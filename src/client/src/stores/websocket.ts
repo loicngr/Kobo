@@ -222,13 +222,9 @@ export const useWebSocketStore = defineStore('websocket', {
 
             if (subtype === 'init') {
               workspaceStore.fetchSessions(wid)
-              // Only auto-switch to the new session if the user hasn't
-              // selected a specific session yet (i.e. viewing "All sessions").
-              // This prevents the feed from appearing to "clear" when a
-              // chat message triggers an agent resume with a new session.
-              if (sessionId && !workspaceStore.selectedSessionId) {
-                workspaceStore.selectSession(sessionId)
-              }
+              // Never auto-switch session on init — let the user stay on
+              // "All sessions" so the feed is not filtered and previous
+              // activity remains visible across agent restarts/resumes.
             }
 
             const handler = subtype ? systemMessages[subtype] : undefined
