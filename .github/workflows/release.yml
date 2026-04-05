@@ -89,9 +89,7 @@ jobs:
         run: npm run build
 
       - name: Publish to npm
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: npm publish
+        run: npm publish --provenance
 
       - name: Push commit and tag
         env:
