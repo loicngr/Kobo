@@ -22,17 +22,23 @@ const INDEX_FILE = 'index.json'
 const locks = new Map<string, Promise<void>>()
 
 function withLock<T>(worktreePath: string, fn: () => T): Promise<T> {
-  const key = worktreePath
-  const prev = locks.get(key) ?? Promise.resolve()
+  const prev = locks.get(worktreePath) ?? Promise.resolve()
+  // The second argument to .then() means: even if the previous operation in the
+  // queue rejected, still run fn — one failure must not block the whole queue.
   const next = prev.then(fn, fn)
-  locks.set(key, next.then(() => {}, () => {}))
+  locks.set(worktreePath, next.then(() => {}, () => {}))
   return next
 }
 
 function readIndex(imagesDir: string): ImageIndexEntry[] {
   const indexPath = path.join(imagesDir, INDEX_FILE)
   if (!fs.existsSync(indexPath)) return []
-  return JSON.parse(fs.readFileSync(indexPath, 'utf-8'))
+  try {
+    return JSON.parse(fs.readFileSync(indexPath, 'utf-8'))
+  } catch (err) {
+    console.error(`[image-service] Failed to parse ${indexPath}, treating as empty index:`, err)
+    return []
+  }
 }
 
 function writeIndex(imagesDir: string, entries: ImageIndexEntry[]): void {
@@ -45,18 +51,24 @@ export async function saveImage(
   originalName: string,
 ): Promise<SavedImage> {
   const ext = path.extname(originalName).toLowerCase().replace('.', '')
+  if (!ext) {
+    throw new Error(`File has no extension. Allowed: ${[...ALLOWED_EXTENSIONS].join(', ')}`)
+  }
   if (!ALLOWED_EXTENSIONS.has(ext)) {
     throw new Error(`Unsupported image extension: '${ext}'. Allowed: ${[...ALLOWED_EXTENSIONS].join(', ')}`)
   }
 
   const uid = nanoid(10)
   const imagesDir = path.join(worktreePath, IMAGES_DIR)
+  // mkdirSync is idempotent — safe to call outside the lock
   fs.mkdirSync(imagesDir, { recursive: true })
 
   const filename = `${uid}.${ext}`
-  fs.writeFileSync(path.join(imagesDir, filename), fileBuffer)
 
   await withLock(worktreePath, () => {
+    // Write the image file inside the lock so both the file write and index
+    // update happen atomically — avoids orphan files on crash between the two.
+    fs.writeFileSync(path.join(imagesDir, filename), fileBuffer)
     const entries = readIndex(imagesDir)
     entries.push({ uid, originalName, createdAt: new Date().toISOString() })
     writeIndex(imagesDir, entries)
