@@ -76,9 +76,17 @@ export interface GlobalSettings {
 }
 
 export interface Settings {
+  schemaVersion: number
   global: GlobalSettings
   projects: ProjectSettings[]
 }
+
+/**
+ * Bump when adding/removing/renaming fields in Settings that require a migration.
+ * Each bump must come with a corresponding entry in `runSettingsMigrations()`.
+ * Append-only — never renumber shipped versions.
+ */
+export const SETTINGS_SCHEMA_VERSION = 1
 
 export interface EffectiveSettings {
   model: string
@@ -97,6 +105,7 @@ export function _setSettingsPath(p: string): void {
 
 function defaultSettings(): Settings {
   return {
+    schemaVersion: SETTINGS_SCHEMA_VERSION,
     global: {
       defaultModel: 'auto',
       prPromptTemplate: DEFAULT_PR_PROMPT_TEMPLATE,
@@ -125,6 +134,46 @@ function pickKnownKeys<T>(data: Record<string, unknown>, allowedKeys: string[]):
   return Object.fromEntries(Object.entries(data).filter(([key]) => allowedKeys.includes(key))) as Partial<T>
 }
 
+/**
+ * Apply migrations sequentially to bring an older settings object up to
+ * SETTINGS_SCHEMA_VERSION. Each migration is append-only — never edit or
+ * reorder shipped migrations. The returned object carries the bumped
+ * schemaVersion; callers should persist it back to disk.
+ */
+export function runSettingsMigrations(raw: Record<string, unknown>): Settings {
+  // Ensure a baseline shape so we can safely read .global and .projects
+  const current = raw as {
+    schemaVersion?: number
+    global?: Record<string, unknown>
+    projects?: unknown[]
+  }
+  if (!current.global || typeof current.global !== 'object') {
+    current.global = {}
+  }
+  if (!Array.isArray(current.projects)) {
+    current.projects = []
+  }
+
+  // Detect legacy (pre-versioned) settings as v0
+  let version = typeof current.schemaVersion === 'number' ? current.schemaVersion : 0
+
+  // ── v0 → v1: ensure gitConventions field exists on global and every project
+  if (version < 1) {
+    if (typeof current.global.gitConventions !== 'string') {
+      current.global.gitConventions = ''
+    }
+    for (const p of current.projects as Array<Record<string, unknown>>) {
+      if (typeof p.gitConventions !== 'string') p.gitConventions = ''
+    }
+    version = 1
+  }
+
+  // Future migrations go here — increment SETTINGS_SCHEMA_VERSION in lockstep.
+
+  current.schemaVersion = version
+  return current as unknown as Settings
+}
+
 function readSettings(): Settings {
   if (!fs.existsSync(settingsFilePath)) {
     const defaults = defaultSettings()
@@ -133,20 +182,30 @@ function readSettings(): Settings {
   }
 
   const raw = fs.readFileSync(settingsFilePath, 'utf-8')
-  const parsed = JSON.parse(raw)
-  if (!parsed || typeof parsed.global !== 'object' || !Array.isArray(parsed.projects)) {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
     const defaults = defaultSettings()
     writeSettings(defaults)
     return defaults
   }
-  // Backfill missing fields on load (forward compat for old settings.json)
-  if (typeof parsed.global.gitConventions !== 'string') {
-    parsed.global.gitConventions = ''
+  if (!parsed || typeof parsed !== 'object') {
+    const defaults = defaultSettings()
+    writeSettings(defaults)
+    return defaults
   }
-  for (const p of parsed.projects) {
-    if (typeof p.gitConventions !== 'string') p.gitConventions = ''
+
+  const originalVersion = (parsed as { schemaVersion?: number }).schemaVersion
+  const migrated = runSettingsMigrations(parsed as Record<string, unknown>)
+
+  // If migrations bumped the version, persist the upgraded settings so the
+  // next process doesn't re-run them on every load.
+  if (migrated.schemaVersion !== originalVersion) {
+    writeSettings(migrated)
   }
-  return parsed as Settings
+
+  return migrated
 }
 
 function writeSettings(settings: Settings): void {

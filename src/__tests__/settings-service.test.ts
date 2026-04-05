@@ -11,6 +11,8 @@ import {
   getProjectSettings,
   getSettings,
   listProjects,
+  runSettingsMigrations,
+  SETTINGS_SCHEMA_VERSION,
   updateGlobalSettings,
   upsertProject,
 } from '../server/services/settings-service.js'
@@ -335,5 +337,85 @@ describe('default prefills', () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }
+  })
+})
+
+describe('runSettingsMigrations()', () => {
+  it('migrates legacy (unversioned) settings to v1 and adds gitConventions', () => {
+    const legacy = {
+      global: { defaultModel: 'auto', prPromptTemplate: 'x' },
+      projects: [{ path: '/a', displayName: 'A', defaultSourceBranch: 'main' }],
+    }
+    const migrated = runSettingsMigrations(legacy as unknown as Record<string, unknown>)
+
+    expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+    expect(migrated.global.gitConventions).toBe('')
+    expect(migrated.projects[0]?.gitConventions).toBe('')
+  })
+
+  it('is a no-op when the file is already at the latest version', () => {
+    const current: Settings = {
+      schemaVersion: SETTINGS_SCHEMA_VERSION,
+      global: {
+        defaultModel: 'claude-opus-4-6',
+        prPromptTemplate: 'template',
+        gitConventions: 'conv',
+      },
+      projects: [],
+    }
+    const migrated = runSettingsMigrations(current as unknown as Record<string, unknown>)
+    expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+    expect(migrated.global.defaultModel).toBe('claude-opus-4-6')
+  })
+
+  it('backfills missing global and projects fields on empty object', () => {
+    const migrated = runSettingsMigrations({})
+    expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+    expect(migrated.global).toBeDefined()
+    expect(migrated.projects).toEqual([])
+  })
+
+  it('preserves existing gitConventions string during migration', () => {
+    const legacy = {
+      global: { gitConventions: 'my custom rules' },
+      projects: [],
+    }
+    const migrated = runSettingsMigrations(legacy as unknown as Record<string, unknown>)
+    expect(migrated.global.gitConventions).toBe('my custom rules')
+  })
+})
+
+describe('settings file persistence with migrations', () => {
+  it('writes schemaVersion in a fresh settings.json', () => {
+    getSettings() // triggers defaultSettings()
+    const content = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'))
+    expect(content.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+  })
+
+  it('upgrades and persists a pre-versioned settings.json on load', () => {
+    const legacy = {
+      global: { defaultModel: 'auto', prPromptTemplate: 'old' },
+      projects: [{ path: '/a', displayName: 'A', defaultSourceBranch: 'main' }],
+    }
+    fs.writeFileSync(settingsPath, JSON.stringify(legacy))
+    const loaded = getSettings()
+
+    expect(loaded.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+    expect(loaded.global.gitConventions).toBe('')
+
+    // Verify it was persisted to disk (not just in-memory)
+    const onDisk = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'))
+    expect(onDisk.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+    expect(onDisk.global.gitConventions).toBe('')
+  })
+
+  it('does not re-write the file when already at the latest version', () => {
+    getSettings() // creates file
+    const mtimeBefore = fs.statSync(settingsPath).mtimeMs
+    // Wait a tiny bit then re-read
+    const loaded = getSettings()
+    expect(loaded.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+    const mtimeAfter = fs.statSync(settingsPath).mtimeMs
+    expect(mtimeAfter).toBe(mtimeBefore)
   })
 })
