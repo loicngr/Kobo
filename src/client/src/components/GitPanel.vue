@@ -14,6 +14,7 @@ const store = useWorkspaceStore()
 const pushing = ref(false)
 const openingPr = ref(false)
 const gitStats = ref<GitStats | null>(null)
+const loadingStats = ref(false)
 
 const repoName = computed(() => {
   if (!props.workspace?.projectPath) return '-'
@@ -26,10 +27,13 @@ async function loadGitStats() {
     gitStats.value = null
     return
   }
+  loadingStats.value = true
   try {
     gitStats.value = await store.fetchGitStats(props.workspace.id)
   } catch {
     gitStats.value = null
+  } finally {
+    loadingStats.value = false
   }
 }
 
@@ -105,8 +109,21 @@ async function handleOpenPr() {
 
 <template>
   <div class="git-panel q-pa-md">
-    <div class="text-caption text-uppercase text-weight-bold q-mb-sm text-grey-6" style="letter-spacing: 0.05em;">
-      Git
+    <div class="row items-center justify-between q-mb-sm">
+      <div class="text-caption text-uppercase text-weight-bold text-grey-6" style="letter-spacing: 0.05em;">
+        Git
+      </div>
+      <q-btn
+        v-if="workspace"
+        flat
+        round
+        dense
+        size="xs"
+        icon="refresh"
+        color="grey-6"
+        :loading="loadingStats"
+        @click="loadGitStats"
+      />
     </div>
 
     <template v-if="workspace">
