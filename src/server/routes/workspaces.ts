@@ -621,6 +621,33 @@ app.post('/:id/start', async (c) => {
   }
 })
 
+// GET /api/workspaces/:id/git-stats — commit count and diff stats for the branch
+app.get('/:id/git-stats', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+
+    const path = await import('node:path')
+    const worktreePath = path.default.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+
+    const commitCount = gitOps.getCommitCount(worktreePath, workspace.sourceBranch, workspace.workingBranch)
+    const diffStats = gitOps.getStructuredDiffStatsBetween(worktreePath, workspace.sourceBranch, workspace.workingBranch)
+
+    return c.json({
+      commitCount,
+      filesChanged: diffStats.filesChanged,
+      insertions: diffStats.insertions,
+      deletions: diffStats.deletions,
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
 // POST /api/workspaces/:id/push — push working branch to origin
 app.post('/:id/push', async (c) => {
   try {

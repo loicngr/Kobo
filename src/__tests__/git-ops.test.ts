@@ -8,10 +8,12 @@ import {
   createBranch,
   deleteLocalBranch,
   deleteRemoteBranch,
+  getCommitCount,
   getCommitsBetween,
   getCurrentBranch,
   getDiffStats,
   getDiffStatsBetween,
+  getStructuredDiffStatsBetween,
   listBranches,
   listRemoteBranches,
   pushBranch,
@@ -254,6 +256,89 @@ describe('getDiffStatsBetween', () => {
 
     const result = getDiffStatsBetween(repo, 'main', 'feature')
     expect(result).toBe('')
+
+    rmSync(repo, { recursive: true, force: true })
+  })
+})
+
+describe('getCommitCount', () => {
+  it('returns the number of commits between two branches', () => {
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-git-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+    writeFileSync(path.join(repo, 'a.txt'), 'a')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: repo })
+
+    execFileSync('git', ['checkout', '-b', 'feature'], { cwd: repo })
+    writeFileSync(path.join(repo, 'b.txt'), 'b')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'feat: add b'], { cwd: repo })
+    writeFileSync(path.join(repo, 'c.txt'), 'c')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'feat: add c'], { cwd: repo })
+
+    const count = getCommitCount(repo, 'main', 'feature')
+    expect(count).toBe(2)
+
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('returns 0 when no commits between branches', () => {
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-git-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+    writeFileSync(path.join(repo, 'a.txt'), 'a')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: repo })
+    execFileSync('git', ['checkout', '-b', 'feature'], { cwd: repo })
+
+    const count = getCommitCount(repo, 'main', 'feature')
+    expect(count).toBe(0)
+
+    rmSync(repo, { recursive: true, force: true })
+  })
+})
+
+describe('getStructuredDiffStatsBetween', () => {
+  it('returns structured diff stats between two branches', () => {
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-git-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+    writeFileSync(path.join(repo, 'a.txt'), 'a\n')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: repo })
+
+    execFileSync('git', ['checkout', '-b', 'feature'], { cwd: repo })
+    writeFileSync(path.join(repo, 'b.txt'), 'b\nb\nb\n')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'feat'], { cwd: repo })
+
+    const stats = getStructuredDiffStatsBetween(repo, 'main', 'feature')
+    expect(stats.filesChanged).toBe(1)
+    expect(stats.insertions).toBe(3)
+    expect(stats.deletions).toBe(0)
+
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('returns zeros when no diff', () => {
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-git-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+    writeFileSync(path.join(repo, 'a.txt'), 'a')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: repo })
+    execFileSync('git', ['checkout', '-b', 'feature'], { cwd: repo })
+
+    const stats = getStructuredDiffStatsBetween(repo, 'main', 'feature')
+    expect(stats.filesChanged).toBe(0)
+    expect(stats.insertions).toBe(0)
+    expect(stats.deletions).toBe(0)
 
     rmSync(repo, { recursive: true, force: true })
   })

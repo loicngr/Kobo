@@ -57,6 +57,8 @@ vi.mock('../server/utils/git-ops.js', () => ({
   pushBranch: vi.fn(),
   getCommitsBetween: vi.fn().mockReturnValue(''),
   getDiffStatsBetween: vi.fn().mockReturnValue(''),
+  getCommitCount: vi.fn().mockReturnValue(0),
+  getStructuredDiffStatsBetween: vi.fn().mockReturnValue({ filesChanged: 0, insertions: 0, deletions: 0 }),
 }))
 
 vi.mock('../server/services/websocket-service.js', () => ({
@@ -1274,5 +1276,40 @@ describe('GET /api/workspaces/archived', () => {
     expect(res.status).toBe(200)
     expect(workspaceService.listArchivedWorkspaces).toHaveBeenCalled()
     expect(workspaceService.getWorkspaceWithTasks).not.toHaveBeenCalled()
+  })
+})
+
+describe('GET /api/workspaces/:id/git-stats', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('returns commit count and diff stats for a workspace', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      projectPath: '/tmp/project',
+      sourceBranch: 'main',
+      workingBranch: 'feature/test',
+    } as never)
+    vi.mocked(gitOps.getCommitCount).mockReturnValue(5)
+    vi.mocked(gitOps.getStructuredDiffStatsBetween).mockReturnValue({
+      filesChanged: 3,
+      insertions: 42,
+      deletions: 7,
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/git-stats')
+    expect(res.status).toBe(200)
+
+    const data = await res.json()
+    expect(data.commitCount).toBe(5)
+    expect(data.filesChanged).toBe(3)
+    expect(data.insertions).toBe(42)
+    expect(data.deletions).toBe(7)
+  })
+
+  it('returns 404 when workspace not found', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
+
+    const res = await app.request('/api/workspaces/unknown/git-stats')
+    expect(res.status).toBe(404)
   })
 })
