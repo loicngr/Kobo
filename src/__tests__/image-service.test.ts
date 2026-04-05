@@ -68,9 +68,7 @@ describe('image-service', () => {
     })
 
     it('rejects files with no extension', async () => {
-      await expect(saveImage(tmpDir, Buffer.from('fake-data'), 'noextension')).rejects.toThrow(
-        'File has no extension',
-      )
+      await expect(saveImage(tmpDir, Buffer.from('fake-data'), 'noextension')).rejects.toThrow('File has no extension')
     })
 
     it('handles multiple saves — index grows with each entry', async () => {
@@ -109,9 +107,7 @@ describe('image-service', () => {
     })
 
     it('throws a descriptive error for an unknown UID', async () => {
-      await expect(deleteImage(tmpDir, 'unknownUID')).rejects.toThrow(
-        "Image 'unknownUID' not found in index",
-      )
+      await expect(deleteImage(tmpDir, 'unknownUID')).rejects.toThrow("Image 'unknownUID' not found in index")
     })
 
     it('after delete, index no longer contains the entry', async () => {
@@ -130,9 +126,7 @@ describe('image-service', () => {
       const result = await saveImage(tmpDir, Buffer.from('fake-image-data'), 'once.png')
       await deleteImage(tmpDir, result.uid)
 
-      await expect(deleteImage(tmpDir, result.uid)).rejects.toThrow(
-        `Image '${result.uid}' not found in index`,
-      )
+      await expect(deleteImage(tmpDir, result.uid)).rejects.toThrow(`Image '${result.uid}' not found in index`)
     })
   })
 
@@ -153,9 +147,7 @@ describe('image-service', () => {
     })
 
     it('many concurrent saves all land in index.json without data loss', async () => {
-      const saves = Array.from({ length: 10 }, (_, i) =>
-        saveImage(tmpDir, Buffer.from(`data-${i}`), `img-${i}.png`),
-      )
+      const saves = Array.from({ length: 10 }, (_, i) => saveImage(tmpDir, Buffer.from(`data-${i}`), `img-${i}.png`))
       const results = await Promise.all(saves)
 
       const indexPath = path.join(tmpDir, '.ai', 'images', 'index.json')
