@@ -57,6 +57,13 @@ jobs:
         working-directory: src/client
         run: npm ci
 
+      - name: Audit root dependencies
+        run: npm audit --audit-level=high
+
+      - name: Audit client dependencies
+        working-directory: src/client
+        run: npm audit --audit-level=high
+
       - name: Lint
         run: npm run lint
 
