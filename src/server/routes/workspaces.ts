@@ -634,7 +634,11 @@ app.get('/:id/git-stats', async (c) => {
     const worktreePath = path.default.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
 
     const commitCount = gitOps.getCommitCount(worktreePath, workspace.sourceBranch, workspace.workingBranch)
-    const diffStats = gitOps.getStructuredDiffStatsBetween(worktreePath, workspace.sourceBranch, workspace.workingBranch)
+    const diffStats = gitOps.getStructuredDiffStatsBetween(
+      worktreePath,
+      workspace.sourceBranch,
+      workspace.workingBranch,
+    )
 
     return c.json({
       commitCount,
