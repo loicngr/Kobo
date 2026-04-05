@@ -295,6 +295,20 @@ onMounted(async () => {
               />
             </div>
 
+            <!-- Verbose system messages toggle -->
+            <div class="q-mb-lg">
+              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">Activity feed</div>
+              <q-toggle
+                :model-value="store.showVerboseSystemMessages"
+                label="Show verbose system messages (task_progress, task_started)"
+                dark
+                dense
+                color="indigo-4"
+                class="text-grey-5 text-caption"
+                @update:model-value="store.toggleVerboseSystemMessages()"
+              />
+            </div>
+
             <!-- Available variables reference -->
             <div class="q-mb-md">
               <q-expansion-item

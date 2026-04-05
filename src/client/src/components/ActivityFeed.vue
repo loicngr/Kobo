@@ -184,6 +184,13 @@ function senderColor(item: ActivityItem): string {
   }
 }
 
+function toolDescription(item: ActivityItem): string {
+  if (!item.meta) return ''
+  const input = (item.meta as Record<string, unknown>).input as Record<string, unknown> | undefined
+  if (input && typeof input.description === 'string') return input.description
+  return ''
+}
+
 function hasExpandableArgs(item: ActivityItem): boolean {
   if (!item.meta) return false
   const meta = item.meta as Record<string, unknown>
@@ -259,6 +266,7 @@ function formatSystemDetails(item: ActivityItem): string {
         >
           <q-icon :name="iconForToolUse(item.content)" size="14px" color="grey-6" />
           <span class="af-tool-label text-grey-7">{{ item.content }}</span>
+          <span v-if="toolDescription(item)" class="af-tool-desc text-grey-8">— {{ toolDescription(item) }}</span>
           <q-icon
             v-if="hasExpandableArgs(item)"
             :name="isExpanded(item.id) ? 'expand_less' : 'expand_more'"
@@ -397,6 +405,13 @@ function formatSystemDetails(item: ActivityItem): string {
 .af-tool-label {
   font-family: 'Roboto Mono', monospace;
   font-size: 11px;
+}
+
+.af-tool-desc {
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .af-tool-args {

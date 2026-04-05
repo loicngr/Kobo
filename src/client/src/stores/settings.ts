@@ -32,6 +32,7 @@ export const useSettingsStore = defineStore('settings', {
     global: { defaultModel: 'auto', prPromptTemplate: '', gitConventions: '' } as GlobalSettings,
     projects: [] as ProjectSettings[],
     loading: false,
+    showVerboseSystemMessages: localStorage.getItem('kobo:showVerboseSystemMessages') === 'true',
   }),
 
   getters: {
@@ -92,6 +93,11 @@ export const useSettingsStore = defineStore('settings', {
         console.error('[settings store] upsertProject failed:', err)
         throw err
       }
+    },
+
+    toggleVerboseSystemMessages() {
+      this.showVerboseSystemMessages = !this.showVerboseSystemMessages
+      localStorage.setItem('kobo:showVerboseSystemMessages', String(this.showVerboseSystemMessages))
     },
 
     async deleteProject(projectPath: string) {

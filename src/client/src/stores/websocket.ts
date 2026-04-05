@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import type { DevServerStatus } from './dev-server'
 import { useDevServerStore } from './dev-server'
+import { useSettingsStore } from './settings'
 import { useWorkspaceStore } from './workspace'
 
 export const useWebSocketStore = defineStore('websocket', {
@@ -202,8 +203,14 @@ export const useWebSocketStore = defineStore('websocket', {
             }
           } else if (outputType === 'system') {
             const subtype = payload.subtype as string | undefined
-            // Skip noisy hook events
+            // Skip noisy events (hooks, and optionally subagent task progress)
             if (subtype === 'hook_started' || subtype === 'hook_response') {
+              break
+            }
+            if (
+              (subtype === 'task_progress' || subtype === 'task_started') &&
+              !useSettingsStore().showVerboseSystemMessages
+            ) {
               break
             }
 
