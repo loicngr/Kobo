@@ -93,7 +93,7 @@ watch(
           style="font-size: 10px;"
         />
         <q-select
-          v-if="sessions.length > 1"
+          v-if="sessions.length > 0"
           v-model="selectedSessionId"
           :options="sessionOptions"
           emit-value
