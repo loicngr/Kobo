@@ -2,6 +2,9 @@
 
 > **Kōbō** (工房) — Japanese for *workshop*. A multi-workspace agent manager for [Claude Code](https://claude.com/claude-code).
 
+> [!WARNING]
+> 🚧 **Work in progress** — This project is under active development. Breaking changes may occur at any time.
+
 Kōbō lets you delegate multiple coding missions to Claude Code agents in parallel. Each workspace lives in its own isolated git worktree with its own branch, its own Claude session, optionally its own dev server, and a custom MCP tools server the agent uses to track progress. A Vue 3 dashboard shows live agent output, tasks, acceptance criteria, and git state across every workspace.
 
 Think of it as an apprentice's hall: you hand out missions, each apprentice sets up their own workbench, and you watch them work from a single control surface.
