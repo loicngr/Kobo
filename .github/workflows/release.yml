@@ -32,11 +32,11 @@ jobs:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Verify tag commit is on main
+      - name: Verify tag commit is on develop
         run: |
-          git fetch origin main
-          if ! git merge-base --is-ancestor HEAD origin/main; then
-            echo "::error::This workflow must be run from a commit that is an ancestor of origin/main"
+          git fetch origin develop
+          if ! git merge-base --is-ancestor HEAD origin/develop; then
+            echo "::error::This workflow must be run from a commit that is an ancestor of origin/develop"
             exit 1
           fi
 
@@ -97,7 +97,7 @@ jobs:
         env:
           NEW_TAG: ${{ steps.bump.outputs.new_tag }}
         run: |
-          git push origin HEAD:main
+          git push origin HEAD:develop
           git push origin "$NEW_TAG"
 
       - name: Create GitHub Release
