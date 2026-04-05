@@ -235,8 +235,13 @@ export const useWebSocketStore = defineStore('websocket', {
             } else if (typeof handler === 'string') {
               content = handler
             } else {
-              // Unknown subtype — show as formatted JSON
-              content = `[${subtype ?? 'system'}] ${JSON.stringify(payload, null, 2)}`
+              // Unknown subtype — show summary if available, otherwise short label
+              const summary = (payload.summary as string) ?? null
+              if (summary) {
+                content = `[${subtype ?? 'system'}] ${summary}`
+              } else {
+                content = `[${subtype ?? 'system'}]`
+              }
             }
 
             if (content) {

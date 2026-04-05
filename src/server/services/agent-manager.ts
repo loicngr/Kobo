@@ -69,6 +69,7 @@ export function startAgent(
 
   const db = getDb()
   let agentSessionId: string
+  let resumedClaudeSessionId: string | undefined
 
   // Build CLI args
   const args = ['--dangerously-skip-permissions', '--output-format', 'stream-json', '--verbose']
@@ -85,6 +86,7 @@ export function startAgent(
     const claudeSessionId = sessionIds.get(workspaceId) ?? lastSession?.claude_session_id
 
     if (claudeSessionId) {
+      resumedClaudeSessionId = claudeSessionId
       args.push('--resume', claudeSessionId, '-p', prompt)
       // Always reuse existing session — find by claude_session_id if lastSession didn't match
       const existingId =
@@ -177,6 +179,7 @@ export function startAgent(
     rl,
     status: 'running',
     agentSessionId,
+    claudeSessionId: resumedClaudeSessionId,
   }
 
   // ── stdout line-by-line (NDJSON) ──
@@ -369,6 +372,9 @@ export function startAgent(
 
   // Store in agents map
   agents.set(workspaceId, agent)
+
+  // Notify frontend that agent is now running
+  emit(workspaceId, 'agent:status', { status: 'executing' }, agent.claudeSessionId)
 
   return agent
 }

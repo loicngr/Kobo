@@ -212,6 +212,20 @@ function formatArgs(item: ActivityItem): string {
     return String(meta.input)
   }
 }
+
+function hasSystemDetails(item: ActivityItem): boolean {
+  if (item.type !== 'system' || !item.meta) return false
+  return Object.keys(item.meta).length > 0
+}
+
+function formatSystemDetails(item: ActivityItem): string {
+  if (!item.meta) return ''
+  try {
+    return JSON.stringify(item.meta, null, 2)
+  } catch {
+    return ''
+  }
+}
 </script>
 
 <template>
@@ -298,11 +312,25 @@ function formatArgs(item: ActivityItem): string {
 
       <!-- System -->
       <template v-else-if="item.type === 'system'">
-        <div class="row items-center">
+        <div
+          class="row items-center"
+          :class="{ 'cursor-pointer': hasSystemDetails(item) }"
+          @click="hasSystemDetails(item) && toggleExpand(item.id)"
+        >
           <q-icon name="info" size="14px" color="amber-6" class="q-mr-xs" />
           <span class="af-system-content text-caption text-amber-6">{{ item.content }}</span>
+          <q-icon
+            v-if="hasSystemDetails(item)"
+            :name="isExpanded(item.id) ? 'expand_less' : 'expand_more'"
+            size="14px"
+            color="amber-8"
+            class="q-ml-xs"
+          />
           <q-space />
           <span class="af-time">{{ formatTime(item.timestamp) }}</span>
+        </div>
+        <div v-if="isExpanded(item.id) && hasSystemDetails(item)" class="af-system-details q-mt-xs rounded-borders">
+          <pre class="af-args-pre">{{ formatSystemDetails(item) }}</pre>
         </div>
       </template>
 
@@ -467,6 +495,12 @@ function formatArgs(item: ActivityItem): string {
 .af-item--system {
   background-color: #2a2a1a;
   border-left: 3px solid #f59e0b;
+}
+
+.af-system-details {
+  padding: 6px 8px;
+  background-color: rgba(255, 255, 255, 0.04);
+  overflow-x: auto;
 }
 
 .af-system-content {
