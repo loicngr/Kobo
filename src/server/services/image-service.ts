@@ -26,7 +26,13 @@ function withLock<T>(worktreePath: string, fn: () => T): Promise<T> {
   // The second argument to .then() means: even if the previous operation in the
   // queue rejected, still run fn — one failure must not block the whole queue.
   const next = prev.then(fn, fn)
-  locks.set(worktreePath, next.then(() => {}, () => {}))
+  locks.set(
+    worktreePath,
+    next.then(
+      () => {},
+      () => {},
+    ),
+  )
   return next
 }
 
@@ -45,11 +51,7 @@ function writeIndex(imagesDir: string, entries: ImageIndexEntry[]): void {
   fs.writeFileSync(path.join(imagesDir, INDEX_FILE), JSON.stringify(entries, null, 2))
 }
 
-export async function saveImage(
-  worktreePath: string,
-  fileBuffer: Buffer,
-  originalName: string,
-): Promise<SavedImage> {
+export async function saveImage(worktreePath: string, fileBuffer: Buffer, originalName: string): Promise<SavedImage> {
   const ext = path.extname(originalName).toLowerCase().replace('.', '')
   if (!ext) {
     throw new Error(`File has no extension. Allowed: ${[...ALLOWED_EXTENSIONS].join(', ')}`)

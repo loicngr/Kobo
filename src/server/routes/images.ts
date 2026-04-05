@@ -3,12 +3,7 @@ import * as imageService from '../services/image-service.js'
 import * as workspaceService from '../services/workspace-service.js'
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
-const ALLOWED_MIME_TYPES = new Set([
-  'image/png',
-  'image/jpeg',
-  'image/gif',
-  'image/webp',
-])
+const ALLOWED_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 
 const app = new Hono()
 
