@@ -9,6 +9,7 @@ import { getDb } from './db/index.js'
 import { runMigrations } from './db/migrations.js'
 import devServerRouter from './routes/dev-server.js'
 import gitRouter from './routes/git.js'
+import imagesRouter from './routes/images.js'
 import notionRouter from './routes/notion.js'
 import settingsRouter from './routes/settings.js'
 import workspacesRouter from './routes/workspaces.js'
@@ -48,6 +49,7 @@ app.get('/api/health', (c) => c.json({ status: 'ok', version: '0.1.0' }))
 
 // 4. Mount route sub-routers
 app.route('/api/workspaces', workspacesRouter)
+app.route('/api/workspaces', imagesRouter)
 app.route('/api/notion', notionRouter)
 app.route('/api/git', gitRouter)
 app.route('/api/settings', settingsRouter)
