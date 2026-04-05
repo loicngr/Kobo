@@ -23,6 +23,110 @@ const filteredSkills = computed(() => {
   return skills.value.filter((s) => s.toLowerCase().includes(q))
 })
 
+// Image upload
+interface PendingImage {
+  tempId: string
+  uid?: string
+  path?: string
+  originalName: string
+  status: 'uploading' | 'ready' | 'error'
+}
+
+const pendingImages = ref<PendingImage[]>([])
+const fileInputRef = ref<HTMLInputElement | null>(null)
+const isDragging = ref(false)
+
+const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
+
+async function uploadImage(file: File) {
+  if (!ALLOWED_TYPES.includes(file.type)) return
+
+  const tempId = crypto.randomUUID()
+  const pending: PendingImage = {
+    tempId,
+    originalName: file.name || 'pasted-image.png',
+    status: 'uploading',
+  }
+  pendingImages.value.push(pending)
+
+  try {
+    const formData = new FormData()
+    formData.append('image', file)
+
+    const res = await fetch(`/api/workspaces/${props.workspaceId}/images`, {
+      method: 'POST',
+      body: formData,
+    })
+
+    if (!res.ok) {
+      const err = await res.json()
+      throw new Error(err.error || 'Upload failed')
+    }
+
+    const data = await res.json()
+    const entry = pendingImages.value.find((p) => p.tempId === tempId)
+    if (entry) {
+      entry.uid = data.uid
+      entry.path = data.path
+      entry.status = 'ready'
+    }
+  } catch {
+    const entry = pendingImages.value.find((p) => p.tempId === tempId)
+    if (entry) entry.status = 'error'
+  }
+}
+
+async function removeImage(tempId: string) {
+  const entry = pendingImages.value.find((p) => p.tempId === tempId)
+  if (entry?.uid) {
+    try {
+      await fetch(`/api/workspaces/${props.workspaceId}/images/${entry.uid}`, { method: 'DELETE' })
+    } catch {
+      /* best-effort */
+    }
+  }
+  pendingImages.value = pendingImages.value.filter((p) => p.tempId !== tempId)
+}
+
+function onPaste(event: ClipboardEvent) {
+  if (!event.clipboardData) return
+  for (const item of Array.from(event.clipboardData.items)) {
+    if (item.type.startsWith('image/')) {
+      const file = item.getAsFile()
+      if (file) uploadImage(file)
+    }
+  }
+}
+
+function onDrop(event: DragEvent) {
+  event.preventDefault()
+  isDragging.value = false
+  if (!event.dataTransfer) return
+  for (const file of Array.from(event.dataTransfer.files)) {
+    if (ALLOWED_TYPES.includes(file.type)) uploadImage(file)
+  }
+}
+
+function onDragOver(event: DragEvent) {
+  event.preventDefault()
+  isDragging.value = true
+}
+
+function onDragLeave() {
+  isDragging.value = false
+}
+
+function onFileSelected(event: Event) {
+  const input = event.target as HTMLInputElement
+  if (!input.files) return
+  for (const file of Array.from(input.files)) {
+    uploadImage(file)
+  }
+  input.value = ''
+}
+
+const hasUploading = computed(() => pendingImages.value.some((p) => p.status === 'uploading'))
+
 let lastSkillsFetch = 0
 
 async function fetchSkills() {
@@ -62,19 +166,27 @@ const isDisabled = computed(() => {
 
 function sendMessage() {
   const text = message.value.trim()
-  if (!text || isDisabled.value) return
+  if ((!text && pendingImages.value.length === 0) || isDisabled.value || hasUploading.value) return
 
-  wsStore.sendChatMessage(props.workspaceId, text)
+  const imageTags = pendingImages.value
+    .filter((p) => p.status === 'ready' && p.path)
+    .map((p) => `[image: ${p.path}]`)
+    .join(' ')
+
+  const composedText = imageTags ? `${text} ${imageTags}`.trim() : text
+
+  wsStore.sendChatMessage(props.workspaceId, composedText)
 
   store.addActivityItem(props.workspaceId, {
     id: `user-${Date.now()}`,
     type: 'text',
-    content: text,
+    content: composedText,
     timestamp: new Date().toISOString(),
     meta: { sender: 'user', pending: true },
   })
 
   message.value = ''
+  pendingImages.value = []
 }
 
 function onKeydown(event: KeyboardEvent) {
@@ -108,7 +220,45 @@ function onKeydown(event: KeyboardEvent) {
 </script>
 
 <template>
-  <div class="chat-input-container row items-end q-pa-sm q-gutter-sm" style="position: relative;">
+  <div
+    class="chat-input-container column q-pa-sm"
+    :class="{ 'chat-input-dragging': isDragging }"
+    @dragover="onDragOver"
+    @dragleave="onDragLeave"
+    @drop="onDrop"
+  >
+    <!-- Pending images tags -->
+    <div v-if="pendingImages.length > 0" class="row items-center q-gutter-xs q-mb-xs q-px-xs" style="flex-wrap: wrap;">
+      <div
+        v-for="img in pendingImages"
+        :key="img.tempId"
+        class="image-tag row items-center q-px-sm q-py-xs rounded-borders"
+        :class="{
+          'image-tag--uploading': img.status === 'uploading',
+          'image-tag--ready': img.status === 'ready',
+          'image-tag--error': img.status === 'error',
+        }"
+      >
+        <q-spinner-dots v-if="img.status === 'uploading'" size="14px" color="grey-6" class="q-mr-xs" />
+        <q-icon v-else-if="img.status === 'ready'" name="image" size="14px" color="green-6" class="q-mr-xs" />
+        <q-icon v-else name="error" size="14px" color="red-6" class="q-mr-xs" />
+
+        <span class="text-caption image-tag-label">
+          {{ img.status === 'uploading' ? 'Uploading...' : (img.path || img.originalName) }}
+        </span>
+
+        <q-btn
+          flat
+          dense
+          round
+          size="xs"
+          icon="close"
+          class="q-ml-xs image-tag-close"
+          @click="removeImage(img.tempId)"
+        />
+      </div>
+    </div>
+
     <!-- Skills autocomplete popup -->
     <div v-if="showSkills && filteredSkills.length > 0" class="skills-popup rounded-borders">
       <div class="skills-header text-caption text-weight-bold text-grey-6 q-px-sm q-py-xs">
@@ -127,25 +277,50 @@ function onKeydown(event: KeyboardEvent) {
       </div>
     </div>
 
-    <q-input
-      v-model="message"
-      dense
-      dark
-      borderless
-      autogrow
-      placeholder="Message... (/ for skills)"
-      class="chat-input col rounded-borders"
-      :disable="isDisabled"
-      @keydown="onKeydown"
-    />
-    <q-btn
-      flat
-      dense
-      icon="send"
-      color="primary"
-      :disable="isDisabled || !message.trim()"
-      @click="sendMessage"
-    />
+    <div class="row items-end q-gutter-sm">
+      <q-input
+        v-model="message"
+        dense
+        dark
+        borderless
+        autogrow
+        placeholder="Message... (/ for skills)"
+        class="chat-input col rounded-borders"
+        :disable="isDisabled"
+        @keydown="onKeydown"
+        @paste="onPaste"
+      />
+
+      <!-- Hidden file input -->
+      <input
+        ref="fileInputRef"
+        type="file"
+        accept="image/png,image/jpeg,image/gif,image/webp"
+        multiple
+        style="display: none;"
+        @change="onFileSelected"
+      />
+
+      <q-btn
+        flat
+        dense
+        icon="attach_file"
+        color="grey-6"
+        :disable="isDisabled"
+        @click="fileInputRef?.click()"
+      >
+        <q-tooltip>Attach image</q-tooltip>
+      </q-btn>
+
+      <q-btn
+        flat
+        dense
+        icon="send"
+        color="primary"
+        :disable="isDisabled || (!message.trim() && pendingImages.length === 0) || hasUploading"
+        @click="sendMessage"
+      />
+    </div>
   </div>
 </template>
 
@@ -154,6 +329,12 @@ function onKeydown(event: KeyboardEvent) {
   background-color: #16162a;
   border-top: 1px solid #2a2a4a;
   min-height: 48px;
+  position: relative;
+
+  &.chat-input-dragging {
+    outline: 2px dashed #6c63ff;
+    outline-offset: -2px;
+  }
 }
 
 .chat-input {
@@ -193,6 +374,46 @@ function onKeydown(event: KeyboardEvent) {
   &:hover,
   &--active {
     background-color: rgba(108, 99, 255, 0.15);
+  }
+}
+
+.image-tag {
+  font-family: 'Roboto Mono', monospace;
+  font-size: 12px;
+  line-height: 1;
+
+  &--uploading {
+    background-color: #2a2a4a;
+    border: 1px solid #3a3a5a;
+    color: #8888aa;
+  }
+
+  &--ready {
+    background-color: #1a2a1a;
+    border: 1px solid #2a4a2a;
+    color: #6aaa6a;
+  }
+
+  &--error {
+    background-color: #2a1a1a;
+    border: 1px solid #4a2a2a;
+    color: #aa6a6a;
+  }
+}
+
+.image-tag-label {
+  max-width: 250px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.image-tag-close {
+  color: #aa4444;
+  opacity: 0.7;
+
+  &:hover {
+    opacity: 1;
   }
 }
 </style>
