@@ -207,8 +207,29 @@ export const useWebSocketStore = defineStore('websocket', {
             if (subtype === 'hook_started' || subtype === 'hook_response') {
               break
             }
+
+            // Capture subagent state from task_started / task_progress / task_notification
+            if (subtype === 'task_started' || subtype === 'task_progress' || subtype === 'task_notification') {
+              const toolUseId = payload.tool_use_id as string | undefined
+              if (wid && toolUseId) {
+                const usage = payload.usage as Record<string, unknown> | undefined
+                const taskStatus = payload.status as string | undefined
+                const isDone = subtype === 'task_notification' && taskStatus === 'completed'
+                workspaceStore.upsertSubagent(wid, {
+                  toolUseId,
+                  description: (payload.description as string) ?? (payload.summary as string) ?? undefined,
+                  taskType: (payload.task_type as string) ?? undefined,
+                  status: isDone ? 'done' : 'running',
+                  lastToolName: (payload.last_tool_name as string) ?? undefined,
+                  totalTokens: (usage?.total_tokens as number) ?? undefined,
+                  toolUses: (usage?.tool_uses as number) ?? undefined,
+                  durationMs: (usage?.duration_ms as number) ?? undefined,
+                })
+              }
+            }
+
             if (
-              (subtype === 'task_progress' || subtype === 'task_started') &&
+              (subtype === 'task_progress' || subtype === 'task_started' || subtype === 'task_notification') &&
               !useSettingsStore().showVerboseSystemMessages
             ) {
               break
@@ -301,9 +322,13 @@ export const useWebSocketStore = defineStore('websocket', {
               for (const block of content) {
                 const b = block as Record<string, unknown>
                 if (b.type === 'tool_result') {
+                  const toolId = (b.tool_use_id as string) ?? ''
+                  // Mark any tracked subagent as done when its tool_result arrives
+                  if (wid && toolId && workspaceStore.subagents[wid]?.[toolId]) {
+                    workspaceStore.upsertSubagent(wid, { toolUseId: toolId, status: 'done' })
+                  }
                   const resultText = typeof b.content === 'string' ? b.content : this._extractReadableContent(b.content)
                   if (resultText) {
-                    const toolId = (b.tool_use_id as string) ?? ''
                     workspaceStore.addActivityItem(wid, {
                       id: `${eventId}-${toolId}`,
                       type: 'tool_use',

@@ -411,6 +411,22 @@ app.post('/:id/tasks/:taskId/notify-done', (c) => {
   }
 })
 
+// POST /api/workspaces/:id/tasks/notify-updated — broadcast generic task list change
+app.post('/:id/tasks/notify-updated', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+    wsService.emit(id, 'task:updated', {})
+    return new Response(null, { status: 204 })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
 // GET /api/workspaces/archived — list archived workspaces (must be before GET /:id)
 app.get('/archived', (c) => {
   try {

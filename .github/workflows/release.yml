@@ -63,7 +63,11 @@ jobs:
       - name: Type check
         run: npx tsc --noEmit
 
-      - name: Run tests
+      - name: Run backend tests
+        run: npm test
+
+      - name: Run frontend tests
+        working-directory: src/client
         run: npm test
 
       - name: Configure git

@@ -14,6 +14,7 @@ function renderMarkdown(text: string): string {
 const store = useWorkspaceStore()
 const wsStore = useWebSocketStore()
 const feedContainer = ref<HTMLElement | null>(null)
+const isLoadingMore = ref(false)
 const expandedItems = ref<Set<string>>(new Set())
 
 // Detect options in agent text messages (patterns like "- **A —" or "- **B —")
@@ -106,20 +107,50 @@ function scrollToPreviousUserMessage() {
     userMessageCursor.value--
   }
 
+  const targetIdx = userItems[userMessageCursor.value].idx
   const targetId = userItems[userMessageCursor.value].item.id
-  const el = feedContainer.value?.querySelector(`[data-item-id="${targetId}"]`)
-  if (el) {
-    el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+
+  // Ensure the target item is loaded (increase displayCount if needed)
+  const itemsFromEnd = items.length - targetIdx
+  if (itemsFromEnd > displayCount.value) {
+    displayCount.value = Math.min(itemsFromEnd + 10, items.length)
   }
+
+  // Wait for DOM update before scrolling
+  nextTick(() => {
+    const el = feedContainer.value?.querySelector(`[data-item-id="${targetId}"]`)
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
+    }
+  })
 }
 
-// Reset cursor when new items arrive
+// Reset cursor when workspace changes (not on every new message)
 watch(
-  () => store.activityFeed.length,
+  () => store.selectedWorkspaceId,
   () => {
     userMessageCursor.value = -1
   },
 )
+
+// Infinite scroll: only render the last N items, load more when user scrolls up
+const INITIAL_COUNT = 50
+const LOAD_STEP = 50
+const displayCount = ref(INITIAL_COUNT)
+
+// Reset display count when workspace changes (but not when new items arrive)
+watch(
+  () => store.selectedWorkspaceId,
+  () => {
+    displayCount.value = INITIAL_COUNT
+  },
+)
+
+const visibleItems = computed(() => {
+  const items = store.activityFeed
+  if (items.length <= displayCount.value) return items
+  return items.slice(-displayCount.value)
+})
 
 // Auto-scroll: stick to bottom unless user scrolled up
 const isUserScrolledUp = ref(false)
@@ -130,6 +161,23 @@ function onFeedScroll() {
   // Consider "at bottom" if within 50px of the bottom
   const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50
   isUserScrolledUp.value = !atBottom
+
+  // Load more older items when user scrolls near the top
+  if (el.scrollTop < 200 && !isLoadingMore.value) {
+    const total = store.activityFeed.length
+    if (displayCount.value < total) {
+      isLoadingMore.value = true
+      const prevScrollHeight = el.scrollHeight
+      displayCount.value = Math.min(displayCount.value + LOAD_STEP, total)
+      // Preserve scroll position after new items are prepended
+      nextTick(() => {
+        if (feedContainer.value) {
+          feedContainer.value.scrollTop += feedContainer.value.scrollHeight - prevScrollHeight
+        }
+        isLoadingMore.value = false
+      })
+    }
+  }
 }
 
 function scrollToBottom() {
@@ -309,9 +357,12 @@ function formatSystemDetails(item: ActivityItem): string {
       </div>
     </div>
 
-    <!-- Feed items -->
+    <!-- Loading indicator shown at the top when user scrolls up and more items are available -->
+    <div v-if="isLoadingMore" class="row justify-center q-my-sm">
+      <q-spinner-dots size="24px" color="grey-6" />
+    </div>
     <div
-      v-for="item in store.activityFeed"
+      v-for="item in visibleItems"
       :key="item.id"
       :data-item-id="item.id"
       class="af-item text-caption rounded-borders"
@@ -463,7 +514,7 @@ function formatSystemDetails(item: ActivityItem): string {
       class="scroll-to-user-btn"
       @click="scrollToPreviousUserMessage"
     >
-      <q-tooltip>Go to your messages</q-tooltip>
+      <q-tooltip>Go to previous message</q-tooltip>
     </q-btn>
   </div>
 </template>

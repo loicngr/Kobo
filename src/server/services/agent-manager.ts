@@ -9,6 +9,7 @@ import {
   getCompiledMcpServerPath,
   getDbPath,
   getMcpServerSourcePath,
+  getSettingsPath,
   getSkillsPath,
 } from '../utils/paths.js'
 import { registerProcess, unregisterProcess } from '../utils/process-tracker.js'
@@ -27,6 +28,14 @@ export interface AgentInstance {
 }
 
 // ── State ──────────────────────────────────────────────────────────────────────
+
+/** Actual bound port of the running backend — set at startup via setBackendPort() */
+let backendPort: number = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000
+
+/** Called from index.ts once the HTTP server is listening so MCP children can reach it. */
+export function setBackendPort(port: number): void {
+  backendPort = port
+}
 
 /** workspaceId -> agent instance */
 const agents = new Map<string, AgentInstance>()
@@ -141,7 +150,8 @@ export function startAgent(
           env: {
             KOBO_WORKSPACE_ID: workspaceId,
             KOBO_DB_PATH: getDbPath(),
-            KOBO_BACKEND_URL: `http://localhost:${process.env.PORT ?? '3000'}`,
+            KOBO_SETTINGS_PATH: getSettingsPath(),
+            KOBO_BACKEND_URL: `http://127.0.0.1:${backendPort}`,
           },
         },
       },

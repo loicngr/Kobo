@@ -3,6 +3,7 @@ import AcceptancePanel from 'src/components/AcceptancePanel.vue'
 import DevServerPanel from 'src/components/DevServerPanel.vue'
 import GitPanel from 'src/components/GitPanel.vue'
 import NotionPanel from 'src/components/NotionPanel.vue'
+import SubagentsPanel from 'src/components/SubagentsPanel.vue'
 import WorkspaceList from 'src/components/WorkspaceList.vue'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { ref } from 'vue'
@@ -88,6 +89,7 @@ const store = useWorkspaceStore()
           <q-tab name="git" icon="commit" />
           <q-tab name="server" icon="dns" />
           <q-tab name="tasks" icon="checklist" />
+          <q-tab name="subagents" icon="smart_toy" />
         </q-tabs>
 
         <q-separator dark />
@@ -105,6 +107,10 @@ const store = useWorkspaceStore()
             <NotionPanel :workspace="store.selectedWorkspace" :tasks="store.tasks" />
             <q-separator dark />
             <AcceptancePanel :tasks="store.acceptanceCriteria" />
+          </q-tab-panel>
+
+          <q-tab-panel name="subagents" class="q-pa-none">
+            <SubagentsPanel />
           </q-tab-panel>
         </q-tab-panels>
       </div>

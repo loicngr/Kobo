@@ -13,7 +13,7 @@ import imagesRouter from './routes/images.js'
 import notionRouter from './routes/notion.js'
 import settingsRouter from './routes/settings.js'
 import workspacesRouter from './routes/workspaces.js'
-import { getAvailableSkills, sendMessage, startAgent, stopAgent } from './services/agent-manager.js'
+import { getAvailableSkills, sendMessage, setBackendPort, startAgent, stopAgent } from './services/agent-manager.js'
 import { startDevServer, stopDevServer } from './services/dev-server-service.js'
 import { emit, handleConnection, setMessageHandler } from './services/websocket-service.js'
 import { getLatestSession, getWorkspace, updateWorkspaceStatus } from './services/workspace-service.js'
@@ -113,6 +113,7 @@ const server = serve(
     port: PORT,
   },
   (info) => {
+    setBackendPort(info.port)
     console.log(`Server running at http://localhost:${info.port}`)
   },
 )

@@ -73,6 +73,20 @@ export interface OpenPrResult {
   warning?: string
 }
 
+export interface Subagent {
+  toolUseId: string
+  description: string
+  taskType?: string
+  status: 'running' | 'done'
+  lastToolName?: string
+  lastDescription?: string
+  totalTokens?: number
+  toolUses?: number
+  durationMs?: number
+  startedAt: string
+  updatedAt: string
+}
+
 export interface GitStats {
   commitCount: number
   filesChanged: number
@@ -87,6 +101,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     selectedWorkspaceId: null as string | null,
     tasks: [] as Task[],
     activityFeeds: {} as Record<string, ActivityItem[]>,
+    subagents: {} as Record<string, Record<string, Subagent>>,
     sessions: [] as AgentSession[],
     selectedSessionId: null as string | null,
     archivedWorkspaces: [] as Workspace[],
@@ -102,6 +117,12 @@ export const useWorkspaceStore = defineStore('workspace', {
     running: (state) => state.workspaces.filter((w) => ['extracting', 'brainstorming', 'executing'].includes(w.status)),
 
     idle: (state) => state.workspaces.filter((w) => ['completed', 'idle', 'created'].includes(w.status)),
+
+    currentSubagents: (state): Subagent[] => {
+      if (!state.selectedWorkspaceId) return []
+      const map = state.subagents[state.selectedWorkspaceId] ?? {}
+      return Object.values(map).sort((a, b) => a.startedAt.localeCompare(b.startedAt))
+    },
 
     activityFeed: (state) => {
       if (!state.selectedWorkspaceId) return []
@@ -388,6 +409,28 @@ export const useWorkspaceStore = defineStore('workspace', {
         delete this.activityFeeds[workspaceId]
       } else {
         this.activityFeeds = {}
+      }
+    },
+
+    upsertSubagent(workspaceId: string, data: Partial<Subagent> & { toolUseId: string }) {
+      if (!this.subagents[workspaceId]) this.subagents[workspaceId] = {}
+      const existing = this.subagents[workspaceId][data.toolUseId]
+      const now = new Date().toISOString()
+      // Once a subagent is 'done', never regress to 'running' — guards against
+      // out-of-order events (e.g. a late task_progress after task_notification).
+      const nextStatus = existing?.status === 'done' ? 'done' : (data.status ?? existing?.status ?? 'running')
+      this.subagents[workspaceId][data.toolUseId] = {
+        toolUseId: data.toolUseId,
+        description: data.description ?? existing?.description ?? '',
+        taskType: data.taskType ?? existing?.taskType,
+        status: nextStatus,
+        lastToolName: data.lastToolName ?? existing?.lastToolName,
+        lastDescription: data.lastDescription ?? existing?.lastDescription,
+        totalTokens: data.totalTokens ?? existing?.totalTokens,
+        toolUses: data.toolUses ?? existing?.toolUses,
+        durationMs: data.durationMs ?? existing?.durationMs,
+        startedAt: existing?.startedAt ?? now,
+        updatedAt: now,
       }
     },
 

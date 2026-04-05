@@ -608,6 +608,30 @@ describe('POST /api/workspaces/:id/tasks/:taskId/notify-done', () => {
   })
 })
 
+describe('POST /api/workspaces/:id/tasks/notify-updated', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('emet un event WebSocket task:updated et retourne 204', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'ws-1' } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/tasks/notify-updated', {
+      method: 'POST',
+    })
+
+    expect(res.status).toBe(204)
+    expect(wsService.emit).toHaveBeenCalledWith('ws-1', 'task:updated', expect.any(Object))
+  })
+
+  it('retourne 404 si workspace inconnu', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
+
+    const res = await app.request('/api/workspaces/unknown/tasks/notify-updated', {
+      method: 'POST',
+    })
+    expect(res.status).toBe(404)
+  })
+})
+
 describe('PATCH /api/workspaces/:id', () => {
   it('updates workspace status', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
