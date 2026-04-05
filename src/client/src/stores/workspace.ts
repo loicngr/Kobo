@@ -73,6 +73,13 @@ export interface OpenPrResult {
   warning?: string
 }
 
+export interface GitStats {
+  commitCount: number
+  filesChanged: number
+  insertions: number
+  deletions: number
+}
+
 export const useWorkspaceStore = defineStore('workspace', {
   state: () => ({
     workspaces: [] as Workspace[],
@@ -226,6 +233,12 @@ export const useWorkspaceStore = defineStore('workspace', {
         const err = await res.json().catch(() => ({ error: 'Push failed' }))
         throw new WorkspaceActionError(err.error ?? 'Push failed', err.code)
       }
+    },
+
+    async fetchGitStats(id: string): Promise<GitStats> {
+      const res = await fetch(`/api/workspaces/${id}/git-stats`)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      return (await res.json()) as GitStats
     },
 
     async openPullRequest(id: string): Promise<OpenPrResult> {

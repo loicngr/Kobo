@@ -116,6 +116,28 @@ export function pushBranch(repoPath: string, branchName: string, remote = 'origi
   }
 }
 
+export function getCommitCount(repoPath: string, base: string, head: string): number {
+  try {
+    const output = git(repoPath, ['rev-list', '--count', `${base}..${head}`])
+    return parseInt(output, 10) || 0
+  } catch {
+    return 0
+  }
+}
+
+export function getStructuredDiffStatsBetween(
+  repoPath: string,
+  base: string,
+  head: string,
+): { filesChanged: number; insertions: number; deletions: number } {
+  try {
+    const output = git(repoPath, ['diff', '--shortstat', `${base}...${head}`])
+    return parseDiffShortstat(output)
+  } catch {
+    return { filesChanged: 0, insertions: 0, deletions: 0 }
+  }
+}
+
 export function getCommitsBetween(repoPath: string, base: string, head: string): string {
   try {
     return git(repoPath, ['log', `${base}..${head}`, '--pretty=format:- %s (%h)', '--no-merges'])

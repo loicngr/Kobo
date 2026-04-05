@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
-import type { Workspace } from 'src/stores/workspace'
+import type { GitStats, Workspace } from 'src/stores/workspace'
 import { useWorkspaceStore, WorkspaceActionError } from 'src/stores/workspace'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 const props = defineProps<{
   workspace: Workspace | null
@@ -13,6 +13,7 @@ const store = useWorkspaceStore()
 
 const pushing = ref(false)
 const openingPr = ref(false)
+const gitStats = ref<GitStats | null>(null)
 
 const repoName = computed(() => {
   if (!props.workspace?.projectPath) return '-'
@@ -20,12 +21,31 @@ const repoName = computed(() => {
   return parts[parts.length - 1] || parts[parts.length - 2] || '-'
 })
 
+async function loadGitStats() {
+  if (!props.workspace) {
+    gitStats.value = null
+    return
+  }
+  try {
+    gitStats.value = await store.fetchGitStats(props.workspace.id)
+  } catch {
+    gitStats.value = null
+  }
+}
+
+watch(
+  () => props.workspace?.id,
+  () => loadGitStats(),
+  { immediate: true },
+)
+
 async function handlePush() {
   if (!props.workspace) return
   pushing.value = true
   try {
     await store.pushBranch(props.workspace.id)
     $q.notify({ type: 'positive', message: 'Branch pushed', position: 'top' })
+    loadGitStats()
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Push failed'
     $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
@@ -108,9 +128,35 @@ async function handleOpenPr() {
       </div>
 
       <!-- Source branch info -->
-      <div class="text-caption q-mb-md text-grey-8" style="font-size: 11px;">
+      <div class="text-caption q-mb-sm text-grey-8" style="font-size: 11px;">
         from {{ workspace.sourceBranch }} &middot; local only
       </div>
+
+      <!-- Git stats -->
+      <template v-if="gitStats && (gitStats.commitCount > 0 || gitStats.filesChanged > 0)">
+        <!-- Commit count -->
+        <div class="row items-center q-mb-xs">
+          <q-icon name="commit" size="14px" color="grey-6" class="q-mr-xs" />
+          <span class="text-caption text-grey-4" style="font-size: 11px;">
+            {{ gitStats.commitCount }} commit{{ gitStats.commitCount !== 1 ? 's' : '' }}
+          </span>
+        </div>
+
+        <!-- File changes -->
+        <div class="row items-center q-mb-md">
+          <q-icon name="insert_drive_file" size="14px" color="grey-6" class="q-mr-xs" />
+          <span class="text-caption text-grey-4" style="font-size: 11px;">
+            {{ gitStats.filesChanged }} file{{ gitStats.filesChanged !== 1 ? 's' : '' }}
+          </span>
+          <span v-if="gitStats.insertions > 0" class="text-caption q-ml-xs" style="font-size: 11px; color: #4ade80;">
+            +{{ gitStats.insertions }}
+          </span>
+          <span v-if="gitStats.deletions > 0" class="text-caption q-ml-xs" style="font-size: 11px; color: #f87171;">
+            -{{ gitStats.deletions }}
+          </span>
+        </div>
+      </template>
+      <div v-else class="q-mb-md" />
 
       <!-- Actions -->
       <div class="row q-gutter-xs">
