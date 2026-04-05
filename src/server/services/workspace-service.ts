@@ -205,6 +205,13 @@ export function updateWorkspaceName(id: string, name: string): Workspace {
   return getWorkspace(id) as Workspace
 }
 
+export function updateWorkspaceModel(id: string, model: string): Workspace {
+  const db = getDb()
+  const now = new Date().toISOString()
+  db.prepare('UPDATE workspaces SET model = ?, updated_at = ? WHERE id = ?').run(model, now, id)
+  return getWorkspace(id) as Workspace
+}
+
 export function updateDevServerStatus(id: string, status: string): void {
   const db = getDb()
   db.prepare('UPDATE workspaces SET dev_server_status = ? WHERE id = ?').run(status, id)

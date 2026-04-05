@@ -23,20 +23,35 @@ interface ParsedOption {
 }
 
 function parseOptions(content: string): { textBefore: string; options: ParsedOption[] } | null {
-  // Match patterns like "- **A — Description**" or "- **A** — Description"
-  const optionRegex = /^-\s*\*\*([A-Z])\s*[—–-]\s*(.+?)\*\*/gm
-  const matches = [...content.matchAll(optionRegex)]
-  if (matches.length < 2) return null // Need at least 2 options
+  // Pattern 1: "- **A — Description**"
+  const letterRegex = /^-\s*\*\*([A-Z])\s*[—–-]\s*(.+?)\*\*/gm
+  const letterMatches = [...content.matchAll(letterRegex)]
+  if (letterMatches.length >= 2) {
+    const firstMatchIndex = content.indexOf(letterMatches[0][0])
+    return {
+      textBefore: content.substring(0, firstMatchIndex).trim(),
+      options: letterMatches.map((m) => ({
+        key: m[1],
+        label: `${m[1]} — ${m[2]}`,
+      })),
+    }
+  }
 
-  const firstMatchIndex = content.indexOf(matches[0][0])
-  const textBefore = content.substring(0, firstMatchIndex).trim()
+  // Pattern 2: "1. **Label** — Description" or "1. **Label —** Description"
+  const numberedRegex = /^\d+\.\s*\*\*(.+?)\*\*\s*[—–-]\s*(.+)/gm
+  const numberedMatches = [...content.matchAll(numberedRegex)]
+  if (numberedMatches.length >= 2) {
+    const firstMatchIndex = content.indexOf(numberedMatches[0][0])
+    return {
+      textBefore: content.substring(0, firstMatchIndex).trim(),
+      options: numberedMatches.map((m, i) => ({
+        key: String(i + 1),
+        label: `${m[1]} — ${m[2]}`,
+      })),
+    }
+  }
 
-  const options: ParsedOption[] = matches.map((m) => ({
-    key: m[1],
-    label: `${m[1]} — ${m[2]}`,
-  }))
-
-  return { textBefore, options }
+  return null
 }
 
 const parsedOptionsCache = new Map<string, ReturnType<typeof parseOptions>>()
@@ -58,6 +73,19 @@ const lastTextItemId = computed(() => {
   const items = store.activityFeed
   for (let i = items.length - 1; i >= 0; i--) {
     if (items[i].type === 'text') return items[i].id
+  }
+  return null
+})
+
+// Show AskUserQuestion buttons only if the user hasn't replied yet.
+// Scan backwards: user message before finding the question → answered.
+// AskUserQuestion found first → active. Everything else is skipped.
+const activeAskId = computed(() => {
+  const items = store.activityFeed
+  for (let i = items.length - 1; i >= 0; i--) {
+    const item = items[i]
+    if (item.meta?.sender === 'user') return null
+    if (item.type === 'tool_use' && item.content === 'AskUserQuestion') return item.id
   }
   return null
 })
@@ -191,6 +219,38 @@ function toolDescription(item: ActivityItem): string {
   return ''
 }
 
+interface AskUserOption {
+  label: string
+  description?: string
+}
+
+interface AskUserQuestion {
+  question: string
+  options: AskUserOption[]
+}
+
+function getAskUserQuestions(item: ActivityItem): AskUserQuestion[] | null {
+  if (item.type !== 'tool_use' || item.content !== 'AskUserQuestion') return null
+  const input = (item.meta as Record<string, unknown>)?.input as Record<string, unknown> | undefined
+  if (!input?.questions || !Array.isArray(input.questions)) return null
+  const questions = input.questions as Array<Record<string, unknown>>
+  return questions
+    .filter((q) => Array.isArray(q.options) && q.options.length > 0)
+    .map((q) => ({
+      question: (q.question as string) ?? '',
+      options: (q.options as Array<Record<string, unknown>>).map((o) => ({
+        label: (o.label as string) ?? '',
+        description: (o.description as string) ?? '',
+      })),
+    }))
+}
+
+function sendQuestionAnswer(label: string) {
+  const workspaceId = store.selectedWorkspaceId
+  if (!workspaceId) return
+  wsStore.sendChatMessage(workspaceId, label)
+}
+
 function hasExpandableArgs(item: ActivityItem): boolean {
   if (!item.meta) return false
   const meta = item.meta as Record<string, unknown>
@@ -257,8 +317,41 @@ function formatSystemDetails(item: ActivityItem): string {
       class="af-item text-caption rounded-borders"
       :class="itemClass(item)"
     >
-      <!-- Tool use -->
-      <template v-if="item.type === 'tool_use'">
+      <!-- Tool use: AskUserQuestion -->
+      <template v-if="item.type === 'tool_use' && getAskUserQuestions(item)">
+        <div class="af-tool row items-center q-gutter-xs">
+          <q-icon name="help_outline" size="14px" color="indigo-4" />
+          <span class="af-tool-label text-indigo-4">Question</span>
+          <q-space />
+          <span class="af-time">{{ formatTime(item.timestamp) }}</span>
+        </div>
+        <div v-for="(q, qi) in getAskUserQuestions(item)" :key="qi" class="q-mt-sm">
+          <div v-if="q.question" class="text-grey-4 q-mb-xs">{{ q.question }}</div>
+          <div class="af-ask-options-list q-mb-sm">
+            <div v-for="(opt, oi) in q.options" :key="oi" class="af-ask-option-item text-caption text-grey-5">
+              <span class="text-weight-bold text-grey-3">{{ oi + 1 }}. {{ opt.label }}</span>
+              <span v-if="opt.description"> — {{ opt.description }}</span>
+            </div>
+          </div>
+          <div v-if="item.id === activeAskId" class="af-ask-buttons q-gutter-xs">
+            <q-btn
+              v-for="(opt, oi) in q.options"
+              :key="opt.label"
+              no-caps
+              outline
+              dense
+              color="indigo-4"
+              class="af-option-btn"
+              @click="sendQuestionAnswer(`${oi + 1}. ${opt.label}`)"
+            >
+              {{ opt.label }}
+            </q-btn>
+          </div>
+        </div>
+      </template>
+
+      <!-- Tool use: generic -->
+      <template v-else-if="item.type === 'tool_use'">
         <div
           class="af-tool row items-center q-gutter-xs"
           :class="{ 'cursor-pointer': hasExpandableArgs(item) }"
@@ -294,28 +387,25 @@ function formatSystemDetails(item: ActivityItem): string {
           <q-space />
           <span class="af-time">{{ formatTime(item.timestamp) }}</span>
         </div>
-        <!-- Check for interactive options (A/B/C choices) -->
-        <template v-if="getCachedOptions(item.id, item.content) && item.id === lastTextItemId">
-          <div class="af-text-content af-markdown" v-html="renderMarkdown(getCachedOptions(item.id, item.content)!.textBefore)" />
-          <div class="af-options q-mt-sm q-gutter-sm">
-            <q-btn
-              v-for="opt in getCachedOptions(item.id, item.content)!.options"
-              :key="opt.key"
-              no-caps
-              outline
-              dense
-              color="indigo-4"
-              class="af-option-btn"
-              @click="sendOptionChoice(opt.key)"
-            >
-              <span class="text-weight-bold q-mr-xs">{{ opt.key }}</span>
-              {{ opt.label.substring(opt.key.length + 3) }}
-            </q-btn>
-          </div>
-        </template>
-        <template v-else>
-          <div class="af-text-content af-markdown" v-html="renderMarkdown(item.content)" />
-        </template>
+        <div class="af-text-content af-markdown" v-html="renderMarkdown(item.content)" />
+        <!-- Quick-reply buttons when options detected -->
+        <div
+          v-if="getCachedOptions(item.id, item.content) && item.id === lastTextItemId"
+          class="af-options q-mt-sm q-gutter-xs"
+        >
+          <q-btn
+            v-for="opt in getCachedOptions(item.id, item.content)!.options"
+            :key="opt.key"
+            no-caps
+            outline
+            dense
+            color="indigo-4"
+            class="af-option-btn"
+            @click="sendOptionChoice(`${opt.key}. ${opt.label}`)"
+          >
+            {{ opt.label }}
+          </q-btn>
+        </div>
       </template>
 
       <!-- System -->
@@ -412,6 +502,10 @@ function formatSystemDetails(item: ActivityItem): string {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.af-ask-option-item {
+  padding: 2px 0;
 }
 
 .af-tool-args {

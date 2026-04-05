@@ -13,6 +13,22 @@ const ActivityFeed = defineAsyncComponent(() =>
 import ChatInput from 'src/components/ChatInput.vue'
 
 const store = useWorkspaceStore()
+
+const modelOptions = [
+  { label: 'Auto', value: 'auto' },
+  { label: 'Opus 4.6', value: 'claude-opus-4-6' },
+  { label: 'Sonnet 4.6', value: 'claude-sonnet-4-6' },
+  { label: 'Haiku 4.5', value: 'claude-haiku-4-5-20251001' },
+]
+
+const currentModel = computed({
+  get: () => store.selectedWorkspace?.model ?? 'auto',
+  set: (val: string) => {
+    if (store.selectedWorkspaceId) {
+      store.updateModel(store.selectedWorkspaceId, val)
+    }
+  },
+})
 const route = useRoute()
 const router = useRouter()
 
@@ -106,6 +122,25 @@ watch(
           style="min-width: 160px; max-width: 220px; font-size: 11px;"
         />
         <q-space />
+        <q-select
+          v-model="currentModel"
+          :options="modelOptions"
+          emit-value
+          map-options
+          dense
+          dark
+          borderless
+          options-dense
+          class="q-mr-sm model-select"
+          style="min-width: 100px; max-width: 160px; font-size: 11px;"
+        >
+          <template #selected>
+            <span class="row items-center no-wrap text-caption text-grey-5">
+              <q-icon name="auto_awesome" size="12px" color="indigo-4" class="q-mr-xs" />
+              {{ modelOptions.find(m => m.value === currentModel)?.label ?? currentModel }}
+            </span>
+          </template>
+        </q-select>
         <q-btn
           v-if="['created', 'idle', 'completed', 'error', 'quota'].includes(selectedWs.status)"
           dense

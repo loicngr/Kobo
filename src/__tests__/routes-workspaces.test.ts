@@ -10,6 +10,7 @@ vi.mock('../server/services/workspace-service.js', () => ({
   listWorkspaces: vi.fn(),
   updateWorkspaceStatus: vi.fn(),
   updateWorkspaceName: vi.fn(),
+  updateWorkspaceModel: vi.fn(),
   deleteWorkspace: vi.fn(),
   createTask: vi.fn(),
   listTasks: vi.fn(),
@@ -59,6 +60,7 @@ vi.mock('../server/utils/git-ops.js', () => ({
   getDiffStatsBetween: vi.fn().mockReturnValue(''),
   getCommitCount: vi.fn().mockReturnValue(0),
   getStructuredDiffStatsBetween: vi.fn().mockReturnValue({ filesChanged: 0, insertions: 0, deletions: 0 }),
+  getPrUrl: vi.fn().mockReturnValue(null),
 }))
 
 vi.mock('../server/services/websocket-service.js', () => ({
@@ -634,7 +636,7 @@ describe('PATCH /api/workspaces/:id', () => {
 
     expect(res.status).toBe(400)
     const data = await res.json()
-    expect(data.error).toContain('Missing required field: status')
+    expect(data.error).toContain('Missing field: status or model')
   })
 
   it('returns 404 for unknown workspace', async () => {
@@ -1295,6 +1297,7 @@ describe('GET /api/workspaces/:id/git-stats', () => {
       insertions: 42,
       deletions: 7,
     })
+    vi.mocked(gitOps.getPrUrl).mockReturnValue('https://github.com/org/repo/pull/1')
 
     const res = await app.request('/api/workspaces/ws-1/git-stats')
     expect(res.status).toBe(200)
@@ -1304,6 +1307,7 @@ describe('GET /api/workspaces/:id/git-stats', () => {
     expect(data.filesChanged).toBe(3)
     expect(data.insertions).toBe(42)
     expect(data.deletions).toBe(7)
+    expect(data.prUrl).toBe('https://github.com/org/repo/pull/1')
   })
 
   it('returns 404 when workspace not found', async () => {

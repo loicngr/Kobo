@@ -438,22 +438,28 @@ app.get('/:id', (c) => {
   }
 })
 
-// PATCH /api/workspaces/:id — update workspace status
+// PATCH /api/workspaces/:id — update workspace fields (status, model)
 app.patch('/:id', async (c) => {
   try {
     const id = c.req.param('id')
-    const body = await c.req.json<{ status: WorkspaceStatus }>()
-
-    if (!body.status) {
-      return c.json({ error: 'Missing required field: status' }, 400)
-    }
+    const body = await c.req.json<{ status?: WorkspaceStatus; model?: string }>()
 
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
     }
 
-    const updated = workspaceService.updateWorkspaceStatus(id, body.status)
+    let updated = workspace
+    if (body.model !== undefined) {
+      updated = workspaceService.updateWorkspaceModel(id, body.model)
+    }
+    if (body.status) {
+      updated = workspaceService.updateWorkspaceStatus(id, body.status)
+    }
+    if (!body.status && body.model === undefined) {
+      return c.json({ error: 'Missing field: status or model' }, 400)
+    }
+
     return c.json(updated)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -639,12 +645,14 @@ app.get('/:id/git-stats', async (c) => {
       workspace.sourceBranch,
       workspace.workingBranch,
     )
+    const prUrl = gitOps.getPrUrl(workspace.projectPath, workspace.workingBranch)
 
     return c.json({
       commitCount,
       filesChanged: diffStats.filesChanged,
       insertions: diffStats.insertions,
       deletions: diffStats.deletions,
+      prUrl,
     })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

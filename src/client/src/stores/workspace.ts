@@ -78,6 +78,7 @@ export interface GitStats {
   filesChanged: number
   insertions: number
   deletions: number
+  prUrl: string | null
 }
 
 export const useWorkspaceStore = defineStore('workspace', {
@@ -225,6 +226,18 @@ export const useWorkspaceStore = defineStore('workspace', {
         console.error('[workspace store] deleteWorkspace failed:', err)
         throw err
       }
+    },
+
+    async updateModel(id: string, model: string) {
+      const res = await fetch(`/api/workspaces/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const updated = (await res.json()) as Workspace
+      const idx = this.workspaces.findIndex((w) => w.id === id)
+      if (idx >= 0) this.workspaces[idx] = updated
     },
 
     async pushBranch(id: string): Promise<void> {

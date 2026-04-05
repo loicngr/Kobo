@@ -146,6 +146,19 @@ export function getCommitsBetween(repoPath: string, base: string, head: string):
   }
 }
 
+export function getPrUrl(repoPath: string, branchName: string): string | null {
+  try {
+    return (
+      execFileSync('gh', ['pr', 'view', branchName, '--json', 'url', '--jq', '.url'], {
+        cwd: repoPath,
+        encoding: 'utf-8',
+      }).trim() || null
+    )
+  } catch {
+    return null
+  }
+}
+
 export function getDiffStatsBetween(repoPath: string, base: string, head: string): string {
   try {
     return git(repoPath, ['diff', '--shortstat', `${base}...${head}`])

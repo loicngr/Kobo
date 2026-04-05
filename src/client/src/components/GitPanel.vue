@@ -178,6 +178,18 @@ async function handleOpenPr() {
       <!-- Actions -->
       <div class="row q-gutter-xs">
         <q-btn
+          v-if="gitStats?.prUrl"
+          dense
+          no-caps
+          size="sm"
+          outline
+          color="green-4"
+          label="View PR"
+          icon="open_in_new"
+          class="git-btn"
+          @click="window.open(gitStats.prUrl!, '_blank')"
+        />
+        <q-btn
           dense
           no-caps
           size="sm"

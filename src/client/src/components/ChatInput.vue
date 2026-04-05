@@ -164,6 +164,25 @@ const isDisabled = computed(() => {
   return !props.workspaceId
 })
 
+// Message history (arrow up/down to cycle through previous messages)
+const messageHistory = ref<string[]>(JSON.parse(localStorage.getItem('kobo:chatHistory') ?? '[]'))
+const historyIndex = ref(-1)
+const savedDraft = ref('')
+
+function pushToHistory(text: string) {
+  if (!text) return
+  // Avoid consecutive duplicates
+  if (messageHistory.value[0] === text) return
+  messageHistory.value.unshift(text)
+  if (messageHistory.value.length > 50) messageHistory.value.pop()
+  localStorage.setItem('kobo:chatHistory', JSON.stringify(messageHistory.value))
+}
+
+function resetHistoryNav() {
+  historyIndex.value = -1
+  savedDraft.value = ''
+}
+
 function sendMessage() {
   const text = message.value.trim()
   if ((!text && pendingImages.value.length === 0) || isDisabled.value || hasUploading.value) return
@@ -185,6 +204,8 @@ function sendMessage() {
     meta: { sender: 'user', pending: true },
   })
 
+  pushToHistory(text)
+  resetHistoryNav()
   message.value = ''
   pendingImages.value = []
 }
@@ -210,6 +231,25 @@ function onKeydown(event: KeyboardEvent) {
       showSkills.value = false
       return
     }
+  }
+
+  // Arrow up/down to navigate message history
+  if (event.key === 'ArrowUp' && messageHistory.value.length > 0) {
+    event.preventDefault()
+    if (historyIndex.value === -1) {
+      savedDraft.value = message.value
+    }
+    if (historyIndex.value < messageHistory.value.length - 1) {
+      historyIndex.value++
+      message.value = messageHistory.value[historyIndex.value]
+    }
+    return
+  }
+  if (event.key === 'ArrowDown' && historyIndex.value >= 0) {
+    event.preventDefault()
+    historyIndex.value--
+    message.value = historyIndex.value >= 0 ? messageHistory.value[historyIndex.value] : savedDraft.value
+    return
   }
 
   if (event.key === 'Enter' && !event.shiftKey) {
