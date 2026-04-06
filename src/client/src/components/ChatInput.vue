@@ -2,6 +2,9 @@
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { computed, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   workspaceId: string
@@ -284,7 +287,7 @@ function onKeydown(event: KeyboardEvent) {
         <q-icon v-else name="error" size="14px" color="red-6" class="q-mr-xs" />
 
         <span class="text-caption image-tag-label">
-          {{ img.status === 'uploading' ? 'Uploading...' : (img.path || img.originalName) }}
+          {{ img.status === 'uploading' ? t('chat.uploading') : (img.path || img.originalName) }}
         </span>
 
         <q-btn
@@ -302,7 +305,7 @@ function onKeydown(event: KeyboardEvent) {
     <!-- Skills autocomplete popup -->
     <div v-if="showSkills && filteredSkills.length > 0" class="skills-popup rounded-borders">
       <div class="skills-header text-caption text-weight-bold text-grey-6 q-px-sm q-py-xs">
-        Skills
+        {{ t('chat.skills') }}
       </div>
       <div
         v-for="(skill, idx) in filteredSkills.slice(0, 12)"
@@ -324,7 +327,7 @@ function onKeydown(event: KeyboardEvent) {
         dark
         borderless
         autogrow
-        placeholder="Message... (/ for skills)"
+        :placeholder="t('chat.placeholder')"
         class="chat-input col rounded-borders"
         :disable="isDisabled"
         @keydown="onKeydown"
@@ -349,7 +352,7 @@ function onKeydown(event: KeyboardEvent) {
         :disable="isDisabled"
         @click="fileInputRef?.click()"
       >
-        <q-tooltip>Attach image</q-tooltip>
+        <q-tooltip>{{ t('chat.attachImage') }}</q-tooltip>
       </q-btn>
 
       <q-btn

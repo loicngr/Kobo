@@ -5,6 +5,9 @@ import { useWebSocketStore } from 'src/stores/websocket'
 import type { ActivityItem } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 function renderMarkdown(text: string): string {
   const html = marked.parse(text, { async: false, breaks: true, gfm: true }) as string
@@ -270,11 +273,11 @@ function itemClass(item: ActivityItem): string {
 function senderLabel(item: ActivityItem): string {
   switch (item.meta?.sender) {
     case 'system-prompt':
-      return 'Initial Prompt'
+      return t('activityFeed.senderInitialPrompt')
     case 'user':
-      return 'You'
+      return t('activityFeed.senderYou')
     default:
-      return 'Agent'
+      return t('activityFeed.senderAgent')
   }
 }
 
@@ -388,9 +391,9 @@ function formatSystemDetails(item: ActivityItem): string {
       class="af-empty column items-center justify-center text-center q-pa-xl"
     >
       <q-icon name="forum" size="48px" color="grey-8" />
-      <div class="text-grey-6 q-mt-md text-body2">No activity yet</div>
+      <div class="text-grey-6 q-mt-md text-body2">{{ t('activityFeed.noActivity') }}</div>
       <div class="text-grey-8 text-caption q-mt-xs">
-        Start a workspace to see agent output here
+        {{ t('activityFeed.noActivityHint') }}
       </div>
     </div>
 
@@ -409,7 +412,7 @@ function formatSystemDetails(item: ActivityItem): string {
       <template v-if="item.type === 'tool_use' && getAskUserQuestions(item)">
         <div class="af-tool row items-center q-gutter-xs">
           <q-icon name="help_outline" size="14px" color="indigo-4" />
-          <span class="af-tool-label text-indigo-4">Question</span>
+          <span class="af-tool-label text-indigo-4">{{ t('activityFeed.question') }}</span>
           <q-space />
           <span class="af-time">{{ formatTime(item.timestamp) }}</span>
         </div>
@@ -551,7 +554,7 @@ function formatSystemDetails(item: ActivityItem): string {
       class="scroll-to-user-btn"
       @click="scrollToPreviousUserMessage"
     >
-      <q-tooltip>Go to previous message</q-tooltip>
+      <q-tooltip>{{ t('activityFeed.previousMessage') }}</q-tooltip>
     </q-btn>
   </div>
 </template>
