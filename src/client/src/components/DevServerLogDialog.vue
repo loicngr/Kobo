@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useDevServerStore } from 'src/stores/dev-server'
 import { nextTick, onUnmounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{
   modelValue: boolean
@@ -9,6 +10,7 @@ const props = defineProps<{
 
 defineEmits<{ 'update:modelValue': [value: boolean] }>()
 
+const { t } = useI18n()
 const devServerStore = useDevServerStore()
 const logs = ref('')
 const loading = ref(false)
@@ -69,7 +71,7 @@ onUnmounted(() => {
   <q-dialog :model-value="modelValue" @update:model-value="$emit('update:modelValue', $event)">
     <q-card class="text-grey-3" style="min-width: 700px; max-width: 900px; max-height: 80vh; background: #1e1e3a;">
       <q-card-section class="row items-center">
-        <div class="text-h6">Logs Dev Server</div>
+        <div class="text-h6">{{ t('devServer.logsTitle') }}</div>
         <q-space />
         <q-btn flat round dense icon="refresh" color="grey-5" @click="refresh" :loading="loading" />
         <q-btn flat round dense icon="close" color="grey-5" @click="$emit('update:modelValue', false)" />
@@ -78,7 +80,7 @@ onUnmounted(() => {
       <q-separator dark />
 
       <q-card-section class="log-content" ref="logContainer">
-        <pre class="log-text rounded-borders q-pa-md">{{ logs || 'No logs available' }}</pre>
+        <pre class="log-text rounded-borders q-pa-md">{{ logs || t('devServer.noLogs') }}</pre>
       </q-card-section>
     </q-card>
   </q-dialog>

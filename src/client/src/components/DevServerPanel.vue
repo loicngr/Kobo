@@ -3,11 +3,13 @@ import DevServerLogDialog from 'src/components/DevServerLogDialog.vue'
 import { useDevServerStore } from 'src/stores/dev-server'
 import { useSettingsStore } from 'src/stores/settings'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{
   workspace: { id: string; projectPath: string } | null
 }>()
 
+const { t } = useI18n()
 const devServerStore = useDevServerStore()
 const settingsStore = useSettingsStore()
 
@@ -47,17 +49,17 @@ const statusColor = computed(() => {
 const statusLabel = computed(() => {
   switch (status.value?.status) {
     case 'running':
-      return 'Running'
+      return t('devServer.statusRunning')
     case 'starting':
-      return 'Starting'
+      return t('devServer.statusStarting')
     case 'stopping':
-      return 'Stopping'
+      return t('devServer.statusStopping')
     case 'error':
-      return 'Error'
+      return t('devServer.statusError')
     case 'stopped':
-      return 'Stopped'
+      return t('devServer.statusStopped')
     default:
-      return 'Unknown'
+      return t('devServer.statusUnknown')
   }
 })
 
@@ -129,19 +131,19 @@ onUnmounted(() => {
 <template>
   <div class="dd-panel q-px-md q-py-sm">
     <div class="text-caption text-uppercase text-weight-bold text-grey-5 q-mb-xs">
-      Dev Server
+      {{ t('devServer.title') }}
     </div>
 
     <template v-if="!workspace">
       <div class="text-caption text-grey-8">
-        No workspace selected
+        {{ t('devServer.noWorkspace') }}
       </div>
     </template>
 
     <template v-else-if="!hasDevServer">
       <div class="text-caption text-grey-8">
-        Not configured —
-        <router-link to="/settings" style="color: #6c63ff;">Settings</router-link>
+        {{ t('devServer.notConfigured') }}
+        <router-link to="/settings" style="color: #6c63ff;">{{ t('devServer.settingsLink') }}</router-link>
       </div>
     </template>
 
@@ -154,7 +156,7 @@ onUnmounted(() => {
         <q-btn v-if="canStart" flat round dense icon="play_arrow" size="xs" color="green-5" @click="start" :loading="starting" />
         <q-btn v-if="canStop" flat round dense icon="stop" size="xs" color="red-5" @click="stop" :loading="stopping" />
         <q-btn flat round dense icon="article" size="xs" color="grey-5" @click="showLogs = true">
-          <q-tooltip>Logs</q-tooltip>
+          <q-tooltip>{{ t('devServer.logsTooltip') }}</q-tooltip>
         </q-btn>
       </div>
 
@@ -165,7 +167,7 @@ onUnmounted(() => {
 
       <!-- Containers -->
       <div v-if="status.containers.length > 0" class="text-caption text-grey-7" style="font-size: 10px;">
-        {{ status.containers.length }} container{{ status.containers.length > 1 ? 's' : '' }}
+        {{ status.containers.length }} {{ t('devServer.containerWord', status.containers.length) }}
       </div>
 
       <!-- Error -->
