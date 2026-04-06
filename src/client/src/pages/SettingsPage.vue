@@ -10,6 +10,8 @@ const $q = useQuasar()
 const store = useSettingsStore()
 const { t, locale } = useI18n()
 
+const currentLocale = computed(() => locale.value as Locale)
+
 const localeOptions = computed(() => [
   { label: t('language.en'), value: 'en' as Locale },
   { label: t('language.fr'), value: 'fr' as Locale },
@@ -306,7 +308,7 @@ onMounted(async () => {
                 {{ t('language.label') }}
               </div>
               <q-select
-                :model-value="locale"
+                :model-value="currentLocale"
                 :options="localeOptions"
                 emit-value
                 map-options
@@ -513,7 +515,7 @@ onMounted(async () => {
                       dark
                       outlined
                       :readonly="!isNewProject"
-                      placeholder="/path/to/project"
+                      :placeholder="t('settings.projectPathPlaceholder')"
                       class="settings-input"
                       :class="{ 'readonly-input': !isNewProject }"
                     />
@@ -614,7 +616,7 @@ onMounted(async () => {
                       outlined
                       :rows="6"
                       autogrow
-                      :placeholder="t('settings.gitConventionsProjectHint')"
+                      :placeholder="t('settings.gitConventionsProjectPlaceholder')"
                       class="settings-input mono-textarea"
                     />
                     <div class="text-caption text-grey-7 q-mt-xs">{{ t('settings.gitConventionsProjectHint') }}</div>
