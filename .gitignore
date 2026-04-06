@@ -8,3 +8,6 @@ docs/
 .idea/
 src/client/.quasar/
 .mcp.json
+.ai/git-conventions.md
+.ai/thoughts/
+.ai/images/
