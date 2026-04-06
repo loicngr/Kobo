@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { useWebSocketStore } from './websocket'
 
 export interface Workspace {
   id: string
@@ -10,6 +11,7 @@ export interface Workspace {
   notionUrl: string | null
   notionPageId: string | null
   model: string
+  permissionMode: string
   devServerStatus: string
   archivedAt: string | null
   createdAt: string
@@ -87,12 +89,20 @@ export interface Subagent {
   updatedAt: string
 }
 
+export interface AgentTodo {
+  content: string
+  status: string
+  activeForm?: string
+}
+
 export interface GitStats {
   commitCount: number
   filesChanged: number
   insertions: number
   deletions: number
   prUrl: string | null
+  prState: 'OPEN' | 'CLOSED' | 'MERGED' | null
+  unpushedCount: number // -1 = no upstream
 }
 
 export const useWorkspaceStore = defineStore('workspace', {
@@ -102,11 +112,13 @@ export const useWorkspaceStore = defineStore('workspace', {
     tasks: [] as Task[],
     activityFeeds: {} as Record<string, ActivityItem[]>,
     subagents: {} as Record<string, Record<string, Subagent>>,
+    agentTodos: {} as Record<string, AgentTodo[]>,
     sessions: [] as AgentSession[],
     selectedSessionId: null as string | null,
     archivedWorkspaces: [] as Workspace[],
     archivedLoaded: false,
     loading: false,
+    gitRefreshTrigger: 0,
   }),
 
   getters: {
@@ -117,6 +129,11 @@ export const useWorkspaceStore = defineStore('workspace', {
     running: (state) => state.workspaces.filter((w) => ['extracting', 'brainstorming', 'executing'].includes(w.status)),
 
     idle: (state) => state.workspaces.filter((w) => ['completed', 'idle', 'created'].includes(w.status)),
+
+    currentAgentTodos: (state): AgentTodo[] => {
+      if (!state.selectedWorkspaceId) return []
+      return state.agentTodos[state.selectedWorkspaceId] ?? []
+    },
 
     currentSubagents: (state): Subagent[] => {
       if (!state.selectedWorkspaceId) return []
@@ -261,6 +278,18 @@ export const useWorkspaceStore = defineStore('workspace', {
       if (idx >= 0) this.workspaces[idx] = updated
     },
 
+    async updatePermissionMode(id: string, permissionMode: string) {
+      const res = await fetch(`/api/workspaces/${id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ permissionMode }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const updated = (await res.json()) as Workspace
+      const idx = this.workspaces.findIndex((w) => w.id === id)
+      if (idx >= 0) this.workspaces[idx] = updated
+    },
+
     async pushBranch(id: string): Promise<void> {
       const res = await fetch(`/api/workspaces/${id}/push`, { method: 'POST' })
       if (!res.ok) {
@@ -370,6 +399,10 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.tasks = []
       this.fetchWorkspaceDetails(id)
       this.fetchSessions(id)
+      // Re-subscribe to replay events if the feed is empty (e.g. after unarchive)
+      if (!this.activityFeeds[id]?.length) {
+        useWebSocketStore().subscribe(id)
+      }
     },
 
     async fetchSessions(workspaceId: string) {
@@ -410,6 +443,14 @@ export const useWorkspaceStore = defineStore('workspace', {
       } else {
         this.activityFeeds = {}
       }
+    },
+
+    triggerGitRefresh() {
+      this.gitRefreshTrigger++
+    },
+
+    updateAgentTodos(workspaceId: string, todos: AgentTodo[]) {
+      this.agentTodos[workspaceId] = todos
     },
 
     upsertSubagent(workspaceId: string, data: Partial<Subagent> & { toolUseId: string }) {

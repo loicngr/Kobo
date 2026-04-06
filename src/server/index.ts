@@ -13,7 +13,14 @@ import imagesRouter from './routes/images.js'
 import notionRouter from './routes/notion.js'
 import settingsRouter from './routes/settings.js'
 import workspacesRouter from './routes/workspaces.js'
-import { getAvailableSkills, sendMessage, setBackendPort, startAgent, stopAgent } from './services/agent-manager.js'
+import {
+  getAvailableSkills,
+  sendMessage,
+  setBackendPort,
+  startAgent,
+  startWatchdog,
+  stopAgent,
+} from './services/agent-manager.js'
 import { startDevServer, stopDevServer } from './services/dev-server-service.js'
 import { emit, handleConnection, setMessageHandler } from './services/websocket-service.js'
 import { getLatestSession, getWorkspace, updateWorkspaceStatus } from './services/workspace-service.js'
@@ -38,8 +45,13 @@ console.log(`[kobo] Kōbō home: ${getKoboHome()}`)
 const db = getDb()
 runMigrations(db)
 
-// 2. Initialize process cleanup
+// 2. Initialize process cleanup, agent watchdog, and PR watcher
 initProcessCleanup()
+startWatchdog()
+
+import { startPrWatcher } from './services/pr-watcher-service.js'
+
+startPrWatcher()
 
 // 3. Create Hono app
 const app = new Hono()
@@ -148,7 +160,7 @@ setMessageHandler((type, payload) => {
         const workspace = getWorkspace(p.workspaceId)
         if (workspace) {
           const worktreePath = `${workspace.projectPath}/.worktrees/${workspace.workingBranch}`
-          startAgent(p.workspaceId, worktreePath, p.content, workspace.model, true)
+          startAgent(p.workspaceId, worktreePath, p.content, workspace.model, true, workspace.permissionMode)
           updateWorkspaceStatus(p.workspaceId, 'executing')
         }
       } catch (restartErr) {
@@ -166,7 +178,7 @@ setMessageHandler((type, payload) => {
       }
       const worktreePath = `${workspace.projectPath}/.worktrees/${workspace.workingBranch}`
       const prompt = p.prompt ?? 'Continue the previous task where you left off.'
-      startAgent(p.workspaceId, worktreePath, prompt, workspace.model)
+      startAgent(p.workspaceId, worktreePath, prompt, workspace.model, false, workspace.permissionMode)
     } catch (err) {
       console.error('[ws] Failed to start agent:', err)
     }

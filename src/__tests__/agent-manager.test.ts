@@ -30,8 +30,25 @@ vi.mock('node:fs', async (importOriginal) => {
 // ── Mock workspace-service ──
 
 const mockUpdateWorkspaceStatus = vi.fn()
+const mockGetWorkspace = vi.fn().mockReturnValue(null)
+const mockListTasks = vi.fn().mockReturnValue([])
 vi.mock('../server/services/workspace-service.js', () => ({
   updateWorkspaceStatus: (...args: unknown[]) => mockUpdateWorkspaceStatus(...args),
+  getWorkspace: (...args: unknown[]) => mockGetWorkspace(...args),
+  listTasks: (...args: unknown[]) => mockListTasks(...args),
+}))
+
+// ── Mock settings-service ──
+
+vi.mock('../server/services/settings-service.js', () => ({
+  getEffectiveSettings: vi.fn().mockReturnValue({
+    model: 'auto',
+    dangerouslySkipPermissions: true,
+    prPromptTemplate: '',
+    gitConventions: '',
+    sourceBranch: 'main',
+    devServer: null,
+  }),
 }))
 
 // ── Mock websocket-service ──

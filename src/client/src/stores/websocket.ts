@@ -171,24 +171,62 @@ export const useWebSocketStore = defineStore('websocket', {
             )
             for (const block of toolUseBlocks) {
               const b = block as Record<string, unknown>
+              const toolName = (b.name as string) ?? 'tool'
               workspaceStore.addActivityItem(wid, {
                 id: `${eventId}-${(b.id as string) ?? Math.random()}`,
                 type: 'tool_use',
-                content: (b.name as string) ?? 'tool',
+                content: toolName,
                 timestamp,
                 sessionId,
                 meta: b,
               })
+              // Trigger git panel refresh when agent runs git-related Bash commands
+              if (toolName === 'Bash' && wid) {
+                const input = b.input as Record<string, unknown> | undefined
+                const cmd = ((input?.command as string) ?? '') + ((input?.description as string) ?? '')
+                if (/\bgit\b|commit|push|pull|merge|rebase|checkout|branch/i.test(cmd)) {
+                  workspaceStore.triggerGitRefresh()
+                }
+              }
+              // Capture TodoWrite to track agent's internal todos
+              if (toolName === 'TodoWrite' && wid) {
+                const input = b.input as Record<string, unknown> | undefined
+                if (input?.todos && Array.isArray(input.todos)) {
+                  workspaceStore.updateAgentTodos(
+                    wid,
+                    (input.todos as Array<Record<string, unknown>>).map((t) => ({
+                      content: (t.content as string) ?? '',
+                      status: (t.status as string) ?? 'pending',
+                      activeForm: (t.activeForm as string) ?? undefined,
+                    })),
+                  )
+                }
+              }
             }
           } else if (outputType === 'tool_use') {
+            const toolName = (payload.name as string) ?? 'tool'
             workspaceStore.addActivityItem(wid, {
               id: eventId,
               type: 'tool_use',
-              content: (payload.name as string) ?? 'tool',
+              content: toolName,
               timestamp,
               sessionId,
               meta: payload,
             })
+            // Capture TodoWrite to track agent's internal todos
+            if (toolName === 'TodoWrite' && wid) {
+              const input = payload.input as Record<string, unknown> | undefined
+              if (input?.todos && Array.isArray(input.todos)) {
+                workspaceStore.updateAgentTodos(
+                  wid,
+                  (input.todos as Array<Record<string, unknown>>).map((t) => ({
+                    content: (t.content as string) ?? '',
+                    status: (t.status as string) ?? 'pending',
+                    activeForm: (t.activeForm as string) ?? undefined,
+                  })),
+                )
+              }
+            }
           } else if (outputType === 'tool_result') {
             const resultContent = this._extractToolResultContent(payload.content)
             if (resultContent) {
@@ -253,6 +291,7 @@ export const useWebSocketStore = defineStore('websocket', {
               // Never auto-switch session on init — let the user stay on
               // "All sessions" so the feed is not filtered and previous
               // activity remains visible across agent restarts/resumes.
+              if (!useSettingsStore().showVerboseSystemMessages) break
             }
 
             const handler = subtype ? systemMessages[subtype] : undefined
@@ -283,6 +322,7 @@ export const useWebSocketStore = defineStore('websocket', {
               })
             }
           } else if (outputType === 'result') {
+            if (!useSettingsStore().showVerboseSystemMessages) break
             // Only show cost/token summary — the result text is already shown as an assistant message
             const usage = payload.usage as Record<string, unknown> | undefined
             if (usage) {
@@ -342,6 +382,7 @@ export const useWebSocketStore = defineStore('websocket', {
               }
             }
           } else if (outputType === 'rate_limit_event') {
+            if (!useSettingsStore().showVerboseSystemMessages) break
             const info = payload.rate_limit_info as Record<string, unknown> | undefined
             if (info) {
               const status = (info.status as string) ?? 'unknown'

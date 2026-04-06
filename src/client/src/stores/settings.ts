@@ -10,6 +10,7 @@ interface ProjectSettings {
   displayName: string
   defaultSourceBranch: string
   defaultModel: string
+  dangerouslySkipPermissions: boolean
   prPromptTemplate: string
   gitConventions: string
   devServer: DevServerConfig
@@ -17,6 +18,7 @@ interface ProjectSettings {
 
 interface GlobalSettings {
   defaultModel: string
+  dangerouslySkipPermissions: boolean
   prPromptTemplate: string
   gitConventions: string
 }
@@ -29,7 +31,12 @@ export type { DevServerConfig, GlobalSettings, ProjectSettings }
 
 export const useSettingsStore = defineStore('settings', {
   state: () => ({
-    global: { defaultModel: 'auto', prPromptTemplate: '', gitConventions: '' } as GlobalSettings,
+    global: {
+      defaultModel: 'auto',
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      gitConventions: '',
+    } as GlobalSettings,
     projects: [] as ProjectSettings[],
     loading: false,
     showVerboseSystemMessages: localStorage.getItem('kobo:showVerboseSystemMessages') === 'true',

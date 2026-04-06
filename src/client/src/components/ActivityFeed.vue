@@ -52,6 +52,35 @@ function parseOptions(content: string): { textBefore: string; options: ParsedOpt
     }
   }
 
+  // Pattern 3: "- **Label** — Description" or "- **Label** (extra) — Description"
+  // Use [^\S\n] instead of \s to prevent matching across line boundaries
+  const bulletBoldRegex = /^[-•][^\S\n]*\*\*(.+?)\*\*[^\S\n]*(?:\([^)]*\)[^\S\n]*)?[—–-][^\S\n]*(.+)/gm
+  const bulletBoldMatches = [...content.matchAll(bulletBoldRegex)]
+  if (bulletBoldMatches.length >= 2) {
+    const firstMatchIndex = content.indexOf(bulletBoldMatches[0][0])
+    return {
+      textBefore: content.substring(0, firstMatchIndex).trim(),
+      options: bulletBoldMatches.map((m, i) => ({
+        key: String(i + 1),
+        label: `${m[1]} — ${m[2]}`,
+      })),
+    }
+  }
+
+  // Pattern 4: "- **Label**" or "- **Label** (extra)" — simple bold bullet list without description
+  const simpleBulletRegex = /^[-•][^\S\n]*\*\*(.+?)\*\*[^\S\n]*(?:\(([^)]*)\))?[^\S\n]*$/gm
+  const simpleBulletMatches = [...content.matchAll(simpleBulletRegex)]
+  if (simpleBulletMatches.length >= 2) {
+    const firstMatchIndex = content.indexOf(simpleBulletMatches[0][0])
+    return {
+      textBefore: content.substring(0, firstMatchIndex).trim(),
+      options: simpleBulletMatches.map((m, i) => ({
+        key: String(i + 1),
+        label: m[2] ? `${m[1]} (${m[2]})` : m[1],
+      })),
+    }
+  }
+
   return null
 }
 
@@ -260,6 +289,14 @@ function senderColor(item: ActivityItem): string {
   }
 }
 
+function toolDisplayName(item: ActivityItem): string {
+  if (item.content === 'Skill' && item.meta) {
+    const input = (item.meta as Record<string, unknown>).input as Record<string, unknown> | undefined
+    if (input && typeof input.skill === 'string') return `Skill — ${input.skill}`
+  }
+  return item.content
+}
+
 function toolDescription(item: ActivityItem): string {
   if (!item.meta) return ''
   const input = (item.meta as Record<string, unknown>).input as Record<string, unknown> | undefined
@@ -409,7 +446,7 @@ function formatSystemDetails(item: ActivityItem): string {
           @click="hasExpandableArgs(item) && toggleExpand(item.id)"
         >
           <q-icon :name="iconForToolUse(item.content)" size="14px" color="grey-6" />
-          <span class="af-tool-label text-grey-7">{{ item.content }}</span>
+          <span class="af-tool-label text-grey-7">{{ toolDisplayName(item) }}</span>
           <span v-if="toolDescription(item)" class="af-tool-desc text-grey-8">— {{ toolDescription(item) }}</span>
           <q-icon
             v-if="hasExpandableArgs(item)"

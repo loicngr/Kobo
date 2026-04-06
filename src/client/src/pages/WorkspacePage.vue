@@ -21,11 +21,25 @@ const modelOptions = [
   { label: 'Haiku 4.5', value: 'claude-haiku-4-5-20251001' },
 ]
 
+const permissionModeOptions = [
+  { label: 'Auto-accept', value: 'auto-accept' },
+  { label: 'Plan', value: 'plan' },
+]
+
 const currentModel = computed({
   get: () => store.selectedWorkspace?.model ?? 'auto',
   set: (val: string) => {
     if (store.selectedWorkspaceId) {
       store.updateModel(store.selectedWorkspaceId, val)
+    }
+  },
+})
+
+const currentPermissionMode = computed({
+  get: () => store.selectedWorkspace?.permissionMode ?? 'auto-accept',
+  set: (val: string) => {
+    if (store.selectedWorkspaceId) {
+      store.updatePermissionMode(store.selectedWorkspaceId, val)
     }
   },
 })
@@ -122,6 +136,25 @@ watch(
           style="min-width: 160px; max-width: 220px; font-size: 11px;"
         />
         <q-space />
+        <q-select
+          v-model="currentPermissionMode"
+          :options="permissionModeOptions"
+          emit-value
+          map-options
+          dense
+          dark
+          borderless
+          options-dense
+          class="q-mr-xs"
+          style="min-width: 80px; max-width: 140px; font-size: 11px;"
+        >
+          <template #selected>
+            <span class="row items-center no-wrap text-caption text-grey-5">
+              <q-icon :name="currentPermissionMode === 'plan' ? 'visibility' : 'flash_on'" size="12px" color="amber-6" class="q-mr-xs" />
+              {{ permissionModeOptions.find(m => m.value === currentPermissionMode)?.label ?? currentPermissionMode }}
+            </span>
+          </template>
+        </q-select>
         <q-select
           v-model="currentModel"
           :options="modelOptions"

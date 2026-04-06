@@ -12,6 +12,7 @@ export function initSchema(db: Database.Database): void {
       notion_url TEXT,
       notion_page_id TEXT,
       model TEXT NOT NULL DEFAULT 'claude-opus-4-6',
+      permission_mode TEXT NOT NULL DEFAULT 'auto-accept',
       dev_server_status TEXT NOT NULL DEFAULT 'stopped',
       archived_at TEXT,
       created_at TEXT NOT NULL,

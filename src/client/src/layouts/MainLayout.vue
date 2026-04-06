@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import AcceptancePanel from 'src/components/AcceptancePanel.vue'
+import AgentTodosPanel from 'src/components/AgentTodosPanel.vue'
 import DevServerPanel from 'src/components/DevServerPanel.vue'
 import GitPanel from 'src/components/GitPanel.vue'
 import NotionPanel from 'src/components/NotionPanel.vue'
@@ -107,6 +108,8 @@ const store = useWorkspaceStore()
             <NotionPanel :workspace="store.selectedWorkspace" :tasks="store.tasks" />
             <q-separator dark />
             <AcceptancePanel :tasks="store.acceptanceCriteria" />
+            <q-separator dark />
+            <AgentTodosPanel />
           </q-tab-panel>
 
           <q-tab-panel name="subagents" class="q-pa-none">

@@ -11,6 +11,7 @@ vi.mock('../server/services/workspace-service.js', () => ({
   updateWorkspaceStatus: vi.fn(),
   updateWorkspaceName: vi.fn(),
   updateWorkspaceModel: vi.fn(),
+  updateWorkspacePermissionMode: vi.fn(),
   deleteWorkspace: vi.fn(),
   createTask: vi.fn(),
   listTasks: vi.fn(),
@@ -61,6 +62,8 @@ vi.mock('../server/utils/git-ops.js', () => ({
   getCommitCount: vi.fn().mockReturnValue(0),
   getStructuredDiffStatsBetween: vi.fn().mockReturnValue({ filesChanged: 0, insertions: 0, deletions: 0 }),
   getPrUrl: vi.fn().mockReturnValue(null),
+  getPrStatus: vi.fn().mockReturnValue(null),
+  getUnpushedCount: vi.fn().mockReturnValue(0),
 }))
 
 vi.mock('../server/services/websocket-service.js', () => ({
@@ -130,6 +133,7 @@ const fakeWorkspace = {
   notionUrl: null,
   notionPageId: null,
   model: 'claude-opus-4-6',
+  permissionMode: 'auto-accept' as const,
   devServerStatus: 'stopped',
   archivedAt: null,
   createdAt: '2026-01-01T00:00:00.000Z',
@@ -168,6 +172,7 @@ beforeEach(() => {
   // Default: no git conventions configured — individual tests can override
   vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
     model: 'auto',
+    dangerouslySkipPermissions: true,
     prPromptTemplate: '',
     gitConventions: '',
     sourceBranch: 'main',
@@ -660,7 +665,7 @@ describe('PATCH /api/workspaces/:id', () => {
 
     expect(res.status).toBe(400)
     const data = await res.json()
-    expect(data.error).toContain('Missing field: status or model')
+    expect(data.error).toContain('Missing field: status, model, or permissionMode')
   })
 
   it('returns 404 for unknown workspace', async () => {
@@ -698,6 +703,8 @@ describe('POST /api/workspaces/:id/start', () => {
       '/tmp/project/.worktrees/feature/test',
       'Do something',
       'claude-opus-4-6',
+      false,
+      'auto-accept',
     )
     expect(workspaceService.updateWorkspaceStatus).toHaveBeenCalledWith('ws-1', 'executing')
   })
@@ -717,6 +724,8 @@ describe('POST /api/workspaces/:id/start', () => {
       '/tmp/project/.worktrees/feature/test',
       'Continue the previous task where you left off.',
       'claude-opus-4-6',
+      false,
+      'auto-accept',
     )
   })
 
@@ -815,6 +824,7 @@ describe('git conventions file creation on workspace create', () => {
   it('writes .ai/git-conventions.md when gitConventions is non-empty', async () => {
     vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
       model: 'auto',
+      dangerouslySkipPermissions: true,
       prPromptTemplate: '',
       gitConventions: '# My conventions\n- Rule 1',
       sourceBranch: 'main',
@@ -842,6 +852,7 @@ describe('git conventions file creation on workspace create', () => {
   it('does NOT write the file when gitConventions is empty', async () => {
     vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
       model: 'auto',
+      dangerouslySkipPermissions: true,
       prPromptTemplate: '',
       gitConventions: '',
       sourceBranch: 'main',
@@ -868,6 +879,7 @@ describe('git conventions file creation on workspace create', () => {
   it('includes the git conventions section in the agent prompt when non-empty', async () => {
     vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
       model: 'auto',
+      dangerouslySkipPermissions: true,
       prPromptTemplate: '',
       gitConventions: '# conventions',
       sourceBranch: 'main',
@@ -895,6 +907,7 @@ describe('git conventions file creation on workspace create', () => {
   it('does NOT include the git conventions section when empty', async () => {
     vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
       model: 'auto',
+      dangerouslySkipPermissions: true,
       prPromptTemplate: '',
       gitConventions: '',
       sourceBranch: 'main',
@@ -1058,6 +1071,7 @@ describe('POST /api/workspaces/:id/open-pr', () => {
   it('creates PR, renders template, sends message on happy path', async () => {
     vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
       model: 'auto',
+      dangerouslySkipPermissions: true,
       prPromptTemplate: 'template body',
       gitConventions: '',
       sourceBranch: 'main',
@@ -1098,6 +1112,7 @@ describe('POST /api/workspaces/:id/open-pr', () => {
   it('returns messageSent: false when template is empty (PR still created)', async () => {
     vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
       model: 'auto',
+      dangerouslySkipPermissions: true,
       prPromptTemplate: '',
       gitConventions: '',
       sourceBranch: 'main',
@@ -1123,6 +1138,7 @@ describe('POST /api/workspaces/:id/open-pr', () => {
   it('returns 500 when gh pr create fails', async () => {
     vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
       model: 'auto',
+      dangerouslySkipPermissions: true,
       prPromptTemplate: '',
       gitConventions: '',
       sourceBranch: 'main',
@@ -1146,6 +1162,7 @@ describe('POST /api/workspaces/:id/open-pr', () => {
   it('returns 500 when gh output cannot be parsed', async () => {
     vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
       model: 'auto',
+      dangerouslySkipPermissions: true,
       prPromptTemplate: '',
       gitConventions: '',
       sourceBranch: 'main',
@@ -1166,9 +1183,10 @@ describe('POST /api/workspaces/:id/open-pr', () => {
     expect(data.error).toContain('parse')
   })
 
-  it('returns 200 with warning when sendMessage fails (PR already created)', async () => {
+  it('resumes agent when sendMessage fails (PR already created)', async () => {
     vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
       model: 'auto',
+      dangerouslySkipPermissions: true,
       prPromptTemplate: 'template',
       gitConventions: '',
       sourceBranch: 'main',
@@ -1192,8 +1210,9 @@ describe('POST /api/workspaces/:id/open-pr', () => {
     const data = await res.json()
     expect(data.ok).toBe(true)
     expect(data.prNumber).toBe(42)
-    expect(data.messageSent).toBe(false)
-    expect(data.warning).toBeDefined()
+    // Agent is resumed with the PR prompt
+    expect(data.messageSent).toBe(true)
+    expect(agentManager.startAgent).toHaveBeenCalled()
   })
 })
 
@@ -1321,7 +1340,7 @@ describe('GET /api/workspaces/:id/git-stats', () => {
       insertions: 42,
       deletions: 7,
     })
-    vi.mocked(gitOps.getPrUrl).mockReturnValue('https://github.com/org/repo/pull/1')
+    vi.mocked(gitOps.getPrStatus).mockReturnValue({ state: 'OPEN', url: 'https://github.com/org/repo/pull/1' })
 
     const res = await app.request('/api/workspaces/ws-1/git-stats')
     expect(res.status).toBe(200)
@@ -1332,6 +1351,7 @@ describe('GET /api/workspaces/:id/git-stats', () => {
     expect(data.insertions).toBe(42)
     expect(data.deletions).toBe(7)
     expect(data.prUrl).toBe('https://github.com/org/repo/pull/1')
+    expect(data.prState).toBe('OPEN')
   })
 
   it('returns 404 when workspace not found', async () => {

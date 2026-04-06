@@ -43,6 +43,16 @@ watch(
   { immediate: true },
 )
 
+// Refresh when agent runs git commands (debounced)
+let gitRefreshTimeout: ReturnType<typeof setTimeout> | null = null
+watch(
+  () => store.gitRefreshTrigger,
+  () => {
+    if (gitRefreshTimeout) clearTimeout(gitRefreshTimeout)
+    gitRefreshTimeout = setTimeout(() => loadGitStats(), 3000)
+  },
+)
+
 async function handlePush() {
   if (!props.workspace) return
   pushing.value = true
@@ -58,28 +68,25 @@ async function handlePush() {
   }
 }
 
+function viewPr() {
+  if (gitStats.value?.prUrl) {
+    window.open(gitStats.value.prUrl, '_blank')
+  }
+}
+
 async function handleOpenPr() {
   if (!props.workspace) return
   openingPr.value = true
   try {
     const result = await store.openPullRequest(props.workspace.id)
-    if (result.messageSent === false && result.warning) {
-      $q.notify({
-        type: 'warning',
-        message: `PR #${result.prNumber} opened — agent not active, message not sent`,
-        caption: result.prUrl,
-        position: 'top',
-        timeout: 6000,
-      })
-    } else {
-      $q.notify({
-        type: 'positive',
-        message: `PR #${result.prNumber} opened`,
-        caption: result.prUrl,
-        position: 'top',
-        timeout: 5000,
-      })
-    }
+    $q.notify({
+      type: 'positive',
+      message: `PR #${result.prNumber} created`,
+      caption: result.prUrl,
+      position: 'top',
+      timeout: 5000,
+    })
+    loadGitStats()
   } catch (e) {
     if (e instanceof WorkspaceActionError && e.code === 'branch_not_pushed') {
       $q.notify({
@@ -146,7 +153,13 @@ async function handleOpenPr() {
 
       <!-- Source branch info -->
       <div class="text-caption q-mb-sm text-grey-8" style="font-size: 11px;">
-        from {{ workspace.sourceBranch }} &middot; local only
+        from {{ workspace.sourceBranch }}
+        <template v-if="gitStats">
+          &middot;
+          <span v-if="gitStats.unpushedCount === -1">local only</span>
+          <span v-else-if="gitStats.unpushedCount === 0" style="color: #4ade80;">pushed</span>
+          <span v-else style="color: #f59e0b;">{{ gitStats.unpushedCount }} unpushed</span>
+        </template>
       </div>
 
       <!-- Git stats -->
@@ -187,20 +200,22 @@ async function handleOpenPr() {
           label="View PR"
           icon="open_in_new"
           class="git-btn"
-          @click="window.open(gitStats.prUrl!, '_blank')"
+          @click="viewPr"
         />
         <q-btn
+          v-if="!gitStats?.prUrl || gitStats.prState === 'CLOSED' || gitStats.prState === 'MERGED'"
           dense
           no-caps
           size="sm"
           color="primary"
-          label="Open PR"
+          label="Create PR"
           class="git-btn"
           :loading="openingPr"
           :disable="!workspace || pushing"
           @click="handleOpenPr"
         />
         <q-btn
+          v-if="!gitStats || gitStats.unpushedCount !== 0"
           dense
           no-caps
           size="sm"

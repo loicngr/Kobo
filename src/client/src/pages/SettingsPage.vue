@@ -12,6 +12,7 @@ const activeTab = ref('global')
 
 // Global form
 const globalModel = ref('auto')
+const globalSkipPermissions = ref(true)
 const globalPrPrompt = ref('')
 const globalGitConventions = ref('')
 const savingGlobal = ref(false)
@@ -24,6 +25,7 @@ const projectForm = ref({
   displayName: '',
   defaultSourceBranch: '',
   defaultModel: '',
+  dangerouslySkipPermissions: true,
   prPromptTemplate: '',
   gitConventions: '',
   devServer: { startCommand: '', stopCommand: '' },
@@ -71,6 +73,7 @@ const selectedProject = computed<ProjectSettings | null>(() => {
 // Init global form from store
 function syncGlobalForm() {
   globalModel.value = store.global.defaultModel
+  globalSkipPermissions.value = store.global.dangerouslySkipPermissions ?? true
   globalPrPrompt.value = store.global.prPromptTemplate
   globalGitConventions.value = store.global.gitConventions
 }
@@ -83,6 +86,7 @@ function syncProjectForm(project: ProjectSettings | null) {
       displayName: '',
       defaultSourceBranch: '',
       defaultModel: '',
+      dangerouslySkipPermissions: true,
       prPromptTemplate: '',
       gitConventions: '',
       devServer: { startCommand: '', stopCommand: '' },
@@ -95,6 +99,7 @@ function syncProjectForm(project: ProjectSettings | null) {
     displayName: project.displayName,
     defaultSourceBranch: project.defaultSourceBranch,
     defaultModel: project.defaultModel,
+    dangerouslySkipPermissions: project.dangerouslySkipPermissions ?? true,
     prPromptTemplate: project.prPromptTemplate,
     gitConventions: project.gitConventions ?? '',
     devServer: {
@@ -150,6 +155,7 @@ async function saveGlobal() {
   try {
     await store.updateGlobal({
       defaultModel: globalModel.value,
+      dangerouslySkipPermissions: globalSkipPermissions.value,
       prPromptTemplate: globalPrPrompt.value,
       gitConventions: globalGitConventions.value,
     })
@@ -173,6 +179,7 @@ async function saveProject() {
       displayName: projectForm.value.displayName,
       defaultSourceBranch: projectForm.value.defaultSourceBranch,
       defaultModel: projectForm.value.defaultModel,
+      dangerouslySkipPermissions: projectForm.value.dangerouslySkipPermissions,
       prPromptTemplate: projectForm.value.prPromptTemplate,
       gitConventions: projectForm.value.gitConventions,
       devServer: projectForm.value.devServer,
@@ -293,6 +300,20 @@ onMounted(async () => {
                 outlined
                 class="settings-input"
               />
+            </div>
+
+            <!-- Skip permissions toggle -->
+            <div class="q-mb-lg">
+              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">Agent permissions</div>
+              <q-toggle
+                v-model="globalSkipPermissions"
+                label="Skip permission prompts (--dangerously-skip-permissions)"
+                dark
+                dense
+                color="indigo-4"
+                class="text-grey-5 text-caption"
+              />
+              <div class="text-caption text-red-4 q-mt-xs">Warning: disabling this will cause all tool permissions (Write, Edit, Bash...) to be auto-denied in headless mode. The agent will only be able to read.</div>
             </div>
 
             <!-- Verbose system messages toggle -->
@@ -516,6 +537,19 @@ onMounted(async () => {
                       dark
                       outlined
                       class="settings-input"
+                    />
+                  </div>
+
+                  <!-- Skip permissions toggle (project override) -->
+                  <div class="q-mb-md">
+                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">Agent permissions</div>
+                    <q-toggle
+                      v-model="projectForm.dangerouslySkipPermissions"
+                      label="Skip permission prompts"
+                      dark
+                      dense
+                      color="indigo-4"
+                      class="text-grey-5 text-caption"
                     />
                   </div>
 

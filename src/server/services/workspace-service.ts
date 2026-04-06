@@ -13,6 +13,8 @@ export type WorkspaceStatus =
 
 export type TaskStatus = 'pending' | 'in_progress' | 'done'
 
+export type PermissionMode = 'auto-accept' | 'plan'
+
 export interface Workspace {
   id: string
   name: string
@@ -23,6 +25,7 @@ export interface Workspace {
   notionUrl: string | null
   notionPageId: string | null
   model: string
+  permissionMode: PermissionMode
   devServerStatus: string
   archivedAt: string | null
   createdAt: string
@@ -82,6 +85,7 @@ interface WorkspaceRow {
   notion_url: string | null
   notion_page_id: string | null
   model: string
+  permission_mode: string
   dev_server_status: string
   archived_at: string | null
   created_at: string
@@ -110,6 +114,7 @@ function mapWorkspace(row: WorkspaceRow): Workspace {
     notionUrl: row.notion_url,
     notionPageId: row.notion_page_id,
     model: row.model,
+    permissionMode: (row.permission_mode ?? 'auto-accept') as PermissionMode,
     devServerStatus: row.dev_server_status,
     archivedAt: row.archived_at,
     createdAt: row.created_at,
@@ -209,6 +214,13 @@ export function updateWorkspaceModel(id: string, model: string): Workspace {
   const db = getDb()
   const now = new Date().toISOString()
   db.prepare('UPDATE workspaces SET model = ?, updated_at = ? WHERE id = ?').run(model, now, id)
+  return getWorkspace(id) as Workspace
+}
+
+export function updateWorkspacePermissionMode(id: string, permissionMode: PermissionMode): Workspace {
+  const db = getDb()
+  const now = new Date().toISOString()
+  db.prepare('UPDATE workspaces SET permission_mode = ?, updated_at = ? WHERE id = ?').run(permissionMode, now, id)
   return getWorkspace(id) as Workspace
 }
 

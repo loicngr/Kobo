@@ -52,6 +52,7 @@ Please:
 1. Review the PR description on GitHub and improve it if needed (add a proper summary, screenshots if relevant, a test plan)
 2. Verify that all acceptance criteria are checked
 3. Post a comment on the PR summarizing what was done and any follow-up items
+4. Do NOT add a "Generated with Claude Code" footer or any AI attribution to the PR description
 `
 
 export interface DevServerConfig {
@@ -64,6 +65,7 @@ export interface ProjectSettings {
   displayName: string
   defaultSourceBranch: string
   defaultModel: string
+  dangerouslySkipPermissions: boolean
   prPromptTemplate: string
   gitConventions: string
   devServer: DevServerConfig
@@ -71,6 +73,7 @@ export interface ProjectSettings {
 
 export interface GlobalSettings {
   defaultModel: string
+  dangerouslySkipPermissions: boolean
   prPromptTemplate: string
   gitConventions: string
 }
@@ -81,15 +84,46 @@ export interface Settings {
   projects: ProjectSettings[]
 }
 
-/**
- * Bump when adding/removing/renaming fields in Settings that require a migration.
- * Each bump must come with a corresponding entry in `runSettingsMigrations()`.
- * Append-only — never renumber shipped versions.
- */
-export const SETTINGS_SCHEMA_VERSION = 1
+// ── Settings migration registry ───────────────────────────────────────────────
+// Each entry describes a single settings upgrade step.
+// Append-only — never edit or reorder shipped entries.
+
+interface SettingsMigration {
+  version: number
+  name: string
+  migrate: (current: { global: Record<string, unknown>; projects: Array<Record<string, unknown>> }) => void
+}
+
+const settingsMigrations: SettingsMigration[] = [
+  {
+    version: 1,
+    name: 'add-git-conventions',
+    migrate: ({ global, projects }) => {
+      if (typeof global.gitConventions !== 'string') global.gitConventions = ''
+      for (const p of projects) {
+        if (typeof p.gitConventions !== 'string') p.gitConventions = ''
+      }
+    },
+  },
+  {
+    version: 2,
+    name: 'add-dangerously-skip-permissions',
+    migrate: ({ global, projects }) => {
+      if (typeof global.dangerouslySkipPermissions !== 'boolean') global.dangerouslySkipPermissions = true
+      for (const p of projects) {
+        if (typeof p.dangerouslySkipPermissions !== 'boolean') p.dangerouslySkipPermissions = true
+      }
+    },
+  },
+]
+
+/** Current settings schema version — always equals the highest migration version. */
+export const SETTINGS_SCHEMA_VERSION =
+  settingsMigrations.length > 0 ? settingsMigrations[settingsMigrations.length - 1].version : 0
 
 export interface EffectiveSettings {
   model: string
+  dangerouslySkipPermissions: boolean
   prPromptTemplate: string
   gitConventions: string
   sourceBranch: string
@@ -108,6 +142,7 @@ function defaultSettings(): Settings {
     schemaVersion: SETTINGS_SCHEMA_VERSION,
     global: {
       defaultModel: 'auto',
+      dangerouslySkipPermissions: true,
       prPromptTemplate: DEFAULT_PR_PROMPT_TEMPLATE,
       gitConventions: DEFAULT_GIT_CONVENTIONS,
     },
@@ -121,6 +156,7 @@ function defaultProjectSettings(projectPath: string): ProjectSettings {
     displayName: '',
     defaultSourceBranch: '',
     defaultModel: '',
+    dangerouslySkipPermissions: true,
     prPromptTemplate: '',
     gitConventions: '',
     devServer: {
@@ -136,12 +172,10 @@ function pickKnownKeys<T>(data: Record<string, unknown>, allowedKeys: string[]):
 
 /**
  * Apply migrations sequentially to bring an older settings object up to
- * SETTINGS_SCHEMA_VERSION. Each migration is append-only — never edit or
- * reorder shipped migrations. The returned object carries the bumped
- * schemaVersion; callers should persist it back to disk.
+ * SETTINGS_SCHEMA_VERSION. Append-only — never edit or reorder shipped entries.
+ * The returned object carries the bumped schemaVersion; callers persist it.
  */
 export function runSettingsMigrations(raw: Record<string, unknown>): Settings {
-  // Ensure a baseline shape so we can safely read .global and .projects
   const current = raw as {
     schemaVersion?: number
     global?: Record<string, unknown>
@@ -154,21 +188,14 @@ export function runSettingsMigrations(raw: Record<string, unknown>): Settings {
     current.projects = []
   }
 
-  // Detect legacy (pre-versioned) settings as v0
   let version = typeof current.schemaVersion === 'number' ? current.schemaVersion : 0
 
-  // ── v0 → v1: ensure gitConventions field exists on global and every project
-  if (version < 1) {
-    if (typeof current.global.gitConventions !== 'string') {
-      current.global.gitConventions = ''
+  for (const m of settingsMigrations) {
+    if (version < m.version) {
+      m.migrate({ global: current.global, projects: current.projects as Array<Record<string, unknown>> })
+      version = m.version
     }
-    for (const p of current.projects as Array<Record<string, unknown>>) {
-      if (typeof p.gitConventions !== 'string') p.gitConventions = ''
-    }
-    version = 1
   }
-
-  // Future migrations go here — increment SETTINGS_SCHEMA_VERSION in lockstep.
 
   current.schemaVersion = version
   return current as unknown as Settings
@@ -238,6 +265,7 @@ export function getEffectiveSettings(projectPath: string): EffectiveSettings {
   if (!project) {
     return {
       model: settings.global.defaultModel,
+      dangerouslySkipPermissions: settings.global.dangerouslySkipPermissions,
       prPromptTemplate: settings.global.prPromptTemplate,
       gitConventions: settings.global.gitConventions,
       sourceBranch: '',
@@ -247,6 +275,7 @@ export function getEffectiveSettings(projectPath: string): EffectiveSettings {
 
   return {
     model: project.defaultModel || settings.global.defaultModel,
+    dangerouslySkipPermissions: project.dangerouslySkipPermissions ?? settings.global.dangerouslySkipPermissions,
     prPromptTemplate: project.prPromptTemplate || settings.global.prPromptTemplate,
     gitConventions: project.gitConventions || settings.global.gitConventions,
     sourceBranch: project.defaultSourceBranch,
@@ -256,7 +285,7 @@ export function getEffectiveSettings(projectPath: string): EffectiveSettings {
 
 export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSettings {
   const settings = readSettings()
-  const allowedGlobalKeys = ['defaultModel', 'prPromptTemplate', 'gitConventions']
+  const allowedGlobalKeys = ['defaultModel', 'dangerouslySkipPermissions', 'prPromptTemplate', 'gitConventions']
   const filtered = pickKnownKeys<GlobalSettings>(data as Record<string, unknown>, allowedGlobalKeys)
   settings.global = { ...settings.global, ...filtered }
   writeSettings(settings)
@@ -268,6 +297,7 @@ export function upsertProject(projectPath: string, data: Partial<Omit<ProjectSet
     'displayName',
     'defaultSourceBranch',
     'defaultModel',
+    'dangerouslySkipPermissions',
     'prPromptTemplate',
     'gitConventions',
     'devServer',

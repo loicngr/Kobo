@@ -15,6 +15,26 @@ const router = useRouter()
 
 const searchQuery = ref('')
 
+interface ProjectGroup {
+  projectPath: string
+  projectName: string
+  workspaces: Workspace[]
+}
+
+function groupByProject(workspaces: Workspace[]): ProjectGroup[] {
+  const groups = new Map<string, Workspace[]>()
+  for (const ws of workspaces) {
+    const key = ws.projectPath
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key)!.push(ws)
+  }
+  return [...groups.entries()].map(([path, wsList]) => ({
+    projectPath: path,
+    projectName: path.split('/').pop() ?? path,
+    workspaces: wsList,
+  }))
+}
+
 const filteredNeedsAttention = computed(() =>
   store.needsAttention.filter((w) => w.name.toLowerCase().includes(searchQuery.value.toLowerCase())),
 )
@@ -26,6 +46,10 @@ const filteredRunning = computed(() =>
 const filteredIdle = computed(() =>
   store.idle.filter((w) => w.name.toLowerCase().includes(searchQuery.value.toLowerCase())),
 )
+
+const groupedNeedsAttention = computed(() => groupByProject(filteredNeedsAttention.value))
+const groupedRunning = computed(() => groupByProject(filteredRunning.value))
+const groupedIdle = computed(() => groupByProject(filteredIdle.value))
 
 const totalCount = computed(() => store.workspaces.length)
 const runningCount = computed(() => store.running.length)
@@ -238,50 +262,56 @@ onMounted(async () => {
         </div>
 
         <div v-show="attentionExpanded">
-          <div
-            v-for="ws in filteredNeedsAttention"
-            :key="ws.id"
-            class="wl-item cursor-pointer q-pa-sm q-mx-xs rounded-borders"
-            :class="{ 'wl-item--selected': ws.id === store.selectedWorkspaceId }"
-            style="border-left: 3px solid #ef4444;"
-            @click="selectWorkspace(ws.id)"
-          >
-            <div class="col" style="min-width: 0;">
-              <div class="row items-center no-wrap q-gutter-xs">
-                <div
-                  v-if="devServerStore.getStatus(ws.id)?.status === 'running'"
-                  class="dd-dot dd-dot--running"
-                />
-                <div class="wl-item-name text-body2 text-weight-medium text-grey-3 ellipsis">{{ ws.name }}</div>
-              </div>
-              <div class="text-caption q-mt-xs">
-                <q-icon name="warning" size="xs" color="red-5" class="q-mr-xs" />
-                <span class="text-red-5">{{ ws.status }}</span>
-                <span class="q-ml-xs text-grey-8">&middot; {{ timeAgo(ws.updatedAt) }}</span>
-              </div>
+          <div v-for="group in groupedNeedsAttention" :key="group.projectPath" class="wl-project-group">
+            <div v-if="groupedNeedsAttention.length > 1" class="wl-project-label q-px-md q-pt-xs">
+              <q-icon name="folder" size="12px" color="grey-7" class="q-mr-xs" />
+              <span class="text-caption text-grey-7">{{ group.projectName }}</span>
             </div>
-            <q-btn
-              flat round dense
-              icon="archive"
-              size="xs"
-              color="grey-6"
-              class="wl-item-action wl-item-archive"
-              @click="onArchiveClick(ws, $event)"
+            <div
+              v-for="ws in group.workspaces"
+              :key="ws.id"
+              class="wl-item cursor-pointer q-pa-sm q-mx-xs rounded-borders"
+              :class="{ 'wl-item--selected': ws.id === store.selectedWorkspaceId }"
+              style="border-left: 3px solid #ef4444;"
+              @click="selectWorkspace(ws.id)"
             >
-              <q-tooltip>Archive</q-tooltip>
-            </q-btn>
-            <q-btn
-              flat
-              round
-              dense
-              icon="delete_outline"
-              size="xs"
-              color="grey-6"
-              class="wl-item-action wl-item-delete"
-              @click="openDeleteDialog(ws, $event)"
-            >
-              <q-tooltip>Delete</q-tooltip>
-            </q-btn>
+              <div class="col" style="min-width: 0;">
+                <div class="row items-center no-wrap q-gutter-xs">
+                  <div
+                    v-if="devServerStore.getStatus(ws.id)?.status === 'running'"
+                    class="dd-dot dd-dot--running"
+                  />
+                  <div class="wl-item-name text-body2 text-weight-medium text-grey-3 ellipsis">{{ ws.name }}</div>
+                </div>
+                <div class="text-caption q-mt-xs">
+                  <q-icon name="warning" size="xs" color="red-5" class="q-mr-xs" />
+                  <span class="text-red-5">{{ ws.status }}</span>
+                  <span class="q-ml-xs text-grey-8">&middot; {{ timeAgo(ws.updatedAt) }}</span>
+                </div>
+              </div>
+              <q-btn
+                flat round dense
+                icon="archive"
+                size="xs"
+                color="grey-6"
+                class="wl-item-action wl-item-archive"
+                @click="onArchiveClick(ws, $event)"
+              >
+                <q-tooltip>Archive</q-tooltip>
+              </q-btn>
+              <q-btn
+                flat
+                round
+                dense
+                icon="delete_outline"
+                size="xs"
+                color="grey-6"
+                class="wl-item-action wl-item-delete"
+                @click="openDeleteDialog(ws, $event)"
+              >
+                <q-tooltip>Delete</q-tooltip>
+              </q-btn>
+            </div>
           </div>
         </div>
       </div>
@@ -310,49 +340,55 @@ onMounted(async () => {
         </div>
 
         <div v-show="runningExpanded">
-          <div
-            v-for="ws in filteredRunning"
-            :key="ws.id"
-            class="wl-item cursor-pointer q-pa-sm q-mx-xs rounded-borders"
-            :class="{ 'wl-item--selected': ws.id === store.selectedWorkspaceId }"
-            style="border-left: 3px solid #4ade80;"
-            @click="selectWorkspace(ws.id)"
-          >
-            <div class="col" style="min-width: 0;">
-              <div class="row items-center no-wrap q-gutter-xs">
-                <div
-                  v-if="devServerStore.getStatus(ws.id)?.status === 'running'"
-                  class="dd-dot dd-dot--running"
-                />
-                <div class="wl-item-name text-body2 text-weight-medium text-grey-3 ellipsis">{{ ws.name }}</div>
-              </div>
-              <div class="text-caption q-mt-xs">
-                <span class="text-green-4">{{ ws.status }}</span>
-                <span class="q-ml-xs text-grey-8">&middot; {{ timeAgo(ws.updatedAt) }}</span>
-              </div>
+          <div v-for="group in groupedRunning" :key="group.projectPath" class="wl-project-group">
+            <div v-if="groupedRunning.length > 1" class="wl-project-label q-px-md q-pt-xs">
+              <q-icon name="folder" size="12px" color="grey-7" class="q-mr-xs" />
+              <span class="text-caption text-grey-7">{{ group.projectName }}</span>
             </div>
-            <q-btn
-              flat round dense
-              icon="archive"
-              size="xs"
-              color="grey-6"
-              class="wl-item-action wl-item-archive"
-              @click="onArchiveClick(ws, $event)"
+            <div
+              v-for="ws in group.workspaces"
+              :key="ws.id"
+              class="wl-item cursor-pointer q-pa-sm q-mx-xs rounded-borders"
+              :class="{ 'wl-item--selected': ws.id === store.selectedWorkspaceId }"
+              style="border-left: 3px solid #4ade80;"
+              @click="selectWorkspace(ws.id)"
             >
-              <q-tooltip>Archive</q-tooltip>
-            </q-btn>
-            <q-btn
-              flat
-              round
-              dense
-              icon="delete_outline"
-              size="xs"
-              color="grey-6"
-              class="wl-item-action wl-item-delete"
-              @click="openDeleteDialog(ws, $event)"
-            >
-              <q-tooltip>Delete</q-tooltip>
-            </q-btn>
+              <div class="col" style="min-width: 0;">
+                <div class="row items-center no-wrap q-gutter-xs">
+                  <div
+                    v-if="devServerStore.getStatus(ws.id)?.status === 'running'"
+                    class="dd-dot dd-dot--running"
+                  />
+                  <div class="wl-item-name text-body2 text-weight-medium text-grey-3 ellipsis">{{ ws.name }}</div>
+                </div>
+                <div class="text-caption q-mt-xs">
+                  <span class="text-green-4">{{ ws.status }}</span>
+                  <span class="q-ml-xs text-grey-8">&middot; {{ timeAgo(ws.updatedAt) }}</span>
+                </div>
+              </div>
+              <q-btn
+                flat round dense
+                icon="archive"
+                size="xs"
+                color="grey-6"
+                class="wl-item-action wl-item-archive"
+                @click="onArchiveClick(ws, $event)"
+              >
+                <q-tooltip>Archive</q-tooltip>
+              </q-btn>
+              <q-btn
+                flat
+                round
+                dense
+                icon="delete_outline"
+                size="xs"
+                color="grey-6"
+                class="wl-item-action wl-item-delete"
+                @click="openDeleteDialog(ws, $event)"
+              >
+                <q-tooltip>Delete</q-tooltip>
+              </q-btn>
+            </div>
           </div>
         </div>
       </div>
@@ -381,48 +417,54 @@ onMounted(async () => {
         </div>
 
         <div v-show="idleExpanded">
-          <div
-            v-for="ws in filteredIdle"
-            :key="ws.id"
-            class="wl-item cursor-pointer q-pa-sm q-mx-xs rounded-borders"
-            :class="{ 'wl-item--selected': ws.id === store.selectedWorkspaceId }"
-            style="border-left: 3px solid #666;"
-            @click="selectWorkspace(ws.id)"
-          >
-            <div class="col" style="min-width: 0;">
-              <div class="row items-center no-wrap q-gutter-xs">
-                <div
-                  v-if="devServerStore.getStatus(ws.id)?.status === 'running'"
-                  class="dd-dot dd-dot--running"
-                />
-                <div class="wl-item-name text-body2 text-weight-medium text-grey-3 ellipsis">{{ ws.name }}</div>
-              </div>
-              <div class="wl-item-meta text-caption text-grey-8">
-                {{ timeAgo(ws.updatedAt) }}
-              </div>
+          <div v-for="group in groupedIdle" :key="group.projectPath" class="wl-project-group">
+            <div v-if="groupedIdle.length > 1" class="wl-project-label q-px-md q-pt-xs">
+              <q-icon name="folder" size="12px" color="grey-7" class="q-mr-xs" />
+              <span class="text-caption text-grey-7">{{ group.projectName }}</span>
             </div>
-            <q-btn
-              flat round dense
-              icon="archive"
-              size="xs"
-              color="grey-6"
-              class="wl-item-action wl-item-archive"
-              @click="onArchiveClick(ws, $event)"
+            <div
+              v-for="ws in group.workspaces"
+              :key="ws.id"
+              class="wl-item cursor-pointer q-pa-sm q-mx-xs rounded-borders"
+              :class="{ 'wl-item--selected': ws.id === store.selectedWorkspaceId }"
+              style="border-left: 3px solid #666;"
+              @click="selectWorkspace(ws.id)"
             >
-              <q-tooltip>Archive</q-tooltip>
-            </q-btn>
-            <q-btn
-              flat
-              round
-              dense
-              icon="delete_outline"
-              size="xs"
-              color="grey-6"
-              class="wl-item-action wl-item-delete"
-              @click="openDeleteDialog(ws, $event)"
-            >
-              <q-tooltip>Delete</q-tooltip>
-            </q-btn>
+              <div class="col" style="min-width: 0;">
+                <div class="row items-center no-wrap q-gutter-xs">
+                  <div
+                    v-if="devServerStore.getStatus(ws.id)?.status === 'running'"
+                    class="dd-dot dd-dot--running"
+                  />
+                  <div class="wl-item-name text-body2 text-weight-medium text-grey-3 ellipsis">{{ ws.name }}</div>
+                </div>
+                <div class="wl-item-meta text-caption text-grey-8">
+                  {{ timeAgo(ws.updatedAt) }}
+                </div>
+              </div>
+              <q-btn
+                flat round dense
+                icon="archive"
+                size="xs"
+                color="grey-6"
+                class="wl-item-action wl-item-archive"
+                @click="onArchiveClick(ws, $event)"
+              >
+                <q-tooltip>Archive</q-tooltip>
+              </q-btn>
+              <q-btn
+                flat
+                round
+                dense
+                icon="delete_outline"
+                size="xs"
+                color="grey-6"
+                class="wl-item-action wl-item-delete"
+                @click="openDeleteDialog(ws, $event)"
+              >
+                <q-tooltip>Delete</q-tooltip>
+              </q-btn>
+            </div>
           </div>
         </div>
       </div>
@@ -586,11 +628,26 @@ onMounted(async () => {
   }
 }
 
+.wl-project-group {
+  & + .wl-project-group {
+    margin-top: 6px;
+  }
+}
+
+.wl-project-label {
+  display: flex;
+  align-items: center;
+  padding-bottom: 2px;
+  font-size: 11px;
+}
+
 .wl-item {
   background-color: #222244;
   position: relative;
   transition: background-color 0.15s;
+  margin-bottom: 4px;
 
+  &:last-child { margin-bottom: 0; }
   &:hover { background-color: #2a2a4a; }
   &--selected {
     background-color: #2a2a4a;

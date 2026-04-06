@@ -13,6 +13,7 @@ import {
   getSkillsPath,
 } from '../utils/paths.js'
 import { registerProcess, unregisterProcess } from '../utils/process-tracker.js'
+import { getEffectiveSettings } from './settings-service.js'
 import { emit } from './websocket-service.js'
 import { getWorkspace as getWs, listTasks, updateWorkspaceStatus } from './workspace-service.js'
 
@@ -62,6 +63,85 @@ const backoffTimers = new Map<string, ReturnType<typeof setTimeout>>()
 /** workspaceId -> pending SIGKILL timer */
 const killTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
+// ── Watchdog ──────────────────────────────────────────────────────────────────
+// Periodically checks that tracked agent processes are still alive.
+// If a process died without triggering the 'exit' handler (crash, OOM kill,
+// etc.), the watchdog cleans up and updates the workspace status.
+
+const WATCHDOG_INTERVAL_MS = 30_000
+
+let watchdogTimer: ReturnType<typeof setInterval> | null = null
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0) // signal 0 = existence check, doesn't actually kill
+    return true
+  } catch {
+    return false
+  }
+}
+
+function runWatchdog(): void {
+  for (const [workspaceId, agent] of agents) {
+    const pid = agent.process.pid
+    if (pid === undefined || isProcessAlive(pid)) continue
+
+    console.error(`[watchdog] Agent process for workspace '${workspaceId}' (PID ${pid}) is dead — cleaning up`)
+
+    // Close readline to release the stream
+    try {
+      agent.rl.close()
+    } catch {
+      // Ignore
+    }
+
+    unregisterProcess(workspaceId)
+    agents.delete(workspaceId)
+    retryCounts.delete(workspaceId)
+
+    // Update DB session
+    try {
+      const db = getDb()
+      db.prepare('UPDATE agent_sessions SET status = ?, ended_at = ? WHERE id = ?').run(
+        'error',
+        new Date().toISOString(),
+        agent.agentSessionId,
+      )
+    } catch (err) {
+      console.error('[watchdog] Failed to update agent_sessions:', err)
+    }
+
+    // Update workspace status
+    try {
+      updateWorkspaceStatus(workspaceId, 'error')
+    } catch {
+      // Transition may not be valid — ignore
+    }
+
+    emit(
+      workspaceId,
+      'agent:status',
+      { status: 'error', message: 'Agent process died unexpectedly' },
+      agent.claudeSessionId,
+    )
+  }
+}
+
+/** Start the watchdog (called once from server bootstrap). */
+export function startWatchdog(): void {
+  if (watchdogTimer) return
+  watchdogTimer = setInterval(runWatchdog, WATCHDOG_INTERVAL_MS)
+  watchdogTimer.unref?.()
+}
+
+/** Stop the watchdog (for clean shutdown / tests). */
+export function stopWatchdog(): void {
+  if (watchdogTimer) {
+    clearInterval(watchdogTimer)
+    watchdogTimer = null
+  }
+}
+
 // ── Start agent ────────────────────────────────────────────────────────────────
 
 export function startAgent(
@@ -70,6 +150,7 @@ export function startAgent(
   prompt: string,
   model?: string,
   resume = false,
+  permissionMode: 'auto-accept' | 'plan' = 'auto-accept',
 ): AgentInstance {
   // Check if agent already running for this workspace
   if (agents.has(workspaceId)) {
@@ -80,8 +161,19 @@ export function startAgent(
   let agentSessionId: string
   let resumedClaudeSessionId: string | undefined
 
-  // Build CLI args
-  const args = ['--dangerously-skip-permissions', '--output-format', 'stream-json', '--verbose']
+  // Build CLI args — read dangerouslySkipPermissions from effective settings
+  const ws = getWs(workspaceId)
+  const effectiveSettings = ws ? getEffectiveSettings(ws.projectPath) : null
+  const skipPermissions = effectiveSettings?.dangerouslySkipPermissions ?? true
+
+  const args = ['--output-format', 'stream-json', '--verbose']
+  if (skipPermissions) {
+    args.push('--dangerously-skip-permissions')
+  }
+  if (permissionMode === 'plan') {
+    // In plan mode, prepend read-only instructions to the prompt
+    prompt = `[PLAN MODE] You are in PLAN/READ-ONLY mode. You MUST NOT create, edit, write, or delete any files. Only use read-only tools (Read, Grep, Glob, LS, Bash for read-only commands). Analyze the codebase, plan your approach, and present your findings — but do NOT execute any changes.\n\n${prompt}`
+  }
   if (model && model !== 'auto') {
     args.push('--model', model)
   }

@@ -159,6 +159,38 @@ export function getPrUrl(repoPath: string, branchName: string): string | null {
   }
 }
 
+export interface PrStatus {
+  state: 'OPEN' | 'CLOSED' | 'MERGED'
+  url: string
+}
+
+export function getPrStatus(repoPath: string, branchName: string): PrStatus | null {
+  try {
+    const raw = execFileSync('gh', ['pr', 'view', branchName, '--json', 'state,url'], {
+      cwd: repoPath,
+      encoding: 'utf-8',
+    }).trim()
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { state: string; url: string }
+    return { state: parsed.state as PrStatus['state'], url: parsed.url }
+  } catch {
+    return null
+  }
+}
+
+/** Count commits ahead of upstream. Returns -1 if no upstream is set. */
+export function getUnpushedCount(repoPath: string): number {
+  try {
+    const output = execFileSync('git', ['rev-list', '@{u}..HEAD', '--count'], {
+      cwd: repoPath,
+      encoding: 'utf-8',
+    }).trim()
+    return parseInt(output, 10) || 0
+  } catch {
+    return -1 // no upstream
+  }
+}
+
 export function getDiffStatsBetween(repoPath: string, base: string, head: string): string {
   try {
     return git(repoPath, ['diff', '--shortstat', `${base}...${head}`])

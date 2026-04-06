@@ -5,7 +5,7 @@ import * as devServerService from '../services/dev-server-service.js'
 import * as notionService from '../services/notion-service.js'
 import * as settingsService from '../services/settings-service.js'
 import * as wsService from '../services/websocket-service.js'
-import type { WorkspaceStatus } from '../services/workspace-service.js'
+import type { PermissionMode, WorkspaceStatus } from '../services/workspace-service.js'
 import * as workspaceService from '../services/workspace-service.js'
 import * as worktreeService from '../services/worktree-service.js'
 import * as gitOps from '../utils/git-ops.js'
@@ -130,7 +130,27 @@ app.post('/', async (c) => {
       return c.json({ error: `Failed to create worktree: ${message}` }, 500)
     }
 
-    // 4b. Write git conventions to the worktree if configured
+    // 4b. Ensure Kobo-generated files inside .ai/ are gitignored (the .ai/ dir
+    //     itself may contain project files that SHOULD be committed).
+    try {
+      const fs = await import('node:fs')
+      const pathMod = await import('node:path')
+      const gitignorePath = pathMod.default.join(worktreePath, '.gitignore')
+      const existing = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, 'utf-8') : ''
+      const lines = existing.split('\n').map((l: string) => l.trim())
+      const toAdd: string[] = []
+      if (!lines.includes('.ai/git-conventions.md')) toAdd.push('.ai/git-conventions.md')
+      if (!lines.includes('.ai/thoughts/')) toAdd.push('.ai/thoughts/')
+      if (!lines.includes('.ai/images/')) toAdd.push('.ai/images/')
+      if (toAdd.length > 0) {
+        const separator = existing.length > 0 && !existing.endsWith('\n') ? '\n' : ''
+        fs.appendFileSync(gitignorePath, `${separator}${toAdd.join('\n')}\n`, 'utf-8')
+      }
+    } catch (err) {
+      console.error('[workspaces] Failed to update .gitignore:', err)
+    }
+
+    // 4c. Write git conventions to the worktree if configured
     const effectiveSettings = settingsService.getEffectiveSettings(body.projectPath)
     if (effectiveSettings.gitConventions) {
       try {
@@ -454,11 +474,11 @@ app.get('/:id', (c) => {
   }
 })
 
-// PATCH /api/workspaces/:id — update workspace fields (status, model)
+// PATCH /api/workspaces/:id — update workspace fields (status, model, permissionMode)
 app.patch('/:id', async (c) => {
   try {
     const id = c.req.param('id')
-    const body = await c.req.json<{ status?: WorkspaceStatus; model?: string }>()
+    const body = await c.req.json<{ status?: WorkspaceStatus; model?: string; permissionMode?: PermissionMode }>()
 
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) {
@@ -469,11 +489,18 @@ app.patch('/:id', async (c) => {
     if (body.model !== undefined) {
       updated = workspaceService.updateWorkspaceModel(id, body.model)
     }
+    if (body.permissionMode !== undefined) {
+      const validModes: PermissionMode[] = ['auto-accept', 'plan']
+      if (!validModes.includes(body.permissionMode)) {
+        return c.json({ error: `Invalid permission mode. Must be one of: ${validModes.join(', ')}` }, 400)
+      }
+      updated = workspaceService.updateWorkspacePermissionMode(id, body.permissionMode)
+    }
     if (body.status) {
       updated = workspaceService.updateWorkspaceStatus(id, body.status)
     }
-    if (!body.status && body.model === undefined) {
-      return c.json({ error: 'Missing field: status or model' }, 400)
+    if (!body.status && body.model === undefined && body.permissionMode === undefined) {
+      return c.json({ error: 'Missing field: status, model, or permissionMode' }, 400)
     }
 
     return c.json(updated)
@@ -633,7 +660,7 @@ app.post('/:id/start', async (c) => {
 
     const worktreePath = `${workspace.projectPath}/.worktrees/${workspace.workingBranch}`
 
-    agentManager.startAgent(id, worktreePath, prompt, workspace.model)
+    agentManager.startAgent(id, worktreePath, prompt, workspace.model, false, workspace.permissionMode)
     workspaceService.updateWorkspaceStatus(id, 'executing')
 
     return c.json({ status: 'started' })
@@ -661,14 +688,17 @@ app.get('/:id/git-stats', async (c) => {
       workspace.sourceBranch,
       workspace.workingBranch,
     )
-    const prUrl = gitOps.getPrUrl(workspace.projectPath, workspace.workingBranch)
+    const pr = gitOps.getPrStatus(workspace.projectPath, workspace.workingBranch)
+    const unpushedCount = gitOps.getUnpushedCount(worktreePath)
 
     return c.json({
       commitCount,
       filesChanged: diffStats.filesChanged,
       insertions: diffStats.insertions,
       deletions: diffStats.deletions,
-      prUrl,
+      prUrl: pr?.url ?? null,
+      prState: pr?.state ?? null,
+      unpushedCount,
     })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -821,21 +851,32 @@ app.post('/:id/open-pr', async (c) => {
     const sessionId = session?.claudeSessionId ?? undefined
     emit(workspace.id, 'user:message', { content: rendered, sender: 'user' }, sessionId)
 
-    // 8. Send to the running agent (degrade on failure)
+    // 8. Send to the running agent, or resume the agent with the PR prompt
+    let messageSent = false
     try {
       agentManager.sendMessage(workspace.id, rendered)
-      return c.json({ ok: true, prNumber, prUrl, messageSent: true })
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      console.warn(`[workspaces] open-pr: PR created but sendMessage failed: ${message}`)
-      return c.json({
-        ok: true,
-        prNumber,
-        prUrl,
-        messageSent: false,
-        warning: `Agent is not active — message was not sent (${message})`,
-      })
+      messageSent = true
+    } catch {
+      // Agent not running — resume it with the PR prompt
+      try {
+        const worktreePathForResume = `${workspace.projectPath}/.worktrees/${workspace.workingBranch}`
+        agentManager.startAgent(
+          workspace.id,
+          worktreePathForResume,
+          rendered,
+          workspace.model,
+          true,
+          workspace.permissionMode,
+        )
+        workspaceService.updateWorkspaceStatus(workspace.id, 'executing')
+        messageSent = true
+      } catch (resumeErr) {
+        const resumeMsg = resumeErr instanceof Error ? resumeErr.message : String(resumeErr)
+        console.warn(`[workspaces] open-pr: PR created but agent resume failed: ${resumeMsg}`)
+      }
     }
+
+    return c.json({ ok: true, prNumber, prUrl, messageSent })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
