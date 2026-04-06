@@ -3,11 +3,13 @@ import { useQuasar } from 'quasar'
 import type { GitStats, Workspace } from 'src/stores/workspace'
 import { useWorkspaceStore, WorkspaceActionError } from 'src/stores/workspace'
 import { computed, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{
   workspace: Workspace | null
 }>()
 
+const { t } = useI18n()
 const $q = useQuasar()
 const store = useWorkspaceStore()
 
@@ -58,11 +60,11 @@ async function handlePush() {
   pushing.value = true
   try {
     await store.pushBranch(props.workspace.id)
-    $q.notify({ type: 'positive', message: 'Branch pushed', position: 'top' })
+    $q.notify({ type: 'positive', message: t('git.pushSuccess'), position: 'top' })
     loadGitStats()
   } catch (e) {
-    const msg = e instanceof Error ? e.message : 'Push failed'
-    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    const error = e instanceof Error ? e.message : t('git.push')
+    $q.notify({ type: 'negative', message: t('git.pushFailed', { error }), position: 'top', timeout: 6000 })
   } finally {
     pushing.value = false
   }
@@ -81,7 +83,7 @@ async function handleOpenPr() {
     const result = await store.openPullRequest(props.workspace.id)
     $q.notify({
       type: 'positive',
-      message: `PR #${result.prNumber} created`,
+      message: t('git.prCreated', { n: result.prNumber }),
       caption: result.prUrl,
       position: 'top',
       timeout: 5000,
@@ -91,7 +93,7 @@ async function handleOpenPr() {
     if (e instanceof WorkspaceActionError && e.code === 'branch_not_pushed') {
       $q.notify({
         type: 'warning',
-        message: 'Branch is not on remote. Click Push first.',
+        message: t('git.pushFirstRemote'),
         position: 'top',
         timeout: 6000,
       })
@@ -100,14 +102,14 @@ async function handleOpenPr() {
     if (e instanceof WorkspaceActionError && e.code === 'unpushed_commits') {
       $q.notify({
         type: 'warning',
-        message: 'Local commits are not pushed. Click Push first.',
+        message: t('git.pushFirstLocal'),
         position: 'top',
         timeout: 6000,
       })
       return
     }
-    const msg = e instanceof Error ? e.message : 'Open PR failed'
-    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    const error = e instanceof Error ? e.message : t('git.createPR')
+    $q.notify({ type: 'negative', message: t('git.openPRFailed', { error }), position: 'top', timeout: 6000 })
   } finally {
     openingPr.value = false
   }
@@ -118,7 +120,7 @@ async function handleOpenPr() {
   <div class="git-panel q-pa-md">
     <div class="row items-center justify-between q-mb-sm">
       <div class="text-caption text-uppercase text-weight-bold text-grey-6" style="letter-spacing: 0.05em;">
-        Git
+        {{ t('git.title') }}
       </div>
       <q-btn
         v-if="workspace"
@@ -153,12 +155,12 @@ async function handleOpenPr() {
 
       <!-- Source branch info -->
       <div class="text-caption q-mb-sm text-grey-8" style="font-size: 11px;">
-        from {{ workspace.sourceBranch }}
+        {{ t('git.from', { branch: workspace.sourceBranch }) }}
         <template v-if="gitStats">
           &middot;
-          <span v-if="gitStats.unpushedCount === -1">local only</span>
-          <span v-else-if="gitStats.unpushedCount === 0" style="color: #4ade80;">pushed</span>
-          <span v-else style="color: #f59e0b;">{{ gitStats.unpushedCount }} unpushed</span>
+          <span v-if="gitStats.unpushedCount === -1">{{ t('git.localOnly') }}</span>
+          <span v-else-if="gitStats.unpushedCount === 0" style="color: #4ade80;">{{ t('git.pushed') }}</span>
+          <span v-else style="color: #f59e0b;">{{ t('git.unpushed', { n: gitStats.unpushedCount }) }}</span>
         </template>
       </div>
 
@@ -168,7 +170,7 @@ async function handleOpenPr() {
         <div class="row items-center q-mb-xs">
           <q-icon name="commit" size="14px" color="grey-6" class="q-mr-xs" />
           <span class="text-caption text-grey-4" style="font-size: 11px;">
-            {{ gitStats.commitCount }} commit{{ gitStats.commitCount !== 1 ? 's' : '' }}
+            {{ gitStats.commitCount }} {{ t('git.commitWord', gitStats.commitCount) }}
           </span>
         </div>
 
@@ -176,7 +178,7 @@ async function handleOpenPr() {
         <div class="row items-center q-mb-md">
           <q-icon name="insert_drive_file" size="14px" color="grey-6" class="q-mr-xs" />
           <span class="text-caption text-grey-4" style="font-size: 11px;">
-            {{ gitStats.filesChanged }} file{{ gitStats.filesChanged !== 1 ? 's' : '' }}
+            {{ gitStats.filesChanged }} {{ t('git.fileWord', gitStats.filesChanged) }}
           </span>
           <span v-if="gitStats.insertions > 0" class="text-caption q-ml-xs" style="font-size: 11px; color: #4ade80;">
             +{{ gitStats.insertions }}
@@ -197,7 +199,7 @@ async function handleOpenPr() {
           size="sm"
           outline
           color="green-4"
-          label="View PR"
+          :label="t('git.viewPR')"
           icon="open_in_new"
           class="git-btn"
           @click="viewPr"
@@ -208,7 +210,7 @@ async function handleOpenPr() {
           no-caps
           size="sm"
           color="primary"
-          label="Create PR"
+          :label="t('git.createPR')"
           class="git-btn"
           :loading="openingPr"
           :disable="!workspace || pushing"
@@ -221,7 +223,7 @@ async function handleOpenPr() {
           size="sm"
           outline
           color="grey-5"
-          label="Push"
+          :label="t('git.push')"
           class="git-btn"
           :loading="pushing"
           :disable="!workspace || openingPr"
@@ -231,7 +233,7 @@ async function handleOpenPr() {
     </template>
 
     <div v-else class="text-caption text-grey-8">
-      Select a workspace
+      {{ t('git.selectWorkspace') }}
     </div>
   </div>
 </template>

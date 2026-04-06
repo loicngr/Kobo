@@ -148,6 +148,7 @@ export default {
   },
   git: {
     title: 'Git',
+    from: 'depuis {branch}',
     localOnly: 'local uniquement',
     pushed: 'poussé',
     unpushed: '{n} non poussé(s)',
