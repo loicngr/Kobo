@@ -168,7 +168,7 @@ export default {
   devServer: {
     title: 'Serveur de développement',
     noWorkspace: 'Aucun espace de travail sélectionné',
-    notConfigured: 'Non configuré —',
+    notConfigured: 'Non configuré',
     settingsLink: 'Paramètres',
     logsTooltip: 'Logs',
     containerWord: 'conteneur | conteneurs',
@@ -178,7 +178,7 @@ export default {
     statusError: 'Erreur',
     statusStopped: 'Arrêté',
     statusUnknown: 'Inconnu',
-    logsTitle: 'Logs Serveur de développement',
+    logsTitle: 'Logs du serveur de développement',
     noLogs: 'Aucun log disponible',
   },
   notion: {

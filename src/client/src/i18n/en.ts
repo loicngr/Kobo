@@ -167,7 +167,7 @@ export default {
   devServer: {
     title: 'Dev Server',
     noWorkspace: 'No workspace selected',
-    notConfigured: 'Not configured —',
+    notConfigured: 'Not configured',
     settingsLink: 'Settings',
     logsTooltip: 'Logs',
     containerWord: 'container | containers',

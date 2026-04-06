@@ -142,8 +142,7 @@ onUnmounted(() => {
 
     <template v-else-if="!hasDevServer">
       <div class="text-caption text-grey-8">
-        {{ t('devServer.notConfigured') }}
-        <router-link to="/settings" style="color: #6c63ff;">{{ t('devServer.settingsLink') }}</router-link>
+        {{ t('devServer.notConfigured') }} — <router-link to="/settings" style="color: #6c63ff;">{{ t('devServer.settingsLink') }}</router-link>
       </div>
     </template>
 
