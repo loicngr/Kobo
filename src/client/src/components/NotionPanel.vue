@@ -2,6 +2,9 @@
 import type { Task, Workspace } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { computed, nextTick, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   workspace: Workspace | null
@@ -160,7 +163,7 @@ function statusColor(status: string): string {
   <div class="notion-panel q-pa-md">
     <div class="row items-center q-mb-sm">
       <div class="text-caption text-uppercase text-weight-bold text-grey-6" style="letter-spacing: 0.05em;">
-        Notion
+        {{ t('notion.title') }}
       </div>
       <q-space />
       <q-btn
@@ -171,7 +174,7 @@ function statusColor(status: string): string {
         size="xs"
         icon="add"
         color="indigo-4"
-        :title="'Add task'"
+        :title="t('notion.addTask')"
         @click="startAdd"
       />
     </div>
@@ -186,11 +189,11 @@ function statusColor(status: string): string {
           class="notion-link text-caption items-center text-blue-4"
         >
           <q-icon name="open_in_new" size="12px" class="q-mr-xs" />
-          Open in Notion
+          {{ t('notion.openInNotion') }}
         </a>
       </div>
       <div v-else class="text-caption q-mb-sm text-grey-8">
-        No Notion URL
+        {{ t('notion.noNotionUrl') }}
       </div>
 
       <!-- Refresh button -->
@@ -201,7 +204,7 @@ function statusColor(status: string): string {
         no-caps
         size="xs"
         icon="refresh"
-        label="Refresh"
+        :label="t('notion.refresh')"
         color="grey-6"
         class="q-mb-sm"
         :loading="refreshing"
@@ -218,11 +221,11 @@ function statusColor(status: string): string {
           style="height: 4px; border-radius: 2px;"
         />
         <div class="text-caption text-grey-7" style="font-size: 11px;">
-          {{ doneTasks }}/{{ totalTasks }} subtasks
+          {{ t('notion.subtasks', { n: `${doneTasks}/${totalTasks}` }) }}
         </div>
       </div>
       <div v-else-if="!adding" class="text-caption text-grey-8 q-mb-sm" style="font-size: 11px;">
-        No tasks
+        {{ t('notion.noTasks') }}
       </div>
 
       <!-- Add task inline input -->
@@ -233,7 +236,7 @@ function statusColor(status: string): string {
           dense
           borderless
           autofocus
-          placeholder="New task... (Enter to add, Esc to cancel)"
+          :placeholder="t('notion.newTaskPlaceholder')"
           class="col task-input"
           input-class="task-input-inner"
           @keydown.enter.prevent="addTask"
@@ -295,7 +298,7 @@ function statusColor(status: string): string {
     </template>
 
     <div v-else class="text-caption text-grey-8">
-      Select a workspace
+      {{ t('notion.selectWorkspace') }}
     </div>
   </div>
 </template>

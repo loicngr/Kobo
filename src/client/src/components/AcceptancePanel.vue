@@ -2,6 +2,9 @@
 import type { Task } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { nextTick, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 defineProps<{
   tasks: Task[]
@@ -141,7 +144,7 @@ async function removeCriterion(task: Task) {
   <div class="acceptance-panel q-pa-md">
     <div class="row items-center q-mb-sm">
       <div class="text-caption text-uppercase text-weight-bold text-grey-6" style="letter-spacing: 0.05em;">
-        Acceptance Criteria
+        {{ t('acceptance.title') }}
       </div>
       <q-space />
       <q-btn
@@ -152,7 +155,7 @@ async function removeCriterion(task: Task) {
         size="xs"
         icon="add"
         color="indigo-4"
-        :title="'Add criterion'"
+        :title="t('acceptance.addCriterion')"
         @click="startAdd"
       />
     </div>
@@ -165,7 +168,7 @@ async function removeCriterion(task: Task) {
         dense
         borderless
         autofocus
-        placeholder="New criterion... (Enter to add, Esc to cancel)"
+        :placeholder="t('acceptance.newCriterionPlaceholder')"
         class="col criterion-input"
         input-class="criterion-input-inner"
         @keydown.enter.prevent="addCriterion"
@@ -225,7 +228,7 @@ async function removeCriterion(task: Task) {
     </div>
 
     <div v-else-if="!adding" class="text-caption text-grey-8" style="font-size: 11px;">
-      No acceptance criteria
+      {{ t('acceptance.noCriteria') }}
     </div>
   </div>
 </template>

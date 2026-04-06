@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { useI18n } from 'vue-i18n'
 
+const { t } = useI18n()
 const store = useWorkspaceStore()
 
 function statusIcon(status: string): string {
@@ -30,7 +32,7 @@ function statusColor(status: string): string {
   <div class="agent-todos-panel q-pa-md">
     <div class="row items-center q-mb-sm">
       <div class="text-caption text-uppercase text-weight-bold text-grey-6" style="letter-spacing: 0.05em;">
-        Agent Todos
+        {{ t('agentTodos.title') }}
       </div>
     </div>
 
@@ -57,7 +59,7 @@ function statusColor(status: string): string {
     </div>
 
     <div v-else class="text-caption text-grey-8" style="font-size: 11px;">
-      No agent todos
+      {{ t('agentTodos.noTodos') }}
     </div>
   </div>
 </template>
