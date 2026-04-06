@@ -141,12 +141,12 @@ function timeAgo(dateStr: string): string {
   const then = new Date(dateStr).getTime()
   const diffMs = now - then
   const diffMin = Math.floor(diffMs / 60000)
-  if (diffMin < 1) return 'just now'
-  if (diffMin < 60) return `${diffMin}m ago`
+  if (diffMin < 1) return t('common.justNow')
+  if (diffMin < 60) return t('common.minutesAgo', { n: diffMin })
   const diffH = Math.floor(diffMin / 60)
-  if (diffH < 24) return `${diffH}h ago`
+  if (diffH < 24) return t('common.hoursAgo', { n: diffH })
   const diffD = Math.floor(diffH / 24)
-  return `${diffD}d ago`
+  return t('common.daysAgo', { n: diffD })
 }
 
 function selectWorkspace(id: string) {
@@ -184,7 +184,7 @@ onMounted(async () => {
     <!-- Header -->
     <div class="wl-header row items-center justify-between q-px-md q-py-sm">
       <span class="text-caption text-uppercase text-weight-bold text-grey-6" style="letter-spacing: 0.05em;">
-        Workspaces
+        {{ t('workspaceList.title') }}
       </span>
       <div class="row items-center q-gutter-xs">
         <q-badge
@@ -226,7 +226,7 @@ onMounted(async () => {
         v-model="searchQuery"
         dense
         dark
-        placeholder="Search..."
+        :placeholder="t('workspaceList.search')"
         class="wl-search rounded-borders"
         borderless
       >
@@ -252,7 +252,7 @@ onMounted(async () => {
             color="red-5"
           />
           <span class="text-caption text-weight-bold q-ml-xs text-red-5">
-            Needs Attention
+            {{ t('workspaceList.needsAttention') }}
           </span>
           <q-badge
             :label="filteredNeedsAttention.length"
@@ -299,7 +299,7 @@ onMounted(async () => {
                 class="wl-item-action wl-item-archive"
                 @click="onArchiveClick(ws, $event)"
               >
-                <q-tooltip>Archive</q-tooltip>
+                <q-tooltip>{{ t('workspaceList.archiveTooltip') }}</q-tooltip>
               </q-btn>
               <q-btn
                 flat
@@ -311,7 +311,7 @@ onMounted(async () => {
                 class="wl-item-action wl-item-delete"
                 @click="openDeleteDialog(ws, $event)"
               >
-                <q-tooltip>Delete</q-tooltip>
+                <q-tooltip>{{ t('workspaceList.deleteTooltip') }}</q-tooltip>
               </q-btn>
             </div>
           </div>
@@ -330,7 +330,7 @@ onMounted(async () => {
             color="green-5"
           />
           <span class="text-caption text-weight-bold q-ml-xs text-green-4">
-            Running
+            {{ t('workspaceList.running') }}
           </span>
           <q-badge
             :label="filteredRunning.length"
@@ -376,7 +376,7 @@ onMounted(async () => {
                 class="wl-item-action wl-item-archive"
                 @click="onArchiveClick(ws, $event)"
               >
-                <q-tooltip>Archive</q-tooltip>
+                <q-tooltip>{{ t('workspaceList.archiveTooltip') }}</q-tooltip>
               </q-btn>
               <q-btn
                 flat
@@ -388,7 +388,7 @@ onMounted(async () => {
                 class="wl-item-action wl-item-delete"
                 @click="openDeleteDialog(ws, $event)"
               >
-                <q-tooltip>Delete</q-tooltip>
+                <q-tooltip>{{ t('workspaceList.deleteTooltip') }}</q-tooltip>
               </q-btn>
             </div>
           </div>
@@ -407,7 +407,7 @@ onMounted(async () => {
             color="grey-6"
           />
           <span class="text-caption text-weight-bold q-ml-xs text-grey-6">
-            Idle
+            {{ t('workspaceList.idle') }}
           </span>
           <q-badge
             :label="filteredIdle.length"
@@ -452,7 +452,7 @@ onMounted(async () => {
                 class="wl-item-action wl-item-archive"
                 @click="onArchiveClick(ws, $event)"
               >
-                <q-tooltip>Archive</q-tooltip>
+                <q-tooltip>{{ t('workspaceList.archiveTooltip') }}</q-tooltip>
               </q-btn>
               <q-btn
                 flat
@@ -464,7 +464,7 @@ onMounted(async () => {
                 class="wl-item-action wl-item-delete"
                 @click="openDeleteDialog(ws, $event)"
               >
-                <q-tooltip>Delete</q-tooltip>
+                <q-tooltip>{{ t('workspaceList.deleteTooltip') }}</q-tooltip>
               </q-btn>
             </div>
           </div>
@@ -484,7 +484,7 @@ onMounted(async () => {
           />
           <q-icon name="inventory_2" size="xs" color="grey-7" class="q-ml-xs" />
           <span class="text-caption text-weight-bold q-ml-xs text-grey-7">
-            Archived
+            {{ t('workspaceList.archived') }}
           </span>
           <q-badge
             v-if="store.archived.length > 0"
@@ -517,7 +517,7 @@ onMounted(async () => {
               class="wl-item-action wl-item-unarchive"
               @click="onUnarchiveClick(ws, $event)"
             >
-              <q-tooltip>Unarchive</q-tooltip>
+              <q-tooltip>{{ t('workspaceList.unarchiveTooltip') }}</q-tooltip>
             </q-btn>
             <q-btn
               flat round dense
@@ -538,9 +538,9 @@ onMounted(async () => {
         v-if="filteredNeedsAttention.length === 0 && filteredRunning.length === 0 && filteredIdle.length === 0 && store.archived.length === 0"
         class="q-pa-lg text-center text-grey-6 text-caption"
       >
-        <template v-if="store.loading">Loading...</template>
-        <template v-else-if="searchQuery">No results for "{{ searchQuery }}"</template>
-        <template v-else>No workspaces yet</template>
+        <template v-if="store.loading">{{ t('common.loading') }}</template>
+        <template v-else-if="searchQuery">{{ t('workspaceList.noResults', { query: searchQuery }) }}</template>
+        <template v-else>{{ t('workspaceList.noWorkspaces') }}</template>
       </div>
     </div>
 
@@ -556,7 +556,7 @@ onMounted(async () => {
   <q-dialog v-model="deleteDialog" persistent>
     <q-card class="text-grey-3" style="min-width: 360px; background: #1e1e3a;">
       <q-card-section>
-        <div class="text-h6">Delete workspace?</div>
+        <div class="text-h6">{{ t('workspaceList.deleteDialogTitle') }}</div>
       </q-card-section>
 
       <q-card-section class="q-pt-none">
@@ -570,7 +570,7 @@ onMounted(async () => {
         <div class="column q-gutter-xs">
           <q-checkbox
             v-model="deleteLocalBranch"
-            label="Delete local branch"
+            :label="t('workspaceList.deleteLocalBranch')"
             dark
             dense
             color="red-5"
@@ -578,22 +578,22 @@ onMounted(async () => {
           <q-checkbox
             v-model="deleteRemoteBranch"
             :disable="!deleteLocalBranch"
-            label="Delete remote branch"
+            :label="t('workspaceList.deleteRemoteBranch')"
             dark
             dense
             color="red-5"
           />
         </div>
         <div v-if="deleteRemoteBranch" class="text-caption q-mt-sm text-red-5">
-          Warning: this action is irreversible on the remote.
+          {{ t('workspaceList.deleteWarning') }}
         </div>
       </q-card-section>
 
       <q-card-actions align="right">
-        <q-btn flat label="Cancel" color="grey-5" @click="deleteDialog = false" :disable="deleting" />
+        <q-btn flat :label="t('workspaceList.cancelBtn')" color="grey-5" @click="deleteDialog = false" :disable="deleting" />
         <q-btn
           flat
-          label="Delete"
+          :label="t('workspaceList.deleteBtn')"
           color="red-5"
           :loading="deleting"
           @click="confirmDelete"
