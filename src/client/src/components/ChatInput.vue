@@ -362,7 +362,9 @@ function onKeydown(event: KeyboardEvent) {
         color="primary"
         :disable="isDisabled || (!message.trim() && pendingImages.length === 0) || hasUploading"
         @click="sendMessage"
-      />
+      >
+        <q-tooltip>{{ t('chat.send') }}</q-tooltip>
+      </q-btn>
     </div>
   </div>
 </template>

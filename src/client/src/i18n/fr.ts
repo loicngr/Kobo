@@ -144,6 +144,7 @@ export default {
     uploading: 'Envoi...',
     skills: 'Skills',
     attachImage: 'Joindre une image',
+    send: 'Envoyer',
   },
   git: {
     title: 'Git',

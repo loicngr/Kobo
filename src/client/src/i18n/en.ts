@@ -143,6 +143,7 @@ export default {
     uploading: 'Uploading...',
     skills: 'Skills',
     attachImage: 'Attach image',
+    send: 'Send',
   },
   git: {
     title: 'Git',
