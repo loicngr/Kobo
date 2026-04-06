@@ -204,8 +204,8 @@ export default {
     running: 'En cours :',
     tools: 'outils',
     tokens: 'tok',
-    ms: 'ms',
-    s: 's',
-    m: 'min',
+    unitMs: 'ms',
+    unitSeconds: 's',
+    unitMinutes: 'min',
   },
 }

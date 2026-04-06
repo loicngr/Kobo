@@ -7,7 +7,7 @@ import fr from './fr'
 export type Locale = 'en' | 'fr'
 export type MessageSchema = typeof en
 
-const LOCALE_KEY = 'kobo-locale'
+export const LOCALE_KEY = 'kobo-locale'
 
 function detectLocale(): Locale {
   const saved = localStorage.getItem(LOCALE_KEY) as Locale | null
@@ -23,6 +23,8 @@ export const i18n = createI18n<[MessageSchema], Locale>({
 })
 
 export function setLocale(locale: Locale): void {
+  // In legacy:false (Composition API) mode, i18n.global is a Composer instance
+  // and .locale is WritableComputedRef<string>. Cast narrows to our Locale union.
   ;(i18n.global.locale as unknown as WritableComputedRef<Locale>).value = locale
   localStorage.setItem(LOCALE_KEY, locale)
 }

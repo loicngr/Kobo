@@ -173,7 +173,7 @@ export default {
     statusError: 'Error',
     statusStopped: 'Stopped',
     statusUnknown: 'Unknown',
-    logsTitle: 'Logs Dev Server',
+    logsTitle: 'Dev Server Logs',
     noLogs: 'No logs available',
   },
   notion: {
@@ -203,8 +203,8 @@ export default {
     running: 'Running:',
     tools: 'tools',
     tokens: 'tok',
-    ms: 'ms',
-    s: 's',
-    m: 'm',
+    unitMs: 'ms',
+    unitSeconds: 's',
+    unitMinutes: 'm',
   },
 }
