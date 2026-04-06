@@ -2,7 +2,7 @@ import { defineConfig } from '#q-app/wrappers'
 
 export default defineConfig(() => {
   return {
-    boot: [],
+    boot: ['i18n'],
 
     css: ['app.scss'],
 
