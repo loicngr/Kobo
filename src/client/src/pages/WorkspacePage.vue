@@ -3,6 +3,7 @@ import type { AgentSession } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { computed, defineAsyncComponent, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useI18n } from 'vue-i18n'
 
 const ActivityFeed = defineAsyncComponent(() =>
   Promise.all([import('src/components/ActivityFeed.vue'), new Promise((resolve) => setTimeout(resolve, 500))]).then(
@@ -12,6 +13,7 @@ const ActivityFeed = defineAsyncComponent(() =>
 
 import ChatInput from 'src/components/ChatInput.vue'
 
+const { t } = useI18n()
 const store = useWorkspaceStore()
 
 const modelOptions = [
@@ -21,10 +23,10 @@ const modelOptions = [
   { label: 'Haiku 4.5', value: 'claude-haiku-4-5-20251001' },
 ]
 
-const permissionModeOptions = [
-  { label: 'Auto-accept', value: 'auto-accept' },
-  { label: 'Plan', value: 'plan' },
-]
+const permissionModeOptions = computed(() => [
+  { label: t('workspace.permissionAutoAccept'), value: 'auto-accept' },
+  { label: t('workspace.permissionPlan'), value: 'plan' },
+])
 
 const currentModel = computed({
   get: () => store.selectedWorkspace?.model ?? 'auto',
@@ -66,21 +68,21 @@ const selectedSessionId = computed({
 
 const sessionOptions = computed(() => {
   const opts = store.sessions.map((s: AgentSession, idx: number) => ({
-    label: `Session #${store.sessions.length - idx}`,
+    label: t('workspace.session', { n: store.sessions.length - idx }),
     value: s.claudeSessionId,
     caption: timeAgo(s.startedAt),
   }))
-  return [{ label: 'All sessions', value: null, caption: '' }, ...opts]
+  return [{ label: t('workspace.allSessions'), value: null, caption: '' }, ...opts]
 })
 
 function timeAgo(dateStr: string): string {
   const diffMs = Date.now() - new Date(dateStr).getTime()
   const min = Math.floor(diffMs / 60000)
-  if (min < 1) return 'just now'
-  if (min < 60) return `${min}m ago`
+  if (min < 1) return t('common.justNow')
+  if (min < 60) return t('common.minutesAgo', { n: min })
   const h = Math.floor(min / 60)
-  if (h < 24) return `${h}h ago`
-  return `${Math.floor(h / 24)}d ago`
+  if (h < 24) return t('common.hoursAgo', { n: h })
+  return t('common.daysAgo', { n: Math.floor(h / 24) })
 }
 
 onMounted(() => {
@@ -181,7 +183,7 @@ watch(
           size="sm"
           color="positive"
           icon="play_arrow"
-          label="Start"
+          :label="t('workspace.start')"
           class="q-mr-xs"
           @click="store.startWorkspace(selectedWs.id)"
         />
@@ -192,14 +194,14 @@ watch(
           size="sm"
           color="negative"
           icon="stop"
-          label="Stop"
+          :label="t('workspace.stop')"
           class="q-mr-xs"
           @click="store.stopWorkspace(selectedWs.id)"
         />
       </template>
       <template v-else>
         <span class="text-body2 text-grey-8">
-          Select a workspace to begin
+          {{ t('workspace.selectWorkspace') }}
         </span>
       </template>
     </div>
@@ -212,7 +214,7 @@ watch(
       <template #fallback>
         <div class="col column items-center justify-center">
           <q-spinner-dots size="40px" color="indigo-4" />
-          <div class="text-grey-6 text-caption q-mt-sm">Loading...</div>
+          <div class="text-grey-6 text-caption q-mt-sm">{{ t('common.loading') }}</div>
         </div>
       </template>
     </Suspense>
