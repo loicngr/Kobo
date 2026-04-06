@@ -527,7 +527,7 @@ onMounted(async () => {
               class="wl-item-action wl-item-delete"
               @click="openDeleteDialog(ws, $event)"
             >
-              <q-tooltip>Delete</q-tooltip>
+              <q-tooltip>{{ t('workspaceList.deleteTooltip') }}</q-tooltip>
             </q-btn>
           </div>
         </div>
