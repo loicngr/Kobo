@@ -221,7 +221,7 @@ function statusColor(status: string): string {
           style="height: 4px; border-radius: 2px;"
         />
         <div class="text-caption text-grey-7" style="font-size: 11px;">
-          {{ t('notion.subtasks', { n: `${doneTasks}/${totalTasks}` }) }}
+          {{ t('notion.subtasks', { done: doneTasks, total: totalTasks }) }}
         </div>
       </div>
       <div v-else-if="!adding" class="text-caption text-grey-8 q-mb-sm" style="font-size: 11px;">

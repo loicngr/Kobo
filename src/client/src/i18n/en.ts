@@ -188,7 +188,7 @@ export default {
     refresh: 'Refresh',
     noTasks: 'No tasks',
     newTaskPlaceholder: 'New task... (Enter to add, Esc to cancel)',
-    subtasks: '{n} subtasks',
+    subtasks: '{done}/{total} subtasks',
     selectWorkspace: 'Select a workspace',
   },
   acceptance: {
@@ -209,6 +209,6 @@ export default {
     tokens: 'tok',
     unitMs: 'ms',
     unitSeconds: 's',
-    unitMinutes: 'm',
+    unitMinutes: 'min',
   },
 }

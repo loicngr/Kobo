@@ -189,7 +189,7 @@ export default {
     refresh: 'Actualiser',
     noTasks: 'Aucune tâche',
     newTaskPlaceholder: 'Nouvelle tâche... (Entrée pour ajouter, Échap pour annuler)',
-    subtasks: '{n} sous-tâches',
+    subtasks: '{done}/{total} sous-tâches',
     selectWorkspace: 'Sélectionnez un espace de travail',
   },
   acceptance: {
