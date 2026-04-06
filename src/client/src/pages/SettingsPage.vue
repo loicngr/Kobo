@@ -3,9 +3,21 @@ import { useQuasar } from 'quasar'
 import type { ProjectSettings } from 'src/stores/settings'
 import { useSettingsStore } from 'src/stores/settings'
 import { computed, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { setLocale, type Locale } from 'src/i18n'
 
 const $q = useQuasar()
 const store = useSettingsStore()
+const { t, locale } = useI18n()
+
+const localeOptions = computed(() => [
+  { label: t('language.en'), value: 'en' as Locale },
+  { label: t('language.fr'), value: 'fr' as Locale },
+])
+
+function onLocaleChange(val: Locale) {
+  setLocale(val)
+}
 
 // Tab state
 const activeTab = ref('global')
@@ -38,14 +50,17 @@ const savingProject = ref(false)
 const deletingProject = ref(false)
 
 // Model options
-const modelOptions = [
+const modelOptions = computed(() => [
   { label: 'Auto', value: 'auto' },
   { label: 'Opus 4.6', value: 'claude-opus-4-6' },
   { label: 'Sonnet 4.6', value: 'claude-sonnet-4-6' },
   { label: 'Haiku 4.5', value: 'claude-haiku-4-5-20251001' },
-]
+])
 
-const projectModelOptions = [{ label: 'Use global', value: '' }, ...modelOptions]
+const projectModelOptions = computed(() => [
+  { label: t('settings.useGlobal'), value: '' },
+  ...modelOptions.value,
+])
 
 // Available template variables reference (displayed in the Global tab)
 const availableVariables = [
@@ -159,9 +174,9 @@ async function saveGlobal() {
       prPromptTemplate: globalPrPrompt.value,
       gitConventions: globalGitConventions.value,
     })
-    $q.notify({ type: 'positive', message: 'Global settings saved.', position: 'top' })
+    $q.notify({ type: 'positive', message: t('settings.savedGlobal'), position: 'top' })
   } catch {
-    $q.notify({ type: 'negative', message: 'Error saving settings.', position: 'top' })
+    $q.notify({ type: 'negative', message: t('settings.errorSaving'), position: 'top' })
   } finally {
     savingGlobal.value = false
   }
@@ -170,7 +185,7 @@ async function saveGlobal() {
 // Save project
 async function saveProject() {
   if (!projectForm.value.path.trim()) {
-    $q.notify({ type: 'negative', message: 'Project path is required.', position: 'top' })
+    $q.notify({ type: 'negative', message: t('settings.projectPathRequired'), position: 'top' })
     return
   }
   savingProject.value = true
@@ -188,9 +203,9 @@ async function saveProject() {
     // Select the project we just saved
     const idx = store.projects.findIndex((p) => p.path === projectForm.value.path.trim())
     if (idx >= 0) selectedProjectIndex.value = idx
-    $q.notify({ type: 'positive', message: 'Project saved.', position: 'top' })
+    $q.notify({ type: 'positive', message: t('settings.savedProject'), position: 'top' })
   } catch {
-    $q.notify({ type: 'negative', message: 'Error saving project.', position: 'top' })
+    $q.notify({ type: 'negative', message: t('settings.errorSavingProject'), position: 'top' })
   } finally {
     savingProject.value = false
   }
@@ -205,9 +220,9 @@ async function deleteProject() {
     selectedProjectIndex.value = -1
     isNewProject.value = false
     syncProjectForm(null)
-    $q.notify({ type: 'positive', message: 'Project deleted.', position: 'top' })
+    $q.notify({ type: 'positive', message: t('settings.deletedProject'), position: 'top' })
   } catch {
-    $q.notify({ type: 'negative', message: 'Error deleting project.', position: 'top' })
+    $q.notify({ type: 'negative', message: t('settings.errorDeletingProject'), position: 'top' })
   } finally {
     deletingProject.value = false
   }
@@ -257,7 +272,7 @@ onMounted(async () => {
       <!-- Header -->
       <div class="settings-header row items-center q-mb-lg">
         <q-icon name="settings" size="24px" color="indigo-4" class="q-mr-sm" />
-        <span class="text-h5 text-weight-medium text-grey-3">Settings</span>
+        <span class="text-h5 text-weight-medium text-grey-3">{{ t('settings.title') }}</span>
       </div>
 
       <!-- Tabs -->
@@ -270,8 +285,8 @@ onMounted(async () => {
         align="left"
         narrow-indicator
       >
-        <q-tab name="global" label="Global" />
-        <q-tab name="projects" label="Projects" />
+        <q-tab name="global" :label="t('settings.globalTab')" />
+        <q-tab name="projects" :label="t('settings.projectsTab')" />
       </q-tabs>
 
       <!-- Tab panels -->
@@ -280,14 +295,34 @@ onMounted(async () => {
         <q-tab-panel name="global" class="q-pa-none">
           <div class="settings-card rounded-borders q-pa-lg">
             <div class="text-subtitle1 text-weight-medium q-mb-md text-grey-3">
-              Global Settings
+              {{ t('settings.globalSettings') }}
             </div>
 
             <q-separator dark class="q-mb-md" />
 
+            <!-- Language selector -->
+            <div class="q-mb-lg">
+              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">
+                {{ t('language.label') }}
+              </div>
+              <q-select
+                :model-value="locale"
+                :options="localeOptions"
+                emit-value
+                map-options
+                option-value="value"
+                option-label="label"
+                dense
+                dark
+                outlined
+                class="settings-input"
+                @update:model-value="onLocaleChange"
+              />
+            </div>
+
             <!-- Model selector -->
             <div class="q-mb-lg">
-              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">Default model</div>
+              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ t('settings.defaultModel') }}</div>
               <q-select
                 v-model="globalModel"
                 :options="modelOptions"
@@ -304,24 +339,24 @@ onMounted(async () => {
 
             <!-- Skip permissions toggle -->
             <div class="q-mb-lg">
-              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">Agent permissions</div>
+              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ t('settings.agentPermissions') }}</div>
               <q-toggle
                 v-model="globalSkipPermissions"
-                label="Skip permission prompts (--dangerously-skip-permissions)"
+                :label="t('settings.skipPermissions')"
                 dark
                 dense
                 color="indigo-4"
                 class="text-grey-5 text-caption"
               />
-              <div class="text-caption text-red-4 q-mt-xs">Warning: disabling this will cause all tool permissions (Write, Edit, Bash...) to be auto-denied in headless mode. The agent will only be able to read.</div>
+              <div class="text-caption text-red-4 q-mt-xs">{{ t('settings.skipPermissionsWarning') }}</div>
             </div>
 
             <!-- Verbose system messages toggle -->
             <div class="q-mb-lg">
-              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">Activity feed</div>
+              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ t('settings.activityFeed') }}</div>
               <q-toggle
                 :model-value="store.showVerboseSystemMessages"
-                label="Show verbose system messages (task_progress, task_started)"
+                :label="t('settings.showVerboseMessages')"
                 dark
                 dense
                 color="indigo-4"
@@ -336,7 +371,7 @@ onMounted(async () => {
                 dense
                 dark
                 icon="code"
-                label="Available variables in PR prompt template"
+                :label="t('settings.availableVariables')"
                 class="variables-panel rounded-borders"
               >
                 <q-list dense dark class="q-pa-sm">
@@ -352,7 +387,7 @@ onMounted(async () => {
 
             <!-- PR prompt template -->
             <div class="q-mb-lg">
-              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">PR prompt template</div>
+              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ t('settings.prPromptTemplate') }}</div>
               <q-input
                 v-model="globalPrPrompt"
                 type="textarea"
@@ -361,15 +396,15 @@ onMounted(async () => {
                 outlined
                 :rows="8"
                 autogrow
-                placeholder="Instructions for the agent when creating GitHub PRs..."
+                :placeholder="t('settings.prPromptPlaceholder')"
                 class="settings-input mono-textarea"
               />
-              <div class="text-caption text-grey-7 q-mt-xs">Use <code>&#123;&#123;variable&#125;&#125;</code> placeholders. See "Available variables" above.</div>
+              <div class="text-caption text-grey-7 q-mt-xs">{{ t('settings.prPromptHint') }}</div>
             </div>
 
             <!-- Git conventions -->
             <div class="q-mb-lg">
-              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">Git conventions (global)</div>
+              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ t('settings.gitConventionsGlobal') }}</div>
               <q-input
                 v-model="globalGitConventions"
                 type="textarea"
@@ -378,16 +413,16 @@ onMounted(async () => {
                 outlined
                 :rows="8"
                 autogrow
-                placeholder="# Git conventions..."
+                :placeholder="t('settings.gitConventionsPlaceholder')"
                 class="settings-input mono-textarea"
               />
-              <div class="text-caption text-grey-7 q-mt-xs">These conventions are written to <code>.ai/git-conventions.md</code> in each new workspace and must be followed by the agent before any git operation. Overridden by per-project conventions if defined.</div>
+              <div class="text-caption text-grey-7 q-mt-xs">{{ t('settings.gitConventionsHint') }}</div>
             </div>
 
             <!-- Save button -->
             <div class="row justify-end">
               <q-btn
-                label="Save"
+                :label="t('settings.saveBtn')"
                 no-caps
                 unelevated
                 color="primary"
@@ -406,7 +441,7 @@ onMounted(async () => {
               <div class="settings-card rounded-borders" style="height: 100%;">
                 <div class="q-pa-sm">
                   <div class="text-caption text-uppercase text-weight-bold q-px-sm q-py-xs text-grey-6" style="letter-spacing: 0.05em;">
-                    Configured projects
+                    {{ t('settings.configuredProjects') }}
                   </div>
                 </div>
 
@@ -439,14 +474,14 @@ onMounted(async () => {
                   v-if="store.projects.length === 0 && !store.loading"
                   class="q-pa-md text-center text-caption text-grey-8"
                 >
-                  No projects configured
+                  {{ t('settings.noProjects') }}
                 </div>
 
                 <q-separator dark />
 
                 <div class="q-pa-sm">
                   <q-btn
-                    label="Add project"
+                    :label="t('settings.addProject')"
                     icon="add"
                     no-caps
                     flat
@@ -464,14 +499,14 @@ onMounted(async () => {
               <div class="settings-card rounded-borders q-pa-lg" style="height: 100%;">
                 <template v-if="selectedProject || isNewProject">
                   <div class="text-subtitle1 text-weight-medium q-mb-md text-grey-3">
-                    {{ isNewProject ? 'New project' : 'Edit project' }}
+                    {{ isNewProject ? t('settings.newProject') : t('settings.editProject') }}
                   </div>
 
                   <q-separator dark class="q-mb-md" />
 
                   <!-- Path -->
                   <div class="q-mb-md">
-                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">Project path</div>
+                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ t('settings.projectPath') }}</div>
                     <q-input
                       v-model="projectForm.path"
                       dense
@@ -486,20 +521,20 @@ onMounted(async () => {
 
                   <!-- Display name -->
                   <div class="q-mb-md">
-                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">Display name</div>
+                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ t('settings.displayName') }}</div>
                     <q-input
                       v-model="projectForm.displayName"
                       dense
                       dark
                       outlined
-                      placeholder="My project"
+                      :placeholder="t('settings.displayNamePlaceholder')"
                       class="settings-input"
                     />
                   </div>
 
                   <!-- Default source branch -->
                   <div class="q-mb-md">
-                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">Default source branch</div>
+                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ t('settings.defaultSourceBranch') }}</div>
                     <q-select
                       v-model="projectForm.defaultSourceBranch"
                       :options="branchFilterOptions"
@@ -516,7 +551,7 @@ onMounted(async () => {
                       <template #no-option>
                         <q-item>
                           <q-item-section class="text-grey-6 text-caption">
-                            {{ projectForm.path.trim() ? 'No branches found' : 'Enter the project path' }}
+                            {{ projectForm.path.trim() ? t('settings.noBranchesFound') : t('settings.enterProjectPath') }}
                           </q-item-section>
                         </q-item>
                       </template>
@@ -525,7 +560,7 @@ onMounted(async () => {
 
                   <!-- Default model -->
                   <div class="q-mb-md">
-                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">Default model</div>
+                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ t('settings.projectModel') }}</div>
                     <q-select
                       v-model="projectForm.defaultModel"
                       :options="projectModelOptions"
@@ -542,10 +577,10 @@ onMounted(async () => {
 
                   <!-- Skip permissions toggle (project override) -->
                   <div class="q-mb-md">
-                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">Agent permissions</div>
+                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ t('settings.agentPermissions') }}</div>
                     <q-toggle
                       v-model="projectForm.dangerouslySkipPermissions"
-                      label="Skip permission prompts"
+                      :label="t('settings.skipPermissionsShort')"
                       dark
                       dense
                       color="indigo-4"
@@ -555,7 +590,7 @@ onMounted(async () => {
 
                   <!-- PR prompt template -->
                   <div class="q-mb-md">
-                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">PR prompt template</div>
+                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ t('settings.prPromptTemplate') }}</div>
                     <q-input
                       v-model="projectForm.prPromptTemplate"
                       type="textarea"
@@ -563,14 +598,14 @@ onMounted(async () => {
                       dark
                       outlined
                       :rows="4"
-                      placeholder="Project-specific instructions for PR creation..."
+                      :placeholder="t('settings.prTemplatePlaceholder')"
                       class="settings-input mono-textarea"
                     />
                   </div>
 
                   <!-- Git conventions (project override) -->
                   <div class="q-mb-md">
-                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">Git conventions (project override)</div>
+                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ t('settings.gitConventionsProject') }}</div>
                     <q-input
                       v-model="projectForm.gitConventions"
                       type="textarea"
@@ -579,17 +614,17 @@ onMounted(async () => {
                       outlined
                       :rows="6"
                       autogrow
-                      placeholder="Leave empty to use the global conventions."
+                      :placeholder="t('settings.gitConventionsProjectHint')"
                       class="settings-input mono-textarea"
                     />
-                    <div class="text-caption text-grey-7 q-mt-xs">Leave empty to use the global conventions.</div>
+                    <div class="text-caption text-grey-7 q-mt-xs">{{ t('settings.gitConventionsProjectHint') }}</div>
                   </div>
 
                   <!-- Dev Server -->
                   <div class="q-mb-lg">
-                    <div class="field-label text-body2 text-weight-medium q-mb-sm text-grey-6">Dev server</div>
+                    <div class="field-label text-body2 text-weight-medium q-mb-sm text-grey-6">{{ t('settings.devServer') }}</div>
                     <div class="q-mb-md">
-                      <div class="field-label-sub text-caption q-mb-xs text-grey-7">Script start</div>
+                      <div class="field-label-sub text-caption q-mb-xs text-grey-7">{{ t('settings.devServerStart') }}</div>
                       <q-input
                         v-model="projectForm.devServer.startCommand"
                         type="textarea"
@@ -597,12 +632,12 @@ onMounted(async () => {
                         dark
                         outlined
                         :rows="3"
-                        placeholder="npm run dev"
+                        :placeholder="t('settings.devServerStartPlaceholder')"
                         class="settings-input mono-textarea"
                       />
                     </div>
                     <div>
-                      <div class="field-label-sub text-caption q-mb-xs text-grey-7">Script stop</div>
+                      <div class="field-label-sub text-caption q-mb-xs text-grey-7">{{ t('settings.devServerStop') }}</div>
                       <q-input
                         v-model="projectForm.devServer.stopCommand"
                         type="textarea"
@@ -610,7 +645,7 @@ onMounted(async () => {
                         dark
                         outlined
                         :rows="3"
-                        placeholder="Optional — the process will be killed automatically if empty"
+                        :placeholder="t('settings.devServerStopPlaceholder')"
                         class="settings-input mono-textarea"
                       />
                     </div>
@@ -620,7 +655,7 @@ onMounted(async () => {
                   <div class="row items-center q-gutter-sm">
                     <q-btn
                       v-if="!isNewProject"
-                      label="Delete"
+                      :label="t('settings.deleteBtn')"
                       no-caps
                       flat
                       color="red-5"
@@ -629,7 +664,7 @@ onMounted(async () => {
                     />
                     <q-space />
                     <q-btn
-                      label="Save"
+                      :label="t('settings.saveBtn')"
                       no-caps
                       unelevated
                       color="primary"
@@ -644,7 +679,7 @@ onMounted(async () => {
                   <div class="column items-center justify-center" style="height: 100%; min-height: 300px;">
                     <q-icon name="folder_open" size="48px" color="grey-7" class="q-mb-md" />
                     <div class="text-body2 text-grey-8">
-                      Select a project or add a new one
+                      {{ t('settings.selectOrAdd') }}
                     </div>
                   </div>
                 </template>
