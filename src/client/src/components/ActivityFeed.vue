@@ -38,6 +38,20 @@ function parseOptions(content: string): { textBefore: string; options: ParsedOpt
     }
   }
 
+  // Pattern 1b: "a) Description" or "A) Description" — plain letter-paren format without bold
+  const letterParenRegex = /^([a-zA-Z])\)\s+(.+)/gm
+  const letterParenMatches = [...content.matchAll(letterParenRegex)]
+  if (letterParenMatches.length >= 2) {
+    const firstMatchIndex = content.indexOf(letterParenMatches[0][0])
+    return {
+      textBefore: content.substring(0, firstMatchIndex).trim(),
+      options: letterParenMatches.map((m) => ({
+        key: m[1].toUpperCase(),
+        label: m[2].trim(),
+      })),
+    }
+  }
+
   // Pattern 2: "1. **Label** — Description" or "1. **Label —** Description"
   const numberedRegex = /^\d+\.\s*\*\*(.+?)\*\*\s*[—–-]\s*(.+)/gm
   const numberedMatches = [...content.matchAll(numberedRegex)]
