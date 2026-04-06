@@ -38,7 +38,7 @@ function parseOptions(content: string): { textBefore: string; options: ParsedOpt
     }
   }
 
-  // Pattern 1b: "a) Description" or "A) Description" — plain letter-paren format without bold
+  // Pattern 1b: "a) Description" or "A) Description" — plain letter-paren format
   const letterParenRegex = /^([a-zA-Z])\)\s+(.+)/gm
   const letterParenMatches = [...content.matchAll(letterParenRegex)]
   if (letterParenMatches.length >= 2) {
@@ -46,6 +46,90 @@ function parseOptions(content: string): { textBefore: string; options: ParsedOpt
     return {
       textBefore: content.substring(0, firstMatchIndex).trim(),
       options: letterParenMatches.map((m) => ({
+        key: m[1].toUpperCase(),
+        label: m[2].trim(),
+      })),
+    }
+  }
+
+  // Pattern 1c: "Option 1 – Label" or "Option 2 — Label : Description" — plain numbered option format
+  const optionNRegex = /^Option\s+(\d+)\s*[—–-]\s*(.+)/gim
+  const optionNMatches = [...content.matchAll(optionNRegex)]
+  if (optionNMatches.length >= 2) {
+    const firstMatchIndex = content.indexOf(optionNMatches[0][0])
+    return {
+      textBefore: content.substring(0, firstMatchIndex).trim(),
+      options: optionNMatches.map((m) => ({
+        key: m[1],
+        label: m[2].trim(),
+      })),
+    }
+  }
+
+  // Pattern 1d: "1) Description" — numbered paren format
+  const numberedParenRegex = /^(\d+)\)\s+(.+)/gm
+  const numberedParenMatches = [...content.matchAll(numberedParenRegex)]
+  if (numberedParenMatches.length >= 2) {
+    const firstMatchIndex = content.indexOf(numberedParenMatches[0][0])
+    return {
+      textBefore: content.substring(0, firstMatchIndex).trim(),
+      options: numberedParenMatches.map((m) => ({
+        key: m[1],
+        label: m[2].trim(),
+      })),
+    }
+  }
+
+  // Pattern 1e: "A. Description" — letter-period format
+  const letterDotRegex = /^([a-zA-Z])\.\s+(.+)/gm
+  const letterDotMatches = [...content.matchAll(letterDotRegex)]
+  if (letterDotMatches.length >= 2) {
+    const firstMatchIndex = content.indexOf(letterDotMatches[0][0])
+    return {
+      textBefore: content.substring(0, firstMatchIndex).trim(),
+      options: letterDotMatches.map((m) => ({
+        key: m[1].toUpperCase(),
+        label: m[2].trim(),
+      })),
+    }
+  }
+
+  // Pattern 1f: "A: Description" or "A : Description" — letter-colon format
+  const letterColonRegex = /^([a-zA-Z])\s*:\s+(.+)/gm
+  const letterColonMatches = [...content.matchAll(letterColonRegex)]
+  if (letterColonMatches.length >= 2) {
+    const firstMatchIndex = content.indexOf(letterColonMatches[0][0])
+    return {
+      textBefore: content.substring(0, firstMatchIndex).trim(),
+      options: letterColonMatches.map((m) => ({
+        key: m[1].toUpperCase(),
+        label: m[2].trim(),
+      })),
+    }
+  }
+
+  // Pattern 1g: "(a) Description" or "(1) Description" — parenthesized prefix format
+  const parenPrefixRegex = /^\(([a-zA-Z0-9])\)\s+(.+)/gm
+  const parenPrefixMatches = [...content.matchAll(parenPrefixRegex)]
+  if (parenPrefixMatches.length >= 2) {
+    const firstMatchIndex = content.indexOf(parenPrefixMatches[0][0])
+    return {
+      textBefore: content.substring(0, firstMatchIndex).trim(),
+      options: parenPrefixMatches.map((m) => ({
+        key: m[1].toUpperCase(),
+        label: m[2].trim(),
+      })),
+    }
+  }
+
+  // Pattern 1h: "[A] Description" or "[1] Description" — bracketed prefix format
+  const bracketPrefixRegex = /^\[([a-zA-Z0-9])\]\s+(.+)/gm
+  const bracketPrefixMatches = [...content.matchAll(bracketPrefixRegex)]
+  if (bracketPrefixMatches.length >= 2) {
+    const firstMatchIndex = content.indexOf(bracketPrefixMatches[0][0])
+    return {
+      textBefore: content.substring(0, firstMatchIndex).trim(),
+      options: bracketPrefixMatches.map((m) => ({
         key: m[1].toUpperCase(),
         label: m[2].trim(),
       })),
