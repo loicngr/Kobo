@@ -93,7 +93,7 @@ async function handleOpenPr() {
     if (e instanceof WorkspaceActionError && e.code === 'branch_not_pushed') {
       $q.notify({
         type: 'warning',
-        message: t('git.pushFirstRemote'),
+        message: t('git.pushFirstRemote', { label: t('git.push') }),
         position: 'top',
         timeout: 6000,
       })
@@ -102,7 +102,7 @@ async function handleOpenPr() {
     if (e instanceof WorkspaceActionError && e.code === 'unpushed_commits') {
       $q.notify({
         type: 'warning',
-        message: t('git.pushFirstLocal'),
+        message: t('git.pushFirstLocal', { label: t('git.push') }),
         position: 'top',
         timeout: 6000,
       })

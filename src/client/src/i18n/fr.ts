@@ -161,8 +161,8 @@ export default {
     pushSuccess: 'Branche poussée',
     pushFailed: 'Échec du push : {error}',
     prCreated: 'PR #{n} créée',
-    pushFirstRemote: "La branche n'est pas sur le distant. Cliquez d'abord sur Pousser.",
-    pushFirstLocal: "Des commits locaux ne sont pas poussés. Cliquez d'abord sur Pousser.",
+    pushFirstRemote: "La branche n'est pas sur le distant. Cliquez d'abord sur {label}.",
+    pushFirstLocal: "Des commits locaux ne sont pas poussés. Cliquez d'abord sur {label}.",
     openPRFailed: "Échec de l'ouverture de la PR : {error}",
   },
   devServer: {

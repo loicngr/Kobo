@@ -548,7 +548,7 @@ onMounted(async () => {
 
     <!-- Footer counter -->
     <div class="q-px-md q-py-xs text-caption text-grey-8">
-      {{ totalCount }} workspace{{ totalCount !== 1 ? 's' : '' }} &middot; {{ t('workspaceList.footerRunning', { n: runningCount }) }}
+      {{ t('workspaceList.workspaceWord', totalCount) }} &middot; {{ t('workspaceList.footerRunning', { n: runningCount }) }}
     </div>
   </div>
 

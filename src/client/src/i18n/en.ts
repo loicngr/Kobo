@@ -160,8 +160,8 @@ export default {
     pushSuccess: 'Branch pushed',
     pushFailed: 'Push failed: {error}',
     prCreated: 'PR #{n} created',
-    pushFirstRemote: 'Branch is not on remote. Click Push first.',
-    pushFirstLocal: 'Local commits are not pushed. Click Push first.',
+    pushFirstRemote: 'Branch is not on remote. Click {label} first.',
+    pushFirstLocal: 'Local commits are not pushed. Click {label} first.',
     openPRFailed: 'Open PR failed: {error}',
   },
   devServer: {
