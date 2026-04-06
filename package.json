@@ -53,6 +53,7 @@
     "build:client": "cd src/client && npx quasar build",
     "build:server": "npx tsc && chmod +x dist/server/index.js",
     "build": "npm run build:client && npm run build:server",
+    "install-all": "npm install && cd src/client && npm install && cd ../server && npm install",
     "start": "node dist/server/index.js",
     "test": "vitest run --config vitest.config.ts --root .",
     "test:watch": "vitest --config vitest.config.ts --root .",
