@@ -1,6 +1,7 @@
 // src/client/src/i18n/index.ts
-import { createI18n } from 'vue-i18n'
+
 import type { WritableComputedRef } from 'vue'
+import { createI18n } from 'vue-i18n'
 import en from './en'
 import fr from './fr'
 

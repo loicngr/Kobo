@@ -86,8 +86,7 @@ export default {
     addCriterionPlaceholder: 'Ajouter un critère...',
     createBtn: 'Créer',
     hintNotion: "Les sous-tâches et critères d'acceptation seront extraits de la page Notion.",
-    hintDefault:
-      "« Importer depuis Notion » permet d'extraire automatiquement les sous-tâches d'un ticket.",
+    hintDefault: "« Importer depuis Notion » permet d'extraire automatiquement les sous-tâches d'un ticket.",
     errorInvalidNotionUrl: 'Veuillez coller une URL Notion valide (https://www.notion.so/...).',
     errorDescribeTask: 'Veuillez décrire la tâche.',
     errorWorkspaceName: "Veuillez fournir un nom d'espace de travail.",

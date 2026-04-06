@@ -5,8 +5,8 @@ import { useWebSocketStore } from 'src/stores/websocket'
 import type { Workspace } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
 
 const store = useWorkspaceStore()
 const wsStore = useWebSocketStore()

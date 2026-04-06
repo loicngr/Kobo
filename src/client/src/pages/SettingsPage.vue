@@ -1,10 +1,10 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
+import { type Locale, setLocale } from 'src/i18n'
 import type { ProjectSettings } from 'src/stores/settings'
 import { useSettingsStore } from 'src/stores/settings'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { setLocale, type Locale } from 'src/i18n'
 
 const $q = useQuasar()
 const store = useSettingsStore()
@@ -59,10 +59,7 @@ const modelOptions = computed(() => [
   { label: 'Haiku 4.5', value: 'claude-haiku-4-5-20251001' },
 ])
 
-const projectModelOptions = computed(() => [
-  { label: t('settings.useGlobal'), value: '' },
-  ...modelOptions.value,
-])
+const projectModelOptions = computed(() => [{ label: t('settings.useGlobal'), value: '' }, ...modelOptions.value])
 
 // Available template variables reference (displayed in the Global tab)
 const availableVariables = [

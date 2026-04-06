@@ -1,5 +1,6 @@
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
+import { i18n } from 'src/i18n'
 import { beforeEach, describe, expect, it } from 'vitest'
 import SubagentsPanel from '../components/SubagentsPanel.vue'
 import { useWorkspaceStore } from '../stores/workspace'
@@ -12,7 +13,7 @@ const globalStubs = {
 }
 
 function mountPanel() {
-  return mount(SubagentsPanel, { global: { stubs: globalStubs } })
+  return mount(SubagentsPanel, { global: { stubs: globalStubs, plugins: [i18n] } })
 }
 
 describe('SubagentsPanel.vue', () => {
@@ -71,7 +72,7 @@ describe('SubagentsPanel.vue', () => {
     const text = wrapper.text()
     expect(text).toContain('500ms')
     expect(text).toContain('15.0s')
-    expect(text).toContain('2m 5s')
+    expect(text).toContain('2min 5s')
   })
 
   it('formats token counts with k/M suffixes', () => {
