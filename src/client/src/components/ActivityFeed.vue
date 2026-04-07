@@ -306,20 +306,20 @@ watch(
 
 // Clean up caches for items ejected by MAX_FEED_ITEMS cap (I2)
 watch(
-    visibleItems,
-    (items) => {
-      const visibleIds = new Set(items.map((i) => i.id))
-      for (const key of parsedOptionsCache.keys()) {
-        if (!visibleIds.has(key)) parsedOptionsCache.delete(key)
-      }
-      for (const key of askUserCache.keys()) {
-        if (!visibleIds.has(key)) askUserCache.delete(key)
-      }
-      for (const key of markdownCache.keys()) {
-        if (!visibleIds.has(key)) markdownCache.delete(key)
-      }
-    },
-    { flush: 'post' },
+  visibleItems,
+  (items) => {
+    const visibleIds = new Set(items.map((i) => i.id))
+    for (const key of parsedOptionsCache.keys()) {
+      if (!visibleIds.has(key)) parsedOptionsCache.delete(key)
+    }
+    for (const key of askUserCache.keys()) {
+      if (!visibleIds.has(key)) askUserCache.delete(key)
+    }
+    for (const key of markdownCache.keys()) {
+      if (!visibleIds.has(key)) markdownCache.delete(key)
+    }
+  },
+  { flush: 'post' },
 )
 
 // Auto-scroll: stick to bottom unless user scrolled up.

@@ -125,7 +125,6 @@ vi.mock('node:fs', async () => {
 
 // ── Imports (after mocks) ────────────────────────────────────────────────────
 
-import * as childProcess from 'node:child_process'
 import * as fs from 'node:fs'
 import router from '../server/routes/workspaces.js'
 import * as agentManager from '../server/services/agent-manager.js'
