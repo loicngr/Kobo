@@ -68,6 +68,7 @@ export interface ProjectSettings {
   dangerouslySkipPermissions: boolean
   prPromptTemplate: string
   gitConventions: string
+  setupScript: string
   devServer: DevServerConfig
 }
 
@@ -115,6 +116,17 @@ const settingsMigrations: SettingsMigration[] = [
       }
     },
   },
+  {
+    version: 3,
+    name: 'add-setup-script',
+    migrate({ projects }) {
+      for (const project of projects) {
+        if (!('setupScript' in project)) {
+          ;(project as Record<string, unknown>).setupScript = ''
+        }
+      }
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -128,6 +140,7 @@ export interface EffectiveSettings {
   gitConventions: string
   sourceBranch: string
   devServer: DevServerConfig | null
+  setupScript: string
 }
 
 let settingsFilePath = getSettingsPath()
@@ -159,6 +172,7 @@ function defaultProjectSettings(projectPath: string): ProjectSettings {
     dangerouslySkipPermissions: true,
     prPromptTemplate: '',
     gitConventions: '',
+    setupScript: '',
     devServer: {
       startCommand: '',
       stopCommand: '',
@@ -270,6 +284,7 @@ export function getEffectiveSettings(projectPath: string): EffectiveSettings {
       gitConventions: settings.global.gitConventions,
       sourceBranch: '',
       devServer: null,
+      setupScript: '',
     }
   }
 
@@ -280,6 +295,7 @@ export function getEffectiveSettings(projectPath: string): EffectiveSettings {
     gitConventions: project.gitConventions || settings.global.gitConventions,
     sourceBranch: project.defaultSourceBranch,
     devServer: project.devServer,
+    setupScript: project.setupScript || '',
   }
 }
 
@@ -300,6 +316,7 @@ export function upsertProject(projectPath: string, data: Partial<Omit<ProjectSet
     'dangerouslySkipPermissions',
     'prPromptTemplate',
     'gitConventions',
+    'setupScript',
     'devServer',
   ]
   const allowedDevServerKeys = ['startCommand', 'stopCommand']

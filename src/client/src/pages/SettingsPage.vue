@@ -30,6 +30,7 @@ const projectForm = ref({
   dangerouslySkipPermissions: true,
   prPromptTemplate: '',
   gitConventions: '',
+  setupScript: '',
   devServer: { startCommand: '', stopCommand: '' },
 })
 
@@ -64,19 +65,19 @@ const modelOptions = computed(() => [
 const projectModelOptions = computed(() => [{ label: t('settings.useGlobal'), value: '' }, ...modelOptions.value])
 
 // Available template variables reference (displayed in the Global tab)
-const availableVariables = [
-  { name: '{{pr_number}}', description: 'PR number (e.g., 42)' },
-  { name: '{{pr_url}}', description: 'Full URL of the created PR' },
-  { name: '{{branch_name}}', description: 'Working branch name' },
-  { name: '{{source_branch}}', description: 'Source branch the PR targets' },
-  { name: '{{workspace_name}}', description: 'Workspace name' },
-  { name: '{{project_name}}', description: 'Last segment of the project path' },
-  { name: '{{notion_url}}', description: 'Notion URL if set, empty otherwise' },
-  { name: '{{commits}}', description: 'Bulleted commit list between source and head' },
-  { name: '{{diff_stats}}', description: 'Git shortstat summary (files, insertions, deletions)' },
-  { name: '{{tasks}}', description: 'Regular tasks as a checkbox list' },
-  { name: '{{acceptance_criteria}}', description: 'Acceptance criteria as a checkbox list' },
-]
+const availableVariables = computed(() => [
+  { name: '{{pr_number}}', description: t('settings.var.prNumber') },
+  { name: '{{pr_url}}', description: t('settings.var.prUrl') },
+  { name: '{{branch_name}}', description: t('settings.var.branchName') },
+  { name: '{{source_branch}}', description: t('settings.var.sourceBranch') },
+  { name: '{{workspace_name}}', description: t('settings.var.workspaceName') },
+  { name: '{{project_name}}', description: t('settings.var.projectName') },
+  { name: '{{notion_url}}', description: t('settings.var.notionUrl') },
+  { name: '{{commits}}', description: t('settings.var.commits') },
+  { name: '{{diff_stats}}', description: t('settings.var.diffStats') },
+  { name: '{{tasks}}', description: t('settings.var.tasks') },
+  { name: '{{acceptance_criteria}}', description: t('settings.var.acceptanceCriteria') },
+])
 
 // Selected project
 const selectedProject = computed<ProjectSettings | null>(() => {
@@ -105,6 +106,7 @@ function syncProjectForm(project: ProjectSettings | null) {
       dangerouslySkipPermissions: true,
       prPromptTemplate: '',
       gitConventions: '',
+      setupScript: '',
       devServer: { startCommand: '', stopCommand: '' },
     }
     projectBranches.value = []
@@ -118,6 +120,7 @@ function syncProjectForm(project: ProjectSettings | null) {
     dangerouslySkipPermissions: project.dangerouslySkipPermissions ?? true,
     prPromptTemplate: project.prPromptTemplate,
     gitConventions: project.gitConventions ?? '',
+    setupScript: project.setupScript ?? '',
     devServer: {
       startCommand: project.devServer?.startCommand ?? '',
       stopCommand: project.devServer?.stopCommand ?? '',
@@ -198,6 +201,7 @@ async function saveProject() {
       dangerouslySkipPermissions: projectForm.value.dangerouslySkipPermissions,
       prPromptTemplate: projectForm.value.prPromptTemplate,
       gitConventions: projectForm.value.gitConventions,
+      setupScript: projectForm.value.setupScript,
       devServer: projectForm.value.devServer,
     })
     isNewProject.value = false
@@ -416,7 +420,6 @@ onUnmounted(() => {
                 dark
                 outlined
                 :rows="8"
-                autogrow
                 :placeholder="$t('settings.gitConventionsPlaceholder')"
                 class="settings-input mono-textarea"
               />
@@ -617,11 +620,26 @@ onUnmounted(() => {
                       dark
                       outlined
                       :rows="6"
-                      autogrow
                       :placeholder="$t('settings.gitConventionsEmpty')"
                       class="settings-input mono-textarea"
                     />
                     <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.gitConventionsEmpty') }}</div>
+                  </div>
+
+                  <!-- Setup Script -->
+                  <div class="q-mb-lg">
+                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.setupScript') }}</div>
+                    <q-input
+                      v-model="projectForm.setupScript"
+                      type="textarea"
+                      dense
+                      dark
+                      outlined
+                      :rows="5"
+                      :placeholder="$t('settings.setupScriptPlaceholder')"
+                      class="settings-input mono-textarea"
+                    />
+                    <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.setupScriptHint') }}</div>
                   </div>
 
                   <!-- Dev Server -->

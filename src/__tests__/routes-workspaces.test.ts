@@ -107,6 +107,10 @@ vi.mock('../server/services/settings-service.js', () => ({
   getEffectiveSettings: vi.fn(),
 }))
 
+vi.mock('../server/services/setup-script-service.js', () => ({
+  runSetupScript: vi.fn(),
+}))
+
 vi.mock('node:fs', async () => {
   const actual = await vi.importActual<typeof import('node:fs')>('node:fs')
   const mocked = {
@@ -131,6 +135,7 @@ import * as agentManager from '../server/services/agent-manager.js'
 import * as devServerService from '../server/services/dev-server-service.js'
 import * as notionService from '../server/services/notion-service.js'
 import * as settingsService from '../server/services/settings-service.js'
+import * as setupScriptService from '../server/services/setup-script-service.js'
 import * as wsService from '../server/services/websocket-service.js'
 import * as workspaceService from '../server/services/workspace-service.js'
 import * as worktreeService from '../server/services/worktree-service.js'
@@ -197,6 +202,7 @@ beforeEach(() => {
     gitConventions: '',
     sourceBranch: 'main',
     devServer: null,
+    setupScript: '',
   })
 })
 
@@ -369,6 +375,99 @@ describe('POST /api/workspaces', () => {
       'ws-1',
       expect.objectContaining({ title: 'Criterion 1', isAcceptanceCriterion: true }),
     )
+  })
+
+  it('runs setup script when configured and continues on success', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktree).mockReturnValue('/tmp/worktree')
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
+      model: 'claude-opus-4-6',
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      gitConventions: '',
+      sourceBranch: 'main',
+      devServer: null,
+      setupScript: '#!/bin/bash\necho "ok"',
+    })
+    vi.mocked(setupScriptService.runSetupScript).mockResolvedValue({ exitCode: 0 })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'test-ws',
+        projectPath: '/tmp/test',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(vi.mocked(setupScriptService.runSetupScript)).toHaveBeenCalledOnce()
+  })
+
+  it('returns 500 and sets status to error when setup script fails', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktree).mockReturnValue('/tmp/worktree')
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
+      model: 'claude-opus-4-6',
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      gitConventions: '',
+      sourceBranch: 'main',
+      devServer: null,
+      setupScript: '#!/bin/bash\nexit 1',
+    })
+    vi.mocked(setupScriptService.runSetupScript).mockResolvedValue({ exitCode: 1 })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'test-ws',
+        projectPath: '/tmp/test',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect(body.error).toContain('Setup script failed')
+  })
+
+  it('does not run setup script when not configured', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktree).mockReturnValue('/tmp/worktree')
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
+      model: 'claude-opus-4-6',
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      gitConventions: '',
+      sourceBranch: 'main',
+      devServer: null,
+      setupScript: '',
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'test-ws',
+        projectPath: '/tmp/test',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(vi.mocked(setupScriptService.runSetupScript)).not.toHaveBeenCalled()
   })
 })
 
@@ -902,6 +1001,7 @@ describe('git conventions file creation on workspace create', () => {
       gitConventions: '# My conventions\n- Rule 1',
       sourceBranch: 'main',
       devServer: null,
+      setupScript: '',
     })
 
     await app.request('/api/workspaces', {
@@ -930,6 +1030,7 @@ describe('git conventions file creation on workspace create', () => {
       gitConventions: '',
       sourceBranch: 'main',
       devServer: null,
+      setupScript: '',
     })
 
     await app.request('/api/workspaces', {
@@ -957,6 +1058,7 @@ describe('git conventions file creation on workspace create', () => {
       gitConventions: '# conventions',
       sourceBranch: 'main',
       devServer: null,
+      setupScript: '',
     })
 
     await app.request('/api/workspaces', {
@@ -985,6 +1087,7 @@ describe('git conventions file creation on workspace create', () => {
       gitConventions: '',
       sourceBranch: 'main',
       devServer: null,
+      setupScript: '',
     })
 
     await app.request('/api/workspaces', {
@@ -1149,6 +1252,7 @@ describe('POST /api/workspaces/:id/open-pr', () => {
       gitConventions: '',
       sourceBranch: 'main',
       devServer: null,
+      setupScript: '',
     })
 
     execFilePromiseMock.mockImplementation((cmd: string, args: string[]) => {
@@ -1191,6 +1295,7 @@ describe('POST /api/workspaces/:id/open-pr', () => {
       gitConventions: '',
       sourceBranch: 'main',
       devServer: null,
+      setupScript: '',
     })
 
     execFilePromiseMock.mockImplementation((cmd: string, args: string[]) => {
@@ -1218,6 +1323,7 @@ describe('POST /api/workspaces/:id/open-pr', () => {
       gitConventions: '',
       sourceBranch: 'main',
       devServer: null,
+      setupScript: '',
     })
 
     execFilePromiseMock.mockImplementation((cmd: string, args: string[]) => {
@@ -1243,6 +1349,7 @@ describe('POST /api/workspaces/:id/open-pr', () => {
       gitConventions: '',
       sourceBranch: 'main',
       devServer: null,
+      setupScript: '',
     })
 
     execFilePromiseMock.mockImplementation((cmd: string, args: string[]) => {
@@ -1268,6 +1375,7 @@ describe('POST /api/workspaces/:id/open-pr', () => {
       gitConventions: '',
       sourceBranch: 'main',
       devServer: null,
+      setupScript: '',
     })
 
     execFilePromiseMock.mockImplementation((cmd: string, args: string[]) => {

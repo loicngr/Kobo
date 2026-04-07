@@ -531,6 +531,36 @@ export const useWebSocketStore = defineStore('websocket', {
           break
         }
 
+        case 'setup:output':
+          workspaceStore.addActivityItem(wid, {
+            id: msg.id ?? `setup-${Date.now()}`,
+            type: 'text',
+            content: msg.payload?.text ?? '',
+            timestamp: msg.createdAt ?? new Date().toISOString(),
+            meta: { sender: 'setup' },
+          })
+          break
+
+        case 'setup:complete':
+          workspaceStore.addActivityItem(wid, {
+            id: msg.id ?? `setup-complete-${Date.now()}`,
+            type: 'text',
+            content: '[setup] Complete',
+            timestamp: msg.createdAt ?? new Date().toISOString(),
+            meta: { sender: 'setup' },
+          })
+          break
+
+        case 'setup:error':
+          workspaceStore.addActivityItem(wid, {
+            id: msg.id ?? `setup-error-${Date.now()}`,
+            type: 'text',
+            content: `[setup] Error: ${msg.payload?.message ?? 'unknown'}`,
+            timestamp: msg.createdAt ?? new Date().toISOString(),
+            meta: { sender: 'error' },
+          })
+          break
+
         case 'workspace:archived':
         case 'workspace:unarchived': {
           // Refresh active list; if the archived tab was ever opened, refresh that too.

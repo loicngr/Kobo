@@ -13,6 +13,7 @@ interface ProjectSettings {
   dangerouslySkipPermissions: boolean
   prPromptTemplate: string
   gitConventions: string
+  setupScript: string
   devServer: DevServerConfig
 }
 

@@ -12,6 +12,7 @@ import * as devServerService from '../services/dev-server-service.js'
 import * as notionService from '../services/notion-service.js'
 import { renderPrTemplate } from '../services/pr-template-service.js'
 import * as settingsService from '../services/settings-service.js'
+import { runSetupScript } from '../services/setup-script-service.js'
 import * as wsService from '../services/websocket-service.js'
 import type { PermissionMode, WorkspaceStatus } from '../services/workspace-service.js'
 import * as workspaceService from '../services/workspace-service.js'
@@ -148,6 +149,7 @@ app.post('/', async (c) => {
       if (!lines.includes('.ai/git-conventions.md')) toAdd.push('.ai/git-conventions.md')
       if (!lines.includes('.ai/thoughts/')) toAdd.push('.ai/thoughts/')
       if (!lines.includes('.ai/images/')) toAdd.push('.ai/images/')
+      if (!lines.includes('.ai/.setup-script.tmp')) toAdd.push('.ai/.setup-script.tmp')
       if (toAdd.length > 0) {
         const separator = existing.length > 0 && !existing.endsWith('\n') ? '\n' : ''
         fs.appendFileSync(gitignorePath, `${separator}${toAdd.join('\n')}\n`, 'utf-8')
@@ -166,6 +168,29 @@ app.post('/', async (c) => {
         fs.writeFileSync(conventionsPath, effectiveSettings.gitConventions, 'utf-8')
       } catch (err) {
         console.error('[workspaces] Failed to write git-conventions.md:', err)
+      }
+    }
+
+    // 4d. Run setup script if configured
+    if (effectiveSettings.setupScript) {
+      workspaceService.updateWorkspaceStatus(workspace.id, 'extracting')
+      wsService.emit(workspace.id, 'setup:output', { text: '[kobo] Running setup script...' })
+      try {
+        const result = await runSetupScript(workspace.id, worktreePath, effectiveSettings.setupScript, {
+          workspaceName: workspace.name,
+          branchName: body.workingBranch,
+          sourceBranch: body.sourceBranch,
+          projectPath: body.projectPath,
+        })
+        if (result.exitCode !== 0) {
+          workspaceService.updateWorkspaceStatus(workspace.id, 'error')
+          return c.json({ error: `Setup script failed with exit code ${result.exitCode}` }, 500)
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        console.error(`[workspaces] Setup script error: ${message}`)
+        workspaceService.updateWorkspaceStatus(workspace.id, 'error')
+        return c.json({ error: `Setup script error: ${message}` }, 500)
       }
     }
 
