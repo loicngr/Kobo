@@ -401,7 +401,7 @@ export function startAgent(
     const lowerText = text.toLowerCase()
 
     if (lowerText.includes('rate limit') || lowerText.includes('quota') || lowerText.includes('limit exceeded')) {
-      handleQuota(workspaceId, workingDir, agent.claudeSessionId)
+      handleQuota(workspaceId, agent.claudeSessionId)
     }
 
     // Also emit stderr for visibility
@@ -421,7 +421,14 @@ export function startAgent(
     agent.rl.close()
 
     unregisterProcess(workspaceId)
-    agents.delete(workspaceId)
+
+    // Only remove from the map if this exact agent instance is still current.
+    // stopAgent() eagerly removes the entry so startAgent() can proceed
+    // immediately; if a new agent was started in the meantime, we must not
+    // remove it.
+    if (agents.get(workspaceId) === agent) {
+      agents.delete(workspaceId)
+    }
 
     // Clean up retry state and inactivity timer
     retryCounts.delete(workspaceId)
@@ -491,6 +498,11 @@ export function stopAgent(workspaceId: string): void {
 
   agent.status = 'stopping'
 
+  // Remove from the map immediately so startAgent() can be called right after
+  // without hitting "Agent already running". The exit handler checks identity
+  // before removing, so a new agent started in the meantime won't be affected.
+  agents.delete(workspaceId)
+
   // Cancel any pending backoff timer
   const timer = backoffTimers.get(workspaceId)
   if (timer) {
@@ -514,8 +526,10 @@ export function stopAgent(workspaceId: string): void {
 
   // After 5s timeout, send SIGKILL if still running
   const killTimer = setTimeout(() => {
-    // C2: Guard against race with natural exit — only act if this exact agent instance is still current
-    if (agents.get(workspaceId) !== agent) {
+    // C2: If a new agent has been started for this workspace in the meantime,
+    // don't kill the old process — it's handled by the new lifecycle.
+    const currentAgent = agents.get(workspaceId)
+    if (currentAgent && currentAgent !== agent) {
       killTimers.delete(workspaceId)
       return
     }
@@ -567,7 +581,7 @@ export function getAvailableSkills(): string[] {
 
 // ── Quota handling ─────────────────────────────────────────────────────────────
 
-function handleQuota(workspaceId: string, workingDir: string, claudeSessionId?: string): void {
+function handleQuota(workspaceId: string, claudeSessionId?: string): void {
   // Update workspace status
   try {
     updateWorkspaceStatus(workspaceId, 'quota')
@@ -602,8 +616,15 @@ function handleQuota(workspaceId: string, workingDir: string, claudeSessionId?: 
 
     // Only restart if not already running or stopped
     if (!agents.has(workspaceId)) {
+      // Re-read workspace from DB — it may have been deleted or archived during backoff
+      const freshWs = getWs(workspaceId)
+      if (!freshWs || freshWs.archivedAt !== null || freshWs.status !== 'quota') {
+        return
+      }
+
       try {
-        startAgent(workspaceId, workingDir, 'Continue the previous task where you left off.', undefined, true)
+        const freshWorkingDir = `${freshWs.projectPath}/.worktrees/${freshWs.workingBranch}`
+        startAgent(workspaceId, freshWorkingDir, 'Continue the previous task where you left off.', undefined, true)
       } catch {
         // Agent restart failed
         emit(workspaceId, 'agent:status', { status: 'error', message: 'Quota retry failed' })

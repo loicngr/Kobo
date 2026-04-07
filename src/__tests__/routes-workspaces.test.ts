@@ -14,6 +14,7 @@ vi.mock('../server/services/workspace-service.js', () => ({
   updateWorkspacePermissionMode: vi.fn(),
   deleteWorkspace: vi.fn(),
   createTask: vi.fn(),
+  getTask: vi.fn(),
   listTasks: vi.fn(),
   updateTaskStatus: vi.fn(),
   updateTaskTitle: vi.fn(),
@@ -36,10 +37,20 @@ vi.mock('../server/services/agent-manager.js', () => ({
   sendMessage: vi.fn(),
 }))
 
+// I10: workspaces.ts now uses promisify(execFile) instead of execFileSync.
+// We mock execFile with a [util.promisify.custom] property so that promisify returns our mock.
+const { execFilePromiseMock } = vi.hoisted(() => {
+  const execFilePromiseMock = vi.fn()
+  return { execFilePromiseMock }
+})
 vi.mock('node:child_process', async () => {
   const actual = await vi.importActual<typeof import('node:child_process')>('node:child_process')
+  const mock = Object.assign(vi.fn(), {
+    [Symbol.for('nodejs.util.promisify.custom')]: execFilePromiseMock,
+  })
   return {
     ...actual,
+    execFile: mock,
     execFileSync: vi.fn(),
   }
 })
@@ -64,6 +75,10 @@ vi.mock('../server/utils/git-ops.js', () => ({
   getPrUrl: vi.fn().mockReturnValue(null),
   getPrStatus: vi.fn().mockReturnValue(null),
   getUnpushedCount: vi.fn().mockReturnValue(0),
+  getPrStatusAsync: vi.fn().mockResolvedValue(null),
+  getPrUrlAsync: vi.fn().mockResolvedValue(null),
+  getUnpushedCountAsync: vi.fn().mockResolvedValue(0),
+  getWorkingTreeStatus: vi.fn().mockReturnValue({ staged: 0, modified: 0, untracked: 0 }),
 }))
 
 vi.mock('../server/services/websocket-service.js', () => ({
@@ -94,11 +109,17 @@ vi.mock('../server/services/settings-service.js', () => ({
 
 vi.mock('node:fs', async () => {
   const actual = await vi.importActual<typeof import('node:fs')>('node:fs')
-  return {
+  const mocked = {
     ...actual,
     mkdirSync: vi.fn(),
     writeFileSync: vi.fn(),
     existsSync: vi.fn().mockReturnValue(false),
+    readFileSync: vi.fn().mockReturnValue(''),
+    appendFileSync: vi.fn(),
+  }
+  return {
+    ...mocked,
+    default: mocked,
   }
 })
 
@@ -493,6 +514,8 @@ describe('POST /api/workspaces/:id/tasks', () => {
 
 describe('PATCH /api/workspaces/:id/tasks/:taskId', () => {
   it('updates task status', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'ws-1' } as never)
+    vi.mocked(workspaceService.getTask).mockReturnValue({ id: 'task-1', workspaceId: 'ws-1' } as never)
     vi.mocked(workspaceService.updateTaskStatus).mockReturnValue(undefined as any)
 
     const res = await app.request('/api/workspaces/ws-1/tasks/task-1', {
@@ -508,6 +531,9 @@ describe('PATCH /api/workspaces/:id/tasks/:taskId', () => {
   })
 
   it('returns 400 for invalid status', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'ws-1' } as never)
+    vi.mocked(workspaceService.getTask).mockReturnValue({ id: 'task-1', workspaceId: 'ws-1' } as never)
+
     const res = await app.request('/api/workspaces/ws-1/tasks/task-1', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -520,6 +546,8 @@ describe('PATCH /api/workspaces/:id/tasks/:taskId', () => {
   })
 
   it("met à jour le titre d'une task", async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'ws-1' } as never)
+    vi.mocked(workspaceService.getTask).mockReturnValue({ id: 'task-1', workspaceId: 'ws-1' } as never)
     vi.mocked(workspaceService.updateTaskTitle).mockReturnValue({ id: 'task-1', title: 'New title' } as never)
 
     const res = await app.request('/api/workspaces/ws-1/tasks/task-1', {
@@ -533,6 +561,8 @@ describe('PATCH /api/workspaces/:id/tasks/:taskId', () => {
   })
 
   it('accepte title et status ensemble', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'ws-1' } as never)
+    vi.mocked(workspaceService.getTask).mockReturnValue({ id: 'task-1', workspaceId: 'ws-1' } as never)
     vi.mocked(workspaceService.updateTaskTitle).mockReturnValue({ id: 'task-1' } as never)
     vi.mocked(workspaceService.updateTaskStatus).mockReturnValue({ id: 'task-1' } as never)
 
@@ -548,6 +578,9 @@ describe('PATCH /api/workspaces/:id/tasks/:taskId', () => {
   })
 
   it('retourne 400 si ni title ni status', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'ws-1' } as never)
+    vi.mocked(workspaceService.getTask).mockReturnValue({ id: 'task-1', workspaceId: 'ws-1' } as never)
+
     const res = await app.request('/api/workspaces/ws-1/tasks/task-1', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -557,6 +590,9 @@ describe('PATCH /api/workspaces/:id/tasks/:taskId', () => {
   })
 
   it('retourne 400 si title vide', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'ws-1' } as never)
+    vi.mocked(workspaceService.getTask).mockReturnValue({ id: 'task-1', workspaceId: 'ws-1' } as never)
+
     const res = await app.request('/api/workspaces/ws-1/tasks/task-1', {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -564,11 +600,37 @@ describe('PATCH /api/workspaces/:id/tasks/:taskId', () => {
     })
     expect(res.status).toBe(400)
   })
+
+  it('retourne 404 si workspace inconnu', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
+
+    const res = await app.request('/api/workspaces/unknown/tasks/task-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'done' }),
+    })
+    expect(res.status).toBe(404)
+  })
+
+  it("retourne 404 si la task n'appartient pas au workspace", async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'ws-1' } as never)
+    vi.mocked(workspaceService.getTask).mockReturnValue(null as never)
+
+    const res = await app.request('/api/workspaces/ws-1/tasks/task-other', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'done' }),
+    })
+    expect(res.status).toBe(404)
+    const data = await res.json()
+    expect(data.error).toContain("Task 'task-other' not found in workspace 'ws-1'")
+  })
 })
 
 describe('DELETE /api/workspaces/:id/tasks/:taskId', () => {
   it('supprime une task et retourne 204', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'ws-1' } as never)
+    vi.mocked(workspaceService.getTask).mockReturnValue({ id: 'task-1', workspaceId: 'ws-1' } as never)
 
     const res = await app.request('/api/workspaces/ws-1/tasks/task-1', {
       method: 'DELETE',
@@ -584,6 +646,18 @@ describe('DELETE /api/workspaces/:id/tasks/:taskId', () => {
       method: 'DELETE',
     })
     expect(res.status).toBe(404)
+  })
+
+  it("retourne 404 si la task n'appartient pas au workspace", async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'ws-1' } as never)
+    vi.mocked(workspaceService.getTask).mockReturnValue(null as never)
+
+    const res = await app.request('/api/workspaces/ws-1/tasks/task-other', {
+      method: 'DELETE',
+    })
+    expect(res.status).toBe(404)
+    const data = await res.json()
+    expect(data.error).toContain("Task 'task-other' not found in workspace 'ws-1'")
   })
 })
 
@@ -1006,7 +1080,7 @@ describe('POST /api/workspaces/:id/open-pr', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(agentManager.sendMessage).mockReset()
-    vi.mocked(childProcess.execFileSync).mockReset()
+    execFilePromiseMock.mockReset()
     vi.mocked(workspaceService.getWorkspace).mockReturnValue({
       ...fakeWorkspace,
       workingBranch: 'feature/test',
@@ -1027,10 +1101,10 @@ describe('POST /api/workspaces/:id/open-pr', () => {
   })
 
   it('returns 409 branch_not_pushed when ls-remote returns empty', async () => {
-    vi.mocked(childProcess.execFileSync).mockImplementation(((_cmd: string, args: string[]) => {
-      if (args.includes('ls-remote')) return Buffer.from('')
-      throw new Error('unexpected')
-    }) as never)
+    execFilePromiseMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args.includes('ls-remote')) return Promise.resolve({ stdout: '' })
+      return Promise.reject(new Error('unexpected'))
+    })
 
     const res = await app.request('/api/workspaces/ws-1/open-pr', { method: 'POST' })
     expect(res.status).toBe(409)
@@ -1039,15 +1113,15 @@ describe('POST /api/workspaces/:id/open-pr', () => {
   })
 
   it('returns 409 branch_not_pushed when upstream is not configured', async () => {
-    vi.mocked(childProcess.execFileSync).mockImplementation(((_cmd: string, args: string[]) => {
-      if (args.includes('ls-remote')) return Buffer.from('abc refs/heads/feature/test\n')
+    execFilePromiseMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args.includes('ls-remote')) return Promise.resolve({ stdout: 'abc refs/heads/feature/test\n' })
       if (args.includes('rev-list')) {
         const err = new Error("fatal: no upstream configured for branch 'feature/test'")
-        ;(err as never as { stderr: Buffer }).stderr = Buffer.from('fatal: no upstream configured')
-        throw err
+        ;(err as never as { stderr: string }).stderr = 'fatal: no upstream configured'
+        return Promise.reject(err)
       }
-      throw new Error('unexpected')
-    }) as never)
+      return Promise.reject(new Error('unexpected'))
+    })
 
     const res = await app.request('/api/workspaces/ws-1/open-pr', { method: 'POST' })
     expect(res.status).toBe(409)
@@ -1056,11 +1130,11 @@ describe('POST /api/workspaces/:id/open-pr', () => {
   })
 
   it('returns 409 unpushed_commits when rev-list returns > 0', async () => {
-    vi.mocked(childProcess.execFileSync).mockImplementation(((_cmd: string, args: string[]) => {
-      if (args.includes('ls-remote')) return Buffer.from('abc refs/heads/feature/test\n')
-      if (args.includes('rev-list')) return Buffer.from('3\n')
-      throw new Error('unexpected')
-    }) as never)
+    execFilePromiseMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args.includes('ls-remote')) return Promise.resolve({ stdout: 'abc refs/heads/feature/test\n' })
+      if (args.includes('rev-list')) return Promise.resolve({ stdout: '3\n' })
+      return Promise.reject(new Error('unexpected'))
+    })
 
     const res = await app.request('/api/workspaces/ws-1/open-pr', { method: 'POST' })
     expect(res.status).toBe(409)
@@ -1078,14 +1152,15 @@ describe('POST /api/workspaces/:id/open-pr', () => {
       devServer: null,
     })
 
-    vi.mocked(childProcess.execFileSync).mockImplementation(((cmd: string, args: string[]) => {
-      if (cmd === 'git' && args.includes('ls-remote')) return Buffer.from('abc refs/heads/feature/test\n')
-      if (cmd === 'git' && args.includes('rev-list')) return Buffer.from('0\n')
+    execFilePromiseMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === 'git' && args.includes('ls-remote'))
+        return Promise.resolve({ stdout: 'abc refs/heads/feature/test\n' })
+      if (cmd === 'git' && args.includes('rev-list')) return Promise.resolve({ stdout: '0\n' })
       if (cmd === 'gh' && args.includes('pr') && args.includes('create')) {
-        return Buffer.from('https://github.com/org/repo/pull/42\n')
+        return Promise.resolve({ stdout: 'https://github.com/org/repo/pull/42\n' })
       }
-      return Buffer.from('')
-    }) as never)
+      return Promise.resolve({ stdout: '' })
+    })
 
     const prTemplateService = await import('../server/services/pr-template-service.js')
     vi.mocked(prTemplateService.renderPrTemplate).mockReturnValue('RENDERED PROMPT')
@@ -1119,12 +1194,13 @@ describe('POST /api/workspaces/:id/open-pr', () => {
       devServer: null,
     })
 
-    vi.mocked(childProcess.execFileSync).mockImplementation(((cmd: string, args: string[]) => {
-      if (cmd === 'git' && args.includes('ls-remote')) return Buffer.from('abc refs/heads/feature/test\n')
-      if (cmd === 'git' && args.includes('rev-list')) return Buffer.from('0\n')
-      if (cmd === 'gh') return Buffer.from('https://github.com/org/repo/pull/42\n')
-      return Buffer.from('')
-    }) as never)
+    execFilePromiseMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === 'git' && args.includes('ls-remote'))
+        return Promise.resolve({ stdout: 'abc refs/heads/feature/test\n' })
+      if (cmd === 'git' && args.includes('rev-list')) return Promise.resolve({ stdout: '0\n' })
+      if (cmd === 'gh') return Promise.resolve({ stdout: 'https://github.com/org/repo/pull/42\n' })
+      return Promise.resolve({ stdout: '' })
+    })
 
     const res = await app.request('/api/workspaces/ws-1/open-pr', { method: 'POST' })
 
@@ -1145,12 +1221,13 @@ describe('POST /api/workspaces/:id/open-pr', () => {
       devServer: null,
     })
 
-    vi.mocked(childProcess.execFileSync).mockImplementation(((cmd: string, args: string[]) => {
-      if (cmd === 'git' && args.includes('ls-remote')) return Buffer.from('abc refs/heads/feature/test\n')
-      if (cmd === 'git' && args.includes('rev-list')) return Buffer.from('0\n')
-      if (cmd === 'gh') throw new Error('gh: auth required')
-      return Buffer.from('')
-    }) as never)
+    execFilePromiseMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === 'git' && args.includes('ls-remote'))
+        return Promise.resolve({ stdout: 'abc refs/heads/feature/test\n' })
+      if (cmd === 'git' && args.includes('rev-list')) return Promise.resolve({ stdout: '0\n' })
+      if (cmd === 'gh') return Promise.reject(new Error('gh: auth required'))
+      return Promise.resolve({ stdout: '' })
+    })
 
     const res = await app.request('/api/workspaces/ws-1/open-pr', { method: 'POST' })
 
@@ -1169,12 +1246,13 @@ describe('POST /api/workspaces/:id/open-pr', () => {
       devServer: null,
     })
 
-    vi.mocked(childProcess.execFileSync).mockImplementation(((cmd: string, args: string[]) => {
-      if (cmd === 'git' && args.includes('ls-remote')) return Buffer.from('abc refs/heads/feature/test\n')
-      if (cmd === 'git' && args.includes('rev-list')) return Buffer.from('0\n')
-      if (cmd === 'gh') return Buffer.from('some unexpected output\n')
-      return Buffer.from('')
-    }) as never)
+    execFilePromiseMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === 'git' && args.includes('ls-remote'))
+        return Promise.resolve({ stdout: 'abc refs/heads/feature/test\n' })
+      if (cmd === 'git' && args.includes('rev-list')) return Promise.resolve({ stdout: '0\n' })
+      if (cmd === 'gh') return Promise.resolve({ stdout: 'some unexpected output\n' })
+      return Promise.resolve({ stdout: '' })
+    })
 
     const res = await app.request('/api/workspaces/ws-1/open-pr', { method: 'POST' })
 
@@ -1193,12 +1271,13 @@ describe('POST /api/workspaces/:id/open-pr', () => {
       devServer: null,
     })
 
-    vi.mocked(childProcess.execFileSync).mockImplementation(((cmd: string, args: string[]) => {
-      if (cmd === 'git' && args.includes('ls-remote')) return Buffer.from('abc refs/heads/feature/test\n')
-      if (cmd === 'git' && args.includes('rev-list')) return Buffer.from('0\n')
-      if (cmd === 'gh') return Buffer.from('https://github.com/org/repo/pull/42\n')
-      return Buffer.from('')
-    }) as never)
+    execFilePromiseMock.mockImplementation((cmd: string, args: string[]) => {
+      if (cmd === 'git' && args.includes('ls-remote'))
+        return Promise.resolve({ stdout: 'abc refs/heads/feature/test\n' })
+      if (cmd === 'git' && args.includes('rev-list')) return Promise.resolve({ stdout: '0\n' })
+      if (cmd === 'gh') return Promise.resolve({ stdout: 'https://github.com/org/repo/pull/42\n' })
+      return Promise.resolve({ stdout: '' })
+    })
 
     vi.mocked(agentManager.sendMessage).mockImplementation(() => {
       throw new Error('No active agent session')
@@ -1340,7 +1419,7 @@ describe('GET /api/workspaces/:id/git-stats', () => {
       insertions: 42,
       deletions: 7,
     })
-    vi.mocked(gitOps.getPrStatus).mockReturnValue({ state: 'OPEN', url: 'https://github.com/org/repo/pull/1' })
+    vi.mocked(gitOps.getPrStatusAsync).mockResolvedValue({ state: 'OPEN', url: 'https://github.com/org/repo/pull/1' })
 
     const res = await app.request('/api/workspaces/ws-1/git-stats')
     expect(res.status).toBe(200)

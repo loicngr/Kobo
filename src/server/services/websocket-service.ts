@@ -23,6 +23,10 @@ export interface WsMessage {
 /** Maps each WS client to the set of workspaceIds they are subscribed to */
 const clients = new Map<WebSocket, Set<string>>()
 
+/** I6: Per-workspace emit counter for periodic cleanup */
+const emitCounters = new Map<string, number>()
+const EMIT_CLEANUP_THRESHOLD = 2000
+
 // ── Message handler (decoupled routing) ────────────────────────────────────────
 
 export type MessageHandler = (type: string, payload: unknown) => void
@@ -100,11 +104,22 @@ export function handleConnection(ws: WebSocket): void {
     }
   })
 
+  // Ping every 30s to keep the connection alive and detect stale clients
+  const pingInterval = setInterval(() => {
+    if (ws.readyState === ws.OPEN) {
+      ws.ping()
+    } else {
+      clearInterval(pingInterval)
+    }
+  }, 30_000)
+
   ws.on('close', () => {
+    clearInterval(pingInterval)
     clients.delete(ws)
   })
 
   ws.on('error', () => {
+    clearInterval(pingInterval)
     clients.delete(ws)
   })
 }
@@ -126,6 +141,15 @@ export function emit(workspaceId: string, type: string, payload: unknown, sessio
     db.prepare(
       'INSERT INTO ws_events (id, workspace_id, type, payload, session_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
     ).run(id, workspaceId, type, JSON.stringify(payload), sessionId ?? null, createdAt)
+
+    // I6: Periodic cleanup — increment counter and trigger cleanup when threshold is reached
+    const count = (emitCounters.get(workspaceId) ?? 0) + 1
+    if (count >= EMIT_CLEANUP_THRESHOLD) {
+      cleanupOldEvents(workspaceId)
+      emitCounters.set(workspaceId, 0)
+    } else {
+      emitCounters.set(workspaceId, count)
+    }
   } catch (err) {
     console.error(`[websocket-service] Failed to persist event (workspace=${workspaceId}, type=${type}):`, err)
   }
@@ -208,15 +232,15 @@ export function handleSyncRequest(ws: WebSocket, lastEventId: string, workspaceI
         .prepare(`SELECT * FROM ws_events WHERE workspace_id IN (${placeholders}) AND rowid > ? ORDER BY rowid ASC`)
         .all(...resolvedIds, lastRow.rowid) as typeof rows
     } else {
-      // lastEventId not found — send all events for subscribed workspaces
+      // I7: lastEventId not found — send events capped to avoid unbounded memory usage
       rows = db
-        .prepare(`SELECT * FROM ws_events WHERE workspace_id IN (${placeholders}) ORDER BY rowid ASC`)
+        .prepare(`SELECT * FROM ws_events WHERE workspace_id IN (${placeholders}) ORDER BY rowid ASC LIMIT 10000`)
         .all(...resolvedIds) as typeof rows
     }
   } else {
-    // No lastEventId — send all events
+    // No lastEventId — send all events (capped to avoid unbounded memory usage)
     rows = db
-      .prepare(`SELECT * FROM ws_events WHERE workspace_id IN (${placeholders}) ORDER BY rowid ASC`)
+      .prepare(`SELECT * FROM ws_events WHERE workspace_id IN (${placeholders}) ORDER BY rowid ASC LIMIT 10000`)
       .all(...resolvedIds) as typeof rows
   }
 
@@ -238,6 +262,14 @@ export function handleSyncRequest(ws: WebSocket, lastEventId: string, workspaceI
   })
 
   ws.send(JSON.stringify({ type: 'sync:response', payload: { events } }))
+
+  // Trigger cleanup when the event count is high to prevent unbounded growth
+  const CLEANUP_THRESHOLD = 5000
+  if (rows.length >= CLEANUP_THRESHOLD) {
+    for (const wid of resolvedIds) {
+      cleanupOldEvents(wid)
+    }
+  }
 }
 
 // ── Cleanup ────────────────────────────────────────────────────────────────────
@@ -274,4 +306,12 @@ export function getClientCount(): number {
  */
 export function _getClients(): Map<WebSocket, Set<string>> {
   return clients
+}
+
+/**
+ * Get the internal emit counters map — exposed for testing only.
+ * @internal
+ */
+export function _getEmitCounters(): Map<string, number> {
+  return emitCounters
 }

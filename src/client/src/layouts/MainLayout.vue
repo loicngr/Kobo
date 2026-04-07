@@ -4,6 +4,7 @@ import AgentTodosPanel from 'src/components/AgentTodosPanel.vue'
 import DevServerPanel from 'src/components/DevServerPanel.vue'
 import GitPanel from 'src/components/GitPanel.vue'
 import NotionPanel from 'src/components/NotionPanel.vue'
+import StatsPanel from 'src/components/StatsPanel.vue'
 import SubagentsPanel from 'src/components/SubagentsPanel.vue'
 import WorkspaceList from 'src/components/WorkspaceList.vue'
 import { useWorkspaceStore } from 'src/stores/workspace'
@@ -91,6 +92,7 @@ const store = useWorkspaceStore()
           <q-tab name="server" icon="dns" />
           <q-tab name="tasks" icon="checklist" />
           <q-tab name="subagents" icon="smart_toy" />
+          <q-tab name="stats" icon="bar_chart" />
         </q-tabs>
 
         <q-separator dark />
@@ -114,6 +116,10 @@ const store = useWorkspaceStore()
 
           <q-tab-panel name="subagents" class="q-pa-none">
             <SubagentsPanel />
+          </q-tab-panel>
+
+          <q-tab-panel name="stats" class="q-pa-none">
+            <StatsPanel :workspace="store.selectedWorkspace" />
           </q-tab-panel>
         </q-tab-panels>
       </div>
@@ -140,6 +146,7 @@ const store = useWorkspaceStore()
 
 .drawer-content {
   overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .drawer-header {
@@ -153,11 +160,21 @@ const store = useWorkspaceStore()
 .right-tabs {
   flex-shrink: 0;
   background-color: #16162a;
+
+  :deep(.q-tabs__content) {
+    overflow: hidden !important;
+  }
+
+  :deep(.q-tab) {
+    min-width: 0;
+    padding: 0 8px;
+  }
 }
 
 .right-tab-panels {
   background: transparent !important;
   overflow-y: auto;
+  overflow-x: hidden;
 }
 
 :deep(.q-tab-panel) {

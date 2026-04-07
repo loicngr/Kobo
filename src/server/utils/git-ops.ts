@@ -1,4 +1,9 @@
-import { execFileSync } from 'node:child_process'
+import { execFile as execFileCb, execFileSync } from 'node:child_process'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { promisify } from 'node:util'
+
+const execFileAsync = promisify(execFileCb)
 
 function git(repoPath: string, args: string[]): string {
   return execFileSync('git', args, { cwd: repoPath, encoding: 'utf-8' }).trim()
@@ -116,9 +121,25 @@ export function pushBranch(repoPath: string, branchName: string, remote = 'origi
   }
 }
 
+/** Try a git command with `base`, falling back to `origin/base` if the local ref is missing. */
+function resolveBase(repoPath: string, base: string): string {
+  try {
+    git(repoPath, ['rev-parse', '--verify', base])
+    return base
+  } catch {
+    try {
+      git(repoPath, ['rev-parse', '--verify', `origin/${base}`])
+      return `origin/${base}`
+    } catch {
+      return base
+    }
+  }
+}
+
 export function getCommitCount(repoPath: string, base: string, head: string): number {
   try {
-    const output = git(repoPath, ['rev-list', '--count', `${base}..${head}`])
+    const ref = resolveBase(repoPath, base)
+    const output = git(repoPath, ['rev-list', '--count', `${ref}..${head}`])
     return parseInt(output, 10) || 0
   } catch {
     return 0
@@ -131,7 +152,8 @@ export function getStructuredDiffStatsBetween(
   head: string,
 ): { filesChanged: number; insertions: number; deletions: number } {
   try {
-    const output = git(repoPath, ['diff', '--shortstat', `${base}...${head}`])
+    const ref = resolveBase(repoPath, base)
+    const output = git(repoPath, ['diff', '--shortstat', `${ref}...${head}`])
     return parseDiffShortstat(output)
   } catch {
     return { filesChanged: 0, insertions: 0, deletions: 0 }
@@ -140,7 +162,8 @@ export function getStructuredDiffStatsBetween(
 
 export function getCommitsBetween(repoPath: string, base: string, head: string): string {
   try {
-    return git(repoPath, ['log', `${base}..${head}`, '--pretty=format:- %s (%h)', '--no-merges'])
+    const ref = resolveBase(repoPath, base)
+    return git(repoPath, ['log', `${ref}..${head}`, '--pretty=format:- %s (%h)', '--no-merges'])
   } catch {
     return ''
   }
@@ -178,6 +201,106 @@ export function getPrStatus(repoPath: string, branchName: string): PrStatus | nu
   }
 }
 
+export interface DiffFile {
+  path: string
+  status: 'added' | 'modified' | 'deleted' | 'renamed'
+}
+
+/** List files changed between base and HEAD (committed), plus working tree changes. */
+export function getChangedFiles(repoPath: string, base: string): DiffFile[] {
+  const ref = resolveBase(repoPath, base)
+  const files: DiffFile[] = []
+  const seen = new Set<string>()
+
+  // Committed changes (base..HEAD)
+  try {
+    const output = git(repoPath, ['diff', '--name-status', `${ref}...HEAD`])
+    for (const line of output.split('\n')) {
+      if (!line) continue
+      const [statusCode, ...pathParts] = line.split('\t')
+      const filePath = pathParts.join('\t').replace(/\/$/, '')
+      if (!filePath) continue
+      let status: DiffFile['status'] = 'modified'
+      if (statusCode?.startsWith('A')) status = 'added'
+      else if (statusCode?.startsWith('D')) status = 'deleted'
+      else if (statusCode?.startsWith('R')) status = 'renamed'
+      files.push({ path: filePath, status })
+      seen.add(filePath)
+    }
+  } catch {
+    // No commits yet
+  }
+
+  // Working tree changes (uncommitted)
+  try {
+    const output = git(repoPath, ['status', '--porcelain', '-uall'])
+    for (const line of output.split('\n')) {
+      if (!line) continue
+      const filePath = line.substring(3).replace(/\/$/, '')
+      if (!filePath || seen.has(filePath)) continue
+      const x = line[0]
+      const y = line[1]
+      let status: DiffFile['status'] = 'modified'
+      if (x === '?' && y === '?') status = 'added'
+      else if (x === 'A' || y === 'A') status = 'added'
+      else if (x === 'D' || y === 'D') status = 'deleted'
+      files.push({ path: filePath, status })
+    }
+  } catch {
+    // Ignore
+  }
+
+  return files
+}
+
+/** Get the original content of a file at a given ref. Returns null if the file didn't exist. */
+export function getFileAtRef(repoPath: string, ref: string, filePath: string): string | null {
+  const resolvedRef = resolveBase(repoPath, ref)
+  try {
+    return git(repoPath, ['show', `${resolvedRef}:${filePath}`])
+  } catch {
+    return null
+  }
+}
+
+/** Get the current content of a file in the worktree. Returns null if the file doesn't exist. */
+export function getFileContent(repoPath: string, filePath: string): string | null {
+  try {
+    return readFileSync(join(repoPath, filePath), 'utf-8')
+  } catch {
+    return null
+  }
+}
+
+export interface WorkingTreeStatus {
+  staged: number
+  modified: number
+  untracked: number
+}
+
+export function getWorkingTreeStatus(repoPath: string): WorkingTreeStatus {
+  try {
+    const output = git(repoPath, ['status', '--porcelain'])
+    let staged = 0
+    let modified = 0
+    let untracked = 0
+    for (const line of output.split('\n')) {
+      if (!line) continue
+      const x = line[0] // index status
+      const y = line[1] // worktree status
+      if (x === '?' && y === '?') {
+        untracked++
+      } else {
+        if (x !== ' ' && x !== '?') staged++
+        if (y !== ' ' && y !== '?') modified++
+      }
+    }
+    return { staged, modified, untracked }
+  } catch {
+    return { staged: 0, modified: 0, untracked: 0 }
+  }
+}
+
 /** Count commits ahead of upstream. Returns -1 if no upstream is set. */
 export function getUnpushedCount(repoPath: string): number {
   try {
@@ -196,5 +319,49 @@ export function getDiffStatsBetween(repoPath: string, base: string, head: string
     return git(repoPath, ['diff', '--shortstat', `${base}...${head}`])
   } catch {
     return ''
+  }
+}
+
+// ── Async versions ───────────────────────────────────────────────────────────
+// Non-blocking alternatives for hot paths (pr-watcher, route handlers).
+// The sync versions above are kept for callers that haven't migrated yet.
+
+export async function getPrUrlAsync(repoPath: string, branchName: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync('gh', ['pr', 'view', branchName, '--json', 'url', '--jq', '.url'], {
+      cwd: repoPath,
+      encoding: 'utf-8',
+    })
+    return stdout.trim() || null
+  } catch {
+    return null
+  }
+}
+
+export async function getPrStatusAsync(repoPath: string, branchName: string): Promise<PrStatus | null> {
+  try {
+    const { stdout } = await execFileAsync('gh', ['pr', 'view', branchName, '--json', 'state,url'], {
+      cwd: repoPath,
+      encoding: 'utf-8',
+    })
+    const raw = stdout.trim()
+    if (!raw) return null
+    const parsed = JSON.parse(raw) as { state: string; url: string }
+    return { state: parsed.state as PrStatus['state'], url: parsed.url }
+  } catch {
+    return null
+  }
+}
+
+/** Async version of getUnpushedCount. Returns -1 if no upstream is set. */
+export async function getUnpushedCountAsync(repoPath: string): Promise<number> {
+  try {
+    const { stdout } = await execFileAsync('git', ['rev-list', '@{u}..HEAD', '--count'], {
+      cwd: repoPath,
+      encoding: 'utf-8',
+    })
+    return parseInt(stdout.trim(), 10) || 0
+  } catch {
+    return -1 // no upstream
   }
 }

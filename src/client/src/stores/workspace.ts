@@ -103,7 +103,10 @@ export interface GitStats {
   prUrl: string | null
   prState: 'OPEN' | 'CLOSED' | 'MERGED' | null
   unpushedCount: number // -1 = no upstream
+  workingTree: { staged: number; modified: number; untracked: number }
 }
+
+const MAX_FEED_ITEMS = 5000
 
 export const useWorkspaceStore = defineStore('workspace', {
   state: () => ({
@@ -111,6 +114,11 @@ export const useWorkspaceStore = defineStore('workspace', {
     selectedWorkspaceId: null as string | null,
     tasks: [] as Task[],
     activityFeeds: {} as Record<string, ActivityItem[]>,
+    activityFeedIds: {} as Record<string, Set<string>>,
+    activityCounts: {} as Record<
+      string,
+      { toolUses: number; agentMessages: number; userMessages: number; errors: number }
+    >,
     subagents: {} as Record<string, Record<string, Subagent>>,
     agentTodos: {} as Record<string, AgentTodo[]>,
     sessions: [] as AgentSession[],
@@ -118,6 +126,13 @@ export const useWorkspaceStore = defineStore('workspace', {
     archivedWorkspaces: [] as Workspace[],
     archivedLoaded: false,
     loading: false,
+    loadingOlderEvents: false,
+    hasMoreEvents: {} as Record<string, boolean>,
+    usageStats: {} as Record<
+      string,
+      { inputTokens: number; outputTokens: number; costUsd: number; sessionCount: number }
+    >,
+    chatDraft: '',
     gitRefreshTrigger: 0,
   }),
 
@@ -184,6 +199,10 @@ export const useWorkspaceStore = defineStore('workspace', {
         const res = await fetch(`/api/workspaces/${id}`)
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const data = await res.json()
+
+        // Guard against stale response: user may have switched workspace while
+        // this request was in flight.
+        if (this.selectedWorkspaceId !== id) return
 
         // Update workspace in list
         const idx = this.workspaces.findIndex((w) => w.id === id)
@@ -256,6 +275,11 @@ export const useWorkspaceStore = defineStore('workspace', {
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         this.workspaces = this.workspaces.filter((w) => w.id !== id)
         delete this.activityFeeds[id]
+        delete this.activityFeedIds[id]
+        delete this.activityCounts[id]
+        delete this.subagents[id]
+        delete this.agentTodos[id]
+        delete this.usageStats[id]
         if (this.selectedWorkspaceId === id) {
           this.selectedWorkspaceId = null
           this.tasks = []
@@ -267,27 +291,37 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async updateModel(id: string, model: string) {
-      const res = await fetch(`/api/workspaces/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ model }),
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const updated = (await res.json()) as Workspace
-      const idx = this.workspaces.findIndex((w) => w.id === id)
-      if (idx >= 0) this.workspaces[idx] = updated
+      try {
+        const res = await fetch(`/api/workspaces/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model }),
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const updated = (await res.json()) as Workspace
+        const idx = this.workspaces.findIndex((w) => w.id === id)
+        if (idx >= 0) this.workspaces[idx] = updated
+      } catch (err) {
+        console.error('[workspace store] updateModel failed:', err)
+        throw err
+      }
     },
 
     async updatePermissionMode(id: string, permissionMode: string) {
-      const res = await fetch(`/api/workspaces/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ permissionMode }),
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const updated = (await res.json()) as Workspace
-      const idx = this.workspaces.findIndex((w) => w.id === id)
-      if (idx >= 0) this.workspaces[idx] = updated
+      try {
+        const res = await fetch(`/api/workspaces/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ permissionMode }),
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const updated = (await res.json()) as Workspace
+        const idx = this.workspaces.findIndex((w) => w.id === id)
+        if (idx >= 0) this.workspaces[idx] = updated
+      } catch (err) {
+        console.error('[workspace store] updatePermissionMode failed:', err)
+        throw err
+      }
     },
 
     async pushBranch(id: string): Promise<void> {
@@ -409,9 +443,58 @@ export const useWorkspaceStore = defineStore('workspace', {
       try {
         const res = await fetch(`/api/workspaces/${workspaceId}/sessions`)
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
+
+        // Guard against stale response: user may have switched workspace while
+        // this request was in flight.
+        if (this.selectedWorkspaceId !== workspaceId) return
+
         this.sessions = await res.json()
       } catch (err) {
         console.error('[workspace store] fetchSessions failed:', err)
+      }
+    },
+
+    async fetchOlderEvents(workspaceId: string): Promise<boolean> {
+      if (this.loadingOlderEvents) return false
+      if (this.hasMoreEvents[workspaceId] === false) return false
+
+      const feed = this.activityFeeds[workspaceId]
+      if (!feed?.length) return false
+
+      const oldestId = feed[0].id
+      this.loadingOlderEvents = true
+      try {
+        const res = await fetch(
+          `/api/workspaces/${workspaceId}/events?before=${encodeURIComponent(oldestId)}&limit=100`,
+        )
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const data = (await res.json()) as {
+          events: Array<{
+            id: string
+            workspaceId: string
+            type: string
+            payload: Record<string, unknown>
+            createdAt: string
+          }>
+          hasMore: boolean
+        }
+
+        this.hasMoreEvents[workspaceId] = data.hasMore
+
+        if (data.events.length > 0) {
+          // Route each event through the websocket store to parse and add properly
+          const wsStore = useWebSocketStore()
+          for (const evt of data.events) {
+            wsStore._routeMessage(evt)
+          }
+        }
+
+        return data.events.length > 0
+      } catch (err) {
+        console.error('[workspace store] fetchOlderEvents failed:', err)
+        return false
+      } finally {
+        this.loadingOlderEvents = false
       }
     },
 
@@ -423,6 +506,12 @@ export const useWorkspaceStore = defineStore('workspace', {
       if (!this.activityFeeds[workspaceId]) {
         this.activityFeeds[workspaceId] = []
       }
+      if (!this.activityFeedIds[workspaceId]) {
+        this.activityFeedIds[workspaceId] = new Set()
+      }
+      if (!this.activityCounts[workspaceId]) {
+        this.activityCounts[workspaceId] = { toolUses: 0, agentMessages: 0, userMessages: 0, errors: 0 }
+      }
       // When agent responds, resolve pending user messages
       if (item.meta?.sender !== 'user' && item.meta?.sender !== 'system-prompt') {
         for (const existing of this.activityFeeds[workspaceId]) {
@@ -431,18 +520,49 @@ export const useWorkspaceStore = defineStore('workspace', {
           }
         }
       }
-      // Avoid duplicates (sync replay)
-      if (!this.activityFeeds[workspaceId].some((i) => i.id === item.id)) {
+      // Avoid duplicates (sync replay) — O(1) via Set
+      if (!this.activityFeedIds[workspaceId].has(item.id)) {
+        this.activityFeedIds[workspaceId].add(item.id)
         this.activityFeeds[workspaceId].push(item)
+        // Increment activity counters
+        const counts = this.activityCounts[workspaceId]
+        if (item.type === 'tool_use') counts.toolUses++
+        else if (item.type === 'error') counts.errors++
+        if (item.meta?.sender === 'user') counts.userMessages++
+        else if (item.type === 'text' && item.meta?.sender !== 'system-prompt') counts.agentMessages++
+      }
+      // Cap feed size to prevent unbounded memory growth
+      const feed = this.activityFeeds[workspaceId]
+      if (feed.length > MAX_FEED_ITEMS) {
+        const removed = feed.splice(0, feed.length - MAX_FEED_ITEMS)
+        const idSet = this.activityFeedIds[workspaceId]
+        for (const r of removed) {
+          idSet.delete(r.id)
+        }
       }
     },
 
     clearActivityFeed(workspaceId?: string) {
       if (workspaceId) {
         delete this.activityFeeds[workspaceId]
+        delete this.activityFeedIds[workspaceId]
+        delete this.activityCounts[workspaceId]
       } else {
         this.activityFeeds = {}
+        this.activityFeedIds = {}
+        this.activityCounts = {}
       }
+    },
+
+    addUsageStats(workspaceId: string, data: { inputTokens?: number; outputTokens?: number; costUsd?: number }) {
+      if (!this.usageStats[workspaceId]) {
+        this.usageStats[workspaceId] = { inputTokens: 0, outputTokens: 0, costUsd: 0, sessionCount: 0 }
+      }
+      const s = this.usageStats[workspaceId]
+      s.inputTokens += data.inputTokens ?? 0
+      s.outputTokens += data.outputTokens ?? 0
+      s.costUsd += data.costUsd ?? 0
+      s.sessionCount++
     },
 
     triggerGitRefresh() {

@@ -4,37 +4,44 @@ import { useDevServerStore } from './dev-server'
 import { useSettingsStore } from './settings'
 import { useWorkspaceStore } from './workspace'
 
+// Module-level variables — must NOT be reactive (Vue Proxy breaks WebSocket)
+let _ws: WebSocket | null = null
+let _reconnectTimer: ReturnType<typeof setTimeout> | null = null
+let _reconnectAttempt = 0
+
 export const useWebSocketStore = defineStore('websocket', {
   state: () => ({
     connected: false,
     lastEventId: null as string | null,
-    _ws: null as WebSocket | null,
-    _reconnectTimer: null as ReturnType<typeof setTimeout> | null,
-    _reconnectAttempt: 0,
   }),
 
   actions: {
     connect() {
-      if (this._ws) return
+      if (_ws) return
 
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
       const url = `${protocol}//${window.location.host}/ws`
 
       const ws = new WebSocket(url)
-      this._ws = ws
+      _ws = ws
 
       ws.addEventListener('open', () => {
         this.connected = true
-        this._reconnectAttempt = 0
+        _reconnectAttempt = 0
 
-        // Request sync if we have a last event ID
+        // Re-subscribe to all known workspaces (subscriptions are lost on reconnect)
+        const workspaceStore = useWorkspaceStore()
+        const allIds = workspaceStore.workspaces.map((w) => w.id)
+        for (const wid of allIds) {
+          this._send({ type: 'subscribe', payload: { workspaceId: wid } })
+        }
+
+        // Request sync to catch up on missed events
         if (this.lastEventId) {
-          ws.send(
-            JSON.stringify({
-              type: 'sync:request',
-              payload: { lastEventId: this.lastEventId },
-            }),
-          )
+          this._send({
+            type: 'sync:request',
+            payload: { lastEventId: this.lastEventId, workspaceIds: allIds },
+          })
         }
       })
 
@@ -49,7 +56,7 @@ export const useWebSocketStore = defineStore('websocket', {
 
       ws.addEventListener('close', () => {
         this.connected = false
-        this._ws = null
+        _ws = null
         this._scheduleReconnect()
       })
 
@@ -59,13 +66,13 @@ export const useWebSocketStore = defineStore('websocket', {
     },
 
     disconnect() {
-      if (this._reconnectTimer) {
-        clearTimeout(this._reconnectTimer)
-        this._reconnectTimer = null
+      if (_reconnectTimer) {
+        clearTimeout(_reconnectTimer)
+        _reconnectTimer = null
       }
-      if (this._ws) {
-        this._ws.close()
-        this._ws = null
+      if (_ws) {
+        _ws.close()
+        _ws = null
       }
       this.connected = false
     },
@@ -97,20 +104,20 @@ export const useWebSocketStore = defineStore('websocket', {
     },
 
     _send(data: Record<string, unknown>) {
-      if (this._ws && this._ws.readyState === WebSocket.OPEN) {
-        this._ws.send(JSON.stringify(data))
+      if (_ws && _ws.readyState === WebSocket.OPEN) {
+        _ws.send(JSON.stringify(data))
       }
     },
 
     _scheduleReconnect() {
-      if (this._reconnectTimer) return
+      if (_reconnectTimer) return
 
       // Exponential backoff: 1s, 2s, 4s, 8s, 16s, max 30s
-      const delay = Math.min(1000 * 2 ** this._reconnectAttempt, 30000)
-      this._reconnectAttempt++
+      const delay = Math.min(1000 * 2 ** _reconnectAttempt, 30000)
+      _reconnectAttempt++
 
-      this._reconnectTimer = setTimeout(() => {
-        this._reconnectTimer = null
+      _reconnectTimer = setTimeout(() => {
+        _reconnectTimer = null
         this.connect()
       }, delay)
     },
@@ -322,9 +329,17 @@ export const useWebSocketStore = defineStore('websocket', {
               })
             }
           } else if (outputType === 'result') {
-            if (!useSettingsStore().showVerboseSystemMessages) break
-            // Only show cost/token summary — the result text is already shown as an assistant message
+            // Always capture usage stats for the stats panel, regardless of verbose mode
             const usage = payload.usage as Record<string, unknown> | undefined
+            if (usage && wid) {
+              const inputTokens = (usage.input_tokens ?? usage.inputTokens ?? 0) as number
+              const outputTokens = (usage.output_tokens ?? usage.outputTokens ?? 0) as number
+              const cost = (payload.cost_usd ?? payload.costUsd ?? usage.cost_usd ?? usage.costUsd ?? 0) as number
+              workspaceStore.addUsageStats(wid, { inputTokens, outputTokens, costUsd: cost })
+            }
+
+            if (!useSettingsStore().showVerboseSystemMessages) break
+            // Show cost/token summary — the result text is already shown as an assistant message
             if (usage) {
               const inputTokens = usage.input_tokens ?? usage.inputTokens
               const outputTokens = usage.output_tokens ?? usage.outputTokens
@@ -485,6 +500,7 @@ export const useWebSocketStore = defineStore('websocket', {
 
         case 'sync:response': {
           // Replay persisted events to restore activity feed after refresh
+          // filter out nested sync:response events to prevent infinite recursion
           const events =
             (payload.events as Array<{
               id: string
@@ -494,6 +510,7 @@ export const useWebSocketStore = defineStore('websocket', {
               createdAt: string
             }>) ?? []
           for (const evt of events) {
+            if (evt.type === 'sync:response') continue
             this._routeMessage(evt)
           }
           break

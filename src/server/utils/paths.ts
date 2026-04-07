@@ -96,6 +96,19 @@ export function getMcpServerSourcePath(): string {
 }
 
 /**
+ * Returns the version string from the root package.json. The result is cached
+ * after the first call so the file is only read once per process lifetime.
+ */
+let _cachedVersion: string | null = null
+export function getPackageVersion(): string {
+  if (_cachedVersion) return _cachedVersion
+  const pkgPath = getPackageAssetPath('package.json')
+  const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8'))
+  _cachedVersion = pkg.version as string
+  return _cachedVersion
+}
+
+/**
  * Absolute path to the built Quasar SPA (src/client/dist/spa). Returns null
  * if the SPA has not been built yet.
  */

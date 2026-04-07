@@ -5,7 +5,7 @@ import path from 'node:path'
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import { WebSocketServer } from 'ws'
-import { getDb } from './db/index.js'
+import { closeDb, getDb } from './db/index.js'
 import { runMigrations } from './db/migrations.js'
 import devServerRouter from './routes/dev-server.js'
 import gitRouter from './routes/git.js'
@@ -20,12 +20,14 @@ import {
   startAgent,
   startWatchdog,
   stopAgent,
+  stopWatchdog,
 } from './services/agent-manager.js'
 import { startDevServer, stopDevServer } from './services/dev-server-service.js'
+import { startPrWatcher, stopPrWatcher } from './services/pr-watcher-service.js'
 import { emit, handleConnection, setMessageHandler } from './services/websocket-service.js'
 import { getLatestSession, getWorkspace, updateWorkspaceStatus } from './services/workspace-service.js'
-import { getClientSpaPath, getKoboHome } from './utils/paths.js'
-import { initProcessCleanup } from './utils/process-tracker.js'
+import { getClientSpaPath, getKoboHome, getPackageVersion } from './utils/paths.js'
+import { initProcessCleanup, killAll as killAllTrackedProcesses } from './utils/process-tracker.js'
 
 // 0. Runtime prerequisite check — warn if claude CLI is missing. Don't block
 // startup: the user may still want to configure settings or browse workspaces
@@ -48,16 +50,13 @@ runMigrations(db)
 // 2. Initialize process cleanup, agent watchdog, and PR watcher
 initProcessCleanup()
 startWatchdog()
-
-import { startPrWatcher } from './services/pr-watcher-service.js'
-
 startPrWatcher()
 
 // 3. Create Hono app
 const app = new Hono()
 
 // Health check (root / is handled by the SPA catch-all below)
-app.get('/api/health', (c) => c.json({ status: 'ok', version: '0.1.0' }))
+app.get('/api/health', (c) => c.json({ status: 'ok', version: getPackageVersion() }))
 
 // 4. Mount route sub-routers
 app.route('/api/workspaces', workspacesRouter)
@@ -70,7 +69,7 @@ app.route('/api/dev-server', devServerRouter)
 // Skills endpoint
 app.get('/api/skills', (c) => c.json(getAvailableSkills()))
 
-const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000
+const PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || '3000', 10)
 
 // 9. Serve static files from the built SPA if present (production mode).
 // The path is resolved relative to the package install directory, so this
@@ -221,3 +220,60 @@ server.on('upgrade', (request, socket, head) => {
     socket.destroy()
   }
 })
+
+// 9. Graceful shutdown handler
+let isShuttingDown = false
+
+function gracefulShutdown(signal: string): void {
+  if (isShuttingDown) return
+  isShuttingDown = true
+
+  console.log(`\n[kobo] Received ${signal}, shutting down gracefully…`)
+
+  // 1. Stop accepting new connections
+  wss.close(() => {
+    console.log('[kobo] WebSocket server closed')
+  })
+
+  server.close(() => {
+    console.log('[kobo] HTTP server closed')
+  })
+
+  // 2. Stop background services
+  try {
+    stopWatchdog()
+  } catch {
+    // Best-effort
+  }
+
+  try {
+    stopPrWatcher()
+  } catch {
+    // Best-effort
+  }
+
+  // 3. Kill all tracked child processes (agents, dev servers)
+  try {
+    killAllTrackedProcesses()
+    console.log('[kobo] Tracked processes killed')
+  } catch {
+    // Best-effort
+  }
+
+  // 4. Close database
+  try {
+    closeDb()
+    console.log('[kobo] Database closed')
+  } catch {
+    // Best-effort
+  }
+
+  // 4. Give a short grace period for in-flight requests, then exit
+  setTimeout(() => {
+    console.log('[kobo] Shutdown complete')
+    process.exit(0)
+  }, 2000).unref()
+}
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'))
+process.on('SIGINT', () => gracefulShutdown('SIGINT'))

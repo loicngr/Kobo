@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 
+const { t } = useI18n()
 const store = useWorkspaceStore()
 
 const subagents = computed(() => store.currentSubagents)
@@ -26,11 +28,11 @@ function formatTokens(count?: number): string {
 <template>
   <div class="subagents-panel q-pa-md">
     <div class="text-caption text-uppercase text-weight-bold text-grey-6 q-mb-sm" style="letter-spacing: 0.05em;">
-      Sub-agents
+      {{ $t('subagents.title') }}
     </div>
 
     <div v-if="subagents.length === 0" class="text-caption text-grey-8">
-      No sub-agent activity yet
+      {{ $t('subagents.empty') }}
     </div>
 
     <div v-for="sa in subagents" :key="sa.toolUseId" class="subagent-item q-mb-sm rounded-borders q-pa-sm">
@@ -46,10 +48,10 @@ function formatTokens(count?: number): string {
         </span>
       </div>
       <div v-if="sa.lastToolName" class="text-caption text-grey-6" style="font-size: 10px;">
-        Running: <span class="text-grey-4">{{ sa.lastToolName }}</span>
+        {{ $t('subagents.running') }}<span class="text-grey-4">{{ sa.lastToolName }}</span>
       </div>
       <div class="row items-center q-gutter-xs q-mt-xs text-caption text-grey-7" style="font-size: 10px;">
-        <span v-if="sa.toolUses !== undefined">{{ sa.toolUses }} tools</span>
+        <span v-if="sa.toolUses !== undefined">{{ $t('subagents.tools', { count: sa.toolUses }) }}</span>
         <span v-if="sa.totalTokens">· {{ formatTokens(sa.totalTokens) }} tok</span>
         <span v-if="sa.durationMs">· {{ formatDuration(sa.durationMs) }}</span>
       </div>

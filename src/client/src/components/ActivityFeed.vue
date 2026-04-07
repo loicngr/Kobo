@@ -5,12 +5,14 @@ import { useWebSocketStore } from 'src/stores/websocket'
 import type { ActivityItem } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 function renderMarkdown(text: string): string {
   const html = marked.parse(text, { async: false, breaks: true, gfm: true }) as string
   return DOMPurify.sanitize(html)
 }
 
+const { t } = useI18n()
 const store = useWorkspaceStore()
 const wsStore = useWebSocketStore()
 const feedContainer = ref<HTMLElement | null>(null)
@@ -190,6 +192,24 @@ function getCachedOptions(itemId: string, content: string) {
   return parsedOptionsCache.get(itemId)!
 }
 
+// Cache for getAskUserQuestions — avoids double-call in v-if + v-for
+const askUserCache = new Map<string, AskUserQuestion[] | null>()
+function getCachedAskUser(itemId: string, item: ActivityItem): AskUserQuestion[] | null {
+  if (!askUserCache.has(itemId)) {
+    askUserCache.set(itemId, getAskUserQuestions(item))
+  }
+  return askUserCache.get(itemId)!
+}
+
+// Cache for renderMarkdown — avoids re-rendering on every re-render
+const markdownCache = new Map<string, string>()
+function getCachedMarkdown(id: string, content: string): string {
+  if (!markdownCache.has(id)) {
+    markdownCache.set(id, renderMarkdown(content))
+  }
+  return markdownCache.get(id)!
+}
+
 function sendOptionChoice(key: string) {
   const workspaceId = store.selectedWorkspaceId
   if (!workspaceId) return
@@ -252,11 +272,16 @@ function scrollToPreviousUserMessage() {
   })
 }
 
-// Reset cursor when workspace changes (not on every new message)
+// Reset cursor and clear caches when workspace changes (not on every new message)
 watch(
   () => store.selectedWorkspaceId,
   () => {
     userMessageCursor.value = -1
+    parsedOptionsCache.clear()
+    askUserCache.clear()
+    markdownCache.clear()
+    lastScrollTop = 0
+    isLoadingMore.value = false
   },
 )
 
@@ -264,6 +289,12 @@ watch(
 const INITIAL_COUNT = 50
 const LOAD_STEP = 50
 const displayCount = ref(INITIAL_COUNT)
+
+const visibleItems = computed(() => {
+  const items = store.activityFeed
+  if (items.length <= displayCount.value) return items
+  return items.slice(-displayCount.value)
+})
 
 // Reset display count when workspace changes (but not when new items arrive)
 watch(
@@ -273,35 +304,77 @@ watch(
   },
 )
 
-const visibleItems = computed(() => {
-  const items = store.activityFeed
-  if (items.length <= displayCount.value) return items
-  return items.slice(-displayCount.value)
-})
+// Clean up caches for items ejected by MAX_FEED_ITEMS cap (I2)
+watch(
+    visibleItems,
+    (items) => {
+      const visibleIds = new Set(items.map((i) => i.id))
+      for (const key of parsedOptionsCache.keys()) {
+        if (!visibleIds.has(key)) parsedOptionsCache.delete(key)
+      }
+      for (const key of askUserCache.keys()) {
+        if (!visibleIds.has(key)) askUserCache.delete(key)
+      }
+      for (const key of markdownCache.keys()) {
+        if (!visibleIds.has(key)) markdownCache.delete(key)
+      }
+    },
+    { flush: 'post' },
+)
 
-// Auto-scroll: stick to bottom unless user scrolled up
+// Auto-scroll: stick to bottom unless user scrolled up.
+// We track the previous scrollTop to distinguish user scrolls (up) from
+// programmatic/content-growth scrolls that shift the position.
 const isUserScrolledUp = ref(false)
+let lastScrollTop = 0
 
 function onFeedScroll() {
   const el = feedContainer.value
   if (!el) return
-  // Consider "at bottom" if within 50px of the bottom
   const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50
-  isUserScrolledUp.value = !atBottom
+
+  if (atBottom) {
+    // User scrolled back to the bottom — re-enable auto-scroll
+    isUserScrolledUp.value = false
+  } else if (el.scrollTop < lastScrollTop) {
+    // User scrolled UP — disable auto-scroll
+    isUserScrolledUp.value = true
+  }
+  // If scrollTop increased (content grew or programmatic scroll), don't change the flag
+
+  lastScrollTop = el.scrollTop
 
   // Load more older items when user scrolls near the top
   if (el.scrollTop < 200 && !isLoadingMore.value) {
     const total = store.activityFeed.length
     if (displayCount.value < total) {
+      // Reveal more in-memory items first
       isLoadingMore.value = true
       const prevScrollHeight = el.scrollHeight
       displayCount.value = Math.min(displayCount.value + LOAD_STEP, total)
-      // Preserve scroll position after new items are prepended
       nextTick(() => {
         if (feedContainer.value) {
           feedContainer.value.scrollTop += feedContainer.value.scrollHeight - prevScrollHeight
         }
         isLoadingMore.value = false
+      })
+    } else if (store.selectedWorkspaceId && store.hasMoreEvents[store.selectedWorkspaceId] !== false) {
+      // All in-memory items shown — fetch older events from server
+      isLoadingMore.value = true
+      const prevScrollHeight = el.scrollHeight
+      store.fetchOlderEvents(store.selectedWorkspaceId).then((loaded) => {
+        if (loaded) {
+          // More items were added to the feed — increase display count
+          displayCount.value = store.activityFeed.length
+          nextTick(() => {
+            if (feedContainer.value) {
+              feedContainer.value.scrollTop += feedContainer.value.scrollHeight - prevScrollHeight
+            }
+            isLoadingMore.value = false
+          })
+        } else {
+          isLoadingMore.value = false
+        }
       })
     }
   }
@@ -312,6 +385,15 @@ function scrollToBottom() {
   const el = feedContainer.value
   if (!el) return
   el.scrollTop = el.scrollHeight
+}
+
+function jumpToBottom() {
+  isUserScrolledUp.value = false
+  displayCount.value = INITIAL_COUNT
+  nextTick(() => {
+    const el = feedContainer.value
+    if (el) el.scrollTop = el.scrollHeight
+  })
 }
 
 // Watch for new items and auto-scroll
@@ -333,7 +415,7 @@ onUnmounted(() => {
 
 function formatTime(dateStr: string): string {
   const d = new Date(dateStr)
-  return d.toLocaleTimeString('en-US', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+  return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
 function iconForToolUse(content: string): string {
@@ -368,11 +450,11 @@ function itemClass(item: ActivityItem): string {
 function senderLabel(item: ActivityItem): string {
   switch (item.meta?.sender) {
     case 'system-prompt':
-      return 'Initial Prompt'
+      return t('activityFeed.initialPrompt')
     case 'user':
-      return 'You'
+      return t('activityFeed.you')
     default:
-      return 'Agent'
+      return t('activityFeed.agent')
   }
 }
 
@@ -463,6 +545,9 @@ function formatArgs(item: ActivityItem): string {
   }
 }
 
+// M11: extract template .some() into a computed
+const hasUserMessages = computed(() => store.activityFeed.some((i) => i.meta?.sender === 'user'))
+
 function hasSystemDetails(item: ActivityItem): boolean {
   if (item.type !== 'system' || !item.meta) return false
   return Object.keys(item.meta).length > 0
@@ -486,9 +571,9 @@ function formatSystemDetails(item: ActivityItem): string {
       class="af-empty column items-center justify-center text-center q-pa-xl"
     >
       <q-icon name="forum" size="48px" color="grey-8" />
-      <div class="text-grey-6 q-mt-md text-body2">No activity yet</div>
+      <div class="text-grey-6 q-mt-md text-body2">{{ $t('activityFeed.empty') }}</div>
       <div class="text-grey-8 text-caption q-mt-xs">
-        Start a workspace to see agent output here
+        {{ $t('activityFeed.emptyHint') }}
       </div>
     </div>
 
@@ -504,14 +589,14 @@ function formatSystemDetails(item: ActivityItem): string {
       :class="itemClass(item)"
     >
       <!-- Tool use: AskUserQuestion -->
-      <template v-if="item.type === 'tool_use' && getAskUserQuestions(item)">
+      <template v-if="item.type === 'tool_use' && getCachedAskUser(item.id, item)">
         <div class="af-tool row items-center q-gutter-xs">
           <q-icon name="help_outline" size="14px" color="indigo-4" />
-          <span class="af-tool-label text-indigo-4">Question</span>
+          <span class="af-tool-label text-indigo-4">{{ $t('activityFeed.question') }}</span>
           <q-space />
           <span class="af-time">{{ formatTime(item.timestamp) }}</span>
         </div>
-        <div v-for="(q, qi) in getAskUserQuestions(item)" :key="qi" class="q-mt-sm">
+        <div v-for="(q, qi) in getCachedAskUser(item.id, item)" :key="qi" class="q-mt-sm">
           <div v-if="q.question" class="text-grey-4 q-mb-xs">{{ q.question }}</div>
           <div class="af-ask-options-list q-mb-sm">
             <div v-for="(opt, oi) in q.options" :key="oi" class="af-ask-option-item text-caption text-grey-5">
@@ -573,7 +658,7 @@ function formatSystemDetails(item: ActivityItem): string {
           <q-space />
           <span class="af-time">{{ formatTime(item.timestamp) }}</span>
         </div>
-        <div class="af-text-content af-markdown" v-html="renderMarkdown(item.content)" />
+        <div class="af-text-content af-markdown" v-html="getCachedMarkdown(item.id, item.content)" />
         <!-- Quick-reply buttons when options detected -->
         <div
           v-if="getCachedOptions(item.id, item.content) && item.id === lastTextItemId"
@@ -638,19 +723,33 @@ function formatSystemDetails(item: ActivityItem): string {
       </template>
     </div>
 
-    <!-- Scroll to user message button -->
-    <q-btn
-      v-if="store.activityFeed.some(i => i.meta?.sender === 'user')"
-      round
-      dense
-      size="sm"
-      icon="person_search"
-      color="indigo-8"
-      class="scroll-to-user-btn"
-      @click="scrollToPreviousUserMessage"
-    >
-      <q-tooltip>Go to previous message</q-tooltip>
-    </q-btn>
+    <!-- Sticky bottom buttons -->
+    <div class="scroll-buttons">
+      <q-btn
+        v-if="hasUserMessages"
+        round
+        dense
+        size="sm"
+        icon="person_search"
+        color="indigo-8"
+        class="scroll-btn"
+        @click="scrollToPreviousUserMessage"
+      >
+        <q-tooltip>{{ $t('activityFeed.goToPrevious') }}</q-tooltip>
+      </q-btn>
+      <q-btn
+        v-if="isUserScrolledUp"
+        round
+        dense
+        size="sm"
+        icon="keyboard_double_arrow_down"
+        color="indigo-8"
+        class="scroll-btn"
+        @click="jumpToBottom"
+      >
+        <q-tooltip>{{ $t('activityFeed.scrollToBottom') }}</q-tooltip>
+      </q-btn>
+    </div>
   </div>
 </template>
 
@@ -813,11 +912,16 @@ function formatSystemDetails(item: ActivityItem): string {
   font-family: 'Roboto Mono', monospace;
   white-space: pre-wrap;
 }
-.scroll-to-user-btn {
+.scroll-buttons {
   position: sticky;
   bottom: 8px;
   align-self: flex-end;
   margin-right: 8px;
+  display: flex;
+  gap: 6px;
+}
+
+.scroll-btn {
   opacity: 0.7;
   transition: opacity 0.15s;
 

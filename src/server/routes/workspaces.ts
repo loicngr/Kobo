@@ -1,8 +1,16 @@
-import { execFileSync } from 'node:child_process'
+import { execFile as execFileCb } from 'node:child_process'
+import { promisify } from 'node:util'
+
+const execFileAsync = promisify(execFileCb)
+
+import fs from 'node:fs'
+import path from 'node:path'
 import { Hono } from 'hono'
+import { getDb } from '../db/index.js'
 import * as agentManager from '../services/agent-manager.js'
 import * as devServerService from '../services/dev-server-service.js'
 import * as notionService from '../services/notion-service.js'
+import { renderPrTemplate } from '../services/pr-template-service.js'
 import * as settingsService from '../services/settings-service.js'
 import * as wsService from '../services/websocket-service.js'
 import type { PermissionMode, WorkspaceStatus } from '../services/workspace-service.js'
@@ -133,9 +141,7 @@ app.post('/', async (c) => {
     // 4b. Ensure Kobo-generated files inside .ai/ are gitignored (the .ai/ dir
     //     itself may contain project files that SHOULD be committed).
     try {
-      const fs = await import('node:fs')
-      const pathMod = await import('node:path')
-      const gitignorePath = pathMod.default.join(worktreePath, '.gitignore')
+      const gitignorePath = path.join(worktreePath, '.gitignore')
       const existing = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, 'utf-8') : ''
       const lines = existing.split('\n').map((l: string) => l.trim())
       const toAdd: string[] = []
@@ -154,11 +160,9 @@ app.post('/', async (c) => {
     const effectiveSettings = settingsService.getEffectiveSettings(body.projectPath)
     if (effectiveSettings.gitConventions) {
       try {
-        const fs = await import('node:fs')
-        const path = await import('node:path')
-        const aiDir = path.default.join(worktreePath, '.ai')
+        const aiDir = path.join(worktreePath, '.ai')
         fs.mkdirSync(aiDir, { recursive: true })
-        const conventionsPath = path.default.join(aiDir, 'git-conventions.md')
+        const conventionsPath = path.join(aiDir, 'git-conventions.md')
         fs.writeFileSync(conventionsPath, effectiveSettings.gitConventions, 'utf-8')
       } catch (err) {
         console.error('[workspaces] Failed to write git-conventions.md:', err)
@@ -169,9 +173,7 @@ app.post('/', async (c) => {
     let notionFilePath: string | null = null
     if (notionContent && body.notionUrl) {
       try {
-        const fs = await import('node:fs')
-        const path = await import('node:path')
-        const thoughtsDir = path.default.join(worktreePath, '.ai', 'thoughts')
+        const thoughtsDir = path.join(worktreePath, '.ai', 'thoughts')
         fs.mkdirSync(thoughtsDir, { recursive: true })
 
         // Derive filename from title (TK-XXX pattern or slug)
@@ -179,7 +181,7 @@ app.post('/', async (c) => {
         const filename = tkMatch
           ? `${tkMatch[0]}.md`
           : `PAGE-${notionService.parseNotionUrl(body.notionUrl).replace(/-/g, '')}.md`
-        notionFilePath = path.default.join(thoughtsDir, filename)
+        notionFilePath = path.join(thoughtsDir, filename)
 
         const today = new Date().toISOString().split('T')[0]
         let md = `# ${workspace.name}\n\n`
@@ -256,8 +258,7 @@ app.post('/', async (c) => {
     brainstormPrompt += `\n\nThen brainstorm the implementation approach. Explore the codebase to understand the existing structure. Ask clarifying questions if needed. When you're done brainstorming and have a clear plan, create a plan file and proceed with implementation. Once you have completed the brainstorming phase, output [BRAINSTORM_COMPLETE] on its own line.`
 
     // Persist the initial prompt in the feed so it's visible in the chat
-    const { emit } = await import('../services/websocket-service.js')
-    emit(workspace.id, 'user:message', { content: brainstormPrompt, sender: 'system-prompt' })
+    wsService.emit(workspace.id, 'user:message', { content: brainstormPrompt, sender: 'system-prompt' })
 
     try {
       agentManager.startAgent(workspace.id, worktreePath, brainstormPrompt, workspace.model)
@@ -305,7 +306,7 @@ app.post('/:id/refresh-notion', async (c) => {
     const notionContent = await notionService.extractNotionPage(workspace.notionUrl)
 
     // Delete existing tasks and recreate from Notion
-    const db = (await import('../db/index.js')).getDb()
+    const db = getDb()
     db.prepare('DELETE FROM tasks WHERE workspace_id = ?').run(id)
 
     let sortOrder = 0
@@ -368,7 +369,19 @@ app.post('/:id/tasks', async (c) => {
 // PATCH /api/workspaces/:id/tasks/:taskId — update task status and/or title
 app.patch('/:id/tasks/:taskId', async (c) => {
   try {
+    const id = c.req.param('id')
     const taskId = c.req.param('taskId')
+
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+
+    const task = workspaceService.getTask(taskId, id)
+    if (!task) {
+      return c.json({ error: `Task '${taskId}' not found in workspace '${id}'` }, 404)
+    }
+
     const body = await c.req.json<{ status?: string; title?: string }>()
 
     if (body.status === undefined && body.title === undefined) {
@@ -406,7 +419,31 @@ app.delete('/:id/tasks/:taskId', (c) => {
     if (!workspace) {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
     }
+
+    const task = workspaceService.getTask(taskId, id)
+    if (!task) {
+      return c.json({ error: `Task '${taskId}' not found in workspace '${id}'` }, 404)
+    }
+
     workspaceService.deleteTask(taskId)
+    return new Response(null, { status: 204 })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// POST /api/workspaces/:id/tasks/notify-updated — broadcast generic task list change
+// Must be declared BEFORE /:id/tasks/:taskId/notify-done so Hono doesn't capture
+// "notify-updated" as a :taskId parameter.
+app.post('/:id/tasks/notify-updated', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+    wsService.emit(id, 'task:updated', {})
     return new Response(null, { status: 204 })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -431,16 +468,81 @@ app.post('/:id/tasks/:taskId/notify-done', (c) => {
   }
 })
 
-// POST /api/workspaces/:id/tasks/notify-updated — broadcast generic task list change
-app.post('/:id/tasks/notify-updated', (c) => {
+// GET /api/workspaces/:id/events — paginated event history (must be before GET /:id for route ordering)
+app.get('/:id/events', (c) => {
   try {
     const id = c.req.param('id')
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
     }
-    wsService.emit(id, 'task:updated', {})
-    return new Response(null, { status: 204 })
+
+    const before = c.req.query('before') // event ID cursor
+    const limit = Math.min(parseInt(c.req.query('limit') ?? '100', 10) || 100, 500)
+
+    const db = getDb()
+    let rows: Array<{
+      id: string
+      workspace_id: string
+      type: string
+      payload: string
+      session_id: string | null
+      created_at: string
+    }>
+
+    if (before) {
+      // Get the rowid of the cursor event
+      const cursorRow = db.prepare('SELECT rowid FROM ws_events WHERE id = ?').get(before) as
+        | { rowid: number }
+        | undefined
+      if (!cursorRow) {
+        return c.json({ events: [], hasMore: false })
+      }
+      rows = db
+        .prepare('SELECT * FROM ws_events WHERE workspace_id = ? AND rowid < ? ORDER BY rowid DESC LIMIT ?')
+        .all(id, cursorRow.rowid, limit) as typeof rows
+    } else {
+      // No cursor — return the oldest events
+      rows = db
+        .prepare('SELECT * FROM ws_events WHERE workspace_id = ? ORDER BY rowid ASC LIMIT ?')
+        .all(id, limit) as typeof rows
+    }
+
+    // Reverse to chronological order (we queried DESC for "before" pagination)
+    if (before) rows.reverse()
+
+    const events = rows.map((row) => {
+      let parsedPayload: unknown
+      try {
+        parsedPayload = JSON.parse(row.payload)
+      } catch {
+        parsedPayload = row.payload
+      }
+      return {
+        id: row.id,
+        workspaceId: row.workspace_id,
+        type: row.type,
+        payload: parsedPayload,
+        sessionId: row.session_id,
+        createdAt: row.created_at,
+      }
+    })
+
+    // Check if there are more older events beyond what we returned
+    let hasMore = false
+    if (before && rows.length > 0) {
+      const firstRow = db.prepare('SELECT rowid FROM ws_events WHERE id = ?').get(rows[0].id) as
+        | { rowid: number }
+        | undefined
+      if (firstRow) {
+        const older = db
+          .prepare('SELECT COUNT(*) as c FROM ws_events WHERE workspace_id = ? AND rowid < ?')
+          .get(id, firstRow.rowid) as { c: number }
+        hasMore = older.c > 0
+      }
+    }
+
+    return c.json({ events, hasMore })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
@@ -679,8 +781,7 @@ app.get('/:id/git-stats', async (c) => {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
     }
 
-    const path = await import('node:path')
-    const worktreePath = path.default.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
 
     const commitCount = gitOps.getCommitCount(worktreePath, workspace.sourceBranch, workspace.workingBranch)
     const diffStats = gitOps.getStructuredDiffStatsBetween(
@@ -688,8 +789,9 @@ app.get('/:id/git-stats', async (c) => {
       workspace.sourceBranch,
       workspace.workingBranch,
     )
-    const pr = gitOps.getPrStatus(workspace.projectPath, workspace.workingBranch)
-    const unpushedCount = gitOps.getUnpushedCount(worktreePath)
+    const pr = await gitOps.getPrStatusAsync(workspace.projectPath, workspace.workingBranch)
+    const unpushedCount = await gitOps.getUnpushedCountAsync(worktreePath)
+    const workingTree = gitOps.getWorkingTreeStatus(worktreePath)
 
     return c.json({
       commitCount,
@@ -699,7 +801,55 @@ app.get('/:id/git-stats', async (c) => {
       prUrl: pr?.url ?? null,
       prState: pr?.state ?? null,
       unpushedCount,
+      workingTree,
     })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// GET /api/workspaces/:id/diff — list changed files
+app.get('/:id/diff', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+
+    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    const files = gitOps.getChangedFiles(worktreePath, workspace.sourceBranch)
+    return c.json({
+      files,
+      sourceBranch: workspace.sourceBranch,
+      workingBranch: workspace.workingBranch,
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// GET /api/workspaces/:id/diff/:filePath — get original and modified content for a file
+app.get('/:id/diff-file', (c) => {
+  try {
+    const id = c.req.param('id')
+    const filePath = c.req.query('path')
+    if (!filePath) {
+      return c.json({ error: 'Missing path query parameter' }, 400)
+    }
+
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+
+    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    const original = gitOps.getFileAtRef(worktreePath, workspace.sourceBranch, filePath)
+    const modified = gitOps.getFileContent(worktreePath, filePath)
+
+    return c.json({ original: original ?? '', modified: modified ?? '', filePath })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
@@ -715,8 +865,7 @@ app.post('/:id/push', async (c) => {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
     }
 
-    const path = await import('node:path')
-    const worktreePath = path.default.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
 
     try {
       gitOps.pushBranch(worktreePath, workspace.workingBranch)
@@ -726,10 +875,9 @@ app.post('/:id/push', async (c) => {
     }
 
     // Emit a trace into the chat feed so the user sees the action
-    const { emit } = await import('../services/websocket-service.js')
     const session = workspaceService.getLatestSession(id)
     const sessionId = session?.claudeSessionId ?? undefined
-    emit(
+    wsService.emit(
       id,
       'user:message',
       { content: `Pushed branch ${workspace.workingBranch} to origin`, sender: 'system-prompt' },
@@ -752,16 +900,15 @@ app.post('/:id/open-pr', async (c) => {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
     }
 
-    const path = await import('node:path')
-    const worktreePath = path.default.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
 
     // 1. Check branch is on remote
     let lsRemoteOut = ''
     try {
-      const result = execFileSync('git', ['ls-remote', '--heads', 'origin', workspace.workingBranch], {
+      const { stdout } = await execFileAsync('git', ['ls-remote', '--heads', 'origin', workspace.workingBranch], {
         cwd: worktreePath,
       })
-      lsRemoteOut = result.toString()
+      lsRemoteOut = stdout
     } catch {
       lsRemoteOut = ''
     }
@@ -771,15 +918,15 @@ app.post('/:id/open-pr', async (c) => {
 
     // 2. Check all local commits are pushed
     try {
-      const result = execFileSync('git', ['rev-list', '@{u}..HEAD', '--count'], { cwd: worktreePath })
-      const countStr = result.toString().trim()
+      const { stdout } = await execFileAsync('git', ['rev-list', '@{u}..HEAD', '--count'], { cwd: worktreePath })
+      const countStr = stdout.trim()
       const count = parseInt(countStr, 10) || 0
       if (count > 0) {
         return c.json({ error: 'Local commits not pushed', code: 'unpushed_commits' }, 409)
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      const stderr = (err as { stderr?: Buffer }).stderr?.toString() ?? ''
+      const stderr = (err as { stderr?: string | Buffer }).stderr?.toString() ?? ''
       const combined = `${message} ${stderr}`.toLowerCase()
       if (combined.includes('no upstream') || combined.includes('aucun amont') || combined.includes('no such ref')) {
         return c.json({ error: 'Branch has no upstream', code: 'branch_not_pushed' }, 409)
@@ -791,7 +938,7 @@ app.post('/:id/open-pr', async (c) => {
     let ghOutput: string
     try {
       const placeholderBody = 'Automated PR — description will be updated by the agent.'
-      const result = execFileSync(
+      const { stdout } = await execFileAsync(
         'gh',
         [
           'pr',
@@ -807,10 +954,10 @@ app.post('/:id/open-pr', async (c) => {
         ],
         { cwd: worktreePath },
       )
-      ghOutput = result.toString()
+      ghOutput = stdout
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      const stderr = (err as { stderr?: Buffer }).stderr?.toString() ?? ''
+      const stderr = (err as { stderr?: string | Buffer }).stderr?.toString() ?? ''
       return c.json({ error: `gh pr create failed: ${message} ${stderr}`.trim() }, 500)
     }
 
@@ -831,7 +978,6 @@ app.post('/:id/open-pr', async (c) => {
     }
 
     // 6. Build context and render the template
-    const { renderPrTemplate } = await import('../services/pr-template-service.js')
     const commits = gitOps.getCommitsBetween(worktreePath, workspace.sourceBranch, workspace.workingBranch)
     const diffStats = gitOps.getDiffStatsBetween(worktreePath, workspace.sourceBranch, workspace.workingBranch)
     const tasks = workspaceService.listTasks(workspace.id)
@@ -846,10 +992,9 @@ app.post('/:id/open-pr', async (c) => {
     })
 
     // 7. Emit user:message into the chat feed
-    const { emit } = await import('../services/websocket-service.js')
     const session = workspaceService.getLatestSession(workspace.id)
     const sessionId = session?.claudeSessionId ?? undefined
-    emit(workspace.id, 'user:message', { content: rendered, sender: 'user' }, sessionId)
+    wsService.emit(workspace.id, 'user:message', { content: rendered, sender: 'user' }, sessionId)
 
     // 8. Send to the running agent, or resume the agent with the PR prompt
     let messageSent = false

@@ -1,4 +1,4 @@
-import { getPrStatus } from '../utils/git-ops.js'
+import { getPrStatusAsync } from '../utils/git-ops.js'
 import { emitEphemeral } from './websocket-service.js'
 import { archiveWorkspace, listWorkspaces } from './workspace-service.js'
 
@@ -13,12 +13,13 @@ import { archiveWorkspace, listWorkspaces } from './workspace-service.js'
 
 const POLL_INTERVAL_MS = 30 * 1000 // 30 seconds
 
-let timer: ReturnType<typeof setInterval> | null = null
+let timer: ReturnType<typeof setTimeout> | null = null
+let checking = false
 
 /** Tracks the last known PR state per workspace to detect transitions. */
 const lastKnownState = new Map<string, string>()
 
-function checkPrStatuses(): void {
+async function checkPrStatuses(): Promise<void> {
   const workspaces = listWorkspaces(false) // non-archived only
 
   // Clean up entries for workspaces that no longer exist
@@ -33,7 +34,7 @@ function checkPrStatuses(): void {
     if (['extracting', 'brainstorming', 'executing'].includes(ws.status)) continue
 
     try {
-      const pr = getPrStatus(ws.projectPath, ws.workingBranch)
+      const pr = await getPrStatusAsync(ws.projectPath, ws.workingBranch)
       if (!pr) continue
 
       const prev = lastKnownState.get(ws.id)
@@ -58,15 +59,34 @@ function checkPrStatuses(): void {
   }
 }
 
+function scheduleNext(): void {
+  timer = setTimeout(async () => {
+    if (checking) {
+      // Previous run still in progress — skip and reschedule
+      scheduleNext()
+      return
+    }
+    checking = true
+    try {
+      await checkPrStatuses()
+    } catch (err) {
+      console.error('[pr-watcher] Unexpected error in checkPrStatuses:', err)
+    } finally {
+      checking = false
+      scheduleNext()
+    }
+  }, POLL_INTERVAL_MS)
+  timer.unref?.()
+}
+
 export function startPrWatcher(): void {
   if (timer) return
-  timer = setInterval(checkPrStatuses, POLL_INTERVAL_MS)
-  timer.unref?.()
+  scheduleNext()
 }
 
 export function stopPrWatcher(): void {
   if (timer) {
-    clearInterval(timer)
+    clearTimeout(timer)
     timer = null
   }
 }

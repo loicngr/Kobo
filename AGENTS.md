@@ -171,6 +171,19 @@ See the "Notion integration" section of the README for the end-user setup guide.
 
 **Dependencies** — root `package.json` covers backend + tests. `src/client/package.json` is a separate npm tree. Install both.
 
+## Internationalization (i18n)
+
+The frontend uses `vue-i18n` v10 with 5 supported locales: English (`en`), French (`fr`), German (`de`), Spanish (`es`), Italian (`it`). Translation files live in `src/client/src/i18n/`.
+
+**Mandatory rules for all frontend code:**
+
+- **NEVER hardcode user-visible text** in Vue templates or scripts. Always use `$t('key')` in templates and `t('key')` in `<script setup>` (via `const { t } = useI18n()`).
+- When adding or modifying a text, **update ALL 5 locale files** (`en.ts`, `fr.ts`, `de.ts`, `es.ts`, `it.ts`) with the corresponding translation.
+- Keys follow the pattern `'component.label'` (e.g. `'git.push'`, `'settings.title'`, `'common.save'`). Use the existing key structure as reference.
+- Keep technical terms in English across all locales when that's the industry convention (Git, PR, Push, Diff, Commit, Branch, Tokens, etc.).
+- Placeholders like `{count}`, `{n}`, `{query}` must remain intact in all translations.
+- The language selector is in the Settings page (Global tab). The locale is auto-detected from the browser on first visit and persisted in `localStorage('kobo:locale')`.
+
 ## Testing discipline
 
 - **TDD for backend** — write the failing test, confirm it fails for the right reason, implement minimally, confirm it passes, commit. One commit per logical unit. See existing tests in `src/__tests__/workspace-service.test.ts` for the setup pattern (fresh in-memory DB per test via `resetDb()`).
@@ -225,3 +238,4 @@ The human user of this repository prefers French for conversational exchanges. C
 - Don't introduce ORMs, query builders, or schema validation libraries — the project is small enough for raw prepared statements and hand-written mappers.
 - Don't break the single-source-of-truth of `CLAUDE.md` → `AGENTS.md` symlink. Edit `AGENTS.md`; `CLAUDE.md` follows automatically.
 - Don't skip `try/catch` swallowing on best-effort cleanup (agent stop, dev-server stop, worktree removal). These must never break the primary operation.
+- Don't hardcode user-visible text in the frontend. Every string must go through `$t()` / `t()` with keys in all 5 locale files. See [Internationalization (i18n)](#internationalization-i18n).

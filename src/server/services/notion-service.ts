@@ -1,5 +1,6 @@
 import { type ChildProcess, spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
+import { getPackageVersion } from '../utils/paths.js'
 
 export interface NotionTodo {
   title: string
@@ -82,10 +83,11 @@ export async function callMcpTool(mcpProcess: ChildProcess, toolName: string, ar
 
     let buffer = ''
 
-    // C1: 30s timeout
+    // C1: 30s timeout — I7: kill the MCP process on timeout to avoid zombie
     const timeout = setTimeout(() => {
       mcpProcess.stdout?.removeListener('data', onData)
       mcpProcess.stdout?.removeListener('error', onError)
+      mcpProcess.kill()
       reject(new Error(`callMcpTool('${toolName}') timed out after 30s`))
     }, 30_000)
 
@@ -195,7 +197,7 @@ async function initializeMcp(mcpProcess: ChildProcess): Promise<void> {
     params: {
       protocolVersion: '2024-11-05',
       capabilities: {},
-      clientInfo: { name: 'kobo', version: '0.1.0' },
+      clientInfo: { name: 'kobo', version: getPackageVersion() },
     },
   })
 
@@ -207,9 +209,10 @@ async function initializeMcp(mcpProcess: ChildProcess): Promise<void> {
 
     let buffer = ''
 
-    // C1: 10s timeout for initialization
+    // C1: 10s timeout for initialization — I7: kill the MCP process on timeout
     const timeout = setTimeout(() => {
       mcpProcess.stdout?.removeListener('data', onData)
+      mcpProcess.kill()
       reject(new Error('initializeMcp timed out after 10s'))
     }, 10_000)
 

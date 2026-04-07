@@ -34,8 +34,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 2', () => {
-    expect(SCHEMA_VERSION).toBe(2)
+  it('exporte SCHEMA_VERSION = 3', () => {
+    expect(SCHEMA_VERSION).toBe(3)
   })
 
   it('migre depuis la legacy schema_version table', () => {
@@ -104,6 +104,69 @@ describe('runMigrations(db)', () => {
       .c
 
     expect(afterCount).toBe(beforeCount)
+    db.close()
+  })
+
+  it('crée les index workspace_id après migration (fresh install)', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+
+    const indexes = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%_workspace_id'")
+      .all() as { name: string }[]
+    const indexNames = indexes.map((i) => i.name)
+
+    expect(indexNames).toContain('idx_tasks_workspace_id')
+    expect(indexNames).toContain('idx_agent_sessions_workspace_id')
+    expect(indexNames).toContain('idx_ws_events_workspace_id')
+    db.close()
+  })
+
+  it("crée les index workspace_id lors d'un upgrade v2 → v3", () => {
+    const db = new Database(':memory:')
+    // Simulate a v2 database (init + permission_mode migration already applied)
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        version  INTEGER PRIMARY KEY,
+        name     TEXT NOT NULL,
+        applied_at TEXT NOT NULL
+      )
+    `)
+    db.exec(`
+      CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, project_path TEXT NOT NULL, source_branch TEXT NOT NULL, working_branch TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'created', notion_url TEXT, notion_page_id TEXT, model TEXT NOT NULL DEFAULT 'claude-opus-4-6', permission_mode TEXT NOT NULL DEFAULT 'auto-accept', dev_server_status TEXT NOT NULL DEFAULT 'stopped', archived_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE tasks (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', is_acceptance_criterion INTEGER DEFAULT 0, sort_order INTEGER DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, pid INTEGER, claude_session_id TEXT, status TEXT NOT NULL DEFAULT 'running', started_at TEXT NOT NULL, ended_at TEXT);
+      CREATE TABLE ws_events (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, type TEXT NOT NULL, payload TEXT NOT NULL, session_id TEXT, created_at TEXT NOT NULL);
+    `)
+    const now = new Date().toISOString()
+    db.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(1, 'init-schema', now)
+    db.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(
+      2,
+      'add-permission-mode',
+      now,
+    )
+
+    // No indexes should exist yet
+    const beforeIndexes = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%_workspace_id'")
+      .all() as { name: string }[]
+    expect(beforeIndexes.length).toBe(0)
+
+    runMigrations(db)
+
+    // Indexes should now exist
+    const afterIndexes = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%_workspace_id'")
+      .all() as { name: string }[]
+    const indexNames = afterIndexes.map((i) => i.name)
+
+    expect(indexNames).toContain('idx_tasks_workspace_id')
+    expect(indexNames).toContain('idx_agent_sessions_workspace_id')
+    expect(indexNames).toContain('idx_ws_events_workspace_id')
+
+    // Migration should be recorded
+    const history = getMigrationHistory(db)
+    expect(history.some((h) => h.version === 3 && h.name === 'add-workspace-id-indexes')).toBe(true)
     db.close()
   })
 

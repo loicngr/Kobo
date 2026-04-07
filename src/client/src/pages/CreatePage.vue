@@ -3,13 +3,15 @@ import { useQuasar } from 'quasar'
 import { useSettingsStore } from 'src/stores/settings'
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 
 const router = useRouter()
 const $q = useQuasar()
 const store = useWorkspaceStore()
 const settingsStore = useSettingsStore()
+const { t } = useI18n()
 
 const pathFilterOptions = ref<string[]>([])
 
@@ -28,12 +30,12 @@ const loadingBranches = ref(false)
 const submitting = ref(false)
 
 // Model options — Claude Code Max
-const modelOptions = [
-  { label: 'Auto', value: 'auto', description: 'Claude picks the optimal model' },
-  { label: 'Opus 4.6', value: 'claude-opus-4-6', description: 'Most powerful' },
-  { label: 'Sonnet 4.6', value: 'claude-sonnet-4-6', description: 'Balanced' },
-  { label: 'Haiku 4.5', value: 'claude-haiku-4-5-20251001', description: 'Fastest' },
-]
+const modelOptions = computed(() => [
+  { label: t('model.auto'), value: 'auto', description: 'Claude picks the optimal model' },
+  { label: t('model.opus'), value: 'claude-opus-4-6', description: 'Most powerful' },
+  { label: t('model.sonnet'), value: 'claude-sonnet-4-6', description: 'Balanced' },
+  { label: t('model.haiku'), value: 'claude-haiku-4-5-20251001', description: 'Fastest' },
+])
 
 // Validate Notion URL
 const isValidNotionUrl = computed(() => notionUrl.value.trim().startsWith('https://www.notion.so/'))
@@ -49,9 +51,9 @@ const showManualSections = computed(() => {
 })
 
 function addManualTask() {
-  const t = newManualTask.value.trim()
-  if (!t) return
-  manualTasks.value.push(t)
+  const trimmed = newManualTask.value.trim()
+  if (!trimmed) return
+  manualTasks.value.push(trimmed)
   newManualTask.value = ''
 }
 
@@ -60,9 +62,9 @@ function removeManualTask(idx: number) {
 }
 
 function addManualCriterion() {
-  const t = newManualCriterion.value.trim()
-  if (!t) return
-  manualCriteria.value.push(t)
+  const trimmed = newManualCriterion.value.trim()
+  if (!trimmed) return
+  manualCriteria.value.push(trimmed)
   newManualCriterion.value = ''
 }
 
@@ -137,6 +139,11 @@ onMounted(() => {
   settingsStore.fetchSettings()
 })
 
+// Cleanup debounce timer on unmount
+onUnmounted(() => {
+  if (pathDebounce) clearTimeout(pathDebounce)
+})
+
 // Convert text to kebab-case feature branch name
 function toKebabCase(str: string): string {
   return str
@@ -176,13 +183,13 @@ function branchNameFromNotionUrl(url: string): string {
 
 // Form validation
 function validate(): string | null {
-  if (useNotion.value && !isValidNotionUrl.value) return 'Please paste a valid Notion URL (https://www.notion.so/...).'
-  if (!useNotion.value && !description.value.trim()) return 'Please describe the task.'
+  if (useNotion.value && !isValidNotionUrl.value) return t('createPage.validationNotionUrl')
+  if (!useNotion.value && !description.value.trim()) return t('createPage.validationDescription')
   if (!useNotion.value && (!getFinalName() || getFinalName() === 'workspace')) {
-    if (!workspaceName.value.trim() && !description.value.trim()) return 'Please provide a workspace name.'
+    if (!workspaceName.value.trim() && !description.value.trim()) return t('createPage.validationName')
   }
-  if (!projectPath.value.trim()) return 'Please enter the project path.'
-  if (!branch.value) return 'Please select a branch.'
+  if (!projectPath.value.trim()) return t('createPage.validationPath')
+  if (!branch.value) return t('createPage.validationBranch')
   return null
 }
 
@@ -231,7 +238,7 @@ async function handleCreate() {
   } catch {
     $q.notify({
       type: 'negative',
-      message: 'Error creating workspace.',
+      message: t('createPage.errorCreating'),
       position: 'top',
     })
   } finally {
@@ -245,7 +252,7 @@ async function handleCreate() {
     <div class="create-inner">
       <!-- Title -->
       <div class="create-title text-center text-weight-bold q-mb-lg text-grey-3">
-        What would you like to work on?
+        {{ $t('createPage.title') }}
       </div>
 
       <!-- Input card -->
@@ -254,7 +261,7 @@ async function handleCreate() {
         <div class="card-top-bar row items-center q-px-md q-py-xs">
           <span class="model-badge cursor-default row items-center q-gutter-xs">
             <q-icon name="auto_awesome" size="14px" color="indigo-4" />
-            <span class="text-indigo-3 text-weight-medium text-caption">Claude Code</span>
+            <span class="text-indigo-3 text-weight-medium text-caption">{{ $t('createPage.claudeCode') }}</span>
           </span>
           <q-space />
           <q-btn
@@ -267,7 +274,7 @@ async function handleCreate() {
             @click="toggleNotion"
           >
             <q-icon name="description" size="14px" class="q-mr-xs" />
-            {{ useNotion ? 'Notion enabled' : 'Import from Notion' }}
+            {{ useNotion ? $t('createPage.notionEnabled') : $t('createPage.importNotion') }}
           </q-btn>
         </div>
 
@@ -280,7 +287,7 @@ async function handleCreate() {
               v-model="notionUrl"
               borderless
               dense
-              placeholder="https://www.notion.so/workspace/Page-title-abc123..."
+              :placeholder="$t('createPage.notionPlaceholder')"
               class="notion-url-input"
               input-class="notion-url-input-inner"
             >
@@ -289,10 +296,10 @@ async function handleCreate() {
               </template>
             </q-input>
             <div v-if="notionUrl.trim() && !isValidNotionUrl" class="notion-error text-caption q-px-md q-pb-xs text-red-5">
-              URL must start with https://www.notion.so/
+              {{ $t('createPage.notionValidation') }}
             </div>
             <div v-if="isValidNotionUrl" class="notion-valid text-caption q-px-md q-pb-xs text-green-4">
-              Subtasks and acceptance criteria will be extracted automatically.
+              {{ $t('createPage.notionAutoExtract') }}
             </div>
           </div>
         </transition>
@@ -305,7 +312,7 @@ async function handleCreate() {
             v-model="workspaceName"
             borderless
             dense
-            :placeholder="useNotion && isValidNotionUrl ? 'Workspace name (defaults to Notion page title)' : 'Workspace name...'"
+            :placeholder="useNotion && isValidNotionUrl ? $t('createPage.workspaceName') : $t('createPage.workspaceNamePlaceholder')"
             class="name-input"
             input-class="name-input-inner"
           />
@@ -321,7 +328,7 @@ async function handleCreate() {
             borderless
             autogrow
             :rows="3"
-            :placeholder="useNotion ? 'Additional instructions (optional)...' : 'Describe the task...'"
+            :placeholder="useNotion ? $t('createPage.instructions') : $t('createPage.instructionsPlaceholder')"
             class="create-textarea"
             input-class="create-textarea-input"
             @keydown.ctrl.enter="handleCreate"
@@ -334,13 +341,13 @@ async function handleCreate() {
         <!-- Manual tasks / criteria (when no Notion ticket) -->
         <template v-if="showManualSections">
           <div class="manual-hint q-px-md q-py-sm text-caption text-grey-6">
-            No Notion ticket? Add your tasks and acceptance criteria manually — they'll be sent to the Claude agent as context.
+            {{ $t('createPage.manualHint') }}
           </div>
 
           <q-expansion-item
             dark
             dense
-            :label="`Tasks (${manualTasks.length})`"
+            :label="$t('createPage.tasks', { count: manualTasks.length })"
             header-class="text-grey-4 manual-expansion-header"
             class="manual-expansion q-mx-sm"
           >
@@ -351,7 +358,7 @@ async function handleCreate() {
                   dark
                   dense
                   borderless
-                  placeholder="Add a task..."
+                  :placeholder="$t('createPage.addTask')"
                   class="col manual-input"
                   input-class="manual-input-inner"
                   @keydown.enter.prevent="addManualTask"
@@ -388,7 +395,7 @@ async function handleCreate() {
           <q-expansion-item
             dark
             dense
-            :label="`Acceptance Criteria (${manualCriteria.length})`"
+            :label="$t('createPage.acceptanceCriteria', { count: manualCriteria.length })"
             header-class="text-grey-4 manual-expansion-header"
             class="manual-expansion q-mx-sm q-mb-sm"
           >
@@ -399,7 +406,7 @@ async function handleCreate() {
                   dark
                   dense
                   borderless
-                  placeholder="Add a criterion..."
+                  :placeholder="$t('createPage.addCriterion')"
                   class="col manual-input"
                   input-class="manual-input-inner"
                   @keydown.enter.prevent="addManualCriterion"
@@ -491,13 +498,13 @@ async function handleCreate() {
             </template>
             <template #selected>
               <span class="bottom-select-label row items-center no-wrap">
-                {{ projectPath || '/path/to/project' }}
+                {{ projectPath || $t('createPage.projectPath') }}
               </span>
             </template>
             <template #no-option>
               <q-item>
                 <q-item-section class="text-grey-6 text-caption">
-                  Enter the project path
+                  {{ $t('createPage.enterPath') }}
                 </q-item-section>
               </q-item>
             </template>
@@ -517,14 +524,14 @@ async function handleCreate() {
             <template #selected>
               <span class="bottom-select-label row items-center no-wrap">
                 <q-icon name="call_split" size="12px" color="grey-5" class="q-mr-xs" />
-                {{ branch ?? 'Branch' }}
+                {{ branch ?? $t('createPage.branch') }}
                 <q-icon name="expand_more" size="12px" color="grey-5" />
               </span>
             </template>
             <template #no-option>
               <q-item>
                 <q-item-section class="text-grey-6 text-caption">
-                  {{ projectPath.trim() ? 'No branches found' : 'Enter a project path' }}
+                  {{ projectPath.trim() ? $t('createPage.noBranches') : $t('createPage.enterPath') }}
                 </q-item-section>
               </q-item>
             </template>
@@ -532,7 +539,7 @@ async function handleCreate() {
 
           <!-- Create button -->
           <q-btn
-            label="Create"
+            :label="$t('createPage.create')"
             no-caps
             unelevated
             class="create-btn text-weight-bold rounded-borders"
@@ -545,8 +552,8 @@ async function handleCreate() {
       <!-- Hint text -->
       <div class="create-hint text-center text-body2 q-mt-md text-grey-8">
         {{ useNotion
-          ? 'Subtasks and acceptance criteria will be extracted from the Notion page.'
-          : 'Click "Import from Notion" to automatically extract subtasks from a ticket.'
+          ? $t('createPage.notionExtractHint')
+          : $t('createPage.notionImportHint')
         }}
       </div>
     </div>

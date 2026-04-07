@@ -19,6 +19,17 @@ export const migrations: Migration[] = [
       db.exec("ALTER TABLE workspaces ADD COLUMN permission_mode TEXT NOT NULL DEFAULT 'auto-accept'")
     },
   },
+  {
+    version: 3,
+    name: 'add-workspace-id-indexes',
+    migrate: (db) => {
+      db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_tasks_workspace_id ON tasks(workspace_id);
+        CREATE INDEX IF NOT EXISTS idx_agent_sessions_workspace_id ON agent_sessions(workspace_id);
+        CREATE INDEX IF NOT EXISTS idx_ws_events_workspace_id ON ws_events(workspace_id);
+      `)
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

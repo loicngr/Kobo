@@ -68,6 +68,20 @@ body:
     validations:
       required: true
 
+  - type: dropdown
+    id: language
+    attributes:
+      label: UI language
+      description: The language selected in Settings.
+      options:
+        - English
+        - Français
+        - Deutsch
+        - Español
+        - Italiano
+    validations:
+      required: false
+
   - type: textarea
     id: logs
     attributes:

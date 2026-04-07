@@ -48,8 +48,4 @@ export function killAll(): void {
 
 export function initProcessCleanup(): void {
   process.on('exit', killAll)
-  process.on('SIGINT', () => {
-    killAll()
-    process.exit(0)
-  })
 }

@@ -1,18 +1,30 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
+import { defineAsyncComponent } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const DiffViewer = defineAsyncComponent(() => import('./DiffViewer.vue'))
+
 import type { GitStats, Workspace } from 'src/stores/workspace'
 import { useWorkspaceStore, WorkspaceActionError } from 'src/stores/workspace'
-import { computed, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 
 const props = defineProps<{
   workspace: Workspace | null
 }>()
 
+const { t } = useI18n()
 const $q = useQuasar()
 const store = useWorkspaceStore()
 
 const pushing = ref(false)
 const openingPr = ref(false)
+const showDiff = ref(false)
+
+function onSendToChat(text: string) {
+  store.chatDraft = text
+  showDiff.value = false
+}
 const gitStats = ref<GitStats | null>(null)
 const loadingStats = ref(false)
 
@@ -53,12 +65,16 @@ watch(
   },
 )
 
+onUnmounted(() => {
+  if (gitRefreshTimeout) clearTimeout(gitRefreshTimeout)
+})
+
 async function handlePush() {
   if (!props.workspace) return
   pushing.value = true
   try {
     await store.pushBranch(props.workspace.id)
-    $q.notify({ type: 'positive', message: 'Branch pushed', position: 'top' })
+    $q.notify({ type: 'positive', message: t('git.branchPushed'), position: 'top' })
     loadGitStats()
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Push failed'
@@ -81,7 +97,7 @@ async function handleOpenPr() {
     const result = await store.openPullRequest(props.workspace.id)
     $q.notify({
       type: 'positive',
-      message: `PR #${result.prNumber} created`,
+      message: t('git.prCreated', { n: result.prNumber }),
       caption: result.prUrl,
       position: 'top',
       timeout: 5000,
@@ -91,7 +107,7 @@ async function handleOpenPr() {
     if (e instanceof WorkspaceActionError && e.code === 'branch_not_pushed') {
       $q.notify({
         type: 'warning',
-        message: 'Branch is not on remote. Click Push first.',
+        message: t('git.pushFirst'),
         position: 'top',
         timeout: 6000,
       })
@@ -100,7 +116,7 @@ async function handleOpenPr() {
     if (e instanceof WorkspaceActionError && e.code === 'unpushed_commits') {
       $q.notify({
         type: 'warning',
-        message: 'Local commits are not pushed. Click Push first.',
+        message: t('git.unpushedCommits'),
         position: 'top',
         timeout: 6000,
       })
@@ -118,7 +134,7 @@ async function handleOpenPr() {
   <div class="git-panel q-pa-md">
     <div class="row items-center justify-between q-mb-sm">
       <div class="text-caption text-uppercase text-weight-bold text-grey-6" style="letter-spacing: 0.05em;">
-        Git
+        {{ $t('git.title') }}
       </div>
       <q-btn
         v-if="workspace"
@@ -153,30 +169,30 @@ async function handleOpenPr() {
 
       <!-- Source branch info -->
       <div class="text-caption q-mb-sm text-grey-8" style="font-size: 11px;">
-        from {{ workspace.sourceBranch }}
+        {{ $t('git.from') }} {{ workspace.sourceBranch }}
         <template v-if="gitStats">
           &middot;
-          <span v-if="gitStats.unpushedCount === -1">local only</span>
-          <span v-else-if="gitStats.unpushedCount === 0" style="color: #4ade80;">pushed</span>
-          <span v-else style="color: #f59e0b;">{{ gitStats.unpushedCount }} unpushed</span>
+          <span v-if="gitStats.unpushedCount === -1">{{ $t('git.localOnly') }}</span>
+          <span v-else-if="gitStats.unpushedCount === 0" style="color: #4ade80;">{{ $t('git.pushed') }}</span>
+          <span v-else style="color: #f59e0b;">{{ $t('git.unpushed', { count: gitStats.unpushedCount }) }}</span>
         </template>
       </div>
 
       <!-- Git stats -->
-      <template v-if="gitStats && (gitStats.commitCount > 0 || gitStats.filesChanged > 0)">
+      <template v-if="gitStats">
         <!-- Commit count -->
         <div class="row items-center q-mb-xs">
           <q-icon name="commit" size="14px" color="grey-6" class="q-mr-xs" />
           <span class="text-caption text-grey-4" style="font-size: 11px;">
-            {{ gitStats.commitCount }} commit{{ gitStats.commitCount !== 1 ? 's' : '' }}
+            {{ $t('git.commits', { count: gitStats.commitCount }, gitStats.commitCount) }}
           </span>
         </div>
 
         <!-- File changes -->
-        <div class="row items-center q-mb-md">
+        <div v-if="gitStats.filesChanged > 0" class="row items-center q-mb-md">
           <q-icon name="insert_drive_file" size="14px" color="grey-6" class="q-mr-xs" />
           <span class="text-caption text-grey-4" style="font-size: 11px;">
-            {{ gitStats.filesChanged }} file{{ gitStats.filesChanged !== 1 ? 's' : '' }}
+            {{ $t('git.files', { count: gitStats.filesChanged }, gitStats.filesChanged) }}
           </span>
           <span v-if="gitStats.insertions > 0" class="text-caption q-ml-xs" style="font-size: 11px; color: #4ade80;">
             +{{ gitStats.insertions }}
@@ -185,8 +201,27 @@ async function handleOpenPr() {
             -{{ gitStats.deletions }}
           </span>
         </div>
+        <div v-else class="q-mb-xs" />
+
+        <!-- Working tree -->
+        <div
+          v-if="gitStats.workingTree && (gitStats.workingTree.staged > 0 || gitStats.workingTree.modified > 0 || gitStats.workingTree.untracked > 0)"
+          class="row items-center q-gutter-xs q-mb-md"
+          style="font-size: 11px;"
+        >
+          <q-icon name="edit_note" size="14px" color="grey-6" />
+          <span v-if="gitStats.workingTree.staged > 0" class="text-caption" style="color: #4ade80;">
+            {{ $t('git.staged', { count: gitStats.workingTree.staged }) }}
+          </span>
+          <span v-if="gitStats.workingTree.modified > 0" class="text-caption" style="color: #f59e0b;">
+            {{ $t('git.modified', { count: gitStats.workingTree.modified }) }}
+          </span>
+          <span v-if="gitStats.workingTree.untracked > 0" class="text-caption text-grey-6">
+            {{ $t('git.untracked', { count: gitStats.workingTree.untracked }) }}
+          </span>
+        </div>
+        <div v-else class="q-mb-md" />
       </template>
-      <div v-else class="q-mb-md" />
 
       <!-- Actions -->
       <div class="row q-gutter-xs">
@@ -197,7 +232,7 @@ async function handleOpenPr() {
           size="sm"
           outline
           color="green-4"
-          label="View PR"
+          :label="$t('git.viewPr')"
           icon="open_in_new"
           class="git-btn"
           @click="viewPr"
@@ -208,7 +243,7 @@ async function handleOpenPr() {
           no-caps
           size="sm"
           color="primary"
-          label="Create PR"
+          :label="$t('git.createPr')"
           class="git-btn"
           :loading="openingPr"
           :disable="!workspace || pushing"
@@ -221,18 +256,40 @@ async function handleOpenPr() {
           size="sm"
           outline
           color="grey-5"
-          label="Push"
+          :label="$t('git.push')"
           class="git-btn"
           :loading="pushing"
           :disable="!workspace || openingPr"
           @click="handlePush"
         />
+        <q-btn
+          dense
+          no-caps
+          size="sm"
+          outline
+          color="indigo-4"
+          :label="$t('git.diff')"
+          icon="difference"
+          class="git-btn"
+          :disable="!workspace"
+          @click="showDiff = true"
+        />
       </div>
     </template>
 
     <div v-else class="text-caption text-grey-8">
-      Select a workspace
+      {{ $t('common.selectWorkspace') }}
     </div>
+
+    <!-- Diff viewer dialog (fullscreen) -->
+    <q-dialog v-model="showDiff" maximized>
+      <DiffViewer
+        v-if="workspace"
+        :workspace-id="workspace.id"
+        @close="showDiff = false"
+        @send-to-chat="onSendToChat"
+      />
+    </q-dialog>
   </div>
 </template>
 

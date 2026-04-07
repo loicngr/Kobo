@@ -34,6 +34,7 @@ let db: Database.Database
 try {
   db = new Database(dbPath, { readonly: false })
   db.pragma('journal_mode = WAL')
+  db.pragma('busy_timeout = 5000')
   db.pragma('foreign_keys = ON')
 } catch (err) {
   console.error('[kobo-tasks-server] Failed to open database:', err)
@@ -230,6 +231,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         properties: {
           status: {
             type: 'string',
+            enum: ['idle', 'completed', 'error'],
             description: 'New status (e.g. idle, completed)',
           },
         },

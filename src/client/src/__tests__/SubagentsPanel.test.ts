@@ -1,8 +1,12 @@
 import { mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it } from 'vitest'
+import { createI18n } from 'vue-i18n'
 import SubagentsPanel from '../components/SubagentsPanel.vue'
+import en from '../i18n/en'
 import { useWorkspaceStore } from '../stores/workspace'
+
+const i18n = createI18n({ legacy: false, locale: 'en', messages: { en } })
 
 // Stub Quasar components — they're registered globally at runtime but in tests
 // we only care about the text content, not the rendered icons/spinners.
@@ -12,7 +16,7 @@ const globalStubs = {
 }
 
 function mountPanel() {
-  return mount(SubagentsPanel, { global: { stubs: globalStubs } })
+  return mount(SubagentsPanel, { global: { stubs: globalStubs, plugins: [i18n] } })
 }
 
 describe('SubagentsPanel.vue', () => {

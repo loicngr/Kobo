@@ -1,7 +1,10 @@
 <script setup lang="ts">
+import { useQuasar } from 'quasar'
 import type { AgentSession } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
-import { computed, defineAsyncComponent, onMounted, watch } from 'vue'
+import { useTimeAgo } from 'src/utils/formatters'
+import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 
 const ActivityFeed = defineAsyncComponent(() =>
@@ -12,19 +15,51 @@ const ActivityFeed = defineAsyncComponent(() =>
 
 import ChatInput from 'src/components/ChatInput.vue'
 
+const $q = useQuasar()
 const store = useWorkspaceStore()
+const { t } = useI18n()
+const { timeAgo } = useTimeAgo()
 
-const modelOptions = [
-  { label: 'Auto', value: 'auto' },
-  { label: 'Opus 4.6', value: 'claude-opus-4-6' },
-  { label: 'Sonnet 4.6', value: 'claude-sonnet-4-6' },
-  { label: 'Haiku 4.5', value: 'claude-haiku-4-5-20251001' },
-]
+const starting = ref(false)
+const stopping = ref(false)
 
-const permissionModeOptions = [
-  { label: 'Auto-accept', value: 'auto-accept' },
-  { label: 'Plan', value: 'plan' },
-]
+async function handleStart() {
+  if (!store.selectedWorkspaceId) return
+  starting.value = true
+  try {
+    await store.startWorkspace(store.selectedWorkspaceId)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : t('workspacePage.startFailed')
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+  } finally {
+    starting.value = false
+  }
+}
+
+async function handleStop() {
+  if (!store.selectedWorkspaceId) return
+  stopping.value = true
+  try {
+    await store.stopWorkspace(store.selectedWorkspaceId)
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : t('workspacePage.stopFailed')
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+  } finally {
+    stopping.value = false
+  }
+}
+
+const modelOptions = computed(() => [
+  { label: t('model.auto'), value: 'auto' },
+  { label: t('model.opus'), value: 'claude-opus-4-6' },
+  { label: t('model.sonnet'), value: 'claude-sonnet-4-6' },
+  { label: t('model.haiku'), value: 'claude-haiku-4-5-20251001' },
+])
+
+const permissionModeOptions = computed(() => [
+  { label: t('permissionMode.autoAccept'), value: 'auto-accept' },
+  { label: t('permissionMode.plan'), value: 'plan' },
+])
 
 const currentModel = computed({
   get: () => store.selectedWorkspace?.model ?? 'auto',
@@ -66,22 +101,12 @@ const selectedSessionId = computed({
 
 const sessionOptions = computed(() => {
   const opts = store.sessions.map((s: AgentSession, idx: number) => ({
-    label: `Session #${store.sessions.length - idx}`,
+    label: t('workspacePage.session', { n: store.sessions.length - idx }),
     value: s.claudeSessionId,
     caption: timeAgo(s.startedAt),
   }))
-  return [{ label: 'All sessions', value: null, caption: '' }, ...opts]
+  return [{ label: t('workspacePage.allSessions'), value: null, caption: '' }, ...opts]
 })
-
-function timeAgo(dateStr: string): string {
-  const diffMs = Date.now() - new Date(dateStr).getTime()
-  const min = Math.floor(diffMs / 60000)
-  if (min < 1) return 'just now'
-  if (min < 60) return `${min}m ago`
-  const h = Math.floor(min / 60)
-  if (h < 24) return `${h}h ago`
-  return `${Math.floor(h / 24)}d ago`
-}
 
 onMounted(() => {
   const id = route.params.id as string | undefined
@@ -181,9 +206,11 @@ watch(
           size="sm"
           color="positive"
           icon="play_arrow"
-          label="Start"
+          :label="$t('common.start')"
           class="q-mr-xs"
-          @click="store.startWorkspace(selectedWs.id)"
+          :loading="starting"
+          :disable="starting"
+          @click="handleStart"
         />
         <q-btn
           v-if="['extracting', 'brainstorming', 'executing'].includes(selectedWs.status)"
@@ -192,14 +219,16 @@ watch(
           size="sm"
           color="negative"
           icon="stop"
-          label="Stop"
+          :label="$t('common.stop')"
           class="q-mr-xs"
-          @click="store.stopWorkspace(selectedWs.id)"
+          :loading="stopping"
+          :disable="stopping"
+          @click="handleStop"
         />
       </template>
       <template v-else>
         <span class="text-body2 text-grey-8">
-          Select a workspace to begin
+          {{ $t('workspacePage.selectWorkspace') }}
         </span>
       </template>
     </div>
@@ -212,7 +241,7 @@ watch(
       <template #fallback>
         <div class="col column items-center justify-center">
           <q-spinner-dots size="40px" color="indigo-4" />
-          <div class="text-grey-6 text-caption q-mt-sm">Loading...</div>
+          <div class="text-grey-6 text-caption q-mt-sm">{{ $t('common.loading') }}</div>
         </div>
       </template>
     </Suspense>

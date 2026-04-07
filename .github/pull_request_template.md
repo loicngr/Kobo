@@ -21,6 +21,13 @@
 
 <!-- Manual test notes, screenshots, or video if UI-facing. -->
 
+## Internationalization
+
+<!-- Remove this section if the PR doesn't touch i18n. -->
+
+- [ ] All user-visible strings use `$t()` / `t()` — no hardcoded text
+- [ ] Translation keys added to all 5 locale files (en, fr, de, es, it)
+
 ## Schema / migrations
 
 <!-- Remove this section if the PR doesn't touch the DB or settings.json. -->

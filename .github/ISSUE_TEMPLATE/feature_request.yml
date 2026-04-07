@@ -44,6 +44,7 @@ body:
         - Notion integration
         - Dev server orchestration
         - Git / PR workflow
+        - Internationalization (i18n)
         - CI / tooling
         - Other
     validations:

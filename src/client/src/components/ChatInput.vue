@@ -2,11 +2,13 @@
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { computed, onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{
   workspaceId: string
 }>()
 
+const { t } = useI18n()
 const store = useWorkspaceStore()
 const wsStore = useWebSocketStore()
 const message = ref('')
@@ -142,6 +144,17 @@ async function fetchSkills() {
 }
 
 onMounted(fetchSkills)
+
+// Watch for chatDraft changes (e.g. from DiffViewer "Add to chat")
+watch(
+  () => store.chatDraft,
+  (draft) => {
+    if (draft) {
+      message.value = message.value ? `${message.value}\n${draft}` : draft
+      store.chatDraft = ''
+    }
+  },
+)
 
 // Watch for / prefix to trigger autocomplete
 watch(message, async (val) => {
@@ -284,7 +297,7 @@ function onKeydown(event: KeyboardEvent) {
         <q-icon v-else name="error" size="14px" color="red-6" class="q-mr-xs" />
 
         <span class="text-caption image-tag-label">
-          {{ img.status === 'uploading' ? 'Uploading...' : (img.path || img.originalName) }}
+          {{ img.status === 'uploading' ? $t('chatInput.uploading') : (img.path || img.originalName) }}
         </span>
 
         <q-btn
@@ -302,7 +315,7 @@ function onKeydown(event: KeyboardEvent) {
     <!-- Skills autocomplete popup -->
     <div v-if="showSkills && filteredSkills.length > 0" class="skills-popup rounded-borders">
       <div class="skills-header text-caption text-weight-bold text-grey-6 q-px-sm q-py-xs">
-        Skills
+        {{ $t('chatInput.skills') }}
       </div>
       <div
         v-for="(skill, idx) in filteredSkills.slice(0, 12)"
@@ -324,7 +337,7 @@ function onKeydown(event: KeyboardEvent) {
         dark
         borderless
         autogrow
-        placeholder="Message... (/ for skills)"
+        :placeholder="$t('chatInput.placeholder')"
         class="chat-input col rounded-borders"
         :disable="isDisabled"
         @keydown="onKeydown"
@@ -349,7 +362,7 @@ function onKeydown(event: KeyboardEvent) {
         :disable="isDisabled"
         @click="fileInputRef?.click()"
       >
-        <q-tooltip>Attach image</q-tooltip>
+        <q-tooltip>{{ $t('chatInput.attachImage') }}</q-tooltip>
       </q-btn>
 
       <q-btn
@@ -360,6 +373,9 @@ function onKeydown(event: KeyboardEvent) {
         :disable="isDisabled || (!message.trim() && pendingImages.length === 0) || hasUploading"
         @click="sendMessage"
       />
+    </div>
+    <div class="chat-hint text-caption text-grey-8">
+      <kbd>Enter</kbd> {{ $t('common.send') }} <span class="q-mx-xs">&middot;</span> <kbd>Shift+Enter</kbd> {{ $t('common.newLine') }} <span class="q-mx-xs">&middot;</span> <kbd>↑↓</kbd> {{ $t('common.history') }}
     </div>
   </div>
 </template>
@@ -446,6 +462,20 @@ function onKeydown(event: KeyboardEvent) {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.chat-hint {
+  font-size: 10px;
+  text-align: left;
+  padding: 2px 4px 0;
+
+  kbd {
+    background-color: #2a2a4a;
+    border-radius: 3px;
+    padding: 1px 4px;
+    font-family: 'Roboto Mono', monospace;
+    font-size: 9px;
+  }
 }
 
 .image-tag-close {

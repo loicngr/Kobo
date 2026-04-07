@@ -206,21 +206,32 @@ export function updateWorkspaceStatus(id: string, status: WorkspaceStatus): Work
 export function updateWorkspaceName(id: string, name: string): Workspace {
   const db = getDb()
   const now = new Date().toISOString()
-  db.prepare('UPDATE workspaces SET name = ?, updated_at = ? WHERE id = ?').run(name, now, id)
+  const result = db.prepare('UPDATE workspaces SET name = ?, updated_at = ? WHERE id = ?').run(name, now, id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
   return getWorkspace(id) as Workspace
 }
 
 export function updateWorkspaceModel(id: string, model: string): Workspace {
   const db = getDb()
   const now = new Date().toISOString()
-  db.prepare('UPDATE workspaces SET model = ?, updated_at = ? WHERE id = ?').run(model, now, id)
+  const result = db.prepare('UPDATE workspaces SET model = ?, updated_at = ? WHERE id = ?').run(model, now, id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
   return getWorkspace(id) as Workspace
 }
 
 export function updateWorkspacePermissionMode(id: string, permissionMode: PermissionMode): Workspace {
   const db = getDb()
   const now = new Date().toISOString()
-  db.prepare('UPDATE workspaces SET permission_mode = ?, updated_at = ? WHERE id = ?').run(permissionMode, now, id)
+  const result = db
+    .prepare('UPDATE workspaces SET permission_mode = ?, updated_at = ? WHERE id = ?')
+    .run(permissionMode, now, id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
   return getWorkspace(id) as Workspace
 }
 
@@ -253,6 +264,14 @@ export function createTask(workspaceId: string, data: CreateTaskInput): Task {
 
   const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as TaskRow
   return mapTask(row)
+}
+
+export function getTask(taskId: string, workspaceId: string): Task | null {
+  const db = getDb()
+  const row = db.prepare('SELECT * FROM tasks WHERE id = ? AND workspace_id = ?').get(taskId, workspaceId) as
+    | TaskRow
+    | undefined
+  return row ? mapTask(row) : null
 }
 
 export function listTasks(workspaceId: string): Task[] {

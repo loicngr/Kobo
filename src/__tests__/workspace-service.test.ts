@@ -385,6 +385,29 @@ describe('getWorkspaceWithTasks(id)', () => {
   })
 })
 
+// ── I6: updateWorkspaceName / updateWorkspaceModel / updateWorkspacePermissionMode throw on missing workspace ──
+
+describe('updateWorkspaceName() throws when workspace not found', () => {
+  it("lève une erreur si le workspace n'existe pas", async () => {
+    const { updateWorkspaceName } = await import('../server/services/workspace-service.js')
+    expect(() => updateWorkspaceName('nonexistent', 'New Name')).toThrow(/not found/)
+  })
+})
+
+describe('updateWorkspaceModel() throws when workspace not found', () => {
+  it("lève une erreur si le workspace n'existe pas", async () => {
+    const { updateWorkspaceModel } = await import('../server/services/workspace-service.js')
+    expect(() => updateWorkspaceModel('nonexistent', 'claude-sonnet-4-20250514')).toThrow(/not found/)
+  })
+})
+
+describe('updateWorkspacePermissionMode() throws when workspace not found', () => {
+  it("lève une erreur si le workspace n'existe pas", async () => {
+    const { updateWorkspacePermissionMode } = await import('../server/services/workspace-service.js')
+    expect(() => updateWorkspacePermissionMode('nonexistent', 'plan')).toThrow(/not found/)
+  })
+})
+
 // ── Gap 8: toutes les transitions de status valides ───────────────────────────
 
 describe('updateWorkspaceStatus() — transitions clés non couvertes', () => {

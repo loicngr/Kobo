@@ -15,6 +15,7 @@ export function getDb(dbPath?: string): Database.Database {
   instance = new Database(resolvedPath)
 
   instance.pragma('journal_mode=WAL')
+  instance.pragma('busy_timeout=5000')
   instance.pragma('foreign_keys=ON')
 
   return instance
