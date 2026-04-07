@@ -25,7 +25,7 @@
     "@types/dompurify": "^3.0.5",
     "dompurify": "^3.3.3",
     "marked": "^17.0.6",
-    "monaco-editor": "^0.55.1",
+    "monaco-editor": "^0.53.0",
     "pinia": "^2.3.1",
     "quasar": "^2.19.3",
     "vue": "^3.5.32",
