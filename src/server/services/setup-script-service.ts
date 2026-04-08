@@ -24,7 +24,7 @@ export function runSetupScript(
     fs.mkdirSync(path.dirname(scriptPath), { recursive: true })
     fs.writeFileSync(scriptPath, script, { mode: 0o755 })
 
-    const proc = spawn(scriptPath, [], {
+    const proc = spawn('/usr/bin/env', ['bash', scriptPath], {
       cwd: worktreePath,
       env: {
         ...process.env,
