@@ -5,6 +5,12 @@ import { getProjectSettings } from './settings-service.js'
 import { emitEphemeral } from './websocket-service.js'
 import { getWorkspace, updateDevServerStatus } from './workspace-service.js'
 
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function getWorktreePath(projectPath: string, workingBranch: string): string {
+  return path.join(projectPath, '.worktrees', workingBranch)
+}
+
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 export interface DevServerStatus {
@@ -178,8 +184,10 @@ export function startDevServer(workspaceId: string): DevServerStatus {
   const instanceName = sanitizeBranchName(workspace.workingBranch)
 
   // Execute as bash script (supports multi-line scripts)
+  const worktreePath = getWorktreePath(workspace.projectPath, workspace.workingBranch)
+  const cwd = existsSync(worktreePath) ? worktreePath : workspace.projectPath
   const proc = spawn('bash', ['-c', settings.devServer.startCommand], {
-    cwd: workspace.projectPath,
+    cwd,
     env: {
       ...process.env,
       INSTANCE: instanceName,
@@ -251,6 +259,8 @@ export function stopDevServer(workspaceId: string): DevServerStatus {
 
   const config = resolveInstance(workspace.projectPath, workspace.workingBranch)
   const instanceName = config?.instanceName ?? sanitizeBranchName(workspace.workingBranch)
+  const worktreePath = getWorktreePath(workspace.projectPath, workspace.workingBranch)
+  const cwd = existsSync(worktreePath) ? worktreePath : workspace.projectPath
 
   // Kill tracked process first (covers Node servers and any spawned process)
   const tracked = trackedProcesses.get(workspaceId)
@@ -273,7 +283,7 @@ export function stopDevServer(workspaceId: string): DevServerStatus {
     // Custom stop script — run synchronously with instance context in env
     try {
       execSync(settings.devServer.stopCommand, {
-        cwd: workspace.projectPath,
+        cwd,
         env: {
           ...process.env,
           INSTANCE: instanceName,
@@ -293,7 +303,7 @@ export function stopDevServer(workspaceId: string): DevServerStatus {
   if (config?.projectName) {
     try {
       execSync(`docker compose -p "${config.projectName}" down`, {
-        cwd: workspace.projectPath,
+        cwd: cwd,
         encoding: 'utf-8',
         timeout: 30000,
       })

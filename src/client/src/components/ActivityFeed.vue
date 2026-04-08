@@ -40,7 +40,21 @@ function parseOptions(content: string): { textBefore: string; options: ParsedOpt
     }
   }
 
-  // Pattern 1b: "a) Description" or "A) Description" — plain letter-paren format
+  // Pattern 1b: "**A)** Description" or "**A)** Description" — bold letter-paren format
+  const boldLetterParenRegex = /^\*\*([a-zA-Z])\)\*\*\s+(.+)/gm
+  const boldLetterParenMatches = [...content.matchAll(boldLetterParenRegex)]
+  if (boldLetterParenMatches.length >= 2) {
+    const firstMatchIndex = content.indexOf(boldLetterParenMatches[0][0])
+    return {
+      textBefore: content.substring(0, firstMatchIndex).trim(),
+      options: boldLetterParenMatches.map((m) => ({
+        key: m[1].toUpperCase(),
+        label: m[2].trim(),
+      })),
+    }
+  }
+
+  // Pattern 1c: "a) Description" or "A) Description" — plain letter-paren format
   const letterParenRegex = /^([a-zA-Z])\)\s+(.+)/gm
   const letterParenMatches = [...content.matchAll(letterParenRegex)]
   if (letterParenMatches.length >= 2) {
