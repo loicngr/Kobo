@@ -11,6 +11,12 @@ function getWorktreePath(projectPath: string, workingBranch: string): string {
   return path.join(projectPath, '.worktrees', workingBranch)
 }
 
+/** Build a clean env for child processes, stripping Kobo-specific variables. */
+function cleanEnv(): Record<string, string | undefined> {
+  const { PORT, SERVER_PORT, ...rest } = process.env
+  return rest
+}
+
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 export interface DevServerStatus {
@@ -189,7 +195,7 @@ export function startDevServer(workspaceId: string): DevServerStatus {
   const proc = spawn('bash', ['-c', settings.devServer.startCommand], {
     cwd,
     env: {
-      ...process.env,
+      ...cleanEnv(),
       INSTANCE: instanceName,
       DEV_DOCKER_NO_FOLLOW: '1',
     },
@@ -285,7 +291,7 @@ export function stopDevServer(workspaceId: string): DevServerStatus {
       execSync(settings.devServer.stopCommand, {
         cwd,
         env: {
-          ...process.env,
+          ...cleanEnv(),
           INSTANCE: instanceName,
           PROJECT_NAME: config?.projectName ?? '',
         },
