@@ -149,6 +149,14 @@ describe('updateWorkspaceStatus(id, status)', () => {
     expect(updated.updatedAt >= updatedAt).toBe(true)
   })
 
+  it('autorise la self-transition extracting → extracting', async () => {
+    const { createWorkspace, updateWorkspaceStatus } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'Self-transition', projectPath: '/p', sourceBranch: 'main', workingBranch: 'b' })
+    updateWorkspaceStatus(ws.id, 'extracting')
+    const updated = updateWorkspaceStatus(ws.id, 'extracting')
+    expect(updated.status).toBe('extracting')
+  })
+
   it('lève une erreur sur une transition invalide', async () => {
     const { createWorkspace, updateWorkspaceStatus } = await import('../server/services/workspace-service.js')
     const ws = createWorkspace({ name: 'Bad transition', projectPath: '/p', sourceBranch: 'main', workingBranch: 'b' })

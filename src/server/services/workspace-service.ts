@@ -66,7 +66,7 @@ export interface CreateTaskInput {
 // Valid status transitions
 const VALID_TRANSITIONS: Record<WorkspaceStatus, WorkspaceStatus[]> = {
   created: ['extracting', 'brainstorming', 'idle', 'error'],
-  extracting: ['brainstorming', 'idle', 'error'],
+  extracting: ['extracting', 'brainstorming', 'idle', 'error'],
   brainstorming: ['executing', 'completed', 'idle', 'error'],
   executing: ['completed', 'idle', 'error', 'quota'],
   completed: ['idle', 'executing'],
