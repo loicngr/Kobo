@@ -154,9 +154,10 @@ async function removeCriterion(task: Task) {
         size="xs"
         icon="add"
         color="indigo-4"
-        :title="$t('acceptance.addCriterion')"
         @click="startAdd"
-      />
+      >
+        <q-tooltip>{{ $t('tooltip.addCriterion') }}</q-tooltip>
+      </q-btn>
     </div>
 
     <!-- Add criterion inline input -->
@@ -221,7 +222,9 @@ async function removeCriterion(task: Task) {
             color="grey-6"
             class="criterion-delete-btn"
             @click="removeCriterion(task)"
-          />
+          >
+            <q-tooltip>{{ $t('tooltip.removeCriterion') }}</q-tooltip>
+          </q-btn>
         </template>
       </div>
     </div>

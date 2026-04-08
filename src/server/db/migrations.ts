@@ -5,12 +5,14 @@ import { initSchema } from './schema.js'
 // Each entry describes a single schema upgrade step.
 // Append-only — never edit or reorder shipped entries.
 
+/** Describes a single incremental schema upgrade step. Append-only -- never edit shipped entries. */
 export interface Migration {
   version: number
   name: string
   migrate: (db: Database.Database) => void
 }
 
+/** Ordered registry of all schema migrations. Append new entries at the end. */
 export const migrations: Migration[] = [
   {
     version: 2,
@@ -30,6 +32,13 @@ export const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 4,
+    name: 'add-has-unread',
+    migrate: (db) => {
+      db.prepare('ALTER TABLE workspaces ADD COLUMN has_unread INTEGER NOT NULL DEFAULT 0').run()
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */
@@ -44,6 +53,7 @@ export interface MigrationRecord {
   applied_at: string
 }
 
+/** Apply all pending migrations sequentially, or bootstrap a fresh database via initSchema. */
 export function runMigrations(db: Database.Database): void {
   // Create the history table (replaces the old single-row schema_version table).
   db.exec(`

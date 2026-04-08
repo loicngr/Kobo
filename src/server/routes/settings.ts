@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import type { GlobalSettings, ProjectSettings } from '../services/settings-service.js'
 import * as settingsService from '../services/settings-service.js'
 
+/** Hono sub-router for global and per-project settings CRUD. */
 const app = new Hono()
 
 // GET /api/settings — return full settings

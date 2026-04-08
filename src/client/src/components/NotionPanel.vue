@@ -173,9 +173,10 @@ function statusColor(status: string): string {
         size="xs"
         icon="add"
         color="indigo-4"
-        :title="$t('notion.addTask')"
         @click="startAdd"
-      />
+      >
+        <q-tooltip>{{ $t('tooltip.addNotionTask') }}</q-tooltip>
+      </q-btn>
     </div>
 
     <template v-if="workspace">
@@ -290,7 +291,9 @@ function statusColor(status: string): string {
               color="grey-6"
               class="task-delete-btn"
               @click="removeTask(task)"
-            />
+            >
+              <q-tooltip>{{ $t('tooltip.removeNotionTask') }}</q-tooltip>
+            </q-btn>
           </template>
         </div>
       </div>

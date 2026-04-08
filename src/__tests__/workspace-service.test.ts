@@ -628,3 +628,47 @@ describe('listWorkspaces() and listArchivedWorkspaces()', () => {
     expect(found?.archivedAt).toBeTruthy()
   })
 })
+
+describe('markWorkspaceRead() / markWorkspaceUnread()', () => {
+  it('new workspace has hasUnread = false by default', async () => {
+    const { createWorkspace } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'Unread test',
+      projectPath: '/tmp/ur',
+      sourceBranch: 'main',
+      workingBranch: 'feat/ur',
+    })
+    expect(ws.hasUnread).toBe(false)
+  })
+
+  it('markWorkspaceUnread sets has_unread to 1', async () => {
+    const { createWorkspace, getWorkspace, markWorkspaceUnread } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const ws = createWorkspace({
+      name: 'Mark unread',
+      projectPath: '/tmp/mu',
+      sourceBranch: 'main',
+      workingBranch: 'feat/mu',
+    })
+    markWorkspaceUnread(ws.id)
+    const found = getWorkspace(ws.id)
+    expect(found?.hasUnread).toBe(true)
+  })
+
+  it('markWorkspaceRead sets has_unread to 0', async () => {
+    const { createWorkspace, getWorkspace, markWorkspaceUnread, markWorkspaceRead } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const ws = createWorkspace({
+      name: 'Mark read',
+      projectPath: '/tmp/mr',
+      sourceBranch: 'main',
+      workingBranch: 'feat/mr',
+    })
+    markWorkspaceUnread(ws.id)
+    markWorkspaceRead(ws.id)
+    const found = getWorkspace(ws.id)
+    expect(found?.hasUnread).toBe(false)
+  })
+})

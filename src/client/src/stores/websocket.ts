@@ -561,6 +561,14 @@ export const useWebSocketStore = defineStore('websocket', {
           })
           break
 
+        case 'workspace:unread': {
+          if (wid) {
+            const hasUnread = (payload.hasUnread as boolean) ?? false
+            workspaceStore.updateWorkspaceFromEvent(wid, { hasUnread })
+          }
+          break
+        }
+
         case 'workspace:archived':
         case 'workspace:unarchived': {
           // Refresh active list; if the archived tab was ever opened, refresh that too.

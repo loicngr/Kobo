@@ -17,6 +17,7 @@ const globalModel = ref('auto')
 const globalSkipPermissions = ref(true)
 const globalPrPrompt = ref('')
 const globalGitConventions = ref('')
+const globalEditorCommand = ref('')
 const savingGlobal = ref(false)
 
 // Project form
@@ -93,6 +94,7 @@ function syncGlobalForm() {
   globalSkipPermissions.value = store.global.dangerouslySkipPermissions ?? true
   globalPrPrompt.value = store.global.prPromptTemplate
   globalGitConventions.value = store.global.gitConventions
+  globalEditorCommand.value = store.global.editorCommand ?? ''
 }
 
 // Init project form from selected project
@@ -177,6 +179,7 @@ async function saveGlobal() {
       dangerouslySkipPermissions: globalSkipPermissions.value,
       prPromptTemplate: globalPrPrompt.value,
       gitConventions: globalGitConventions.value,
+      editorCommand: globalEditorCommand.value,
     })
     $q.notify({ type: 'positive', message: t('settings.saved'), position: 'top' })
   } catch {
@@ -424,6 +427,19 @@ onUnmounted(() => {
                 class="settings-input mono-textarea"
               />
               <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.gitConventionsHint') }}</div>
+            </div>
+
+            <div class="q-mb-lg">
+              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.editorCommand') }}</div>
+              <q-input
+                v-model="globalEditorCommand"
+                dense
+                dark
+                outlined
+                :placeholder="$t('settings.editorCommandPlaceholder')"
+                class="settings-input"
+              />
+              <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.editorCommandHint') }}</div>
             </div>
 
             <!-- Save button -->

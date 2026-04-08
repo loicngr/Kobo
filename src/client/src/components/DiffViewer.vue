@@ -402,7 +402,9 @@ onUnmounted(() => {
         ]"
         class="q-mr-sm"
       />
-      <q-btn flat round dense icon="close" color="grey-5" size="sm" @click="emit('close')" />
+      <q-btn flat round dense icon="close" color="grey-5" size="sm" @click="emit('close')">
+        <q-tooltip>{{ $t('tooltip.closeDiffViewer') }}</q-tooltip>
+      </q-btn>
     </div>
 
     <q-separator dark />

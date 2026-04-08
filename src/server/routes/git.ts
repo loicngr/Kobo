@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { listBranches, listRemoteBranches } from '../utils/git-ops.js'
 
+/** Hono sub-router for git-related endpoints (branch listing). */
 const app = new Hono()
 
 // GET /api/git/branches?path=<repoPath> — list branches for a repo

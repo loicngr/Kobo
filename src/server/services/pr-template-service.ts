@@ -1,6 +1,7 @@
 import path from 'node:path'
 import type { Task, Workspace } from './workspace-service.js'
 
+/** Variables available for substitution in a PR prompt template. */
 export interface PrTemplateContext {
   workspace: Workspace
   prNumber: number

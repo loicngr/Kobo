@@ -26,11 +26,26 @@ interface ParsedOption {
 }
 
 function parseOptions(content: string): { textBefore: string; options: ParsedOption[] } | null {
-  // Pattern 1: "- **A — Description**"
-  const letterRegex = /^-\s*\*\*([A-Z])\s*[—–-]\s*(.+?)\*\*/gm
-  const letterMatches = [...content.matchAll(letterRegex)]
+  // Strip bold markers for pattern matching (handles **A)** X, **A) X**, etc.)
+  // Keep original content for textBefore positioning.
+  const stripped = content.replace(/\*\*/g, '')
+
+  // Helper: find the position of the first option in the ORIGINAL content
+  // by searching for the first matched key (e.g., "A)") with optional surrounding **
+  function findOriginalIndex(firstKey: string): number {
+    const escaped = firstKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const origMatch = content.match(new RegExp(`^(?:\\*\\*)?${escaped}`, 'm'))
+    if (origMatch?.index !== undefined) return origMatch.index
+    // Fallback: use stripped position
+    const strippedIdx = stripped.indexOf(firstKey)
+    return strippedIdx >= 0 ? strippedIdx : 0
+  }
+
+  // Pattern 1: "- A — Description" (bold already stripped)
+  const letterRegex = /^-\s*([A-Z])\s*[—–-]\s*(.+)/gm
+  const letterMatches = [...stripped.matchAll(letterRegex)]
   if (letterMatches.length >= 2) {
-    const firstMatchIndex = content.indexOf(letterMatches[0][0])
+    const firstMatchIndex = findOriginalIndex(letterMatches[0][0])
     return {
       textBefore: content.substring(0, firstMatchIndex).trim(),
       options: letterMatches.map((m) => ({
@@ -40,25 +55,11 @@ function parseOptions(content: string): { textBefore: string; options: ParsedOpt
     }
   }
 
-  // Pattern 1b: "**A)** Description" or "**A)** Description" — bold letter-paren format
-  const boldLetterParenRegex = /^\*\*([a-zA-Z])\)\*\*\s+(.+)/gm
-  const boldLetterParenMatches = [...content.matchAll(boldLetterParenRegex)]
-  if (boldLetterParenMatches.length >= 2) {
-    const firstMatchIndex = content.indexOf(boldLetterParenMatches[0][0])
-    return {
-      textBefore: content.substring(0, firstMatchIndex).trim(),
-      options: boldLetterParenMatches.map((m) => ({
-        key: m[1].toUpperCase(),
-        label: m[2].trim(),
-      })),
-    }
-  }
-
-  // Pattern 1c: "a) Description" or "A) Description" — plain letter-paren format
+  // Pattern 1b: "a) Description" or "A) Description" — letter-paren format (bold already stripped)
   const letterParenRegex = /^([a-zA-Z])\)\s+(.+)/gm
-  const letterParenMatches = [...content.matchAll(letterParenRegex)]
+  const letterParenMatches = [...stripped.matchAll(letterParenRegex)]
   if (letterParenMatches.length >= 2) {
-    const firstMatchIndex = content.indexOf(letterParenMatches[0][0])
+    const firstMatchIndex = findOriginalIndex(letterParenMatches[0][0].substring(0, 3))
     return {
       textBefore: content.substring(0, firstMatchIndex).trim(),
       options: letterParenMatches.map((m) => ({
@@ -70,9 +71,9 @@ function parseOptions(content: string): { textBefore: string; options: ParsedOpt
 
   // Pattern 1c: "Option 1 – Label" or "Option 2 — Label : Description" — plain numbered option format
   const optionNRegex = /^Option\s+(\d+)\s*[—–-]\s*(.+)/gim
-  const optionNMatches = [...content.matchAll(optionNRegex)]
+  const optionNMatches = [...stripped.matchAll(optionNRegex)]
   if (optionNMatches.length >= 2) {
-    const firstMatchIndex = content.indexOf(optionNMatches[0][0])
+    const firstMatchIndex = findOriginalIndex(optionNMatches[0][0].substring(0, 10))
     return {
       textBefore: content.substring(0, firstMatchIndex).trim(),
       options: optionNMatches.map((m) => ({
@@ -84,9 +85,9 @@ function parseOptions(content: string): { textBefore: string; options: ParsedOpt
 
   // Pattern 1d: "1) Description" — numbered paren format
   const numberedParenRegex = /^(\d+)\)\s+(.+)/gm
-  const numberedParenMatches = [...content.matchAll(numberedParenRegex)]
+  const numberedParenMatches = [...stripped.matchAll(numberedParenRegex)]
   if (numberedParenMatches.length >= 2) {
-    const firstMatchIndex = content.indexOf(numberedParenMatches[0][0])
+    const firstMatchIndex = findOriginalIndex(numberedParenMatches[0][0].substring(0, 3))
     return {
       textBefore: content.substring(0, firstMatchIndex).trim(),
       options: numberedParenMatches.map((m) => ({
@@ -98,9 +99,9 @@ function parseOptions(content: string): { textBefore: string; options: ParsedOpt
 
   // Pattern 1e: "A. Description" — letter-period format
   const letterDotRegex = /^([a-zA-Z])\.\s+(.+)/gm
-  const letterDotMatches = [...content.matchAll(letterDotRegex)]
+  const letterDotMatches = [...stripped.matchAll(letterDotRegex)]
   if (letterDotMatches.length >= 2) {
-    const firstMatchIndex = content.indexOf(letterDotMatches[0][0])
+    const firstMatchIndex = findOriginalIndex(letterDotMatches[0][0].substring(0, 3))
     return {
       textBefore: content.substring(0, firstMatchIndex).trim(),
       options: letterDotMatches.map((m) => ({
@@ -112,9 +113,9 @@ function parseOptions(content: string): { textBefore: string; options: ParsedOpt
 
   // Pattern 1f: "A: Description" or "A : Description" — letter-colon format
   const letterColonRegex = /^([a-zA-Z])\s*:\s+(.+)/gm
-  const letterColonMatches = [...content.matchAll(letterColonRegex)]
+  const letterColonMatches = [...stripped.matchAll(letterColonRegex)]
   if (letterColonMatches.length >= 2) {
-    const firstMatchIndex = content.indexOf(letterColonMatches[0][0])
+    const firstMatchIndex = findOriginalIndex(letterColonMatches[0][0].substring(0, 2))
     return {
       textBefore: content.substring(0, firstMatchIndex).trim(),
       options: letterColonMatches.map((m) => ({
@@ -126,9 +127,9 @@ function parseOptions(content: string): { textBefore: string; options: ParsedOpt
 
   // Pattern 1g: "(a) Description" or "(1) Description" — parenthesized prefix format
   const parenPrefixRegex = /^\(([a-zA-Z0-9])\)\s+(.+)/gm
-  const parenPrefixMatches = [...content.matchAll(parenPrefixRegex)]
+  const parenPrefixMatches = [...stripped.matchAll(parenPrefixRegex)]
   if (parenPrefixMatches.length >= 2) {
-    const firstMatchIndex = content.indexOf(parenPrefixMatches[0][0])
+    const firstMatchIndex = findOriginalIndex(parenPrefixMatches[0][0].substring(0, 4))
     return {
       textBefore: content.substring(0, firstMatchIndex).trim(),
       options: parenPrefixMatches.map((m) => ({
@@ -140,9 +141,9 @@ function parseOptions(content: string): { textBefore: string; options: ParsedOpt
 
   // Pattern 1h: "[A] Description" or "[1] Description" — bracketed prefix format
   const bracketPrefixRegex = /^\[([a-zA-Z0-9])\]\s+(.+)/gm
-  const bracketPrefixMatches = [...content.matchAll(bracketPrefixRegex)]
+  const bracketPrefixMatches = [...stripped.matchAll(bracketPrefixRegex)]
   if (bracketPrefixMatches.length >= 2) {
-    const firstMatchIndex = content.indexOf(bracketPrefixMatches[0][0])
+    const firstMatchIndex = findOriginalIndex(bracketPrefixMatches[0][0].substring(0, 4))
     return {
       textBefore: content.substring(0, firstMatchIndex).trim(),
       options: bracketPrefixMatches.map((m) => ({
@@ -432,6 +433,130 @@ function formatTime(dateStr: string): string {
   return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
 }
 
+// ── Inline diff rendering for Edit/Write tool calls ───────────────────────────
+
+interface FileChangeInfo {
+  toolName: 'Edit' | 'Write' | 'Bash:rm'
+  filePath: string
+  oldString?: string
+  newString?: string
+  content?: string
+  replaceAll?: boolean
+  additions: number
+  deletions: number
+}
+
+function getFileChangeInfo(item: ActivityItem): FileChangeInfo | null {
+  if (item.type !== 'tool_use') return null
+  const input = (item.meta as Record<string, unknown>)?.input as Record<string, unknown> | undefined
+
+  if (item.content === 'Edit') {
+    if (!input?.file_path) return null
+    const filePath = input.file_path as string
+    const oldStr = (input.old_string as string) ?? ''
+    const newStr = (input.new_string as string) ?? ''
+    const oldLines = oldStr.split('\n')
+    const newLines = newStr.split('\n')
+    return {
+      toolName: 'Edit',
+      filePath,
+      oldString: oldStr,
+      newString: newStr,
+      replaceAll: (input.replace_all as boolean) ?? false,
+      additions: newLines.length,
+      deletions: oldLines.length,
+    }
+  }
+
+  if (item.content === 'Write') {
+    if (!input?.file_path) return null
+    const filePath = input.file_path as string
+    const content = (input.content as string) ?? ''
+    const lines = content.split('\n').length
+    return {
+      toolName: 'Write',
+      filePath,
+      content,
+      additions: lines,
+      deletions: 0,
+    }
+  }
+
+  // Bash — detect rm/unlink commands
+  if (item.content === 'Bash') {
+    const cmd = (input?.command as string) ?? ''
+    const rmMatch = cmd.match(/^\s*rm\s+(?:-[a-zA-Z]*\s+)*(.+)/)
+    if (rmMatch) {
+      const filePath = rmMatch[1].trim().replace(/["']/g, '')
+      return {
+        toolName: 'Bash:rm',
+        filePath,
+        additions: 0,
+        deletions: 1,
+      }
+    }
+  }
+
+  return null
+}
+
+function fileBasename(filePath: string): string {
+  return filePath.split('/').pop() ?? filePath
+}
+
+function fileExtension(filePath: string): string {
+  const name = fileBasename(filePath)
+  const dot = name.lastIndexOf('.')
+  return dot >= 0 ? name.substring(dot + 1) : ''
+}
+
+function langIconForExt(ext: string): string {
+  const map: Record<string, string> = {
+    ts: 'JS',
+    tsx: 'TS',
+    js: 'JS',
+    jsx: 'JS',
+    vue: 'VU',
+    py: 'PY',
+    rs: 'RS',
+    go: 'GO',
+    java: 'JA',
+    php: 'PH',
+    css: 'CS',
+    scss: 'SC',
+    html: 'HT',
+    md: 'MD',
+    json: 'JS',
+    sql: 'SQ',
+    sh: 'SH',
+    yaml: 'YA',
+    yml: 'YA',
+    toml: 'TM',
+  }
+  return map[ext.toLowerCase()] ?? ext.substring(0, 2).toUpperCase()
+}
+
+function iconColorForExt(ext: string): string {
+  const map: Record<string, string> = {
+    ts: 'blue-5',
+    tsx: 'blue-5',
+    js: 'yellow-8',
+    jsx: 'yellow-8',
+    vue: 'green-5',
+    py: 'blue-4',
+    rs: 'orange-5',
+    go: 'cyan-5',
+    java: 'red-5',
+    php: 'indigo-4',
+    css: 'purple-4',
+    scss: 'pink-4',
+    html: 'orange-4',
+    md: 'grey-5',
+    json: 'yellow-6',
+  }
+  return map[ext.toLowerCase()] ?? 'grey-5'
+}
+
 function iconForToolUse(content: string): string {
   const lower = content.toLowerCase()
   if (lower.includes('read') || lower.includes('grep') || lower.includes('glob')) return 'search'
@@ -635,6 +760,61 @@ function formatSystemDetails(item: ActivityItem): string {
         </div>
       </template>
 
+      <!-- Tool use: Edit / Write — inline diff -->
+      <template v-else-if="item.type === 'tool_use' && getFileChangeInfo(item)">
+        <div
+          class="af-file-change cursor-pointer"
+          @click="toggleExpand(item.id)"
+        >
+          <div class="af-file-header row items-center no-wrap q-gutter-xs">
+            <span
+              class="af-lang-badge"
+              :class="`text-${iconColorForExt(fileExtension(getFileChangeInfo(item)!.filePath))}`"
+            >{{ langIconForExt(fileExtension(getFileChangeInfo(item)!.filePath)) }}</span>
+            <span class="af-file-path text-grey-4 ellipsis">{{ getFileChangeInfo(item)!.filePath }}</span>
+            <span class="af-diff-stats">
+              <span v-if="getFileChangeInfo(item)!.additions" class="text-green-5">+{{ getFileChangeInfo(item)!.additions }}</span>
+              <span v-if="getFileChangeInfo(item)!.deletions" class="text-red-5 q-ml-xs">-{{ getFileChangeInfo(item)!.deletions }}</span>
+            </span>
+            <q-icon
+              :name="isExpanded(item.id) ? 'expand_less' : 'expand_more'"
+              size="14px"
+              color="grey-6"
+            />
+            <q-space />
+            <span class="af-time">{{ formatTime(item.timestamp) }}</span>
+          </div>
+          <div v-if="isExpanded(item.id)" class="af-diff-body q-mt-xs" @click.stop>
+            <template v-if="getFileChangeInfo(item)!.toolName === 'Edit'">
+              <div
+                v-for="(line, li) in (getFileChangeInfo(item)!.oldString ?? '').split('\n')"
+                :key="`del-${li}`"
+                class="af-diff-line af-diff-del"
+              ><span class="af-diff-sign">-</span>{{ line }}</div>
+              <div
+                v-for="(line, li) in (getFileChangeInfo(item)!.newString ?? '').split('\n')"
+                :key="`add-${li}`"
+                class="af-diff-line af-diff-add"
+              ><span class="af-diff-sign">+</span>{{ line }}</div>
+            </template>
+            <template v-else-if="getFileChangeInfo(item)!.toolName === 'Bash:rm'">
+              <div class="af-diff-line af-diff-del"><span class="af-diff-sign">-</span>File deleted</div>
+            </template>
+            <template v-else>
+              <div
+                v-for="(line, li) in (getFileChangeInfo(item)!.content ?? '').split('\n').slice(0, 30)"
+                :key="`w-${li}`"
+                class="af-diff-line af-diff-add"
+              ><span class="af-diff-sign">+</span>{{ line }}</div>
+              <div
+                v-if="(getFileChangeInfo(item)!.content ?? '').split('\n').length > 30"
+                class="af-diff-line text-grey-7 text-italic"
+              >… {{ (getFileChangeInfo(item)!.content ?? '').split('\n').length - 30 }} more lines</div>
+            </template>
+          </div>
+        </div>
+      </template>
+
       <!-- Tool use: generic -->
       <template v-else-if="item.type === 'tool_use'">
         <div
@@ -820,6 +1000,75 @@ function formatSystemDetails(item: ActivityItem): string {
   color: #888;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+// File change (Edit/Write) inline diff
+.af-file-change {
+  padding: 6px 8px;
+  background: rgba(255, 255, 255, 0.03);
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.af-file-header {
+  font-size: 11px;
+  font-family: 'Roboto Mono', monospace;
+}
+
+.af-lang-badge {
+  font-size: 9px;
+  font-weight: 700;
+  font-family: 'Roboto Mono', monospace;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 4px;
+  border-radius: 3px;
+  min-width: 20px;
+  text-align: center;
+}
+
+.af-file-path {
+  font-size: 11px;
+  max-width: 70%;
+}
+
+.af-diff-stats {
+  font-size: 10px;
+  font-family: 'Roboto Mono', monospace;
+  white-space: nowrap;
+}
+
+.af-diff-body {
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 4px;
+  padding: 4px 0;
+  max-height: 300px;
+  overflow-y: auto;
+  overflow-x: auto;
+}
+
+.af-diff-line {
+  font-family: 'Roboto Mono', monospace;
+  font-size: 10px;
+  padding: 0 8px;
+  white-space: pre;
+  line-height: 1.5;
+  min-width: fit-content;
+}
+
+.af-diff-sign {
+  display: inline-block;
+  width: 12px;
+  user-select: none;
+}
+
+.af-diff-del {
+  background: rgba(248, 81, 73, 0.1);
+  color: #f85149;
+}
+
+.af-diff-add {
+  background: rgba(63, 185, 80, 0.1);
+  color: #3fb950;
 }
 
 // Text (agent)

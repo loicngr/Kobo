@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { extractNotionPage } from '../services/notion-service.js'
 
+/** Hono sub-router for Notion page extraction. */
 const app = new Hono()
 
 // POST /api/notion/extract — extract a Notion page

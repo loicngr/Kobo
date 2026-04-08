@@ -4,6 +4,7 @@ import { getDb } from '../db/index.js'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
+/** A persisted or ephemeral event broadcast to subscribed WebSocket clients. */
 export interface WsEvent {
   id: string
   workspaceId: string
@@ -13,6 +14,7 @@ export interface WsEvent {
   createdAt: string
 }
 
+/** Incoming message from a WebSocket client. */
 export interface WsMessage {
   type: string
   payload: unknown
@@ -23,21 +25,24 @@ export interface WsMessage {
 /** Maps each WS client to the set of workspaceIds they are subscribed to */
 const clients = new Map<WebSocket, Set<string>>()
 
-/** I6: Per-workspace emit counter for periodic cleanup */
+/** Per-workspace emit counter for periodic cleanup. */
 const emitCounters = new Map<string, number>()
 const EMIT_CLEANUP_THRESHOLD = 2000
 
 // ── Message handler (decoupled routing) ────────────────────────────────────────
 
+/** Callback for routed WS messages (chat, workspace, devserver commands). */
 export type MessageHandler = (type: string, payload: unknown) => void
 let messageHandler: MessageHandler | null = null
 
+/** Register the handler that processes routed WS messages (e.g. chat:message, workspace:start). */
 export function setMessageHandler(handler: MessageHandler): void {
   messageHandler = handler
 }
 
 // ── Connection handling ────────────────────────────────────────────────────────
 
+/** Handle a new WebSocket connection: register, dispatch messages, ping keepalive. */
 export function handleConnection(ws: WebSocket): void {
   // Register client with empty subscription set
   clients.set(ws, new Set())
@@ -81,7 +86,6 @@ export function handleConnection(ws: WebSocket): void {
       case 'sync:request': {
         const p = payload as { lastEventId?: string; workspaceIds?: string[] } | null
         const lastEventId = p?.lastEventId ?? ''
-        // I2: Accept optional workspaceIds so the client can sync even before re-subscribing
         const workspaceIds = p?.workspaceIds
         handleSyncRequest(ws, lastEventId, workspaceIds)
         break
@@ -135,14 +139,14 @@ export function emit(workspaceId: string, type: string, payload: unknown, sessio
   const id = nanoid()
   const createdAt = new Date().toISOString()
 
-  // C3: Persist to DB — best-effort only; don't let FK violation (deleted workspace) break the broadcast
+  // Best-effort persist — don't let FK violation (deleted workspace) break the broadcast
   try {
     const db = getDb()
     db.prepare(
       'INSERT INTO ws_events (id, workspace_id, type, payload, session_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
     ).run(id, workspaceId, type, JSON.stringify(payload), sessionId ?? null, createdAt)
 
-    // I6: Periodic cleanup — increment counter and trigger cleanup when threshold is reached
+    // Periodic cleanup — trigger when emit threshold is reached
     const count = (emitCounters.get(workspaceId) ?? 0) + 1
     if (count >= EMIT_CLEANUP_THRESHOLD) {
       cleanupOldEvents(workspaceId)
@@ -188,12 +192,10 @@ export function emitEphemeral(workspaceId: string, type: string, payload: unknow
 // ── Sync (replay missed events) ────────────────────────────────────────────────
 
 /**
- * Sends all events after lastEventId for workspaces the client is subscribed to.
- * I2: If workspaceIds is provided, use those instead of the client's current subscriptions
- * so the client can sync even before re-subscribing (e.g. after a reconnect).
+ * Replay all events after lastEventId for workspaces the client is subscribed to.
+ * If workspaceIds is provided, uses those instead of the client's current subscriptions.
  */
 export function handleSyncRequest(ws: WebSocket, lastEventId: string, workspaceIds?: string[]): void {
-  // I2: Use provided workspaceIds first, fall back to current subscriptions
   const resolvedIds: string[] =
     workspaceIds && workspaceIds.length > 0
       ? workspaceIds
@@ -232,7 +234,7 @@ export function handleSyncRequest(ws: WebSocket, lastEventId: string, workspaceI
         .prepare(`SELECT * FROM ws_events WHERE workspace_id IN (${placeholders}) AND rowid > ? ORDER BY rowid ASC`)
         .all(...resolvedIds, lastRow.rowid) as typeof rows
     } else {
-      // I7: lastEventId not found — send events capped to avoid unbounded memory usage
+      // lastEventId not found — send events capped to avoid unbounded memory usage
       rows = db
         .prepare(`SELECT * FROM ws_events WHERE workspace_id IN (${placeholders}) ORDER BY rowid ASC LIMIT 10000`)
         .all(...resolvedIds) as typeof rows

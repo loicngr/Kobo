@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { isGitBranchExistsError } from '../utils/git-ops.js'
 
+/** Parsed information about a single git worktree. */
 export interface WorktreeInfo {
   path: string
   branch: string
@@ -49,11 +50,11 @@ function removeFromExclude(projectPath: string, worktreePath: string): void {
 
   const lines = fs.readFileSync(excludeFile, 'utf-8').split('\n')
   const filtered = lines.filter((line) => line !== entry)
-  // I3: ensure the file ends with exactly one newline and has no trailing empty lines
   const trimmed = filtered.join('\n').replace(/\n+$/, '')
   fs.writeFileSync(excludeFile, trimmed ? `${trimmed}\n` : '', 'utf-8')
 }
 
+/** Create a git worktree under `.worktrees/` for the given branch. Returns the worktree path. */
 export function createWorktree(projectPath: string, branchName: string, sourceBranch: string): string {
   const worktreesDir = path.join(projectPath, '.worktrees')
   if (!fs.existsSync(worktreesDir)) {
@@ -68,7 +69,6 @@ export function createWorktree(projectPath: string, branchName: string, sourceBr
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
 
-    // M3: use shared utility for branch-exists detection
     // If branch already exists, add worktree without creating the branch
     if (isGitBranchExistsError(message)) {
       git(projectPath, ['worktree', 'add', worktreePath, branchName])
@@ -82,6 +82,7 @@ export function createWorktree(projectPath: string, branchName: string, sourceBr
   return worktreePath
 }
 
+/** Remove a git worktree and clean up the .git/info/exclude entry. */
 export function removeWorktree(projectPath: string, worktreePath: string): void {
   try {
     git(projectPath, ['worktree', 'remove', worktreePath, '--force'])
@@ -93,6 +94,7 @@ export function removeWorktree(projectPath: string, worktreePath: string): void 
   removeFromExclude(projectPath, worktreePath)
 }
 
+/** List all git worktrees for a repository by parsing `git worktree list --porcelain`. */
 export function listWorktrees(projectPath: string): WorktreeInfo[] {
   const output = git(projectPath, ['worktree', 'list', '--porcelain'])
 
@@ -129,6 +131,7 @@ export function listWorktrees(projectPath: string): WorktreeInfo[] {
   return worktrees
 }
 
+/** Check whether a worktree for the given branch already exists. */
 export function worktreeExists(projectPath: string, branchName: string): boolean {
   try {
     const worktrees = listWorktrees(projectPath)

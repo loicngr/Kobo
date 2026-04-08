@@ -153,8 +153,12 @@ onUnmounted(() => {
         <q-badge :color="statusColor" :label="statusLabel" style="font-size: 10px;" />
         <q-space />
         <!-- Action buttons -->
-        <q-btn v-if="canStart" flat round dense icon="play_arrow" size="xs" color="green-5" @click="start" :loading="starting" />
-        <q-btn v-if="canStop" flat round dense icon="stop" size="xs" color="red-5" @click="stop" :loading="stopping" />
+        <q-btn v-if="canStart" flat round dense icon="play_arrow" size="xs" color="green-5" @click="start" :loading="starting">
+          <q-tooltip>{{ $t('tooltip.startDevServer') }}</q-tooltip>
+        </q-btn>
+        <q-btn v-if="canStop" flat round dense icon="stop" size="xs" color="red-5" @click="stop" :loading="stopping">
+          <q-tooltip>{{ $t('tooltip.stopDevServer') }}</q-tooltip>
+        </q-btn>
         <q-btn flat round dense icon="article" size="xs" color="grey-5" @click="showLogs = true">
           <q-tooltip>{{ $t('devServer.logs') }}</q-tooltip>
         </q-btn>

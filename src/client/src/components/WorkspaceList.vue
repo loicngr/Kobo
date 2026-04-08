@@ -272,7 +272,7 @@ onMounted(async () => {
                     v-if="devServerStore.getStatus(ws.id)?.status === 'running'"
                     class="dd-dot dd-dot--running"
                   />
-                  <div class="wl-item-name text-body2 text-weight-medium text-grey-3 ellipsis">{{ ws.name }}</div>
+                  <div class="wl-item-name text-body2 text-grey-3 ellipsis" :style="{ fontWeight: ws.hasUnread ? 700 : 400, opacity: ws.hasUnread ? 1 : 0.75 }">{{ ws.name }}</div>
                 </div>
                 <div class="text-caption q-mt-xs">
                   <q-icon name="warning" size="xs" color="red-5" class="q-mr-xs" />
@@ -350,7 +350,7 @@ onMounted(async () => {
                     v-if="devServerStore.getStatus(ws.id)?.status === 'running'"
                     class="dd-dot dd-dot--running"
                   />
-                  <div class="wl-item-name text-body2 text-weight-medium text-grey-3 ellipsis">{{ ws.name }}</div>
+                  <div class="wl-item-name text-body2 text-grey-3 ellipsis" :style="{ fontWeight: ws.hasUnread ? 700 : 400, opacity: ws.hasUnread ? 1 : 0.75 }">{{ ws.name }}</div>
                 </div>
                 <div class="text-caption q-mt-xs">
                   <span class="text-green-4">{{ ws.status }}</span>
@@ -427,7 +427,7 @@ onMounted(async () => {
                     v-if="devServerStore.getStatus(ws.id)?.status === 'running'"
                     class="dd-dot dd-dot--running"
                   />
-                  <div class="wl-item-name text-body2 text-weight-medium text-grey-3 ellipsis">{{ ws.name }}</div>
+                  <div class="wl-item-name text-body2 text-grey-3 ellipsis" :style="{ fontWeight: ws.hasUnread ? 700 : 400, opacity: ws.hasUnread ? 1 : 0.75 }">{{ ws.name }}</div>
                 </div>
                 <div class="wl-item-meta text-caption text-grey-8">
                   {{ timeAgo(ws.updatedAt) }}

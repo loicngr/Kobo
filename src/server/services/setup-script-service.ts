@@ -5,6 +5,7 @@ import * as wsService from './websocket-service.js'
 
 const SETUP_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes
 
+/** Environment variables passed to the setup script. */
 export interface SetupScriptEnv {
   workspaceName: string
   branchName: string
@@ -12,6 +13,7 @@ export interface SetupScriptEnv {
   projectPath: string
 }
 
+/** Execute a setup script in a worktree, streaming output via WebSocket. Resolves with the exit code. */
 export function runSetupScript(
   workspaceId: string,
   worktreePath: string,

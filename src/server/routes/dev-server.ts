@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { getDevServerLogs, getStatus, startDevServer, stopDevServer } from '../services/dev-server-service.js'
 import { getWorkspace } from '../services/workspace-service.js'
 
+/** Hono sub-router for per-workspace dev server lifecycle (start, stop, status, logs). */
 const app = new Hono()
 
 // GET /api/dev-server/:workspaceId/status

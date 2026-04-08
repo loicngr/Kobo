@@ -1,4 +1,4 @@
-import { execFile as execFileCb } from 'node:child_process'
+import { execFile as execFileCb, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFileCb)
@@ -19,9 +19,12 @@ import * as workspaceService from '../services/workspace-service.js'
 import * as worktreeService from '../services/worktree-service.js'
 import * as gitOps from '../utils/git-ops.js'
 
+/** Hono sub-router for workspace CRUD, tasks, agent lifecycle, git operations, and PR creation. */
 const app = new Hono()
 
-// GET /api/workspaces — list all workspaces
+/** Tracks workspaces currently running a setup script to prevent concurrent executions. */
+const setupScriptRunning = new Set<string>()
+
 app.get('/', (c) => {
   try {
     const workspaces = workspaceService.listWorkspaces()
@@ -51,7 +54,7 @@ app.post('/', async (c) => {
       return c.json({ error: 'Missing required fields: name, projectPath, sourceBranch, workingBranch' }, 400)
     }
 
-    // 1. Create workspace
+    // Create workspace record
     let workspace = workspaceService.createWorkspace({
       name: body.name,
       projectPath: body.projectPath,
@@ -64,7 +67,7 @@ app.post('/', async (c) => {
 
     let notionContent: notionService.NotionPageContent | null = null
 
-    // 2. If notionUrl provided, extract Notion page
+    // Extract Notion page content if a URL was provided
     if (body.notionUrl) {
       workspaceService.updateWorkspaceStatus(workspace.id, 'extracting')
 
@@ -76,7 +79,7 @@ app.post('/', async (c) => {
       }
     }
 
-    // 3. Create tasks from extracted data
+    // Create tasks from extracted Notion data
     if (notionContent) {
       let sortOrder = 0
 
@@ -129,7 +132,7 @@ app.post('/', async (c) => {
       }
     }
 
-    // 4. Create worktree
+    // Create git worktree for the working branch
     let worktreePath: string
     try {
       worktreePath = worktreeService.createWorktree(body.projectPath, body.workingBranch, body.sourceBranch)
@@ -139,17 +142,18 @@ app.post('/', async (c) => {
       return c.json({ error: `Failed to create worktree: ${message}` }, 500)
     }
 
-    // 4b. Ensure Kobo-generated files inside .ai/ are gitignored (the .ai/ dir
-    //     itself may contain project files that SHOULD be committed).
+    // Ensure Kobo-generated files inside .ai/ are gitignored (the .ai/ dir
+    // itself may contain project files that SHOULD be committed).
     try {
       const gitignorePath = path.join(worktreePath, '.gitignore')
       const existing = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, 'utf-8') : ''
       const lines = existing.split('\n').map((l: string) => l.trim())
       const toAdd: string[] = []
-      if (!lines.includes('.ai/git-conventions.md')) toAdd.push('.ai/git-conventions.md')
+      if (!lines.includes('.ai/.git-conventions.md')) toAdd.push('.ai/.git-conventions.md')
       if (!lines.includes('.ai/thoughts/')) toAdd.push('.ai/thoughts/')
       if (!lines.includes('.ai/images/')) toAdd.push('.ai/images/')
       if (!lines.includes('.ai/.setup-script.tmp')) toAdd.push('.ai/.setup-script.tmp')
+      if (!lines.includes('.mcp.json')) toAdd.push('.mcp.json')
       if (toAdd.length > 0) {
         const separator = existing.length > 0 && !existing.endsWith('\n') ? '\n' : ''
         fs.appendFileSync(gitignorePath, `${separator}${toAdd.join('\n')}\n`, 'utf-8')
@@ -158,20 +162,20 @@ app.post('/', async (c) => {
       console.error('[workspaces] Failed to update .gitignore:', err)
     }
 
-    // 4c. Write git conventions to the worktree if configured
+    // Write git conventions to the worktree if configured
     const effectiveSettings = settingsService.getEffectiveSettings(body.projectPath)
     if (effectiveSettings.gitConventions) {
       try {
         const aiDir = path.join(worktreePath, '.ai')
         fs.mkdirSync(aiDir, { recursive: true })
-        const conventionsPath = path.join(aiDir, 'git-conventions.md')
+        const conventionsPath = path.join(aiDir, '.git-conventions.md')
         fs.writeFileSync(conventionsPath, effectiveSettings.gitConventions, 'utf-8')
       } catch (err) {
-        console.error('[workspaces] Failed to write git-conventions.md:', err)
+        console.error('[workspaces] Failed to write .git-conventions.md:', err)
       }
     }
 
-    // 4d. Run setup script if configured
+    // Run setup script if configured
     let setupScriptFailed = false
     if (effectiveSettings.setupScript) {
       workspaceService.updateWorkspaceStatus(workspace.id, 'extracting')
@@ -195,7 +199,7 @@ app.post('/', async (c) => {
       }
     }
 
-    // 5. Save Notion content as markdown in worktree
+    // Save Notion content as markdown in worktree
     let notionFilePath: string | null = null
     if (notionContent && body.notionUrl) {
       try {
@@ -242,10 +246,10 @@ app.post('/', async (c) => {
 
     // Skip agent launch if setup script failed — workspace stays in 'error' status
     if (!setupScriptFailed) {
-      // 6. Update workspace status to 'brainstorming'
+      // Transition to brainstorming and build the initial agent prompt
       workspaceService.updateWorkspaceStatus(workspace.id, 'brainstorming')
 
-      // 6. Build prompt with tasks and acceptance criteria
+      // Build prompt with tasks and acceptance criteria
       const allTasks = workspaceService.listTasks(workspace.id)
       const todos = allTasks.filter((t) => !t.isAcceptanceCriterion)
       const criteria = allTasks.filter((t) => t.isAcceptanceCriterion)
@@ -279,7 +283,7 @@ app.post('/', async (c) => {
       }
 
       if (effectiveSettings.gitConventions) {
-        brainstormPrompt += `\n# Git conventions\nIMPORTANT: Before any git operation (commit, branch, rebase, merge, push), read and apply the conventions defined in \`.ai/git-conventions.md\`. They are project-specific and override any default behavior. Re-read this file if you're unsure or if context was compacted.\n`
+        brainstormPrompt += `\n# Git conventions\nIMPORTANT: Before any git operation (commit, branch, rebase, merge, push), read and apply the conventions defined in \`.ai/.git-conventions.md\`. They are project-specific and override any default behavior. Re-read this file if you're unsure or if context was compacted.\n`
       }
 
       brainstormPrompt += `\nIMPORTANT: Start by reading CLAUDE.md and/or AGENTS.md at the project root if they exist — they contain project conventions and instructions you must follow.`
@@ -647,6 +651,89 @@ app.patch('/:id', async (c) => {
   }
 })
 
+/** Open the workspace worktree in the user's configured editor. */
+app.post('/:id/open-editor', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const globalSettings = settingsService.getGlobalSettings()
+    if (!globalSettings.editorCommand) {
+      return c.json({ error: 'No editor command configured' }, 400)
+    }
+
+    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    if (!fs.existsSync(worktreePath)) {
+      return c.json({ error: `Worktree path does not exist: ${worktreePath}` }, 400)
+    }
+
+    const child = spawn(globalSettings.editorCommand, [worktreePath], {
+      detached: true,
+      stdio: 'ignore',
+    })
+    child.unref()
+
+    return c.json({ success: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+/** Re-run the project setup script in the workspace worktree. */
+app.post('/:id/run-setup-script', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    if (setupScriptRunning.has(id)) {
+      return c.json({ error: 'Setup script is already running for this workspace' }, 409)
+    }
+
+    // Stop the running agent before re-running the setup script
+    try {
+      if (agentManager.getAgentStatus(id)) {
+        agentManager.stopAgent(id)
+      }
+    } catch {
+      /* best-effort — agent may already be stopped */
+    }
+
+    const effectiveSettings = settingsService.getEffectiveSettings(workspace.projectPath)
+    if (!effectiveSettings.setupScript) {
+      return c.json({ error: 'No setup script configured' }, 400)
+    }
+
+    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    if (!fs.existsSync(worktreePath)) {
+      return c.json({ error: `Worktree path does not exist: ${worktreePath}` }, 400)
+    }
+
+    setupScriptRunning.add(id)
+    try {
+      const result = await runSetupScript(workspace.id, worktreePath, effectiveSettings.setupScript, {
+        workspaceName: workspace.name,
+        branchName: workspace.workingBranch,
+        sourceBranch: workspace.sourceBranch,
+        projectPath: workspace.projectPath,
+      })
+
+      if (result.exitCode !== 0) {
+        return c.json({ error: `Setup script failed with exit code ${result.exitCode}` }, 500)
+      }
+
+      return c.json({ success: true })
+    } finally {
+      setupScriptRunning.delete(id)
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
 // POST /api/workspaces/:id/archive — mark workspace as archived (soft-delete)
 app.post('/:id/archive', (c) => {
   try {
@@ -722,14 +809,14 @@ app.delete('/:id', async (c) => {
       }>()
       .catch(() => ({}) as { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean })
 
-    // 1. Stop agent if running
+    // Stop agent if running (best-effort)
     try {
       agentManager.stopAgent(id)
     } catch {
       // Agent may not be running — ignore
     }
 
-    // 2. Remove worktree
+    // Remove worktree
     const worktreesDir = `${workspace.projectPath}/.worktrees`
     const worktreePath = `${worktreesDir}/${workspace.workingBranch}`
     try {
@@ -739,7 +826,7 @@ app.delete('/:id', async (c) => {
       console.error(`[workspaces] Failed to remove worktree: ${message}`)
     }
 
-    // 3. Delete local branch if requested
+    // Delete local branch if requested
     if (body.deleteLocalBranch) {
       try {
         gitOps.deleteLocalBranch(workspace.projectPath, workspace.workingBranch)
@@ -749,7 +836,7 @@ app.delete('/:id', async (c) => {
       }
     }
 
-    // 4. Delete remote branch if requested
+    // Delete remote branch if requested
     if (body.deleteRemoteBranch) {
       try {
         gitOps.deleteRemoteBranch(workspace.projectPath, workspace.workingBranch)
@@ -759,7 +846,7 @@ app.delete('/:id', async (c) => {
       }
     }
 
-    // 5. Delete workspace from DB
+    // Delete workspace from DB (cascades to tasks, sessions, events)
     workspaceService.deleteWorkspace(id)
 
     return new Response(null, { status: 204 })
@@ -931,7 +1018,7 @@ app.post('/:id/open-pr', async (c) => {
 
     const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
 
-    // 1. Check branch is on remote
+    // Verify branch exists on remote
     let lsRemoteOut = ''
     try {
       const { stdout } = await execFileAsync('git', ['ls-remote', '--heads', 'origin', workspace.workingBranch], {
@@ -945,7 +1032,7 @@ app.post('/:id/open-pr', async (c) => {
       return c.json({ error: 'Branch is not on remote', code: 'branch_not_pushed' }, 409)
     }
 
-    // 2. Check all local commits are pushed
+    // Ensure all local commits are pushed
     try {
       const { stdout } = await execFileAsync('git', ['rev-list', '@{u}..HEAD', '--count'], { cwd: worktreePath })
       const countStr = stdout.trim()
@@ -963,7 +1050,7 @@ app.post('/:id/open-pr', async (c) => {
       return c.json({ error: `Failed to check branch state: ${message}` }, 500)
     }
 
-    // 3. Create PR via gh
+    // Create PR via GitHub CLI
     let ghOutput: string
     try {
       const placeholderBody = 'Automated PR — description will be updated by the agent.'
@@ -990,7 +1077,7 @@ app.post('/:id/open-pr', async (c) => {
       return c.json({ error: `gh pr create failed: ${message} ${stderr}`.trim() }, 500)
     }
 
-    // 4. Parse PR URL and number
+    // Parse PR URL and number from gh output
     const urlMatch = ghOutput.match(/https:\/\/github\.com\/[^\s]+\/pull\/(\d+)/)
     if (!urlMatch) {
       return c.json({ error: 'Could not parse PR URL from gh output' }, 500)
@@ -1000,13 +1087,13 @@ app.post('/:id/open-pr', async (c) => {
 
     // ── From here on, PR exists. No more 5xx responses. ──
 
-    // 5. Resolve the template; skip message steps if empty
+    // Resolve the PR prompt template; skip message steps if empty
     const effective = settingsService.getEffectiveSettings(workspace.projectPath)
     if (!effective.prPromptTemplate) {
       return c.json({ ok: true, prNumber, prUrl, messageSent: false })
     }
 
-    // 6. Build context and render the template
+    // Build context and render the PR prompt template
     const commits = gitOps.getCommitsBetween(worktreePath, workspace.sourceBranch, workspace.workingBranch)
     const diffStats = gitOps.getDiffStatsBetween(worktreePath, workspace.sourceBranch, workspace.workingBranch)
     const tasks = workspaceService.listTasks(workspace.id)
@@ -1020,12 +1107,12 @@ app.post('/:id/open-pr', async (c) => {
       tasks,
     })
 
-    // 7. Emit user:message into the chat feed
+    // Emit user:message into the chat feed
     const session = workspaceService.getLatestSession(workspace.id)
     const sessionId = session?.claudeSessionId ?? undefined
     wsService.emit(workspace.id, 'user:message', { content: rendered, sender: 'user' }, sessionId)
 
-    // 8. Send to the running agent, or resume the agent with the PR prompt
+    // Send to the running agent, or resume the agent with the PR prompt
     let messageSent = false
     try {
       agentManager.sendMessage(workspace.id, rendered)
@@ -1051,6 +1138,25 @@ app.post('/:id/open-pr', async (c) => {
     }
 
     return c.json({ ok: true, prNumber, prUrl, messageSent })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+/** POST /api/workspaces/:id/mark-read — mark workspace as read (clear unread indicator). */
+app.post('/:id/mark-read', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+
+    workspaceService.markWorkspaceRead(id)
+    wsService.emitEphemeral(id, 'workspace:unread', { hasUnread: false })
+
+    return c.json({ success: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)

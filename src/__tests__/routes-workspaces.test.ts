@@ -24,6 +24,8 @@ vi.mock('../server/services/workspace-service.js', () => ({
   archiveWorkspace: vi.fn(),
   unarchiveWorkspace: vi.fn(),
   listArchivedWorkspaces: vi.fn(),
+  markWorkspaceRead: vi.fn(),
+  markWorkspaceUnread: vi.fn(),
 }))
 
 vi.mock('../server/services/worktree-service.js', () => ({
@@ -160,6 +162,7 @@ const fakeWorkspace = {
   model: 'claude-opus-4-6',
   permissionMode: 'auto-accept' as const,
   devServerStatus: 'stopped',
+  hasUnread: false,
   archivedAt: null,
   createdAt: '2026-01-01T00:00:00.000Z',
   updatedAt: '2026-01-01T00:00:00.000Z',
@@ -994,7 +997,7 @@ describe('git conventions file creation on workspace create', () => {
     vi.mocked(fs.writeFileSync).mockClear()
   })
 
-  it('writes .ai/git-conventions.md when gitConventions is non-empty', async () => {
+  it('writes .ai/.git-conventions.md when gitConventions is non-empty', async () => {
     vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
       model: 'auto',
       dangerouslySkipPermissions: true,
@@ -1018,7 +1021,7 @@ describe('git conventions file creation on workspace create', () => {
 
     const writeCall = vi
       .mocked(fs.writeFileSync)
-      .mock.calls.find(([p]) => typeof p === 'string' && p.includes('git-conventions.md'))
+      .mock.calls.find(([p]) => typeof p === 'string' && p.includes('.git-conventions.md'))
     expect(writeCall).toBeDefined()
     expect(writeCall?.[1]).toBe('# My conventions\n- Rule 1')
   })
@@ -1047,7 +1050,7 @@ describe('git conventions file creation on workspace create', () => {
 
     const writeCall = vi
       .mocked(fs.writeFileSync)
-      .mock.calls.find(([p]) => typeof p === 'string' && p.includes('git-conventions.md'))
+      .mock.calls.find(([p]) => typeof p === 'string' && p.includes('.git-conventions.md'))
     expect(writeCall).toBeUndefined()
   })
 
@@ -1077,7 +1080,7 @@ describe('git conventions file creation on workspace create', () => {
     expect(startCall).toBeDefined()
     const prompt = startCall?.[2] as string
     expect(prompt).toContain('Git conventions')
-    expect(prompt).toContain('.ai/git-conventions.md')
+    expect(prompt).toContain('.ai/.git-conventions.md')
   })
 
   it('does NOT include the git conventions section when empty', async () => {
@@ -1104,7 +1107,7 @@ describe('git conventions file creation on workspace create', () => {
 
     const startCall = vi.mocked(agentManager.startAgent).mock.calls[0]
     const prompt = startCall?.[2] as string
-    expect(prompt).not.toContain('.ai/git-conventions.md')
+    expect(prompt).not.toContain('.ai/.git-conventions.md')
   })
 })
 
@@ -1546,5 +1549,131 @@ describe('GET /api/workspaces/:id/git-stats', () => {
 
     const res = await app.request('/api/workspaces/unknown/git-stats')
     expect(res.status).toBe(404)
+  })
+})
+
+describe('POST /api/workspaces/:id/run-setup-script', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('runs setup script and returns success when exit code is 0', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
+      model: 'auto',
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      gitConventions: '',
+      sourceBranch: 'main',
+      devServer: null,
+      setupScript: 'echo "hello"',
+    })
+    vi.mocked(fs.existsSync).mockReturnValue(true)
+    vi.mocked(setupScriptService.runSetupScript).mockResolvedValue({ exitCode: 0 })
+
+    const res = await app.request('/api/workspaces/ws-1/run-setup-script', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data.success).toBe(true)
+    expect(setupScriptService.runSetupScript).toHaveBeenCalledWith(
+      'ws-1',
+      '/tmp/project/.worktrees/feature/test',
+      'echo "hello"',
+      {
+        workspaceName: 'Test Workspace',
+        branchName: 'feature/test',
+        sourceBranch: 'main',
+        projectPath: '/tmp/project',
+      },
+    )
+  })
+
+  it('returns 500 when setup script fails with non-zero exit code', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
+      model: 'auto',
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      gitConventions: '',
+      sourceBranch: 'main',
+      devServer: null,
+      setupScript: 'exit 1',
+    })
+    vi.mocked(fs.existsSync).mockReturnValue(true)
+    vi.mocked(setupScriptService.runSetupScript).mockResolvedValue({ exitCode: 1 })
+
+    const res = await app.request('/api/workspaces/ws-1/run-setup-script', { method: 'POST' })
+
+    expect(res.status).toBe(500)
+    const data = await res.json()
+    expect(data.error).toBe('Setup script failed with exit code 1')
+  })
+
+  it('returns 400 when no setup script is configured', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
+      model: 'auto',
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      gitConventions: '',
+      sourceBranch: 'main',
+      devServer: null,
+      setupScript: '',
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/run-setup-script', { method: 'POST' })
+
+    expect(res.status).toBe(400)
+    const data = await res.json()
+    expect(data.error).toBe('No setup script configured')
+  })
+
+  it('returns 404 when workspace not found', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
+
+    const res = await app.request('/api/workspaces/unknown/run-setup-script', { method: 'POST' })
+
+    expect(res.status).toBe(404)
+  })
+
+  it('returns 400 when worktree path does not exist', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
+      model: 'auto',
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      gitConventions: '',
+      sourceBranch: 'main',
+      devServer: null,
+      setupScript: 'echo "hello"',
+    })
+    vi.mocked(fs.existsSync).mockReturnValue(false)
+
+    const res = await app.request('/api/workspaces/ws-1/run-setup-script', { method: 'POST' })
+
+    expect(res.status).toBe(400)
+    const data = await res.json()
+    expect(data.error).toContain('Worktree path does not exist')
+  })
+})
+
+describe('POST /api/workspaces/:id/mark-read', () => {
+  it('returns success when workspace exists', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+
+    const res = await app.request('/api/workspaces/ws-1/mark-read', { method: 'POST' })
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data.success).toBe(true)
+    expect(workspaceService.markWorkspaceRead).toHaveBeenCalledWith('ws-1')
+    expect(wsService.emitEphemeral).toHaveBeenCalledWith('ws-1', 'workspace:unread', { hasUnread: false })
+  })
+
+  it('returns 404 for unknown workspace', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+
+    const res = await app.request('/api/workspaces/unknown-id/mark-read', { method: 'POST' })
+    expect(res.status).toBe(404)
+    const data = await res.json()
+    expect(data.error).toContain('not found')
   })
 })

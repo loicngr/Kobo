@@ -22,6 +22,7 @@ interface GlobalSettings {
   dangerouslySkipPermissions: boolean
   prPromptTemplate: string
   gitConventions: string
+  editorCommand: string
 }
 
 function toBase64Url(str: string): string {
@@ -37,6 +38,7 @@ export const useSettingsStore = defineStore('settings', {
       dangerouslySkipPermissions: true,
       prPromptTemplate: '',
       gitConventions: '',
+      editorCommand: '',
     } as GlobalSettings,
     projects: [] as ProjectSettings[],
     loading: false,

@@ -3,6 +3,10 @@ import { ensureKoboHome, getDbPath } from '../utils/paths.js'
 
 let instance: Database.Database | null = null
 
+/**
+ * Return the singleton SQLite database connection, creating it on first call.
+ * Configures WAL mode, busy timeout, and foreign keys.
+ */
 export function getDb(dbPath?: string): Database.Database {
   if (instance) return instance
 
@@ -21,6 +25,7 @@ export function getDb(dbPath?: string): Database.Database {
   return instance
 }
 
+/** Close the singleton database connection and release resources. */
 export function closeDb(): void {
   if (instance) {
     instance.close()

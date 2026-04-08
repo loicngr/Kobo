@@ -14,11 +14,12 @@ import {
 } from '../utils/paths.js'
 import { registerProcess, unregisterProcess } from '../utils/process-tracker.js'
 import { getEffectiveSettings } from './settings-service.js'
-import { emit } from './websocket-service.js'
-import { getWorkspace as getWs, listTasks, updateWorkspaceStatus } from './workspace-service.js'
+import { emit, emitEphemeral } from './websocket-service.js'
+import { getWorkspace as getWs, listTasks, markWorkspaceUnread, updateWorkspaceStatus } from './workspace-service.js'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
+/** Represents a running Claude Code CLI process for a workspace. */
 export interface AgentInstance {
   workspaceId: string
   process: ChildProcess
@@ -118,6 +119,13 @@ function runWatchdog(): void {
       // Transition may not be valid — ignore
     }
 
+    try {
+      markWorkspaceUnread(workspaceId)
+      emitEphemeral(workspaceId, 'workspace:unread', { hasUnread: true })
+    } catch {
+      // best-effort
+    }
+
     emit(
       workspaceId,
       'agent:status',
@@ -144,6 +152,7 @@ export function stopWatchdog(): void {
 
 // ── Start agent ────────────────────────────────────────────────────────────────
 
+/** Spawn a Claude Code CLI process for a workspace and wire up stdout/stderr/exit handling. */
 export function startAgent(
   workspaceId: string,
   workingDir: string,
@@ -393,7 +402,6 @@ export function startAgent(
 
   // ── stderr — detect quota / rate limit errors ──
   proc.stderr?.on('data', (data: Buffer) => {
-    // I1: Don't process quota errors if the agent is already stopping or gone
     const currentAgent = agents.get(workspaceId)
     if (!currentAgent || currentAgent.status === 'stopping') return
 
@@ -417,7 +425,6 @@ export function startAgent(
       // File may not exist (spawn failed) — ignore
     }
 
-    // I3: Close readline interface to release the stream reference
     agent.rl.close()
 
     unregisterProcess(workspaceId)
@@ -432,7 +439,7 @@ export function startAgent(
 
     // Clean up retry state and inactivity timer
     retryCounts.delete(workspaceId)
-    // C2: Clear the kill timer if it's still pending (process exited naturally before SIGKILL)
+    // Clear the kill timer if it's still pending (process exited naturally before SIGKILL)
     const pendingKillTimer = killTimers.get(workspaceId)
     if (pendingKillTimer) {
       clearTimeout(pendingKillTimer)
@@ -455,7 +462,7 @@ export function startAgent(
       return
     }
 
-    // C1: Also clear backoff timers on non-stopping exit
+    // Also clear backoff timers on non-stopping exit
     const pendingBackoff = backoffTimers.get(workspaceId)
     if (pendingBackoff) {
       clearTimeout(pendingBackoff)
@@ -468,12 +475,24 @@ export function startAgent(
       } catch (err) {
         console.error('[agent] Failed to update workspace status on exit:', err)
       }
+      try {
+        markWorkspaceUnread(workspaceId)
+        emitEphemeral(workspaceId, 'workspace:unread', { hasUnread: true })
+      } catch {
+        // best-effort
+      }
       emit(workspaceId, 'agent:status', { status: 'error', exitCode: code }, agent.claudeSessionId)
     } else {
       try {
         updateWorkspaceStatus(workspaceId, 'completed')
       } catch (err) {
         console.error('[agent] Failed to update workspace status on exit:', err)
+      }
+      try {
+        markWorkspaceUnread(workspaceId)
+        emitEphemeral(workspaceId, 'workspace:unread', { hasUnread: true })
+      } catch {
+        // best-effort
       }
       emit(workspaceId, 'agent:status', { status: 'completed' }, agent.claudeSessionId)
     }
@@ -490,6 +509,7 @@ export function startAgent(
 
 // ── Stop agent ─────────────────────────────────────────────────────────────────
 
+/** Gracefully stop an agent (SIGTERM, then SIGKILL after 5s). */
 export function stopAgent(workspaceId: string): void {
   const agent = agents.get(workspaceId)
   if (!agent) {
@@ -510,7 +530,6 @@ export function stopAgent(workspaceId: string): void {
     backoffTimers.delete(workspaceId)
   }
 
-  // I3: Close readline interface now that we're stopping
   try {
     agent.rl.close()
   } catch {
@@ -526,7 +545,7 @@ export function stopAgent(workspaceId: string): void {
 
   // After 5s timeout, send SIGKILL if still running
   const killTimer = setTimeout(() => {
-    // C2: If a new agent has been started for this workspace in the meantime,
+    // If a new agent has been started for this workspace in the meantime,
     // don't kill the old process — it's handled by the new lifecycle.
     const currentAgent = agents.get(workspaceId)
     if (currentAgent && currentAgent !== agent) {
@@ -551,6 +570,7 @@ export function stopAgent(workspaceId: string): void {
 
 // ── Send message to agent stdin ────────────────────────────────────────────────
 
+/** Write a user message to the running agent's stdin. */
 export function sendMessage(workspaceId: string, content: string): void {
   const agent = agents.get(workspaceId)
   if (!agent) {
@@ -566,15 +586,18 @@ export function sendMessage(workspaceId: string, content: string): void {
 
 // ── Status queries ─────────────────────────────────────────────────────────────
 
+/** Get the in-memory status of the agent for a workspace, or null if not running. */
 export function getAgentStatus(workspaceId: string): 'running' | 'stopping' | null {
   const agent = agents.get(workspaceId)
   return agent?.status ?? null
 }
 
+/** Return the number of currently running agents. */
 export function getRunningCount(): number {
   return agents.size
 }
 
+/** Return the cached list of slash commands discovered from the last agent init. */
 export function getAvailableSkills(): string[] {
   return availableSkills
 }

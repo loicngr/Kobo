@@ -6,6 +6,7 @@ import GitPanel from 'src/components/GitPanel.vue'
 import NotionPanel from 'src/components/NotionPanel.vue'
 import StatsPanel from 'src/components/StatsPanel.vue'
 import SubagentsPanel from 'src/components/SubagentsPanel.vue'
+import ToolsPanel from 'src/components/ToolsPanel.vue'
 import WorkspaceList from 'src/components/WorkspaceList.vue'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { ref } from 'vue'
@@ -15,7 +16,6 @@ const rightTab = ref('git')
 const leftDrawerOpen = ref(true)
 const rightDrawerOpen = ref(true)
 
-// Resizable left drawer — persist width in localStorage
 const DRAWER_WIDTH_KEY = 'at-left-drawer-width'
 const savedWidth = parseInt(localStorage.getItem(DRAWER_WIDTH_KEY) ?? '260', 10)
 const leftDrawerWidth = ref(Math.min(500, Math.max(200, savedWidth)))
@@ -50,24 +50,18 @@ const store = useWorkspaceStore()
 
 <template>
   <q-layout view="lHh LpR lFf">
-    <!-- Left Sidebar — Workspace List (260px) -->
     <q-drawer
       v-model="leftDrawerOpen"
       :width="leftDrawerWidth"
       :breakpoint="0"
       persistent
       bordered
-      class="left-sidebar"
+      class="bg-dark"
     >
       <WorkspaceList />
-      <!-- Resize handle -->
-      <div
-        class="resize-handle"
-        @mousedown="startResize"
-      />
+      <div class="resize-handle" @mousedown="startResize" />
     </q-drawer>
 
-    <!-- Right Sidebar — Tabbed Context Panel (300px) -->
     <q-drawer
       v-model="rightDrawerOpen"
       side="right"
@@ -75,114 +69,68 @@ const store = useWorkspaceStore()
       :breakpoint="0"
       persistent
       bordered
-      class="right-sidebar"
+      class="bg-dark"
     >
-      <div class="drawer-content column full-height">
-        <q-tabs
-          v-model="rightTab"
-          dense
-          dark
-          active-color="indigo-4"
-          indicator-color="indigo-4"
-          narrow-indicator
-          align="justify"
-          class="right-tabs"
-        >
-          <q-tab name="git" icon="commit" />
-          <q-tab name="server" icon="dns" />
-          <q-tab name="tasks" icon="checklist" />
-          <q-tab name="subagents" icon="smart_toy" />
-          <q-tab name="stats" icon="bar_chart" />
-        </q-tabs>
+      <q-tabs
+        v-model="rightTab"
+        dense
+        dark
+        active-color="indigo-4"
+        indicator-color="indigo-4"
+        narrow-indicator
+        shrink
+      >
+        <q-tab name="git" icon="commit" />
+        <q-tab name="server" icon="dns" />
+        <q-tab name="tasks" icon="checklist" />
+        <q-tab name="subagents" icon="smart_toy" />
+        <q-tab name="tools" icon="build" />
+        <q-tab name="stats" icon="bar_chart" />
+      </q-tabs>
 
-        <q-separator dark />
+      <q-separator dark />
 
-        <q-tab-panels v-model="rightTab" animated class="col right-tab-panels">
-          <q-tab-panel name="git" class="q-pa-none">
-            <GitPanel :workspace="store.selectedWorkspace" />
-          </q-tab-panel>
+      <q-tab-panels v-model="rightTab" animated keep-alive>
+        <q-tab-panel name="git" class="q-pa-none">
+          <GitPanel :workspace="store.selectedWorkspace" />
+        </q-tab-panel>
 
-          <q-tab-panel name="server" class="q-pa-none">
-            <DevServerPanel :workspace="store.selectedWorkspace" />
-          </q-tab-panel>
+        <q-tab-panel name="server" class="q-pa-none">
+          <DevServerPanel :workspace="store.selectedWorkspace" />
+        </q-tab-panel>
 
-          <q-tab-panel name="tasks" class="q-pa-none">
-            <NotionPanel :workspace="store.selectedWorkspace" :tasks="store.tasks" />
-            <q-separator dark />
-            <AcceptancePanel :tasks="store.acceptanceCriteria" />
-            <q-separator dark />
-            <AgentTodosPanel />
-          </q-tab-panel>
+        <q-tab-panel name="tasks" class="q-pa-none">
+          <NotionPanel :workspace="store.selectedWorkspace" :tasks="store.tasks" />
+          <q-separator dark />
+          <AcceptancePanel :tasks="store.acceptanceCriteria" />
+          <q-separator dark />
+          <AgentTodosPanel />
+        </q-tab-panel>
 
-          <q-tab-panel name="subagents" class="q-pa-none">
-            <SubagentsPanel />
-          </q-tab-panel>
+        <q-tab-panel name="subagents" class="q-pa-none">
+          <SubagentsPanel />
+        </q-tab-panel>
 
-          <q-tab-panel name="stats" class="q-pa-none">
-            <StatsPanel :workspace="store.selectedWorkspace" />
-          </q-tab-panel>
-        </q-tab-panels>
-      </div>
+        <q-tab-panel name="tools" class="q-pa-none">
+          <ToolsPanel :workspace="store.selectedWorkspace" />
+        </q-tab-panel>
+
+        <q-tab-panel name="stats" class="q-pa-none">
+          <StatsPanel :workspace="store.selectedWorkspace" />
+        </q-tab-panel>
+      </q-tab-panels>
     </q-drawer>
 
-    <!-- Main Content Area -->
-    <q-page-container class="main-content">
+    <q-page-container class="bg-dark">
       <router-view />
     </q-page-container>
   </q-layout>
 </template>
 
 <style lang="scss" scoped>
-.left-sidebar,
-.right-sidebar {
+.bg-dark {
   background-color: #16162a !important;
   border-color: #2a2a4a !important;
-  overflow-x: hidden !important;
-}
-
-:deep(.q-drawer__content) {
-  overflow-x: hidden !important;
-}
-
-.drawer-content {
-  overflow-y: auto;
-  overflow-x: hidden;
-}
-
-.drawer-header {
-  min-height: 48px;
-}
-
-.letter-spacing-wide {
-  letter-spacing: 0.05em;
-}
-
-.right-tabs {
-  flex-shrink: 0;
-  background-color: #16162a;
-
-  :deep(.q-tabs__content) {
-    overflow: hidden !important;
-  }
-
-  :deep(.q-tab) {
-    min-width: 0;
-    padding: 0 8px;
-  }
-}
-
-.right-tab-panels {
-  background: transparent !important;
-  overflow-y: auto;
-  overflow-x: hidden;
-}
-
-:deep(.q-tab-panel) {
-  padding: 0;
-}
-
-.main-content {
-  background-color: #1a1a2e;
 }
 
 .resize-handle {

@@ -29,9 +29,8 @@ import { getLatestSession, getWorkspace, updateWorkspaceStatus } from './service
 import { getClientSpaPath, getKoboHome, getPackageVersion } from './utils/paths.js'
 import { initProcessCleanup, killAll as killAllTrackedProcesses } from './utils/process-tracker.js'
 
-// 0. Runtime prerequisite check — warn if claude CLI is missing. Don't block
-// startup: the user may still want to configure settings or browse workspaces
-// before installing Claude Code.
+// Runtime prerequisite check — warn if the claude CLI is missing. Don't block
+// startup: the user may still want to configure settings or browse workspaces.
 {
   const check = spawnSync('claude', ['--version'], { stdio: 'ignore' })
   if (check.error && (check.error as NodeJS.ErrnoException).code === 'ENOENT') {
@@ -43,22 +42,22 @@ import { initProcessCleanup, killAll as killAllTrackedProcesses } from './utils/
 
 console.log(`[kobo] Kōbō home: ${getKoboHome()}`)
 
-// 1. Initialize DB + run migrations
+// Initialize DB + run migrations
 const db = getDb()
 runMigrations(db)
 
-// 2. Initialize process cleanup, agent watchdog, and PR watcher
+// Initialize process cleanup, agent watchdog, and PR watcher
 initProcessCleanup()
 startWatchdog()
 startPrWatcher()
 
-// 3. Create Hono app
+// Create Hono app
 const app = new Hono()
 
 // Health check (root / is handled by the SPA catch-all below)
 app.get('/api/health', (c) => c.json({ status: 'ok', version: getPackageVersion() }))
 
-// 4. Mount route sub-routers
+// Mount route sub-routers
 app.route('/api/workspaces', workspacesRouter)
 app.route('/api/workspaces', imagesRouter)
 app.route('/api/notion', notionRouter)
@@ -71,7 +70,7 @@ app.get('/api/skills', (c) => c.json(getAvailableSkills()))
 
 const PORT = parseInt(process.env.SERVER_PORT || process.env.PORT || '3000', 10)
 
-// 9. Serve static files from the built SPA if present (production mode).
+// Serve static files from the built SPA if present (production mode).
 // The path is resolved relative to the package install directory, so this
 // works both in dev (tsx running from src/) and when installed via npm / npx
 // (node running from dist/).
@@ -117,7 +116,7 @@ if (clientDistPath) {
   })
 }
 
-// 5. Create HTTP server via @hono/node-server
+// Create HTTP server via @hono/node-server
 const server = serve(
   {
     fetch: app.fetch,
@@ -129,15 +128,15 @@ const server = serve(
   },
 )
 
-// 6. Create WebSocketServer attached to the HTTP server
+// Create WebSocketServer attached to the HTTP server
 const wss = new WebSocketServer({ noServer: true })
 
-// 7. Wire WebSocket connections to websocket-service.handleConnection()
+// Wire WebSocket connections to websocket-service.handleConnection()
 wss.on('connection', (ws) => {
   handleConnection(ws)
 })
 
-// 8. Wire websocket-service message handler to agent-manager
+// Wire websocket-service message handler to agent-manager
 setMessageHandler((type, payload) => {
   const p = payload as { workspaceId?: string; content?: string; prompt?: string } | null
 
@@ -221,7 +220,7 @@ server.on('upgrade', (request, socket, head) => {
   }
 })
 
-// 9. Graceful shutdown handler
+// Graceful shutdown handler
 let isShuttingDown = false
 
 function gracefulShutdown(signal: string): void {
@@ -230,7 +229,7 @@ function gracefulShutdown(signal: string): void {
 
   console.log(`\n[kobo] Received ${signal}, shutting down gracefully…`)
 
-  // 1. Stop accepting new connections
+  // Stop accepting new connections
   wss.close(() => {
     console.log('[kobo] WebSocket server closed')
   })
@@ -239,7 +238,7 @@ function gracefulShutdown(signal: string): void {
     console.log('[kobo] HTTP server closed')
   })
 
-  // 2. Stop background services
+  // Stop background services
   try {
     stopWatchdog()
   } catch {
@@ -252,7 +251,7 @@ function gracefulShutdown(signal: string): void {
     // Best-effort
   }
 
-  // 3. Kill all tracked child processes (agents, dev servers)
+  // Kill all tracked child processes (agents, dev servers)
   try {
     killAllTrackedProcesses()
     console.log('[kobo] Tracked processes killed')
@@ -260,7 +259,7 @@ function gracefulShutdown(signal: string): void {
     // Best-effort
   }
 
-  // 4. Close database
+  // Close database
   try {
     closeDb()
     console.log('[kobo] Database closed')
@@ -268,7 +267,7 @@ function gracefulShutdown(signal: string): void {
     // Best-effort
   }
 
-  // 4. Give a short grace period for in-flight requests, then exit
+  // Give a short grace period for in-flight requests, then exit
   setTimeout(() => {
     console.log('[kobo] Shutdown complete')
     process.exit(0)

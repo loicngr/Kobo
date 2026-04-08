@@ -1,13 +1,14 @@
-// src/server/services/image-service.ts
 import fs from 'node:fs'
 import path from 'node:path'
 import { nanoid } from 'nanoid'
 
+/** Result of saving an image to a worktree. */
 export interface SavedImage {
   uid: string
   relativePath: string
 }
 
+/** An entry in the per-worktree image index (`.ai/images/index.json`). */
 export interface ImageIndexEntry {
   uid: string
   originalName: string
@@ -51,6 +52,7 @@ function writeIndex(imagesDir: string, entries: ImageIndexEntry[]): void {
   fs.writeFileSync(path.join(imagesDir, INDEX_FILE), JSON.stringify(entries, null, 2))
 }
 
+/** Save an image buffer to `.ai/images/` and update the index. Returns the UID and relative path. */
 export async function saveImage(worktreePath: string, fileBuffer: Buffer, originalName: string): Promise<SavedImage> {
   const ext = path.extname(originalName).toLowerCase().replace('.', '')
   if (!ext) {
@@ -79,6 +81,7 @@ export async function saveImage(worktreePath: string, fileBuffer: Buffer, origin
   return { uid, relativePath: `${IMAGES_DIR}/${filename}` }
 }
 
+/** Delete an image by UID from disk and the index. */
 export async function deleteImage(worktreePath: string, uid: string): Promise<void> {
   const imagesDir = path.join(worktreePath, IMAGES_DIR)
 

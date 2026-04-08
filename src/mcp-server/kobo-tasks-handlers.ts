@@ -3,9 +3,13 @@ import path from 'node:path'
 import type Database from 'better-sqlite3'
 import { nanoid } from 'nanoid'
 
+/** Allowed task status values. */
 export const VALID_TASK_STATUSES = ['pending', 'in_progress', 'done'] as const
+
+/** Union type of valid task statuses. */
 export type TaskStatus = (typeof VALID_TASK_STATUSES)[number]
 
+/** Public-facing representation of a task exposed via MCP tools. */
 export interface TaskDto {
   id: string
   title: string
@@ -13,11 +17,13 @@ export interface TaskDto {
   is_acceptance_criterion: boolean
 }
 
+/** Result returned when a task is marked as done. */
 export interface MarkDoneResult {
   success: boolean
   task: TaskDto
 }
 
+/** Lightweight dev-server status returned by the MCP tool. */
 export interface DevServerStatusDto {
   workspaceId: string
   status: string
@@ -39,6 +45,7 @@ function rowToDto(row: TaskRow): TaskDto {
   }
 }
 
+/** Return all tasks for a workspace, ordered by sort_order. */
 export function listTasksHandler(db: Database.Database, workspaceId: string): TaskDto[] {
   const rows = db
     .prepare(
@@ -48,6 +55,7 @@ export function listTasksHandler(db: Database.Database, workspaceId: string): Ta
   return rows.map(rowToDto)
 }
 
+/** Set a task's status to "done" and return the updated task. */
 export function markTaskDoneHandler(db: Database.Database, workspaceId: string, taskId: string): MarkDoneResult {
   const now = new Date().toISOString()
   const result = db
@@ -64,6 +72,7 @@ export function markTaskDoneHandler(db: Database.Database, workspaceId: string, 
   return { success: true, task: rowToDto(row) }
 }
 
+/** Create a new task appended at the end of the workspace's task list. */
 export function createTaskHandler(
   db: Database.Database,
   workspaceId: string,
@@ -97,6 +106,7 @@ export function createTaskHandler(
   return rowToDto(row)
 }
 
+/** Update one or more fields of an existing task (title, status, or acceptance criterion flag). */
 export function updateTaskHandler(
   db: Database.Database,
   workspaceId: string,
@@ -147,6 +157,7 @@ export function updateTaskHandler(
   return rowToDto(row)
 }
 
+/** Permanently delete a task from a workspace. */
 export function deleteTaskHandler(
   db: Database.Database,
   workspaceId: string,
@@ -159,6 +170,7 @@ export function deleteTaskHandler(
   return { success: true, task_id: taskId }
 }
 
+/** Read the dev-server status for a workspace directly from the database. */
 export function getDevServerStatusHandler(db: Database.Database, workspaceId: string): DevServerStatusDto {
   const row = db.prepare('SELECT dev_server_status FROM workspaces WHERE id = ?').get(workspaceId) as
     | { dev_server_status: string }
@@ -169,6 +181,7 @@ export function getDevServerStatusHandler(db: Database.Database, workspaceId: st
   return { workspaceId, status: row.dev_server_status }
 }
 
+/** Read global and per-project settings from the JSON file on disk. */
 export function getSettingsHandler(settingsPath: string | undefined, projectPath?: string): Record<string, unknown> {
   // Shape is determined solely by whether projectPath was provided:
   //  - with projectPath → { global, project }
@@ -195,8 +208,7 @@ export function getSettingsHandler(settingsPath: string | undefined, projectPath
   return { global, projects }
 }
 
-// ── Workspace info ─────────────────────────────────────────────────────────────
-
+/** Full metadata about a workspace, including derived worktree path. */
 export interface WorkspaceInfoDto {
   id: string
   name: string
@@ -209,6 +221,7 @@ export interface WorkspaceInfoDto {
   notionUrl: string | null
   notionPageId: string | null
   devServerStatus: string
+  hasUnread: boolean
   createdAt: string
   updatedAt: string
 }
@@ -224,14 +237,16 @@ interface WorkspaceRow {
   notion_page_id: string | null
   model: string
   dev_server_status: string
+  has_unread: number
   created_at: string
   updated_at: string
 }
 
+/** Fetch workspace metadata from the database, computing the worktree path from project_path and working_branch. */
 export function getWorkspaceInfoHandler(db: Database.Database, workspaceId: string): WorkspaceInfoDto {
   const row = db
     .prepare(
-      'SELECT id, name, project_path, source_branch, working_branch, status, notion_url, notion_page_id, model, dev_server_status, created_at, updated_at FROM workspaces WHERE id = ?',
+      'SELECT id, name, project_path, source_branch, working_branch, status, notion_url, notion_page_id, model, dev_server_status, has_unread, created_at, updated_at FROM workspaces WHERE id = ?',
     )
     .get(workspaceId) as WorkspaceRow | undefined
 
@@ -251,13 +266,13 @@ export function getWorkspaceInfoHandler(db: Database.Database, workspaceId: stri
     notionUrl: row.notion_url,
     notionPageId: row.notion_page_id,
     devServerStatus: row.dev_server_status,
+    hasUnread: row.has_unread === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
 }
 
-// ── Workspace images (read from .ai/images/index.json in worktree) ─────────────
-
+/** Metadata for an image uploaded to a workspace's `.ai/images/` directory. */
 export interface WorkspaceImageDto {
   uid: string
   originalName: string
@@ -265,6 +280,7 @@ export interface WorkspaceImageDto {
   createdAt: string
 }
 
+/** List images registered in the worktree's `.ai/images/index.json`, resolving each entry to its file path. */
 export function listWorkspaceImagesHandler(worktreePath: string): WorkspaceImageDto[] {
   const imagesDir = path.join(worktreePath, '.ai', 'images')
   const indexPath = path.join(imagesDir, 'index.json')

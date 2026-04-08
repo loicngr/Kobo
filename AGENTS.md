@@ -200,7 +200,7 @@ The frontend uses `vue-i18n` v10 with 5 supported locales: English (`en`), Frenc
 
 ### Commit rules (mirrors `DEFAULT_GIT_CONVENTIONS` in `src/server/services/settings-service.ts`)
 
-These rules are the source of truth and are also written to `.ai/git-conventions.md` inside every workspace that the agent creates. Follow them when committing on this repository too.
+These rules are the source of truth and are also written to `.ai/.git-conventions.md` inside every workspace that the agent creates. Follow them when committing on this repository too.
 
 **Commits**
 - Use Conventional Commits: `type(scope): subject`

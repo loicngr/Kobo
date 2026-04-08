@@ -208,6 +208,7 @@ function sendMessage() {
   const composedText = imageTags ? `${text} ${imageTags}`.trim() : text
 
   wsStore.sendChatMessage(props.workspaceId, composedText)
+  store.markRead(props.workspaceId)
 
   store.addActivityItem(props.workspaceId, {
     id: `user-${Date.now()}`,
@@ -308,7 +309,9 @@ function onKeydown(event: KeyboardEvent) {
           icon="close"
           class="q-ml-xs image-tag-close"
           @click="removeImage(img.tempId)"
-        />
+        >
+          <q-tooltip>{{ $t('tooltip.removeImage') }}</q-tooltip>
+        </q-btn>
       </div>
     </div>
 
@@ -372,7 +375,9 @@ function onKeydown(event: KeyboardEvent) {
         color="primary"
         :disable="isDisabled || (!message.trim() && pendingImages.length === 0) || hasUploading"
         @click="sendMessage"
-      />
+      >
+        <q-tooltip>{{ $t('tooltip.sendMessage') }}</q-tooltip>
+      </q-btn>
     </div>
     <div class="chat-hint text-caption text-grey-8">
       <kbd>Enter</kbd> {{ $t('common.send') }} <span class="q-mx-xs">&middot;</span> <kbd>Shift+Enter</kbd> {{ $t('common.newLine') }} <span class="q-mx-xs">&middot;</span> <kbd>↑↓</kbd> {{ $t('common.history') }}

@@ -19,6 +19,7 @@ function cleanEnv(): Record<string, string | undefined> {
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
+/** Runtime status of a dev-server instance (Docker-based or direct process). */
 export interface DevServerStatus {
   status: 'unknown' | 'stopped' | 'starting' | 'running' | 'stopping' | 'error'
   instanceName: string
@@ -29,6 +30,7 @@ export interface DevServerStatus {
   error?: string
 }
 
+/** Configuration parsed from a `.container/instances/*.env` file. */
 export interface InstanceConfig {
   instanceName: string
   projectName: string

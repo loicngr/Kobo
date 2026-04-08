@@ -2,9 +2,13 @@ import { Hono } from 'hono'
 import * as imageService from '../services/image-service.js'
 import * as workspaceService from '../services/workspace-service.js'
 
+/** Maximum allowed upload size for a single image (10 MB). */
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
+
+/** MIME types accepted for image uploads. */
 const ALLOWED_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
 
+/** Hono sub-router for workspace image upload and deletion. */
 const app = new Hono()
 
 // POST /:id/images — upload an image

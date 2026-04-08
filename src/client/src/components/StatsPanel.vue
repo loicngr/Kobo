@@ -154,7 +154,9 @@ function formatDateTime(d: Date): string {
         icon="refresh"
         color="grey-6"
         @click="store.fetchWorkspaceDetails(workspace.id)"
-      />
+      >
+        <q-tooltip>{{ $t('tooltip.refreshStats') }}</q-tooltip>
+      </q-btn>
     </div>
 
     <template v-if="workspace && stats">

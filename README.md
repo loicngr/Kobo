@@ -16,7 +16,7 @@ Think of it as an apprentice's hall: you hand out missions, each apprentice sets
 - **Task & acceptance criteria tracking** — the agent reports progress through a dedicated MCP server (`kobo-tasks`) that reads and updates tasks directly from the SQLite database
 - **Notion integration** — pull workspace missions straight from Notion pages, extract markdown, and use it as the source of truth for acceptance criteria
 - **Per-workspace dev servers** — start/stop Docker or Node dev servers scoped to each branch, with log streaming
-- **Conventional-commit enforcement** — project-level git conventions are written to `.ai/git-conventions.md` inside every workspace so Claude follows them during commits
+- **Conventional-commit enforcement** — project-level git conventions are written to `.ai/.git-conventions.md` inside every workspace so Claude follows them during commits
 - **Pull request automation** — one-click `push` and `open-pr` endpoints integrate with the GitHub CLI, using a configurable prompt template
 - **Archive instead of delete** — soft-remove workspaces without losing the worktree, branches, or history; unarchive restores the exact pre-archive state
 
@@ -181,7 +181,7 @@ Kōbō reads settings from `~/.config/kobo/settings.json` (or falls back to defa
 
 - `defaultModel` — Claude model to use (e.g. `claude-opus-4-6`)
 - `prPromptTemplate` — template rendered when opening a PR via the `/open-pr` endpoint; supports `{{pr_number}}`, `{{pr_url}}`, `{{branch_name}}`, `{{diff_stats}}`, `{{commits}}`, etc.
-- `gitConventions` — markdown-formatted git conventions written to `.ai/git-conventions.md` in every workspace so the agent follows them when committing
+- `gitConventions` — markdown-formatted git conventions written to `.ai/.git-conventions.md` in every workspace so the agent follows them when committing
 - `devServer` — per-project `startCommand` / `stopCommand` for launching workspace-scoped dev servers
 
 ## Contributing

@@ -55,11 +55,13 @@ Please:
 4. Do NOT add a "Generated with Claude Code" footer or any AI attribution to the PR description
 `
 
+/** Dev-server start/stop commands for a project. */
 export interface DevServerConfig {
   startCommand: string
   stopCommand: string
 }
 
+/** Per-project settings, stored in settings.json. */
 export interface ProjectSettings {
   path: string
   displayName: string
@@ -72,13 +74,16 @@ export interface ProjectSettings {
   devServer: DevServerConfig
 }
 
+/** Global settings that apply as defaults when no project override is set. */
 export interface GlobalSettings {
   defaultModel: string
   dangerouslySkipPermissions: boolean
   prPromptTemplate: string
   gitConventions: string
+  editorCommand: string
 }
 
+/** Top-level settings structure persisted to settings.json. */
 export interface Settings {
   schemaVersion: number
   global: GlobalSettings
@@ -133,6 +138,7 @@ const settingsMigrations: SettingsMigration[] = [
 export const SETTINGS_SCHEMA_VERSION =
   settingsMigrations.length > 0 ? settingsMigrations[settingsMigrations.length - 1].version : 0
 
+/** Merged settings for a project (project overrides + global defaults). */
 export interface EffectiveSettings {
   model: string
   dangerouslySkipPermissions: boolean
@@ -158,6 +164,7 @@ function defaultSettings(): Settings {
       dangerouslySkipPermissions: true,
       prPromptTemplate: DEFAULT_PR_PROMPT_TEMPLATE,
       gitConventions: DEFAULT_GIT_CONVENTIONS,
+      editorCommand: '',
     },
     projects: [],
   }
@@ -184,11 +191,7 @@ function pickKnownKeys<T>(data: Record<string, unknown>, allowedKeys: string[]):
   return Object.fromEntries(Object.entries(data).filter(([key]) => allowedKeys.includes(key))) as Partial<T>
 }
 
-/**
- * Apply migrations sequentially to bring an older settings object up to
- * SETTINGS_SCHEMA_VERSION. Append-only — never edit or reorder shipped entries.
- * The returned object carries the bumped schemaVersion; callers persist it.
- */
+/** Apply settings migrations sequentially up to SETTINGS_SCHEMA_VERSION. Append-only. */
 export function runSettingsMigrations(raw: Record<string, unknown>): Settings {
   const current = raw as {
     schemaVersion?: number
@@ -259,19 +262,23 @@ function writeSettings(settings: Settings): void {
   fs.renameSync(tmpPath, settingsFilePath)
 }
 
+/** Read and return the full settings object, creating defaults if missing. */
 export function getSettings(): Settings {
   return readSettings()
 }
 
+/** Return only the global settings section. */
 export function getGlobalSettings(): GlobalSettings {
   return readSettings().global
 }
 
+/** Return project-specific settings, or null if the project is not configured. */
 export function getProjectSettings(projectPath: string): ProjectSettings | null {
   const settings = readSettings()
   return settings.projects.find((p) => p.path === projectPath) ?? null
 }
 
+/** Compute effective settings for a project (project overrides merged with global defaults). */
 export function getEffectiveSettings(projectPath: string): EffectiveSettings {
   const settings = readSettings()
   const project = settings.projects.find((p) => p.path === projectPath) ?? null
@@ -299,15 +306,23 @@ export function getEffectiveSettings(projectPath: string): EffectiveSettings {
   }
 }
 
+/** Merge partial updates into global settings and persist. */
 export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSettings {
   const settings = readSettings()
-  const allowedGlobalKeys = ['defaultModel', 'dangerouslySkipPermissions', 'prPromptTemplate', 'gitConventions']
+  const allowedGlobalKeys = [
+    'defaultModel',
+    'dangerouslySkipPermissions',
+    'prPromptTemplate',
+    'gitConventions',
+    'editorCommand',
+  ]
   const filtered = pickKnownKeys<GlobalSettings>(data as Record<string, unknown>, allowedGlobalKeys)
   settings.global = { ...settings.global, ...filtered }
   writeSettings(settings)
   return settings.global
 }
 
+/** Create or update project-specific settings. Merges devServer fields on update. */
 export function upsertProject(projectPath: string, data: Partial<Omit<ProjectSettings, 'path'>>): ProjectSettings {
   const allowedProjectKeys = [
     'displayName',
@@ -358,12 +373,14 @@ export function upsertProject(projectPath: string, data: Partial<Omit<ProjectSet
   return settings.projects.find((p) => p.path === projectPath) as ProjectSettings
 }
 
+/** Remove a project from the settings file. */
 export function deleteProject(projectPath: string): void {
   const settings = readSettings()
   settings.projects = settings.projects.filter((p) => p.path !== projectPath)
   writeSettings(settings)
 }
 
+/** List all configured projects. */
 export function listProjects(): ProjectSettings[] {
   return readSettings().projects
 }

@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3'
 
+/** Create all tables and indexes for a fresh install. Not used for upgrades -- see migrations.ts. */
 export function initSchema(db: Database.Database): void {
   db.exec(`
     CREATE TABLE IF NOT EXISTS workspaces (
@@ -14,6 +15,7 @@ export function initSchema(db: Database.Database): void {
       model TEXT NOT NULL DEFAULT 'claude-opus-4-6',
       permission_mode TEXT NOT NULL DEFAULT 'auto-accept',
       dev_server_status TEXT NOT NULL DEFAULT 'stopped',
+      has_unread INTEGER NOT NULL DEFAULT 0,
       archived_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL

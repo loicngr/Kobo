@@ -2,11 +2,13 @@ import { type ChildProcess, spawn } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { getPackageVersion } from '../utils/paths.js'
 
+/** A to-do item extracted from a Notion page. */
 export interface NotionTodo {
   title: string
   checked: boolean
 }
 
+/** Structured content extracted from a Notion page (title, goal, todos, Gherkin features). */
 export interface NotionPageContent {
   title: string
   goal: string
@@ -25,7 +27,6 @@ interface JsonRpcResponse {
 const GHERKIN_PATTERN =
   /^(Scénario|Étant donné|Quand|Alors|Scenario|Given|When|Then|Feature|Fonctionnalité|And|Et|But|Mais)/i
 
-// C2: rpcIdCounter encapsulated in a closure to avoid module-level mutable state
 const nextRpcId = (() => {
   let counter = 1
   return () => counter++
@@ -58,11 +59,7 @@ export function parseNotionUrl(url: string): string {
   return `${raw.slice(0, 8)}-${raw.slice(8, 12)}-${raw.slice(12, 16)}-${raw.slice(16, 20)}-${raw.slice(20)}`
 }
 
-/**
- * Send a JSON-RPC request to the MCP process and read the response.
- * M4: parameter renamed from `process` to `mcpProcess` to avoid shadowing global `process`.
- * C1: 30s timeout added to prevent hanging indefinitely.
- */
+/** Send a JSON-RPC request to the MCP process and read the response (30s timeout). */
 export async function callMcpTool(mcpProcess: ChildProcess, toolName: string, args: object): Promise<unknown> {
   const id = nextRpcId()
   const request = JSON.stringify({
@@ -83,7 +80,6 @@ export async function callMcpTool(mcpProcess: ChildProcess, toolName: string, ar
 
     let buffer = ''
 
-    // C1: 30s timeout — I7: kill the MCP process on timeout to avoid zombie
     const timeout = setTimeout(() => {
       mcpProcess.stdout?.removeListener('data', onData)
       mcpProcess.stdout?.removeListener('error', onError)
@@ -182,12 +178,7 @@ function spawnMcpProcess(): ChildProcess {
   return mcpProcess
 }
 
-/**
- * Initialize the MCP server by sending an initialize request.
- * I1: notifications/initialized is sent after receiving the initialize response.
- * I4: onData listener is removed in the reject path.
- * C1: 10s timeout added.
- */
+/** Initialize the MCP server by sending an initialize handshake (10s timeout). */
 async function initializeMcp(mcpProcess: ChildProcess): Promise<void> {
   const id = nextRpcId()
   const request = JSON.stringify({
@@ -209,7 +200,6 @@ async function initializeMcp(mcpProcess: ChildProcess): Promise<void> {
 
     let buffer = ''
 
-    // C1: 10s timeout for initialization — I7: kill the MCP process on timeout
     const timeout = setTimeout(() => {
       mcpProcess.stdout?.removeListener('data', onData)
       mcpProcess.kill()
@@ -230,7 +220,6 @@ async function initializeMcp(mcpProcess: ChildProcess): Promise<void> {
             clearTimeout(timeout)
             mcpProcess.stdout?.removeListener('data', onData)
 
-            // I1: Send notifications/initialized AFTER receiving the initialize response
             const initialized = JSON.stringify({
               jsonrpc: '2.0',
               method: 'notifications/initialized',
@@ -245,7 +234,6 @@ async function initializeMcp(mcpProcess: ChildProcess): Promise<void> {
       }
     }
 
-    // I4: onError handler to clean up listener on error
     const onError = (err: Error) => {
       clearTimeout(timeout)
       mcpProcess.stdout?.removeListener('data', onData)
@@ -299,6 +287,7 @@ interface NotionBlock {
   [key: string]: unknown
 }
 
+/** Parse Notion block children into structured goal, todos, and Gherkin features. */
 export function parseBlocks(blocks: NotionBlock[]): {
   goal: string
   todos: NotionTodo[]

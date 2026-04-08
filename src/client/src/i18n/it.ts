@@ -132,11 +132,15 @@ export default {
   'settings.gitConventions': 'Convenzioni Git (globale)',
   'settings.gitConventionsPlaceholder': '# Convenzioni Git...',
   'settings.gitConventionsHint':
-    "Queste convenzioni vengono scritte in .ai/git-conventions.md in ogni nuovo workspace e devono essere seguite dall'agente prima di qualsiasi operazione Git. Sovrascritte dalle convenzioni per progetto se definite.",
+    "Queste convenzioni vengono scritte in .ai/.git-conventions.md in ogni nuovo workspace e devono essere seguite dall'agente prima di qualsiasi operazione Git. Sovrascritte dalle convenzioni per progetto se definite.",
   'settings.setupScript': 'Script di setup',
   'settings.setupScriptPlaceholder': 'npm install',
   'settings.setupScriptHint':
     "Eseguito con bash nel worktree dopo la creazione, prima dell'avvio dell'agente. Nessun shebang necessario. In caso di errore, il workspace viene impostato su errore. Timeout: 5 minuti.",
+  'settings.editorCommand': 'Comando editor',
+  'settings.editorCommandPlaceholder': 'code, phpstorm, subl, vim...',
+  'settings.editorCommandHint':
+    'Comando per aprire il worktree nel proprio editor. Il percorso del worktree viene passato come argomento.',
   'settings.configuredProjects': 'Progetti configurati',
   'settings.noProjects': 'Nessun progetto configurato',
   'settings.addProject': 'Aggiungi progetto',
@@ -182,6 +186,8 @@ export default {
   'git.createPr': 'Crea PR',
   'git.push': 'Push',
   'git.diff': 'Diff',
+  'git.openEditor': "Apri nell'editor",
+  'git.openEditorFailed': "Impossibile aprire l'editor",
   'git.branchPushed': 'Branch pushato',
   'git.pushFirst': 'Il branch non è sul remoto. Fai Push prima.',
   'git.unpushedCommits': 'I commit locali non sono pushati. Fai Push prima.',
@@ -259,6 +265,31 @@ export default {
   'stats.progress': 'Progresso',
   'stats.tasks': 'Task',
   'stats.acceptanceCriteria': 'Criteri di accettazione',
+
+  // Tooltips
+  'tooltip.addTask': 'Aggiungi task',
+  'tooltip.removeTask': 'Rimuovi task',
+  'tooltip.addCriterion': 'Aggiungi criterio',
+  'tooltip.removeCriterion': 'Rimuovi criterio',
+  'tooltip.startDevServer': 'Avvia server di sviluppo',
+  'tooltip.stopDevServer': 'Arresta server di sviluppo',
+  'tooltip.closeDiffViewer': 'Chiudi diff',
+  'tooltip.refreshLogs': 'Aggiorna log',
+  'tooltip.closeDialog': 'Chiudi',
+  'tooltip.refreshGitStats': 'Aggiorna statistiche Git',
+  'tooltip.removeImage': 'Rimuovi immagine',
+  'tooltip.sendMessage': 'Invia messaggio',
+  'tooltip.addNotionTask': 'Aggiungi task',
+  'tooltip.removeNotionTask': 'Rimuovi task',
+  'tooltip.refreshStats': 'Aggiorna statistiche',
+
+  // Tools Panel
+  'tools.title': 'Strumenti',
+  'tools.runSetupScript': 'Rieseguire script di setup',
+  'tools.runSetupScriptTooltip': 'Eseguire lo script di setup del progetto nel worktree',
+  'tools.noSetupScript': 'Nessun script di setup configurato —',
+  'tools.setupScriptSuccess': 'Script di setup completato con successo.',
+  'tools.setupScriptFailed': 'Script di setup fallito.',
 
   // Diff Viewer
   'diff.title': 'Diff',

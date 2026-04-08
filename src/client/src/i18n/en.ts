@@ -131,11 +131,15 @@ export default {
   'settings.gitConventions': 'Git conventions (global)',
   'settings.gitConventionsPlaceholder': '# Git conventions...',
   'settings.gitConventionsHint':
-    'These conventions are written to .ai/git-conventions.md in each new workspace and must be followed by the agent before any git operation. Overridden by per-project conventions if defined.',
+    'These conventions are written to .ai/.git-conventions.md in each new workspace and must be followed by the agent before any git operation. Overridden by per-project conventions if defined.',
   'settings.setupScript': 'Setup script',
   'settings.setupScriptPlaceholder': 'npm install',
   'settings.setupScriptHint':
     'Executed with bash in the worktree after creation, before the agent starts. No shebang needed. If it fails, the workspace is set to error. Timeout: 5 minutes.',
+  'settings.editorCommand': 'Editor command',
+  'settings.editorCommandPlaceholder': 'code, phpstorm, subl, vim...',
+  'settings.editorCommandHint':
+    'Command used to open the worktree in your editor. The worktree path is passed as argument.',
   'settings.configuredProjects': 'Configured projects',
   'settings.noProjects': 'No projects configured',
   'settings.addProject': 'Add project',
@@ -181,6 +185,8 @@ export default {
   'git.createPr': 'Create PR',
   'git.push': 'Push',
   'git.diff': 'Diff',
+  'git.openEditor': 'Open in editor',
+  'git.openEditorFailed': 'Failed to open editor',
   'git.branchPushed': 'Branch pushed',
   'git.pushFirst': 'Branch is not on remote. Click Push first.',
   'git.unpushedCommits': 'Local commits are not pushed. Click Push first.',
@@ -258,6 +264,31 @@ export default {
   'stats.progress': 'Progress',
   'stats.tasks': 'Tasks',
   'stats.acceptanceCriteria': 'Acceptance criteria',
+
+  // Tooltips
+  'tooltip.addTask': 'Add task',
+  'tooltip.removeTask': 'Remove task',
+  'tooltip.addCriterion': 'Add criterion',
+  'tooltip.removeCriterion': 'Remove criterion',
+  'tooltip.startDevServer': 'Start dev server',
+  'tooltip.stopDevServer': 'Stop dev server',
+  'tooltip.closeDiffViewer': 'Close diff viewer',
+  'tooltip.refreshLogs': 'Refresh logs',
+  'tooltip.closeDialog': 'Close',
+  'tooltip.refreshGitStats': 'Refresh Git stats',
+  'tooltip.removeImage': 'Remove image',
+  'tooltip.sendMessage': 'Send message',
+  'tooltip.addNotionTask': 'Add task',
+  'tooltip.removeNotionTask': 'Remove task',
+  'tooltip.refreshStats': 'Refresh statistics',
+
+  // Tools Panel
+  'tools.title': 'Tools',
+  'tools.runSetupScript': 'Re-run setup script',
+  'tools.runSetupScriptTooltip': 'Execute the project setup script in the worktree',
+  'tools.noSetupScript': 'No setup script configured —',
+  'tools.setupScriptSuccess': 'Setup script completed successfully.',
+  'tools.setupScriptFailed': 'Setup script failed.',
 
   // Diff Viewer
   'diff.title': 'Diff',

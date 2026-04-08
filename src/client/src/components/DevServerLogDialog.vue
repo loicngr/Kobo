@@ -71,8 +71,12 @@ onUnmounted(() => {
       <q-card-section class="row items-center">
         <div class="text-h6">Logs Dev Server</div>
         <q-space />
-        <q-btn flat round dense icon="refresh" color="grey-5" @click="refresh" :loading="loading" />
-        <q-btn flat round dense icon="close" color="grey-5" @click="$emit('update:modelValue', false)" />
+        <q-btn flat round dense icon="refresh" color="grey-5" @click="refresh" :loading="loading">
+          <q-tooltip>{{ $t('tooltip.refreshLogs') }}</q-tooltip>
+        </q-btn>
+        <q-btn flat round dense icon="close" color="grey-5" @click="$emit('update:modelValue', false)">
+          <q-tooltip>{{ $t('tooltip.closeDialog') }}</q-tooltip>
+        </q-btn>
       </q-card-section>
 
       <q-separator dark />

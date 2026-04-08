@@ -13,6 +13,7 @@ export interface Workspace {
   model: string
   permissionMode: string
   devServerStatus: string
+  hasUnread: boolean
   archivedAt: string | null
   createdAt: string
   updatedAt: string
@@ -431,6 +432,8 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.selectedWorkspaceId = id
       this.selectedSessionId = null
       this.tasks = []
+      // Mark as read before fetching details so the API response already reflects the read state
+      this.markRead(id)
       this.fetchWorkspaceDetails(id)
       this.fetchSessions(id)
       // Re-subscribe to replay events if the feed is empty (e.g. after unarchive)
@@ -592,6 +595,20 @@ export const useWorkspaceStore = defineStore('workspace', {
         durationMs: data.durationMs ?? existing?.durationMs,
         startedAt: existing?.startedAt ?? now,
         updatedAt: now,
+      }
+    },
+
+    /** Mark a workspace as read by calling the backend and updating local state. */
+    async markRead(workspaceId: string) {
+      try {
+        const res = await fetch(`/api/workspaces/${workspaceId}/mark-read`, { method: 'POST' })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const idx = this.workspaces.findIndex((w) => w.id === workspaceId)
+        if (idx >= 0) {
+          this.workspaces[idx] = { ...this.workspaces[idx], hasUnread: false }
+        }
+      } catch (err) {
+        console.error('[workspace store] markRead failed:', err)
       }
     },
 

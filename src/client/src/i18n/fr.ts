@@ -132,11 +132,15 @@ export default {
   'settings.gitConventions': 'Conventions Git (global)',
   'settings.gitConventionsPlaceholder': '# Conventions Git...',
   'settings.gitConventionsHint':
-    "Ces conventions sont écrites dans .ai/git-conventions.md pour chaque nouvel espace de travail et doivent être respectées par l'agent avant toute opération Git. Remplacées par les conventions par projet si définies.",
+    "Ces conventions sont écrites dans .ai/.git-conventions.md pour chaque nouvel espace de travail et doivent être respectées par l'agent avant toute opération Git. Remplacées par les conventions par projet si définies.",
   'settings.setupScript': 'Script de setup',
   'settings.setupScriptPlaceholder': 'npm install',
   'settings.setupScriptHint':
     "Exécuté avec bash dans le worktree après sa création, avant le démarrage de l'agent. Pas besoin de shebang. En cas d'échec, le workspace passe en erreur. Timeout : 5 minutes.",
+  'settings.editorCommand': 'Commande éditeur',
+  'settings.editorCommandPlaceholder': 'code, phpstorm, subl, vim...',
+  'settings.editorCommandHint':
+    'Commande utilisée pour ouvrir le worktree dans votre éditeur. Le chemin du worktree est passé en argument.',
   'settings.configuredProjects': 'Projets configurés',
   'settings.noProjects': 'Aucun projet configuré',
   'settings.addProject': 'Ajouter un projet',
@@ -182,6 +186,8 @@ export default {
   'git.createPr': 'Créer une PR',
   'git.push': 'Push',
   'git.diff': 'Diff',
+  'git.openEditor': "Ouvrir dans l'éditeur",
+  'git.openEditorFailed': "Impossible d'ouvrir l'éditeur",
   'git.branchPushed': 'Branche pushée',
   'git.pushFirst': "La branche n'est pas sur le dépôt distant. Cliquez d'abord sur Push.",
   'git.unpushedCommits': "Les commits locaux ne sont pas pushés. Cliquez d'abord sur Push.",
@@ -259,6 +265,31 @@ export default {
   'stats.progress': 'Progression',
   'stats.tasks': 'Tâches',
   'stats.acceptanceCriteria': "Critères d'acceptation",
+
+  // Tooltips
+  'tooltip.addTask': 'Ajouter une tâche',
+  'tooltip.removeTask': 'Supprimer la tâche',
+  'tooltip.addCriterion': 'Ajouter un critère',
+  'tooltip.removeCriterion': 'Supprimer le critère',
+  'tooltip.startDevServer': 'Démarrer le serveur de dev',
+  'tooltip.stopDevServer': 'Arrêter le serveur de dev',
+  'tooltip.closeDiffViewer': 'Fermer le diff',
+  'tooltip.refreshLogs': 'Actualiser les logs',
+  'tooltip.closeDialog': 'Fermer',
+  'tooltip.refreshGitStats': 'Actualiser les stats Git',
+  'tooltip.removeImage': "Supprimer l'image",
+  'tooltip.sendMessage': 'Envoyer le message',
+  'tooltip.addNotionTask': 'Ajouter une tâche',
+  'tooltip.removeNotionTask': 'Supprimer la tâche',
+  'tooltip.refreshStats': 'Actualiser les statistiques',
+
+  // Tools Panel
+  'tools.title': 'Outils',
+  'tools.runSetupScript': 'Relancer le script de setup',
+  'tools.runSetupScriptTooltip': 'Exécuter le script de setup du projet dans le worktree',
+  'tools.noSetupScript': 'Aucun script de setup configuré —',
+  'tools.setupScriptSuccess': 'Script de setup terminé avec succès.',
+  'tools.setupScriptFailed': 'Échec du script de setup.',
 
   // Diff Viewer
   'diff.title': 'Diff',

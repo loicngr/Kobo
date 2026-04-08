@@ -79,11 +79,13 @@ function scheduleNext(): void {
   timer.unref?.()
 }
 
+/** Start polling GitHub for merged/closed PRs to auto-archive workspaces. */
 export function startPrWatcher(): void {
   if (timer) return
   scheduleNext()
 }
 
+/** Stop the PR watcher polling loop. */
 export function stopPrWatcher(): void {
   if (timer) {
     clearTimeout(timer)

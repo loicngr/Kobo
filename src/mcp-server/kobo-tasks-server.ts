@@ -41,6 +41,7 @@ try {
   process.exit(1)
 }
 
+/** Fire-and-forget POST to the backend so the UI reflects a task marked as done. */
 async function notifyBackend(taskId: string): Promise<void> {
   try {
     const url = `${backendUrl}/api/workspaces/${workspaceId}/tasks/${taskId}/notify-done`
@@ -53,6 +54,7 @@ async function notifyBackend(taskId: string): Promise<void> {
   }
 }
 
+/** Fire-and-forget POST to the backend so the UI refreshes the task list after a mutation. */
 async function notifyTasksUpdated(): Promise<void> {
   try {
     const url = `${backendUrl}/api/workspaces/${workspaceId}/tasks/notify-updated`
@@ -62,6 +64,7 @@ async function notifyTasksUpdated(): Promise<void> {
   }
 }
 
+/** Generic HTTP request to the Kobo backend, returning parsed JSON or null. */
 async function backendRequest(method: 'GET' | 'POST' | 'PATCH', pathname: string, body?: unknown): Promise<unknown> {
   const url = `${backendUrl}${pathname}`
   const init: RequestInit = { method }
@@ -173,7 +176,8 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     },
     {
       name: 'get_dev_server_status',
-      description: 'Check whether the dev server is running for the current workspace.',
+      description:
+        'Get the live dev server status for the current workspace. Returns status (running/stopped/starting/error/unknown), URL, HTTP port, instance name, project name, and running container names.',
       inputSchema: {
         type: 'object',
         properties: {},
@@ -241,10 +245,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
   ],
 }))
 
+/** Wrap a successful result as an MCP tool response with JSON text content. */
 function ok(data: unknown) {
   return { content: [{ type: 'text', text: JSON.stringify(data, null, 2) }] }
 }
 
+/** Wrap an error message as an MCP tool error response. */
 function fail(message: string) {
   return { content: [{ type: 'text', text: `Error: ${message}` }], isError: true }
 }
@@ -302,7 +308,13 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
 
     if (name === 'get_dev_server_status') {
-      return ok(getDevServerStatusHandler(db, workspaceId!))
+      try {
+        const result = await backendRequest('GET', `/api/dev-server/${workspaceId}/status`)
+        return ok(result)
+      } catch {
+        // Fallback to DB if the backend HTTP API is unreachable
+        return ok(getDevServerStatusHandler(db, workspaceId!))
+      }
     }
 
     if (name === 'get_workspace_info') {

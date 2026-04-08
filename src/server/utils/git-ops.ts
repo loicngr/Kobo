@@ -9,10 +9,12 @@ function git(repoPath: string, args: string[]): string {
   return execFileSync('git', args, { cwd: repoPath, encoding: 'utf-8' }).trim()
 }
 
+/** Return the name of the currently checked-out branch. */
 export function getCurrentBranch(repoPath: string): string {
   return git(repoPath, ['rev-parse', '--abbrev-ref', 'HEAD'])
 }
 
+/** List all local branch names in the repository. */
 export function listBranches(repoPath: string): string[] {
   const output = git(repoPath, ['branch', '--format=%(refname:short)'])
   return output
@@ -21,6 +23,7 @@ export function listBranches(repoPath: string): string[] {
     .filter(Boolean)
 }
 
+/** Thrown when attempting to create a branch that already exists. */
 export class BranchAlreadyExistsError extends Error {
   constructor(branchName: string) {
     super(`Branch '${branchName}' already exists`)
@@ -28,15 +31,13 @@ export class BranchAlreadyExistsError extends Error {
   }
 }
 
-/**
- * M3: Shared utility to detect "branch already exists" git error messages
- * across different locales (English, French, Russian).
- */
+/** Detect "branch already exists" git error messages across locales (EN, FR, RU). */
 export function isGitBranchExistsError(message: string): boolean {
   const lower = message.toLowerCase()
   return lower.includes('already exists') || lower.includes('existe') || lower.includes('существует')
 }
 
+/** Create a new local branch from the given source branch. */
 export function createBranch(repoPath: string, branchName: string, sourceBranch: string): void {
   try {
     git(repoPath, ['branch', branchName, sourceBranch])
@@ -49,6 +50,7 @@ export function createBranch(repoPath: string, branchName: string, sourceBranch:
   }
 }
 
+/** Return shortstat diff stats for staged (cached) changes. */
 export function getDiffStats(repoPath: string): {
   filesChanged: number
   insertions: number
@@ -82,6 +84,7 @@ function parseDiffShortstat(output: string): {
   }
 }
 
+/** List remote-tracking branch names. Returns empty array on failure. */
 export function listRemoteBranches(repoPath: string): string[] {
   try {
     const output = git(repoPath, ['branch', '-r', '--format=%(refname:short)'])
@@ -94,6 +97,7 @@ export function listRemoteBranches(repoPath: string): string[] {
   }
 }
 
+/** Force-delete a local branch (`git branch -D`). */
 export function deleteLocalBranch(repoPath: string, branchName: string): void {
   try {
     git(repoPath, ['branch', '-D', branchName])
@@ -103,6 +107,7 @@ export function deleteLocalBranch(repoPath: string, branchName: string): void {
   }
 }
 
+/** Delete a branch on the remote (`git push --delete`). */
 export function deleteRemoteBranch(repoPath: string, branchName: string, remote = 'origin'): void {
   try {
     git(repoPath, ['push', remote, '--delete', branchName])
@@ -112,6 +117,7 @@ export function deleteRemoteBranch(repoPath: string, branchName: string, remote 
   }
 }
 
+/** Push a branch to the remote with upstream tracking (`git push -u`). */
 export function pushBranch(repoPath: string, branchName: string, remote = 'origin'): void {
   try {
     git(repoPath, ['push', '-u', remote, branchName])
@@ -136,6 +142,7 @@ function resolveBase(repoPath: string, base: string): string {
   }
 }
 
+/** Count commits between base and head (`git rev-list --count`). Returns 0 on failure. */
 export function getCommitCount(repoPath: string, base: string, head: string): number {
   try {
     const ref = resolveBase(repoPath, base)
@@ -146,6 +153,7 @@ export function getCommitCount(repoPath: string, base: string, head: string): nu
   }
 }
 
+/** Return structured diff shortstat between two refs (three-dot merge base). */
 export function getStructuredDiffStatsBetween(
   repoPath: string,
   base: string,
@@ -160,6 +168,7 @@ export function getStructuredDiffStatsBetween(
   }
 }
 
+/** Return a formatted list of commit subjects between base and head. */
 export function getCommitsBetween(repoPath: string, base: string, head: string): string {
   try {
     const ref = resolveBase(repoPath, base)
@@ -169,6 +178,7 @@ export function getCommitsBetween(repoPath: string, base: string, head: string):
   }
 }
 
+/** Get the GitHub PR URL for a branch using `gh pr view`. Returns null if no PR exists. */
 export function getPrUrl(repoPath: string, branchName: string): string | null {
   try {
     return (
@@ -182,11 +192,13 @@ export function getPrUrl(repoPath: string, branchName: string): string | null {
   }
 }
 
+/** State and URL of a GitHub pull request. */
 export interface PrStatus {
   state: 'OPEN' | 'CLOSED' | 'MERGED'
   url: string
 }
 
+/** Get the state and URL of the PR for a branch. Returns null if no PR exists. */
 export function getPrStatus(repoPath: string, branchName: string): PrStatus | null {
   try {
     const raw = execFileSync('gh', ['pr', 'view', branchName, '--json', 'state,url'], {
@@ -201,6 +213,7 @@ export function getPrStatus(repoPath: string, branchName: string): PrStatus | nu
   }
 }
 
+/** A file entry in a diff with its path and change status. */
 export interface DiffFile {
   path: string
   status: 'added' | 'modified' | 'deleted' | 'renamed'
@@ -272,12 +285,14 @@ export function getFileContent(repoPath: string, filePath: string): string | nul
   }
 }
 
+/** Summary counts of staged, modified, and untracked files in a working tree. */
 export interface WorkingTreeStatus {
   staged: number
   modified: number
   untracked: number
 }
 
+/** Parse `git status --porcelain` into counts of staged, modified, and untracked files. */
 export function getWorkingTreeStatus(repoPath: string): WorkingTreeStatus {
   try {
     const output = git(repoPath, ['status', '--porcelain'])
@@ -314,6 +329,7 @@ export function getUnpushedCount(repoPath: string): number {
   }
 }
 
+/** Return raw `git diff --shortstat` output between two refs (three-dot). */
 export function getDiffStatsBetween(repoPath: string, base: string, head: string): string {
   try {
     return git(repoPath, ['diff', '--shortstat', `${base}...${head}`])
@@ -324,8 +340,8 @@ export function getDiffStatsBetween(repoPath: string, base: string, head: string
 
 // ── Async versions ───────────────────────────────────────────────────────────
 // Non-blocking alternatives for hot paths (pr-watcher, route handlers).
-// The sync versions above are kept for callers that haven't migrated yet.
 
+/** Async version of getPrUrl. Returns null if no PR exists. */
 export async function getPrUrlAsync(repoPath: string, branchName: string): Promise<string | null> {
   try {
     const { stdout } = await execFileAsync('gh', ['pr', 'view', branchName, '--json', 'url', '--jq', '.url'], {
@@ -338,6 +354,7 @@ export async function getPrUrlAsync(repoPath: string, branchName: string): Promi
   }
 }
 
+/** Async version of getPrStatus. Returns null if no PR exists. */
 export async function getPrStatusAsync(repoPath: string, branchName: string): Promise<PrStatus | null> {
   try {
     const { stdout } = await execFileAsync('gh', ['pr', 'view', branchName, '--json', 'state,url'], {

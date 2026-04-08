@@ -5,6 +5,7 @@ import { useI18n } from 'vue-i18n'
 
 const DiffViewer = defineAsyncComponent(() => import('./DiffViewer.vue'))
 
+import { useSettingsStore } from 'src/stores/settings'
 import type { GitStats, Workspace } from 'src/stores/workspace'
 import { useWorkspaceStore, WorkspaceActionError } from 'src/stores/workspace'
 import { computed, onUnmounted, ref, watch } from 'vue'
@@ -17,9 +18,31 @@ const { t } = useI18n()
 const $q = useQuasar()
 const store = useWorkspaceStore()
 
+const settingsStore = useSettingsStore()
+
 const pushing = ref(false)
 const openingPr = ref(false)
 const showDiff = ref(false)
+const openingEditor = ref(false)
+
+const hasEditorCommand = computed(() => !!settingsStore.global.editorCommand)
+
+async function openEditor() {
+  if (!props.workspace) return
+  openingEditor.value = true
+  try {
+    const res = await fetch(`/api/workspaces/${props.workspace.id}/open-editor`, { method: 'POST' })
+    if (!res.ok) {
+      const data = await res.json()
+      $q.notify({ type: 'negative', message: data.error ?? t('git.openEditorFailed'), position: 'top', timeout: 6000 })
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : t('git.openEditorFailed')
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+  } finally {
+    openingEditor.value = false
+  }
+}
 
 function onSendToChat(text: string) {
   store.chatDraft = text
@@ -146,7 +169,9 @@ async function handleOpenPr() {
         color="grey-6"
         :loading="loadingStats"
         @click="loadGitStats"
-      />
+      >
+        <q-tooltip>{{ $t('tooltip.refreshGitStats') }}</q-tooltip>
+      </q-btn>
     </div>
 
     <template v-if="workspace">
@@ -273,6 +298,20 @@ async function handleOpenPr() {
           class="git-btn"
           :disable="!workspace"
           @click="showDiff = true"
+        />
+        <q-btn
+          v-if="hasEditorCommand"
+          dense
+          no-caps
+          size="sm"
+          outline
+          color="indigo-4"
+          icon="open_in_new"
+          :label="$t('git.openEditor')"
+          :loading="openingEditor"
+          :disable="!workspace"
+          class="git-btn"
+          @click="openEditor"
         />
       </div>
     </template>

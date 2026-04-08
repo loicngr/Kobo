@@ -34,8 +34,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 3', () => {
-    expect(SCHEMA_VERSION).toBe(3)
+  it('exporte SCHEMA_VERSION = 4', () => {
+    expect(SCHEMA_VERSION).toBe(4)
   })
 
   it('migre depuis la legacy schema_version table', () => {
@@ -167,6 +167,55 @@ describe('runMigrations(db)', () => {
     // Migration should be recorded
     const history = getMigrationHistory(db)
     expect(history.some((h) => h.version === 3 && h.name === 'add-workspace-id-indexes')).toBe(true)
+    db.close()
+  })
+
+  it("ajoute la colonne has_unread lors d'un upgrade v3 -> v4", () => {
+    const db = new Database(':memory:')
+    // Simulate a v3 database
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+        version  INTEGER PRIMARY KEY,
+        name     TEXT NOT NULL,
+        applied_at TEXT NOT NULL
+      )
+    `)
+    db.exec(`
+      CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, project_path TEXT NOT NULL, source_branch TEXT NOT NULL, working_branch TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'created', notion_url TEXT, notion_page_id TEXT, model TEXT NOT NULL DEFAULT 'claude-opus-4-6', permission_mode TEXT NOT NULL DEFAULT 'auto-accept', dev_server_status TEXT NOT NULL DEFAULT 'stopped', archived_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE tasks (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', is_acceptance_criterion INTEGER DEFAULT 0, sort_order INTEGER DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, pid INTEGER, claude_session_id TEXT, status TEXT NOT NULL DEFAULT 'running', started_at TEXT NOT NULL, ended_at TEXT);
+      CREATE TABLE ws_events (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, type TEXT NOT NULL, payload TEXT NOT NULL, session_id TEXT, created_at TEXT NOT NULL);
+      CREATE INDEX IF NOT EXISTS idx_tasks_workspace_id ON tasks(workspace_id);
+      CREATE INDEX IF NOT EXISTS idx_agent_sessions_workspace_id ON agent_sessions(workspace_id);
+      CREATE INDEX IF NOT EXISTS idx_ws_events_workspace_id ON ws_events(workspace_id);
+    `)
+    const now = new Date().toISOString()
+    db.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(1, 'init-schema', now)
+    db.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(
+      2,
+      'add-permission-mode',
+      now,
+    )
+    db.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(
+      3,
+      'add-workspace-id-indexes',
+      now,
+    )
+
+    // Insert a workspace before migration
+    db.prepare(
+      "INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at) VALUES ('w1', 'test', '/tmp', 'main', 'feat', ?, ?)",
+    ).run(now, now)
+
+    runMigrations(db)
+
+    // has_unread column should exist with default value 0
+    const row = db.prepare('SELECT has_unread FROM workspaces WHERE id = ?').get('w1') as { has_unread: number }
+    expect(row.has_unread).toBe(0)
+
+    // Migration should be recorded
+    const history = getMigrationHistory(db)
+    expect(history.some((h) => h.version === 4 && h.name === 'add-has-unread')).toBe(true)
     db.close()
   })
 

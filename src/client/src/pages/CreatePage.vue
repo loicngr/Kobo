@@ -371,7 +371,9 @@ async function handleCreate() {
                   color="indigo-4"
                   :disable="!newManualTask.trim()"
                   @click="addManualTask"
-                />
+                >
+                  <q-tooltip>{{ $t('tooltip.addTask') }}</q-tooltip>
+                </q-btn>
               </div>
               <div
                 v-for="(task, idx) in manualTasks"
@@ -387,7 +389,9 @@ async function handleCreate() {
                   size="xs"
                   color="grey-6"
                   @click="removeManualTask(idx)"
-                />
+                >
+                  <q-tooltip>{{ $t('tooltip.removeTask') }}</q-tooltip>
+                </q-btn>
               </div>
             </div>
           </q-expansion-item>
@@ -419,7 +423,9 @@ async function handleCreate() {
                   color="indigo-4"
                   :disable="!newManualCriterion.trim()"
                   @click="addManualCriterion"
-                />
+                >
+                  <q-tooltip>{{ $t('tooltip.addCriterion') }}</q-tooltip>
+                </q-btn>
               </div>
               <div
                 v-for="(crit, idx) in manualCriteria"
@@ -435,7 +441,9 @@ async function handleCreate() {
                   size="xs"
                   color="grey-6"
                   @click="removeManualCriterion(idx)"
-                />
+                >
+                  <q-tooltip>{{ $t('tooltip.removeCriterion') }}</q-tooltip>
+                </q-btn>
               </div>
             </div>
           </q-expansion-item>
