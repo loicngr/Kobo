@@ -50,7 +50,7 @@ describe('SubagentsPanel.vue', () => {
     expect(wrapper.text()).toContain('5.2s')
   })
 
-  it('renders multiple subagents in startedAt order', async () => {
+  it('renders multiple subagents with newest first', async () => {
     const store = useWorkspaceStore()
     store.selectedWorkspaceId = 'ws-1'
     store.upsertSubagent('ws-1', { toolUseId: 'a', description: 'First' })
@@ -60,8 +60,8 @@ describe('SubagentsPanel.vue', () => {
     const wrapper = mountPanel()
     const items = wrapper.findAll('.subagent-item')
     expect(items).toHaveLength(2)
-    expect(items[0].text()).toContain('First')
-    expect(items[1].text()).toContain('Second')
+    expect(items[0].text()).toContain('Second')
+    expect(items[1].text()).toContain('First')
   })
 
   it('formats duration correctly', async () => {
