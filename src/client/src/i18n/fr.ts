@@ -134,9 +134,9 @@ export default {
   'settings.gitConventionsHint':
     "Ces conventions sont écrites dans .ai/git-conventions.md pour chaque nouvel espace de travail et doivent être respectées par l'agent avant toute opération Git. Remplacées par les conventions par projet si définies.",
   'settings.setupScript': 'Script de setup',
-  'settings.setupScriptPlaceholder': '#!/bin/bash\nnpm install',
+  'settings.setupScriptPlaceholder': 'npm install',
   'settings.setupScriptHint':
-    "S'exécute dans le worktree après sa création, avant le démarrage de l'agent. En cas d'échec, le workspace passe en erreur. Timeout : 5 minutes.",
+    "Exécuté avec bash dans le worktree après sa création, avant le démarrage de l'agent. Pas besoin de shebang. En cas d'échec, le workspace passe en erreur. Timeout : 5 minutes.",
   'settings.configuredProjects': 'Projets configurés',
   'settings.noProjects': 'Aucun projet configuré',
   'settings.addProject': 'Ajouter un projet',

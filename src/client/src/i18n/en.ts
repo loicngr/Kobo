@@ -133,9 +133,9 @@ export default {
   'settings.gitConventionsHint':
     'These conventions are written to .ai/git-conventions.md in each new workspace and must be followed by the agent before any git operation. Overridden by per-project conventions if defined.',
   'settings.setupScript': 'Setup script',
-  'settings.setupScriptPlaceholder': '#!/bin/bash\nnpm install',
+  'settings.setupScriptPlaceholder': 'npm install',
   'settings.setupScriptHint':
-    'Runs in the worktree after creation, before the agent starts. If it fails, the workspace is set to error. Timeout: 5 minutes.',
+    'Executed with bash in the worktree after creation, before the agent starts. No shebang needed. If it fails, the workspace is set to error. Timeout: 5 minutes.',
   'settings.configuredProjects': 'Configured projects',
   'settings.noProjects': 'No projects configured',
   'settings.addProject': 'Add project',

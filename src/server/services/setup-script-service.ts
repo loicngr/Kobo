@@ -24,7 +24,7 @@ export function runSetupScript(
     fs.mkdirSync(path.dirname(scriptPath), { recursive: true })
     fs.writeFileSync(scriptPath, script, { mode: 0o755 })
 
-    const proc = spawn('/usr/bin/env', ['bash', scriptPath], {
+    const proc = spawn('bash', [scriptPath], {
       cwd: worktreePath,
       env: {
         ...process.env,
@@ -48,8 +48,11 @@ export function runSetupScript(
       })
     }, timeoutMs)
 
+    const ansiPattern = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*[a-zA-Z]`, 'g')
+    const stripAnsi = (s: string) => s.replace(ansiPattern, '')
+
     const emitLine = (text: string) => {
-      const trimmed = text.trim()
+      const trimmed = stripAnsi(text).trim()
       if (trimmed) {
         wsService.emit(workspaceId, 'setup:output', { text: trimmed })
       }

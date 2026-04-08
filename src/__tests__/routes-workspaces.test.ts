@@ -408,7 +408,7 @@ describe('POST /api/workspaces', () => {
     expect(vi.mocked(setupScriptService.runSetupScript)).toHaveBeenCalledOnce()
   })
 
-  it('returns 500 and sets status to error when setup script fails', async () => {
+  it('returns workspace in error status when setup script fails', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
     vi.mocked(worktreeService.createWorktree).mockReturnValue('/tmp/worktree')
     vi.mocked(workspaceService.listTasks).mockReturnValue([])
@@ -435,9 +435,10 @@ describe('POST /api/workspaces', () => {
       }),
     })
 
-    expect(res.status).toBe(500)
-    const body = await res.json()
-    expect(body.error).toContain('Setup script failed')
+    expect(res.status).toBe(201)
+    expect(workspaceService.updateWorkspaceStatus).toHaveBeenCalledWith(fakeWorkspace.id, 'error')
+    // Agent should NOT be started when setup script fails
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
   })
 
   it('does not run setup script when not configured', async () => {

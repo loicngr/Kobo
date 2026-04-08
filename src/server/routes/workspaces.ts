@@ -172,6 +172,7 @@ app.post('/', async (c) => {
     }
 
     // 4d. Run setup script if configured
+    let setupScriptFailed = false
     if (effectiveSettings.setupScript) {
       workspaceService.updateWorkspaceStatus(workspace.id, 'extracting')
       wsService.emit(workspace.id, 'setup:output', { text: '[kobo] Running setup script...' })
@@ -184,13 +185,13 @@ app.post('/', async (c) => {
         })
         if (result.exitCode !== 0) {
           workspaceService.updateWorkspaceStatus(workspace.id, 'error')
-          return c.json({ error: `Setup script failed with exit code ${result.exitCode}` }, 500)
+          setupScriptFailed = true
         }
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         console.error(`[workspaces] Setup script error: ${message}`)
         workspaceService.updateWorkspaceStatus(workspace.id, 'error')
-        return c.json({ error: `Setup script error: ${message}` }, 500)
+        setupScriptFailed = true
       }
     }
 
@@ -239,61 +240,64 @@ app.post('/', async (c) => {
       }
     }
 
-    // 6. Update workspace status to 'brainstorming'
-    workspaceService.updateWorkspaceStatus(workspace.id, 'brainstorming')
+    // Skip agent launch if setup script failed — workspace stays in 'error' status
+    if (!setupScriptFailed) {
+      // 6. Update workspace status to 'brainstorming'
+      workspaceService.updateWorkspaceStatus(workspace.id, 'brainstorming')
 
-    // 6. Build prompt with tasks and acceptance criteria
-    const allTasks = workspaceService.listTasks(workspace.id)
-    const todos = allTasks.filter((t) => !t.isAcceptanceCriterion)
-    const criteria = allTasks.filter((t) => t.isAcceptanceCriterion)
+      // 6. Build prompt with tasks and acceptance criteria
+      const allTasks = workspaceService.listTasks(workspace.id)
+      const todos = allTasks.filter((t) => !t.isAcceptanceCriterion)
+      const criteria = allTasks.filter((t) => t.isAcceptanceCriterion)
 
-    let brainstormPrompt = `You are working on: ${workspace.name}\n`
+      let brainstormPrompt = `You are working on: ${workspace.name}\n`
 
-    if (notionContent?.goal) {
-      brainstormPrompt += `\nGoal: ${notionContent.goal}\n`
-    }
+      if (notionContent?.goal) {
+        brainstormPrompt += `\nGoal: ${notionContent.goal}\n`
+      }
 
-    brainstormPrompt += `\nBranch: ${body.workingBranch}\n`
+      brainstormPrompt += `\nBranch: ${body.workingBranch}\n`
 
-    if (notionFilePath) {
-      brainstormPrompt += `\nNotion ticket: ${body.notionUrl}`
-      brainstormPrompt += `\nLocal copy: ${notionFilePath}\n`
-    }
+      if (notionFilePath) {
+        brainstormPrompt += `\nNotion ticket: ${body.notionUrl}`
+        brainstormPrompt += `\nLocal copy: ${notionFilePath}\n`
+      }
 
-    if (todos.length > 0) {
-      brainstormPrompt += `\nTasks:\n${todos.map((t) => `- [${t.status === 'done' ? 'x' : ' '}] ${t.title}`).join('\n')}\n`
-    }
+      if (todos.length > 0) {
+        brainstormPrompt += `\nTasks:\n${todos.map((t) => `- [${t.status === 'done' ? 'x' : ' '}] ${t.title}`).join('\n')}\n`
+      }
 
-    if (criteria.length > 0) {
-      brainstormPrompt += `\nAcceptance criteria:\n${criteria.map((t) => `- [${t.status === 'done' ? 'x' : ' '}] ${t.title}`).join('\n')}\n`
-    }
+      if (criteria.length > 0) {
+        brainstormPrompt += `\nAcceptance criteria:\n${criteria.map((t) => `- [${t.status === 'done' ? 'x' : ' '}] ${t.title}`).join('\n')}\n`
+      }
 
-    if (criteria.length > 0 || todos.length > 0) {
-      brainstormPrompt += `\nYou have access to MCP tools via the 'kobo-tasks' server:\n`
-      brainstormPrompt += `- list_tasks() — list all tasks and criteria with their IDs and current status\n`
-      brainstormPrompt += `- mark_task_done(task_id) — mark a task or criterion as done\n`
-      brainstormPrompt += `\nAs you implement the work and validate each criterion, call mark_task_done with the corresponding task_id. Call list_tasks first to see the current IDs.\n`
-    }
+      if (criteria.length > 0 || todos.length > 0) {
+        brainstormPrompt += `\nYou have access to MCP tools via the 'kobo-tasks' server:\n`
+        brainstormPrompt += `- list_tasks() — list all tasks and criteria with their IDs and current status\n`
+        brainstormPrompt += `- mark_task_done(task_id) — mark a task or criterion as done\n`
+        brainstormPrompt += `\nAs you implement the work and validate each criterion, call mark_task_done with the corresponding task_id. Call list_tasks first to see the current IDs.\n`
+      }
 
-    if (effectiveSettings.gitConventions) {
-      brainstormPrompt += `\n# Git conventions\nIMPORTANT: Before any git operation (commit, branch, rebase, merge, push), read and apply the conventions defined in \`.ai/git-conventions.md\`. They are project-specific and override any default behavior. Re-read this file if you're unsure or if context was compacted.\n`
-    }
+      if (effectiveSettings.gitConventions) {
+        brainstormPrompt += `\n# Git conventions\nIMPORTANT: Before any git operation (commit, branch, rebase, merge, push), read and apply the conventions defined in \`.ai/git-conventions.md\`. They are project-specific and override any default behavior. Re-read this file if you're unsure or if context was compacted.\n`
+      }
 
-    brainstormPrompt += `\nIMPORTANT: Start by reading CLAUDE.md and/or AGENTS.md at the project root if they exist — they contain project conventions and instructions you must follow.`
-    brainstormPrompt += `\n\nThen brainstorm the implementation approach. Explore the codebase to understand the existing structure. Ask clarifying questions if needed. When you're done brainstorming and have a clear plan, create a plan file and proceed with implementation. Once you have completed the brainstorming phase, output [BRAINSTORM_COMPLETE] on its own line.`
+      brainstormPrompt += `\nIMPORTANT: Start by reading CLAUDE.md and/or AGENTS.md at the project root if they exist — they contain project conventions and instructions you must follow.`
+      brainstormPrompt += `\n\nThen brainstorm the implementation approach. Explore the codebase to understand the existing structure. Ask clarifying questions if needed. When you're done brainstorming and have a clear plan, create a plan file and proceed with implementation. Once you have completed the brainstorming phase, output [BRAINSTORM_COMPLETE] on its own line.`
 
-    // Persist the initial prompt in the feed so it's visible in the chat
-    wsService.emit(workspace.id, 'user:message', { content: brainstormPrompt, sender: 'system-prompt' })
+      // Persist the initial prompt in the feed so it's visible in the chat
+      wsService.emit(workspace.id, 'user:message', { content: brainstormPrompt, sender: 'system-prompt' })
 
-    try {
-      agentManager.startAgent(workspace.id, worktreePath, brainstormPrompt, workspace.model)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      console.error(`[workspaces] Failed to start agent: ${message}`)
       try {
-        workspaceService.updateWorkspaceStatus(workspace.id, 'error')
-      } catch {
-        /* already logged */
+        agentManager.startAgent(workspace.id, worktreePath, brainstormPrompt, workspace.model)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        console.error(`[workspaces] Failed to start agent: ${message}`)
+        try {
+          workspaceService.updateWorkspaceStatus(workspace.id, 'error')
+        } catch {
+          /* already logged */
+        }
       }
     }
 

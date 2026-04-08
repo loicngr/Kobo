@@ -134,9 +134,9 @@ export default {
   'settings.gitConventionsHint':
     'Estas convenciones se escriben en .ai/git-conventions.md en cada nuevo workspace y deben ser seguidas por el agente antes de cualquier operación Git. Se anulan con convenciones por proyecto si están definidas.',
   'settings.setupScript': 'Script de setup',
-  'settings.setupScriptPlaceholder': '#!/bin/bash\nnpm install',
+  'settings.setupScriptPlaceholder': 'npm install',
   'settings.setupScriptHint':
-    'Se ejecuta en el worktree después de su creación, antes de que el agente inicie. Si falla, el workspace se establece en error. Timeout: 5 minutos.',
+    'Se ejecuta con bash en el worktree después de su creación, antes de que el agente inicie. No necesita shebang. Si falla, el workspace se establece en error. Timeout: 5 minutos.',
   'settings.configuredProjects': 'Proyectos configurados',
   'settings.noProjects': 'No hay proyectos configurados',
   'settings.addProject': 'Añadir proyecto',
