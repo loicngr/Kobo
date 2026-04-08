@@ -49,6 +49,7 @@ app.post('/', async (c) => {
       tasks?: string[]
       acceptanceCriteria?: string[]
       skipSetupScript?: boolean
+      description?: string
     }>()
 
     if (!body.name || !body.projectPath || !body.sourceBranch || !body.workingBranch) {
@@ -279,6 +280,10 @@ app.post('/', async (c) => {
       const ticketId = notionContent?.ticketId || `${workspace.name} ${body.workingBranch}`.match(/TK-\d+/i)?.[0]
       if (ticketId) {
         brainstormPrompt += `Ticket: ${ticketId.toUpperCase()}\n`
+      }
+
+      if (body.description) {
+        brainstormPrompt += `\nUser instructions:\n${body.description}\n`
       }
 
       if (notionContent?.goal) {

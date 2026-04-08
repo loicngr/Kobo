@@ -229,6 +229,7 @@ async function handleCreate() {
         ? { acceptanceCriteria: manualCriteria.value }
         : {}),
       ...(skipSetupScript.value ? { skipSetupScript: true } : {}),
+      ...(description.value.trim() ? { description: description.value.trim() } : {}),
     }
 
     const workspace = await store.createWorkspace(payload)
