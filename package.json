@@ -1,6 +1,6 @@
 {
   "name": "@loicngr/kobo",
-  "version": "1.4.7",
+  "version": "1.4.8",
   "description": "Kōbō — multi-workspace agent manager for Claude Code. Orchestrates isolated git worktrees with dev servers, Notion integration, and MCP tools.",
   "type": "module",
   "license": "GPL-3.0-or-later",
