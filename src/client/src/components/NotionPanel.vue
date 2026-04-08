@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { useWebSocketStore } from 'src/stores/websocket'
 import type { Task, Workspace } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { sendCheckProgress } from 'src/utils/kobo-commands'
 import { computed, nextTick, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -11,7 +13,13 @@ const props = defineProps<{
 
 const { t } = useI18n()
 const store = useWorkspaceStore()
+const wsStore = useWebSocketStore()
 const refreshing = ref(false)
+
+function askAgentProgress() {
+  if (!props.workspace?.id) return
+  sendCheckProgress(props.workspace.id, wsStore, store)
+}
 
 // Filter non-criterion tasks for NotionPanel
 const displayTasks = computed(() => props.tasks.filter((t) => !t.isAcceptanceCriterion))
@@ -165,6 +173,18 @@ function statusColor(status: string): string {
         {{ $t('notion.title') }}
       </div>
       <q-space />
+      <q-btn
+        v-if="workspace"
+        flat
+        dense
+        round
+        size="xs"
+        icon="fact_check"
+        color="grey-5"
+        @click="askAgentProgress"
+      >
+        <q-tooltip>{{ $t('tasks.askProgress') }}</q-tooltip>
+      </q-btn>
       <q-btn
         v-if="workspace"
         flat

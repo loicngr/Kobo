@@ -153,23 +153,23 @@ function parseOptions(content: string): { textBefore: string; options: ParsedOpt
     }
   }
 
-  // Pattern 2: "1. **Label** — Description" or "1. **Label —** Description"
-  const numberedRegex = /^\d+\.\s*\*\*(.+?)\*\*\s*[—–-]\s*(.+)/gm
-  const numberedMatches = [...content.matchAll(numberedRegex)]
-  if (numberedMatches.length >= 2) {
-    const firstMatchIndex = content.indexOf(numberedMatches[0][0])
+  // Pattern 2: "1. Label — Description" or "1. Label → Description" (bold already stripped)
+  const numberedBoldRegex = /^\d+\.\s*(.+?)\s*[—–→]\s+(.+)/gm
+  const numberedBoldMatches = [...stripped.matchAll(numberedBoldRegex)]
+  if (numberedBoldMatches.length >= 2) {
+    const firstKey = numberedBoldMatches[0][0].substring(0, 3)
+    const firstMatchIndex = findOriginalIndex(firstKey)
     return {
       textBefore: content.substring(0, firstMatchIndex).trim(),
-      options: numberedMatches.map((m, i) => ({
+      options: numberedBoldMatches.map((m, i) => ({
         key: String(i + 1),
         label: `${m[1]} — ${m[2]}`,
       })),
     }
   }
 
-  // Pattern 3: "- **Label** — Description" or "- **Label** (extra) — Description"
-  // Use [^\S\n] instead of \s to prevent matching across line boundaries
-  const bulletBoldRegex = /^[-•][^\S\n]*\*\*(.+?)\*\*[^\S\n]*(?:\([^)]*\)[^\S\n]*)?[—–-][^\S\n]*(.+)/gm
+  // Pattern 3: "- **Label** — Description" — requires bold to avoid matching plain lists
+  const bulletBoldRegex = /^[-•][^\S\n]*\*\*(.+?)\*\*[^\S\n]*(?:\([^)]*\)[^\S\n]*)?[—–\-→][^\S\n]*(.+)/gm
   const bulletBoldMatches = [...content.matchAll(bulletBoldRegex)]
   if (bulletBoldMatches.length >= 2) {
     const firstMatchIndex = content.indexOf(bulletBoldMatches[0][0])
@@ -182,14 +182,14 @@ function parseOptions(content: string): { textBefore: string; options: ParsedOpt
     }
   }
 
-  // Pattern 4: "- **Label**" or "- **Label** (extra)" — simple bold bullet list without description
-  const simpleBulletRegex = /^[-•][^\S\n]*\*\*(.+?)\*\*[^\S\n]*(?:\(([^)]*)\))?[^\S\n]*$/gm
-  const simpleBulletMatches = [...content.matchAll(simpleBulletRegex)]
-  if (simpleBulletMatches.length >= 2) {
-    const firstMatchIndex = content.indexOf(simpleBulletMatches[0][0])
+  // Pattern 4: "- **Label**" or "- **Label** (extra)" — requires bold to avoid matching plain lists
+  const simpleBoldBulletRegex = /^[-•][^\S\n]*\*\*(.+?)\*\*[^\S\n]*(?:\(([^)]*)\))?[^\S\n]*$/gm
+  const simpleBoldBulletMatches = [...content.matchAll(simpleBoldBulletRegex)]
+  if (simpleBoldBulletMatches.length >= 2) {
+    const firstMatchIndex = content.indexOf(simpleBoldBulletMatches[0][0])
     return {
       textBefore: content.substring(0, firstMatchIndex).trim(),
-      options: simpleBulletMatches.map((m, i) => ({
+      options: simpleBoldBulletMatches.map((m, i) => ({
         key: String(i + 1),
         label: m[2] ? `${m[1]} (${m[2]})` : m[1],
       })),
@@ -223,6 +223,11 @@ function getCachedMarkdown(id: string, content: string): string {
     markdownCache.set(id, renderMarkdown(content))
   }
   return markdownCache.get(id)!
+}
+
+function shortLabel(label: string): string {
+  const sep = label.match(/\s*[—–→]\s*/)
+  return sep ? label.substring(0, sep.index) : label
 }
 
 function sendOptionChoice(key: string) {
@@ -500,6 +505,15 @@ function getFileChangeInfo(item: ActivityItem): FileChangeInfo | null {
   return null
 }
 
+function shortenFilePath(filePath: string): string {
+  const ws = store.selectedWorkspace
+  if (!ws) return filePath
+  const worktreePrefix = `${ws.projectPath}/.worktrees/${ws.workingBranch}/`
+  if (filePath.startsWith(worktreePrefix)) return filePath.slice(worktreePrefix.length)
+  if (filePath.startsWith(ws.projectPath + '/')) return filePath.slice(ws.projectPath.length + 1)
+  return filePath
+}
+
 function fileBasename(filePath: string): string {
   return filePath.split('/').pop() ?? filePath
 }
@@ -619,7 +633,18 @@ function toolDisplayName(item: ActivityItem): string {
 function toolDescription(item: ActivityItem): string {
   if (!item.meta) return ''
   const input = (item.meta as Record<string, unknown>).input as Record<string, unknown> | undefined
-  if (input && typeof input.description === 'string') return input.description
+  if (!input) return ''
+  if (typeof input.description === 'string') return input.description
+  if (typeof input.file_path === 'string') return shortenFilePath(input.file_path as string)
+  if (typeof input.pattern === 'string') {
+    const base = typeof input.path === 'string' ? `${shortenFilePath(input.path as string)}/` : ''
+    return `${base}${input.pattern}`
+  }
+  if (typeof input.path === 'string') return shortenFilePath(input.path as string)
+  if (typeof input.command === 'string') {
+    const cmd = input.command as string
+    return cmd.length > 80 ? `${cmd.slice(0, 80)}…` : cmd
+  }
   return ''
 }
 
@@ -771,7 +796,7 @@ function formatSystemDetails(item: ActivityItem): string {
               class="af-lang-badge"
               :class="`text-${iconColorForExt(fileExtension(getFileChangeInfo(item)!.filePath))}`"
             >{{ langIconForExt(fileExtension(getFileChangeInfo(item)!.filePath)) }}</span>
-            <span class="af-file-path text-grey-4 ellipsis">{{ getFileChangeInfo(item)!.filePath }}</span>
+            <span class="af-file-path text-grey-4 ellipsis">{{ shortenFilePath(getFileChangeInfo(item)!.filePath) }}</span>
             <span class="af-diff-stats">
               <span v-if="getFileChangeInfo(item)!.additions" class="text-green-5">+{{ getFileChangeInfo(item)!.additions }}</span>
               <span v-if="getFileChangeInfo(item)!.deletions" class="text-red-5 q-ml-xs">-{{ getFileChangeInfo(item)!.deletions }}</span>
@@ -855,8 +880,8 @@ function formatSystemDetails(item: ActivityItem): string {
         <div class="af-text-content af-markdown" v-html="getCachedMarkdown(item.id, item.content)" />
         <!-- Quick-reply buttons when options detected -->
         <div
-          v-if="getCachedOptions(item.id, item.content) && item.id === lastTextItemId"
-          class="af-options q-mt-sm q-gutter-xs"
+          v-if="getCachedOptions(item.id, item.content) && item.id === lastTextItemId && item.meta?.sender !== 'user'"
+          class="af-options q-mt-sm row wrap q-gutter-xs"
         >
           <q-btn
             v-for="opt in getCachedOptions(item.id, item.content)!.options"
@@ -864,11 +889,13 @@ function formatSystemDetails(item: ActivityItem): string {
             no-caps
             outline
             dense
+            size="sm"
             color="indigo-4"
-            class="af-option-btn"
+            class="af-option-btn q-pa-xs"
             @click="sendOptionChoice(`${opt.key}. ${opt.label}`)"
           >
-            {{ opt.label }}
+            <span class="text-weight-bold q-mr-xs">{{ opt.key }}.</span> {{ shortLabel(opt.label) }}
+            <q-tooltip v-if="opt.label !== shortLabel(opt.label)">{{ opt.label }}</q-tooltip>
           </q-btn>
         </div>
       </template>

@@ -66,6 +66,7 @@ export default {
   'chatInput.placeholder': 'Message... (/ for skills)',
   'chatInput.skills': 'Skills',
   'chatInput.attachImage': 'Attach image',
+  'koboCommand.checkProgressDesc': 'Verify progress on tasks and acceptance criteria',
   'chatInput.uploading': 'Uploading...',
 
   // Create Page
@@ -91,6 +92,7 @@ export default {
   'createPage.noBranches': 'No branches found',
   'createPage.enterPath': 'Enter a project path',
   'createPage.create': 'Create',
+  'createPage.skipSetupScript': 'Skip setup script',
   'createPage.notionExtractHint': 'Subtasks and acceptance criteria will be extracted from the Notion page.',
   'createPage.notionImportHint': 'Click "Import from Notion" to automatically extract subtasks from a ticket.',
   'createPage.errorCreating': 'Error creating workspace.',
@@ -111,6 +113,9 @@ export default {
   'settings.skipPermissions': 'Skip permission prompts (--dangerously-skip-permissions)',
   'settings.skipPermissionsWarning':
     'Warning: disabling this will cause all tool permissions (Write, Edit, Bash...) to be auto-denied in headless mode. The agent will only be able to read.',
+  'settings.notifications': 'Notifications',
+  'settings.browserNotifications': 'Browser notifications when agent finishes',
+  'settings.audioNotifications': 'Sound notification when agent finishes',
   'settings.activityFeed': 'Activity feed',
   'settings.verboseMessages': 'Show verbose system messages (task_progress, task_started)',
   'settings.availableVariables': 'Available variables in PR prompt template',
@@ -225,6 +230,7 @@ export default {
   'acceptance.empty': 'No acceptance criteria',
 
   // Agent Todos Panel
+  'tasks.askProgress': 'Ask agent to review progress',
   'agentTodos.title': 'Agent Todos',
   'agentTodos.empty': 'No agent todos',
 
@@ -297,4 +303,8 @@ export default {
   'diff.noChanges': 'No changes',
   'diff.selectFile': 'Select a file to view diff',
   'diff.addToChat': 'Add to chat',
+
+  // Notifications
+  'notification.agentFinished': '{name} — Agent finished',
+  'notification.agentError': '{name} — Agent error',
 }

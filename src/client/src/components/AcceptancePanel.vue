@@ -1,6 +1,8 @@
 <script setup lang="ts">
+import { useWebSocketStore } from 'src/stores/websocket'
 import type { Task } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { sendCheckProgress } from 'src/utils/kobo-commands'
 import { nextTick, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -10,6 +12,13 @@ defineProps<{
 
 const { t } = useI18n()
 const store = useWorkspaceStore()
+const wsStore = useWebSocketStore()
+
+function askAgentProgress() {
+  const wid = store.selectedWorkspaceId
+  if (!wid) return
+  sendCheckProgress(wid, wsStore, store)
+}
 
 // CRUD state
 const adding = ref(false)
@@ -146,6 +155,18 @@ async function removeCriterion(task: Task) {
         {{ $t('acceptance.title') }}
       </div>
       <q-space />
+      <q-btn
+        v-if="store.selectedWorkspace"
+        flat
+        dense
+        round
+        size="xs"
+        icon="fact_check"
+        color="grey-5"
+        @click="askAgentProgress"
+      >
+        <q-tooltip>{{ $t('tasks.askProgress') }}</q-tooltip>
+      </q-btn>
       <q-btn
         v-if="store.selectedWorkspace"
         flat

@@ -9,9 +9,16 @@ import SubagentsPanel from 'src/components/SubagentsPanel.vue'
 import ToolsPanel from 'src/components/ToolsPanel.vue'
 import WorkspaceList from 'src/components/WorkspaceList.vue'
 import { useWorkspaceStore } from 'src/stores/workspace'
-import { ref } from 'vue'
+import { computed, ref } from 'vue'
+import { useRoute } from 'vue-router'
 
-const rightTab = ref('git')
+const DRAWER_TAB_KEY = 'kobo:rightTab'
+const rightTab = ref(localStorage.getItem(DRAWER_TAB_KEY) ?? 'git')
+
+function setRightTab(val: string) {
+  rightTab.value = val
+  localStorage.setItem(DRAWER_TAB_KEY, val)
+}
 
 const leftDrawerOpen = ref(true)
 const rightDrawerOpen = ref(true)
@@ -45,7 +52,10 @@ function startResize(event: MouseEvent) {
   document.addEventListener('mouseup', onMouseUp)
 }
 
+const route = useRoute()
 const store = useWorkspaceStore()
+
+const showRightDrawer = computed(() => route.name === 'workspace')
 </script>
 
 <template>
@@ -63,7 +73,7 @@ const store = useWorkspaceStore()
     </q-drawer>
 
     <q-drawer
-      v-model="rightDrawerOpen"
+      :model-value="showRightDrawer"
       side="right"
       :width="300"
       :breakpoint="0"
@@ -72,13 +82,14 @@ const store = useWorkspaceStore()
       class="bg-dark"
     >
       <q-tabs
-        v-model="rightTab"
+        :model-value="rightTab"
         dense
         dark
         active-color="indigo-4"
         indicator-color="indigo-4"
         narrow-indicator
         shrink
+        @update:model-value="setRightTab"
       >
         <q-tab name="git" icon="commit" />
         <q-tab name="server" icon="dns" />

@@ -81,6 +81,8 @@ export interface GlobalSettings {
   prPromptTemplate: string
   gitConventions: string
   editorCommand: string
+  browserNotifications: boolean
+  audioNotifications: boolean
 }
 
 /** Top-level settings structure persisted to settings.json. */
@@ -132,6 +134,15 @@ const settingsMigrations: SettingsMigration[] = [
       }
     },
   },
+  {
+    version: 4,
+    name: 'add-editor-and-notifications',
+    migrate({ global }) {
+      if (typeof global.editorCommand !== 'string') global.editorCommand = ''
+      if (typeof global.browserNotifications !== 'boolean') global.browserNotifications = true
+      if (typeof global.audioNotifications !== 'boolean') global.audioNotifications = true
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -165,6 +176,8 @@ function defaultSettings(): Settings {
       prPromptTemplate: DEFAULT_PR_PROMPT_TEMPLATE,
       gitConventions: DEFAULT_GIT_CONVENTIONS,
       editorCommand: '',
+      browserNotifications: true,
+      audioNotifications: true,
     },
     projects: [],
   }
@@ -315,6 +328,8 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'prPromptTemplate',
     'gitConventions',
     'editorCommand',
+    'browserNotifications',
+    'audioNotifications',
   ]
   const filtered = pickKnownKeys<GlobalSettings>(data as Record<string, unknown>, allowedGlobalKeys)
   settings.global = { ...settings.global, ...filtered }

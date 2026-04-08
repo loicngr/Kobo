@@ -23,6 +23,7 @@ const useNotion = ref(false)
 const model = ref('auto')
 const projectPath = ref('')
 const branch = ref<string | null>(null)
+const skipSetupScript = ref(false)
 
 // State
 const branches = ref<string[]>([])
@@ -227,6 +228,7 @@ async function handleCreate() {
       ...(showManualSections.value && manualCriteria.value.length > 0
         ? { acceptanceCriteria: manualCriteria.value }
         : {}),
+      ...(skipSetupScript.value ? { skipSetupScript: true } : {}),
     }
 
     const workspace = await store.createWorkspace(payload)
@@ -544,6 +546,15 @@ async function handleCreate() {
               </q-item>
             </template>
           </q-select>
+
+          <q-checkbox
+            v-model="skipSetupScript"
+            :label="$t('createPage.skipSetupScript')"
+            dark
+            dense
+            color="indigo-4"
+            class="text-grey-5 text-caption q-mr-sm"
+          />
 
           <!-- Create button -->
           <q-btn

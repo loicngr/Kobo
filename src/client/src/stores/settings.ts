@@ -23,6 +23,8 @@ interface GlobalSettings {
   prPromptTemplate: string
   gitConventions: string
   editorCommand: string
+  browserNotifications: boolean
+  audioNotifications: boolean
 }
 
 function toBase64Url(str: string): string {
@@ -39,6 +41,8 @@ export const useSettingsStore = defineStore('settings', {
       prPromptTemplate: '',
       gitConventions: '',
       editorCommand: '',
+      browserNotifications: true,
+      audioNotifications: true,
     } as GlobalSettings,
     projects: [] as ProjectSettings[],
     loading: false,

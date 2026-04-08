@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import fs from 'node:fs'
+import path from 'node:path'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
@@ -242,6 +244,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         required: ['status'],
       },
     },
+    {
+      name: 'get_notion_ticket',
+      description:
+        'Get the Notion ticket info for the current workspace. Returns the Notion URL and the extracted ticket content (from .ai/thoughts/) if available.',
+      inputSchema: { type: 'object', properties: {}, required: [] },
+    },
   ],
 }))
 
@@ -340,6 +348,23 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (name === 'list_workspace_images') {
       const info = getWorkspaceInfoHandler(db, workspaceId!)
       return ok(listWorkspaceImagesHandler(info.worktreePath))
+    }
+
+    if (name === 'get_notion_ticket') {
+      const info = getWorkspaceInfoHandler(db, workspaceId!)
+      const thoughtsDir = path.join(info.worktreePath, '.ai', 'thoughts')
+      let ticketContent = ''
+      if (fs.existsSync(thoughtsDir)) {
+        const files = fs.readdirSync(thoughtsDir).filter((f) => f.endsWith('.md'))
+        for (const file of files) {
+          ticketContent += fs.readFileSync(path.join(thoughtsDir, file), 'utf-8') + '\n'
+        }
+      }
+      return ok({
+        notionUrl: info.notionUrl,
+        notionPageId: info.notionPageId,
+        ticketContent: ticketContent.trim() || null,
+      })
     }
 
     if (name === 'get_git_info') {

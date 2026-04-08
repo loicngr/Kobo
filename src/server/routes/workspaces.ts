@@ -48,6 +48,7 @@ app.post('/', async (c) => {
       model?: string
       tasks?: string[]
       acceptanceCriteria?: string[]
+      skipSetupScript?: boolean
     }>()
 
     if (!body.name || !body.projectPath || !body.sourceBranch || !body.workingBranch) {
@@ -142,21 +143,36 @@ app.post('/', async (c) => {
       return c.json({ error: `Failed to create worktree: ${message}` }, 500)
     }
 
-    // Ensure Kobo-generated files inside .ai/ are gitignored (the .ai/ dir
-    // itself may contain project files that SHOULD be committed).
+    // Ensure Kobo-generated files are gitignored. Check both the root
+    // .gitignore and .ai/.gitignore to avoid duplicate entries.
     try {
-      const gitignorePath = path.join(worktreePath, '.gitignore')
-      const existing = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, 'utf-8') : ''
-      const lines = existing.split('\n').map((l: string) => l.trim())
+      const rootGitignorePath = path.join(worktreePath, '.gitignore')
+      const aiGitignorePath = path.join(worktreePath, '.ai', '.gitignore')
+
+      const rootContent = fs.existsSync(rootGitignorePath) ? fs.readFileSync(rootGitignorePath, 'utf-8') : ''
+      const rootLines = rootContent.split('\n').map((l: string) => l.trim())
+      const aiContent = fs.existsSync(aiGitignorePath) ? fs.readFileSync(aiGitignorePath, 'utf-8') : ''
+      const aiLines = aiContent.split('\n').map((l: string) => l.trim())
+
+      // Each entry: [pattern for root .gitignore, equivalent pattern in .ai/.gitignore]
+      const entries: [string, string][] = [
+        ['.ai/.git-conventions.md', '.git-conventions.md'],
+        ['.ai/thoughts/', 'thoughts/'],
+        ['.ai/images/', 'images/'],
+        ['.ai/.setup-script.tmp', '.setup-script.tmp'],
+        ['.mcp.json', ''],
+      ]
+
       const toAdd: string[] = []
-      if (!lines.includes('.ai/.git-conventions.md')) toAdd.push('.ai/.git-conventions.md')
-      if (!lines.includes('.ai/thoughts/')) toAdd.push('.ai/thoughts/')
-      if (!lines.includes('.ai/images/')) toAdd.push('.ai/images/')
-      if (!lines.includes('.ai/.setup-script.tmp')) toAdd.push('.ai/.setup-script.tmp')
-      if (!lines.includes('.mcp.json')) toAdd.push('.mcp.json')
+      for (const [rootPattern, aiPattern] of entries) {
+        const inRoot = rootLines.includes(rootPattern)
+        const inAi = aiPattern && aiLines.includes(aiPattern)
+        if (!inRoot && !inAi) toAdd.push(rootPattern)
+      }
+
       if (toAdd.length > 0) {
-        const separator = existing.length > 0 && !existing.endsWith('\n') ? '\n' : ''
-        fs.appendFileSync(gitignorePath, `${separator}${toAdd.join('\n')}\n`, 'utf-8')
+        const separator = rootContent.length > 0 && !rootContent.endsWith('\n') ? '\n' : ''
+        fs.appendFileSync(rootGitignorePath, `${separator}${toAdd.join('\n')}\n`, 'utf-8')
       }
     } catch (err) {
       console.error('[workspaces] Failed to update .gitignore:', err)
@@ -175,9 +191,9 @@ app.post('/', async (c) => {
       }
     }
 
-    // Run setup script if configured
+    // Run setup script if configured and not skipped
     let setupScriptFailed = false
-    if (effectiveSettings.setupScript) {
+    if (effectiveSettings.setupScript && !body.skipSetupScript) {
       workspaceService.updateWorkspaceStatus(workspace.id, 'extracting')
       wsService.emit(workspace.id, 'setup:output', { text: '[kobo] Running setup script...' })
       try {
@@ -206,11 +222,14 @@ app.post('/', async (c) => {
         const thoughtsDir = path.join(worktreePath, '.ai', 'thoughts')
         fs.mkdirSync(thoughtsDir, { recursive: true })
 
-        // Derive filename from title (TK-XXX pattern or slug)
-        const tkMatch = workspace.name.match(/TK-\d+/i)
-        const filename = tkMatch
-          ? `${tkMatch[0]}.md`
-          : `PAGE-${notionService.parseNotionUrl(body.notionUrl).replace(/-/g, '')}.md`
+        // Derive filename from Notion ticket ID, or fallback to branch/name pattern
+        const notionTicketId = notionContent.ticketId
+        const fallbackMatch = `${workspace.name} ${body.workingBranch}`.match(/TK-\d+/i)
+        const filename = notionTicketId
+          ? `${notionTicketId.toUpperCase()}.md`
+          : fallbackMatch
+            ? `${fallbackMatch[0].toUpperCase()}.md`
+            : `PAGE-${notionService.parseNotionUrl(body.notionUrl).replace(/-/g, '')}.md`
         notionFilePath = path.join(thoughtsDir, filename)
 
         const today = new Date().toISOString().split('T')[0]
@@ -256,11 +275,17 @@ app.post('/', async (c) => {
 
       let brainstormPrompt = `You are working on: ${workspace.name}\n`
 
+      // Include ticket ID if found so the agent uses the correct reference
+      const ticketId = notionContent?.ticketId || `${workspace.name} ${body.workingBranch}`.match(/TK-\d+/i)?.[0]
+      if (ticketId) {
+        brainstormPrompt += `Ticket: ${ticketId.toUpperCase()}\n`
+      }
+
       if (notionContent?.goal) {
         brainstormPrompt += `\nGoal: ${notionContent.goal}\n`
       }
 
-      brainstormPrompt += `\nBranch: ${body.workingBranch}\n`
+      brainstormPrompt += `\nBranch: ${body.workingBranch}\nSource branch: ${body.sourceBranch}\nIMPORTANT: When creating a pull request, always use --base ${body.sourceBranch} to target the correct source branch.\n`
 
       if (notionFilePath) {
         brainstormPrompt += `\nNotion ticket: ${body.notionUrl}`
@@ -275,11 +300,14 @@ app.post('/', async (c) => {
         brainstormPrompt += `\nAcceptance criteria:\n${criteria.map((t) => `- [${t.status === 'done' ? 'x' : ' '}] ${t.title}`).join('\n')}\n`
       }
 
+      brainstormPrompt += `\nYou have access to MCP tools via the 'kobo-tasks' server:\n`
       if (criteria.length > 0 || todos.length > 0) {
-        brainstormPrompt += `\nYou have access to MCP tools via the 'kobo-tasks' server:\n`
         brainstormPrompt += `- list_tasks() — list all tasks and criteria with their IDs and current status\n`
         brainstormPrompt += `- mark_task_done(task_id) — mark a task or criterion as done\n`
-        brainstormPrompt += `\nAs you implement the work and validate each criterion, call mark_task_done with the corresponding task_id. Call list_tasks first to see the current IDs.\n`
+        brainstormPrompt += `\nAs you work, keep the task list up to date: call mark_task_done(task_id) as soon as you complete a task or validate a criterion — don't wait until the end. Call list_tasks() first to see the current IDs.\n`
+      }
+      if (body.notionUrl) {
+        brainstormPrompt += `- get_notion_ticket() — retrieve the Notion ticket info (URL, ticket ID, extracted content)\n`
       }
 
       if (effectiveSettings.gitConventions) {

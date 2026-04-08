@@ -1,8 +1,12 @@
 import { defineStore } from 'pinia'
+import i18n from 'src/i18n'
+import { notify } from 'src/utils/notifications'
 import type { DevServerStatus } from './dev-server'
 import { useDevServerStore } from './dev-server'
 import { useSettingsStore } from './settings'
 import { useWorkspaceStore } from './workspace'
+
+const t = i18n.global.t
 
 // Module-level variables — must NOT be reactive (Vue Proxy breaks WebSocket)
 let _ws: WebSocket | null = null
@@ -13,6 +17,7 @@ export const useWebSocketStore = defineStore('websocket', {
   state: () => ({
     connected: false,
     lastEventId: null as string | null,
+    _replaying: false,
   }),
 
   actions: {
@@ -442,8 +447,17 @@ export const useWebSocketStore = defineStore('websocket', {
 
         case 'agent:status': {
           if (wid) {
-            workspaceStore.updateWorkspaceFromEvent(wid, { status: payload.status as string })
+            const status = payload.status as string
+            workspaceStore.updateWorkspaceFromEvent(wid, { status })
             workspaceStore.fetchWorkspaces()
+            if (!this._replaying && (status === 'completed' || status === 'idle' || status === 'error')) {
+              const wsName = workspaceStore.workspaces.find((w) => w.id === wid)?.name ?? ''
+              const title =
+                status === 'error'
+                  ? t('notification.agentError', { name: wsName })
+                  : t('notification.agentFinished', { name: wsName })
+              notify(title, undefined, wid)
+            }
           }
           break
         }
@@ -499,19 +513,23 @@ export const useWebSocketStore = defineStore('websocket', {
         }
 
         case 'sync:response': {
-          // Replay persisted events to restore activity feed after refresh
-          // filter out nested sync:response events to prevent infinite recursion
-          const events =
-            (payload.events as Array<{
-              id: string
-              workspaceId: string
-              type: string
-              payload: Record<string, unknown>
-              createdAt: string
-            }>) ?? []
-          for (const evt of events) {
-            if (evt.type === 'sync:response') continue
-            this._routeMessage(evt)
+          // Replay persisted events — suppress notifications during replay
+          this._replaying = true
+          try {
+            const events =
+              (payload.events as Array<{
+                id: string
+                workspaceId: string
+                type: string
+                payload: Record<string, unknown>
+                createdAt: string
+              }>) ?? []
+            for (const evt of events) {
+              if (evt.type === 'sync:response') continue
+              this._routeMessage(evt)
+            }
+          } finally {
+            this._replaying = false
           }
           break
         }

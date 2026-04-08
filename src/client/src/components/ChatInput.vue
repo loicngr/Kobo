@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { KOBO_COMMANDS } from 'src/utils/kobo-commands'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -169,7 +170,14 @@ watch(message, async (val) => {
 })
 
 function selectSkill(skill: string) {
-  message.value = `/${skill} `
+  const asCommand = `/${skill}`
+  if (KOBO_COMMANDS[asCommand]) {
+    message.value = asCommand
+    showSkills.value = false
+    sendMessage()
+    return
+  }
+  message.value = `${asCommand} `
   showSkills.value = false
 }
 
@@ -196,9 +204,32 @@ function resetHistoryNav() {
   savedDraft.value = ''
 }
 
+function koboDescription(skill: string): string {
+  const key = KOBO_COMMANDS[`/${skill}`]?.descriptionKey
+  return key ? t(key) : ''
+}
+
 function sendMessage() {
   const text = message.value.trim()
   if ((!text && pendingImages.value.length === 0) || isDisabled.value || hasUploading.value) return
+
+  // Intercept Kobo built-in commands
+  const koboCmd = KOBO_COMMANDS[text]
+  if (koboCmd) {
+    wsStore.sendChatMessage(props.workspaceId, koboCmd.prompt)
+    store.markRead(props.workspaceId)
+    store.addActivityItem(props.workspaceId, {
+      id: `user-${Date.now()}`,
+      type: 'text',
+      content: koboCmd.prompt,
+      timestamp: new Date().toISOString(),
+      meta: { sender: 'user', pending: true },
+    })
+    pushToHistory(text)
+    resetHistoryNav()
+    message.value = ''
+    return
+  }
 
   const imageTags = pendingImages.value
     .filter((p) => p.status === 'ready' && p.path)
@@ -330,6 +361,7 @@ function onKeydown(event: KeyboardEvent) {
       >
         <q-icon name="bolt" size="12px" color="indigo-4" class="q-mr-xs" />
         <span class="text-caption">{{ skill }}</span>
+        <span v-if="koboDescription(skill)" class="text-caption text-grey-7 q-ml-xs">— {{ koboDescription(skill) }}</span>
       </div>
     </div>
 

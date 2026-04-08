@@ -6,7 +6,7 @@ import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
 const store = useWorkspaceStore()
 
-const subagents = computed(() => store.currentSubagents)
+const subagents = computed(() => [...store.currentSubagents].reverse())
 
 function formatDuration(ms?: number): string {
   if (!ms) return ''

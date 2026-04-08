@@ -18,6 +18,8 @@ const globalSkipPermissions = ref(true)
 const globalPrPrompt = ref('')
 const globalGitConventions = ref('')
 const globalEditorCommand = ref('')
+const globalBrowserNotifications = ref(true)
+const globalAudioNotifications = ref(true)
 const savingGlobal = ref(false)
 
 // Project form
@@ -95,6 +97,8 @@ function syncGlobalForm() {
   globalPrPrompt.value = store.global.prPromptTemplate
   globalGitConventions.value = store.global.gitConventions
   globalEditorCommand.value = store.global.editorCommand ?? ''
+  globalBrowserNotifications.value = store.global.browserNotifications ?? true
+  globalAudioNotifications.value = store.global.audioNotifications ?? true
 }
 
 // Init project form from selected project
@@ -180,6 +184,8 @@ async function saveGlobal() {
       prPromptTemplate: globalPrPrompt.value,
       gitConventions: globalGitConventions.value,
       editorCommand: globalEditorCommand.value,
+      browserNotifications: globalBrowserNotifications.value,
+      audioNotifications: globalAudioNotifications.value,
     })
     $q.notify({ type: 'positive', message: t('settings.saved'), position: 'top' })
   } catch {
@@ -373,6 +379,27 @@ onUnmounted(() => {
                 color="indigo-4"
                 class="text-grey-5 text-caption"
                 @update:model-value="store.toggleVerboseSystemMessages()"
+              />
+            </div>
+
+            <!-- Notifications -->
+            <div class="q-mb-lg">
+              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.notifications') }}</div>
+              <q-toggle
+                v-model="globalBrowserNotifications"
+                :label="$t('settings.browserNotifications')"
+                dark
+                dense
+                color="indigo-4"
+                class="text-grey-5 text-caption"
+              />
+              <q-toggle
+                v-model="globalAudioNotifications"
+                :label="$t('settings.audioNotifications')"
+                dark
+                dense
+                color="indigo-4"
+                class="text-grey-5 text-caption"
               />
             </div>
 

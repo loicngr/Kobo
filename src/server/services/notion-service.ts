@@ -11,6 +11,7 @@ export interface NotionTodo {
 /** Structured content extracted from a Notion page (title, goal, todos, Gherkin features). */
 export interface NotionPageContent {
   title: string
+  ticketId: string
   goal: string
   todos: NotionTodo[]
   gherkinFeatures: string[]
@@ -401,6 +402,7 @@ export async function extractNotionPage(notionUrl: string): Promise<NotionPageCo
     const pageResult = unwrapMcpResult(pageRaw)
 
     let title = ''
+    let ticketId = ''
     if (pageResult && typeof pageResult === 'object') {
       const result = pageResult as Record<string, unknown>
       const properties = result.properties as Record<string, unknown> | undefined
@@ -409,7 +411,15 @@ export async function extractNotionPage(notionUrl: string): Promise<NotionPageCo
           const propObj = prop as Record<string, unknown>
           if (propObj.type === 'title' && Array.isArray(propObj.title)) {
             title = extractTextFromRichText(propObj.title as unknown[])
-            break
+          }
+          // Extract unique_id (e.g., "TK-1120") from Notion database properties
+          if (propObj.type === 'unique_id' && propObj.unique_id) {
+            const uid = propObj.unique_id as Record<string, unknown>
+            const prefix = (uid.prefix as string) ?? ''
+            const number = uid.number as number | undefined
+            if (number !== undefined) {
+              ticketId = prefix ? `${prefix}-${number}` : String(number)
+            }
           }
         }
       }
@@ -431,7 +441,7 @@ export async function extractNotionPage(notionUrl: string): Promise<NotionPageCo
 
     const { goal, todos, gherkinFeatures } = parseBlocks(blocks)
 
-    return { title, goal, todos, gherkinFeatures }
+    return { title, ticketId, goal, todos, gherkinFeatures }
   } finally {
     // Ensure the MCP process is terminated
     mcpProcess.stdin?.end()

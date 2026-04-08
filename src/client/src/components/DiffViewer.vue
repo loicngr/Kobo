@@ -409,12 +409,10 @@ onUnmounted(() => {
 
     <q-separator dark />
 
-    <div class="row col" style="min-height: 0;">
+    <div class="row col no-wrap" style="min-height: 0;">
       <!-- File tree sidebar -->
-      <div
-        class="diff-file-list q-pa-xs"
-        style="width: 280px; min-width: 200px; overflow-y: auto; overflow-x: hidden; border-right: 1px solid #2a2a4a;"
-      >
+      <q-scroll-area class="diff-file-list q-pa-xs" style="width: 280px; min-width: 200px; height: 100%; border-right: 1px solid #2a2a4a;">
+
         <q-spinner-dots v-if="loading" size="24px" color="grey-6" class="q-ma-md" />
         <div v-else-if="files.length === 0" class="text-caption text-grey-8 q-pa-sm">{{ $t('diff.noChanges') }}</div>
         <template v-else>
@@ -461,7 +459,7 @@ onUnmounted(() => {
             </div>
           </template>
         </template>
-      </div>
+      </q-scroll-area>
 
       <!-- Monaco diff editor -->
       <div class="col column" style="min-width: 0; position: relative;">

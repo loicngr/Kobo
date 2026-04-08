@@ -66,6 +66,7 @@ export default {
   'chatInput.placeholder': 'Nachricht... (/ für Skills)',
   'chatInput.skills': 'Skills',
   'chatInput.attachImage': 'Bild anhängen',
+  'koboCommand.checkProgressDesc': 'Fortschritt bei Aufgaben und Akzeptanzkriterien prüfen',
   'chatInput.uploading': 'Wird hochgeladen...',
 
   // Create Page
@@ -91,6 +92,7 @@ export default {
   'createPage.noBranches': 'Keine Branches gefunden',
   'createPage.enterPath': 'Projektpfad eingeben',
   'createPage.create': 'Erstellen',
+  'createPage.skipSetupScript': 'Setup-Skript überspringen',
   'createPage.notionExtractHint': 'Unteraufgaben und Akzeptanzkriterien werden aus der Notion-Seite extrahiert.',
   'createPage.notionImportHint':
     'Klicken Sie auf „Aus Notion importieren", um Unteraufgaben automatisch aus einem Ticket zu extrahieren.',
@@ -112,6 +114,9 @@ export default {
   'settings.skipPermissions': 'Berechtigungsabfragen überspringen (--dangerously-skip-permissions)',
   'settings.skipPermissionsWarning':
     'Achtung: Wird diese Option deaktiviert, werden alle Tool-Berechtigungen (Write, Edit, Bash...) im Headless-Modus automatisch abgelehnt. Der Agent kann dann nur lesen.',
+  'settings.notifications': 'Benachrichtigungen',
+  'settings.browserNotifications': 'Browser-Benachrichtigung wenn Agent fertig ist',
+  'settings.audioNotifications': 'Ton-Benachrichtigung wenn Agent fertig ist',
   'settings.activityFeed': 'Aktivitätsfeed',
   'settings.verboseMessages': 'Ausführliche Systemnachrichten anzeigen (task_progress, task_started)',
   'settings.availableVariables': 'Verfügbare Variablen in der PR-Prompt-Vorlage',
@@ -226,6 +231,7 @@ export default {
   'acceptance.empty': 'Keine Akzeptanzkriterien',
 
   // Agent Todos Panel
+  'tasks.askProgress': 'Agent auffordern, Fortschritt zu prüfen',
   'agentTodos.title': 'Agent-Todos',
   'agentTodos.empty': 'Keine Agent-Todos',
 
@@ -298,4 +304,8 @@ export default {
   'diff.noChanges': 'Keine Änderungen',
   'diff.selectFile': 'Datei auswählen, um den Diff anzuzeigen',
   'diff.addToChat': 'Zum Chat hinzufügen',
+
+  // Notifications
+  'notification.agentFinished': '{name} — Agent fertig',
+  'notification.agentError': '{name} — Agent-Fehler',
 }

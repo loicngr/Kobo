@@ -597,9 +597,12 @@ export function getRunningCount(): number {
   return agents.size
 }
 
-/** Return the cached list of slash commands discovered from the last agent init. */
+/** Kobo built-in slash commands injected into the skill list (without leading /). */
+const KOBO_COMMANDS = ['kobo-check-progress']
+
+/** Return the cached list of slash commands discovered from the last agent init, plus Kobo built-in commands. */
 export function getAvailableSkills(): string[] {
-  return availableSkills
+  return [...KOBO_COMMANDS, ...availableSkills]
 }
 
 // ── Quota handling ─────────────────────────────────────────────────────────────

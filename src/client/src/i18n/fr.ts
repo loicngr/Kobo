@@ -66,6 +66,7 @@ export default {
   'chatInput.placeholder': 'Message... (/ pour les skills)',
   'chatInput.skills': 'Skills',
   'chatInput.attachImage': 'Joindre une image',
+  'koboCommand.checkProgressDesc': "Vérifier la progression des tâches et critères d'acceptation",
   'chatInput.uploading': 'Envoi en cours...',
 
   // Create Page
@@ -91,6 +92,7 @@ export default {
   'createPage.noBranches': 'Aucune branche trouvée',
   'createPage.enterPath': 'Entrez le chemin du projet',
   'createPage.create': 'Créer',
+  'createPage.skipSetupScript': 'Ignorer le script de setup',
   'createPage.notionExtractHint': "Les sous-tâches et critères d'acceptation seront extraits de la page Notion.",
   'createPage.notionImportHint':
     "Cliquez sur « Importer depuis Notion » pour extraire automatiquement les sous-tâches d'un ticket.",
@@ -112,6 +114,9 @@ export default {
   'settings.skipPermissions': 'Ignorer les invites de permission (--dangerously-skip-permissions)',
   'settings.skipPermissionsWarning':
     "Attention : désactiver cette option entraînera le refus automatique de toutes les permissions d'outils (Write, Edit, Bash...) en mode headless. L'agent ne pourra que lire.",
+  'settings.notifications': 'Notifications',
+  'settings.browserNotifications': "Notification navigateur quand l'agent termine",
+  'settings.audioNotifications': "Notification sonore quand l'agent termine",
   'settings.activityFeed': "Flux d'activité",
   'settings.verboseMessages': 'Afficher les messages système détaillés (task_progress, task_started)',
   'settings.availableVariables': 'Variables disponibles dans le modèle de prompt PR',
@@ -226,6 +231,7 @@ export default {
   'acceptance.empty': "Aucun critère d'acceptation",
 
   // Agent Todos Panel
+  'tasks.askProgress': "Demander à l'agent de vérifier sa progression",
   'agentTodos.title': "Todos de l'agent",
   'agentTodos.empty': "Aucun todo de l'agent",
 
@@ -298,4 +304,8 @@ export default {
   'diff.noChanges': 'Aucun changement',
   'diff.selectFile': 'Sélectionnez un fichier pour voir le diff',
   'diff.addToChat': 'Ajouter au chat',
+
+  // Notifications
+  'notification.agentFinished': '{name} — Agent terminé',
+  'notification.agentError': '{name} — Erreur agent',
 }
