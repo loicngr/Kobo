@@ -50,6 +50,7 @@ app.post('/', async (c) => {
       acceptanceCriteria?: string[]
       skipSetupScript?: boolean
       description?: string
+      permissionMode?: string
     }>()
 
     if (!body.name || !body.projectPath || !body.sourceBranch || !body.workingBranch) {
@@ -57,6 +58,7 @@ app.post('/', async (c) => {
     }
 
     // Create workspace record
+    const globalSettings = settingsService.getGlobalSettings()
     let workspace = workspaceService.createWorkspace({
       name: body.name,
       projectPath: body.projectPath,
@@ -65,6 +67,7 @@ app.post('/', async (c) => {
       notionUrl: body.notionUrl,
       notionPageId: body.notionPageId,
       model: body.model,
+      permissionMode: body.permissionMode || globalSettings.defaultPermissionMode || 'plan',
     })
 
     let notionContent: notionService.NotionPageContent | null = null

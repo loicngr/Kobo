@@ -107,6 +107,7 @@ vi.mock('../server/db/index.js', () => ({
 
 vi.mock('../server/services/settings-service.js', () => ({
   getEffectiveSettings: vi.fn(),
+  getGlobalSettings: vi.fn(),
 }))
 
 vi.mock('../server/services/setup-script-service.js', () => ({
@@ -197,7 +198,6 @@ const fakeSession = {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  // Default: no git conventions configured — individual tests can override
   vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
     model: 'auto',
     dangerouslySkipPermissions: true,
@@ -206,6 +206,20 @@ beforeEach(() => {
     sourceBranch: 'main',
     devServer: null,
     setupScript: '',
+    notionStatusProperty: '',
+    notionInProgressStatus: '',
+  })
+  vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
+    defaultModel: 'auto',
+    dangerouslySkipPermissions: true,
+    prPromptTemplate: '',
+    gitConventions: '',
+    editorCommand: '',
+    browserNotifications: true,
+    audioNotifications: true,
+    notionStatusProperty: '',
+    notionInProgressStatus: '',
+    defaultPermissionMode: 'plan',
   })
 })
 
@@ -395,6 +409,8 @@ describe('POST /api/workspaces', () => {
       sourceBranch: 'main',
       devServer: null,
       setupScript: '#!/bin/bash\necho "ok"',
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
     })
     vi.mocked(setupScriptService.runSetupScript).mockResolvedValue({ exitCode: 0 })
 
@@ -426,6 +442,8 @@ describe('POST /api/workspaces', () => {
       sourceBranch: 'main',
       devServer: null,
       setupScript: '#!/bin/bash\nexit 1',
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
     })
     vi.mocked(setupScriptService.runSetupScript).mockResolvedValue({ exitCode: 1 })
 
@@ -459,6 +477,8 @@ describe('POST /api/workspaces', () => {
       sourceBranch: 'main',
       devServer: null,
       setupScript: '',
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
     })
 
     const res = await app.request('/api/workspaces', {
@@ -1010,6 +1030,8 @@ describe('git conventions file creation on workspace create', () => {
       sourceBranch: 'main',
       devServer: null,
       setupScript: '',
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
     })
 
     await app.request('/api/workspaces', {
@@ -1039,6 +1061,8 @@ describe('git conventions file creation on workspace create', () => {
       sourceBranch: 'main',
       devServer: null,
       setupScript: '',
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
     })
 
     await app.request('/api/workspaces', {
@@ -1067,6 +1091,8 @@ describe('git conventions file creation on workspace create', () => {
       sourceBranch: 'main',
       devServer: null,
       setupScript: '',
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
     })
 
     await app.request('/api/workspaces', {
@@ -1096,6 +1122,8 @@ describe('git conventions file creation on workspace create', () => {
       sourceBranch: 'main',
       devServer: null,
       setupScript: '',
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
     })
 
     await app.request('/api/workspaces', {
@@ -1261,6 +1289,8 @@ describe('POST /api/workspaces/:id/open-pr', () => {
       sourceBranch: 'main',
       devServer: null,
       setupScript: '',
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
     })
 
     execFilePromiseMock.mockImplementation((cmd: string, args: string[]) => {
@@ -1304,6 +1334,8 @@ describe('POST /api/workspaces/:id/open-pr', () => {
       sourceBranch: 'main',
       devServer: null,
       setupScript: '',
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
     })
 
     execFilePromiseMock.mockImplementation((cmd: string, args: string[]) => {
@@ -1332,6 +1364,8 @@ describe('POST /api/workspaces/:id/open-pr', () => {
       sourceBranch: 'main',
       devServer: null,
       setupScript: '',
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
     })
 
     execFilePromiseMock.mockImplementation((cmd: string, args: string[]) => {
@@ -1358,6 +1392,8 @@ describe('POST /api/workspaces/:id/open-pr', () => {
       sourceBranch: 'main',
       devServer: null,
       setupScript: '',
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
     })
 
     execFilePromiseMock.mockImplementation((cmd: string, args: string[]) => {
@@ -1384,6 +1420,8 @@ describe('POST /api/workspaces/:id/open-pr', () => {
       sourceBranch: 'main',
       devServer: null,
       setupScript: '',
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
     })
 
     execFilePromiseMock.mockImplementation((cmd: string, args: string[]) => {
@@ -1622,6 +1660,8 @@ describe('POST /api/workspaces/:id/run-setup-script', () => {
       sourceBranch: 'main',
       devServer: null,
       setupScript: '',
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
     })
 
     const res = await app.request('/api/workspaces/ws-1/run-setup-script', { method: 'POST' })

@@ -22,6 +22,7 @@ const globalBrowserNotifications = ref(true)
 const globalAudioNotifications = ref(true)
 const globalNotionStatusProperty = ref('')
 const globalNotionStatus = ref('')
+const globalDefaultPermissionMode = ref('plan')
 const savingGlobal = ref(false)
 
 // Project form
@@ -103,6 +104,7 @@ function syncGlobalForm() {
   globalAudioNotifications.value = store.global.audioNotifications ?? true
   globalNotionStatusProperty.value = store.global.notionStatusProperty ?? ''
   globalNotionStatus.value = store.global.notionInProgressStatus ?? ''
+  globalDefaultPermissionMode.value = store.global.defaultPermissionMode || 'plan'
 }
 
 // Init project form from selected project
@@ -196,6 +198,7 @@ async function saveGlobal() {
       audioNotifications: globalAudioNotifications.value,
       notionStatusProperty: globalNotionStatusProperty.value,
       notionInProgressStatus: globalNotionStatus.value,
+      defaultPermissionMode: globalDefaultPermissionMode.value,
     })
     $q.notify({ type: 'positive', message: t('settings.saved'), position: 'top' })
   } catch {
@@ -378,6 +381,25 @@ onUnmounted(() => {
                 class="text-grey-5 text-caption"
               />
               <div class="text-caption text-red-4 q-mt-xs">{{ $t('settings.skipPermissionsWarning') }}</div>
+            </div>
+
+            <!-- Default permission mode -->
+            <div class="q-mb-lg">
+              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.defaultPermissionMode') }}</div>
+              <q-select
+                v-model="globalDefaultPermissionMode"
+                :options="[
+                  { label: $t('permissionMode.plan'), value: 'plan' },
+                  { label: $t('permissionMode.autoAccept'), value: 'auto-accept' },
+                ]"
+                emit-value
+                map-options
+                dense
+                dark
+                outlined
+                class="settings-input"
+              />
+              <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.defaultPermissionModeHint') }}</div>
             </div>
 
             <!-- Verbose system messages toggle -->

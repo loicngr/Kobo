@@ -116,6 +116,9 @@ export default {
   'settings.notifications': 'Notifications',
   'settings.browserNotifications': 'Browser notifications when agent finishes',
   'settings.audioNotifications': 'Sound notification when agent finishes',
+  'settings.defaultPermissionMode': 'Default permission mode',
+  'settings.defaultPermissionModeHint':
+    'Permission mode applied when creating a new workspace. Plan = read-only brainstorming first, Auto-accept = full execution immediately.',
   'settings.activityFeed': 'Activity feed',
   'settings.verboseMessages': 'Show verbose system messages (task_progress, task_started)',
   'settings.availableVariables': 'Available variables in PR prompt template',

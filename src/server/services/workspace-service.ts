@@ -63,6 +63,7 @@ export interface CreateWorkspaceInput {
   notionUrl?: string
   notionPageId?: string
   model?: string
+  permissionMode?: string
 }
 
 /** Input payload for creating a new task. */
@@ -153,8 +154,8 @@ export function createWorkspace(data: CreateWorkspaceInput): Workspace {
   const id = nanoid()
 
   db.prepare(`
-    INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, status, notion_url, notion_page_id, model, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?)
+    INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, status, notion_url, notion_page_id, model, permission_mode, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     data.name,
@@ -164,6 +165,7 @@ export function createWorkspace(data: CreateWorkspaceInput): Workspace {
     data.notionUrl ?? null,
     data.notionPageId ?? null,
     data.model ?? 'claude-opus-4-6',
+    data.permissionMode ?? 'auto-accept',
     now,
     now,
   )

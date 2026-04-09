@@ -24,6 +24,7 @@ const model = ref('auto')
 const projectPath = ref('')
 const branch = ref<string | null>(null)
 const skipSetupScript = ref(false)
+const permissionMode = ref(settingsStore.global.defaultPermissionMode || 'plan')
 
 // State
 const branches = ref<string[]>([])
@@ -230,6 +231,7 @@ async function handleCreate() {
         : {}),
       ...(skipSetupScript.value ? { skipSetupScript: true } : {}),
       ...(description.value.trim() ? { description: description.value.trim() } : {}),
+      permissionMode: permissionMode.value,
     }
 
     const workspace = await store.createWorkspace(payload)
@@ -485,6 +487,41 @@ async function handleCreate() {
             </template>
           </q-select>
 
+          <!-- Permission mode selector -->
+          <q-select
+            v-model="permissionMode"
+            :options="[
+              { label: $t('permissionMode.plan'), value: 'plan' },
+              { label: $t('permissionMode.autoAccept'), value: 'auto-accept' },
+            ]"
+            dense
+            borderless
+            class="bottom-select rounded-borders"
+            hide-dropdown-icon
+            emit-value
+            map-options
+          >
+            <template #selected>
+              <span class="bottom-select-label row items-center no-wrap">
+                <q-icon :name="permissionMode === 'plan' ? 'visibility' : 'flash_on'" size="12px" color="amber-6" class="q-mr-xs" />
+                {{ permissionMode === 'plan' ? $t('permissionMode.plan') : $t('permissionMode.autoAccept') }}
+                <q-icon name="expand_more" size="12px" color="grey-5" />
+              </span>
+            </template>
+          </q-select>
+
+          <q-btn
+            flat
+            round
+            dense
+            size="sm"
+            :icon="skipSetupScript ? 'play_disabled' : 'play_circle'"
+            :color="skipSetupScript ? 'orange-4' : 'grey-6'"
+            @click="skipSetupScript = !skipSetupScript"
+          >
+            <q-tooltip>{{ $t('createPage.skipSetupScript') }}</q-tooltip>
+          </q-btn>
+
           <q-space />
 
           <!-- Repo path input with suggestions -->
@@ -547,15 +584,6 @@ async function handleCreate() {
               </q-item>
             </template>
           </q-select>
-
-          <q-checkbox
-            v-model="skipSetupScript"
-            :label="$t('createPage.skipSetupScript')"
-            dark
-            dense
-            color="indigo-4"
-            class="text-grey-5 text-caption q-mr-sm"
-          />
 
           <!-- Create button -->
           <q-btn

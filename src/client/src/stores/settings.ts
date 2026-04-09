@@ -29,6 +29,7 @@ interface GlobalSettings {
   audioNotifications: boolean
   notionStatusProperty: string
   notionInProgressStatus: string
+  defaultPermissionMode: string
 }
 
 function toBase64Url(str: string): string {
@@ -49,6 +50,7 @@ export const useSettingsStore = defineStore('settings', {
       audioNotifications: true,
       notionStatusProperty: '',
       notionInProgressStatus: '',
+      defaultPermissionMode: 'plan',
     } as GlobalSettings,
     projects: [] as ProjectSettings[],
     loading: false,

@@ -87,6 +87,7 @@ export interface GlobalSettings {
   audioNotifications: boolean
   notionStatusProperty: string
   notionInProgressStatus: string
+  defaultPermissionMode: string
 }
 
 /** Top-level settings structure persisted to settings.json. */
@@ -159,6 +160,13 @@ const settingsMigrations: SettingsMigration[] = [
       }
     },
   },
+  {
+    version: 6,
+    name: 'add-default-permission-mode',
+    migrate({ global }) {
+      if (typeof global.defaultPermissionMode !== 'string') global.defaultPermissionMode = 'plan'
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -198,6 +206,7 @@ function defaultSettings(): Settings {
       audioNotifications: true,
       notionStatusProperty: '',
       notionInProgressStatus: '',
+      defaultPermissionMode: 'plan',
     },
     projects: [],
   }
@@ -358,6 +367,7 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'audioNotifications',
     'notionStatusProperty',
     'notionInProgressStatus',
+    'defaultPermissionMode',
   ]
   const filtered = pickKnownKeys<GlobalSettings>(data as Record<string, unknown>, allowedGlobalKeys)
   settings.global = { ...settings.global, ...filtered }

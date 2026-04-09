@@ -117,6 +117,9 @@ export default {
   'settings.notifications': 'Notifiche',
   'settings.browserNotifications': "Notifica browser quando l'agente termina",
   'settings.audioNotifications': "Notifica sonora quando l'agente termina",
+  'settings.defaultPermissionMode': 'Modalità permessi predefinita',
+  'settings.defaultPermissionModeHint':
+    'Modalità applicata alla creazione di un workspace. Plan = brainstorming in sola lettura prima, Auto-accept = esecuzione completa immediata.',
   'settings.activityFeed': 'Feed attività',
   'settings.verboseMessages': 'Mostra messaggi di sistema dettagliati (task_progress, task_started)',
   'settings.availableVariables': 'Variabili disponibili nel template del prompt PR',

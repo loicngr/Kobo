@@ -117,6 +117,9 @@ export default {
   'settings.notifications': 'Benachrichtigungen',
   'settings.browserNotifications': 'Browser-Benachrichtigung wenn Agent fertig ist',
   'settings.audioNotifications': 'Ton-Benachrichtigung wenn Agent fertig ist',
+  'settings.defaultPermissionMode': 'Standard-Berechtigungsmodus',
+  'settings.defaultPermissionModeHint':
+    'Modus bei der Erstellung eines neuen Workspaces. Plan = Nur-Lesen-Brainstorming zuerst, Auto-accept = sofortige vollständige Ausführung.',
   'settings.activityFeed': 'Aktivitätsfeed',
   'settings.verboseMessages': 'Ausführliche Systemnachrichten anzeigen (task_progress, task_started)',
   'settings.availableVariables': 'Verfügbare Variablen in der PR-Prompt-Vorlage',
