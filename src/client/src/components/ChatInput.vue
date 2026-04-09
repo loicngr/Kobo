@@ -278,8 +278,14 @@ function onKeydown(event: KeyboardEvent) {
     }
   }
 
-  // Arrow up/down to navigate message history
+  // Arrow up/down to navigate message history (only when cursor is on first/last line)
   if (event.key === 'ArrowUp' && messageHistory.value.length > 0) {
+    const textarea = event.target as HTMLTextAreaElement | null
+    const cursorOnFirstLine =
+      !textarea ||
+      textarea.selectionStart <=
+        (message.value.indexOf('\n') === -1 ? message.value.length : message.value.indexOf('\n'))
+    if (!cursorOnFirstLine && historyIndex.value === -1) return
     event.preventDefault()
     if (historyIndex.value === -1) {
       savedDraft.value = message.value

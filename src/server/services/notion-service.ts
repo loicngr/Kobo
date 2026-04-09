@@ -12,6 +12,7 @@ export interface NotionTodo {
 export interface NotionPageContent {
   title: string
   ticketId: string
+  status: string
   goal: string
   todos: NotionTodo[]
   gherkinFeatures: string[]
@@ -403,6 +404,7 @@ export async function extractNotionPage(notionUrl: string): Promise<NotionPageCo
 
     let title = ''
     let ticketId = ''
+    let status = ''
     if (pageResult && typeof pageResult === 'object') {
       const result = pageResult as Record<string, unknown>
       const properties = result.properties as Record<string, unknown> | undefined
@@ -412,7 +414,6 @@ export async function extractNotionPage(notionUrl: string): Promise<NotionPageCo
           if (propObj.type === 'title' && Array.isArray(propObj.title)) {
             title = extractTextFromRichText(propObj.title as unknown[])
           }
-          // Extract unique_id (e.g., "TK-1120") from Notion database properties
           if (propObj.type === 'unique_id' && propObj.unique_id) {
             const uid = propObj.unique_id as Record<string, unknown>
             const prefix = (uid.prefix as string) ?? ''
@@ -420,6 +421,10 @@ export async function extractNotionPage(notionUrl: string): Promise<NotionPageCo
             if (number !== undefined) {
               ticketId = prefix ? `${prefix}-${number}` : String(number)
             }
+          }
+          if (propObj.type === 'status' && propObj.status) {
+            const s = propObj.status as Record<string, unknown>
+            status = (s.name as string) ?? ''
           }
         }
       }
@@ -441,9 +446,44 @@ export async function extractNotionPage(notionUrl: string): Promise<NotionPageCo
 
     const { goal, todos, gherkinFeatures } = parseBlocks(blocks)
 
-    return { title, ticketId, goal, todos, gherkinFeatures }
+    return { title, ticketId, status, goal, todos, gherkinFeatures }
   } finally {
-    // Ensure the MCP process is terminated
+    mcpProcess.stdin?.end()
+    mcpProcess.kill()
+  }
+}
+
+/** Update a status property on a Notion page. Best-effort, does not throw. */
+export async function updateNotionStatus(notionUrl: string, propertyName: string, statusValue: string): Promise<void> {
+  const pageId = parseNotionUrl(notionUrl)
+  const mcpProcess = spawnMcpProcess()
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => resolve(), 1000)
+      mcpProcess.on('error', (err) => {
+        clearTimeout(timeout)
+        reject(new Error(`Failed to start MCP Notion server: ${err.message}`))
+      })
+      mcpProcess.stdout?.once('data', () => {
+        clearTimeout(timeout)
+        resolve()
+      })
+    })
+
+    await initializeMcp(mcpProcess)
+
+    await callMcpTool(mcpProcess, 'API-patch-page', {
+      page_id: pageId,
+      properties: {
+        [propertyName]: {
+          status: { name: statusValue },
+        },
+      },
+    })
+  } catch (err) {
+    console.error('[notion] Failed to update status:', err instanceof Error ? err.message : err)
+  } finally {
     mcpProcess.stdin?.end()
     mcpProcess.kill()
   }

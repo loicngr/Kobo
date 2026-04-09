@@ -71,6 +71,8 @@ export interface ProjectSettings {
   prPromptTemplate: string
   gitConventions: string
   setupScript: string
+  notionStatusProperty: string
+  notionInProgressStatus: string
   devServer: DevServerConfig
 }
 
@@ -83,6 +85,8 @@ export interface GlobalSettings {
   editorCommand: string
   browserNotifications: boolean
   audioNotifications: boolean
+  notionStatusProperty: string
+  notionInProgressStatus: string
 }
 
 /** Top-level settings structure persisted to settings.json. */
@@ -143,6 +147,18 @@ const settingsMigrations: SettingsMigration[] = [
       if (typeof global.audioNotifications !== 'boolean') global.audioNotifications = true
     },
   },
+  {
+    version: 5,
+    name: 'add-notion-in-progress-status',
+    migrate({ global, projects }) {
+      if (typeof global.notionStatusProperty !== 'string') global.notionStatusProperty = ''
+      if (typeof global.notionInProgressStatus !== 'string') global.notionInProgressStatus = ''
+      for (const p of projects) {
+        if (typeof p.notionStatusProperty !== 'string') p.notionStatusProperty = ''
+        if (typeof p.notionInProgressStatus !== 'string') p.notionInProgressStatus = ''
+      }
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -158,6 +174,8 @@ export interface EffectiveSettings {
   sourceBranch: string
   devServer: DevServerConfig | null
   setupScript: string
+  notionStatusProperty: string
+  notionInProgressStatus: string
 }
 
 let settingsFilePath = getSettingsPath()
@@ -178,6 +196,8 @@ function defaultSettings(): Settings {
       editorCommand: '',
       browserNotifications: true,
       audioNotifications: true,
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
     },
     projects: [],
   }
@@ -193,6 +213,8 @@ function defaultProjectSettings(projectPath: string): ProjectSettings {
     prPromptTemplate: '',
     gitConventions: '',
     setupScript: '',
+    notionInProgressStatus: '',
+    notionStatusProperty: '',
     devServer: {
       startCommand: '',
       stopCommand: '',
@@ -305,6 +327,8 @@ export function getEffectiveSettings(projectPath: string): EffectiveSettings {
       sourceBranch: '',
       devServer: null,
       setupScript: '',
+      notionStatusProperty: settings.global.notionStatusProperty,
+      notionInProgressStatus: settings.global.notionInProgressStatus,
     }
   }
 
@@ -316,6 +340,8 @@ export function getEffectiveSettings(projectPath: string): EffectiveSettings {
     sourceBranch: project.defaultSourceBranch,
     devServer: project.devServer,
     setupScript: project.setupScript || '',
+    notionStatusProperty: project.notionStatusProperty || settings.global.notionStatusProperty,
+    notionInProgressStatus: project.notionInProgressStatus || settings.global.notionInProgressStatus,
   }
 }
 
@@ -330,6 +356,8 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'editorCommand',
     'browserNotifications',
     'audioNotifications',
+    'notionStatusProperty',
+    'notionInProgressStatus',
   ]
   const filtered = pickKnownKeys<GlobalSettings>(data as Record<string, unknown>, allowedGlobalKeys)
   settings.global = { ...settings.global, ...filtered }
@@ -347,6 +375,8 @@ export function upsertProject(projectPath: string, data: Partial<Omit<ProjectSet
     'prPromptTemplate',
     'gitConventions',
     'setupScript',
+    'notionStatusProperty',
+    'notionInProgressStatus',
     'devServer',
   ]
   const allowedDevServerKeys = ['startCommand', 'stopCommand']

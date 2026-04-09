@@ -162,6 +162,13 @@ export default {
   'settings.prPromptPlaceholder.project': 'Instrucciones específicas del proyecto para la creación de PRs...',
   'settings.gitConventions.project': 'Convenciones Git (por proyecto)',
   'settings.gitConventionsEmpty': 'Dejar vacío para usar las convenciones globales.',
+  'settings.notionStatus': 'Estado ticket Notion',
+  'settings.notionStatusProperty': 'Nombre de la propiedad',
+  'settings.notionStatusPropertyPlaceholder': 'État, Status...',
+  'settings.notionInProgressStatus': 'Valor a establecer',
+  'settings.notionInProgressStatusPlaceholder': 'En progreso, In progress...',
+  'settings.notionStatusHint':
+    'Cuando se crea un workspace con un ticket Notion, la propiedad especificada se establece a este valor. Ambos campos son obligatorios. Dejar vacío para desactivar.',
   'settings.devServer': 'Servidor de desarrollo',
   'settings.devServerStart': 'Script de inicio',
   'settings.devServerStartPlaceholder': 'npm run dev',
@@ -191,6 +198,18 @@ export default {
   'git.createPr': 'Crear PR',
   'git.push': 'Push',
   'git.diff': 'Diff',
+  'git.rebase': 'Rebase',
+  'git.rebaseConfirmTitle': '¿Rebase de la rama?',
+  'git.rebaseConfirmMessage': 'Rebase sobre {branch}. Pueden surgir conflictos.',
+  'git.rebaseSuccess': 'Rebase completado',
+  'git.rebaseFailed': 'Rebase fallido',
+  'git.pushConfirmTitle': '¿Pushar la rama?',
+  'git.pushConfirmMessage': 'Pushar {branch} al remoto.',
+  'git.changePrBase': 'Cambiar rama base de la PR',
+  'git.changePrBaseTitle': 'Cambiar rama base',
+  'git.changePrBaseMessage': 'Ingrese la nueva rama destino para el pull request.',
+  'git.changePrBaseSuccess': 'Rama base de la PR actualizada',
+  'git.changePrBaseFailed': 'No se pudo cambiar la rama base de la PR',
   'git.openEditor': 'Abrir en editor',
   'git.openEditorFailed': 'No se pudo abrir el editor',
   'git.branchPushed': 'Rama enviada',
@@ -308,4 +327,9 @@ export default {
   // Notifications
   'notification.agentFinished': '{name} — Agente terminado',
   'notification.agentError': '{name} — Error del agente',
+
+  // Context menu
+  'contextMenu.copyPath': 'Copiar ruta del worktree',
+  'contextMenu.openEditor': 'Abrir en editor',
+  'contextMenu.runSetup': 'Ejecutar script de setup',
 }

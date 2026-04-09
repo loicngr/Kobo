@@ -21,7 +21,9 @@ const store = useWorkspaceStore()
 const settingsStore = useSettingsStore()
 
 const pushing = ref(false)
+const rebasing = ref(false)
 const openingPr = ref(false)
+const changingBase = ref(false)
 const showDiff = ref(false)
 const openingEditor = ref(false)
 
@@ -92,25 +94,96 @@ onUnmounted(() => {
   if (gitRefreshTimeout) clearTimeout(gitRefreshTimeout)
 })
 
-async function handlePush() {
+function handleRebase() {
   if (!props.workspace) return
-  pushing.value = true
-  try {
-    await store.pushBranch(props.workspace.id)
-    $q.notify({ type: 'positive', message: t('git.branchPushed'), position: 'top' })
-    loadGitStats()
-  } catch (e) {
-    const msg = e instanceof Error ? e.message : 'Push failed'
-    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
-  } finally {
-    pushing.value = false
-  }
+  $q.dialog({
+    title: t('git.rebaseConfirmTitle'),
+    message: t('git.rebaseConfirmMessage', { branch: props.workspace.sourceBranch }),
+    dark: true,
+    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    ok: { flat: true, label: t('git.rebase'), color: 'orange-4' },
+  }).onOk(async () => {
+    rebasing.value = true
+    try {
+      const res = await fetch(`/api/workspaces/${props.workspace!.id}/rebase`, { method: 'POST' })
+      if (!res.ok) {
+        const data = await res.json()
+        throw new Error(data.error ?? 'Rebase failed')
+      }
+      $q.notify({ type: 'positive', message: t('git.rebaseSuccess'), position: 'top' })
+      loadGitStats()
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : t('git.rebaseFailed')
+      $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    } finally {
+      rebasing.value = false
+    }
+  })
+}
+
+function handlePush() {
+  if (!props.workspace) return
+  $q.dialog({
+    title: t('git.pushConfirmTitle'),
+    message: t('git.pushConfirmMessage', { branch: props.workspace.workingBranch }),
+    dark: true,
+    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    ok: { flat: true, label: t('git.push'), color: 'grey-5' },
+  }).onOk(async () => {
+    pushing.value = true
+    try {
+      await store.pushBranch(props.workspace!.id)
+      $q.notify({ type: 'positive', message: t('git.branchPushed'), position: 'top' })
+      loadGitStats()
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Push failed'
+      $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    } finally {
+      pushing.value = false
+    }
+  })
 }
 
 function viewPr() {
   if (gitStats.value?.prUrl) {
     window.open(gitStats.value.prUrl, '_blank')
   }
+}
+
+function handleChangePrBase() {
+  if (!props.workspace) return
+  $q.dialog({
+    title: t('git.changePrBaseTitle'),
+    message: t('git.changePrBaseMessage'),
+    prompt: {
+      model: props.workspace.sourceBranch,
+      type: 'text',
+    },
+    dark: true,
+    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    ok: { flat: true, label: t('common.save'), color: 'primary' },
+  }).onOk(async (newBase: string) => {
+    if (!newBase.trim() || !props.workspace) return
+    changingBase.value = true
+    try {
+      const res = await fetch(`/api/workspaces/${props.workspace.id}/change-pr-base`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ base: newBase.trim() }),
+      })
+      if (!res.ok) {
+        const data = await res.json()
+        throw new Error(data.error ?? 'Failed')
+      }
+      $q.notify({ type: 'positive', message: t('git.changePrBaseSuccess'), position: 'top' })
+      loadGitStats()
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : t('git.changePrBaseFailed')
+      $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    } finally {
+      changingBase.value = false
+    }
+  })
 }
 
 async function handleOpenPr() {
@@ -263,6 +336,20 @@ async function handleOpenPr() {
           @click="viewPr"
         />
         <q-btn
+          v-if="gitStats?.prUrl && gitStats.prState === 'OPEN'"
+          dense
+          no-caps
+          size="sm"
+          outline
+          color="grey-5"
+          icon="swap_horiz"
+          :loading="changingBase"
+          class="git-btn"
+          @click="handleChangePrBase"
+        >
+          <q-tooltip>{{ $t('git.changePrBase') }}</q-tooltip>
+        </q-btn>
+        <q-btn
           v-if="!gitStats?.prUrl || gitStats.prState === 'CLOSED' || gitStats.prState === 'MERGED'"
           dense
           no-caps
@@ -286,6 +373,18 @@ async function handleOpenPr() {
           :loading="pushing"
           :disable="!workspace || openingPr"
           @click="handlePush"
+        />
+        <q-btn
+          dense
+          no-caps
+          size="sm"
+          outline
+          color="orange-4"
+          :label="$t('git.rebase')"
+          class="git-btn"
+          :loading="rebasing"
+          :disable="!workspace"
+          @click="handleRebase"
         />
         <q-btn
           dense

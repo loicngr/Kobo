@@ -272,6 +272,8 @@ describe('POST /api/workspaces', () => {
   it('creates workspace with Notion URL and extracts content', async () => {
     const notionContent = {
       title: 'Notion Page Title',
+      ticketId: 'TK-123',
+      status: '',
       goal: 'Build something',
       todos: [{ title: 'Do thing', checked: false }],
       gherkinFeatures: ['Feature: login'],
@@ -522,6 +524,8 @@ describe('POST /api/workspaces/:id/refresh-notion', () => {
   it('refreshes Notion content and recreates tasks', async () => {
     const notionContent = {
       title: 'Updated Page',
+      ticketId: '',
+      status: '',
       goal: 'Updated goal',
       todos: [{ title: 'New task', checked: false }],
       gherkinFeatures: ['Feature: new feature'],

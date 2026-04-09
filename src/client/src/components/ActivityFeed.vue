@@ -507,10 +507,16 @@ function getFileChangeInfo(item: ActivityItem): FileChangeInfo | null {
 
 function shortenFilePath(filePath: string): string {
   const ws = store.selectedWorkspace
-  if (!ws) return filePath
-  const worktreePrefix = `${ws.projectPath}/.worktrees/${ws.workingBranch}/`
-  if (filePath.startsWith(worktreePrefix)) return filePath.slice(worktreePrefix.length)
-  if (filePath.startsWith(ws.projectPath + '/')) return filePath.slice(ws.projectPath.length + 1)
+  if (ws) {
+    const worktreePrefix = `${ws.projectPath}/.worktrees/${ws.workingBranch}/`
+    if (filePath.startsWith(worktreePrefix)) return filePath.slice(worktreePrefix.length)
+    if (filePath.startsWith(ws.projectPath + '/')) return filePath.slice(ws.projectPath.length + 1)
+  }
+  // For any absolute path, show only the last 3 segments
+  if (filePath.startsWith('/') && filePath.split('/').length > 4) {
+    const parts = filePath.split('/')
+    return '…/' + parts.slice(-3).join('/')
+  }
   return filePath
 }
 

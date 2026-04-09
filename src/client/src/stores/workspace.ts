@@ -617,6 +617,17 @@ export const useWorkspaceStore = defineStore('workspace', {
       if (idx >= 0) {
         this.workspaces[idx] = { ...this.workspaces[idx], ...data }
       }
+      // When agent stops, mark all running subagents as done
+      if (data.status && ['completed', 'idle', 'error', 'quota'].includes(data.status)) {
+        const subs = this.subagents[workspaceId]
+        if (subs) {
+          for (const [id, sub] of Object.entries(subs)) {
+            if (sub.status === 'running') {
+              subs[id] = { ...sub, status: 'done' }
+            }
+          }
+        }
+      }
     },
   },
 })

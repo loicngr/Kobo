@@ -264,6 +264,21 @@ app.post('/', async (c) => {
       }
     }
 
+    // Update Notion status if both property name and value are configured
+    const notionStatusProp = effectiveSettings.notionStatusProperty
+    const notionTargetStatus = effectiveSettings.notionInProgressStatus
+    if (
+      notionContent &&
+      body.notionUrl &&
+      notionStatusProp &&
+      notionTargetStatus &&
+      notionContent.status !== notionTargetStatus
+    ) {
+      notionService.updateNotionStatus(body.notionUrl, notionStatusProp, notionTargetStatus).catch((err) => {
+        console.error('[workspaces] Failed to update Notion status:', err)
+      })
+    }
+
     // Skip agent launch if setup script failed — workspace stays in 'error' status
     if (!setupScriptFailed) {
       // Transition to brainstorming and build the initial agent prompt
@@ -1034,6 +1049,44 @@ app.post('/:id/push', async (c) => {
     )
 
     return c.json({ ok: true, branch: workspace.workingBranch })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+/** Rebase the workspace branch onto its source branch. */
+app.post('/:id/rebase', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    gitOps.rebaseBranch(worktreePath, workspace.sourceBranch)
+
+    return c.json({ success: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+/** Change the base branch of an existing PR via gh CLI. */
+app.post('/:id/change-pr-base', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const body = await c.req.json<{ base: string }>()
+    if (!body.base) return c.json({ error: 'Missing base parameter' }, 400)
+
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+
+    await execFileAsync('gh', ['pr', 'edit', '--base', body.base], { cwd: worktreePath })
+
+    return c.json({ success: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)

@@ -161,6 +161,13 @@ export default {
   'settings.prPromptPlaceholder.project': 'Project-specific instructions for PR creation...',
   'settings.gitConventions.project': 'Git conventions (project override)',
   'settings.gitConventionsEmpty': 'Leave empty to use the global conventions.',
+  'settings.notionStatus': 'Notion ticket status',
+  'settings.notionStatusProperty': 'Property name',
+  'settings.notionStatusPropertyPlaceholder': 'État, Status...',
+  'settings.notionInProgressStatus': 'Value to set',
+  'settings.notionInProgressStatusPlaceholder': 'In progress, En cours...',
+  'settings.notionStatusHint':
+    'When a workspace is created with a Notion ticket, the specified property is set to this value. Both fields are required. Leave empty to disable.',
   'settings.devServer': 'Dev server',
   'settings.devServerStart': 'Script start',
   'settings.devServerStartPlaceholder': 'npm run dev',
@@ -190,6 +197,18 @@ export default {
   'git.createPr': 'Create PR',
   'git.push': 'Push',
   'git.diff': 'Diff',
+  'git.rebase': 'Rebase',
+  'git.rebaseConfirmTitle': 'Rebase branch?',
+  'git.rebaseConfirmMessage': 'Rebase onto {branch}. This may cause conflicts.',
+  'git.rebaseSuccess': 'Rebase completed',
+  'git.rebaseFailed': 'Rebase failed',
+  'git.pushConfirmTitle': 'Push branch?',
+  'git.pushConfirmMessage': 'Push {branch} to remote.',
+  'git.changePrBase': 'Change PR base branch',
+  'git.changePrBaseTitle': 'Change base branch',
+  'git.changePrBaseMessage': 'Enter the new target branch for the pull request.',
+  'git.changePrBaseSuccess': 'PR base branch updated',
+  'git.changePrBaseFailed': 'Failed to change PR base branch',
   'git.openEditor': 'Open in editor',
   'git.openEditorFailed': 'Failed to open editor',
   'git.branchPushed': 'Branch pushed',
@@ -307,4 +326,9 @@ export default {
   // Notifications
   'notification.agentFinished': '{name} — Agent finished',
   'notification.agentError': '{name} — Agent error',
+
+  // Context menu
+  'contextMenu.copyPath': 'Copy worktree path',
+  'contextMenu.openEditor': 'Open in editor',
+  'contextMenu.runSetup': 'Run setup script',
 }

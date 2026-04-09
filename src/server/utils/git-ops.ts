@@ -127,6 +127,27 @@ export function pushBranch(repoPath: string, branchName: string, remote = 'origi
   }
 }
 
+/** Rebase the current branch onto the given base branch. Fetches origin first to get latest changes. */
+export function rebaseBranch(repoPath: string, baseBranch: string): void {
+  try {
+    git(repoPath, ['fetch', 'origin', baseBranch])
+  } catch {
+    // fetch may fail if offline — continue with local ref
+  }
+  try {
+    git(repoPath, ['rebase', `origin/${baseBranch}`])
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    // Abort the rebase if it fails (conflicts etc.)
+    try {
+      git(repoPath, ['rebase', '--abort'])
+    } catch {
+      /* best-effort */
+    }
+    throw new Error(`Rebase onto '${baseBranch}' failed: ${message}`)
+  }
+}
+
 /** Try a git command with `base`, falling back to `origin/base` if the local ref is missing. */
 function resolveBase(repoPath: string, base: string): string {
   try {
@@ -231,12 +252,18 @@ export function getChangedFiles(repoPath: string, base: string): DiffFile[] {
     for (const line of output.split('\n')) {
       if (!line) continue
       const [statusCode, ...pathParts] = line.split('\t')
-      const filePath = pathParts.join('\t').replace(/\/$/, '')
+      if (!statusCode || pathParts.length === 0) continue
+      // For renames/copies (R100 old new), use the new path (last element)
+      const filePath =
+        (statusCode.startsWith('R') || statusCode.startsWith('C')
+          ? pathParts[pathParts.length - 1]
+          : pathParts[0]
+        )?.replace(/\/$/, '') ?? ''
       if (!filePath) continue
       let status: DiffFile['status'] = 'modified'
-      if (statusCode?.startsWith('A')) status = 'added'
-      else if (statusCode?.startsWith('D')) status = 'deleted'
-      else if (statusCode?.startsWith('R')) status = 'renamed'
+      if (statusCode.startsWith('A')) status = 'added'
+      else if (statusCode.startsWith('D')) status = 'deleted'
+      else if (statusCode.startsWith('R')) status = 'renamed'
       files.push({ path: filePath, status })
       seen.add(filePath)
     }

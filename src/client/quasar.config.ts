@@ -46,7 +46,7 @@ export default defineConfig(() => {
           warning: '#f2c037',
         },
       },
-      plugins: ['Notify'],
+      plugins: ['Notify', 'Dialog'],
     },
 
     animations: [],

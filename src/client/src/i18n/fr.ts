@@ -162,6 +162,13 @@ export default {
   'settings.prPromptPlaceholder.project': 'Instructions spécifiques au projet pour la création de PR...',
   'settings.gitConventions.project': 'Conventions Git (projet)',
   'settings.gitConventionsEmpty': 'Laisser vide pour utiliser les conventions globales.',
+  'settings.notionStatus': 'Statut ticket Notion',
+  'settings.notionStatusProperty': 'Nom de la propriété',
+  'settings.notionStatusPropertyPlaceholder': 'État, Status...',
+  'settings.notionInProgressStatus': 'Valeur à définir',
+  'settings.notionInProgressStatusPlaceholder': 'En cours, In progress...',
+  'settings.notionStatusHint':
+    'Quand un workspace est créé avec un ticket Notion, la propriété spécifiée est mise à cette valeur. Les deux champs sont requis. Laisser vide pour désactiver.',
   'settings.devServer': 'Serveur de dev',
   'settings.devServerStart': 'Script de démarrage',
   'settings.devServerStartPlaceholder': 'npm run dev',
@@ -191,6 +198,18 @@ export default {
   'git.createPr': 'Créer une PR',
   'git.push': 'Push',
   'git.diff': 'Diff',
+  'git.rebase': 'Rebase',
+  'git.rebaseConfirmTitle': 'Rebase la branche ?',
+  'git.rebaseConfirmMessage': 'Rebase sur {branch}. Des conflits peuvent survenir.',
+  'git.rebaseSuccess': 'Rebase terminé',
+  'git.rebaseFailed': 'Rebase échoué',
+  'git.pushConfirmTitle': 'Pusher la branche ?',
+  'git.pushConfirmMessage': 'Pusher {branch} vers le dépôt distant.',
+  'git.changePrBase': 'Changer la branche cible de la PR',
+  'git.changePrBaseTitle': 'Changer la branche cible',
+  'git.changePrBaseMessage': 'Entrez la nouvelle branche cible pour la pull request.',
+  'git.changePrBaseSuccess': 'Branche cible de la PR mise à jour',
+  'git.changePrBaseFailed': 'Impossible de changer la branche cible de la PR',
   'git.openEditor': "Ouvrir dans l'éditeur",
   'git.openEditorFailed': "Impossible d'ouvrir l'éditeur",
   'git.branchPushed': 'Branche pushée',
@@ -308,4 +327,9 @@ export default {
   // Notifications
   'notification.agentFinished': '{name} — Agent terminé',
   'notification.agentError': '{name} — Erreur agent',
+
+  // Context menu
+  'contextMenu.copyPath': 'Copier le chemin du worktree',
+  'contextMenu.openEditor': "Ouvrir dans l'éditeur",
+  'contextMenu.runSetup': 'Lancer le script de setup',
 }

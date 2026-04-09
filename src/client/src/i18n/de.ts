@@ -162,6 +162,13 @@ export default {
   'settings.prPromptPlaceholder.project': 'Projektspezifische Anweisungen für PR-Erstellung...',
   'settings.gitConventions.project': 'Git-Konventionen (Projekt)',
   'settings.gitConventionsEmpty': 'Leer lassen, um die globalen Konventionen zu verwenden.',
+  'settings.notionStatus': 'Notion-Ticket-Status',
+  'settings.notionStatusProperty': 'Eigenschaftsname',
+  'settings.notionStatusPropertyPlaceholder': 'État, Status...',
+  'settings.notionInProgressStatus': 'Zu setzender Wert',
+  'settings.notionInProgressStatusPlaceholder': 'In Bearbeitung, In progress...',
+  'settings.notionStatusHint':
+    'Wenn ein Workspace mit einem Notion-Ticket erstellt wird, wird die angegebene Eigenschaft auf diesen Wert gesetzt. Beide Felder sind erforderlich. Leer lassen zum Deaktivieren.',
   'settings.devServer': 'Dev-Server',
   'settings.devServerStart': 'Startskript',
   'settings.devServerStartPlaceholder': 'npm run dev',
@@ -191,6 +198,18 @@ export default {
   'git.createPr': 'PR erstellen',
   'git.push': 'Push',
   'git.diff': 'Diff',
+  'git.rebase': 'Rebase',
+  'git.rebaseConfirmTitle': 'Branch rebasen?',
+  'git.rebaseConfirmMessage': 'Rebase auf {branch}. Es können Konflikte auftreten.',
+  'git.rebaseSuccess': 'Rebase abgeschlossen',
+  'git.rebaseFailed': 'Rebase fehlgeschlagen',
+  'git.pushConfirmTitle': 'Branch pushen?',
+  'git.pushConfirmMessage': '{branch} zum Remote pushen.',
+  'git.changePrBase': 'PR-Zielbranch ändern',
+  'git.changePrBaseTitle': 'Zielbranch ändern',
+  'git.changePrBaseMessage': 'Geben Sie den neuen Zielbranch für den Pull Request ein.',
+  'git.changePrBaseSuccess': 'PR-Zielbranch aktualisiert',
+  'git.changePrBaseFailed': 'PR-Zielbranch konnte nicht geändert werden',
   'git.openEditor': 'Im Editor öffnen',
   'git.openEditorFailed': 'Editor konnte nicht geöffnet werden',
   'git.branchPushed': 'Branch gepusht',
@@ -308,4 +327,9 @@ export default {
   // Notifications
   'notification.agentFinished': '{name} — Agent fertig',
   'notification.agentError': '{name} — Agent-Fehler',
+
+  // Context menu
+  'contextMenu.copyPath': 'Worktree-Pfad kopieren',
+  'contextMenu.openEditor': 'Im Editor öffnen',
+  'contextMenu.runSetup': 'Setup-Skript ausführen',
 }

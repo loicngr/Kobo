@@ -14,6 +14,8 @@ interface ProjectSettings {
   prPromptTemplate: string
   gitConventions: string
   setupScript: string
+  notionStatusProperty: string
+  notionInProgressStatus: string
   devServer: DevServerConfig
 }
 
@@ -25,6 +27,8 @@ interface GlobalSettings {
   editorCommand: string
   browserNotifications: boolean
   audioNotifications: boolean
+  notionStatusProperty: string
+  notionInProgressStatus: string
 }
 
 function toBase64Url(str: string): string {
@@ -43,6 +47,8 @@ export const useSettingsStore = defineStore('settings', {
       editorCommand: '',
       browserNotifications: true,
       audioNotifications: true,
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
     } as GlobalSettings,
     projects: [] as ProjectSettings[],
     loading: false,

@@ -143,6 +143,31 @@ function selectWorkspace(id: string) {
   router.push({ name: 'workspace', params: { id } })
 }
 
+function copyWorktreePath(ws: Workspace) {
+  const path = `${ws.projectPath}/.worktrees/${ws.workingBranch}`
+  navigator.clipboard.writeText(path).catch(() => {})
+}
+
+async function openInEditor(ws: Workspace) {
+  try {
+    const res = await fetch(`/api/workspaces/${ws.id}/open-editor`, { method: 'POST' })
+    if (!res.ok) {
+      const data = await res.json()
+      console.error('[workspace-list] open-editor failed:', data.error)
+    }
+  } catch (err) {
+    console.error('[workspace-list] open-editor failed:', err)
+  }
+}
+
+async function runSetupScript(ws: Workspace) {
+  try {
+    await fetch(`/api/workspaces/${ws.id}/run-setup-script`, { method: 'POST' })
+  } catch (err) {
+    console.error('[workspace-list] run-setup-script failed:', err)
+  }
+}
+
 function goToCreate() {
   router.push({ name: 'create' })
 }
@@ -265,7 +290,33 @@ onMounted(async () => {
               :class="{ 'wl-item--selected': ws.id === store.selectedWorkspaceId }"
               style="border-left: 3px solid #ef4444;"
               @click="selectWorkspace(ws.id)"
+              @contextmenu.prevent
             >
+              <q-menu dark context-menu>
+                <q-list dense style="min-width: 180px;">
+                  <q-item clickable v-close-popup @click="copyWorktreePath(ws)">
+                    <q-item-section side><q-icon name="content_copy" size="xs" /></q-item-section>
+                    <q-item-section>{{ $t('contextMenu.copyPath') }}</q-item-section>
+                  </q-item>
+                  <q-item v-if="settingsStore.global.editorCommand" clickable v-close-popup @click="openInEditor(ws)">
+                    <q-item-section side><q-icon name="open_in_new" size="xs" /></q-item-section>
+                    <q-item-section>{{ $t('contextMenu.openEditor') }}</q-item-section>
+                  </q-item>
+                  <q-item clickable v-close-popup @click="runSetupScript(ws)">
+                    <q-item-section side><q-icon name="replay" size="xs" /></q-item-section>
+                    <q-item-section>{{ $t('contextMenu.runSetup') }}</q-item-section>
+                  </q-item>
+                  <q-separator dark />
+                  <q-item clickable v-close-popup @click="onArchiveClick(ws, $event)">
+                    <q-item-section side><q-icon name="archive" size="xs" /></q-item-section>
+                    <q-item-section>{{ $t('common.archive') }}</q-item-section>
+                  </q-item>
+                  <q-item clickable v-close-popup @click="openDeleteDialog(ws, $event)" class="text-red-5">
+                    <q-item-section side><q-icon name="delete_outline" size="xs" color="red-5" /></q-item-section>
+                    <q-item-section>{{ $t('common.delete') }}</q-item-section>
+                  </q-item>
+                </q-list>
+              </q-menu>
               <div class="col" style="min-width: 0;">
                 <div class="row items-center no-wrap q-gutter-xs">
                   <div
@@ -280,28 +331,6 @@ onMounted(async () => {
                   <span class="q-ml-xs text-grey-8">&middot; {{ timeAgo(ws.updatedAt) }}</span>
                 </div>
               </div>
-              <q-btn
-                flat round dense
-                icon="archive"
-                size="xs"
-                color="grey-6"
-                class="wl-item-action wl-item-archive"
-                @click="onArchiveClick(ws, $event)"
-              >
-                <q-tooltip>{{ $t('common.archive') }}</q-tooltip>
-              </q-btn>
-              <q-btn
-                flat
-                round
-                dense
-                icon="delete_outline"
-                size="xs"
-                color="grey-6"
-                class="wl-item-action wl-item-delete"
-                @click="openDeleteDialog(ws, $event)"
-              >
-                <q-tooltip>{{ $t('common.delete') }}</q-tooltip>
-              </q-btn>
             </div>
           </div>
         </div>
@@ -343,7 +372,33 @@ onMounted(async () => {
               :class="{ 'wl-item--selected': ws.id === store.selectedWorkspaceId }"
               style="border-left: 3px solid #4ade80;"
               @click="selectWorkspace(ws.id)"
+              @contextmenu.prevent
             >
+              <q-menu dark context-menu>
+                  <q-list dense style="min-width: 180px;">
+                    <q-item clickable v-close-popup @click="copyWorktreePath(ws)">
+                      <q-item-section side><q-icon name="content_copy" size="xs" /></q-item-section>
+                      <q-item-section>{{ $t('contextMenu.copyPath') }}</q-item-section>
+                    </q-item>
+                    <q-item v-if="settingsStore.global.editorCommand" clickable v-close-popup @click="openInEditor(ws)">
+                      <q-item-section side><q-icon name="open_in_new" size="xs" /></q-item-section>
+                      <q-item-section>{{ $t('contextMenu.openEditor') }}</q-item-section>
+                    </q-item>
+                    <q-item clickable v-close-popup @click="runSetupScript(ws)">
+                      <q-item-section side><q-icon name="replay" size="xs" /></q-item-section>
+                      <q-item-section>{{ $t('contextMenu.runSetup') }}</q-item-section>
+                    </q-item>
+                    <q-separator dark />
+                    <q-item clickable v-close-popup @click="onArchiveClick(ws, $event)">
+                      <q-item-section side><q-icon name="archive" size="xs" /></q-item-section>
+                      <q-item-section>{{ $t('common.archive') }}</q-item-section>
+                    </q-item>
+                    <q-item clickable v-close-popup @click="openDeleteDialog(ws, $event)" class="text-red-5">
+                      <q-item-section side><q-icon name="delete_outline" size="xs" color="red-5" /></q-item-section>
+                      <q-item-section>{{ $t('common.delete') }}</q-item-section>
+                    </q-item>
+                  </q-list>
+              </q-menu>
               <div class="col" style="min-width: 0;">
                 <div class="row items-center no-wrap q-gutter-xs">
                   <div
@@ -357,28 +412,6 @@ onMounted(async () => {
                   <span class="q-ml-xs text-grey-8">&middot; {{ timeAgo(ws.updatedAt) }}</span>
                 </div>
               </div>
-              <q-btn
-                flat round dense
-                icon="archive"
-                size="xs"
-                color="grey-6"
-                class="wl-item-action wl-item-archive"
-                @click="onArchiveClick(ws, $event)"
-              >
-                <q-tooltip>{{ $t('common.archive') }}</q-tooltip>
-              </q-btn>
-              <q-btn
-                flat
-                round
-                dense
-                icon="delete_outline"
-                size="xs"
-                color="grey-6"
-                class="wl-item-action wl-item-delete"
-                @click="openDeleteDialog(ws, $event)"
-              >
-                <q-tooltip>{{ $t('common.delete') }}</q-tooltip>
-              </q-btn>
             </div>
           </div>
         </div>
@@ -420,7 +453,33 @@ onMounted(async () => {
               :class="{ 'wl-item--selected': ws.id === store.selectedWorkspaceId }"
               style="border-left: 3px solid #666;"
               @click="selectWorkspace(ws.id)"
+              @contextmenu.prevent
             >
+              <q-menu dark context-menu>
+                  <q-list dense style="min-width: 180px;">
+                    <q-item clickable v-close-popup @click="copyWorktreePath(ws)">
+                      <q-item-section side><q-icon name="content_copy" size="xs" /></q-item-section>
+                      <q-item-section>{{ $t('contextMenu.copyPath') }}</q-item-section>
+                    </q-item>
+                    <q-item v-if="settingsStore.global.editorCommand" clickable v-close-popup @click="openInEditor(ws)">
+                      <q-item-section side><q-icon name="open_in_new" size="xs" /></q-item-section>
+                      <q-item-section>{{ $t('contextMenu.openEditor') }}</q-item-section>
+                    </q-item>
+                    <q-item clickable v-close-popup @click="runSetupScript(ws)">
+                      <q-item-section side><q-icon name="replay" size="xs" /></q-item-section>
+                      <q-item-section>{{ $t('contextMenu.runSetup') }}</q-item-section>
+                    </q-item>
+                    <q-separator dark />
+                    <q-item clickable v-close-popup @click="onArchiveClick(ws, $event)">
+                      <q-item-section side><q-icon name="archive" size="xs" /></q-item-section>
+                      <q-item-section>{{ $t('common.archive') }}</q-item-section>
+                    </q-item>
+                    <q-item clickable v-close-popup @click="openDeleteDialog(ws, $event)" class="text-red-5">
+                      <q-item-section side><q-icon name="delete_outline" size="xs" color="red-5" /></q-item-section>
+                      <q-item-section>{{ $t('common.delete') }}</q-item-section>
+                    </q-item>
+                  </q-list>
+              </q-menu>
               <div class="col" style="min-width: 0;">
                 <div class="row items-center no-wrap q-gutter-xs">
                   <div
@@ -433,28 +492,6 @@ onMounted(async () => {
                   {{ timeAgo(ws.updatedAt) }}
                 </div>
               </div>
-              <q-btn
-                flat round dense
-                icon="archive"
-                size="xs"
-                color="grey-6"
-                class="wl-item-action wl-item-archive"
-                @click="onArchiveClick(ws, $event)"
-              >
-                <q-tooltip>{{ $t('common.archive') }}</q-tooltip>
-              </q-btn>
-              <q-btn
-                flat
-                round
-                dense
-                icon="delete_outline"
-                size="xs"
-                color="grey-6"
-                class="wl-item-action wl-item-delete"
-                @click="openDeleteDialog(ws, $event)"
-              >
-                <q-tooltip>{{ $t('common.delete') }}</q-tooltip>
-              </q-btn>
             </div>
           </div>
         </div>
@@ -647,20 +684,22 @@ onMounted(async () => {
 }
 
 .wl-item-action {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+}
+
+.wl-item--archived .wl-item-action {
   opacity: 0;
   transition: opacity 0.15s;
-  position: absolute;
-  top: 50%;
-  transform: translateY(-50%);
 }
 
-.wl-item-delete { right: 4px; }
-.wl-item-archive,
-.wl-item-unarchive { right: 28px; }
-
-.wl-item:hover .wl-item-action {
+.wl-item--archived:hover .wl-item-action {
   opacity: 1;
 }
+
+.wl-item-unarchive { right: 28px; }
+.wl-item-delete { right: 4px; }
 
 .wl-item--archived {
   opacity: 0.6;
