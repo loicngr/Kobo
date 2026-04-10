@@ -206,6 +206,8 @@ export default {
   'templates.slugDuplicate': 'Eine Vorlage mit diesem Slug existiert bereits',
   'templates.description': 'Beschreibung',
   'templates.descriptionHint': 'Kurzes Label, das im Dropdown angezeigt wird.',
+  'templates.descriptionRequired': 'Beschreibung ist erforderlich',
+  'templates.contentRequired': 'Inhalt ist erforderlich',
   'templates.content': 'Inhalt',
   'templates.contentHint': 'Vorlageninhalt. Verwende {variable_name} für Substitutionen.',
   'templates.filePath': 'Datei: {path}',

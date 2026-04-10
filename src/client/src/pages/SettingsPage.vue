@@ -87,8 +87,12 @@ async function saveTemplate() {
     formError.value = t('templates.slugInvalid')
     return
   }
-  if (!trimmedDesc || !formContent.value.trim()) {
-    formError.value = t('templates.createFailed')
+  if (!trimmedDesc) {
+    formError.value = t('templates.descriptionRequired')
+    return
+  }
+  if (!formContent.value.trim()) {
+    formError.value = t('templates.contentRequired')
     return
   }
   saving.value = true

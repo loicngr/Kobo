@@ -206,6 +206,8 @@ export default {
   'templates.slugDuplicate': 'Un template con questo slug esiste già',
   'templates.description': 'Descrizione',
   'templates.descriptionHint': 'Etichetta breve mostrata nel dropdown.',
+  'templates.descriptionRequired': 'La descrizione è obbligatoria',
+  'templates.contentRequired': 'Il contenuto è obbligatorio',
   'templates.content': 'Contenuto',
   'templates.contentHint': 'Contenuto del template. Usa {variable_name} per le sostituzioni.',
   'templates.filePath': 'File: {path}',

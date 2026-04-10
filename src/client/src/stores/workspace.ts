@@ -467,6 +467,14 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.markRead(id)
       this.fetchWorkspaceDetails(id)
       this.fetchSessions(id)
+      // Pre-fetch git stats so template expansion has them available immediately
+      // when the user selects a template — without this, variables like
+      // {commit_count}/{pr_url} would stay as literal placeholders until the
+      // user opens the Git panel.
+      this.fetchGitStats(id).catch(() => {
+        // Silent: git stats are best-effort for templates. GitPanel.vue will
+        // surface its own error if the user opens it later.
+      })
       // Re-subscribe to replay events if the feed is empty (e.g. after unarchive)
       if (!this.activityFeeds[id]?.length) {
         useWebSocketStore().subscribe(id)

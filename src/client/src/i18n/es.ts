@@ -206,6 +206,8 @@ export default {
   'templates.slugDuplicate': 'Ya existe una plantilla con este slug',
   'templates.description': 'Descripción',
   'templates.descriptionHint': 'Etiqueta corta mostrada en el dropdown.',
+  'templates.descriptionRequired': 'La descripción es obligatoria',
+  'templates.contentRequired': 'El contenido es obligatorio',
   'templates.content': 'Contenido',
   'templates.contentHint': 'Contenido de la plantilla. Usa {variable_name} para las sustituciones.',
   'templates.filePath': 'Archivo: {path}',
