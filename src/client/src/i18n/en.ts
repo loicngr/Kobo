@@ -192,6 +192,33 @@ export default {
   'settings.projectDeleted': 'Project deleted.',
   'settings.projectDeleteError': 'Error deleting project.',
 
+  // Templates
+  'templates.title': 'Templates',
+  'templates.newTemplate': 'New template',
+  'templates.editTemplate': 'Edit template',
+  'templates.deleteTemplate': 'Delete template',
+  'templates.deleteConfirm': "Delete template '/{slug}'?",
+  'templates.deleteConfirmMessage': 'This cannot be undone.',
+  'templates.slug': 'Slug',
+  'templates.slugHint': 'Lowercase letters, digits, hyphens. Max 64 chars.',
+  'templates.slugInvalid': 'Slug must contain only lowercase letters, digits, and hyphens',
+  'templates.slugDuplicate': 'A template with this slug already exists',
+  'templates.description': 'Description',
+  'templates.descriptionHint': 'Short label shown in the dropdown.',
+  'templates.content': 'Content',
+  'templates.contentHint': 'Template content. Use {variable_name} for substitutions.',
+  'templates.filePath': 'File: {path}',
+  'templates.empty': 'No templates yet.',
+  'templates.createFailed': 'Failed to create template',
+  'templates.updateFailed': 'Failed to update template',
+  'templates.deleteFailed': 'Failed to delete template',
+  'templates.save': 'Save',
+  'templates.create': 'Create',
+  // Dropdown section headers in ChatInput
+  'chatInput.dropdownSkills': 'Claude skills',
+  'chatInput.dropdownKobo': 'Kōbō commands',
+  'chatInput.dropdownTemplates': 'Templates',
+
   // Git Panel
   'git.title': 'Git',
   'git.localOnly': 'local only',
