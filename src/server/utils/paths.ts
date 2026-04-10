@@ -78,6 +78,14 @@ export function getSkillsPath(): string {
 }
 
 /**
+ * Absolute path to templates.json under the Kōbō home — user's personal
+ * prompt templates library, editable via Settings > Templates.
+ */
+export function getTemplatesPath(): string {
+  return path.join(getKoboHome(), 'templates.json')
+}
+
+/**
  * Absolute path to the compiled MCP server entry (shipped in the published
  * package as dist/mcp-server/kobo-tasks-server.js). Returns null if not
  * present — callers (agent-manager) then fall back to the TS source for dev.
