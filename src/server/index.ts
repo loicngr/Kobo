@@ -12,6 +12,7 @@ import gitRouter from './routes/git.js'
 import imagesRouter from './routes/images.js'
 import notionRouter from './routes/notion.js'
 import settingsRouter from './routes/settings.js'
+import templatesRouter from './routes/templates.js'
 import workspacesRouter from './routes/workspaces.js'
 import {
   getAvailableSkills,
@@ -64,6 +65,7 @@ app.route('/api/notion', notionRouter)
 app.route('/api/git', gitRouter)
 app.route('/api/settings', settingsRouter)
 app.route('/api/dev-server', devServerRouter)
+app.route('/api/templates', templatesRouter)
 
 // Skills endpoint
 app.get('/api/skills', (c) => c.json(getAvailableSkills()))
