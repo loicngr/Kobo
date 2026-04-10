@@ -2,11 +2,13 @@
 import { useQuasar } from 'quasar'
 import type { ProjectSettings } from 'src/stores/settings'
 import { useSettingsStore } from 'src/stores/settings'
+import { useTemplatesStore, type Template } from 'src/stores/templates'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 const $q = useQuasar()
 const store = useSettingsStore()
+const templatesStore = useTemplatesStore()
 const { t, locale } = useI18n()
 
 // Tab state
@@ -45,6 +47,91 @@ const projectBranches = ref<string[]>([])
 const loadingBranches = ref(false)
 const savingProject = ref(false)
 const deletingProject = ref(false)
+
+// Templates dialog state
+const showTemplateDialog = ref(false)
+const editingSlug = ref<string | null>(null) // null = create mode
+const formSlug = ref('')
+const formDescription = ref('')
+const formContent = ref('')
+const formError = ref('')
+const saving = ref(false)
+
+const sortedTemplates = computed(() => [...templatesStore.templates].sort((a, b) => a.slug.localeCompare(b.slug)))
+
+function openCreateDialog() {
+  editingSlug.value = null
+  formSlug.value = ''
+  formDescription.value = ''
+  formContent.value = ''
+  formError.value = ''
+  showTemplateDialog.value = true
+}
+
+function openEditDialog(template: Template) {
+  editingSlug.value = template.slug
+  formSlug.value = template.slug
+  formDescription.value = template.description
+  formContent.value = template.content
+  formError.value = ''
+  showTemplateDialog.value = true
+}
+
+async function saveTemplate() {
+  formError.value = ''
+  const trimmedSlug = formSlug.value.trim()
+  const trimmedDesc = formDescription.value.trim()
+  // Explicit guard for create mode: slug field is free-form and q-input `:rules`
+  // run on blur not on the save button, so an empty slug would sneak through.
+  if (editingSlug.value === null && !/^[a-z0-9][a-z0-9-]{0,63}$/.test(trimmedSlug)) {
+    formError.value = t('templates.slugInvalid')
+    return
+  }
+  if (!trimmedDesc || !formContent.value.trim()) {
+    formError.value = t('templates.createFailed')
+    return
+  }
+  saving.value = true
+  try {
+    if (editingSlug.value === null) {
+      await templatesStore.createTemplate({
+        slug: trimmedSlug,
+        description: trimmedDesc,
+        content: formContent.value, // keep user's whitespace for multiline prompts
+      })
+    } else {
+      await templatesStore.updateTemplate(editingSlug.value, {
+        description: trimmedDesc,
+        content: formContent.value,
+      })
+    }
+    showTemplateDialog.value = false
+  } catch (err) {
+    formError.value = err instanceof Error ? err.message : t('templates.createFailed')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function confirmDeleteTemplate(template: Template) {
+  $q.dialog({
+    title: t('templates.deleteTemplate'),
+    message: t('templates.deleteConfirm', { slug: template.slug }) + '\n\n' + t('templates.deleteConfirmMessage'),
+    dark: true,
+    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    ok: { flat: true, label: t('templates.deleteTemplate'), color: 'red-5' },
+  }).onOk(async () => {
+    try {
+      await templatesStore.deleteTemplate(template.slug)
+    } catch (err) {
+      $q.notify({
+        type: 'negative',
+        message: err instanceof Error ? err.message : t('templates.deleteFailed'),
+        position: 'top',
+      })
+    }
+  })
+}
 
 // Language options
 const languageOptions = [
@@ -321,6 +408,7 @@ onUnmounted(() => {
       >
         <q-tab name="global" :label="$t('settings.global')" />
         <q-tab name="projects" :label="$t('settings.projects')" />
+        <q-tab name="templates" :label="$t('templates.title')" />
       </q-tabs>
 
       <!-- Tab panels -->
@@ -841,8 +929,123 @@ onUnmounted(() => {
             </div>
           </div>
         </q-tab-panel>
+        <!-- Templates tab -->
+        <q-tab-panel name="templates" class="q-pa-none">
+          <div class="settings-card rounded-borders q-pa-lg">
+            <div class="row items-center justify-between q-mb-md">
+              <div class="text-subtitle1 text-weight-medium text-grey-3">
+                {{ $t('templates.title') }}
+              </div>
+              <q-btn
+                color="primary"
+                icon="add"
+                :label="$t('templates.newTemplate')"
+                dense
+                no-caps
+                @click="openCreateDialog"
+              />
+            </div>
+
+            <q-separator dark class="q-mb-md" />
+
+            <div v-if="sortedTemplates.length === 0" class="text-grey-6 q-py-lg text-center">
+              {{ $t('templates.empty') }}
+            </div>
+
+            <div v-else class="column q-gutter-sm">
+              <q-card
+                v-for="template in sortedTemplates"
+                :key="template.slug"
+                dark
+                flat
+                bordered
+                class="q-pa-md template-card"
+              >
+                <div class="row items-start justify-between no-wrap">
+                  <div class="col">
+                    <div class="text-body1 text-weight-medium" style="font-family: 'Roboto Mono', monospace;">
+                      /{{ template.slug }}
+                    </div>
+                    <div class="text-caption text-grey-5 q-mt-xs">{{ template.description }}</div>
+                  </div>
+                  <div class="row no-wrap q-gutter-xs">
+                    <q-btn flat dense round size="sm" icon="edit" color="grey-5" @click="openEditDialog(template)">
+                      <q-tooltip>{{ $t('templates.editTemplate') }}</q-tooltip>
+                    </q-btn>
+                    <q-btn flat dense round size="sm" icon="delete" color="red-4" @click="confirmDeleteTemplate(template)">
+                      <q-tooltip>{{ $t('templates.deleteTemplate') }}</q-tooltip>
+                    </q-btn>
+                  </div>
+                </div>
+              </q-card>
+            </div>
+
+            <div class="text-caption text-grey-7 q-mt-lg" style="font-family: 'Roboto Mono', monospace;">
+              {{ $t('templates.filePath', { path: '~/.config/kobo/templates.json' }) }}
+            </div>
+          </div>
+        </q-tab-panel>
       </q-tab-panels>
     </div>
+
+    <!-- Templates create/edit dialog -->
+    <q-dialog v-model="showTemplateDialog" persistent>
+      <q-card dark style="min-width: 480px; max-width: 640px;">
+        <q-card-section>
+          <div class="text-subtitle1">
+            {{ editingSlug === null ? $t('templates.newTemplate') : $t('templates.editTemplate') }}
+          </div>
+        </q-card-section>
+
+        <q-card-section class="q-gutter-md">
+          <q-input
+            v-model="formSlug"
+            :label="$t('templates.slug')"
+            :hint="$t('templates.slugHint')"
+            dark
+            dense
+            prefix="/"
+            :disable="editingSlug !== null"
+            :rules="[(v) => /^[a-z0-9][a-z0-9-]{0,63}$/.test(v) || $t('templates.slugInvalid')]"
+            lazy-rules
+          />
+          <q-input
+            v-model="formDescription"
+            :label="$t('templates.description')"
+            :hint="$t('templates.descriptionHint')"
+            dark
+            dense
+            counter
+            maxlength="120"
+            :rules="[(v) => (v && v.trim().length > 0) || '']"
+          />
+          <q-input
+            v-model="formContent"
+            :label="$t('templates.content')"
+            :hint="$t('templates.contentHint')"
+            dark
+            dense
+            type="textarea"
+            autogrow
+            counter
+            maxlength="4096"
+            :rules="[(v) => (v && v.trim().length > 0) || '']"
+          />
+          <div v-if="formError" class="text-negative text-caption">{{ formError }}</div>
+        </q-card-section>
+
+        <q-card-actions align="right">
+          <q-btn flat :label="$t('common.cancel')" v-close-popup />
+          <q-btn
+            flat
+            color="primary"
+            :label="editingSlug === null ? $t('templates.create') : $t('templates.save')"
+            :loading="saving"
+            @click="saveTemplate"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
   </q-page>
 </template>
 
