@@ -508,7 +508,7 @@ function onKeydown(event: KeyboardEvent) {
       selectedSkillIndex.value = Math.max(selectedSkillIndex.value - 1, 0)
       return
     }
-    if (event.key === 'Enter' && !event.shiftKey) {
+    if (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey)) {
       event.preventDefault()
       selectDropdownItem(flatDropdown.value[selectedSkillIndex.value])
       return
