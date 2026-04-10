@@ -136,6 +136,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     >,
     chatDraft: '',
     gitRefreshTrigger: 0,
+    gitStatsCache: {} as Record<string, GitStats>,
   }),
 
   getters: {
@@ -364,7 +365,9 @@ export const useWorkspaceStore = defineStore('workspace', {
     async fetchGitStats(id: string): Promise<GitStats> {
       const res = await fetch(`/api/workspaces/${id}/git-stats`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      return (await res.json()) as GitStats
+      const stats = (await res.json()) as GitStats
+      this.gitStatsCache[id] = stats
+      return stats
     },
 
     async openPullRequest(id: string): Promise<OpenPrResult> {

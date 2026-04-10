@@ -1,9 +1,12 @@
 <script setup lang="ts">
+import type { QInput } from 'quasar'
 import { useQuasar } from 'quasar'
+import { useTemplatesStore } from 'src/stores/templates'
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { KOBO_COMMANDS } from 'src/utils/kobo-commands'
-import { computed, onMounted, ref, watch } from 'vue'
+import { buildTemplateVars, expandTemplate } from 'src/utils/expand-template'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{
@@ -14,7 +17,25 @@ const { t } = useI18n()
 const $q = useQuasar()
 const store = useWorkspaceStore()
 const wsStore = useWebSocketStore()
+const templatesStore = useTemplatesStore()
 const message = ref('')
+
+// Chat input element ref (for caret position access)
+const chatInputRef = ref<InstanceType<typeof QInput> | null>(null)
+
+/**
+ * Returns the underlying `<textarea>` (or `<input>`) element of the chat
+ * input, using Quasar's public API. Returns null before the component has
+ * mounted or if the input hasn't been rendered yet.
+ */
+function getChatInputEl(): HTMLTextAreaElement | HTMLInputElement | null {
+  const inst = chatInputRef.value
+  if (!inst) return null
+  // getNativeElement() is the documented Quasar v2 method — returns the
+  // underlying DOM element held by the component.
+  const el = inst.getNativeElement?.()
+  return (el as HTMLTextAreaElement | HTMLInputElement | null) ?? null
+}
 
 // Skills autocomplete
 const skills = ref<string[]>([])
@@ -22,11 +43,56 @@ const showSkills = ref(false)
 const skillFilter = ref('')
 const selectedSkillIndex = ref(0)
 
-const filteredSkills = computed(() => {
-  if (!skillFilter.value) return skills.value
+// Dropdown item type
+interface DropdownItem {
+  type: 'skill' | 'kobo' | 'template'
+  name: string
+  description?: string
+}
+
+const groupedDropdown = computed<{ skills: DropdownItem[]; kobo: DropdownItem[]; templates: DropdownItem[] }>(() => {
   const q = skillFilter.value.toLowerCase()
-  return skills.value.filter((s) => s.toLowerCase().includes(q))
+  const matches = (name: string) => (q === '' ? true : name.toLowerCase().includes(q))
+
+  // Claude skills come from the existing `skills.value` list (no description available)
+  const claudeSkills = skills.value
+    .filter((s) => matches(s))
+    .map<DropdownItem>((s) => ({ type: 'skill', name: s }))
+
+  // Kōbō commands (without the leading "/") — KOBO_COMMANDS keys include the slash
+  const koboCommands = Object.keys(KOBO_COMMANDS)
+    .map((k) => k.replace(/^\//, ''))
+    .filter((k) => matches(k))
+    .map<DropdownItem>((name) => ({ type: 'kobo', name }))
+
+  // User templates
+  const templates = templatesStore.templates
+    .filter((t) => matches(t.slug))
+    .map<DropdownItem>((t) => ({ type: 'template', name: t.slug, description: t.description }))
+
+  return { skills: claudeSkills, kobo: koboCommands, templates }
 })
+
+// Flat list used for keyboard navigation (skips empty sections implicitly)
+const flatDropdown = computed(() => [
+  ...groupedDropdown.value.skills,
+  ...groupedDropdown.value.kobo,
+  ...groupedDropdown.value.templates,
+])
+
+// Clamp `selectedSkillIndex` when the filtered list shrinks
+watch(
+  () => flatDropdown.value.length,
+  (len) => {
+    if (len === 0) {
+      selectedSkillIndex.value = 0
+      return
+    }
+    if (selectedSkillIndex.value >= len) {
+      selectedSkillIndex.value = len - 1
+    }
+  },
+)
 
 // Image upload
 interface PendingImage {
@@ -163,11 +229,31 @@ watch(
   },
 )
 
-// Watch for / prefix to trigger autocomplete
-watch(message, async (val) => {
-  if (val.startsWith('/')) {
+/**
+ * Returns the slug fragment preceding the current caret position if the user
+ * is currently typing a slash command. For example:
+ *   - "/rev|"          → "rev"
+ *   - "bug, /rev|ed"   → "rev"   (caret after "rev")
+ *   - "hello"          → null
+ *   - "/review-quality" → "review-quality"
+ */
+function getSlashFragmentBeforeCaret(): string | null {
+  const el = getChatInputEl()
+  if (!el) return null
+  const caret = el.selectionStart ?? message.value.length
+  const before = message.value.slice(0, caret)
+  const match = before.match(/\/([\w-]*)$/)
+  return match ? match[1] : null
+}
+
+// Watch for / anywhere before caret to trigger autocomplete
+watch(message, async () => {
+  // Run after the DOM has settled so selectionStart reflects the new caret
+  await nextTick()
+  const fragment = getSlashFragmentBeforeCaret()
+  if (fragment !== null) {
     await fetchSkills()
-    skillFilter.value = val.substring(1)
+    skillFilter.value = fragment
     showSkills.value = true
     selectedSkillIndex.value = 0
   } else {
@@ -175,15 +261,106 @@ watch(message, async (val) => {
   }
 })
 
-function selectSkill(skill: string) {
-  const asCommand = `/${skill}`
-  if (KOBO_COMMANDS[asCommand]) {
+function replaceSlashFragmentWith(expanded: string) {
+  const el = getChatInputEl()
+  if (!el) {
+    // No DOM access — fall back to replacing the whole input
+    message.value = expanded
+    return
+  }
+  const caret = el.selectionStart ?? message.value.length
+  const before = message.value.slice(0, caret)
+  const after = message.value.slice(caret)
+  const match = before.match(/\/[\w-]*$/)
+  if (!match) {
+    // No slash fragment found — fall back to whole-input replacement
+    message.value = expanded
+    return
+  }
+  const fragmentStart = match.index ?? caret
+  message.value = message.value.slice(0, fragmentStart) + expanded + after
+  // Move caret to the end of the inserted text
+  void nextTick(() => {
+    const newPos = fragmentStart + expanded.length
+    el.focus()
+    el.setSelectionRange(newPos, newPos)
+  })
+}
+
+function selectDropdownItem(item: DropdownItem | undefined) {
+  if (!item) return
+
+  if (item.type === 'template') {
+    const template = templatesStore.templates.find((t) => t.slug === item.name)
+    if (!template) return
+
+    // Gather variables from the workspace store.
+    const workspace = store.workspaces.find((w) => w.id === props.workspaceId) ?? null
+    const gitStats = store.gitStatsCache[props.workspaceId] ?? null
+
+    // Compute the session display name matching what WorkspacePage shows:
+    // sessions are displayed in startedAt-ASC order and labelled "Session #N"
+    // where N = store.sessions.length - index (so the newest gets the highest
+    // number). See pages/WorkspacePage.vue sessionOptions computed.
+    const currentSessionVal = store.sessions.find((s) => s.id === store.selectedSessionId) ?? null
+    let sessionName: string | null = null
+    if (currentSessionVal) {
+      if (currentSessionVal.name) {
+        sessionName = currentSessionVal.name
+      } else {
+        const idx = store.sessions.findIndex((s) => s.id === currentSessionVal.id)
+        sessionName = t('workspacePage.session', { n: store.sessions.length - idx })
+      }
+    }
+
+    // GitStats from the server does NOT include `prNumber` — we derive it from
+    // `prUrl` (format: https://host/org/repo/pull/<N>) to avoid a backend change.
+    let prNumber: number | undefined
+    if (gitStats?.prUrl) {
+      const match = gitStats.prUrl.match(/\/pull\/(\d+)/)
+      if (match) prNumber = parseInt(match[1], 10)
+    }
+
+    const vars = buildTemplateVars({
+      workspace: workspace
+        ? {
+            name: workspace.name,
+            workingBranch: workspace.workingBranch,
+            sourceBranch: workspace.sourceBranch,
+            projectPath: workspace.projectPath,
+          }
+        : null,
+      gitStats: gitStats
+        ? {
+            commitCount: gitStats.commitCount,
+            unpushedCount: gitStats.unpushedCount,
+            filesChanged: gitStats.filesChanged,
+            insertions: gitStats.insertions,
+            deletions: gitStats.deletions,
+            prNumber,
+            prUrl: gitStats.prUrl,
+            prState: gitStats.prState,
+          }
+        : null,
+      sessionName,
+    })
+    const expanded = expandTemplate(template.content, vars)
+    replaceSlashFragmentWith(expanded)
+    showSkills.value = false
+    return
+  }
+
+  // Skills Claude + Kōbō commands: insert `/name` (complete the fragment)
+  const asCommand = `/${item.name}`
+  if (item.type === 'kobo' && KOBO_COMMANDS[asCommand]) {
+    // Kōbō commands auto-send — preserve the existing behavior
     message.value = asCommand
     showSkills.value = false
     sendMessage()
     return
   }
-  message.value = `${asCommand} `
+  // Claude skills: just complete the fragment in the input, user hits Enter to send
+  replaceSlashFragmentWith(`${asCommand} `)
   showSkills.value = false
 }
 
@@ -320,10 +497,10 @@ async function sendMessage() {
 }
 
 function onKeydown(event: KeyboardEvent) {
-  if (showSkills.value && filteredSkills.value.length > 0) {
+  if (showSkills.value && flatDropdown.value.length > 0) {
     if (event.key === 'ArrowDown') {
       event.preventDefault()
-      selectedSkillIndex.value = Math.min(selectedSkillIndex.value + 1, filteredSkills.value.length - 1)
+      selectedSkillIndex.value = Math.min(selectedSkillIndex.value + 1, flatDropdown.value.length - 1)
       return
     }
     if (event.key === 'ArrowUp') {
@@ -331,12 +508,13 @@ function onKeydown(event: KeyboardEvent) {
       selectedSkillIndex.value = Math.max(selectedSkillIndex.value - 1, 0)
       return
     }
-    if (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey)) {
+    if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault()
-      selectSkill(filteredSkills.value[selectedSkillIndex.value])
+      selectDropdownItem(flatDropdown.value[selectedSkillIndex.value])
       return
     }
     if (event.key === 'Escape') {
+      event.preventDefault()
       showSkills.value = false
       return
     }
@@ -416,27 +594,59 @@ function onKeydown(event: KeyboardEvent) {
       </div>
     </div>
 
-    <!-- Skills autocomplete popup -->
-    <div v-if="showSkills && filteredSkills.length > 0" class="skills-popup rounded-borders">
-      <div class="skills-header text-caption text-weight-bold text-grey-6 q-px-sm q-py-xs">
-        {{ $t('chatInput.skills') }}
-      </div>
-      <div
-        v-for="(skill, idx) in filteredSkills.slice(0, 12)"
-        :key="skill"
-        class="skill-item row items-center q-px-sm q-py-xs cursor-pointer"
-        :class="{ 'skill-item--active': idx === selectedSkillIndex }"
-        @click="selectSkill(skill)"
-        @mouseenter="selectedSkillIndex = idx"
-      >
-        <q-icon name="bolt" size="12px" color="indigo-4" class="q-mr-xs" />
-        <span class="text-caption">{{ skill }}</span>
-        <span v-if="koboDescription(skill)" class="text-caption text-grey-7 q-ml-xs">— {{ koboDescription(skill) }}</span>
-      </div>
+    <!-- Grouped slash autocomplete popup -->
+    <div v-if="showSkills && flatDropdown.length > 0" class="skills-popup rounded-borders">
+      <!-- Claude skills -->
+      <template v-if="groupedDropdown.skills.length > 0">
+        <div class="skills-section-header">{{ $t('chatInput.dropdownSkills') }}</div>
+        <div
+          v-for="item in groupedDropdown.skills"
+          :key="`skill-${item.name}`"
+          class="skill-item row items-center q-px-sm q-py-xs cursor-pointer"
+          :class="{ 'skill-item--active': flatDropdown.indexOf(item) === selectedSkillIndex }"
+          @mousedown.prevent="selectDropdownItem(item)"
+        >
+          <q-icon name="bolt" size="12px" color="indigo-4" class="q-mr-xs" />
+          <span class="skill-name text-caption">{{ item.name }}</span>
+        </div>
+      </template>
+
+      <!-- Kōbō commands -->
+      <template v-if="groupedDropdown.kobo.length > 0">
+        <div class="skills-section-header">{{ $t('chatInput.dropdownKobo') }}</div>
+        <div
+          v-for="item in groupedDropdown.kobo"
+          :key="`kobo-${item.name}`"
+          class="skill-item row items-center q-px-sm q-py-xs cursor-pointer"
+          :class="{ 'skill-item--active': flatDropdown.indexOf(item) === selectedSkillIndex }"
+          @mousedown.prevent="selectDropdownItem(item)"
+        >
+          <q-icon name="terminal" size="12px" color="teal-4" class="q-mr-xs" />
+          <span class="skill-name text-caption">/{{ item.name }}</span>
+          <span v-if="koboDescription(item.name)" class="skill-description text-caption text-grey-7 q-ml-xs">— {{ koboDescription(item.name) }}</span>
+        </div>
+      </template>
+
+      <!-- User templates -->
+      <template v-if="groupedDropdown.templates.length > 0">
+        <div class="skills-section-header">{{ $t('chatInput.dropdownTemplates') }}</div>
+        <div
+          v-for="item in groupedDropdown.templates"
+          :key="`tpl-${item.name}`"
+          class="skill-item row items-center q-px-sm q-py-xs cursor-pointer"
+          :class="{ 'skill-item--active': flatDropdown.indexOf(item) === selectedSkillIndex }"
+          @mousedown.prevent="selectDropdownItem(item)"
+        >
+          <q-icon name="description" size="12px" color="amber-4" class="q-mr-xs" />
+          <span class="skill-name text-caption">/{{ item.name }}</span>
+          <span v-if="item.description" class="skill-description text-caption text-grey-7 q-ml-xs">— {{ item.description }}</span>
+        </div>
+      </template>
     </div>
 
     <div class="row items-end q-gutter-sm">
       <q-input
+        ref="chatInputRef"
         v-model="message"
         dense
         dark
@@ -527,8 +737,17 @@ function onKeydown(event: KeyboardEvent) {
   z-index: 9999;
 }
 
-.skills-header {
-  border-bottom: 1px solid #2a2a4a;
+.skills-section-header {
+  padding: 4px 12px;
+  font-size: 10px;
+  text-transform: uppercase;
+  color: #6b7280;
+  letter-spacing: 0.05em;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+
+  &:first-child {
+    border-top: none;
+  }
 }
 
 .skill-item {
