@@ -39,7 +39,8 @@ export function initSchema(db: Database.Database): void {
       claude_session_id TEXT,
       status TEXT NOT NULL DEFAULT 'running',
       started_at TEXT NOT NULL,
-      ended_at TEXT
+      ended_at TEXT,
+      name TEXT
     );
 
     CREATE TABLE IF NOT EXISTS ws_events (

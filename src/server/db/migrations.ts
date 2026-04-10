@@ -39,6 +39,37 @@ export const migrations: Migration[] = [
       db.prepare('ALTER TABLE workspaces ADD COLUMN has_unread INTEGER NOT NULL DEFAULT 0').run()
     },
   },
+  {
+    version: 5,
+    name: 'add-agent-session-name',
+    migrate: (db) => {
+      db.exec('ALTER TABLE agent_sessions ADD COLUMN name TEXT')
+    },
+  },
+  {
+    version: 6,
+    name: 'backfill-ws-events-session-id',
+    migrate: (db) => {
+      // Before this release, ws_events.session_id stored the Claude-generated
+      // session ID. The frontend now filters by agent_sessions.id (internal nanoid),
+      // so existing rows are invisible in the activity feed. Rewrite any
+      // ws_events.session_id that matches an agent_sessions.claude_session_id to
+      // the corresponding agent_sessions.id.
+      db.exec(`
+        UPDATE ws_events
+        SET session_id = (
+          SELECT a.id FROM agent_sessions a
+          WHERE a.claude_session_id = ws_events.session_id
+          LIMIT 1
+        )
+        WHERE session_id IS NOT NULL
+          AND EXISTS (
+            SELECT 1 FROM agent_sessions a
+            WHERE a.claude_session_id = ws_events.session_id
+          )
+      `)
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

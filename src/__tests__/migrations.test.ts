@@ -34,8 +34,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 4', () => {
-    expect(SCHEMA_VERSION).toBe(4)
+  it('exporte SCHEMA_VERSION = 6', () => {
+    expect(SCHEMA_VERSION).toBe(6)
   })
 
   it('migre depuis la legacy schema_version table', () => {
@@ -223,6 +223,141 @@ describe('runMigrations(db)', () => {
     const db = new Database(':memory:')
     const history = getMigrationHistory(db)
     expect(history).toEqual([])
+    db.close()
+  })
+
+  it('migration v5: ajoute la colonne name à agent_sessions', () => {
+    const db = new Database(':memory:')
+    // Simulate a v4 database (all migrations up to v4 applied manually)
+    db.exec(`
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+      CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, project_path TEXT NOT NULL,
+        source_branch TEXT NOT NULL, working_branch TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'created',
+        notion_url TEXT, notion_page_id TEXT, model TEXT NOT NULL DEFAULT 'claude-opus-4-6',
+        permission_mode TEXT NOT NULL DEFAULT 'auto-accept',
+        dev_server_status TEXT NOT NULL DEFAULT 'stopped', archived_at TEXT, has_unread INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL
+        REFERENCES workspaces(id) ON DELETE CASCADE, pid INTEGER, claude_session_id TEXT,
+        status TEXT NOT NULL DEFAULT 'running', started_at TEXT NOT NULL, ended_at TEXT);
+      CREATE TABLE tasks (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending', is_acceptance_criterion INTEGER NOT NULL DEFAULT 0,
+        sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE ws_events (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, type TEXT NOT NULL,
+        payload TEXT NOT NULL, session_id TEXT, created_at TEXT NOT NULL);
+      INSERT INTO schema_migrations (version, name, applied_at) VALUES
+        (1, 'init-schema', '2025-01-01'),
+        (2, 'add-permission-mode', '2025-01-01'),
+        (3, 'add-workspace-id-indexes', '2025-01-01'),
+        (4, 'add-has-unread', '2025-01-01');
+    `)
+
+    runMigrations(db)
+
+    const cols = db.prepare("PRAGMA table_info(agent_sessions)").all() as { name: string }[]
+    expect(cols.map(c => c.name)).toContain('name')
+
+    const history = getMigrationHistory(db)
+    expect(history.find(h => h.version === 5)).toBeTruthy()
+    db.close()
+  })
+
+  it('fresh install v5: agent_sessions a la colonne name', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    const cols = db.prepare("PRAGMA table_info(agent_sessions)").all() as { name: string }[]
+    expect(cols.map(c => c.name)).toContain('name')
+    db.close()
+  })
+
+  it('migration v6: backfille ws_events.session_id depuis claude_session_id vers agent_sessions.id', () => {
+    const db = new Database(':memory:')
+    // Simulate a v5 database with existing ws_events rows tagged by claude_session_id
+    db.exec(`
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+      CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, project_path TEXT NOT NULL,
+        source_branch TEXT NOT NULL, working_branch TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'created',
+        notion_url TEXT, notion_page_id TEXT, model TEXT NOT NULL DEFAULT 'claude-opus-4-6',
+        permission_mode TEXT NOT NULL DEFAULT 'auto-accept',
+        dev_server_status TEXT NOT NULL DEFAULT 'stopped', archived_at TEXT, has_unread INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL
+        REFERENCES workspaces(id) ON DELETE CASCADE, pid INTEGER, claude_session_id TEXT,
+        status TEXT NOT NULL DEFAULT 'running', started_at TEXT NOT NULL, ended_at TEXT, name TEXT);
+      CREATE TABLE tasks (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending', is_acceptance_criterion INTEGER NOT NULL DEFAULT 0,
+        sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE ws_events (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, type TEXT NOT NULL,
+        payload TEXT NOT NULL, session_id TEXT, created_at TEXT NOT NULL);
+      INSERT INTO schema_migrations (version, name, applied_at) VALUES
+        (1, 'init-schema', '2025-01-01'),
+        (2, 'add-permission-mode', '2025-01-01'),
+        (3, 'add-workspace-id-indexes', '2025-01-01'),
+        (4, 'add-has-unread', '2025-01-01'),
+        (5, 'add-agent-session-name', '2025-01-01');
+      INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+        VALUES ('w1', 'test', '/tmp', 'main', 'feat', '2025-01-01', '2025-01-01');
+      INSERT INTO agent_sessions (id, workspace_id, pid, claude_session_id, status, started_at)
+        VALUES ('sess-internal-1', 'w1', 100, 'claude-uuid-1', 'completed', '2025-01-01'),
+               ('sess-internal-2', 'w1', 101, 'claude-uuid-2', 'completed', '2025-01-02');
+      INSERT INTO ws_events (id, workspace_id, type, payload, session_id, created_at) VALUES
+        ('e1', 'w1', 'agent:output', '{}', 'claude-uuid-1', '2025-01-01'),
+        ('e2', 'w1', 'agent:output', '{}', 'claude-uuid-1', '2025-01-01'),
+        ('e3', 'w1', 'agent:output', '{}', 'claude-uuid-2', '2025-01-02'),
+        ('e4', 'w1', 'agent:output', '{}', NULL, '2025-01-02'),
+        ('e5', 'w1', 'agent:output', '{}', 'unknown-uuid', '2025-01-02');
+    `)
+
+    runMigrations(db)
+
+    // Events tagged with known claude_session_id should be rewritten to agent_sessions.id
+    const events = db.prepare('SELECT id, session_id FROM ws_events ORDER BY id').all() as {
+      id: string
+      session_id: string | null
+    }[]
+    expect(events.find((e) => e.id === 'e1')?.session_id).toBe('sess-internal-1')
+    expect(events.find((e) => e.id === 'e2')?.session_id).toBe('sess-internal-1')
+    expect(events.find((e) => e.id === 'e3')?.session_id).toBe('sess-internal-2')
+    // NULL stays NULL
+    expect(events.find((e) => e.id === 'e4')?.session_id).toBe(null)
+    // Unknown claude_session_id stays untouched (no matching agent_sessions row)
+    expect(events.find((e) => e.id === 'e5')?.session_id).toBe('unknown-uuid')
+
+    const history = getMigrationHistory(db)
+    expect(history.find((h) => h.version === 6)).toBeTruthy()
+    db.close()
+  })
+
+  it('migration v6 est idempotente (un second runMigrations ne re-modifie rien)', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+
+    // Insert legacy data AFTER the initial migration — this mimics events
+    // that could have been written by an older backend still running
+    // against the upgraded schema.
+    db.exec(`
+      INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+        VALUES ('w1', 'test', '/tmp', 'main', 'feat', '2025-01-01', '2025-01-01');
+      INSERT INTO agent_sessions (id, workspace_id, pid, claude_session_id, status, started_at)
+        VALUES ('sess-1', 'w1', 100, 'claude-legacy', 'completed', '2025-01-01');
+      INSERT INTO ws_events (id, workspace_id, type, payload, session_id, created_at)
+        VALUES ('e1', 'w1', 'agent:output', '{}', 'claude-legacy', '2025-01-01');
+    `)
+
+    // Run migrations a second time — schema_migrations already has v6, so the
+    // backfill should NOT run again. The legacy row must remain unchanged.
+    runMigrations(db)
+
+    const row = db.prepare('SELECT session_id FROM ws_events WHERE id = ?').get('e1') as {
+      session_id: string | null
+    }
+    // v6 was already marked as applied, so the second run is a no-op: the legacy
+    // tag is still present. This protects against accidental double-execution.
+    expect(row.session_id).toBe('claude-legacy')
+
+    // And the history should still contain v6 exactly once.
+    const history = getMigrationHistory(db)
+    const v6Entries = history.filter((h) => h.version === 6)
+    expect(v6Entries.length).toBe(1)
+
     db.close()
   })
 })

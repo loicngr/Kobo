@@ -130,7 +130,7 @@ function runWatchdog(): void {
       workspaceId,
       'agent:status',
       { status: 'error', message: 'Agent process died unexpectedly' },
-      agent.claudeSessionId,
+      agent.agentSessionId,
     )
   }
 }
@@ -160,6 +160,7 @@ export function startAgent(
   model?: string,
   resume = false,
   permissionMode: 'auto-accept' | 'plan' = 'auto-accept',
+  existingSessionId?: string,
 ): AgentInstance {
   // Check if agent already running for this workspace
   if (agents.has(workspaceId)) {
@@ -187,13 +188,34 @@ export function startAgent(
     args.push('--model', model)
   }
   if (resume) {
-    const lastSession = db
-      .prepare(
-        'SELECT id, claude_session_id FROM agent_sessions WHERE workspace_id = ? AND claude_session_id IS NOT NULL ORDER BY started_at DESC LIMIT 1',
-      )
-      .get(workspaceId) as { id: string; claude_session_id: string } | undefined
+    // Prefer resuming the specific session requested by the caller (existingSessionId).
+    // Otherwise fall back to the most recent session for the workspace.
+    let lastSession: { id: string; claude_session_id: string } | undefined
+    if (existingSessionId) {
+      lastSession = db
+        .prepare(
+          'SELECT id, claude_session_id FROM agent_sessions WHERE id = ? AND workspace_id = ? AND claude_session_id IS NOT NULL LIMIT 1',
+        )
+        .get(existingSessionId, workspaceId) as { id: string; claude_session_id: string } | undefined
+      // If the caller explicitly asked to resume a specific session, fail loudly
+      // when it cannot be resumed (no claude_session_id, wrong workspace, or
+      // missing row). Silently creating a new session would orphan the target.
+      if (!lastSession) {
+        throw new Error(
+          `Cannot resume session '${existingSessionId}' for workspace '${workspaceId}': ` +
+            'session not found or has no associated Claude conversation',
+        )
+      }
+    } else {
+      lastSession = db
+        .prepare(
+          'SELECT id, claude_session_id FROM agent_sessions WHERE workspace_id = ? AND claude_session_id IS NOT NULL ORDER BY started_at DESC LIMIT 1',
+        )
+        .get(workspaceId) as { id: string; claude_session_id: string } | undefined
+    }
 
-    const claudeSessionId = sessionIds.get(workspaceId) ?? lastSession?.claude_session_id
+    // The in-memory cache is workspace-scoped, only useful when no specific session was requested.
+    const claudeSessionId = lastSession?.claude_session_id ?? (existingSessionId ? undefined : sessionIds.get(workspaceId))
 
     if (claudeSessionId) {
       resumedClaudeSessionId = claudeSessionId
@@ -227,14 +249,24 @@ export function startAgent(
     }
   } else {
     args.push('-p', prompt)
-    agentSessionId = nanoid()
-    db.prepare('INSERT INTO agent_sessions (id, workspace_id, pid, status, started_at) VALUES (?, ?, ?, ?, ?)').run(
-      agentSessionId,
-      workspaceId,
-      null,
-      'running',
-      new Date().toISOString(),
-    )
+    if (existingSessionId) {
+      const result = db.prepare(
+        'UPDATE agent_sessions SET status = ?, started_at = ?, ended_at = NULL WHERE id = ? AND workspace_id = ?',
+      ).run('running', new Date().toISOString(), existingSessionId, workspaceId)
+      if (result.changes === 0) {
+        throw new Error(`Agent session '${existingSessionId}' not found for workspace '${workspaceId}'`)
+      }
+      agentSessionId = existingSessionId
+    } else {
+      agentSessionId = nanoid()
+      db.prepare('INSERT INTO agent_sessions (id, workspace_id, pid, status, started_at) VALUES (?, ?, ?, ?, ?)').run(
+        agentSessionId,
+        workspaceId,
+        null,
+        'running',
+        new Date().toISOString(),
+      )
+    }
   }
 
   // Write .mcp.json to workingDir so claude picks up the kobo-tasks MCP server
@@ -302,12 +334,12 @@ export function startAgent(
       parsed = JSON.parse(line)
     } catch {
       // Parsing failed — emit raw line
-      emit(workspaceId, 'agent:output', { type: 'raw', content: line }, agent.claudeSessionId)
+      emit(workspaceId, 'agent:output', { type: 'raw', content: line }, agent.agentSessionId)
       // Check for BRAINSTORM_COMPLETE marker in raw lines
       if (line.includes('[BRAINSTORM_COMPLETE]')) {
         try {
           updateWorkspaceStatus(workspaceId, 'executing')
-          emit(workspaceId, 'agent:status', { status: 'executing' }, agent.claudeSessionId)
+          emit(workspaceId, 'agent:status', { status: 'executing' }, agent.agentSessionId)
         } catch (err) {
           console.error('[agent] Failed to transition to executing:', err)
         }
@@ -381,7 +413,7 @@ export function startAgent(
       return
     }
 
-    emit(workspaceId, 'agent:output', parsed, agent.claudeSessionId)
+    emit(workspaceId, 'agent:output', parsed, agent.agentSessionId)
 
     // Detect brainstorming completion from parsed output
     if (msgType === 'assistant' && Array.isArray(p.content)) {
@@ -392,7 +424,7 @@ export function startAgent(
       if (hasMarker) {
         try {
           updateWorkspaceStatus(workspaceId, 'executing')
-          emit(workspaceId, 'agent:status', { status: 'executing' }, agent.claudeSessionId)
+          emit(workspaceId, 'agent:status', { status: 'executing' }, agent.agentSessionId)
         } catch (err) {
           console.error('[agent] Failed to transition to executing:', err)
         }
@@ -409,11 +441,11 @@ export function startAgent(
     const lowerText = text.toLowerCase()
 
     if (lowerText.includes('rate limit') || lowerText.includes('quota') || lowerText.includes('limit exceeded')) {
-      handleQuota(workspaceId, agent.claudeSessionId)
+      handleQuota(workspaceId, agent.agentSessionId)
     }
 
     // Also emit stderr for visibility
-    emit(workspaceId, 'agent:stderr', { content: text }, agent.claudeSessionId)
+    emit(workspaceId, 'agent:stderr', { content: text }, agent.agentSessionId)
   })
 
   // ── process exit ──
@@ -458,7 +490,7 @@ export function startAgent(
 
     if (agent.status === 'stopping') {
       // Clean stop requested
-      emit(workspaceId, 'agent:status', { status: 'stopped' }, agent.claudeSessionId)
+      emit(workspaceId, 'agent:status', { status: 'stopped' }, agent.agentSessionId)
       return
     }
 
@@ -481,7 +513,7 @@ export function startAgent(
       } catch {
         // best-effort
       }
-      emit(workspaceId, 'agent:status', { status: 'error', exitCode: code }, agent.claudeSessionId)
+      emit(workspaceId, 'agent:status', { status: 'error', exitCode: code }, agent.agentSessionId)
     } else {
       try {
         updateWorkspaceStatus(workspaceId, 'completed')
@@ -494,7 +526,7 @@ export function startAgent(
       } catch {
         // best-effort
       }
-      emit(workspaceId, 'agent:status', { status: 'completed' }, agent.claudeSessionId)
+      emit(workspaceId, 'agent:status', { status: 'completed' }, agent.agentSessionId)
     }
   })
 
@@ -502,7 +534,7 @@ export function startAgent(
   agents.set(workspaceId, agent)
 
   // Notify frontend that agent is now running
-  emit(workspaceId, 'agent:status', { status: 'executing' }, agent.claudeSessionId)
+  emit(workspaceId, 'agent:status', { status: 'executing' }, agent.agentSessionId)
 
   return agent
 }
@@ -607,7 +639,7 @@ export function getAvailableSkills(): string[] {
 
 // ── Quota handling ─────────────────────────────────────────────────────────────
 
-function handleQuota(workspaceId: string, claudeSessionId?: string): void {
+function handleQuota(workspaceId: string, agentSessionId?: string): void {
   // Update workspace status
   try {
     updateWorkspaceStatus(workspaceId, 'quota')
@@ -616,7 +648,7 @@ function handleQuota(workspaceId: string, claudeSessionId?: string): void {
   }
 
   // Emit status event
-  emit(workspaceId, 'agent:status', { status: 'quota' }, claudeSessionId)
+  emit(workspaceId, 'agent:status', { status: 'quota' }, agentSessionId)
 
   // Calculate backoff: 15min first, then 30min, then 60min cap
   const retryCount = retryCounts.get(workspaceId) ?? 0
@@ -633,7 +665,7 @@ function handleQuota(workspaceId: string, claudeSessionId?: string): void {
       retryCount: retryCount + 1,
       backoffMinutes,
     },
-    claudeSessionId,
+    agentSessionId,
   )
 
   // Set timer to restart agent

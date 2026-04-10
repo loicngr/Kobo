@@ -16,6 +16,7 @@ import {
   getStructuredDiffStatsBetween,
   listBranches,
   listRemoteBranches,
+  pullBranch,
   pushBranch,
 } from '../server/utils/git-ops.js'
 
@@ -175,6 +176,60 @@ describe('pushBranch', () => {
     execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
     // No remote configured — push must fail
     expect(() => pushBranch(repo, 'main')).toThrow()
+    rmSync(repo, { recursive: true, force: true })
+  })
+})
+
+describe('pullBranch', () => {
+  it('pulls fast-forward changes from origin successfully', () => {
+    const bare = mkdtempSync(path.join(tmpdir(), 'at-pull-bare-'))
+    execFileSync('git', ['init', '--bare'], { cwd: bare })
+
+    // First clone: produce an initial commit and push it
+    const repoA = mkdtempSync(path.join(tmpdir(), 'at-pull-a-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repoA })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repoA })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repoA })
+    writeFileSync(path.join(repoA, 'f.txt'), 'v1')
+    execFileSync('git', ['add', '.'], { cwd: repoA })
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: repoA })
+    execFileSync('git', ['remote', 'add', 'origin', bare], { cwd: repoA })
+    execFileSync('git', ['push', '-u', 'origin', 'main'], { cwd: repoA })
+
+    // Second clone: will receive changes via pull
+    const repoB = mkdtempSync(path.join(tmpdir(), 'at-pull-b-'))
+    execFileSync('git', ['clone', bare, repoB])
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repoB })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repoB })
+
+    // Produce a new commit on repoA and push it
+    writeFileSync(path.join(repoA, 'f.txt'), 'v2')
+    execFileSync('git', ['commit', '-am', 'update'], { cwd: repoA })
+    execFileSync('git', ['push'], { cwd: repoA })
+
+    // pullBranch on repoB should fast-forward
+    expect(() => pullBranch(repoB, 'main')).not.toThrow()
+
+    const content = fs.readFileSync(path.join(repoB, 'f.txt'), 'utf-8')
+    expect(content).toBe('v2')
+
+    rmSync(repoA, { recursive: true, force: true })
+    rmSync(repoB, { recursive: true, force: true })
+    rmSync(bare, { recursive: true, force: true })
+  })
+
+  it('throws with wrapped message when the remote branch does not exist', () => {
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-pull-no-remote-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+    writeFileSync(path.join(repo, 'f.txt'), 'hello')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: repo })
+
+    // No remote configured — pull must fail with our wrapped message
+    expect(() => pullBranch(repo, 'main')).toThrow(/Failed to pull branch 'main' from 'origin'/)
+
     rmSync(repo, { recursive: true, force: true })
   })
 })

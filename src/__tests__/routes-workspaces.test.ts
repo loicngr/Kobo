@@ -21,6 +21,9 @@ vi.mock('../server/services/workspace-service.js', () => ({
   deleteTask: vi.fn(),
   listSessions: vi.fn(),
   getLatestSession: vi.fn(),
+  getActiveSession: vi.fn(),
+  createIdleSession: vi.fn(),
+  renameSession: vi.fn(),
   archiveWorkspace: vi.fn(),
   unarchiveWorkspace: vi.fn(),
   listArchivedWorkspaces: vi.fn(),
@@ -34,9 +37,10 @@ vi.mock('../server/services/worktree-service.js', () => ({
 }))
 
 vi.mock('../server/services/agent-manager.js', () => ({
-  startAgent: vi.fn(),
+  startAgent: vi.fn().mockReturnValue({ agentSessionId: 'mock-agent-session-id' }),
   stopAgent: vi.fn(),
   sendMessage: vi.fn(),
+  getAgentStatus: vi.fn().mockReturnValue(null),
 }))
 
 // I10: workspaces.ts now uses promisify(execFile) instead of execFileSync.
@@ -70,6 +74,10 @@ vi.mock('../server/utils/git-ops.js', () => ({
   deleteLocalBranch: vi.fn(),
   deleteRemoteBranch: vi.fn(),
   pushBranch: vi.fn(),
+  pullBranch: vi.fn(),
+  rebaseBranch: vi.fn(),
+  getFileAtRef: vi.fn().mockReturnValue(null),
+  getFileContent: vi.fn().mockReturnValue(null),
   getCommitsBetween: vi.fn().mockReturnValue(''),
   getDiffStatsBetween: vi.fn().mockReturnValue(''),
   getCommitCount: vi.fn().mockReturnValue(0),
@@ -905,6 +913,7 @@ describe('POST /api/workspaces/:id/start', () => {
       'claude-opus-4-6',
       false,
       'auto-accept',
+      undefined,
     )
     expect(workspaceService.updateWorkspaceStatus).toHaveBeenCalledWith('ws-1', 'executing')
   })
@@ -926,6 +935,7 @@ describe('POST /api/workspaces/:id/start', () => {
       'claude-opus-4-6',
       false,
       'auto-accept',
+      undefined,
     )
   })
 
@@ -1197,7 +1207,7 @@ describe('POST /api/workspaces/:id/push', () => {
       workingBranch: 'feature/test',
       projectPath: '/tmp/project',
     } as never)
-    vi.mocked(workspaceService.getLatestSession).mockReturnValue({
+    vi.mocked(workspaceService.getActiveSession).mockReturnValue({
       id: 's-1',
       claudeSessionId: 'session-uuid',
     } as never)
@@ -1209,7 +1219,78 @@ describe('POST /api/workspaces/:id/push', () => {
       'ws-1',
       'user:message',
       expect.objectContaining({ content: expect.stringContaining('Pushed') }),
-      expect.any(String),
+      's-1',
+    )
+  })
+})
+
+describe('POST /api/workspaces/:id/pull', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(gitOps.pullBranch).mockReset()
+  })
+
+  it('pulls the branch and returns 200', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      workingBranch: 'feature/test',
+      projectPath: '/tmp/project',
+    } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/pull', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data.ok).toBe(true)
+    expect(data.branch).toBe('feature/test')
+    expect(vi.mocked(gitOps.pullBranch)).toHaveBeenCalledWith(
+      expect.stringContaining('.worktrees'),
+      'feature/test',
+    )
+  })
+
+  it('returns 404 when workspace not found', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
+    const res = await app.request('/api/workspaces/unknown/pull', { method: 'POST' })
+    expect(res.status).toBe(404)
+  })
+
+  it('returns 500 when git pull fails (non-ff)', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      workingBranch: 'feature/test',
+      projectPath: '/tmp/project',
+    } as never)
+    vi.mocked(gitOps.pullBranch).mockImplementation(() => {
+      throw new Error('Not possible to fast-forward, aborting.')
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/pull', { method: 'POST' })
+
+    expect(res.status).toBe(500)
+    const data = await res.json()
+    expect(data.error).toContain('fast-forward')
+  })
+
+  it('emits user:message on success tagged with the active session id', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      workingBranch: 'feature/test',
+      projectPath: '/tmp/project',
+    } as never)
+    vi.mocked(workspaceService.getActiveSession).mockReturnValue({
+      id: 's-active',
+      claudeSessionId: 'claude-uuid',
+    } as never)
+
+    await app.request('/api/workspaces/ws-1/pull', { method: 'POST' })
+
+    const { emit } = await import('../server/services/websocket-service.js')
+    expect(vi.mocked(emit)).toHaveBeenCalledWith(
+      'ws-1',
+      'user:message',
+      expect.objectContaining({ content: expect.stringContaining('Pulled') }),
+      's-active',
     )
   })
 })
@@ -1226,7 +1307,7 @@ describe('POST /api/workspaces/:id/open-pr', () => {
       projectPath: '/tmp/project',
     } as never)
     vi.mocked(workspaceService.listTasks).mockReturnValue([])
-    vi.mocked(workspaceService.getLatestSession).mockReturnValue({
+    vi.mocked(workspaceService.getActiveSession).mockReturnValue({
       id: 's-1',
       claudeSessionId: 'sess-uuid',
     } as never)
@@ -1320,7 +1401,7 @@ describe('POST /api/workspaces/:id/open-pr', () => {
       'ws-1',
       'user:message',
       expect.objectContaining({ content: 'RENDERED PROMPT', sender: 'user' }),
-      'sess-uuid',
+      's-1',
     )
     expect(vi.mocked(agentManager.sendMessage)).toHaveBeenCalledWith('ws-1', 'RENDERED PROMPT')
   })
@@ -1719,5 +1800,123 @@ describe('POST /api/workspaces/:id/mark-read', () => {
     expect(res.status).toBe(404)
     const data = await res.json()
     expect(data.error).toContain('not found')
+  })
+})
+
+describe('POST /api/workspaces/:id/sessions', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('crée une session idle et retourne 201', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as any)
+    vi.mocked(agentManager.getAgentStatus).mockReturnValue(null)
+    const fakeSession = { id: 'sess-1', workspaceId: 'ws-1', status: 'idle',
+      startedAt: new Date().toISOString(), pid: null, claudeSessionId: null, endedAt: null, name: null }
+    vi.mocked(workspaceService.createIdleSession).mockReturnValue(fakeSession as any)
+
+    const res = await app.request('/api/workspaces/ws-1/sessions', { method: 'POST' })
+    expect(res.status).toBe(201)
+    const body = await res.json()
+    expect(body.id).toBe('sess-1')
+    expect(body.status).toBe('idle')
+    expect(workspaceService.createIdleSession).toHaveBeenCalledWith('ws-1')
+  })
+
+  it('retourne 404 si workspace introuvable', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+    const res = await app.request('/api/workspaces/unknown/sessions', { method: 'POST' })
+    expect(res.status).toBe(404)
+  })
+
+  it('retourne 409 si un agent tourne déjà', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as any)
+    vi.mocked(agentManager.getAgentStatus).mockReturnValue('running' as any)
+    const res = await app.request('/api/workspaces/ws-1/sessions', { method: 'POST' })
+    expect(res.status).toBe(409)
+  })
+})
+
+describe('PATCH /api/workspaces/:id/sessions/:sessionId', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('renomme la session et retourne 200', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as any)
+    const updated = { id: 'sess-1', name: 'Mon nom', workspaceId: 'ws-1', status: 'idle',
+      startedAt: new Date().toISOString(), pid: null, claudeSessionId: null, endedAt: null }
+    vi.mocked(workspaceService.renameSession).mockReturnValue(updated as any)
+
+    const res = await app.request('/api/workspaces/ws-1/sessions/sess-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Mon nom' }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.name).toBe('Mon nom')
+    expect(workspaceService.renameSession).toHaveBeenCalledWith('sess-1', 'ws-1', 'Mon nom')
+  })
+
+  it('retourne 400 si name est vide', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as any)
+    const res = await app.request('/api/workspaces/ws-1/sessions/sess-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: '' }),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('retourne 404 si workspace introuvable', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+    const res = await app.request('/api/workspaces/unknown/sessions/s1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Test' }),
+    })
+    expect(res.status).toBe(404)
+  })
+
+  it('retourne 404 si session introuvable', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as any)
+    vi.mocked(workspaceService.renameSession).mockReturnValue(null)
+    const res = await app.request('/api/workspaces/ws-1/sessions/nope', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Test' }),
+    })
+    expect(res.status).toBe(404)
+  })
+})
+
+describe('POST /api/workspaces/:id/start avec agentSessionId', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('passe agentSessionId à startAgent quand fourni', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace, permissionMode: 'auto-accept' } as any)
+    vi.mocked(workspaceService.updateWorkspaceStatus).mockReturnValue(undefined as any)
+
+    await app.request('/api/workspaces/ws-1/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: 'hello', agentSessionId: 'sess-idle-1' }),
+    })
+
+    expect(agentManager.startAgent).toHaveBeenCalledWith(
+      'ws-1', expect.any(String), 'hello', fakeWorkspace.model, false, 'auto-accept', 'sess-idle-1',
+    )
+  })
+
+  it('passe undefined si agentSessionId absent', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace, permissionMode: 'auto-accept' } as any)
+    vi.mocked(workspaceService.updateWorkspaceStatus).mockReturnValue(undefined as any)
+
+    await app.request('/api/workspaces/ws-1/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: 'hello' }),
+    })
+
+    expect(agentManager.startAgent).toHaveBeenCalledWith(
+      'ws-1', expect.any(String), 'hello', fakeWorkspace.model, false, 'auto-accept', undefined,
+    )
   })
 })

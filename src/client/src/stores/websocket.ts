@@ -101,10 +101,10 @@ export const useWebSocketStore = defineStore('websocket', {
       })
     },
 
-    sendChatMessage(workspaceId: string, content: string) {
+    sendChatMessage(workspaceId: string, content: string, sessionId?: string) {
       this._send({
         type: 'chat:message',
-        payload: { workspaceId, content },
+        payload: { workspaceId, content, sessionId },
       })
     },
 

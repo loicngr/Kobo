@@ -361,6 +361,60 @@ describe('getLatestSession(workspaceId)', () => {
   })
 })
 
+describe('getActiveSession(workspaceId)', () => {
+  it('retourne null si aucune session', async () => {
+    const { createWorkspace, getActiveSession } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'WS', projectPath: '/p', sourceBranch: 'main', workingBranch: 'b' })
+    expect(getActiveSession(ws.id)).toBeNull()
+  })
+
+  it('ignore les sessions idle meme si elles sont plus recentes', async () => {
+    const { createWorkspace, getActiveSession } = await import('../server/services/workspace-service.js')
+    const { getDb } = await import('../server/db/index.js')
+    const ws = createWorkspace({ name: 'WS', projectPath: '/p', sourceBranch: 'main', workingBranch: 'b' })
+
+    const db = getDb()
+    // Completed session at T0
+    db.prepare(
+      'INSERT INTO agent_sessions (id, workspace_id, pid, claude_session_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run('s-completed', ws.id, 100, 'claude-A', 'completed', '2024-01-01T00:00:00Z')
+    // Idle session at T1 (more recent than the completed one)
+    db.prepare(
+      'INSERT INTO agent_sessions (id, workspace_id, pid, claude_session_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run('s-idle', ws.id, null, null, 'idle', '2024-01-02T00:00:00Z')
+
+    const active = getActiveSession(ws.id)
+    expect(active?.id).toBe('s-completed')
+  })
+
+  it('privilegie la session running sur les completed plus recentes', async () => {
+    const { createWorkspace, getActiveSession } = await import('../server/services/workspace-service.js')
+    const { getDb } = await import('../server/db/index.js')
+    const ws = createWorkspace({ name: 'WS', projectPath: '/p', sourceBranch: 'main', workingBranch: 'b' })
+
+    const db = getDb()
+    db.prepare(
+      'INSERT INTO agent_sessions (id, workspace_id, pid, claude_session_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run('s-running', ws.id, 100, 'claude-R', 'running', '2024-01-01T00:00:00Z')
+    db.prepare(
+      'INSERT INTO agent_sessions (id, workspace_id, pid, claude_session_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run('s-completed', ws.id, 200, 'claude-C', 'completed', '2024-01-02T00:00:00Z')
+
+    const active = getActiveSession(ws.id)
+    expect(active?.id).toBe('s-running')
+  })
+
+  it("retourne null si toutes les sessions sont idle", async () => {
+    const { createWorkspace, createIdleSession, getActiveSession } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const ws = createWorkspace({ name: 'WS', projectPath: '/p', sourceBranch: 'main', workingBranch: 'b' })
+    createIdleSession(ws.id)
+    createIdleSession(ws.id)
+    expect(getActiveSession(ws.id)).toBeNull()
+  })
+})
+
 describe('getWorkspaceWithTasks(id)', () => {
   it('retourne le workspace avec ses tâches', async () => {
     const { createWorkspace, createTask, getWorkspaceWithTasks } = await import(
@@ -670,5 +724,104 @@ describe('markWorkspaceRead() / markWorkspaceUnread()', () => {
     markWorkspaceRead(ws.id)
     const found = getWorkspace(ws.id)
     expect(found?.hasUnread).toBe(false)
+  })
+})
+
+describe('createIdleSession()', () => {
+  it('insère une session idle et la retourne avec name=null', async () => {
+    const { createWorkspace, createIdleSession } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'WS',
+      projectPath: '/p',
+      sourceBranch: 'main',
+      workingBranch: 'bci1',
+    })
+    const session = createIdleSession(ws.id)
+    expect(session.id).toBeTruthy()
+    expect(session.workspaceId).toBe(ws.id)
+    expect(session.status).toBe('idle')
+    expect(session.pid).toBeNull()
+    expect(session.claudeSessionId).toBeNull()
+    expect(session.name).toBeNull()
+    expect(session.endedAt).toBeNull()
+  })
+
+  it('est visible dans listSessions()', async () => {
+    const { createWorkspace, createIdleSession, listSessions } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const ws = createWorkspace({
+      name: 'WS',
+      projectPath: '/p',
+      sourceBranch: 'main',
+      workingBranch: 'bci2',
+    })
+    createIdleSession(ws.id)
+    const sessions = listSessions(ws.id)
+    expect(sessions.length).toBe(1)
+    expect(sessions[0].status).toBe('idle')
+    expect(sessions[0].name).toBeNull()
+  })
+})
+
+describe('renameSession()', () => {
+  it('met à jour le name de la session', async () => {
+    const { createWorkspace, createIdleSession, listSessions, renameSession } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const ws = createWorkspace({
+      name: 'WS',
+      projectPath: '/p',
+      sourceBranch: 'main',
+      workingBranch: 'brs1',
+    })
+    const session = createIdleSession(ws.id)
+    renameSession(session.id, ws.id, 'Mon nom custom')
+    const sessions = listSessions(ws.id)
+    expect(sessions[0].name).toBe('Mon nom custom')
+  })
+
+  it('retourne la session mise à jour', async () => {
+    const { createWorkspace, createIdleSession, renameSession } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const ws = createWorkspace({
+      name: 'WS',
+      projectPath: '/p',
+      sourceBranch: 'main',
+      workingBranch: 'brs2',
+    })
+    const session = createIdleSession(ws.id)
+    const updated = renameSession(session.id, ws.id, 'Nouveau nom')
+    expect(updated).not.toBeNull()
+    expect(updated!.name).toBe('Nouveau nom')
+  })
+
+  it('retourne null si la session est introuvable', async () => {
+    const { renameSession } = await import('../server/services/workspace-service.js')
+    const result = renameSession('unknown-id', 'unknown-ws', 'test')
+    expect(result).toBeNull()
+  })
+
+  it('retourne null si la session appartient à un autre workspace', async () => {
+    const { createWorkspace, createIdleSession, renameSession } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const wsA = createWorkspace({
+      name: 'WS-A',
+      projectPath: '/pa',
+      sourceBranch: 'main',
+      workingBranch: 'brs-a',
+    })
+    const wsB = createWorkspace({
+      name: 'WS-B',
+      projectPath: '/pb',
+      sourceBranch: 'main',
+      workingBranch: 'brs-b',
+    })
+    const sessionA = createIdleSession(wsA.id)
+    // Try to rename sessionA using wsB.id → must fail
+    const result = renameSession(sessionA.id, wsB.id, 'pwned')
+    expect(result).toBeNull()
   })
 })

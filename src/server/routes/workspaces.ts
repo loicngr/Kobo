@@ -340,11 +340,16 @@ app.post('/', async (c) => {
       brainstormPrompt += `\nIMPORTANT: Start by reading CLAUDE.md and/or AGENTS.md at the project root if they exist — they contain project conventions and instructions you must follow.`
       brainstormPrompt += `\n\nThen brainstorm the implementation approach. Explore the codebase to understand the existing structure. Ask clarifying questions if needed. When you're done brainstorming and have a clear plan, create a plan file and proceed with implementation. Once you have completed the brainstorming phase, output [BRAINSTORM_COMPLETE] on its own line.`
 
-      // Persist the initial prompt in the feed so it's visible in the chat
-      wsService.emit(workspace.id, 'user:message', { content: brainstormPrompt, sender: 'system-prompt' })
-
       try {
-        agentManager.startAgent(workspace.id, worktreePath, brainstormPrompt, workspace.model)
+        const agent = agentManager.startAgent(workspace.id, worktreePath, brainstormPrompt, workspace.model)
+        // Persist the initial prompt in the feed so it's visible in the chat,
+        // tagged with the freshly created session id so the strict session filter shows it.
+        wsService.emit(
+          workspace.id,
+          'user:message',
+          { content: brainstormPrompt, sender: 'system-prompt' },
+          agent.agentSessionId,
+        )
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         console.error(`[workspaces] Failed to start agent: ${message}`)
@@ -365,6 +370,28 @@ app.post('/', async (c) => {
   }
 })
 
+// POST /api/workspaces/:id/sessions — create a new idle agent session
+app.post('/:id/sessions', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+    if (workspace.archivedAt) {
+      return c.json({ error: `Workspace '${id}' is archived` }, 400)
+    }
+    if (agentManager.getAgentStatus(id) !== null) {
+      return c.json({ error: 'An agent is already running for this workspace' }, 409)
+    }
+    const session = workspaceService.createIdleSession(id)
+    return c.json(session, 201)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
 // GET /api/workspaces/:id/sessions — list sessions for a workspace
 app.get('/:id/sessions', (c) => {
   try {
@@ -373,6 +400,34 @@ app.get('/:id/sessions', (c) => {
     if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
     const sessions = workspaceService.listSessions(id)
     return c.json(sessions)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// PATCH /api/workspaces/:id/sessions/:sessionId — rename a session
+app.patch('/:id/sessions/:sessionId', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const sessionId = c.req.param('sessionId')
+
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+
+    const body = await c.req.json<{ name?: string }>().catch(() => ({}) as { name?: string })
+    if (!body.name?.trim()) {
+      return c.json({ error: 'name is required and must not be empty' }, 400)
+    }
+
+    const updated = workspaceService.renameSession(sessionId, id, body.name.trim())
+    if (!updated) {
+      return c.json({ error: `Session '${sessionId}' not found` }, 404)
+    }
+
+    return c.json(updated)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
@@ -917,8 +972,12 @@ app.post('/:id/start', async (c) => {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
     }
 
-    const body = await c.req.json<{ prompt?: string }>().catch(() => ({ prompt: undefined }))
+    const body = await c.req
+      .json<{ prompt?: string; agentSessionId?: string; resume?: boolean }>()
+      .catch(() => ({ prompt: undefined, agentSessionId: undefined, resume: undefined }))
     const prompt = body.prompt ?? 'Continue the previous task where you left off.'
+    const agentSessionId = body.agentSessionId
+    const resume = body.resume === true
 
     // Stop existing agent if running
     try {
@@ -929,8 +988,23 @@ app.post('/:id/start', async (c) => {
 
     const worktreePath = `${workspace.projectPath}/.worktrees/${workspace.workingBranch}`
 
-    agentManager.startAgent(id, worktreePath, prompt, workspace.model, false, workspace.permissionMode)
+    const agent = agentManager.startAgent(
+      id,
+      worktreePath,
+      prompt,
+      workspace.model,
+      resume,
+      workspace.permissionMode,
+      agentSessionId,
+    )
     workspaceService.updateWorkspaceStatus(id, 'executing')
+
+    // Persist the user prompt so it survives page refresh.
+    // When agentSessionId is provided (idle-session flow), the prompt was typed
+    // by the user in the chat input; otherwise it's the workspace start prompt.
+    if (body.prompt) {
+      wsService.emit(id, 'user:message', { content: body.prompt, sender: 'user' }, agent.agentSessionId)
+    }
 
     return c.json({ status: 'started' })
   } catch (err) {
@@ -1042,13 +1116,46 @@ app.post('/:id/push', async (c) => {
     }
 
     // Emit a trace into the chat feed so the user sees the action
-    const session = workspaceService.getLatestSession(id)
-    const sessionId = session?.claudeSessionId ?? undefined
+    const session = workspaceService.getActiveSession(id)
     wsService.emit(
       id,
       'user:message',
       { content: `Pushed branch ${workspace.workingBranch} to origin`, sender: 'system-prompt' },
-      sessionId,
+      session?.id ?? undefined,
+    )
+
+    return c.json({ ok: true, branch: workspace.workingBranch })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// POST /api/workspaces/:id/pull — pull working branch from origin (fast-forward only)
+app.post('/:id/pull', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+
+    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+
+    try {
+      gitOps.pullBranch(worktreePath, workspace.workingBranch)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return c.json({ error: message }, 500)
+    }
+
+    // Emit a trace into the chat feed so the user sees the action
+    const session = workspaceService.getActiveSession(id)
+    wsService.emit(
+      id,
+      'user:message',
+      { content: `Pulled branch ${workspace.workingBranch} from origin`, sender: 'system-prompt' },
+      session?.id ?? undefined,
     )
 
     return c.json({ ok: true, branch: workspace.workingBranch })
@@ -1197,9 +1304,8 @@ app.post('/:id/open-pr', async (c) => {
     })
 
     // Emit user:message into the chat feed
-    const session = workspaceService.getLatestSession(workspace.id)
-    const sessionId = session?.claudeSessionId ?? undefined
-    wsService.emit(workspace.id, 'user:message', { content: rendered, sender: 'user' }, sessionId)
+    const session = workspaceService.getActiveSession(workspace.id)
+    wsService.emit(workspace.id, 'user:message', { content: rendered, sender: 'user' }, session?.id ?? undefined)
 
     // Send to the running agent, or resume the agent with the PR prompt
     let messageSent = false

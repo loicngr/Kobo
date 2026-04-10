@@ -127,6 +127,16 @@ export function pushBranch(repoPath: string, branchName: string, remote = 'origi
   }
 }
 
+/** Pull the current branch from the remote using fast-forward only. */
+export function pullBranch(repoPath: string, branchName: string, remote = 'origin'): void {
+  try {
+    git(repoPath, ['pull', '--ff-only', remote, branchName])
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`Failed to pull branch '${branchName}' from '${remote}': ${message}`)
+  }
+}
+
 /** Rebase the current branch onto the given base branch. Fetches origin first to get latest changes. */
 export function rebaseBranch(repoPath: string, baseBranch: string): void {
   try {

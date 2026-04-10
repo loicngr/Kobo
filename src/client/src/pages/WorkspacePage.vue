@@ -88,25 +88,76 @@ const sessions = computed(() => store.sessions)
 const selectedSessionId = computed({
   get: () => store.selectedSessionId,
   set: (val: string | null) => {
+    if (val === '__new__') {
+      handleCreateSession()
+      return
+    }
+    if (!val) return
     store.selectSession(val)
     const query = { ...route.query }
-    if (val) {
-      query.session = val
-    } else {
-      delete query.session
-    }
+    query.session = val
     router.replace({ query })
   },
 })
 
 const sessionOptions = computed(() => {
   const opts = store.sessions.map((s: AgentSession, idx: number) => ({
-    label: t('workspacePage.session', { n: store.sessions.length - idx }),
-    value: s.claudeSessionId,
+    label: s.name ?? t('workspacePage.session', { n: store.sessions.length - idx }),
+    value: s.id,
     caption: timeAgo(s.startedAt),
+    isSession: true,
   }))
-  return [{ label: t('workspacePage.allSessions'), value: null, caption: '' }, ...opts]
+  return [
+    ...opts,
+    { label: t('workspacePage.newSession'), value: '__new__', caption: '', isSession: false },
+  ]
 })
+
+const renameDialogOpen = ref(false)
+const renameTarget = ref<{ id: string } | null>(null)
+const renameValue = ref('')
+const creatingSession = ref(false)
+
+function openRenameDialog(sessionId: string, currentLabel: string) {
+  const session = store.sessions.find((s) => s.id === sessionId)
+  if (!session) return
+  renameTarget.value = { id: sessionId }
+  renameValue.value = session.name ?? currentLabel
+  renameDialogOpen.value = true
+}
+
+async function handleRename() {
+  if (!renameTarget.value || !store.selectedWorkspaceId) return
+  try {
+    await store.renameSession(store.selectedWorkspaceId, renameTarget.value.id, renameValue.value.trim())
+  } catch (err) {
+    console.error('[WorkspacePage] renameSession failed:', err)
+    $q.notify({ type: 'negative', message: t('workspacePage.renameFailed'), position: 'top' })
+  } finally {
+    renameDialogOpen.value = false
+  }
+}
+
+async function handleCreateSession() {
+  if (!store.selectedWorkspaceId) return
+  creatingSession.value = true
+  try {
+    await store.createSession(store.selectedWorkspaceId)
+  } catch (e) {
+    console.error('[WorkspacePage] createSession failed:', e)
+    // Prefer the server's actionable error message (e.g. "agent already running",
+    // "workspace archived") falling back to a localized generic label.
+    const serverMsg = e instanceof Error ? e.message : null
+    $q.notify({
+      type: 'negative',
+      message: serverMsg ?? t('workspacePage.createSessionFailed'),
+      position: 'top',
+      timeout: 6000,
+    })
+  } finally {
+    creatingSession.value = false
+  }
+}
 
 onMounted(() => {
   const id = route.params.id as string | undefined
@@ -157,9 +208,34 @@ watch(
           dark
           borderless
           options-dense
+          :loading="creatingSession"
+          :disable="creatingSession"
           class="q-ml-sm"
           style="min-width: 160px; max-width: 220px; font-size: 11px;"
-        />
+        >
+          <template #option="scope">
+            <q-separator v-if="!scope.opt.isSession" spaced />
+            <q-item v-bind="scope.itemProps" clickable dense class="row items-center no-wrap">
+              <q-item-section>
+                <q-item-label :class="!scope.opt.isSession ? 'text-grey-5' : ''">
+                  {{ scope.opt.label }}
+                </q-item-label>
+                <q-item-label v-if="scope.opt.caption" caption>{{ scope.opt.caption }}</q-item-label>
+              </q-item-section>
+              <q-item-section v-if="scope.opt.isSession" side>
+                <q-btn
+                  icon="more_vert"
+                  flat
+                  dense
+                  round
+                  size="xs"
+                  color="grey-6"
+                  @click.stop="openRenameDialog(scope.opt.value, scope.opt.label)"
+                />
+              </q-item-section>
+            </q-item>
+          </template>
+        </q-select>
         <q-space />
         <q-select
           v-model="currentPermissionMode"
@@ -251,6 +327,33 @@ watch(
       v-if="selectedId"
       :workspace-id="selectedId"
     />
+    <q-dialog v-model="renameDialogOpen" persistent>
+      <q-card dark style="min-width: 320px;">
+        <q-card-section>
+          <div class="text-subtitle1">{{ t('workspacePage.renameSessionTitle') }}</div>
+        </q-card-section>
+        <q-card-section>
+          <q-input
+            v-model="renameValue"
+            :label="t('workspacePage.sessionNameLabel')"
+            dark
+            dense
+            autofocus
+            @keyup.enter="handleRename"
+          />
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat :label="t('common.cancel')" v-close-popup />
+          <q-btn
+            flat
+            color="primary"
+            :label="t('workspacePage.renameSession')"
+            :disable="!renameValue.trim()"
+            @click="handleRename"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
   </q-page>
 </template>
 

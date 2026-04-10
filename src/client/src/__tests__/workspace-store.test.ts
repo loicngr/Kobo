@@ -140,9 +140,36 @@ describe('workspace store', () => {
   })
 
   describe('activityFeed getter (session filtering)', () => {
-    it('returns all items when no session selected', () => {
+    it('returns empty array when no session selected but sessions exist', () => {
       const store = useWorkspaceStore()
       store.selectedWorkspaceId = 'ws-1'
+      // Simulate sessions having been fetched but no session selected yet
+      store.sessions = [
+        {
+          id: 'sess-1',
+          workspaceId: 'ws-1',
+          pid: null,
+          claudeSessionId: null,
+          status: 'running',
+          startedAt: '2026-01-01T00:00:00Z',
+          endedAt: null,
+          name: null,
+        },
+      ]
+      store.addActivityItem('ws-1', {
+        id: 'a',
+        type: 'text',
+        content: 'x',
+        timestamp: '2026-01-01T00:00:00Z',
+        sessionId: 'sess-1',
+      })
+      expect(store.activityFeed).toHaveLength(0)
+    })
+
+    it('returns all items when sessions list is empty (new workspace)', () => {
+      const store = useWorkspaceStore()
+      store.selectedWorkspaceId = 'ws-1'
+      store.sessions = []
       store.addActivityItem('ws-1', {
         id: 'a',
         type: 'text',
@@ -155,12 +182,13 @@ describe('workspace store', () => {
         type: 'text',
         content: 'y',
         timestamp: '2026-01-01T00:00:01Z',
-        sessionId: 'sess-2',
       })
-      expect(store.activityFeed).toHaveLength(2)
+      // Fall-back behavior: with no sessions hydrated, show everything so the
+      // user doesn't stare at a blank feed during the fetch window.
+      expect(store.activityFeed.map((i) => i.id).sort()).toEqual(['a', 'b'])
     })
 
-    it('filters by selected session, keeping items without sessionId', () => {
+    it('filters by selected session and keeps workspace-level items without sessionId', () => {
       const store = useWorkspaceStore()
       store.selectedWorkspaceId = 'ws-1'
       store.selectedSessionId = 'sess-1'
@@ -185,6 +213,7 @@ describe('workspace store', () => {
         timestamp: '2026-01-01T00:00:02Z',
       })
       const feed = store.activityFeed
+      // 'a' belongs to selected session, 'c' has no session (workspace-level)
       expect(feed.map((i) => i.id).sort()).toEqual(['a', 'c'])
     })
   })

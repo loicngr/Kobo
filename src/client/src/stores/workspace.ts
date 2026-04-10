@@ -38,6 +38,7 @@ export interface AgentSession {
   status: string
   startedAt: string
   endedAt: string | null
+  name: string | null
 }
 
 export interface ActivityItem {
@@ -160,8 +161,24 @@ export const useWorkspaceStore = defineStore('workspace', {
     activityFeed: (state) => {
       if (!state.selectedWorkspaceId) return []
       const items = state.activityFeeds[state.selectedWorkspaceId] ?? []
-      if (!state.selectedSessionId) return items
-      return items.filter((i) => !i.sessionId || i.sessionId === state.selectedSessionId)
+      // While fetchSessions hasn't loaded the list yet, fall back to showing
+      // every item: this avoids a blank feed during the brief window between
+      // workspace selection and session hydration, and also covers workspaces
+      // that have no sessions at all (new workspace not yet started).
+      if (!state.selectedSessionId) {
+        return state.sessions.length === 0 ? items : []
+      }
+      // Resolve the claude_session_id of the selected session to also accept
+      // legacy events that were tagged with the Claude UUID before the
+      // backfill migration (v6) had a chance to run.
+      const selectedSession = state.sessions.find((s) => s.id === state.selectedSessionId)
+      const legacyTag = selectedSession?.claudeSessionId ?? null
+      return items.filter(
+        (i) =>
+          !i.sessionId ||
+          i.sessionId === state.selectedSessionId ||
+          (legacyTag !== null && i.sessionId === legacyTag),
+      )
     },
 
     acceptanceCriteria: (state) => state.tasks.filter((t) => t.isAcceptanceCriterion),
@@ -238,14 +255,17 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
-    async startWorkspace(id: string, prompt?: string) {
+    async startWorkspace(id: string, prompt?: string, agentSessionId?: string, resume?: boolean) {
       try {
         const res = await fetch(`/api/workspaces/${id}/start`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt }),
+          body: JSON.stringify({ prompt, agentSessionId, resume }),
         })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}))
+          throw new Error(body.error ?? `HTTP ${res.status}`)
+        }
         await this.fetchWorkspaces()
       } catch (err) {
         console.error('[workspace store] startWorkspace failed:', err)
@@ -330,6 +350,14 @@ export const useWorkspaceStore = defineStore('workspace', {
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: 'Push failed' }))
         throw new WorkspaceActionError(err.error ?? 'Push failed', err.code)
+      }
+    },
+
+    async pullBranch(id: string): Promise<void> {
+      const res = await fetch(`/api/workspaces/${id}/pull`, { method: 'POST' })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Pull failed' }))
+        throw new WorkspaceActionError(err.error ?? 'Pull failed', err.code)
       }
     },
 
@@ -452,6 +480,14 @@ export const useWorkspaceStore = defineStore('workspace', {
         if (this.selectedWorkspaceId !== workspaceId) return
 
         this.sessions = await res.json()
+
+        // Auto-select only if no session is currently selected (or current selection is stale)
+        const currentStillExists = this.selectedSessionId && this.sessions.some((s) => s.id === this.selectedSessionId)
+        if (this.sessions.length > 0 && !currentStillExists) {
+          const persisted = localStorage.getItem(`kobo:session:${workspaceId}`)
+          const found = persisted ? this.sessions.find((s) => s.id === persisted) : null
+          this.selectSession(found ? found.id : this.sessions[0].id)
+        }
       } catch (err) {
         console.error('[workspace store] fetchSessions failed:', err)
       }
@@ -501,8 +537,46 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
-    selectSession(claudeSessionId: string | null) {
-      this.selectedSessionId = claudeSessionId
+    selectSession(id: string) {
+      this.selectedSessionId = id
+      if (this.selectedWorkspaceId) {
+        localStorage.setItem(`kobo:session:${this.selectedWorkspaceId}`, id)
+      }
+    },
+
+    async createSession(workspaceId: string) {
+      try {
+        const res = await fetch(`/api/workspaces/${workspaceId}/sessions`, { method: 'POST' })
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}))
+          throw new Error(body.error ?? `HTTP ${res.status}`)
+        }
+        const session: AgentSession = await res.json()
+        this.sessions.unshift(session)
+        this.selectSession(session.id)
+        return session
+      } catch (err) {
+        console.error('[workspace store] createSession failed:', err)
+        throw err
+      }
+    },
+
+    async renameSession(workspaceId: string, sessionId: string, name: string) {
+      const res = await fetch(`/api/workspaces/${workspaceId}/sessions/${sessionId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.error ?? `HTTP ${res.status}`)
+      }
+      // The backend confirmed the rename (200). Update local state optimistically:
+      // parse the response body, but fall back to the user-supplied name if the
+      // body can't be parsed so the UI still reflects the committed change.
+      const updated = (await res.json().catch(() => null)) as AgentSession | null
+      const session = this.sessions.find((s) => s.id === sessionId)
+      if (session) session.name = updated?.name ?? name
     },
 
     addActivityItem(workspaceId: string, item: ActivityItem) {
@@ -542,6 +616,25 @@ export const useWorkspaceStore = defineStore('workspace', {
         for (const r of removed) {
           idSet.delete(r.id)
         }
+      }
+    },
+
+    removeActivityItem(workspaceId: string, itemId: string) {
+      const feed = this.activityFeeds[workspaceId]
+      const idSet = this.activityFeedIds[workspaceId]
+      if (!feed || !idSet) return
+      const idx = feed.findIndex((i) => i.id === itemId)
+      if (idx < 0) return
+      const [removed] = feed.splice(idx, 1)
+      idSet.delete(itemId)
+      // Revert activity counters
+      const counts = this.activityCounts[workspaceId]
+      if (counts && removed) {
+        if (removed.type === 'tool_use') counts.toolUses = Math.max(0, counts.toolUses - 1)
+        else if (removed.type === 'error') counts.errors = Math.max(0, counts.errors - 1)
+        if (removed.meta?.sender === 'user') counts.userMessages = Math.max(0, counts.userMessages - 1)
+        else if (removed.type === 'text' && removed.meta?.sender !== 'system-prompt')
+          counts.agentMessages = Math.max(0, counts.agentMessages - 1)
       }
     },
 

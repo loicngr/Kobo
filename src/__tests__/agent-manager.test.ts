@@ -194,7 +194,7 @@ describe('startAgent()', () => {
         type: 'assistant',
         content: 'hello',
       },
-      undefined,
+      expect.any(String),
     )
   })
 
@@ -218,7 +218,7 @@ describe('startAgent()', () => {
         type: 'raw',
         content: 'not valid json',
       },
-      undefined,
+      expect.any(String),
     )
   })
 
@@ -235,7 +235,7 @@ describe('startAgent()', () => {
     expect(mockUpdateWorkspaceStatus).toHaveBeenCalledWith('ws-exit0', 'completed')
     expect(mockUnregisterProcess).toHaveBeenCalledWith('ws-exit0')
     expect(_getAgents().has('ws-exit0')).toBe(false)
-    expect(mockEmit).toHaveBeenCalledWith('ws-exit0', 'agent:status', { status: 'completed' }, undefined)
+    expect(mockEmit).toHaveBeenCalledWith('ws-exit0', 'agent:status', { status: 'completed' }, expect.any(String))
   })
 
   it('met a jour le status en error sur exit code non-zero', async () => {
@@ -249,7 +249,7 @@ describe('startAgent()', () => {
     mockProc.emit('exit', 1)
 
     expect(mockUpdateWorkspaceStatus).toHaveBeenCalledWith('ws-exit1', 'error')
-    expect(mockEmit).toHaveBeenCalledWith('ws-exit1', 'agent:status', { status: 'error', exitCode: 1 }, undefined)
+    expect(mockEmit).toHaveBeenCalledWith('ws-exit1', 'agent:status', { status: 'error', exitCode: 1 }, expect.any(String))
   })
 
   it('detecte les erreurs de quota dans stderr', async () => {
@@ -266,7 +266,135 @@ describe('startAgent()', () => {
     await vi.advanceTimersByTimeAsync(10)
 
     expect(mockUpdateWorkspaceStatus).toHaveBeenCalledWith('ws-quota', 'quota')
-    expect(mockEmit).toHaveBeenCalledWith('ws-quota', 'agent:status', { status: 'quota' }, undefined)
+    expect(mockEmit).toHaveBeenCalledWith('ws-quota', 'agent:status', { status: 'quota' }, expect.any(String))
+  })
+
+  it('réutilise une session idle existante quand existingSessionId est fourni', async () => {
+    const mockProc = createMockProcess()
+    mockSpawn.mockReturnValue(mockProc)
+    const existingId = 'existing-session-id'
+
+    mockDbPrepare.mockImplementation((sql: string) => {
+      // Simulate a successful UPDATE: changes > 0
+      if (sql.includes('UPDATE agent_sessions') && sql.includes('ended_at')) {
+        return { run: vi.fn().mockReturnValue({ changes: 1 }), get: vi.fn(), all: vi.fn() }
+      }
+      return { run: vi.fn(), get: vi.fn().mockReturnValue(null), all: vi.fn().mockReturnValue([]) }
+    })
+
+    const { startAgent, _getAgents } = await import('../server/services/agent-manager.js')
+    const agent = startAgent('ws-exist', '/tmp/work', 'do stuff', undefined, false, 'auto-accept', existingId)
+
+    const insertCalls = mockDbPrepare.mock.calls.filter(([sql]: [string]) =>
+      sql.includes('INSERT INTO agent_sessions'),
+    )
+    expect(insertCalls.length).toBe(0)
+
+    // Verify the UPDATE resets ended_at to NULL and is scoped to workspace_id
+    const statusUpdateCall = mockDbPrepare.mock.calls.find(
+      ([sql]: [string]) =>
+        sql.includes('UPDATE agent_sessions') && sql.includes('ended_at') && sql.includes('workspace_id'),
+    )
+    expect(statusUpdateCall).toBeTruthy()
+
+    expect(agent.agentSessionId).toBe(existingId)
+    _getAgents().clear()
+  })
+
+  it('lance une erreur si existingSessionId est introuvable (changes === 0)', async () => {
+    const mockProc = createMockProcess()
+    mockSpawn.mockReturnValue(mockProc)
+
+    mockDbPrepare.mockImplementation((sql: string) => {
+      if (sql.includes('UPDATE agent_sessions') && sql.includes('ended_at')) {
+        return { run: vi.fn().mockReturnValue({ changes: 0 }), get: vi.fn(), all: vi.fn() }
+      }
+      return { run: vi.fn(), get: vi.fn().mockReturnValue(null), all: vi.fn().mockReturnValue([]) }
+    })
+
+    const { startAgent, _getAgents } = await import('../server/services/agent-manager.js')
+    expect(() =>
+      startAgent('ws-nope', '/tmp/work', 'do stuff', undefined, false, 'auto-accept', 'orphan-id'),
+    ).toThrow(/not found/)
+
+    _getAgents().clear()
+  })
+
+  it('émet les events avec agentSessionId et non claudeSessionId', async () => {
+    const mockProc = createMockProcess()
+    mockSpawn.mockReturnValue(mockProc)
+    mockDbPrepare.mockReturnValue({ run: vi.fn(), get: vi.fn().mockReturnValue(null), all: vi.fn().mockReturnValue([]) })
+
+    const { startAgent, _getAgents } = await import('../server/services/agent-manager.js')
+    const agent = startAgent('ws-emit-tag', '/tmp/work', 'test', undefined, false, 'auto-accept')
+
+    expect(agent.agentSessionId).toBeTruthy()
+    const statusCall = mockEmit.mock.calls.find(([, type]: [string, string]) => type === 'agent:status')
+    expect(statusCall).toBeTruthy()
+    expect(statusCall[3]).toBe(agent.agentSessionId)
+
+    _getAgents().clear()
+  })
+
+  it('resume=true avec existingSessionId reprend la session spécifique', async () => {
+    const mockProc = createMockProcess()
+    mockSpawn.mockReturnValue(mockProc)
+    const targetId = 'sess-specific-id'
+
+    mockDbPrepare.mockImplementation((sql: string) => {
+      // The resume-with-id lookup must match the caller's session, not the latest
+      if (sql.includes('WHERE id = ?') && sql.includes('claude_session_id IS NOT NULL')) {
+        return {
+          run: vi.fn(),
+          get: vi.fn().mockReturnValue({ id: targetId, claude_session_id: 'claude-target' }),
+          all: vi.fn(),
+        }
+      }
+      return {
+        run: vi.fn().mockReturnValue({ changes: 1 }),
+        get: vi.fn().mockReturnValue(null),
+        all: vi.fn().mockReturnValue([]),
+      }
+    })
+
+    const { startAgent, _getAgents } = await import('../server/services/agent-manager.js')
+    const agent = startAgent('ws-resume', '/tmp/work', 'continue', undefined, true, 'auto-accept', targetId)
+
+    expect(agent.agentSessionId).toBe(targetId)
+    // The spawn args should contain --resume with the target's claude_session_id
+    const spawnArgs = mockSpawn.mock.calls[mockSpawn.mock.calls.length - 1][1] as string[]
+    expect(spawnArgs).toContain('--resume')
+    expect(spawnArgs).toContain('claude-target')
+
+    _getAgents().clear()
+  })
+
+  it('resume=true avec existingSessionId introuvable throw une erreur', async () => {
+    const mockProc = createMockProcess()
+    mockSpawn.mockReturnValue(mockProc)
+
+    mockDbPrepare.mockImplementation((sql: string) => {
+      // The specific-session lookup returns undefined: either the row doesn't
+      // exist, has no claude_session_id, or belongs to another workspace.
+      if (sql.includes('WHERE id = ?') && sql.includes('claude_session_id IS NOT NULL')) {
+        return { run: vi.fn(), get: vi.fn().mockReturnValue(undefined), all: vi.fn() }
+      }
+      return {
+        run: vi.fn().mockReturnValue({ changes: 1 }),
+        get: vi.fn().mockReturnValue(null),
+        all: vi.fn().mockReturnValue([]),
+      }
+    })
+
+    const { startAgent, _getAgents } = await import('../server/services/agent-manager.js')
+    expect(() =>
+      startAgent('ws-resume', '/tmp/work', 'continue', undefined, true, 'auto-accept', 'ghost-id'),
+    ).toThrow(/Cannot resume session 'ghost-id'/)
+
+    // Critical: the spawn must NOT have been called when the resume lookup fails.
+    expect(mockSpawn).not.toHaveBeenCalled()
+
+    _getAgents().clear()
   })
 })
 
@@ -633,7 +761,7 @@ describe('handleQuota — backoff behavior', () => {
     expect(mockUpdateWorkspaceStatus).toHaveBeenCalledWith('ws-quota-full', 'quota')
 
     // Verify agent:status event was emitted with quota
-    expect(mockEmit).toHaveBeenCalledWith('ws-quota-full', 'agent:status', { status: 'quota' }, undefined)
+    expect(mockEmit).toHaveBeenCalledWith('ws-quota-full', 'agent:status', { status: 'quota' }, expect.any(String))
 
     // Verify backoff timer is set
     expect(_getBackoffTimers().has('ws-quota-full')).toBe(true)
@@ -665,6 +793,6 @@ describe('startAgent() — BRAINSTORM_COMPLETE detection', () => {
     expect(mockUpdateWorkspaceStatus).toHaveBeenCalledWith('ws-brainstorm', 'executing')
 
     // Verify emit was called with agent:status executing
-    expect(mockEmit).toHaveBeenCalledWith('ws-brainstorm', 'agent:status', { status: 'executing' }, 's1')
+    expect(mockEmit).toHaveBeenCalledWith('ws-brainstorm', 'agent:status', { status: 'executing' }, expect.any(String))
   })
 })

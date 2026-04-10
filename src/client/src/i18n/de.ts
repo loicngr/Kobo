@@ -47,8 +47,14 @@ export default {
 
   // Workspace Page
   'workspacePage.selectWorkspace': 'Arbeitsbereich auswählen, um zu beginnen',
-  'workspacePage.allSessions': 'Alle Sitzungen',
   'workspacePage.session': 'Sitzung #{n}',
+  'workspacePage.newSession': '+ Neue Sitzung',
+  'workspacePage.renameSession': 'Umbenennen',
+  'workspacePage.renameSessionTitle': 'Sitzung umbenennen',
+  'workspacePage.sessionNameLabel': 'Sitzungsname',
+  'workspacePage.sessionEndedNotice': 'Diese Sitzung ist beendet. Erstelle eine neue Sitzung um fortzufahren.',
+  'workspacePage.renameFailed': 'Umbenennung fehlgeschlagen',
+  'workspacePage.createSessionFailed': 'Sitzung konnte nicht erstellt werden',
   'workspacePage.startFailed': 'Start fehlgeschlagen',
   'workspacePage.stopFailed': 'Stopp fehlgeschlagen',
 
@@ -200,6 +206,12 @@ export default {
   'git.viewPr': 'PR anzeigen',
   'git.createPr': 'PR erstellen',
   'git.push': 'Push',
+  'git.pull': 'Pull',
+  'git.createPrNoRemote': 'Branch zuerst pushen',
+  'git.pullConfirmTitle': 'Branch pullen?',
+  'git.pullConfirmMessage': '{branch} vom Remote pullen (nur Fast-Forward).',
+  'git.branchPulled': 'Branch gepullt',
+  'git.pullFailed': 'Pull fehlgeschlagen',
   'git.diff': 'Diff',
   'git.rebase': 'Rebase',
   'git.rebaseConfirmTitle': 'Branch rebasen?',

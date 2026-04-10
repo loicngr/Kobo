@@ -403,6 +403,7 @@ export interface AgentSession {
   status: string
   startedAt: string
   endedAt: string | null
+  name: string | null
 }
 
 interface AgentSessionRow {
@@ -413,6 +414,7 @@ interface AgentSessionRow {
   status: string
   started_at: string
   ended_at: string | null
+  name: string | null
 }
 
 function mapSession(row: AgentSessionRow): AgentSession {
@@ -424,6 +426,7 @@ function mapSession(row: AgentSessionRow): AgentSession {
     status: row.status,
     startedAt: row.started_at,
     endedAt: row.ended_at,
+    name: row.name,
   }
 }
 
@@ -442,5 +445,62 @@ export function getLatestSession(workspaceId: string): AgentSession | null {
   const row = db
     .prepare('SELECT * FROM agent_sessions WHERE workspace_id = ? ORDER BY started_at DESC LIMIT 1')
     .get(workspaceId) as AgentSessionRow | undefined
+  return row ? mapSession(row) : null
+}
+
+/**
+ * Return the "active" session for tagging events like push/pull/open-pr traces
+ * or resumed chat messages. Skips idle sessions (never started) and prefers a
+ * running session, falling back to the most recent session that has actually
+ * been started (any non-idle status).
+ */
+export function getActiveSession(workspaceId: string): AgentSession | null {
+  const db = getDb()
+  // Prefer a running session first (the agent the user is actively interacting with)
+  const running = db
+    .prepare(
+      "SELECT * FROM agent_sessions WHERE workspace_id = ? AND status = 'running' ORDER BY started_at DESC LIMIT 1",
+    )
+    .get(workspaceId) as AgentSessionRow | undefined
+  if (running) return mapSession(running)
+  // Otherwise the most recent non-idle session (completed, error, quota, etc.)
+  const latestNonIdle = db
+    .prepare(
+      "SELECT * FROM agent_sessions WHERE workspace_id = ? AND status != 'idle' ORDER BY started_at DESC LIMIT 1",
+    )
+    .get(workspaceId) as AgentSessionRow | undefined
+  return latestNonIdle ? mapSession(latestNonIdle) : null
+}
+
+/** Create an idle agent session (no Claude process yet) for a workspace. */
+export function createIdleSession(workspaceId: string): AgentSession {
+  const db = getDb()
+  const id = nanoid()
+  const now = new Date().toISOString()
+  db.prepare(
+    'INSERT INTO agent_sessions (id, workspace_id, pid, status, started_at) VALUES (?, ?, NULL, ?, ?)',
+  ).run(id, workspaceId, 'idle', now)
+  return {
+    id,
+    workspaceId,
+    pid: null,
+    claudeSessionId: null,
+    status: 'idle',
+    startedAt: now,
+    endedAt: null,
+    name: null,
+  }
+}
+
+/** Rename an agent session. Returns the updated session or null if not found. */
+export function renameSession(sessionId: string, workspaceId: string, name: string): AgentSession | null {
+  const db = getDb()
+  const result = db.prepare('UPDATE agent_sessions SET name = ? WHERE id = ? AND workspace_id = ?').run(
+    name,
+    sessionId,
+    workspaceId,
+  )
+  if (result.changes === 0) return null
+  const row = db.prepare('SELECT * FROM agent_sessions WHERE id = ?').get(sessionId) as AgentSessionRow | undefined
   return row ? mapSession(row) : null
 }

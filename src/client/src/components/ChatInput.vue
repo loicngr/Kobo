@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { useQuasar } from 'quasar'
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { KOBO_COMMANDS } from 'src/utils/kobo-commands'
@@ -10,6 +11,7 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
+const $q = useQuasar()
 const store = useWorkspaceStore()
 const wsStore = useWebSocketStore()
 const message = ref('')
@@ -130,6 +132,10 @@ function onFileSelected(event: Event) {
 
 const hasUploading = computed(() => pendingImages.value.some((p) => p.status === 'uploading'))
 
+const currentSession = computed(() =>
+  store.sessions.find((s) => s.id === store.selectedSessionId) ?? null
+)
+
 let lastSkillsFetch = 0
 
 async function fetchSkills() {
@@ -209,20 +215,23 @@ function koboDescription(skill: string): string {
   return key ? t(key) : ''
 }
 
-function sendMessage() {
+async function sendMessage() {
   const text = message.value.trim()
   if ((!text && pendingImages.value.length === 0) || isDisabled.value || hasUploading.value) return
+
+  const session = currentSession.value
 
   // Intercept Kobo built-in commands
   const koboCmd = KOBO_COMMANDS[text]
   if (koboCmd) {
-    wsStore.sendChatMessage(props.workspaceId, koboCmd.prompt)
+    wsStore.sendChatMessage(props.workspaceId, koboCmd.prompt, store.selectedSessionId ?? undefined)
     store.markRead(props.workspaceId)
     store.addActivityItem(props.workspaceId, {
       id: `user-${Date.now()}`,
       type: 'text',
       content: koboCmd.prompt,
       timestamp: new Date().toISOString(),
+      sessionId: store.selectedSessionId ?? undefined,
       meta: { sender: 'user', pending: true },
     })
     pushToHistory(text)
@@ -237,22 +246,77 @@ function sendMessage() {
     .join(' ')
 
   const composedText = imageTags ? `${text} ${imageTags}`.trim() : text
+  const sessionTag = store.selectedSessionId ?? undefined
 
-  wsStore.sendChatMessage(props.workspaceId, composedText)
+  // Early guard: completed/error session without claudeSessionId can't be resumed.
+  if (
+    (session?.status === 'completed' || session?.status === 'error') &&
+    !session.claudeSessionId
+  ) {
+    $q.notify({
+      type: 'warning',
+      message: t('workspacePage.sessionEndedNotice'),
+      position: 'top',
+      timeout: 5000,
+    })
+    return
+  }
+
+  // Add the optimistic local item BEFORE sending so the WS user:message event
+  // (which the backend may emit synchronously during /start) can find it via
+  // the dedup pass and update its id instead of creating a duplicate.
+  const optimisticId = `user-${Date.now()}`
   store.markRead(props.workspaceId)
-
   store.addActivityItem(props.workspaceId, {
-    id: `user-${Date.now()}`,
+    id: optimisticId,
     type: 'text',
     content: composedText,
     timestamp: new Date().toISOString(),
+    sessionId: sessionTag,
     meta: { sender: 'user', pending: true },
   })
 
+  const savedText = text
   pushToHistory(text)
   resetHistoryNav()
   message.value = ''
   pendingImages.value = []
+
+  // On failure: roll back the optimistic item and restore the input so the
+  // user doesn't lose their message. Only applies to HTTP flows that can fail
+  // before the WS event arrives to upgrade the pending item.
+  const rollback = (err: unknown, contextMsg: string) => {
+    console.error(`[ChatInput] ${contextMsg} failed:`, err)
+    store.removeActivityItem(props.workspaceId, optimisticId)
+    message.value = savedText
+    const serverMsg = err instanceof Error ? err.message : null
+    $q.notify({
+      type: 'negative',
+      message: serverMsg ?? t('workspacePage.startFailed'),
+      position: 'top',
+      timeout: 6000,
+    })
+  }
+
+  if (session?.status === 'idle') {
+    // First message on an idle session — start a fresh agent for it
+    try {
+      await store.startWorkspace(props.workspaceId, composedText, session.id)
+      await store.fetchSessions(props.workspaceId)
+    } catch (err) {
+      rollback(err, 'startWorkspace')
+    }
+  } else if (session?.status === 'completed' || session?.status === 'error') {
+    // Continue an ended session — resume the underlying Claude conversation
+    try {
+      await store.startWorkspace(props.workspaceId, composedText, session.id, true)
+      await store.fetchSessions(props.workspaceId)
+    } catch (err) {
+      rollback(err, 'resume session')
+    }
+  } else {
+    wsStore.sendChatMessage(props.workspaceId, composedText, store.selectedSessionId ?? undefined)
+  }
 }
 
 function onKeydown(event: KeyboardEvent) {

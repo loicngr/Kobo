@@ -25,7 +25,7 @@ import {
 import { startDevServer, stopDevServer } from './services/dev-server-service.js'
 import { startPrWatcher, stopPrWatcher } from './services/pr-watcher-service.js'
 import { emit, handleConnection, setMessageHandler } from './services/websocket-service.js'
-import { getLatestSession, getWorkspace, updateWorkspaceStatus } from './services/workspace-service.js'
+import { getActiveSession, getWorkspace, updateWorkspaceStatus } from './services/workspace-service.js'
 import { getClientSpaPath, getKoboHome, getPackageVersion } from './utils/paths.js'
 import { initProcessCleanup, killAll as killAllTrackedProcesses } from './utils/process-tracker.js'
 
@@ -138,27 +138,35 @@ wss.on('connection', (ws) => {
 
 // Wire websocket-service message handler to agent-manager
 setMessageHandler((type, payload) => {
-  const p = payload as { workspaceId?: string; content?: string; prompt?: string } | null
+  const p = payload as { workspaceId?: string; content?: string; prompt?: string; sessionId?: string } | null
 
   if (type === 'chat:message' && p?.workspaceId && p?.content) {
+    // Prefer the session explicitly selected by the client (sessionId hint),
+    // falling back to the running/most-recent non-idle session so idle sessions
+    // never steal the tagging.
+    const activeSession = getActiveSession(p.workspaceId)
+    const sessionTag = p.sessionId ?? activeSession?.id ?? undefined
     // Persist user message so it survives page refresh
-    const latestSession = getLatestSession(p.workspaceId)
-    emit(
-      p.workspaceId,
-      'user:message',
-      { content: p.content, sender: 'user' },
-      latestSession?.claudeSessionId ?? undefined,
-    )
+    emit(p.workspaceId, 'user:message', { content: p.content, sender: 'user' }, sessionTag)
 
     try {
       sendMessage(p.workspaceId, p.content)
     } catch {
-      // Agent not running — resume the existing session
+      // Agent not running — resume the session hinted by the client if any,
+      // otherwise the most-recent active session.
       try {
         const workspace = getWorkspace(p.workspaceId)
         if (workspace) {
           const worktreePath = `${workspace.projectPath}/.worktrees/${workspace.workingBranch}`
-          startAgent(p.workspaceId, worktreePath, p.content, workspace.model, true, workspace.permissionMode)
+          startAgent(
+            p.workspaceId,
+            worktreePath,
+            p.content,
+            workspace.model,
+            true,
+            workspace.permissionMode,
+            p.sessionId,
+          )
           updateWorkspaceStatus(p.workspaceId, 'executing')
         }
       } catch (restartErr) {

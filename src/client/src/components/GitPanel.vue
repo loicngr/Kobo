@@ -21,6 +21,7 @@ const store = useWorkspaceStore()
 const settingsStore = useSettingsStore()
 
 const pushing = ref(false)
+const pulling = ref(false)
 const rebasing = ref(false)
 const openingPr = ref(false)
 const changingBase = ref(false)
@@ -57,6 +58,21 @@ const repoName = computed(() => {
   if (!props.workspace?.projectPath) return '-'
   const parts = props.workspace.projectPath.replace(/\\/g, '/').split('/')
   return parts[parts.length - 1] || parts[parts.length - 2] || '-'
+})
+
+// Gate the "Create PR" button: the branch must exist on the remote, otherwise
+// `gh pr create` fails downstream. Once it's pushed, let the user open a PR
+// even if the commit count is zero — the server will surface a clear error.
+const canOpenPr = computed(() => {
+  if (!gitStats.value) return false
+  if (gitStats.value.unpushedCount === -1) return false
+  return true
+})
+
+const createPrDisabledReason = computed(() => {
+  if (!gitStats.value) return ''
+  if (gitStats.value.unpushedCount === -1) return t('git.createPrNoRemote')
+  return ''
 })
 
 async function loadGitStats() {
@@ -140,6 +156,30 @@ function handlePush() {
       $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
     } finally {
       pushing.value = false
+    }
+  })
+}
+
+function handlePull() {
+  if (!props.workspace) return
+  $q.dialog({
+    title: t('git.pullConfirmTitle'),
+    message: t('git.pullConfirmMessage', { branch: props.workspace.workingBranch }),
+    dark: true,
+    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    ok: { flat: true, label: t('git.pull'), color: 'grey-5' },
+  }).onOk(async () => {
+    pulling.value = true
+    try {
+      await store.pullBranch(props.workspace!.id)
+      $q.notify({ type: 'positive', message: t('git.branchPulled'), position: 'top' })
+      loadGitStats()
+    } catch (e) {
+      console.error('[GitPanel] pullBranch failed:', e)
+      const msg = e instanceof Error ? e.message : t('git.pullFailed')
+      $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    } finally {
+      pulling.value = false
     }
   })
 }
@@ -358,9 +398,11 @@ async function handleOpenPr() {
           :label="$t('git.createPr')"
           class="git-btn"
           :loading="openingPr"
-          :disable="!workspace || pushing"
+          :disable="!workspace || pushing || !canOpenPr"
           @click="handleOpenPr"
-        />
+        >
+          <q-tooltip v-if="!canOpenPr && createPrDisabledReason">{{ createPrDisabledReason }}</q-tooltip>
+        </q-btn>
         <q-btn
           v-if="!gitStats || gitStats.unpushedCount !== 0"
           dense
@@ -371,8 +413,22 @@ async function handleOpenPr() {
           :label="$t('git.push')"
           class="git-btn"
           :loading="pushing"
-          :disable="!workspace || openingPr"
+          :disable="!workspace || openingPr || pulling || rebasing"
           @click="handlePush"
+        />
+        <q-btn
+          v-if="gitStats && gitStats.unpushedCount !== -1"
+          dense
+          no-caps
+          size="sm"
+          outline
+          color="grey-5"
+          icon="download"
+          :label="$t('git.pull')"
+          class="git-btn"
+          :loading="pulling"
+          :disable="!workspace || pushing || rebasing"
+          @click="handlePull"
         />
         <q-btn
           dense
@@ -383,7 +439,7 @@ async function handleOpenPr() {
           :label="$t('git.rebase')"
           class="git-btn"
           :loading="rebasing"
-          :disable="!workspace"
+          :disable="!workspace || pushing || pulling"
           @click="handleRebase"
         />
         <q-btn
