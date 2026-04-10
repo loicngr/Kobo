@@ -1087,6 +1087,11 @@ onUnmounted(() => {
   border: 1px solid #2a2a4a;
 }
 
+.template-card {
+  background: #1a1a2e;
+  border: 1px solid #2a2a4a;
+}
+
 // field-label: font-size and font-weight moved to template (text-body2 text-weight-medium)
 
 // field-label-sub: font-size moved to template (text-caption)
