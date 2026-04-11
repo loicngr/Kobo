@@ -27,12 +27,12 @@ afterEach(() => {
 
 describe('templates-service', () => {
   describe('listTemplates()', () => {
-    it('seeds 8 default templates on first read when file does not exist', async () => {
+    it('seeds 10 default templates on first read when file does not exist', async () => {
       const { listTemplates } = await import('../server/services/templates-service.js')
       const templates = listTemplates()
-      expect(templates.length).toBe(8)
+      expect(templates.length).toBe(10)
       expect(templates.map((t) => t.slug).sort()).toEqual(
-        ['add-tests', 'explain', 'mark-done', 'plan-tasks', 'refactor', 'review-quality', 'show-tasks', 'sync-tasks'].sort(),
+        ['add-tests', 'ci-status', 'explain', 'mark-done', 'plan-tasks', 'pr-review-comments', 'refactor', 'review-quality', 'show-tasks', 'sync-tasks'].sort(),
       )
       expect(fs.existsSync(tmpFile)).toBe(true)
     })
@@ -42,7 +42,7 @@ describe('templates-service', () => {
       listTemplates()
       fs.unlinkSync(tmpFile)
       const templates = listTemplates()
-      expect(templates.length).toBe(8)
+      expect(templates.length).toBe(10)
     })
 
     it('does not re-seed when the file exists but is empty', async () => {

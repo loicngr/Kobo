@@ -188,6 +188,22 @@ function seedTemplates(): void {
       createdAt: now,
       updatedAt: now,
     },
+    {
+      slug: 'pr-review-comments',
+      description: 'List PR review comments requesting changes',
+      content:
+        'Check if a pull request exists for branch {working_branch}.\n\nIf a PR exists (PR {pr_url}):\n1. Use the GitHub MCP tools to fetch the PR reviews and comments\n2. Filter for reviews with status "CHANGES_REQUESTED"\n3. List each review comment with:\n   - The reviewer name\n   - The file and line referenced\n   - The comment body\n   - Whether it has been resolved\n4. Summarize the outstanding requested changes that still need to be addressed\n\nIf no PR exists, say so and suggest pushing the branch first.',
+      createdAt: now,
+      updatedAt: now,
+    },
+    {
+      slug: 'ci-status',
+      description: 'Check GitHub Actions status on PR',
+      content:
+        'Check the CI/CD status for the pull request on branch {working_branch}.\n\nIf a PR exists (PR {pr_url}):\n1. Use the GitHub MCP tools to list the check runs / status checks on the latest commit of the PR\n2. For each check, report:\n   - Check name\n   - Status (queued, in_progress, completed)\n   - Conclusion (success, failure, neutral, skipped, etc.)\n   - Duration if available\n3. If any checks failed, fetch the logs or annotations and summarize what went wrong\n4. Give an overall summary: all green, some failing, or still running\n\nIf no PR exists, say so and suggest creating one first.',
+      createdAt: now,
+      updatedAt: now,
+    },
   ]
   writeTemplates(seed)
 }
