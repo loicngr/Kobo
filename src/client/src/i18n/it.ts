@@ -57,6 +57,11 @@ export default {
   'workspacePage.createSessionFailed': 'Creazione sessione fallita',
   'workspacePage.startFailed': 'Avvio fallito',
   'workspacePage.stopFailed': 'Arresto fallito',
+  'workspacePage.interrupt': 'Interrompi',
+  'workspacePage.interrupted': 'Agente interrotto — in attesa del tuo prossimo messaggio',
+  'workspacePage.interruptFailed': 'Interruzione fallita',
+  'workspacePage.interruptTooltip':
+    'Interruzione leggera (come Escape) — ferma lo strumento corrente ma mantiene la sessione attiva',
 
   // Activity Feed
   'activityFeed.empty': 'Nessuna attività ancora',
@@ -67,6 +72,7 @@ export default {
   'activityFeed.question': 'Domanda',
   'activityFeed.goToPrevious': 'Vai al messaggio precedente',
   'activityFeed.scrollToBottom': 'Vai in fondo',
+  'activityFeed.sendAnswers': 'Invia risposte',
 
   // Chat Input
   'chatInput.placeholder': 'Messaggio... (/ per le skill)',

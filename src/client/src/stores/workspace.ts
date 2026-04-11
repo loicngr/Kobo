@@ -176,9 +176,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       const legacyTag = selectedSession?.claudeSessionId ?? null
       return items.filter(
         (i) =>
-          !i.sessionId ||
-          i.sessionId === state.selectedSessionId ||
-          (legacyTag !== null && i.sessionId === legacyTag),
+          !i.sessionId || i.sessionId === state.selectedSessionId || (legacyTag !== null && i.sessionId === legacyTag),
       )
     },
 
@@ -283,6 +281,21 @@ export const useWorkspaceStore = defineStore('workspace', {
         await this.fetchWorkspaces()
       } catch (err) {
         console.error('[workspace store] stopWorkspace failed:', err)
+        throw err
+      }
+    },
+
+    async interruptAgent(id: string) {
+      try {
+        const res = await fetch(`/api/workspaces/${id}/interrupt`, {
+          method: 'POST',
+        })
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}))
+          throw new Error(body.error ?? `HTTP ${res.status}`)
+        }
+      } catch (err) {
+        console.error('[workspace store] interruptAgent failed:', err)
         throw err
       }
     },

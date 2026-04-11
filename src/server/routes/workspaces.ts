@@ -1388,4 +1388,22 @@ app.post('/:id/stop', (c) => {
   }
 })
 
+// POST /api/workspaces/:id/interrupt — soft-interrupt agent (SIGINT, like Escape in Claude Code)
+app.post('/:id/interrupt', (c) => {
+  try {
+    const id = c.req.param('id')
+
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+
+    agentManager.interruptAgent(id)
+    return c.json({ status: 'interrupted' })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
 export default app

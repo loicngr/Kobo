@@ -36,6 +36,22 @@ async function handleStart() {
   }
 }
 
+const interrupting = ref(false)
+
+async function handleInterrupt() {
+  if (!store.selectedWorkspaceId) return
+  interrupting.value = true
+  try {
+    await store.interruptAgent(store.selectedWorkspaceId)
+    $q.notify({ type: 'info', message: t('workspacePage.interrupted'), position: 'top', timeout: 3000 })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : t('workspacePage.interruptFailed')
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+  } finally {
+    interrupting.value = false
+  }
+}
+
 async function handleStop() {
   if (!store.selectedWorkspaceId) return
   stopping.value = true
@@ -107,10 +123,7 @@ const sessionOptions = computed(() => {
     caption: timeAgo(s.startedAt),
     isSession: true,
   }))
-  return [
-    ...opts,
-    { label: t('workspacePage.newSession'), value: '__new__', caption: '', isSession: false },
-  ]
+  return [...opts, { label: t('workspacePage.newSession'), value: '__new__', caption: '', isSession: false }]
 })
 
 const renameDialogOpen = ref(false)
@@ -288,6 +301,22 @@ watch(
           :disable="starting"
           @click="handleStart"
         />
+        <q-btn
+          v-if="['extracting', 'brainstorming', 'executing'].includes(selectedWs.status)"
+          dense
+          no-caps
+          size="sm"
+          outline
+          color="orange-4"
+          icon="pause"
+          :label="$t('workspacePage.interrupt')"
+          class="q-mr-xs"
+          :loading="interrupting"
+          :disable="interrupting || stopping"
+          @click="handleInterrupt"
+        >
+          <q-tooltip>{{ $t('workspacePage.interruptTooltip') }}</q-tooltip>
+        </q-btn>
         <q-btn
           v-if="['extracting', 'brainstorming', 'executing'].includes(selectedWs.status)"
           dense

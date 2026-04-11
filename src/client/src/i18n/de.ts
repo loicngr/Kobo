@@ -57,6 +57,11 @@ export default {
   'workspacePage.createSessionFailed': 'Sitzung konnte nicht erstellt werden',
   'workspacePage.startFailed': 'Start fehlgeschlagen',
   'workspacePage.stopFailed': 'Stopp fehlgeschlagen',
+  'workspacePage.interrupt': 'Unterbrechen',
+  'workspacePage.interrupted': 'Agent unterbrochen — wartet auf Ihre nächste Nachricht',
+  'workspacePage.interruptFailed': 'Unterbrechung fehlgeschlagen',
+  'workspacePage.interruptTooltip':
+    'Sanfte Unterbrechung (wie Escape) — stoppt das aktuelle Tool, hält die Sitzung aktiv',
 
   // Activity Feed
   'activityFeed.empty': 'Noch keine Aktivität',
@@ -67,6 +72,7 @@ export default {
   'activityFeed.question': 'Frage',
   'activityFeed.goToPrevious': 'Zur vorherigen Nachricht',
   'activityFeed.scrollToBottom': 'Nach unten scrollen',
+  'activityFeed.sendAnswers': 'Antworten senden',
 
   // Chat Input
   'chatInput.placeholder': 'Nachricht... (/ für Skills)',

@@ -57,6 +57,11 @@ export default {
   'workspacePage.createSessionFailed': 'Error al crear la sesión',
   'workspacePage.startFailed': 'Error al iniciar',
   'workspacePage.stopFailed': 'Error al detener',
+  'workspacePage.interrupt': 'Interrumpir',
+  'workspacePage.interrupted': 'Agente interrumpido — esperando tu próximo mensaje',
+  'workspacePage.interruptFailed': 'Error al interrumpir',
+  'workspacePage.interruptTooltip':
+    'Interrupción suave (como Escape) — detiene la herramienta actual pero mantiene la sesión activa',
 
   // Activity Feed
   'activityFeed.empty': 'Aún no hay actividad',
@@ -67,6 +72,7 @@ export default {
   'activityFeed.question': 'Pregunta',
   'activityFeed.goToPrevious': 'Ir al mensaje anterior',
   'activityFeed.scrollToBottom': 'Ir al final',
+  'activityFeed.sendAnswers': 'Enviar respuestas',
 
   // Chat Input
   'chatInput.placeholder': 'Mensaje... (/ para skills)',

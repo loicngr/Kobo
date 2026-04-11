@@ -57,6 +57,10 @@ export default {
   'workspacePage.createSessionFailed': 'Failed to create session',
   'workspacePage.startFailed': 'Start failed',
   'workspacePage.stopFailed': 'Stop failed',
+  'workspacePage.interrupt': 'Interrupt',
+  'workspacePage.interrupted': 'Agent interrupted — waiting for your next message',
+  'workspacePage.interruptFailed': 'Interrupt failed',
+  'workspacePage.interruptTooltip': 'Soft interrupt (like Escape) — stops the current tool but keeps the session alive',
 
   // Activity Feed
   'activityFeed.empty': 'No activity yet',
@@ -67,6 +71,7 @@ export default {
   'activityFeed.question': 'Question',
   'activityFeed.goToPrevious': 'Go to previous message',
   'activityFeed.scrollToBottom': 'Scroll to bottom',
+  'activityFeed.sendAnswers': 'Send answers',
 
   // Chat Input
   'chatInput.placeholder': 'Message... (/ for skills)',

@@ -57,6 +57,11 @@ export default {
   'workspacePage.createSessionFailed': 'Échec de la création de la session',
   'workspacePage.startFailed': 'Échec du démarrage',
   'workspacePage.stopFailed': "Échec de l'arrêt",
+  'workspacePage.interrupt': 'Interrompre',
+  'workspacePage.interrupted': 'Agent interrompu — en attente de votre prochain message',
+  'workspacePage.interruptFailed': "Échec de l'interruption",
+  'workspacePage.interruptTooltip':
+    'Interruption douce (comme Escape) — arrête le tool en cours mais garde la session active',
 
   // Activity Feed
   'activityFeed.empty': 'Aucune activité',
@@ -67,6 +72,7 @@ export default {
   'activityFeed.question': 'Question',
   'activityFeed.goToPrevious': 'Aller au message précédent',
   'activityFeed.scrollToBottom': 'Défiler vers le bas',
+  'activityFeed.sendAnswers': 'Envoyer les réponses',
 
   // Chat Input
   'chatInput.placeholder': 'Message... (/ pour les skills)',
@@ -243,7 +249,7 @@ export default {
   'git.createPr': 'Créer une PR',
   'git.push': 'Push',
   'git.pull': 'Pull',
-  'git.createPrNoRemote': 'Push la branche d\'abord',
+  'git.createPrNoRemote': "Push la branche d'abord",
   'git.pullConfirmTitle': 'Pull la branche ?',
   'git.pullConfirmMessage': 'Pull {branch} depuis la remote (fast-forward uniquement).',
   'git.branchPulled': 'Branche pull',

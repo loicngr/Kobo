@@ -215,7 +215,8 @@ export function startAgent(
     }
 
     // The in-memory cache is workspace-scoped, only useful when no specific session was requested.
-    const claudeSessionId = lastSession?.claude_session_id ?? (existingSessionId ? undefined : sessionIds.get(workspaceId))
+    const claudeSessionId =
+      lastSession?.claude_session_id ?? (existingSessionId ? undefined : sessionIds.get(workspaceId))
 
     if (claudeSessionId) {
       resumedClaudeSessionId = claudeSessionId
@@ -250,9 +251,11 @@ export function startAgent(
   } else {
     args.push('-p', prompt)
     if (existingSessionId) {
-      const result = db.prepare(
-        'UPDATE agent_sessions SET status = ?, started_at = ?, ended_at = NULL WHERE id = ? AND workspace_id = ?',
-      ).run('running', new Date().toISOString(), existingSessionId, workspaceId)
+      const result = db
+        .prepare(
+          'UPDATE agent_sessions SET status = ?, started_at = ?, ended_at = NULL WHERE id = ? AND workspace_id = ?',
+        )
+        .run('running', new Date().toISOString(), existingSessionId, workspaceId)
       if (result.changes === 0) {
         throw new Error(`Agent session '${existingSessionId}' not found for workspace '${workspaceId}'`)
       }
@@ -537,6 +540,33 @@ export function startAgent(
   emit(workspaceId, 'agent:status', { status: 'executing' }, agent.agentSessionId)
 
   return agent
+}
+
+// ── Interrupt agent ────────────────────────────────────────────────────────────
+
+/**
+ * Soft-interrupt the running agent by sending SIGINT. This mirrors pressing
+ * Escape in Claude Code CLI: the current tool call is aborted but the process
+ * stays alive and waits for the next user message. The agent session remains
+ * in 'running' status.
+ */
+export function interruptAgent(workspaceId: string): void {
+  const agent = agents.get(workspaceId)
+  if (!agent) {
+    throw new Error(`No agent running for workspace '${workspaceId}'`)
+  }
+
+  const pid = agent.process.pid
+  if (pid === undefined) {
+    throw new Error(`Agent process has no PID for workspace '${workspaceId}'`)
+  }
+
+  try {
+    process.kill(pid, 'SIGINT')
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`Failed to interrupt agent for workspace '${workspaceId}': ${message}`)
+  }
 }
 
 // ── Stop agent ─────────────────────────────────────────────────────────────────
