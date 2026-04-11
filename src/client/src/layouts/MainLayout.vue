@@ -4,6 +4,7 @@ import AgentTodosPanel from 'src/components/AgentTodosPanel.vue'
 import DevServerPanel from 'src/components/DevServerPanel.vue'
 import GitPanel from 'src/components/GitPanel.vue'
 import NotionPanel from 'src/components/NotionPanel.vue'
+import PlansPanel from 'src/components/PlansPanel.vue'
 import StatsPanel from 'src/components/StatsPanel.vue'
 import SubagentsPanel from 'src/components/SubagentsPanel.vue'
 import ToolsPanel from 'src/components/ToolsPanel.vue'
@@ -97,6 +98,7 @@ const showRightDrawer = computed(() => route.name === 'workspace')
         <q-tab name="subagents" icon="smart_toy" />
         <q-tab name="tools" icon="build" />
         <q-tab name="stats" icon="bar_chart" />
+        <q-tab name="plans" icon="description" />
       </q-tabs>
 
       <q-separator dark />
@@ -128,6 +130,10 @@ const showRightDrawer = computed(() => route.name === 'workspace')
 
         <q-tab-panel name="stats" class="q-pa-none">
           <StatsPanel :workspace="store.selectedWorkspace" />
+        </q-tab-panel>
+
+        <q-tab-panel name="plans" class="q-pa-none">
+          <PlansPanel :workspace="store.selectedWorkspace" />
         </q-tab-panel>
       </q-tab-panels>
     </q-drawer>
