@@ -222,6 +222,13 @@ export default {
   'chatInput.dropdownKobo': 'Comandi Kōbō',
   'chatInput.dropdownTemplates': 'Template',
 
+  // Plans
+  'plans.title': 'Piani',
+  'plans.empty': 'Nessun piano trovato',
+  'plans.refresh': 'Aggiorna',
+  'plans.back': 'Indietro',
+  'plans.loadFailed': 'Caricamento del piano fallito',
+
   // Git Panel
   'git.title': 'Git',
   'git.localOnly': 'solo locale',
