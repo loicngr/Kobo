@@ -16,9 +16,9 @@ Single-user, single-machine dev tool. No auth, no multi-tenant concerns.
 
 **Database** — Single SQLite file under the **Kōbō home directory** (`~/.config/kobo/kobo.db` by default, overridable via `KOBO_HOME`). Fresh-install schema lives in `src/server/db/schema.ts` (`initSchema`); incremental migrations live in `src/server/db/migrations.ts`. **The project is in production** — every schema change MUST ship as a migration that preserves data, never as a breaking change to `initSchema` alone. See [Database migrations](#database-migrations) below.
 
-**Kōbō home directory** — `KOBO_HOME` env var overrides everything. Otherwise `$XDG_CONFIG_HOME/kobo/`, else `~/.config/kobo/`. Contains `kobo.db`, `settings.json`, `skills.json`. **Development uses `./data/`** via the `KOBO_HOME=./data` prefix in the `dev` npm script, so local dev never touches your real `~/.config/kobo/` and can run in parallel with a production-installed Kōbō (`npx @loicngr/kobo`). See `src/server/utils/paths.ts`.
+**Kōbō home directory** — `KOBO_HOME` env var overrides everything. Otherwise `$XDG_CONFIG_HOME/kobo/`, else `~/.config/kobo/`. Contains `kobo.db`, `settings.json`, `skills.json`, `templates.json`. **Development uses `./data/`** via the `KOBO_HOME=./data` prefix in the `dev` npm script, so local dev never touches your real `~/.config/kobo/` and can run in parallel with a production-installed Kōbō (`npx @loicngr/kobo`). See `src/server/utils/paths.ts`.
 
-**Tests** — vitest (18 test files, 355+ tests at time of writing). No frontend test infrastructure.
+**Tests** — vitest (24 backend test files, 544+ tests; 5 frontend test files, 45+ tests at time of writing). Frontend tests cover Pinia stores and pure utility modules; Vue components are not tested (type-check + manual smoke only).
 
 ## Commands
 
@@ -33,8 +33,10 @@ npm run dev:client                  # frontend only (quasar dev)
 npm run dev:all                     # both concurrently
 
 # Check & test
-npx tsc --noEmit                    # type check (the project's primary quality gate)
-npm test                            # run full vitest suite
+npm run lint                        # biome check (linting + formatting)
+npx tsc --noEmit                    # type check backend (the project's primary quality gate)
+npm test                            # run full vitest suite (backend + client tests)
+(cd src/client && npm test)         # client tests only (stores, utils)
 npm run test:watch                  # vitest in watch mode
 
 # Build & run
@@ -56,7 +58,8 @@ src/
 │   │   └── migrations.ts           # incremental migrations, bumped per feature
 │   ├── services/                   # business logic — pure functions over db + external processes
 │   │   ├── workspace-service.ts    # workspaces + tasks + agent_sessions CRUD
-│   │   ├── agent-manager.ts        # spawns Claude Code CLI, streams stdout, tracks sessions
+│   │   ├── agent-manager.ts        # spawns Claude Code CLI, streams stdout, tracks sessions, interrupt/stop
+│   │   ├── templates-service.ts    # prompt templates CRUD (JSON file persistence, seeding)
 │   │   ├── dev-server-service.ts   # per-workspace dev server lifecycle (docker or npm process)
 │   │   ├── websocket-service.ts    # emit / emitEphemeral to subscribed clients
 │   │   ├── worktree-service.ts     # git worktree create/remove
@@ -65,14 +68,17 @@ src/
 │   │   └── pr-template-service.ts  # pure template variable substitution
 │   ├── routes/                     # Hono handlers, thin layer over services
 │   │   ├── workspaces.ts           # /api/workspaces/* — the main surface
+│   │   ├── templates.ts            # /api/templates — prompt templates CRUD
+│   │   ├── plans.ts                # /api/workspaces/:id/plans — plan file browser (read-only)
 │   │   ├── dev-server.ts, git.ts, notion.ts, settings.ts
 │   ├── utils/
-│   │   ├── git-ops.ts              # pushBranch, getCommitsBetween, delete{Local,Remote}Branch…
+│   │   ├── git-ops.ts              # pushBranch, pullBranch, getCommitsBetween, delete{Local,Remote}Branch…
 │   │   └── process-tracker.ts      # per-workspace spawned-process map
 ├── client/                         # Vue 3 + Quasar SPA
 │   └── src/
-│       ├── stores/                 # pinia: workspace, websocket, settings, dev-server
-│       ├── components/             # WorkspaceList, NotionPanel, AcceptancePanel, ChatInput, GitPanel…
+│       ├── stores/                 # pinia: workspace, websocket, settings, dev-server, templates
+│       ├── components/             # WorkspaceList, NotionPanel, AcceptancePanel, ChatInput, GitPanel, PlansPanel…
+│       ├── utils/                  # expand-template (template variable substitution), formatters…
 │       ├── pages/                  # WorkspacePage, CreatePage, SettingsPage
 │       └── router/
 ├── mcp-server/                     # standalone MCP server spawned per workspace
@@ -87,7 +93,7 @@ src/
 |---|---|
 | `workspaces` | the unit of work — id, name, project_path, source_branch, working_branch, status, notion_url, model, dev_server_status, `archived_at`, timestamps |
 | `tasks` | workspace sub-items — title, status, `is_acceptance_criterion`, sort_order; CASCADE DELETE on workspace |
-| `agent_sessions` | Claude Code CLI invocations — pid, `claude_session_id`, status, started_at, ended_at |
+| `agent_sessions` | Claude Code CLI invocations — pid, `claude_session_id`, status, started_at, ended_at, `name` |
 | `ws_events` | persisted WebSocket events for replay on reconnect — type, payload, session_id, created_at |
 
 `status` enum: `created | extracting | brainstorming | executing | completed | idle | error | quota`. Transitions are validated in `updateWorkspaceStatus` against `VALID_TRANSITIONS`.
@@ -188,7 +194,7 @@ The frontend uses `vue-i18n` v10 with 5 supported locales: English (`en`), Frenc
 
 - **TDD for backend** — write the failing test, confirm it fails for the right reason, implement minimally, confirm it passes, commit. One commit per logical unit. See existing tests in `src/__tests__/workspace-service.test.ts` for the setup pattern (fresh in-memory DB per test via `resetDb()`).
 - **Route tests** use `vi.mock()` on service modules before imports (see `src/__tests__/routes-workspaces.test.ts`). Keep mocks complete — missing exports cause obscure failures.
-- **No frontend test infra.** Type-check via `npx tsc --noEmit` is the frontend gate. Manual smoke testing covers UI behavior.
+- **Frontend tests** cover Pinia stores (`workspace-store`, `settings-store`, `templates-store`) and pure utility modules (`expand-template`). Run with `cd src/client && npm test`. Vue components are **not** tested — type-check via `npx tsc --noEmit` + manual smoke testing covers UI behavior.
 - **`beforeEach(() => vi.clearAllMocks())`** is the convention for all route test files.
 
 ## Git workflow

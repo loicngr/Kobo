@@ -17,7 +17,11 @@ Think of it as an apprentice's hall: you hand out missions, each apprentice sets
 - **Notion integration** — pull workspace missions straight from Notion pages, extract markdown, and use it as the source of truth for acceptance criteria
 - **Per-workspace dev servers** — start/stop Docker or Node dev servers scoped to each branch, with log streaming
 - **Conventional-commit enforcement** — project-level git conventions are written to `.ai/.git-conventions.md` inside every workspace so Claude follows them during commits
-- **Pull request automation** — one-click `push` and `open-pr` endpoints integrate with the GitHub CLI, using a configurable prompt template
+- **Pull request automation** — one-click `push`, `pull`, and `open-pr` endpoints integrate with the GitHub CLI, using a configurable prompt template
+- **Multi-session support** — create multiple Claude agent sessions per workspace, each with its own chat history; resume completed sessions via `--resume`; sessions are named and persisted in localStorage
+- **Prompt templates** — personal library of reusable prompts with variable substitution (`{working_branch}`, `{commit_count}`, etc.), insertable from the chat input via `/` autocomplete; editable in Settings > Templates
+- **Plan browser** — read-only viewer for markdown plan files produced by agents, rendered directly in the right-side panel
+- **Soft interrupt** — pause an agent mid-execution (SIGINT, like pressing Escape in Claude Code) without killing the process; the agent stops the current tool and waits for the next message
 - **Archive instead of delete** — soft-remove workspaces without losing the worktree, branches, or history; unarchive restores the exact pre-archive state
 
 ## Tech stack
