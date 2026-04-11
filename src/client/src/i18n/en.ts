@@ -209,6 +209,7 @@ export default {
   'templates.contentRequired': 'Content is required',
   'templates.content': 'Content',
   'templates.contentHint': 'Template content. Use {variable_name} for substitutions.',
+  'templates.availableVars': 'Available variables',
   'templates.filePath': 'File: {path}',
   'templates.empty': 'No templates yet.',
   'templates.createFailed': 'Failed to create template',

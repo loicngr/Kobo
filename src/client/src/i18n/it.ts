@@ -210,6 +210,7 @@ export default {
   'templates.contentRequired': 'Il contenuto è obbligatorio',
   'templates.content': 'Contenuto',
   'templates.contentHint': 'Contenuto del template. Usa {variable_name} per le sostituzioni.',
+  'templates.availableVars': 'Variabili disponibili',
   'templates.filePath': 'File: {path}',
   'templates.empty': 'Nessun template ancora.',
   'templates.createFailed': 'Creazione del template fallita',

@@ -210,6 +210,7 @@ export default {
   'templates.contentRequired': 'Le contenu est requis',
   'templates.content': 'Contenu',
   'templates.contentHint': 'Contenu du modèle. Utilise {variable_name} pour les substitutions.',
+  'templates.availableVars': 'Variables disponibles',
   'templates.filePath': 'Fichier : {path}',
   'templates.empty': "Aucun modèle pour l'instant.",
   'templates.createFailed': 'Échec de la création du modèle',

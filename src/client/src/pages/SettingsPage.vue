@@ -59,6 +59,15 @@ const saving = ref(false)
 
 const sortedTemplates = computed(() => [...templatesStore.templates].sort((a, b) => a.slug.localeCompare(b.slug)))
 
+const availableVarsDisplay = [
+  '{workspace_name}', '{working_branch}', '{source_branch}',
+  '{project_path}', '{worktree_path}',
+  '{commit_count}', '{unpushed_count}',
+  '{files_changed}', '{insertions}', '{deletions}',
+  '{pr_number}', '{pr_url}', '{pr_state}',
+  '{session_name}',
+]
+
 function openCreateDialog() {
   editingSlug.value = null
   formSlug.value = ''
@@ -994,7 +1003,7 @@ onUnmounted(() => {
 
     <!-- Templates create/edit dialog -->
     <q-dialog v-model="showTemplateDialog" persistent>
-      <q-card dark style="min-width: 480px; max-width: 640px;">
+      <q-card dark style="min-width: 560px; max-width: 800px; width: 80vw;">
         <q-card-section>
           <div class="text-subtitle1">
             {{ editingSlug === null ? $t('templates.newTemplate') : $t('templates.editTemplate') }}
@@ -1035,6 +1044,19 @@ onUnmounted(() => {
             maxlength="4096"
             :rules="[(v) => (v && v.trim().length > 0) || '']"
           />
+          <q-expansion-item
+            dense
+            dense-toggle
+            :label="$t('templates.availableVars')"
+            header-class="text-grey-6 text-caption q-pa-none"
+            style="font-size: 11px;"
+          >
+            <div class="q-pl-md q-pt-xs" style="font-size: 11px; font-family: 'Roboto Mono', monospace; columns: 2; column-gap: 24px;">
+              <div v-for="v in availableVarsDisplay" :key="v" class="text-grey-5 q-mb-xs">
+                {{ v }}
+              </div>
+            </div>
+          </q-expansion-item>
           <div v-if="formError" class="text-negative text-caption">{{ formError }}</div>
         </q-card-section>
 

@@ -210,6 +210,7 @@ export default {
   'templates.contentRequired': 'Inhalt ist erforderlich',
   'templates.content': 'Inhalt',
   'templates.contentHint': 'Vorlageninhalt. Verwende {variable_name} für Substitutionen.',
+  'templates.availableVars': 'Verfügbare Variablen',
   'templates.filePath': 'Datei: {path}',
   'templates.empty': 'Noch keine Vorlagen.',
   'templates.createFailed': 'Vorlage konnte nicht erstellt werden',

@@ -210,6 +210,7 @@ export default {
   'templates.contentRequired': 'El contenido es obligatorio',
   'templates.content': 'Contenido',
   'templates.contentHint': 'Contenido de la plantilla. Usa {variable_name} para las sustituciones.',
+  'templates.availableVars': 'Variables disponibles',
   'templates.filePath': 'Archivo: {path}',
   'templates.empty': 'Aún no hay plantillas.',
   'templates.createFailed': 'Error al crear la plantilla',
