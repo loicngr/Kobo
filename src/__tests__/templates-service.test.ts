@@ -32,7 +32,18 @@ describe('templates-service', () => {
       const templates = listTemplates()
       expect(templates.length).toBe(10)
       expect(templates.map((t) => t.slug).sort()).toEqual(
-        ['add-tests', 'ci-status', 'explain', 'mark-done', 'plan-tasks', 'pr-review-comments', 'refactor', 'review-quality', 'show-tasks', 'sync-tasks'].sort(),
+        [
+          'add-tests',
+          'ci-status',
+          'explain',
+          'mark-done',
+          'plan-tasks',
+          'pr-review-comments',
+          'refactor',
+          'review-quality',
+          'show-tasks',
+          'sync-tasks',
+        ].sort(),
       )
       expect(fs.existsSync(tmpFile)).toBe(true)
     })
@@ -69,7 +80,10 @@ describe('templates-service', () => {
     it('warns on version mismatch but continues best-effort', async () => {
       fs.writeFileSync(
         tmpFile,
-        JSON.stringify({ version: 999, templates: [{ slug: 'x', description: 'd', content: 'c', createdAt: '2026-04-10', updatedAt: '2026-04-10' }] }),
+        JSON.stringify({
+          version: 999,
+          templates: [{ slug: 'x', description: 'd', content: 'c', createdAt: '2026-04-10', updatedAt: '2026-04-10' }],
+        }),
         'utf-8',
       )
       const spy = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -139,15 +153,15 @@ describe('templates-service', () => {
     it('throws on description exceeding 120 chars', async () => {
       const { createTemplate, listTemplates } = await import('../server/services/templates-service.js')
       listTemplates()
-      expect(() => createTemplate({ slug: 'longdesc', description: 'a'.repeat(121), content: 'c' })).toThrow(/description/i)
+      expect(() => createTemplate({ slug: 'longdesc', description: 'a'.repeat(121), content: 'c' })).toThrow(
+        /description/i,
+      )
     })
   })
 
   describe('updateTemplate()', () => {
     it('updates content and bumps updatedAt', async () => {
-      const { createTemplate, updateTemplate, listTemplates } = await import(
-        '../server/services/templates-service.js'
-      )
+      const { createTemplate, updateTemplate, listTemplates } = await import('../server/services/templates-service.js')
       listTemplates()
       const created = createTemplate({ slug: 'upd', description: 'd', content: 'old' })
       // Wait to guarantee a different timestamp
@@ -160,9 +174,7 @@ describe('templates-service', () => {
     })
 
     it('updates description only', async () => {
-      const { createTemplate, updateTemplate, listTemplates } = await import(
-        '../server/services/templates-service.js'
-      )
+      const { createTemplate, updateTemplate, listTemplates } = await import('../server/services/templates-service.js')
       listTemplates()
       createTemplate({ slug: 'upd2', description: 'old', content: 'c' })
       const updated = updateTemplate('upd2', { description: 'new' })
@@ -177,9 +189,7 @@ describe('templates-service', () => {
     })
 
     it('throws on invalid update (content too long)', async () => {
-      const { createTemplate, updateTemplate, listTemplates } = await import(
-        '../server/services/templates-service.js'
-      )
+      const { createTemplate, updateTemplate, listTemplates } = await import('../server/services/templates-service.js')
       listTemplates()
       createTemplate({ slug: 'valid', description: 'd', content: 'c' })
       expect(() => updateTemplate('valid', { content: 'a'.repeat(4097) })).toThrow(/content/i)
@@ -188,9 +198,7 @@ describe('templates-service', () => {
 
   describe('deleteTemplate()', () => {
     it('deletes an existing template and returns true', async () => {
-      const { createTemplate, deleteTemplate, listTemplates } = await import(
-        '../server/services/templates-service.js'
-      )
+      const { createTemplate, deleteTemplate, listTemplates } = await import('../server/services/templates-service.js')
       listTemplates()
       createTemplate({ slug: 'del', description: 'd', content: 'c' })
       expect(deleteTemplate('del')).toBe(true)
@@ -204,9 +212,7 @@ describe('templates-service', () => {
     })
 
     it('does not re-seed after deleting the last user template (file stays with remaining seeds)', async () => {
-      const { createTemplate, deleteTemplate, listTemplates } = await import(
-        '../server/services/templates-service.js'
-      )
+      const { createTemplate, deleteTemplate, listTemplates } = await import('../server/services/templates-service.js')
       const initial = listTemplates()
       createTemplate({ slug: 'extra', description: 'd', content: 'c' })
       deleteTemplate('extra')

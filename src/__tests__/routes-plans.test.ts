@@ -8,8 +8,8 @@ vi.mock('../server/services/workspace-service.js', () => ({
   getWorkspace: vi.fn(),
 }))
 
-import * as workspaceService from '../server/services/workspace-service.js'
 import plansRouter from '../server/routes/plans.js'
+import * as workspaceService from '../server/services/workspace-service.js'
 
 const app = new Hono()
 app.route('/api/workspaces', plansRouter)

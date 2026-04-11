@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import DOMPurify from 'dompurify'
+import { marked } from 'marked'
 import { useQuasar } from 'quasar'
 import type { Workspace } from 'src/stores/workspace'
 import { useTimeAgo } from 'src/utils/formatters'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { marked } from 'marked'
 
 const props = defineProps<{
   workspace: Workspace | null
@@ -48,9 +48,7 @@ async function fetchPlans() {
 async function openPlan(plan: PlanFile) {
   loadingContent.value = true
   try {
-    const res = await fetch(
-      `/api/workspaces/${props.workspace!.id}/plan-file?path=${encodeURIComponent(plan.path)}`,
-    )
+    const res = await fetch(`/api/workspaces/${props.workspace!.id}/plan-file?path=${encodeURIComponent(plan.path)}`)
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const body = (await res.json()) as { content: string; path: string }
     selectedPlan.value = { path: body.path, content: body.content, name: plan.name }

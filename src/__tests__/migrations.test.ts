@@ -253,19 +253,19 @@ describe('runMigrations(db)', () => {
 
     runMigrations(db)
 
-    const cols = db.prepare("PRAGMA table_info(agent_sessions)").all() as { name: string }[]
-    expect(cols.map(c => c.name)).toContain('name')
+    const cols = db.prepare('PRAGMA table_info(agent_sessions)').all() as { name: string }[]
+    expect(cols.map((c) => c.name)).toContain('name')
 
     const history = getMigrationHistory(db)
-    expect(history.find(h => h.version === 5)).toBeTruthy()
+    expect(history.find((h) => h.version === 5)).toBeTruthy()
     db.close()
   })
 
   it('fresh install v5: agent_sessions a la colonne name', () => {
     const db = new Database(':memory:')
     runMigrations(db)
-    const cols = db.prepare("PRAGMA table_info(agent_sessions)").all() as { name: string }[]
-    expect(cols.map(c => c.name)).toContain('name')
+    const cols = db.prepare('PRAGMA table_info(agent_sessions)').all() as { name: string }[]
+    expect(cols.map((c) => c.name)).toContain('name')
     db.close()
   })
 

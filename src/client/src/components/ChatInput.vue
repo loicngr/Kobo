@@ -4,8 +4,8 @@ import { useQuasar } from 'quasar'
 import { useTemplatesStore } from 'src/stores/templates'
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
-import { KOBO_COMMANDS } from 'src/utils/kobo-commands'
 import { buildTemplateVars, expandTemplate } from 'src/utils/expand-template'
+import { KOBO_COMMANDS } from 'src/utils/kobo-commands'
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -55,9 +55,7 @@ const groupedDropdown = computed<{ skills: DropdownItem[]; kobo: DropdownItem[];
   const matches = (name: string) => (q === '' ? true : name.toLowerCase().includes(q))
 
   // Claude skills come from the existing `skills.value` list (no description available)
-  const claudeSkills = skills.value
-    .filter((s) => matches(s))
-    .map<DropdownItem>((s) => ({ type: 'skill', name: s }))
+  const claudeSkills = skills.value.filter((s) => matches(s)).map<DropdownItem>((s) => ({ type: 'skill', name: s }))
 
   // Kōbō commands (without the leading "/") — KOBO_COMMANDS keys include the slash
   const koboCommands = Object.keys(KOBO_COMMANDS)
@@ -198,9 +196,7 @@ function onFileSelected(event: Event) {
 
 const hasUploading = computed(() => pendingImages.value.some((p) => p.status === 'uploading'))
 
-const currentSession = computed(() =>
-  store.sessions.find((s) => s.id === store.selectedSessionId) ?? null
-)
+const currentSession = computed(() => store.sessions.find((s) => s.id === store.selectedSessionId) ?? null)
 
 let lastSkillsFetch = 0
 
@@ -426,10 +422,7 @@ async function sendMessage() {
   const sessionTag = store.selectedSessionId ?? undefined
 
   // Early guard: completed/error session without claudeSessionId can't be resumed.
-  if (
-    (session?.status === 'completed' || session?.status === 'error') &&
-    !session.claudeSessionId
-  ) {
+  if ((session?.status === 'completed' || session?.status === 'error') && !session.claudeSessionId) {
     $q.notify({
       type: 'warning',
       message: t('workspacePage.sessionEndedNotice'),

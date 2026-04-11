@@ -53,10 +53,7 @@ export const useTemplatesStore = defineStore('templates', {
       return template
     },
 
-    async updateTemplate(
-      slug: string,
-      updates: { description?: string; content?: string },
-    ): Promise<Template> {
+    async updateTemplate(slug: string, updates: { description?: string; content?: string }): Promise<Template> {
       const res = await fetch(`/api/templates/${encodeURIComponent(slug)}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },

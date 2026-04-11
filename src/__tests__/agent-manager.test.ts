@@ -249,7 +249,12 @@ describe('startAgent()', () => {
     mockProc.emit('exit', 1)
 
     expect(mockUpdateWorkspaceStatus).toHaveBeenCalledWith('ws-exit1', 'error')
-    expect(mockEmit).toHaveBeenCalledWith('ws-exit1', 'agent:status', { status: 'error', exitCode: 1 }, expect.any(String))
+    expect(mockEmit).toHaveBeenCalledWith(
+      'ws-exit1',
+      'agent:status',
+      { status: 'error', exitCode: 1 },
+      expect.any(String),
+    )
   })
 
   it('detecte les erreurs de quota dans stderr', async () => {
@@ -285,9 +290,7 @@ describe('startAgent()', () => {
     const { startAgent, _getAgents } = await import('../server/services/agent-manager.js')
     const agent = startAgent('ws-exist', '/tmp/work', 'do stuff', undefined, false, 'auto-accept', existingId)
 
-    const insertCalls = mockDbPrepare.mock.calls.filter(([sql]: [string]) =>
-      sql.includes('INSERT INTO agent_sessions'),
-    )
+    const insertCalls = mockDbPrepare.mock.calls.filter(([sql]: [string]) => sql.includes('INSERT INTO agent_sessions'))
     expect(insertCalls.length).toBe(0)
 
     // Verify the UPDATE resets ended_at to NULL and is scoped to workspace_id
@@ -313,9 +316,9 @@ describe('startAgent()', () => {
     })
 
     const { startAgent, _getAgents } = await import('../server/services/agent-manager.js')
-    expect(() =>
-      startAgent('ws-nope', '/tmp/work', 'do stuff', undefined, false, 'auto-accept', 'orphan-id'),
-    ).toThrow(/not found/)
+    expect(() => startAgent('ws-nope', '/tmp/work', 'do stuff', undefined, false, 'auto-accept', 'orphan-id')).toThrow(
+      /not found/,
+    )
 
     _getAgents().clear()
   })
@@ -323,7 +326,11 @@ describe('startAgent()', () => {
   it('émet les events avec agentSessionId et non claudeSessionId', async () => {
     const mockProc = createMockProcess()
     mockSpawn.mockReturnValue(mockProc)
-    mockDbPrepare.mockReturnValue({ run: vi.fn(), get: vi.fn().mockReturnValue(null), all: vi.fn().mockReturnValue([]) })
+    mockDbPrepare.mockReturnValue({
+      run: vi.fn(),
+      get: vi.fn().mockReturnValue(null),
+      all: vi.fn().mockReturnValue([]),
+    })
 
     const { startAgent, _getAgents } = await import('../server/services/agent-manager.js')
     const agent = startAgent('ws-emit-tag', '/tmp/work', 'test', undefined, false, 'auto-accept')
@@ -387,9 +394,9 @@ describe('startAgent()', () => {
     })
 
     const { startAgent, _getAgents } = await import('../server/services/agent-manager.js')
-    expect(() =>
-      startAgent('ws-resume', '/tmp/work', 'continue', undefined, true, 'auto-accept', 'ghost-id'),
-    ).toThrow(/Cannot resume session 'ghost-id'/)
+    expect(() => startAgent('ws-resume', '/tmp/work', 'continue', undefined, true, 'auto-accept', 'ghost-id')).toThrow(
+      /Cannot resume session 'ghost-id'/,
+    )
 
     // Critical: the spawn must NOT have been called when the resume lookup fails.
     expect(mockSpawn).not.toHaveBeenCalled()

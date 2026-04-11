@@ -19,194 +19,6 @@ const feedContainer = ref<HTMLElement | null>(null)
 const isLoadingMore = ref(false)
 const expandedItems = ref<Set<string>>(new Set())
 
-// Detect options in agent text messages (patterns like "- **A —" or "- **B —")
-interface ParsedOption {
-  key: string
-  label: string
-}
-
-function parseOptions(content: string): { textBefore: string; options: ParsedOption[] } | null {
-  // Strip bold markers for pattern matching (handles **A)** X, **A) X**, etc.)
-  // Keep original content for textBefore positioning.
-  const stripped = content.replace(/\*\*/g, '')
-
-  // Helper: find the position of the first option in the ORIGINAL content
-  // by searching for the first matched key (e.g., "A)") with optional surrounding **
-  function findOriginalIndex(firstKey: string): number {
-    const escaped = firstKey.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const origMatch = content.match(new RegExp(`^(?:\\*\\*)?${escaped}`, 'm'))
-    if (origMatch?.index !== undefined) return origMatch.index
-    // Fallback: use stripped position
-    const strippedIdx = stripped.indexOf(firstKey)
-    return strippedIdx >= 0 ? strippedIdx : 0
-  }
-
-  // Pattern 1: "- A — Description" (bold already stripped)
-  const letterRegex = /^-\s*([A-Z])\s*[—–-]\s*(.+)/gm
-  const letterMatches = [...stripped.matchAll(letterRegex)]
-  if (letterMatches.length >= 2) {
-    const firstMatchIndex = findOriginalIndex(letterMatches[0][0])
-    return {
-      textBefore: content.substring(0, firstMatchIndex).trim(),
-      options: letterMatches.map((m) => ({
-        key: m[1],
-        label: `${m[1]} — ${m[2]}`,
-      })),
-    }
-  }
-
-  // Pattern 1b: "a) Description" or "A) Description" — letter-paren format (bold already stripped)
-  const letterParenRegex = /^([a-zA-Z])\)\s+(.+)/gm
-  const letterParenMatches = [...stripped.matchAll(letterParenRegex)]
-  if (letterParenMatches.length >= 2) {
-    const firstMatchIndex = findOriginalIndex(letterParenMatches[0][0].substring(0, 3))
-    return {
-      textBefore: content.substring(0, firstMatchIndex).trim(),
-      options: letterParenMatches.map((m) => ({
-        key: m[1].toUpperCase(),
-        label: m[2].trim(),
-      })),
-    }
-  }
-
-  // Pattern 1c: "Option 1 – Label" or "Option 2 — Label : Description" — plain numbered option format
-  const optionNRegex = /^Option\s+(\d+)\s*[—–-]\s*(.+)/gim
-  const optionNMatches = [...stripped.matchAll(optionNRegex)]
-  if (optionNMatches.length >= 2) {
-    const firstMatchIndex = findOriginalIndex(optionNMatches[0][0].substring(0, 10))
-    return {
-      textBefore: content.substring(0, firstMatchIndex).trim(),
-      options: optionNMatches.map((m) => ({
-        key: m[1],
-        label: m[2].trim(),
-      })),
-    }
-  }
-
-  // Pattern 1d: "1) Description" — numbered paren format
-  const numberedParenRegex = /^(\d+)\)\s+(.+)/gm
-  const numberedParenMatches = [...stripped.matchAll(numberedParenRegex)]
-  if (numberedParenMatches.length >= 2) {
-    const firstMatchIndex = findOriginalIndex(numberedParenMatches[0][0].substring(0, 3))
-    return {
-      textBefore: content.substring(0, firstMatchIndex).trim(),
-      options: numberedParenMatches.map((m) => ({
-        key: m[1],
-        label: m[2].trim(),
-      })),
-    }
-  }
-
-  // Pattern 1e: "A. Description" — letter-period format
-  const letterDotRegex = /^([a-zA-Z])\.\s+(.+)/gm
-  const letterDotMatches = [...stripped.matchAll(letterDotRegex)]
-  if (letterDotMatches.length >= 2) {
-    const firstMatchIndex = findOriginalIndex(letterDotMatches[0][0].substring(0, 3))
-    return {
-      textBefore: content.substring(0, firstMatchIndex).trim(),
-      options: letterDotMatches.map((m) => ({
-        key: m[1].toUpperCase(),
-        label: m[2].trim(),
-      })),
-    }
-  }
-
-  // Pattern 1f: "A: Description" or "A : Description" — letter-colon format
-  const letterColonRegex = /^([a-zA-Z])\s*:\s+(.+)/gm
-  const letterColonMatches = [...stripped.matchAll(letterColonRegex)]
-  if (letterColonMatches.length >= 2) {
-    const firstMatchIndex = findOriginalIndex(letterColonMatches[0][0].substring(0, 2))
-    return {
-      textBefore: content.substring(0, firstMatchIndex).trim(),
-      options: letterColonMatches.map((m) => ({
-        key: m[1].toUpperCase(),
-        label: m[2].trim(),
-      })),
-    }
-  }
-
-  // Pattern 1g: "(a) Description" or "(1) Description" — parenthesized prefix format
-  const parenPrefixRegex = /^\(([a-zA-Z0-9])\)\s+(.+)/gm
-  const parenPrefixMatches = [...stripped.matchAll(parenPrefixRegex)]
-  if (parenPrefixMatches.length >= 2) {
-    const firstMatchIndex = findOriginalIndex(parenPrefixMatches[0][0].substring(0, 4))
-    return {
-      textBefore: content.substring(0, firstMatchIndex).trim(),
-      options: parenPrefixMatches.map((m) => ({
-        key: m[1].toUpperCase(),
-        label: m[2].trim(),
-      })),
-    }
-  }
-
-  // Pattern 1h: "[A] Description" or "[1] Description" — bracketed prefix format
-  const bracketPrefixRegex = /^\[([a-zA-Z0-9])\]\s+(.+)/gm
-  const bracketPrefixMatches = [...stripped.matchAll(bracketPrefixRegex)]
-  if (bracketPrefixMatches.length >= 2) {
-    const firstMatchIndex = findOriginalIndex(bracketPrefixMatches[0][0].substring(0, 4))
-    return {
-      textBefore: content.substring(0, firstMatchIndex).trim(),
-      options: bracketPrefixMatches.map((m) => ({
-        key: m[1].toUpperCase(),
-        label: m[2].trim(),
-      })),
-    }
-  }
-
-  // Pattern 2: "1. Label — Description" or "1. Label → Description" (bold already stripped)
-  const numberedBoldRegex = /^\d+\.\s*(.+?)\s*[—–→]\s+(.+)/gm
-  const numberedBoldMatches = [...stripped.matchAll(numberedBoldRegex)]
-  if (numberedBoldMatches.length >= 2) {
-    const firstKey = numberedBoldMatches[0][0].substring(0, 3)
-    const firstMatchIndex = findOriginalIndex(firstKey)
-    return {
-      textBefore: content.substring(0, firstMatchIndex).trim(),
-      options: numberedBoldMatches.map((m, i) => ({
-        key: String(i + 1),
-        label: `${m[1]} — ${m[2]}`,
-      })),
-    }
-  }
-
-  // Pattern 3: "- **Label** — Description" — requires bold to avoid matching plain lists
-  const bulletBoldRegex = /^[-•][^\S\n]*\*\*(.+?)\*\*[^\S\n]*(?:\([^)]*\)[^\S\n]*)?[—–\-→][^\S\n]*(.+)/gm
-  const bulletBoldMatches = [...content.matchAll(bulletBoldRegex)]
-  if (bulletBoldMatches.length >= 2) {
-    const firstMatchIndex = content.indexOf(bulletBoldMatches[0][0])
-    return {
-      textBefore: content.substring(0, firstMatchIndex).trim(),
-      options: bulletBoldMatches.map((m, i) => ({
-        key: String(i + 1),
-        label: `${m[1]} — ${m[2]}`,
-      })),
-    }
-  }
-
-  // Pattern 4: "- **Label**" or "- **Label** (extra)" — requires bold to avoid matching plain lists
-  const simpleBoldBulletRegex = /^[-•][^\S\n]*\*\*(.+?)\*\*[^\S\n]*(?:\(([^)]*)\))?[^\S\n]*$/gm
-  const simpleBoldBulletMatches = [...content.matchAll(simpleBoldBulletRegex)]
-  if (simpleBoldBulletMatches.length >= 2) {
-    const firstMatchIndex = content.indexOf(simpleBoldBulletMatches[0][0])
-    return {
-      textBefore: content.substring(0, firstMatchIndex).trim(),
-      options: simpleBoldBulletMatches.map((m, i) => ({
-        key: String(i + 1),
-        label: m[2] ? `${m[1]} (${m[2]})` : m[1],
-      })),
-    }
-  }
-
-  return null
-}
-
-const parsedOptionsCache = new Map<string, ReturnType<typeof parseOptions>>()
-function getCachedOptions(itemId: string, content: string) {
-  if (!parsedOptionsCache.has(itemId)) {
-    parsedOptionsCache.set(itemId, parseOptions(content))
-  }
-  return parsedOptionsCache.get(itemId)!
-}
-
 // Cache for getAskUserQuestions — avoids double-call in v-if + v-for
 const askUserCache = new Map<string, AskUserQuestion[] | null>()
 function getCachedAskUser(itemId: string, item: ActivityItem): AskUserQuestion[] | null {
@@ -225,26 +37,6 @@ function getCachedMarkdown(id: string, content: string): string {
   return markdownCache.get(id)!
 }
 
-function shortLabel(label: string): string {
-  const sep = label.match(/\s*[—–→]\s*/)
-  return sep ? label.substring(0, sep.index) : label
-}
-
-function sendOptionChoice(key: string) {
-  const workspaceId = store.selectedWorkspaceId
-  if (!workspaceId) return
-  wsStore.sendChatMessage(workspaceId, key)
-}
-
-// Check if a text item is the latest and has options (only show buttons on the last one)
-const lastTextItemId = computed(() => {
-  const items = store.activityFeed
-  for (let i = items.length - 1; i >= 0; i--) {
-    if (items[i].type === 'text') return items[i].id
-  }
-  return null
-})
-
 // Show AskUserQuestion buttons only if the user hasn't replied yet.
 // Scan backwards: user message before finding the question → answered.
 // AskUserQuestion found first → active. Everything else is skipped.
@@ -257,6 +49,49 @@ const activeAskId = computed(() => {
   }
   return null
 })
+
+// Multi-question answer selection state: Map<itemId, Map<questionIndex, selectedOptionIndex>>
+const askSelections = ref(new Map<string, Map<number, number>>())
+
+function toggleAskSelection(itemId: string, questionIndex: number, optionIndex: number) {
+  if (!askSelections.value.has(itemId)) {
+    askSelections.value.set(itemId, new Map())
+  }
+  const selections = askSelections.value.get(itemId)!
+  if (selections.get(questionIndex) === optionIndex) {
+    selections.delete(questionIndex)
+  } else {
+    selections.set(questionIndex, optionIndex)
+  }
+}
+
+function isAskSelected(itemId: string, questionIndex: number, optionIndex: number): boolean {
+  return askSelections.value.get(itemId)?.get(questionIndex) === optionIndex
+}
+
+function hasAnySelection(itemId: string): boolean {
+  const sel = askSelections.value.get(itemId)
+  return !!sel && sel.size > 0
+}
+
+function sendAskAnswers(itemId: string, questions: AskUserQuestion[]) {
+  const workspaceId = store.selectedWorkspaceId
+  if (!workspaceId) return
+  const selections = askSelections.value.get(itemId)
+  if (!selections || selections.size === 0) return
+
+  const lines: string[] = []
+  for (const [qi, oi] of selections.entries()) {
+    const q = questions[qi]
+    if (!q) continue
+    const opt = q.options[oi]
+    if (!opt) continue
+    lines.push(`${q.question}: ${opt.label}`)
+  }
+  if (lines.length > 0) {
+    wsStore.sendChatMessage(workspaceId, lines.join('\n'))
+  }
+}
 
 // Scroll to previous user message
 const userMessageCursor = ref(-1)
@@ -297,8 +132,8 @@ watch(
   () => store.selectedWorkspaceId,
   () => {
     userMessageCursor.value = -1
-    parsedOptionsCache.clear()
     askUserCache.clear()
+    askSelections.value.clear()
     markdownCache.clear()
     lastScrollTop = 0
     isLoadingMore.value = false
@@ -329,11 +164,11 @@ watch(
   visibleItems,
   (items) => {
     const visibleIds = new Set(items.map((i) => i.id))
-    for (const key of parsedOptionsCache.keys()) {
-      if (!visibleIds.has(key)) parsedOptionsCache.delete(key)
-    }
     for (const key of askUserCache.keys()) {
       if (!visibleIds.has(key)) askUserCache.delete(key)
+    }
+    for (const key of askSelections.value.keys()) {
+      if (!visibleIds.has(key)) askSelections.value.delete(key)
     }
     for (const key of markdownCache.keys()) {
       if (!visibleIds.has(key)) markdownCache.delete(key)
@@ -510,12 +345,12 @@ function shortenFilePath(filePath: string): string {
   if (ws) {
     const worktreePrefix = `${ws.projectPath}/.worktrees/${ws.workingBranch}/`
     if (filePath.startsWith(worktreePrefix)) return filePath.slice(worktreePrefix.length)
-    if (filePath.startsWith(ws.projectPath + '/')) return filePath.slice(ws.projectPath.length + 1)
+    if (filePath.startsWith(`${ws.projectPath}/`)) return filePath.slice(ws.projectPath.length + 1)
   }
   // For any absolute path, show only the last 3 segments
   if (filePath.startsWith('/') && filePath.split('/').length > 4) {
     const parts = filePath.split('/')
-    return '…/' + parts.slice(-3).join('/')
+    return `…/${parts.slice(-3).join('/')}`
   }
   return filePath
 }
@@ -680,12 +515,6 @@ function getAskUserQuestions(item: ActivityItem): AskUserQuestion[] | null {
     }))
 }
 
-function sendQuestionAnswer(label: string) {
-  const workspaceId = store.selectedWorkspaceId
-  if (!workspaceId) return
-  wsStore.sendChatMessage(workspaceId, label)
-}
-
 function hasExpandableArgs(item: ActivityItem): boolean {
   if (!item.meta) return false
   const meta = item.meta as Record<string, unknown>
@@ -779,15 +608,29 @@ function formatSystemDetails(item: ActivityItem): string {
               v-for="(opt, oi) in q.options"
               :key="opt.label"
               no-caps
-              outline
               dense
-              color="indigo-4"
+              :outline="!isAskSelected(item.id, qi, oi)"
+              :unelevated="isAskSelected(item.id, qi, oi)"
+              :color="isAskSelected(item.id, qi, oi) ? 'indigo-6' : 'indigo-4'"
+              :text-color="isAskSelected(item.id, qi, oi) ? 'white' : undefined"
               class="af-option-btn"
-              @click="sendQuestionAnswer(`${oi + 1}. ${opt.label}`)"
+              @click="toggleAskSelection(item.id, qi, oi)"
             >
               {{ opt.label }}
             </q-btn>
           </div>
+        </div>
+        <div v-if="item.id === activeAskId" class="q-mt-sm row justify-end">
+          <q-btn
+            no-caps
+            unelevated
+            dense
+            color="indigo-6"
+            :label="$t('activityFeed.sendAnswers')"
+            icon="send"
+            :disable="!hasAnySelection(item.id)"
+            @click="sendAskAnswers(item.id, getCachedAskUser(item.id, item)!)"
+          />
         </div>
       </template>
 
@@ -885,25 +728,6 @@ function formatSystemDetails(item: ActivityItem): string {
         </div>
         <div class="af-text-content af-markdown" v-html="getCachedMarkdown(item.id, item.content)" />
         <!-- Quick-reply buttons when options detected -->
-        <div
-          v-if="getCachedOptions(item.id, item.content) && item.id === lastTextItemId && item.meta?.sender !== 'user'"
-          class="af-options q-mt-sm row wrap q-gutter-xs"
-        >
-          <q-btn
-            v-for="opt in getCachedOptions(item.id, item.content)!.options"
-            :key="opt.key"
-            no-caps
-            outline
-            dense
-            size="sm"
-            color="indigo-4"
-            class="af-option-btn q-pa-xs"
-            @click="sendOptionChoice(`${opt.key}. ${opt.label}`)"
-          >
-            <span class="text-weight-bold q-mr-xs">{{ opt.key }}.</span> {{ shortLabel(opt.label) }}
-            <q-tooltip v-if="opt.label !== shortLabel(opt.label)">{{ opt.label }}</q-tooltip>
-          </q-btn>
-        </div>
       </template>
 
       <!-- System -->

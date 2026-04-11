@@ -477,9 +477,12 @@ export function createIdleSession(workspaceId: string): AgentSession {
   const db = getDb()
   const id = nanoid()
   const now = new Date().toISOString()
-  db.prepare(
-    'INSERT INTO agent_sessions (id, workspace_id, pid, status, started_at) VALUES (?, ?, NULL, ?, ?)',
-  ).run(id, workspaceId, 'idle', now)
+  db.prepare('INSERT INTO agent_sessions (id, workspace_id, pid, status, started_at) VALUES (?, ?, NULL, ?, ?)').run(
+    id,
+    workspaceId,
+    'idle',
+    now,
+  )
   return {
     id,
     workspaceId,
@@ -495,11 +498,9 @@ export function createIdleSession(workspaceId: string): AgentSession {
 /** Rename an agent session. Returns the updated session or null if not found. */
 export function renameSession(sessionId: string, workspaceId: string, name: string): AgentSession | null {
   const db = getDb()
-  const result = db.prepare('UPDATE agent_sessions SET name = ? WHERE id = ? AND workspace_id = ?').run(
-    name,
-    sessionId,
-    workspaceId,
-  )
+  const result = db
+    .prepare('UPDATE agent_sessions SET name = ? WHERE id = ? AND workspace_id = ?')
+    .run(name, sessionId, workspaceId)
   if (result.changes === 0) return null
   const row = db.prepare('SELECT * FROM agent_sessions WHERE id = ?').get(sessionId) as AgentSessionRow | undefined
   return row ? mapSession(row) : null

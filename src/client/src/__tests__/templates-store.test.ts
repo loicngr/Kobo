@@ -76,9 +76,9 @@ describe('useTemplatesStore', () => {
       } as Response)
       const store = useTemplatesStore()
       store.templates = []
-      await expect(
-        store.createTemplate({ slug: 'review-quality', description: 'd', content: 'c' }),
-      ).rejects.toThrow(/already exists/)
+      await expect(store.createTemplate({ slug: 'review-quality', description: 'd', content: 'c' })).rejects.toThrow(
+        /already exists/,
+      )
       expect(store.templates).toEqual([])
     })
   })

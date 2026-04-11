@@ -65,10 +65,7 @@ export function createTemplate(input: { slug: string; description: string; conte
 }
 
 /** Update an existing template. Returns null if slug not found. */
-export function updateTemplate(
-  slug: string,
-  updates: { description?: string; content?: string },
-): Template | null {
+export function updateTemplate(slug: string, updates: { description?: string; content?: string }): Template | null {
   const templates = listTemplates()
   const idx = templates.findIndex((t) => t.slug === slug)
   if (idx < 0) return null

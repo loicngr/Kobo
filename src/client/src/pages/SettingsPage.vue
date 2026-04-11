@@ -2,7 +2,7 @@
 import { useQuasar } from 'quasar'
 import type { ProjectSettings } from 'src/stores/settings'
 import { useSettingsStore } from 'src/stores/settings'
-import { useTemplatesStore, type Template } from 'src/stores/templates'
+import { type Template, useTemplatesStore } from 'src/stores/templates'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -60,11 +60,19 @@ const saving = ref(false)
 const sortedTemplates = computed(() => [...templatesStore.templates].sort((a, b) => a.slug.localeCompare(b.slug)))
 
 const availableVarsDisplay = [
-  '{workspace_name}', '{working_branch}', '{source_branch}',
-  '{project_path}', '{worktree_path}',
-  '{commit_count}', '{unpushed_count}',
-  '{files_changed}', '{insertions}', '{deletions}',
-  '{pr_number}', '{pr_url}', '{pr_state}',
+  '{workspace_name}',
+  '{working_branch}',
+  '{source_branch}',
+  '{project_path}',
+  '{worktree_path}',
+  '{commit_count}',
+  '{unpushed_count}',
+  '{files_changed}',
+  '{insertions}',
+  '{deletions}',
+  '{pr_number}',
+  '{pr_url}',
+  '{pr_state}',
   '{session_name}',
 ]
 
@@ -129,7 +137,7 @@ async function saveTemplate() {
 async function confirmDeleteTemplate(template: Template) {
   $q.dialog({
     title: t('templates.deleteTemplate'),
-    message: t('templates.deleteConfirm', { slug: template.slug }) + '\n\n' + t('templates.deleteConfirmMessage'),
+    message: `${t('templates.deleteConfirm', { slug: template.slug })}\n\n${t('templates.deleteConfirmMessage')}`,
     dark: true,
     cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
     ok: { flat: true, label: t('templates.deleteTemplate'), color: 'red-5' },

@@ -1243,10 +1243,7 @@ describe('POST /api/workspaces/:id/pull', () => {
     const data = await res.json()
     expect(data.ok).toBe(true)
     expect(data.branch).toBe('feature/test')
-    expect(vi.mocked(gitOps.pullBranch)).toHaveBeenCalledWith(
-      expect.stringContaining('.worktrees'),
-      'feature/test',
-    )
+    expect(vi.mocked(gitOps.pullBranch)).toHaveBeenCalledWith(expect.stringContaining('.worktrees'), 'feature/test')
   })
 
   it('returns 404 when workspace not found', async () => {
@@ -1809,8 +1806,16 @@ describe('POST /api/workspaces/:id/sessions', () => {
   it('crée une session idle et retourne 201', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as any)
     vi.mocked(agentManager.getAgentStatus).mockReturnValue(null)
-    const fakeSession = { id: 'sess-1', workspaceId: 'ws-1', status: 'idle',
-      startedAt: new Date().toISOString(), pid: null, claudeSessionId: null, endedAt: null, name: null }
+    const fakeSession = {
+      id: 'sess-1',
+      workspaceId: 'ws-1',
+      status: 'idle',
+      startedAt: new Date().toISOString(),
+      pid: null,
+      claudeSessionId: null,
+      endedAt: null,
+      name: null,
+    }
     vi.mocked(workspaceService.createIdleSession).mockReturnValue(fakeSession as any)
 
     const res = await app.request('/api/workspaces/ws-1/sessions', { method: 'POST' })
@@ -1840,8 +1845,16 @@ describe('PATCH /api/workspaces/:id/sessions/:sessionId', () => {
 
   it('renomme la session et retourne 200', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as any)
-    const updated = { id: 'sess-1', name: 'Mon nom', workspaceId: 'ws-1', status: 'idle',
-      startedAt: new Date().toISOString(), pid: null, claudeSessionId: null, endedAt: null }
+    const updated = {
+      id: 'sess-1',
+      name: 'Mon nom',
+      workspaceId: 'ws-1',
+      status: 'idle',
+      startedAt: new Date().toISOString(),
+      pid: null,
+      claudeSessionId: null,
+      endedAt: null,
+    }
     vi.mocked(workspaceService.renameSession).mockReturnValue(updated as any)
 
     const res = await app.request('/api/workspaces/ws-1/sessions/sess-1', {
@@ -1901,7 +1914,13 @@ describe('POST /api/workspaces/:id/start avec agentSessionId', () => {
     })
 
     expect(agentManager.startAgent).toHaveBeenCalledWith(
-      'ws-1', expect.any(String), 'hello', fakeWorkspace.model, false, 'auto-accept', 'sess-idle-1',
+      'ws-1',
+      expect.any(String),
+      'hello',
+      fakeWorkspace.model,
+      false,
+      'auto-accept',
+      'sess-idle-1',
     )
   })
 
@@ -1916,7 +1935,13 @@ describe('POST /api/workspaces/:id/start avec agentSessionId', () => {
     })
 
     expect(agentManager.startAgent).toHaveBeenCalledWith(
-      'ws-1', expect.any(String), 'hello', fakeWorkspace.model, false, 'auto-accept', undefined,
+      'ws-1',
+      expect.any(String),
+      'hello',
+      fakeWorkspace.model,
+      false,
+      'auto-accept',
+      undefined,
     )
   })
 })

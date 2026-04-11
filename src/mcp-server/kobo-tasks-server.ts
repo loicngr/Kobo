@@ -357,7 +357,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (fs.existsSync(thoughtsDir)) {
         const files = fs.readdirSync(thoughtsDir).filter((f) => f.endsWith('.md'))
         for (const file of files) {
-          ticketContent += fs.readFileSync(path.join(thoughtsDir, file), 'utf-8') + '\n'
+          ticketContent += `${fs.readFileSync(path.join(thoughtsDir, file), 'utf-8')}\n`
         }
       }
       return ok({

@@ -9,8 +9,8 @@ vi.mock('../server/services/templates-service.js', () => ({
   deleteTemplate: vi.fn(),
 }))
 
-import * as templatesService from '../server/services/templates-service.js'
 import templatesRouter from '../server/routes/templates.js'
+import * as templatesService from '../server/services/templates-service.js'
 
 const app = new Hono()
 app.route('/api/templates', templatesRouter)

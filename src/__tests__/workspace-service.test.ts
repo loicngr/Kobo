@@ -404,7 +404,7 @@ describe('getActiveSession(workspaceId)', () => {
     expect(active?.id).toBe('s-running')
   })
 
-  it("retourne null si toutes les sessions sont idle", async () => {
+  it('retourne null si toutes les sessions sont idle', async () => {
     const { createWorkspace, createIdleSession, getActiveSession } = await import(
       '../server/services/workspace-service.js'
     )
@@ -747,9 +747,7 @@ describe('createIdleSession()', () => {
   })
 
   it('est visible dans listSessions()', async () => {
-    const { createWorkspace, createIdleSession, listSessions } = await import(
-      '../server/services/workspace-service.js'
-    )
+    const { createWorkspace, createIdleSession, listSessions } = await import('../server/services/workspace-service.js')
     const ws = createWorkspace({
       name: 'WS',
       projectPath: '/p',
