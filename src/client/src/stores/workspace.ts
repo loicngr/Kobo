@@ -135,6 +135,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       { inputTokens: number; outputTokens: number; costUsd: number; sessionCount: number }
     >,
     chatDraft: '',
+    queuedMessages: {} as Record<string, { content: string; sessionId?: string }>,
     gitRefreshTrigger: 0,
     gitStatsCache: {} as Record<string, GitStats>,
   }),
@@ -729,20 +730,51 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
+    queueMessage(workspaceId: string, content: string, sessionId?: string) {
+      this.queuedMessages[workspaceId] = { content, sessionId }
+    },
+
+    cancelQueuedMessage(workspaceId: string) {
+      delete this.queuedMessages[workspaceId]
+    },
+
     updateWorkspaceFromEvent(workspaceId: string, data: Partial<Workspace>) {
       const idx = this.workspaces.findIndex((w) => w.id === workspaceId)
       if (idx >= 0) {
         this.workspaces[idx] = { ...this.workspaces[idx], ...data }
       }
-      // When agent stops, mark all running subagents as done
+      // When agent stops, resolve pending messages and mark subagents as done
       if (data.status && ['completed', 'idle', 'error', 'quota'].includes(data.status)) {
+        const feed = this.activityFeeds[workspaceId]
+        if (feed) {
+          for (const item of feed) {
+            if (item.meta?.pending) {
+              item.meta.pending = false
+            }
+          }
+        }
         const subs = this.subagents[workspaceId]
         if (subs) {
-          for (const [id, sub] of Object.entries(subs)) {
+          for (const [id, sub] of Object.entries(subs) as [string, Subagent][]) {
             if (sub.status === 'running') {
               subs[id] = { ...sub, status: 'done' }
             }
           }
+        }
+        // Auto-send queued message when agent finishes successfully
+        const queued = this.queuedMessages[workspaceId]
+        if ((data.status === 'completed' || data.status === 'idle') && queued) {
+          delete this.queuedMessages[workspaceId]
+          const wsStore = useWebSocketStore()
+          wsStore.sendChatMessage(workspaceId, queued.content, queued.sessionId)
+          this.addActivityItem(workspaceId, {
+            id: `user-${Date.now()}`,
+            type: 'text',
+            content: queued.content,
+            timestamp: new Date().toISOString(),
+            sessionId: queued.sessionId,
+            meta: { sender: 'user', pending: true },
+          })
         }
       }
     },

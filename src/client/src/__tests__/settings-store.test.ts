@@ -59,6 +59,9 @@ describe('settings store', () => {
           dangerouslySkipPermissions: true,
           prPromptTemplate: '',
           gitConventions: '',
+          setupScript: '',
+          notionStatusProperty: '',
+          notionInProgressStatus: '',
           devServer: { startCommand: '', stopCommand: '' },
         },
         {
@@ -69,6 +72,9 @@ describe('settings store', () => {
           dangerouslySkipPermissions: true,
           prPromptTemplate: '',
           gitConventions: '',
+          setupScript: '',
+          notionStatusProperty: '',
+          notionInProgressStatus: '',
           devServer: { startCommand: '', stopCommand: '' },
         },
       ]

@@ -20,6 +20,15 @@ const wsStore = useWebSocketStore()
 const templatesStore = useTemplatesStore()
 const message = ref('')
 
+const BUSY_STATUSES = ['executing', 'extracting', 'brainstorming']
+
+const isAgentBusy = computed(() => {
+  const ws = store.selectedWorkspace
+  return ws ? BUSY_STATUSES.includes(ws.status) : false
+})
+
+const isQueued = computed(() => !!store.queuedMessages[props.workspaceId])
+
 // Chat input element ref (for caret position access)
 const chatInputRef = ref<InstanceType<typeof QInput> | null>(null)
 
@@ -225,6 +234,30 @@ watch(
   },
 )
 
+// When queue is consumed by auto-send, clear the textarea.
+// cancelQueue does NOT trigger this because it preserves the text.
+let cancelledManually = false
+
+function cancelQueue() {
+  cancelledManually = true
+  store.cancelQueuedMessage(props.workspaceId)
+}
+
+watch(isQueued, (queued, wasQueued) => {
+  if (wasQueued && !queued && !cancelledManually) {
+    message.value = ''
+  }
+  cancelledManually = false
+})
+
+watch(
+  () => props.workspaceId,
+  (wid) => {
+    const queued = store.queuedMessages[wid]
+    message.value = queued ? queued.content : ''
+  },
+)
+
 /**
  * Returns the slug fragment preceding the current caret position if the user
  * is currently typing a slash command. For example:
@@ -412,6 +445,13 @@ async function sendMessage() {
     message.value = ''
     return
   }
+
+  // Queue the message if the agent is busy
+  if (isAgentBusy.value) {
+    store.queueMessage(props.workspaceId, text, store.selectedSessionId ?? undefined)
+    return
+  }
+  store.cancelQueuedMessage(props.workspaceId)
 
   const imageTags = pendingImages.value
     .filter((p) => p.status === 'ready' && p.path)
@@ -637,6 +677,15 @@ function onKeydown(event: KeyboardEvent) {
       </template>
     </div>
 
+    <!-- Queued message banner -->
+    <div
+      v-if="isQueued"
+      class="queue-banner row items-center q-pa-xs q-px-sm text-caption text-amber-6"
+    >
+      <q-icon name="schedule" size="14px" color="amber-6" class="q-mr-sm" />
+      <span>{{ $t('chatInput.queueBanner') }}</span>
+    </div>
+
     <div class="row items-end q-gutter-sm">
       <q-input
         ref="chatInputRef"
@@ -645,6 +694,7 @@ function onKeydown(event: KeyboardEvent) {
         dark
         borderless
         autogrow
+        :readonly="isQueued"
         :placeholder="$t('chatInput.placeholder')"
         class="chat-input col rounded-borders"
         :disable="isDisabled"
@@ -674,6 +724,18 @@ function onKeydown(event: KeyboardEvent) {
       </q-btn>
 
       <q-btn
+        v-if="isQueued"
+        flat
+        dense
+        icon="cancel"
+        color="orange"
+        @click="cancelQueue"
+      >
+        <q-tooltip>{{ $t('chatInput.cancelQueue') }}</q-tooltip>
+      </q-btn>
+
+      <q-btn
+        v-else
         flat
         dense
         icon="send"
@@ -795,6 +857,11 @@ function onKeydown(event: KeyboardEvent) {
     font-family: 'Roboto Mono', monospace;
     font-size: 9px;
   }
+}
+
+.queue-banner {
+  background-color: #2a2a1a;
+  border-bottom: 1px solid #4a4a2a;
 }
 
 .image-tag-close {

@@ -13,6 +13,7 @@ import * as notionService from '../services/notion-service.js'
 import { renderPrTemplate } from '../services/pr-template-service.js'
 import * as settingsService from '../services/settings-service.js'
 import { runSetupScript } from '../services/setup-script-service.js'
+import * as terminalService from '../services/terminal-service.js'
 import * as wsService from '../services/websocket-service.js'
 import type { PermissionMode, WorkspaceStatus } from '../services/workspace-service.js'
 import * as workspaceService from '../services/workspace-service.js'
@@ -865,6 +866,12 @@ app.post('/:id/archive', (c) => {
       console.error(`[workspaces] stopDevServer during archive failed: ${message}`)
     }
 
+    try {
+      terminalService.destroyTerminal(id)
+    } catch {
+      // Terminal may not exist — ignore
+    }
+
     const updated = workspaceService.archiveWorkspace(id)
 
     wsService.emitEphemeral(id, 'workspace:archived', { workspace: updated })
@@ -920,6 +927,12 @@ app.delete('/:id', async (c) => {
       agentManager.stopAgent(id)
     } catch {
       // Agent may not be running — ignore
+    }
+
+    try {
+      terminalService.destroyTerminal(id)
+    } catch {
+      // Terminal may not exist — ignore
     }
 
     // Remove worktree

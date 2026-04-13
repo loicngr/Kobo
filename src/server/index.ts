@@ -4,7 +4,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
-import { WebSocketServer } from 'ws'
+import WebSocket, { WebSocketServer } from 'ws'
 import { closeDb, getDb } from './db/index.js'
 import { runMigrations } from './db/migrations.js'
 import devServerRouter from './routes/dev-server.js'
@@ -26,6 +26,7 @@ import {
 } from './services/agent-manager.js'
 import { startDevServer, stopDevServer } from './services/dev-server-service.js'
 import { startPrWatcher, stopPrWatcher } from './services/pr-watcher-service.js'
+import { createTerminal, destroyAllTerminals, getTerminal } from './services/terminal-service.js'
 import { emit, handleConnection, setMessageHandler } from './services/websocket-service.js'
 import { getActiveSession, getWorkspace, updateWorkspaceStatus } from './services/workspace-service.js'
 import { getClientSpaPath, getKoboHome, getPackageVersion } from './utils/paths.js'
@@ -134,10 +135,103 @@ const server = serve(
 
 // Create WebSocketServer attached to the HTTP server
 const wss = new WebSocketServer({ noServer: true })
+const terminalWss = new WebSocketServer({ noServer: true })
 
 // Wire WebSocket connections to websocket-service.handleConnection()
 wss.on('connection', (ws) => {
   handleConnection(ws)
+})
+
+// Wire terminal WebSocket connections
+terminalWss.on('connection', (ws: WebSocket, workspaceId: string) => {
+  let currentPty = getTerminal(workspaceId)
+  let dataDisposable: { dispose(): void } | null = null
+  let exitDisposable: { dispose(): void } | null = null
+
+  function attachListeners(ptyInstance: import('node-pty').IPty) {
+    // Dispose previous listeners to avoid stacking on reconnect
+    dataDisposable?.dispose()
+    exitDisposable?.dispose()
+
+    dataDisposable = ptyInstance.onData((output: string) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(Buffer.from(output), { binary: true })
+      }
+    })
+
+    exitDisposable = ptyInstance.onExit(({ exitCode }) => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'exited', code: exitCode }))
+        ws.close()
+      }
+    })
+  }
+
+  ws.on('close', () => {
+    dataDisposable?.dispose()
+    exitDisposable?.dispose()
+    dataDisposable = null
+    exitDisposable = null
+  })
+
+  ws.on('error', (err) => {
+    console.error(`[terminal] WebSocket error for workspace ${workspaceId}:`, err)
+  })
+
+  ws.on('message', (data: WebSocket.RawData, isBinary: boolean) => {
+    if (isBinary) {
+      if (currentPty) {
+        currentPty.write(data.toString())
+      }
+      return
+    }
+
+    let msg: { type: string; cols?: number; rows?: number }
+    try {
+      msg = JSON.parse(data.toString())
+    } catch {
+      return // Invalid JSON — ignore
+    }
+
+    if (msg.type === 'create') {
+      if (!currentPty) {
+        const workspace = getWorkspace(workspaceId)
+        if (!workspace) {
+          ws.send(JSON.stringify({ type: 'error', message: 'Workspace not found' }))
+          return
+        }
+        if (workspace.archivedAt) {
+          ws.send(JSON.stringify({ type: 'error', message: 'Workspace is archived' }))
+          return
+        }
+        const cwd = `${workspace.projectPath}/.worktrees/${workspace.workingBranch}`
+        try {
+          currentPty = createTerminal(workspaceId, cwd)
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          ws.send(JSON.stringify({ type: 'error', message }))
+          return
+        }
+      }
+
+      attachListeners(currentPty)
+      ws.send(JSON.stringify({ type: 'ready' }))
+      return
+    }
+
+    if (msg.type === 'resize' && msg.cols && msg.rows) {
+      if (currentPty) {
+        const cols = Math.max(1, Math.floor(msg.cols))
+        const rows = Math.max(1, Math.floor(msg.rows))
+        try {
+          currentPty.resize(cols, rows)
+        } catch (err) {
+          console.error(`[terminal] resize failed for workspace ${workspaceId}:`, err)
+        }
+      }
+      return
+    }
+  })
 })
 
 // Wire websocket-service message handler to agent-manager
@@ -227,6 +321,15 @@ server.on('upgrade', (request, socket, head) => {
     wss.handleUpgrade(request, socket, head, (ws) => {
       wss.emit('connection', ws, request)
     })
+  } else if (pathname.startsWith('/ws/terminal/')) {
+    const workspaceId = pathname.slice('/ws/terminal/'.length)
+    if (!workspaceId) {
+      socket.destroy()
+      return
+    }
+    terminalWss.handleUpgrade(request, socket, head, (ws) => {
+      terminalWss.emit('connection', ws, workspaceId)
+    })
   } else {
     socket.destroy()
   }
@@ -245,6 +348,14 @@ function gracefulShutdown(signal: string): void {
   wss.close(() => {
     console.log('[kobo] WebSocket server closed')
   })
+  terminalWss.close()
+
+  try {
+    destroyAllTerminals()
+    console.log('[kobo] Terminals killed')
+  } catch {
+    // Best-effort
+  }
 
   server.close(() => {
     console.log('[kobo] HTTP server closed')

@@ -13,6 +13,7 @@ const ActivityFeed = defineAsyncComponent(() =>
   ),
 )
 
+import AgentBusyBanner from 'src/components/AgentBusyBanner.vue'
 import ChatInput from 'src/components/ChatInput.vue'
 
 const $q = useQuasar()
@@ -350,6 +351,8 @@ watch(
         </div>
       </template>
     </Suspense>
+
+    <AgentBusyBanner />
 
     <!-- Chat Input — pinned at bottom -->
     <ChatInput

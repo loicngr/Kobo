@@ -9,7 +9,6 @@ import { beforeEach } from 'vitest'
 // Stub localStorage for tests that read/write it at module init time
 if (typeof localStorage === 'undefined') {
   const store: Record<string, string> = {}
-  // @ts-expect-error — happy-dom provides localStorage but this is a safety net
   globalThis.localStorage = {
     getItem: (k: string) => store[k] ?? null,
     setItem: (k: string, v: string) => {

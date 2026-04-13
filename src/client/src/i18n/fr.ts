@@ -74,10 +74,27 @@ export default {
   'activityFeed.scrollToBottom': 'Défiler vers le bas',
   'activityFeed.sendAnswers': 'Envoyer les réponses',
 
+  // Agent Busy
+  'agentBusy.banner': "L'agent est occupé",
+  'agentBusy.subagentsRunning': '1 sub-agent en cours | {n} sub-agents en cours',
+  'agentBusy.viewSubagents': 'Voir les sub-agents',
+  'agentBusy.pendingMessage': "En attente — l'agent est occupé",
+
+  // Terminal
+  'terminal.title': 'Terminal',
+  'terminal.open': 'Ouvrir le terminal',
+  'terminal.close': 'Fermer le terminal',
+  'terminal.noWorkspace': 'Sélectionnez un espace de travail',
+  'terminal.noWorktree': 'Worktree pas encore créé',
+  'terminal.error': 'Erreur du terminal',
+  'terminal.exited': 'Terminal fermé',
+
   // Chat Input
   'chatInput.placeholder': 'Message... (/ pour les skills)',
   'chatInput.skills': 'Skills',
   'chatInput.attachImage': 'Joindre une image',
+  'chatInput.queueBanner': "Message en file d'attente — sera envoyé quand l'agent aura terminé",
+  'chatInput.cancelQueue': "Annuler la file d'attente",
   'koboCommand.checkProgressDesc': "Vérifier la progression des tâches et critères d'acceptation",
   'chatInput.uploading': 'Envoi en cours...',
 

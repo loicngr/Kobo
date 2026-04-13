@@ -553,7 +553,7 @@ export const useWebSocketStore = defineStore('websocket', {
           workspaceStore.addActivityItem(wid, {
             id: msg.id ?? `setup-${Date.now()}`,
             type: 'text',
-            content: msg.payload?.text ?? '',
+            content: (msg.payload?.text as string) ?? '',
             timestamp: msg.createdAt ?? new Date().toISOString(),
             meta: { sender: 'setup' },
           })
