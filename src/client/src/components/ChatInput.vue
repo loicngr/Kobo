@@ -19,12 +19,38 @@ const store = useWorkspaceStore()
 const wsStore = useWebSocketStore()
 const templatesStore = useTemplatesStore()
 const message = ref('')
+const interrupting = ref(false)
 
-const BUSY_STATUSES = ['executing', 'extracting', 'brainstorming']
+const showInterrupt = computed(() => {
+  const ws = store.selectedWorkspace
+  return ws ? ['executing', 'extracting', 'brainstorming'].includes(ws.status) : false
+})
+
+async function handleInterrupt() {
+  if (!props.workspaceId) return
+  interrupting.value = true
+  try {
+    await store.interruptAgent(props.workspaceId)
+    $q.notify({ type: 'info', message: t('workspacePage.interrupted'), position: 'top', timeout: 3000 })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : t('workspacePage.interruptFailed')
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+  } finally {
+    interrupting.value = false
+  }
+}
+
+const hasPendingMessage = computed(() => {
+  const feed = store.activityFeeds[props.workspaceId] ?? []
+  return feed.some((item) => item.meta?.pending)
+})
 
 const isAgentBusy = computed(() => {
+  if (hasPendingMessage.value) return true
   const ws = store.selectedWorkspace
-  return ws ? BUSY_STATUSES.includes(ws.status) : false
+  if (!ws) return false
+  if (!['executing', 'extracting', 'brainstorming'].includes(ws.status)) return false
+  return store.currentSubagents.some((s) => s.status === 'running')
 })
 
 const isQueued = computed(() => !!store.queuedMessages[props.workspaceId])
@@ -686,7 +712,7 @@ function onKeydown(event: KeyboardEvent) {
       <span>{{ $t('chatInput.queueBanner') }}</span>
     </div>
 
-    <div class="row items-end q-gutter-sm">
+    <div class="row items-center q-gutter-sm">
       <q-input
         ref="chatInputRef"
         v-model="message"
@@ -746,8 +772,26 @@ function onKeydown(event: KeyboardEvent) {
         <q-tooltip>{{ $t('tooltip.sendMessage') }}</q-tooltip>
       </q-btn>
     </div>
-    <div class="chat-hint text-caption text-grey-8">
-      <kbd>Enter</kbd> {{ $t('common.send') }} <span class="q-mx-xs">&middot;</span> <kbd>Shift+Enter</kbd> {{ $t('common.newLine') }} <span class="q-mx-xs">&middot;</span> <kbd>↑↓</kbd> {{ $t('common.history') }}
+    <div class="chat-hint row items-center text-caption text-grey-8">
+      <div>
+        <kbd>Enter</kbd> {{ $t('common.send') }} <span class="q-mx-xs">&middot;</span> <kbd>Shift+Enter</kbd> {{ $t('common.newLine') }} <span class="q-mx-xs">&middot;</span> <kbd>↑↓</kbd> {{ $t('common.history') }}
+      </div>
+      <q-space />
+      <q-btn
+        v-if="showInterrupt"
+        flat
+        dense
+        no-caps
+        size="sm"
+        color="orange-4"
+        icon="pause"
+        :label="$t('workspacePage.interrupt')"
+        :loading="interrupting"
+        :disable="interrupting"
+        @click="handleInterrupt"
+      >
+        <q-tooltip>{{ $t('workspacePage.interruptTooltip') }}</q-tooltip>
+      </q-btn>
     </div>
   </div>
 </template>

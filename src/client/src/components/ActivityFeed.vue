@@ -727,9 +727,6 @@ function formatSystemDetails(item: ActivityItem): string {
           <span class="af-time">{{ formatTime(item.timestamp) }}</span>
         </div>
         <div class="af-text-content af-markdown" v-html="getCachedMarkdown(item.id, item.content)" />
-        <div v-if="item.meta?.pending" class="text-grey-7 text-caption q-mt-xs">
-          {{ $t('agentBusy.pendingMessage') }}
-        </div>
       </template>
 
       <!-- System -->

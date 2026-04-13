@@ -307,22 +307,6 @@ watch(
           dense
           no-caps
           size="sm"
-          outline
-          color="orange-4"
-          icon="pause"
-          :label="$t('workspacePage.interrupt')"
-          class="q-mr-xs"
-          :loading="interrupting"
-          :disable="interrupting || stopping"
-          @click="handleInterrupt"
-        >
-          <q-tooltip>{{ $t('workspacePage.interruptTooltip') }}</q-tooltip>
-        </q-btn>
-        <q-btn
-          v-if="['extracting', 'brainstorming', 'executing'].includes(selectedWs.status)"
-          dense
-          no-caps
-          size="sm"
           color="negative"
           icon="stop"
           :label="$t('common.stop')"
