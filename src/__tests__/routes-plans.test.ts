@@ -54,20 +54,27 @@ describe('GET /api/workspaces/:id/plans', () => {
     expect(body.plans).toEqual([])
   })
 
-  it('returns .md files from docs/plans/ and docs/superpowers/plans/', async () => {
+  it('returns .md files from docs/plans/, docs/superpowers/plans/, and docs/superpowers/specs/', async () => {
     const plansDir = path.join(worktreePath, 'docs', 'plans')
     const superDir = path.join(worktreePath, 'docs', 'superpowers', 'plans')
+    const specsDir = path.join(worktreePath, 'docs', 'superpowers', 'specs')
     fs.mkdirSync(plansDir, { recursive: true })
     fs.mkdirSync(superDir, { recursive: true })
+    fs.mkdirSync(specsDir, { recursive: true })
     fs.writeFileSync(path.join(plansDir, 'old-plan.md'), '# Old', 'utf-8')
     fs.writeFileSync(path.join(superDir, 'new-plan.md'), '# New', 'utf-8')
+    fs.writeFileSync(path.join(specsDir, 'design-doc.md'), '# Design', 'utf-8')
     fs.writeFileSync(path.join(plansDir, 'notes.txt'), 'ignore me', 'utf-8')
 
     const res = await app.request('/api/workspaces/ws-1/plans')
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body.plans.length).toBe(2)
-    expect(body.plans.map((p: { name: string }) => p.name).sort()).toEqual(['new-plan.md', 'old-plan.md'])
+    expect(body.plans.length).toBe(3)
+    expect(body.plans.map((p: { name: string }) => p.name).sort()).toEqual([
+      'design-doc.md',
+      'new-plan.md',
+      'old-plan.md',
+    ])
     for (const plan of body.plans) {
       expect(plan.path).toBeTruthy()
       expect(plan.name).toBeTruthy()
@@ -119,6 +126,17 @@ describe('GET /api/workspaces/:id/plan-file', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.content).toBe('# Feature')
+  })
+
+  it('returns file content from docs/superpowers/specs/ (design docs)', async () => {
+    const specsDir = path.join(worktreePath, 'docs', 'superpowers', 'specs')
+    fs.mkdirSync(specsDir, { recursive: true })
+    fs.writeFileSync(path.join(specsDir, 'design.md'), '# Design', 'utf-8')
+
+    const res = await app.request('/api/workspaces/ws-1/plan-file?path=docs/superpowers/specs/design.md')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.content).toBe('# Design')
   })
 
   it('returns 404 for non-existent file', async () => {

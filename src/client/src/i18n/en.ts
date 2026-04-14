@@ -386,6 +386,8 @@ export default {
   'tools.title': 'Tools',
   'tools.runSetupScript': 'Re-run setup script',
   'tools.runSetupScriptTooltip': 'Execute the project setup script in the worktree',
+  'tools.runSetupScriptConfirm': 'Re-run the setup script in this workspace? Existing artifacts may be overwritten.',
+  'tools.runSetupScriptBusy': 'Cannot re-run setup while the agent is working.',
   'tools.noSetupScript': 'No setup script configured —',
   'tools.setupScriptSuccess': 'Setup script completed successfully.',
   'tools.setupScriptFailed': 'Setup script failed.',

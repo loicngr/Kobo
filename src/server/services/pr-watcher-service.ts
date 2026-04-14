@@ -1,4 +1,6 @@
 import { getPrStatusAsync } from '../utils/git-ops.js'
+import { stopDevServer } from './dev-server-service.js'
+import { destroyTerminal } from './terminal-service.js'
 import { emitEphemeral } from './websocket-service.js'
 import { archiveWorkspace, listWorkspaces } from './workspace-service.js'
 
@@ -43,6 +45,20 @@ async function checkPrStatuses(): Promise<void> {
       // Only archive on a transition FROM OPEN — not on first sight of CLOSED/MERGED
       if (prev === 'OPEN' && (pr.state === 'MERGED' || pr.state === 'CLOSED')) {
         console.log(`[pr-watcher] PR ${pr.state.toLowerCase()} for workspace '${ws.name}' — archiving`)
+
+        // Best-effort cleanup (same as manual archive): stop dev server + terminal.
+        // Agent is already not running here (guarded above).
+        try {
+          stopDevServer(ws.id)
+        } catch (err) {
+          console.error(`[pr-watcher] stopDevServer failed for '${ws.name}':`, err instanceof Error ? err.message : err)
+        }
+        try {
+          destroyTerminal(ws.id)
+        } catch {
+          // Terminal may not exist — ignore
+        }
+
         archiveWorkspace(ws.id)
         lastKnownState.delete(ws.id)
         emitEphemeral(ws.id, 'workspace:archived', {

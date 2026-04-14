@@ -186,12 +186,32 @@ async function openInEditor(ws: Workspace) {
   }
 }
 
-async function runSetupScript(ws: Workspace) {
-  try {
-    await fetch(`/api/workspaces/${ws.id}/run-setup-script`, { method: 'POST' })
-  } catch (err) {
-    console.error('[workspace-list] run-setup-script failed:', err)
+const BUSY_STATUSES = ['executing', 'extracting', 'brainstorming']
+
+function runSetupScript(ws: Workspace) {
+  // Guard: never run while the agent is busy — would race with the agent's work.
+  if (BUSY_STATUSES.includes(ws.status)) {
+    $q.notify({
+      type: 'warning',
+      message: t('tools.runSetupScriptBusy'),
+      position: 'top',
+      timeout: 4000,
+    })
+    return
   }
+  $q.dialog({
+    title: t('tools.runSetupScript'),
+    message: t('tools.runSetupScriptConfirm'),
+    cancel: true,
+    persistent: true,
+    dark: true,
+  }).onOk(async () => {
+    try {
+      await fetch(`/api/workspaces/${ws.id}/run-setup-script`, { method: 'POST' })
+    } catch (err) {
+      console.error('[workspace-list] run-setup-script failed:', err)
+    }
+  })
 }
 
 function goToCreate() {

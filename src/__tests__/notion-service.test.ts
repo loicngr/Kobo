@@ -95,6 +95,13 @@ function makeCode(text: string, language = 'gherkin') {
   }
 }
 
+function makeBullet(text: string) {
+  return {
+    type: 'bulleted_list_item',
+    bulleted_list_item: { rich_text: [{ plain_text: text }] },
+  }
+}
+
 // ---------------------------------------------------------------------------
 // parseBlocks – tests
 // ---------------------------------------------------------------------------
@@ -189,6 +196,47 @@ describe('parseBlocks() — Gherkin (paragraphes)', () => {
     expect(gherkinFeatures[0]).toContain('Scenario: First')
     expect(gherkinFeatures[1]).toContain('Scenario: Second')
   })
+
+  it('sépare les Scénarios numérotés en paragraphes + steps en bullets (format Notion)', () => {
+    // Reproduit le format Image #57: "Scénario 1 :" en paragraphe, steps en bullets
+    const blocks = [
+      makeParagraph('Scénario 1 : Avoir avec référence facture'),
+      makeBullet('Étant donné un avoir (BT-3 = 381) créé à partir d\'une facture existante'),
+      makeBullet('Quand le document est généré'),
+      makeBullet("Alors BT-25 contient le numéro de la facture d'origine"),
+      makeParagraph('Scénario 2 : Type de facture antérieure'),
+      makeBullet("Étant donné un avoir de type 381 avec une référence antérieure"),
+      makeBullet('Quand le document est exporté'),
+      makeBullet('Alors EXT-FR-FE-02 indique le type du document référencé'),
+    ]
+    const { gherkinFeatures } = parseBlocks(blocks)
+    expect(gherkinFeatures).toHaveLength(2)
+    expect(gherkinFeatures[0]).toContain('Scénario 1 : Avoir avec référence facture')
+    expect(gherkinFeatures[0]).toContain('BT-25 contient')
+    expect(gherkinFeatures[0]).not.toContain('Scénario 2')
+    expect(gherkinFeatures[1]).toContain('Scénario 2 : Type de facture antérieure')
+    expect(gherkinFeatures[1]).toContain('EXT-FR-FE-02')
+  })
+
+  it('sépare plusieurs Scenario consécutifs sans heading entre eux', () => {
+    const blocks = [
+      makeParagraph('Scenario: First'),
+      makeParagraph('Given something'),
+      makeParagraph('Then it works'),
+      makeParagraph('Scenario: Second'),
+      makeParagraph('Given another'),
+      makeParagraph('Then it also works'),
+      makeParagraph('Scénario: Troisième'),
+      makeParagraph('Étant donné une chose'),
+      makeParagraph('Alors une autre'),
+    ]
+    const { gherkinFeatures } = parseBlocks(blocks)
+    expect(gherkinFeatures).toHaveLength(3)
+    expect(gherkinFeatures[0]).toContain('Scenario: First')
+    expect(gherkinFeatures[0]).not.toContain('Scenario: Second')
+    expect(gherkinFeatures[1]).toContain('Scenario: Second')
+    expect(gherkinFeatures[2]).toContain('Scénario: Troisième')
+  })
 })
 
 describe('parseBlocks() — Gherkin (blocs de code)', () => {
@@ -204,6 +252,38 @@ describe('parseBlocks() — Gherkin (blocs de code)', () => {
     const blocks = [makeCode('const x = 1\nconsole.log(x)', 'javascript')]
     const { gherkinFeatures } = parseBlocks(blocks)
     expect(gherkinFeatures).toHaveLength(0)
+  })
+
+  it('sépare plusieurs Scenario dans un même bloc de code', () => {
+    const gherkinText = [
+      'Scenario: Nominal — A',
+      '  Given a thing',
+      '  Then it works',
+      '',
+      'Scenario: Nominal — B',
+      '  Given another thing',
+      '  Then it also works',
+      '',
+      'Scénario: Cas FR',
+      '  Étant donné une chose',
+      '  Alors ça marche',
+    ].join('\n')
+    const blocks = [makeCode(gherkinText)]
+    const { gherkinFeatures } = parseBlocks(blocks)
+    expect(gherkinFeatures).toHaveLength(3)
+    expect(gherkinFeatures[0]).toContain('Scenario: Nominal — A')
+    expect(gherkinFeatures[0]).not.toContain('Scenario: Nominal — B')
+    expect(gherkinFeatures[1]).toContain('Scenario: Nominal — B')
+    expect(gherkinFeatures[2]).toContain('Scénario: Cas FR')
+  })
+
+  it('garde "Feature:" attaché au premier Scenario dans un bloc de code', () => {
+    const gherkinText = ['Feature: Login', 'Scenario: OK', '  Given a user', '  Then welcome'].join('\n')
+    const blocks = [makeCode(gherkinText)]
+    const { gherkinFeatures } = parseBlocks(blocks)
+    expect(gherkinFeatures).toHaveLength(1)
+    expect(gherkinFeatures[0]).toContain('Feature: Login')
+    expect(gherkinFeatures[0]).toContain('Scenario: OK')
   })
 })
 

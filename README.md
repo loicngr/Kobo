@@ -137,6 +137,23 @@ If you need to pin a specific version of the Notion MCP server, use a fork, or a
 
 Without a valid token configured, the Notion import field in the workspace creation form will return an error when you click **Refresh** or submit a Notion URL — the rest of Kōbō (workspaces, agents, tasks, Git integration) keeps working independently.
 
+## Recommended: Superpowers plugin for Claude Code
+
+For the best experience, we recommend installing the [**superpowers**](https://github.com/obra/superpowers) plugin in Claude Code. Kōbō is designed to work well with it out of the box:
+
+- **Brainstorming → spec → plan → execute** workflow — superpowers produces design specs in `docs/superpowers/specs/` and implementation plans in `docs/superpowers/plans/`; Kōbō's **Plan browser** (right-side drawer) lists both so you can review them without leaving the UI
+- **Subagent-driven development** — executes plans task-by-task via parallel subagents; Kōbō surfaces sub-agent activity in the chat feed and the *Agent busy* banner so you always know what's running
+- **Test-driven development, systematic debugging, code review** — all integrated with Kōbō's task tracking and git workflow
+
+Install inside Claude Code:
+
+```bash
+/plugin marketplace add obra/superpowers-marketplace
+/plugin install superpowers@superpowers-marketplace
+```
+
+Then start a new workspace in Kōbō — the agent will pick up the skills automatically.
+
 ## Architecture
 
 ```

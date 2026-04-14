@@ -270,6 +270,13 @@ app.post('/', async (c) => {
         md += `- Notion: ${body.notionUrl}\n`
         md += `- Retrieved: ${today}\n\n`
 
+        // Persist the user's initial instructions (typed in the "Description"
+        // field at creation time) so the agent can refer back to them later —
+        // e.g. additional Notion sub-pages, parent PRs, constraints, etc.
+        if (body.description?.trim()) {
+          md += `## User instructions\n\n${body.description.trim()}\n\n`
+        }
+
         if (notionContent.goal) {
           md += `## Goal\n\n${notionContent.goal}\n\n`
         }

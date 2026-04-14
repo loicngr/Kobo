@@ -29,6 +29,11 @@ interface JsonRpcResponse {
 const GHERKIN_PATTERN =
   /^(Scénario|Étant donné|Quand|Alors|Scenario|Given|When|Then|Feature|Fonctionnalité|And|Et|But|Mais)/i
 
+// Keywords that start a NEW scenario and must flush the current block.
+// NOTE: `Feature`/`Fonctionnalité` are top-level containers, not a new scenario,
+// so they stay attached to the first scenario rather than triggering a split.
+const SCENARIO_START_PATTERN = /^(Scénario|Scenario)/i
+
 const nextRpcId = (() => {
   let counter = 1
   return () => counter++
@@ -338,7 +343,19 @@ export function parseBlocks(blocks: NotionBlock[]): {
       }
 
       // Check if this is a Gherkin line
-      if (GHERKIN_PATTERN.test(text.trim())) {
+      const trimmed = text.trim()
+      if (GHERKIN_PATTERN.test(trimmed)) {
+        // A new "Scenario:" line starts a fresh block — flush any in-progress
+        // scenario first so multiple consecutive scenarios aren't merged.
+        // Only flush when the current block already contains a Scenario line
+        // (a leading "Feature:" alone should stay attached to the first scenario).
+        if (
+          SCENARIO_START_PATTERN.test(trimmed) &&
+          currentGherkinBlock.some((line) => SCENARIO_START_PATTERN.test(line.trim()))
+        ) {
+          gherkinFeatures.push(currentGherkinBlock.join('\n'))
+          currentGherkinBlock = []
+        }
         currentGherkinBlock.push(text)
       } else if (currentGherkinBlock.length > 0) {
         // Part of an ongoing gherkin block (continuation lines)
@@ -357,7 +374,25 @@ export function parseBlocks(blocks: NotionBlock[]): {
           gherkinFeatures.push(currentGherkinBlock.join('\n'))
           currentGherkinBlock = []
         }
-        gherkinFeatures.push(codeText)
+        // Split the code block on each "Scenario:"/"Scénario:" boundary so that
+        // multiple scenarios in a single Notion code block become separate
+        // acceptance criteria. A leading "Feature:" (if present) stays attached
+        // to the first scenario.
+        const sections: string[] = []
+        let current: string[] = []
+        for (const line of codeText.split('\n')) {
+          if (SCENARIO_START_PATTERN.test(line.trim()) && current.some((l) => SCENARIO_START_PATTERN.test(l.trim()))) {
+            sections.push(current.join('\n').trimEnd())
+            current = []
+          }
+          current.push(line)
+        }
+        if (current.length > 0) {
+          sections.push(current.join('\n').trimEnd())
+        }
+        for (const section of sections) {
+          if (section.trim()) gherkinFeatures.push(section)
+        }
       }
       insideObjectif = false
       continue

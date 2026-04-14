@@ -387,6 +387,9 @@ export default {
   'tools.title': 'Werkzeuge',
   'tools.runSetupScript': 'Setup-Skript erneut ausführen',
   'tools.runSetupScriptTooltip': 'Das Setup-Skript des Projekts im Worktree ausführen',
+  'tools.runSetupScriptConfirm':
+    'Setup-Skript in diesem Workspace erneut ausführen? Vorhandene Artefakte können überschrieben werden.',
+  'tools.runSetupScriptBusy': 'Setup kann nicht erneut ausgeführt werden, während der Agent arbeitet.',
   'tools.noSetupScript': 'Kein Setup-Skript konfiguriert —',
   'tools.setupScriptSuccess': 'Setup-Skript erfolgreich abgeschlossen.',
   'tools.setupScriptFailed': 'Setup-Skript fehlgeschlagen.',

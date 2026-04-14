@@ -6,8 +6,8 @@ import * as workspaceService from '../services/workspace-service.js'
 /** Hono sub-router for workspace plan file browsing (read-only). */
 const app = new Hono()
 
-/** Directories inside the worktree where plan files may live. */
-const PLAN_DIRS = ['docs/plans', 'docs/superpowers/plans']
+/** Directories inside the worktree where plan / design doc files may live. */
+const PLAN_DIRS = ['docs/plans', 'docs/superpowers/plans', 'docs/superpowers/specs']
 
 /** Only .md files are listed. */
 const MD_EXT = '.md'
@@ -83,7 +83,10 @@ app.get('/:id/plan-file', (c) => {
     // Security: normalize the path and verify it stays within allowed directories
     const normalized = path.normalize(filePath)
     if (normalized.includes('..') || !PLAN_DIRS.some((dir) => normalized.startsWith(dir))) {
-      return c.json({ error: 'Invalid path: must be under docs/plans/ or docs/superpowers/plans/' }, 400)
+      return c.json(
+        { error: 'Invalid path: must be under docs/plans/, docs/superpowers/plans/, or docs/superpowers/specs/' },
+        400,
+      )
     }
 
     const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)

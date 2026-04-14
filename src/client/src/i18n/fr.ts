@@ -387,6 +387,9 @@ export default {
   'tools.title': 'Outils',
   'tools.runSetupScript': 'Relancer le script de setup',
   'tools.runSetupScriptTooltip': 'Exécuter le script de setup du projet dans le worktree',
+  'tools.runSetupScriptConfirm':
+    'Relancer le script de setup dans cette tâche ? Les artefacts existants peuvent être écrasés.',
+  'tools.runSetupScriptBusy': "Impossible de relancer le setup pendant que l'agent travaille.",
   'tools.noSetupScript': 'Aucun script de setup configuré —',
   'tools.setupScriptSuccess': 'Script de setup terminé avec succès.',
   'tools.setupScriptFailed': 'Échec du script de setup.',
