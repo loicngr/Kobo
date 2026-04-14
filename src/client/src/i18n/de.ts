@@ -117,6 +117,7 @@ export default {
   'createPage.acceptanceCriteria': 'Akzeptanzkriterien ({count})',
   'createPage.addCriterion': 'Kriterium hinzufügen...',
   'createPage.projectPath': 'Projektpfad eingeben',
+  'createPage.branchType': 'Branch-Typ',
   'createPage.branch': 'Branch',
   'createPage.noBranches': 'Keine Branches gefunden',
   'createPage.enterPath': 'Projektpfad eingeben',
@@ -403,6 +404,7 @@ export default {
   'notification.agentError': '{name} — Agent-Fehler',
 
   // Context menu
+  'contextMenu.rename': 'Umbenennen',
   'contextMenu.copyPath': 'Worktree-Pfad kopieren',
   'contextMenu.openEditor': 'Im Editor öffnen',
   'contextMenu.runSetup': 'Setup-Skript ausführen',

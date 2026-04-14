@@ -873,7 +873,7 @@ describe('PATCH /api/workspaces/:id', () => {
 
     expect(res.status).toBe(400)
     const data = await res.json()
-    expect(data.error).toContain('Missing field: status, model, or permissionMode')
+    expect(data.error).toContain('Missing field: status, model, permissionMode, or name')
   })
 
   it('returns 404 for unknown workspace', async () => {

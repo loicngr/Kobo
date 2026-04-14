@@ -117,6 +117,7 @@ export default {
   'createPage.acceptanceCriteria': 'Criterios de aceptación ({count})',
   'createPage.addCriterion': 'Añadir un criterio...',
   'createPage.projectPath': 'Introduce la ruta del proyecto',
+  'createPage.branchType': 'Tipo de rama',
   'createPage.branch': 'Rama',
   'createPage.noBranches': 'No se encontraron ramas',
   'createPage.enterPath': 'Introduce la ruta del proyecto',
@@ -403,6 +404,7 @@ export default {
   'notification.agentError': '{name} — Error del agente',
 
   // Context menu
+  'contextMenu.rename': 'Renombrar',
   'contextMenu.copyPath': 'Copiar ruta del worktree',
   'contextMenu.openEditor': 'Abrir en editor',
   'contextMenu.runSetup': 'Ejecutar script de setup',

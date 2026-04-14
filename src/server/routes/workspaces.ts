@@ -60,11 +60,13 @@ app.post('/', async (c) => {
 
     // Create workspace record
     const globalSettings = settingsService.getGlobalSettings()
+    // workingBranch may be updated after Notion extraction to inject the ticket ID
+    let workingBranch = body.workingBranch
     let workspace = workspaceService.createWorkspace({
       name: body.name,
       projectPath: body.projectPath,
       sourceBranch: body.sourceBranch,
-      workingBranch: body.workingBranch,
+      workingBranch,
       notionUrl: body.notionUrl,
       notionPageId: body.notionPageId,
       model: body.model,
@@ -138,10 +140,35 @@ app.post('/', async (c) => {
       }
     }
 
+    // Inject ticket ID into the working branch.
+    // Works with or without Notion: ticket ID comes from Notion extraction first,
+    // then falls back to a TK-XXXX pattern anywhere in the workspace name.
+    // The worktree has not been created yet, so a DB update is sufficient.
+    {
+      const detectedTicketId = notionContent?.ticketId || workspace.name.match(/[A-Z]+-\d+/i)?.[0]
+      if (detectedTicketId && !workingBranch.toLowerCase().includes(detectedTicketId.toLowerCase())) {
+        const ticketPrefix = detectedTicketId.toUpperCase()
+        const slashIdx = workingBranch.indexOf('/')
+        const typePrefix = slashIdx >= 0 ? workingBranch.slice(0, slashIdx + 1) : 'feature/'
+        // Use Notion title or workspace name for the slug — both have proper accented
+        // characters that NFD normalization can transliterate (é→e, ç→c, etc.)
+        const titleSource = notionContent?.title || workspace.name
+        const titleSlug = titleSource
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-|-$/g, '')
+          .substring(0, 50)
+        workingBranch = `${typePrefix}${ticketPrefix}--${titleSlug}`
+        workspace = workspaceService.updateWorkingBranch(workspace.id, workingBranch)
+      }
+    }
+
     // Create git worktree for the working branch
     let worktreePath: string
     try {
-      worktreePath = worktreeService.createWorktree(body.projectPath, body.workingBranch, body.sourceBranch)
+      worktreePath = worktreeService.createWorktree(body.projectPath, workingBranch, body.sourceBranch)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       workspaceService.updateWorkspaceStatus(workspace.id, 'error')
@@ -204,7 +231,7 @@ app.post('/', async (c) => {
       try {
         const result = await runSetupScript(workspace.id, worktreePath, effectiveSettings.setupScript, {
           workspaceName: workspace.name,
-          branchName: body.workingBranch,
+          branchName: workingBranch,
           sourceBranch: body.sourceBranch,
           projectPath: body.projectPath,
         })
@@ -229,7 +256,7 @@ app.post('/', async (c) => {
 
         // Derive filename from Notion ticket ID, or fallback to branch/name pattern
         const notionTicketId = notionContent.ticketId
-        const fallbackMatch = `${workspace.name} ${body.workingBranch}`.match(/TK-\d+/i)
+        const fallbackMatch = `${workspace.name} ${workingBranch}`.match(/TK-\d+/i)
         const filename = notionTicketId
           ? `${notionTicketId.toUpperCase()}.md`
           : fallbackMatch
@@ -296,7 +323,7 @@ app.post('/', async (c) => {
       let brainstormPrompt = `You are working on: ${workspace.name}\n`
 
       // Include ticket ID if found so the agent uses the correct reference
-      const ticketId = notionContent?.ticketId || `${workspace.name} ${body.workingBranch}`.match(/TK-\d+/i)?.[0]
+      const ticketId = notionContent?.ticketId || `${workspace.name} ${workingBranch}`.match(/TK-\d+/i)?.[0]
       if (ticketId) {
         brainstormPrompt += `Ticket: ${ticketId.toUpperCase()}\n`
       }
@@ -309,7 +336,7 @@ app.post('/', async (c) => {
         brainstormPrompt += `\nGoal: ${notionContent.goal}\n`
       }
 
-      brainstormPrompt += `\nBranch: ${body.workingBranch}\nSource branch: ${body.sourceBranch}\nIMPORTANT: When creating a pull request, always use --base ${body.sourceBranch} to target the correct source branch.\n`
+      brainstormPrompt += `\nBranch: ${workingBranch}\nSource branch: ${body.sourceBranch}\nIMPORTANT: When creating a pull request, always use --base ${body.sourceBranch} to target the correct source branch.\n`
 
       if (notionFilePath) {
         brainstormPrompt += `\nNotion ticket: ${body.notionUrl}`
@@ -716,11 +743,16 @@ app.get('/:id', (c) => {
   }
 })
 
-// PATCH /api/workspaces/:id — update workspace fields (status, model, permissionMode)
+// PATCH /api/workspaces/:id — update workspace fields (status, model, permissionMode, name)
 app.patch('/:id', async (c) => {
   try {
     const id = c.req.param('id')
-    const body = await c.req.json<{ status?: WorkspaceStatus; model?: string; permissionMode?: PermissionMode }>()
+    const body = await c.req.json<{
+      status?: WorkspaceStatus
+      model?: string
+      permissionMode?: PermissionMode
+      name?: string
+    }>()
 
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) {
@@ -741,8 +773,11 @@ app.patch('/:id', async (c) => {
     if (body.status) {
       updated = workspaceService.updateWorkspaceStatus(id, body.status)
     }
-    if (!body.status && body.model === undefined && body.permissionMode === undefined) {
-      return c.json({ error: 'Missing field: status, model, or permissionMode' }, 400)
+    if (body.name !== undefined) {
+      updated = workspaceService.updateWorkspaceName(id, body.name)
+    }
+    if (!body.status && body.model === undefined && body.permissionMode === undefined && body.name === undefined) {
+      return c.json({ error: 'Missing field: status, model, permissionMode, or name' }, 400)
     }
 
     return c.json(updated)
@@ -751,7 +786,11 @@ app.patch('/:id', async (c) => {
     if (message.includes('not found')) {
       return c.json({ error: message }, 404)
     }
-    if (message.includes('Invalid status transition')) {
+    if (
+      message.includes('Invalid status transition') ||
+      message.includes('name cannot be empty') ||
+      message.includes('name cannot exceed')
+    ) {
       return c.json({ error: message }, 400)
     }
     return c.json({ error: message }, 500)

@@ -23,7 +23,18 @@ const useNotion = ref(false)
 const model = ref('auto')
 const projectPath = ref('')
 const branch = ref<string | null>(null)
+const branchType = ref('feature')
 const skipSetupScript = ref(false)
+
+const branchTypeOptions = [
+  { label: 'feature/', value: 'feature' },
+  { label: 'fix/', value: 'fix' },
+  { label: 'hotfix/', value: 'hotfix' },
+  { label: 'chore/', value: 'chore' },
+  { label: 'refactor/', value: 'refactor' },
+  { label: 'docs/', value: 'docs' },
+  { label: 'test/', value: 'test' },
+]
 const permissionMode = ref(settingsStore.global.defaultPermissionMode || 'plan')
 
 // State
@@ -146,9 +157,13 @@ onUnmounted(() => {
   if (pathDebounce) clearTimeout(pathDebounce)
 })
 
-// Convert text to kebab-case feature branch name
+// Convert text to kebab-case feature branch name.
+// Strips diacritics via NFD decomposition before removing non-ASCII so that
+// accented letters (é→e, è→e, ç→c, etc.) are preserved rather than dropped.
 function toKebabCase(str: string): string {
   return str
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/[^a-z0-9\s-]/g, '')
     .trim()
@@ -171,7 +186,9 @@ function getFinalName(): string {
   return 'workspace'
 }
 
-// Extract a branch-safe name from Notion URL slug (for branch naming only, not display)
+// Extract a branch-safe name from a Notion URL slug.
+// If the slug contains a ticket ID (TK-XXXX), it is placed first so the branch
+// name becomes "TK-1122--rest-of-slug", making it easy to trace in git.
 function branchNameFromNotionUrl(url: string): string {
   const lastSegment = url.split('/').pop() ?? ''
   const parts = lastSegment.split('-')
@@ -179,8 +196,22 @@ function branchNameFromNotionUrl(url: string): string {
   if (parts.length > 1 && /^[0-9a-f]{12,}$/i.test(parts[parts.length - 1])) {
     parts.pop()
   }
-  const slug = parts.join('-').toLowerCase().substring(0, 50)
-  return slug || `task-${Date.now()}`
+  const raw = parts.join('-').toLowerCase()
+
+  // Extract ticket ID (TK-XXXX) anywhere in the slug
+  const ticketMatch = raw.match(/tk-(\d+)/)
+  if (ticketMatch) {
+    const ticketId = `TK-${ticketMatch[1]}`
+    // Remove the ticket ID from the slug and clean up
+    const rest = raw
+      .replace(/tk-\d+/i, '')
+      .replace(/-+/g, '-')
+      .replace(/^-|-$/g, '')
+      .substring(0, 40)
+    return rest ? `${ticketId}--${rest}` : ticketId
+  }
+
+  return raw.substring(0, 50) || `task-${Date.now()}`
 }
 
 // Form validation
@@ -207,16 +238,20 @@ async function handleCreate() {
   try {
     const name = getFinalName()
 
-    // Generate branch name: from workspace name if provided, from Notion URL slug otherwise
+    // Generate branch name.
+    // When a Notion URL is present, always derive the slug from it so the
+    // ticket ID (TK-XXXX) appears in the branch name even if the workspace
+    // name was typed manually. Falls back to the workspace name, then a
+    // timestamp when neither source is available.
     let branchSlug: string
-    if (name !== 'workspace') {
-      branchSlug = toKebabCase(name)
-    } else if (useNotion.value && isValidNotionUrl.value) {
+    if (useNotion.value && isValidNotionUrl.value) {
       branchSlug = branchNameFromNotionUrl(notionUrl.value.trim())
+    } else if (name !== 'workspace') {
+      branchSlug = toKebabCase(name)
     } else {
       branchSlug = `task-${Date.now()}`
     }
-    const workingBranch = `feature/${branchSlug}`
+    const workingBranch = `${branchType.value}/${branchSlug}`
 
     const payload = {
       name,
@@ -558,7 +593,28 @@ async function handleCreate() {
             </template>
           </q-select>
 
-          <!-- Branch selector -->
+          <!-- Branch type selector (feature / fix / hotfix / …) -->
+          <q-select
+            v-model="branchType"
+            :options="branchTypeOptions"
+            emit-value
+            map-options
+            dense
+            borderless
+            class="bottom-select rounded-borders branch-type-select"
+            hide-dropdown-icon
+          >
+            <template #selected>
+              <span class="bottom-select-label row items-center no-wrap">
+                <q-icon name="account_tree" size="12px" color="grey-5" class="q-mr-xs" />
+                {{ branchType }}/
+                <q-icon name="expand_more" size="12px" color="grey-5" />
+              </span>
+            </template>
+            <q-tooltip>{{ $t('createPage.branchType') }}</q-tooltip>
+          </q-select>
+
+          <!-- Branch selector (source branch) -->
           <q-select
             v-model="branch"
             :options="branches"

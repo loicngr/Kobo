@@ -313,8 +313,8 @@ export const useWebSocketStore = defineStore('websocket', {
               content = handler(payload)
             } else if (typeof handler === 'string') {
               content = handler
-            } else {
-              // Unknown subtype — show summary if available, otherwise short label
+            } else if (useSettingsStore().showVerboseSystemMessages) {
+              // Unknown subtype — only show in verbose mode
               const summary = (payload.summary as string) ?? null
               if (summary) {
                 content = `[${subtype ?? 'system'}] ${summary}`

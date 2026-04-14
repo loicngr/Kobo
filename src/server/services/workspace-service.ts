@@ -221,11 +221,25 @@ export function updateWorkspaceStatus(id: string, status: WorkspaceStatus): Work
   return getWorkspace(id) as Workspace
 }
 
+const WORKSPACE_NAME_MAX_LENGTH = 200
+
 /** Update a workspace's display name. */
 export function updateWorkspaceName(id: string, name: string): Workspace {
+  // Strip control characters (incl. newlines) and collapse whitespace
+  const noControl = Array.from(name, (c) => {
+    const code = c.charCodeAt(0)
+    return code < 32 || code === 127 ? ' ' : c
+  }).join('')
+  const sanitized = noControl.replace(/\s+/g, ' ').trim()
+  if (!sanitized) {
+    throw new Error('Workspace name cannot be empty')
+  }
+  if (sanitized.length > WORKSPACE_NAME_MAX_LENGTH) {
+    throw new Error(`Workspace name cannot exceed ${WORKSPACE_NAME_MAX_LENGTH} characters`)
+  }
   const db = getDb()
   const now = new Date().toISOString()
-  const result = db.prepare('UPDATE workspaces SET name = ?, updated_at = ? WHERE id = ?').run(name, now, id)
+  const result = db.prepare('UPDATE workspaces SET name = ?, updated_at = ? WHERE id = ?').run(sanitized, now, id)
   if (result.changes === 0) {
     throw new Error(`Workspace '${id}' not found`)
   }
@@ -237,6 +251,19 @@ export function updateWorkspaceModel(id: string, model: string): Workspace {
   const db = getDb()
   const now = new Date().toISOString()
   const result = db.prepare('UPDATE workspaces SET model = ?, updated_at = ? WHERE id = ?').run(model, now, id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+  return getWorkspace(id) as Workspace
+}
+
+/** Update the working branch for a workspace (e.g. after ticket ID injection). */
+export function updateWorkingBranch(id: string, workingBranch: string): Workspace {
+  const db = getDb()
+  const now = new Date().toISOString()
+  const result = db
+    .prepare('UPDATE workspaces SET working_branch = ?, updated_at = ? WHERE id = ?')
+    .run(workingBranch, now, id)
   if (result.changes === 0) {
     throw new Error(`Workspace '${id}' not found`)
   }

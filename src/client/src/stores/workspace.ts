@@ -586,6 +586,27 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
+    async renameWorkspace(workspaceId: string, name: string) {
+      const res = await fetch(`/api/workspaces/${workspaceId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.error ?? `HTTP ${res.status}`)
+      }
+      const updated = (await res.json()) as Workspace
+      const idx = this.workspaces.findIndex((w) => w.id === workspaceId)
+      if (idx >= 0) {
+        this.workspaces[idx] = { ...this.workspaces[idx], ...updated }
+      }
+      const aidx = this.archivedWorkspaces.findIndex((w) => w.id === workspaceId)
+      if (aidx >= 0) {
+        this.archivedWorkspaces[aidx] = { ...this.archivedWorkspaces[aidx], ...updated }
+      }
+    },
+
     async renameSession(workspaceId: string, sessionId: string, name: string) {
       const res = await fetch(`/api/workspaces/${workspaceId}/sessions/${sessionId}`, {
         method: 'PATCH',

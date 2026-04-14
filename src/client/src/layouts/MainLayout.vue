@@ -27,7 +27,7 @@ const rightDrawerOpen = ref(true)
 
 const DRAWER_WIDTH_KEY = 'at-left-drawer-width'
 const savedWidth = parseInt(localStorage.getItem(DRAWER_WIDTH_KEY) ?? '260', 10)
-const leftDrawerWidth = ref(Math.min(500, Math.max(200, savedWidth)))
+const leftDrawerWidth = ref(Math.min(500, Math.max(140, savedWidth)))
 const isResizing = ref(false)
 
 function startResize(event: MouseEvent) {
@@ -35,7 +35,7 @@ function startResize(event: MouseEvent) {
   isResizing.value = true
 
   const onMouseMove = (e: MouseEvent) => {
-    const newWidth = Math.min(500, Math.max(200, e.clientX))
+    const newWidth = Math.min(500, Math.max(140, e.clientX))
     leftDrawerWidth.value = newWidth
   }
 

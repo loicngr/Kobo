@@ -135,6 +135,7 @@ watch(
     askUserCache.clear()
     askSelections.value.clear()
     markdownCache.clear()
+    diffCache.clear()
     lastScrollTop = 0
     isLoadingMore.value = false
   },
@@ -172,6 +173,9 @@ watch(
     }
     for (const key of markdownCache.keys()) {
       if (!visibleIds.has(key)) markdownCache.delete(key)
+    }
+    for (const key of diffCache.keys()) {
+      if (!visibleIds.has(key)) diffCache.delete(key)
     }
   },
   { flush: 'post' },
@@ -284,6 +288,66 @@ interface FileChangeInfo {
   replaceAll?: boolean
   additions: number
   deletions: number
+}
+
+interface DiffLine {
+  type: 'add' | 'del' | 'context'
+  content: string
+}
+
+/**
+ * Compute an inline line-by-line diff using the LCS (Longest Common
+ * Subsequence) algorithm. Shared lines are kept as context, differing
+ * lines are emitted as `del` (from a) then `add` (from b), grouped per
+ * change block.
+ */
+function computeInlineDiff(oldText: string, newText: string): DiffLine[] {
+  const a = oldText.split('\n')
+  const b = newText.split('\n')
+  const m = a.length
+  const n = b.length
+
+  // Build LCS table
+  const lcs: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0))
+  for (let i = m - 1; i >= 0; i--) {
+    for (let j = n - 1; j >= 0; j--) {
+      if (a[i] === b[j]) lcs[i][j] = lcs[i + 1][j + 1] + 1
+      else lcs[i][j] = Math.max(lcs[i + 1][j], lcs[i][j + 1])
+    }
+  }
+
+  // Walk the table to produce the diff
+  const result: DiffLine[] = []
+  let i = 0
+  let j = 0
+  while (i < m && j < n) {
+    if (a[i] === b[j]) {
+      result.push({ type: 'context', content: a[i] })
+      i++
+      j++
+    } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
+      result.push({ type: 'del', content: a[i] })
+      i++
+    } else {
+      result.push({ type: 'add', content: b[j] })
+      j++
+    }
+  }
+  while (i < m) {
+    result.push({ type: 'del', content: a[i++] })
+  }
+  while (j < n) {
+    result.push({ type: 'add', content: b[j++] })
+  }
+  return result
+}
+
+const diffCache = new Map<string, DiffLine[]>()
+function getCachedDiff(itemId: string, oldText: string, newText: string): DiffLine[] {
+  if (!diffCache.has(itemId)) {
+    diffCache.set(itemId, computeInlineDiff(oldText, newText))
+  }
+  return diffCache.get(itemId)!
 }
 
 function getFileChangeInfo(item: ActivityItem): FileChangeInfo | null {
@@ -661,15 +725,15 @@ function formatSystemDetails(item: ActivityItem): string {
           <div v-if="isExpanded(item.id)" class="af-diff-body q-mt-xs" @click.stop>
             <template v-if="getFileChangeInfo(item)!.toolName === 'Edit'">
               <div
-                v-for="(line, li) in (getFileChangeInfo(item)!.oldString ?? '').split('\n')"
-                :key="`del-${li}`"
-                class="af-diff-line af-diff-del"
-              ><span class="af-diff-sign">-</span>{{ line }}</div>
-              <div
-                v-for="(line, li) in (getFileChangeInfo(item)!.newString ?? '').split('\n')"
-                :key="`add-${li}`"
-                class="af-diff-line af-diff-add"
-              ><span class="af-diff-sign">+</span>{{ line }}</div>
+                v-for="(line, li) in getCachedDiff(item.id, getFileChangeInfo(item)!.oldString ?? '', getFileChangeInfo(item)!.newString ?? '')"
+                :key="li"
+                class="af-diff-line"
+                :class="{
+                  'af-diff-del': line.type === 'del',
+                  'af-diff-add': line.type === 'add',
+                  'af-diff-context': line.type === 'context',
+                }"
+              ><span class="af-diff-sign">{{ line.type === 'del' ? '-' : line.type === 'add' ? '+' : ' ' }}</span>{{ line.content }}</div>
             </template>
             <template v-else-if="getFileChangeInfo(item)!.toolName === 'Bash:rm'">
               <div class="af-diff-line af-diff-del"><span class="af-diff-sign">-</span>File deleted</div>
@@ -925,6 +989,10 @@ function formatSystemDetails(item: ActivityItem): string {
 .af-diff-add {
   background: rgba(63, 185, 80, 0.1);
   color: #3fb950;
+}
+
+.af-diff-context {
+  color: #8b949e;
 }
 
 // Text (agent)

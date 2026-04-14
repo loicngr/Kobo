@@ -40,17 +40,10 @@ async function handleInterrupt() {
   }
 }
 
-const hasPendingMessage = computed(() => {
-  const feed = store.activityFeeds[props.workspaceId] ?? []
-  return feed.some((item) => item.meta?.pending)
-})
-
 const isAgentBusy = computed(() => {
-  if (hasPendingMessage.value) return true
   const ws = store.selectedWorkspace
   if (!ws) return false
-  if (!['executing', 'extracting', 'brainstorming'].includes(ws.status)) return false
-  return store.currentSubagents.some((s) => s.status === 'running')
+  return ['executing', 'extracting', 'brainstorming'].includes(ws.status)
 })
 
 const isQueued = computed(() => !!store.queuedMessages[props.workspaceId])
@@ -133,6 +126,7 @@ interface PendingImage {
   uid?: string
   path?: string
   originalName: string
+  placeholder: string // the `[image: xxx]` token as it appears in the textarea
   status: 'uploading' | 'ready' | 'error'
 }
 
@@ -142,16 +136,47 @@ const isDragging = ref(false)
 
 const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
 
+function insertTextAtCaret(text: string) {
+  const el = getChatInputEl()
+  const caret = el?.selectionStart ?? message.value.length
+  const before = message.value.slice(0, caret)
+  const after = message.value.slice(caret)
+  message.value = before + text + after
+  nextTick(() => {
+    if (el) {
+      const newPos = caret + text.length
+      el.focus()
+      el.setSelectionRange(newPos, newPos)
+    }
+  })
+}
+
+function makeUniquePlaceholder(): string {
+  const base = `[image: ${t('chatInput.uploading')}]`
+  const existing = new Set(pendingImages.value.map((p) => p.placeholder))
+  if (!existing.has(base)) return base
+  // Disambiguate with a numeric suffix
+  let n = 2
+  while (existing.has(`[image: ${t('chatInput.uploading')} ${n}]`)) n++
+  return `[image: ${t('chatInput.uploading')} ${n}]`
+}
+
 async function uploadImage(file: File) {
   if (!ALLOWED_TYPES.includes(file.type)) return
 
   const tempId = crypto.randomUUID()
+  const originalName = file.name || 'pasted-image.png'
+  const placeholder = makeUniquePlaceholder()
   const pending: PendingImage = {
     tempId,
-    originalName: file.name || 'pasted-image.png',
+    originalName,
+    placeholder,
     status: 'uploading',
   }
   pendingImages.value.push(pending)
+  // Insert the readable placeholder at the caret position; it will be
+  // replaced by the real path once upload completes.
+  insertTextAtCaret(placeholder)
 
   try {
     const formData = new FormData()
@@ -173,6 +198,13 @@ async function uploadImage(file: File) {
       entry.uid = data.uid
       entry.path = data.path
       entry.status = 'ready'
+      // Replace the temporary placeholder with the real path-based one,
+      // matching the tag shown in the badge above the textarea.
+      const newPlaceholder = `[image: ${data.path}]`
+      if (newPlaceholder !== entry.placeholder) {
+        message.value = message.value.split(entry.placeholder).join(newPlaceholder)
+        entry.placeholder = newPlaceholder
+      }
     }
   } catch {
     const entry = pendingImages.value.find((p) => p.tempId === tempId)
@@ -180,16 +212,30 @@ async function uploadImage(file: File) {
   }
 }
 
-async function removeImage(tempId: string) {
-  const entry = pendingImages.value.find((p) => p.tempId === tempId)
-  if (entry?.uid) {
-    try {
-      await fetch(`/api/workspaces/${props.workspaceId}/images/${entry.uid}`, { method: 'DELETE' })
-    } catch {
-      /* best-effort */
-    }
-  }
+function deleteImageOnServer(workspaceId: string, uid: string) {
+  fetch(`/api/workspaces/${workspaceId}/images/${uid}`, { method: 'DELETE' }).catch(() => {
+    /* best-effort */
+  })
+}
+
+/**
+ * Remove a pending image. Synchronous local state mutations (list + textarea
+ * placeholder) run first; the network DELETE is fired asynchronously after so
+ * multiple concurrent calls never interleave with the local reactive updates.
+ */
+function removeImage(tempId: string) {
+  const target = pendingImages.value.find((p) => p.tempId === tempId)
+  if (!target) return
   pendingImages.value = pendingImages.value.filter((p) => p.tempId !== tempId)
+  // Remove the placeholder from the textarea (no-op if already gone)
+  {
+    const escaped = target.placeholder.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    message.value = message.value.replace(new RegExp(`${escaped}\\s?`, 'g'), '')
+  }
+  // Fire the server DELETE last, best-effort and non-blocking
+  if (target.uid) {
+    deleteImageOnServer(props.workspaceId, target.uid)
+  }
 }
 
 function onPaste(event: ClipboardEvent) {
@@ -297,7 +343,7 @@ function getSlashFragmentBeforeCaret(): string | null {
   if (!el) return null
   const caret = el.selectionStart ?? message.value.length
   const before = message.value.slice(0, caret)
-  const match = before.match(/\/([\w-]*)$/)
+  const match = before.match(/\/([\w:.-]*)$/)
   return match ? match[1] : null
 }
 
@@ -313,6 +359,18 @@ watch(message, async () => {
     selectedSkillIndex.value = 0
   } else {
     showSkills.value = false
+  }
+
+  // Detect placeholders removed by the user and delete the corresponding image.
+  // Snapshot tempIds first to avoid mutating the list while iterating.
+  const removedTempIds: string[] = []
+  for (const img of pendingImages.value) {
+    if (!message.value.includes(img.placeholder)) {
+      removedTempIds.push(img.tempId)
+    }
+  }
+  for (const tempId of removedTempIds) {
+    removeImage(tempId)
   }
 })
 
@@ -479,12 +537,16 @@ async function sendMessage() {
   }
   store.cancelQueuedMessage(props.workspaceId)
 
-  const imageTags = pendingImages.value
-    .filter((p) => p.status === 'ready' && p.path)
+  // Placeholders already contain `[image: path]` once the upload is done,
+  // so no replacement is needed. Append orphan images as a safety net.
+  let composedText = text
+  const orphanTags = pendingImages.value
+    .filter((p) => p.status === 'ready' && p.path && !composedText.includes(`[image: ${p.path}]`))
     .map((p) => `[image: ${p.path}]`)
     .join(' ')
-
-  const composedText = imageTags ? `${text} ${imageTags}`.trim() : text
+  if (orphanTags) {
+    composedText = `${composedText} ${orphanTags}`.trim()
+  }
   const sessionTag = store.selectedSessionId ?? undefined
 
   // Early guard: completed/error session without claudeSessionId can't be resumed.

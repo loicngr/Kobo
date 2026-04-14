@@ -199,8 +199,9 @@ watch(
     <!-- Header bar -->
     <div class="wp-header row items-center q-px-md q-py-sm no-wrap">
       <template v-if="selectedWs">
-        <span class="text-body1 text-weight-medium text-grey-3 ellipsis">
+        <span class="text-body1 text-weight-medium text-grey-3 ellipsis" style="max-width: 480px;">
           {{ selectedWs.name }}
+          <q-tooltip>{{ selectedWs.name }}</q-tooltip>
         </span>
         <q-badge
           :label="selectedWs.status"
