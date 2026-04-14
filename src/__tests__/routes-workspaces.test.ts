@@ -10,6 +10,7 @@ vi.mock('../server/services/workspace-service.js', () => ({
   listWorkspaces: vi.fn(),
   updateWorkspaceStatus: vi.fn(),
   updateWorkspaceName: vi.fn(),
+  updateWorkingBranch: vi.fn(),
   updateWorkspaceModel: vi.fn(),
   updateWorkspacePermissionMode: vi.fn(),
   deleteWorkspace: vi.fn(),
@@ -312,6 +313,11 @@ describe('POST /api/workspaces', () => {
       ...fakeWorkspace,
       name: 'Notion Page Title',
     })
+    vi.mocked(workspaceService.updateWorkingBranch).mockReturnValue({
+      ...fakeWorkspace,
+      name: 'Notion Page Title',
+      workingBranch: 'feature/TK-123--notion-page-title',
+    } as never)
     vi.mocked(worktreeService.createWorktree).mockReturnValue('/tmp/worktree')
     vi.mocked(workspaceService.listTasks).mockReturnValue([])
     vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
@@ -332,6 +338,7 @@ describe('POST /api/workspaces', () => {
     expect(notionService.extractNotionPage).toHaveBeenCalledWith('https://notion.so/page-123')
     expect(workspaceService.createTask).toHaveBeenCalled()
     expect(workspaceService.updateWorkspaceName).toHaveBeenCalledWith('ws-1', 'Notion Page Title')
+    expect(workspaceService.updateWorkingBranch).toHaveBeenCalledWith('ws-1', 'feature/TK-123--notion-page-title')
   })
 
   it('returns 400 when required fields are missing', async () => {
