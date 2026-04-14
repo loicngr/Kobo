@@ -201,11 +201,11 @@ describe('parseBlocks() — Gherkin (paragraphes)', () => {
     // Reproduit le format Image #57: "Scénario 1 :" en paragraphe, steps en bullets
     const blocks = [
       makeParagraph('Scénario 1 : Avoir avec référence facture'),
-      makeBullet('Étant donné un avoir (BT-3 = 381) créé à partir d\'une facture existante'),
+      makeBullet("Étant donné un avoir (BT-3 = 381) créé à partir d'une facture existante"),
       makeBullet('Quand le document est généré'),
       makeBullet("Alors BT-25 contient le numéro de la facture d'origine"),
       makeParagraph('Scénario 2 : Type de facture antérieure'),
-      makeBullet("Étant donné un avoir de type 381 avec une référence antérieure"),
+      makeBullet('Étant donné un avoir de type 381 avec une référence antérieure'),
       makeBullet('Quand le document est exporté'),
       makeBullet('Alors EXT-FR-FE-02 indique le type du document référencé'),
     ]
