@@ -97,6 +97,29 @@ export interface AgentTodo {
   activeForm?: string
 }
 
+/**
+ * Set of `task_notification` status values that mark a subagent as finished.
+ * Any other value (present or future) keeps the subagent in `running` — we
+ * never regress UI state on an unknown status.
+ */
+const TERMINAL_TASK_NOTIFICATION_STATUSES = new Set(['completed', 'stopped', 'failed', 'cancelled'])
+
+/**
+ * Returns `true` when a Claude Code system event signals the end of a subagent's work.
+ *
+ * In-flight updates (dernier outil utilisé, progression) arrive via `task_progress`
+ * and never call this function. Terminal lifecycle events arrive via
+ * `task_notification` with a status field indicating WHY the subagent ended —
+ * currently observed values: `completed`, `stopped`, `failed`. We match against
+ * a whitelist so that any unknown status (e.g. a future `progressing` variant)
+ * is treated conservatively as non-terminal.
+ */
+export function isSubagentTerminalEvent(subtype: string | undefined, status?: string | undefined): boolean {
+  if (subtype !== 'task_notification') return false
+  if (!status) return false
+  return TERMINAL_TASK_NOTIFICATION_STATUSES.has(status)
+}
+
 export interface GitStats {
   commitCount: number
   filesChanged: number

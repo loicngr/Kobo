@@ -4,7 +4,7 @@ import { notify } from 'src/utils/notifications'
 import type { DevServerStatus } from './dev-server'
 import { useDevServerStore } from './dev-server'
 import { useSettingsStore } from './settings'
-import { useWorkspaceStore } from './workspace'
+import { isSubagentTerminalEvent, useWorkspaceStore } from './workspace'
 
 const t = i18n.global.t
 
@@ -258,13 +258,15 @@ export const useWebSocketStore = defineStore('websocket', {
               break
             }
 
-            // Capture subagent state from task_started / task_progress / task_notification
+            // Capture subagent state from task_started / task_progress / task_notification.
+            // In-flight updates use task_progress; terminal lifecycle events use
+            // task_notification with an explicit status — see `isSubagentTerminalEvent`.
             if (subtype === 'task_started' || subtype === 'task_progress' || subtype === 'task_notification') {
               const toolUseId = payload.tool_use_id as string | undefined
               if (wid && toolUseId) {
                 const usage = payload.usage as Record<string, unknown> | undefined
                 const taskStatus = payload.status as string | undefined
-                const isDone = subtype === 'task_notification' && taskStatus === 'completed'
+                const isDone = isSubagentTerminalEvent(subtype, taskStatus)
                 workspaceStore.upsertSubagent(wid, {
                   toolUseId,
                   description: (payload.description as string) ?? (payload.summary as string) ?? undefined,

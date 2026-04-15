@@ -15,6 +15,7 @@ Think of it as an apprentice's hall: you hand out missions, each apprentice sets
 - **Live agent output** — stream `stdout`/`stderr` from Claude Code to the browser via WebSocket, with persisted event replay on reconnect
 - **Task & acceptance criteria tracking** — the agent reports progress through a dedicated MCP server (`kobo-tasks`) that reads and updates tasks directly from the SQLite database
 - **Notion integration** — pull workspace missions straight from Notion pages, extract markdown, and use it as the source of truth for acceptance criteria
+- **Sentry integration** — paste a Sentry issue URL to spin up a dedicated "fix workspace" with the stacktrace, tags, and offending spans written to `.ai/thoughts/SENTRY-<id>.md`; the agent is primed with a TDD fix workflow and has access to the Sentry MCP tools for deeper digging
 - **Per-workspace dev servers** — start/stop Docker or Node dev servers scoped to each branch, with log streaming
 - **Conventional-commit enforcement** — project-level git conventions are written to `.ai/.git-conventions.md` inside every workspace so Claude follows them during commits
 - **Pull request automation** — one-click `push`, `pull`, and `open-pr` endpoints integrate with the GitHub CLI, using a configurable prompt template
@@ -41,6 +42,7 @@ Think of it as an apprentice's hall: you hand out missions, each apprentice sets
 - Optional: Docker (if you configure per-workspace dev servers)
 - Optional: `gh` CLI (if you use the PR automation)
 - Optional: a Notion integration token (only if you want to import workspace missions from Notion pages — see [Notion integration](#notion-integration))
+- Optional: a Sentry auth token (only if you want to create fix workspaces from Sentry issue URLs — see [Sentry integration](#sentry-integration))
 
 ### Run via `npx` (recommended)
 
@@ -136,6 +138,51 @@ If you need to pin a specific version of the Notion MCP server, use a fork, or a
 - `NOTION_MCP_ARGS` — space-separated arguments (default: `-y @notionhq/notion-mcp-server`)
 
 Without a valid token configured, the Notion import field in the workspace creation form will return an error when you click **Refresh** or submit a Notion URL — the rest of Kōbō (workspaces, agents, tasks, Git integration) keeps working independently.
+
+## Sentry integration
+
+Kōbō can turn a Sentry issue into a dedicated "fix workspace" — you paste the issue URL at workspace creation and Kōbō extracts the stacktrace, culprit, tags, offending spans and extra context, writes them as a local markdown file inside the worktree (`.ai/thoughts/SENTRY-<id>.md`), and primes the Claude agent with a TDD fix workflow that points at that file. The agent also keeps access to the Sentry MCP tools (`search_issue_events`, `get_issue_tag_values`, `get_sentry_resource`) so it can dig deeper on its own. **This feature is opt-in and reuses the Sentry MCP configuration you already have for Claude Code** — Kōbō does not manage a Sentry token separately.
+
+Under the hood, Kōbō spawns the official [`@sentry/mcp-server`](https://www.npmjs.com/package/@sentry/mcp-server) as a child process using the exact `command`, `args`, and `env` from your `~/.claude.json`, then calls `get_sentry_resource` over stdio. No token handling inside Kōbō — if you change the token or the host in your Claude Code config, Kōbō follows automatically.
+
+### Getting a Sentry auth token
+
+1. In Sentry, go to **Settings → Developer Settings → Custom Integrations** (or **User Auth Tokens** for personal use)
+2. Create a token with at least these scopes: `project:read`, `event:read`, `org:read`
+3. Copy the token (format `sntryu_...` for user tokens)
+
+### Configuring the Sentry MCP in Claude Code
+
+The recommended setup is to register the Sentry MCP once in Claude Code — Kōbō picks it up automatically:
+
+```bash
+claude mcp add sentry -s user \
+  -e SENTRY_ACCESS_TOKEN=sntryu_your_token_here \
+  -e SENTRY_HOST=your-org.sentry.io \
+  -- npx -y @sentry/mcp-server@latest
+```
+
+For self-hosted Sentry, set `SENTRY_HOST` to your Sentry hostname (e.g. `sentry.mycompany.com`).
+
+### How Kōbō picks the entry
+
+Kōbō reads `~/.claude.json` and uses the first entry under `mcpServers` whose key contains `sentry` (case-insensitive) **and is not disabled**. This means:
+
+- A single `sentry` entry → used as-is
+- Multiple entries whose key contains `sentry` → the first matching non-disabled key wins
+- Toggle `"disabled": true` on an entry to make Kōbō skip it
+
+### Usage
+
+1. In the workspace creation form, click **Import Sentry**
+2. Paste the issue URL (e.g. `https://your-org.sentry.io/issues/112081699`)
+3. Submit — Kōbō extracts the issue, writes `.ai/thoughts/SENTRY-<numericId>.md`, creates a `Fix: <title>` task, and boots the agent with the fix workflow
+
+The Sentry issue Short-ID (e.g. `ACME-API-3` — the canonical identifier Sentry assigns to each issue) is used as the ticket prefix for the working branch (e.g. `fix/ACME-API-3--slow-db-query` or `bugfix/ACME-API-3--slow-db-query`, depending on the branch prefix you chose at creation). The Short-ID is also what Sentry recognises in commit messages like `Fixes ACME-API-3` to auto-close the issue on merge. The local copy of the issue is written to `.ai/thoughts/SENTRY-<shortId>.md` (e.g. `SENTRY-ACME-API-3.md`). When Sentry is active, the description field becomes optional — the extracted context is enough to start work.
+
+If the MCP server is slow to initialize (e.g. cold `npx` fetch, self-hosted host validation), bump the handshake timeout with `KOBO_MCP_INIT_TIMEOUT_MS` (default: `30000`).
+
+Without a valid Sentry MCP configured in `~/.claude.json`, the Sentry import field returns a clear error when you submit — the rest of Kōbō keeps working.
 
 ## Recommended: Superpowers plugin for Claude Code
 

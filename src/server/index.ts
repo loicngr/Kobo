@@ -12,6 +12,7 @@ import gitRouter from './routes/git.js'
 import imagesRouter from './routes/images.js'
 import notionRouter from './routes/notion.js'
 import plansRouter from './routes/plans.js'
+import sentryRouter from './routes/sentry.js'
 import settingsRouter from './routes/settings.js'
 import templatesRouter from './routes/templates.js'
 import workspacesRouter from './routes/workspaces.js'
@@ -64,6 +65,7 @@ app.get('/api/health', (c) => c.json({ status: 'ok', version: getPackageVersion(
 app.route('/api/workspaces', workspacesRouter)
 app.route('/api/workspaces', imagesRouter)
 app.route('/api/notion', notionRouter)
+app.route('/api/sentry', sentryRouter)
 app.route('/api/git', gitRouter)
 app.route('/api/settings', settingsRouter)
 app.route('/api/dev-server', devServerRouter)

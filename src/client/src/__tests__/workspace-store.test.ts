@@ -1,10 +1,39 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { useWorkspaceStore } from '../stores/workspace'
+import { isSubagentTerminalEvent, useWorkspaceStore } from '../stores/workspace'
 
 describe('workspace store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+  })
+
+  describe('isSubagentTerminalEvent(subtype, status)', () => {
+    it('marks task_notification with a known terminal status as done', () => {
+      // Empirically observed in Claude Code payloads:
+      expect(isSubagentTerminalEvent('task_notification', 'completed')).toBe(true)
+      expect(isSubagentTerminalEvent('task_notification', 'stopped')).toBe(true)
+      expect(isSubagentTerminalEvent('task_notification', 'failed')).toBe(true)
+      expect(isSubagentTerminalEvent('task_notification', 'cancelled')).toBe(true)
+    })
+
+    it('conservatively keeps subagent running on an unknown status', () => {
+      // If Claude Code ever emits a non-terminal task_notification
+      // (e.g. "progressing"), we must NOT mark the subagent done.
+      expect(isSubagentTerminalEvent('task_notification', 'progressing')).toBe(false)
+      expect(isSubagentTerminalEvent('task_notification', undefined)).toBe(false)
+      expect(isSubagentTerminalEvent('task_notification', '')).toBe(false)
+    })
+
+    it('never treats in-flight subtypes as terminal', () => {
+      expect(isSubagentTerminalEvent('task_started', 'completed')).toBe(false)
+      expect(isSubagentTerminalEvent('task_progress', 'completed')).toBe(false)
+    })
+
+    it('never treats unrelated subtypes as terminal', () => {
+      expect(isSubagentTerminalEvent('init', 'completed')).toBe(false)
+      expect(isSubagentTerminalEvent('hook_started', 'completed')).toBe(false)
+      expect(isSubagentTerminalEvent(undefined, 'completed')).toBe(false)
+    })
   })
 
   describe('upsertSubagent', () => {

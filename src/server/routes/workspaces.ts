@@ -11,6 +11,7 @@ import * as agentManager from '../services/agent-manager.js'
 import * as devServerService from '../services/dev-server-service.js'
 import * as notionService from '../services/notion-service.js'
 import { renderPrTemplate } from '../services/pr-template-service.js'
+import * as sentryService from '../services/sentry-service.js'
 import * as settingsService from '../services/settings-service.js'
 import { runSetupScript } from '../services/setup-script-service.js'
 import * as terminalService from '../services/terminal-service.js'
@@ -46,6 +47,7 @@ app.post('/', async (c) => {
       workingBranch: string
       notionUrl?: string
       notionPageId?: string
+      sentryUrl?: string
       model?: string
       tasks?: string[]
       acceptanceCriteria?: string[]
@@ -74,6 +76,7 @@ app.post('/', async (c) => {
     })
 
     let notionContent: notionService.NotionPageContent | null = null
+    let sentryContent: sentryService.SentryIssueContent | null = null
 
     // Extract Notion page content if a URL was provided
     if (body.notionUrl) {
@@ -85,6 +88,25 @@ app.post('/', async (c) => {
         const message = err instanceof Error ? err.message : String(err)
         console.error(`[workspaces] Failed to extract Notion page: ${message}`)
       }
+    }
+
+    // Extract Sentry issue content if a URL was provided. Done early (before
+    // worktree creation) so the issue ID can be injected into the branch name.
+    if (body.sentryUrl) {
+      workspaceService.updateWorkspaceStatus(workspace.id, 'extracting')
+
+      try {
+        sentryContent = await sentryService.extractSentryIssue(body.sentryUrl)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        console.error(`[workspaces] Failed to extract Sentry issue: ${message}`)
+      }
+    }
+
+    // Update workspace name with Sentry issue title if the user did not provide
+    // a custom name and Notion hasn't already filled it.
+    if (sentryContent?.title && !notionContent?.title && workspace.name === 'workspace') {
+      workspace = workspaceService.updateWorkspaceName(workspace.id, sentryContent.title)
     }
 
     // Create tasks from extracted Notion data
@@ -145,14 +167,17 @@ app.post('/', async (c) => {
     // then falls back to a TK-XXXX pattern anywhere in the workspace name.
     // The worktree has not been created yet, so a DB update is sufficient.
     {
-      const detectedTicketId = notionContent?.ticketId || workspace.name.match(/[A-Z]+-\d+/i)?.[0]
+      // Sentry's canonical identifier is the issue short-ID (e.g. "ACME-API-3"),
+      // which is what Sentry auto-close recognises in commit messages.
+      const detectedTicketId =
+        notionContent?.ticketId || sentryContent?.issueId || workspace.name.match(/[A-Z]+-\d+/i)?.[0]
       if (detectedTicketId && !workingBranch.toLowerCase().includes(detectedTicketId.toLowerCase())) {
         const ticketPrefix = detectedTicketId.toUpperCase()
         const slashIdx = workingBranch.indexOf('/')
         const typePrefix = slashIdx >= 0 ? workingBranch.slice(0, slashIdx + 1) : 'feature/'
-        // Use Notion title or workspace name for the slug — both have proper accented
+        // Use Notion/Sentry title or workspace name for the slug — all have proper accented
         // characters that NFD normalization can transliterate (é→e, ç→c, etc.)
-        const titleSource = notionContent?.title || workspace.name
+        const titleSource = notionContent?.title || sentryContent?.title || workspace.name
         const titleSlug = titleSource
           .normalize('NFD')
           .replace(/[\u0300-\u036f]/g, '')
@@ -302,6 +327,65 @@ app.post('/', async (c) => {
       }
     }
 
+    // --- Sentry file + task (extraction already done before worktree creation) --
+    let sentryFilePath: string | null = null
+
+    if (sentryContent) {
+      try {
+        const thoughtsDir = path.join(worktreePath, '.ai', 'thoughts')
+        fs.mkdirSync(thoughtsDir, { recursive: true })
+        // File is named SENTRY-<shortId>.md (e.g. SENTRY-ACME-API-3.md) — the
+        // Short-ID is the canonical Sentry identifier. Falls back to the numeric
+        // ID if the Short-ID could not be parsed from the MCP response.
+        const idForFile = sentryContent.issueId || sentryContent.issueNumericId
+        sentryFilePath = path.join(thoughtsDir, `SENTRY-${idForFile}.md`)
+
+        const today = new Date().toISOString().split('T')[0]
+        const tags = sentryContent.tags
+        const env = tags.environment ?? 'unknown'
+        const tagsBlock =
+          Object.entries(tags)
+            .map(([k, v]) => `- ${k}: ${v}`)
+            .join('\n') || '- (none)'
+        const spansBlock =
+          sentryContent.offendingSpans.length > 0 ? sentryContent.offendingSpans.map((s) => `- ${s}`).join('\n') : 'N/A'
+        const extra = sentryContent.extraContext || 'N/A'
+
+        const md =
+          `# Fix: ${sentryContent.title || sentryContent.issueId || sentryContent.issueNumericId}\n\n` +
+          `## Source\n` +
+          `- Sentry: ${body.sentryUrl}\n` +
+          `- Issue Short-ID: ${sentryContent.issueId} (use in commit messages for auto-close)\n` +
+          `- Issue numeric ID: ${sentryContent.issueNumericId}\n` +
+          `- Retrieved: ${today}\n\n` +
+          `## Summary\n` +
+          `- **Culprit**: ${sentryContent.culprit}\n` +
+          `- **Platform**: ${sentryContent.platform}\n` +
+          `- **Environment**: ${env}\n` +
+          `- **Occurrences**: ${sentryContent.occurrences} (first: ${sentryContent.firstSeen}, last: ${sentryContent.lastSeen})\n\n` +
+          `## Tags\n${tagsBlock}\n\n` +
+          `## Error Detail / Offending Spans\n${spansBlock}\n\n` +
+          `## Additional Context\n${extra}\n\n` +
+          `## MCP Tools for deeper analysis\n` +
+          `If you need more context, the following Sentry MCP tools are available:\n` +
+          `- \`mcp__sentry__get_sentry_resource(url, resourceType)\` — fetch the issue, breadcrumbs, replay, or trace\n` +
+          `- \`mcp__sentry__search_issue_events(organizationSlug, issueId='${sentryContent.issueId}')\` — recent events for this issue\n` +
+          `- \`mcp__sentry__get_issue_tag_values(organizationSlug, issueId='${sentryContent.issueId}', key)\` — filter by tag (environment, user, browser, …)\n`
+
+        fs.writeFileSync(sentryFilePath, md, 'utf-8')
+
+        workspaceService.createTask(workspace.id, {
+          title: `Fix: ${sentryContent.title || sentryContent.issueId || `Sentry #${sentryContent.issueNumericId}`}`,
+          isAcceptanceCriterion: false,
+          sortOrder: 9999,
+        })
+      } catch (err) {
+        console.error('[workspaces] Failed to save Sentry content:', err)
+        sentryFilePath = null
+      }
+    }
+    // ------------------------------------------------------------------------
+
     // Update Notion status if both property name and value are configured
     const notionStatusProp = effectiveSettings.notionStatusProperty
     const notionTargetStatus = effectiveSettings.notionInProgressStatus
@@ -348,6 +432,25 @@ app.post('/', async (c) => {
       if (notionFilePath) {
         brainstormPrompt += `\nNotion ticket: ${body.notionUrl}`
         brainstormPrompt += `\nLocal copy: ${notionFilePath}\n`
+      }
+
+      if (sentryFilePath && sentryContent) {
+        brainstormPrompt += `\nSentry issue: ${body.sentryUrl}`
+        brainstormPrompt += `\nIssue Short-ID: ${sentryContent.issueId} (canonical, use in commit messages for auto-close)`
+        brainstormPrompt += `\nIssue numeric ID: ${sentryContent.issueNumericId}`
+        brainstormPrompt += `\nLocal copy: ${sentryFilePath}\n`
+        brainstormPrompt +=
+          `\nFix workflow:\n` +
+          `1. Read the local Sentry file above for full context\n` +
+          `2. Locate the bug from the stacktrace / culprit\n` +
+          `3. Write a failing test that reproduces the bug (TDD)\n` +
+          `4. Implement the minimal fix\n` +
+          `5. Confirm the test passes, run related tests\n` +
+          `6. Commit referencing the Sentry Short-ID (e.g. "fix(scope): description (${sentryContent.issueId})") — Sentry auto-closes the issue when the commit is merged\n` +
+          `\nIf you need more context, Sentry MCP tools are available:\n` +
+          `- mcp__sentry__get_sentry_resource(url, resourceType) — fetch the issue, breadcrumbs, replay or trace\n` +
+          `- mcp__sentry__search_issue_events(organizationSlug, issueId='${sentryContent.issueId}') — recent events\n` +
+          `- mcp__sentry__get_issue_tag_values(organizationSlug, issueId='${sentryContent.issueId}', key) — filter by tag\n`
       }
 
       if (todos.length > 0) {

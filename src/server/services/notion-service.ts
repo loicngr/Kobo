@@ -1,6 +1,11 @@
-import { type ChildProcess, spawn } from 'node:child_process'
-import { readFileSync } from 'node:fs'
-import { getPackageVersion } from '../utils/paths.js'
+import type { ChildProcess } from 'node:child_process'
+import {
+  callMcpTool,
+  initializeMcp,
+  readClaudeMcpEntry,
+  spawnMcpProcess,
+  unwrapMcpResult,
+} from '../utils/mcp-client.js'
 
 /** A to-do item extracted from a Notion page. */
 export interface NotionTodo {
@@ -18,13 +23,6 @@ export interface NotionPageContent {
   gherkinFeatures: string[]
 }
 
-interface JsonRpcResponse {
-  jsonrpc: string
-  id: number
-  result?: unknown
-  error?: { code: number; message: string; data?: unknown }
-}
-
 // Gherkin keywords (French and English)
 const GHERKIN_PATTERN =
   /^(Scénario|Étant donné|Quand|Alors|Scenario|Given|When|Then|Feature|Fonctionnalité|And|Et|But|Mais)/i
@@ -33,11 +31,6 @@ const GHERKIN_PATTERN =
 // NOTE: `Feature`/`Fonctionnalité` are top-level containers, not a new scenario,
 // so they stay attached to the first scenario rather than triggering a split.
 const SCENARIO_START_PATTERN = /^(Scénario|Scenario)/i
-
-const nextRpcId = (() => {
-  let counter = 1
-  return () => counter++
-})()
 
 /**
  * Parse a Notion URL and extract the page_id in UUID format (with dashes).
@@ -66,214 +59,40 @@ export function parseNotionUrl(url: string): string {
   return `${raw.slice(0, 8)}-${raw.slice(8, 12)}-${raw.slice(12, 16)}-${raw.slice(16, 20)}-${raw.slice(20)}`
 }
 
-/** Send a JSON-RPC request to the MCP process and read the response (30s timeout). */
-export async function callMcpTool(mcpProcess: ChildProcess, toolName: string, args: object): Promise<unknown> {
-  const id = nextRpcId()
-  const request = JSON.stringify({
-    jsonrpc: '2.0',
-    id,
-    method: 'tools/call',
-    params: {
-      name: toolName,
-      arguments: args,
-    },
-  })
-
-  return new Promise((resolve, reject) => {
-    if (!mcpProcess.stdin || !mcpProcess.stdout) {
-      reject(new Error('MCP process stdin/stdout not available'))
-      return
-    }
-
-    let buffer = ''
-
-    const timeout = setTimeout(() => {
-      mcpProcess.stdout?.removeListener('data', onData)
-      mcpProcess.stdout?.removeListener('error', onError)
-      mcpProcess.kill()
-      reject(new Error(`callMcpTool('${toolName}') timed out after 30s`))
-    }, 30_000)
-
-    const onData = (chunk: Buffer | string) => {
-      buffer += chunk.toString()
-
-      // Try to parse complete JSON lines
-      const lines = buffer.split('\n')
-      // Keep the last (potentially incomplete) line in the buffer
-      buffer = lines.pop() ?? ''
-
-      for (const line of lines) {
-        const trimmed = line.trim()
-        if (!trimmed) continue
-
-        try {
-          const parsed = JSON.parse(trimmed) as JsonRpcResponse
-          if (parsed.id === id) {
-            clearTimeout(timeout)
-            mcpProcess.stdout?.removeListener('data', onData)
-            mcpProcess.stdout?.removeListener('error', onError)
-
-            if (parsed.error) {
-              reject(new Error(`MCP tool '${toolName}' error: ${parsed.error.message} (code: ${parsed.error.code})`))
-            } else {
-              resolve(parsed.result)
-            }
-          }
-        } catch {
-          // Ignore JSON parse errors for partial lines
-        }
-      }
-    }
-
-    const onError = (err: Error) => {
-      clearTimeout(timeout)
-      mcpProcess.stdout?.removeListener('data', onData)
-      reject(err)
-    }
-
-    mcpProcess.stdout.on('data', onData)
-    mcpProcess.stdout.once('error', onError)
-
-    mcpProcess.stdin.write(`${request}\n`)
-  })
-}
-
 /**
- * Read the Notion token from Claude Code's config file as a fallback.
+ * Read the Notion token from the user's Claude Code config as a fallback.
+ * Picks the first enabled `mcpServers` entry named `notion` (disabled entries
+ * are skipped). Returns an empty string when none is found.
  */
 function readNotionTokenFromClaudeConfig(): string {
-  try {
-    const homedir = process.env.HOME ?? process.env.USERPROFILE ?? ''
-    const configPath = `${homedir}/.claude.json`
-    const raw = readFileSync(configPath, 'utf-8')
-    const config = JSON.parse(raw) as Record<string, unknown>
-    const mcpServers = config.mcpServers as Record<string, { env?: Record<string, string> }> | undefined
-    const notionServer = mcpServers?.notion
-    return notionServer?.env?.NOTION_TOKEN ?? notionServer?.env?.NOTION_API_TOKEN ?? ''
-  } catch {
-    return ''
-  }
+  const match = readClaudeMcpEntry((k) => k === 'notion')
+  if (!match) return ''
+  const env = match.entry.env ?? {}
+  return env.NOTION_TOKEN ?? env.NOTION_API_TOKEN ?? ''
 }
 
-function spawnMcpProcess(): ChildProcess {
+function buildNotionMcpConfig(): { command: string; args: string[]; env: Record<string, string> } {
   const notionToken = process.env.NOTION_API_TOKEN ?? process.env.NOTION_TOKEN ?? readNotionTokenFromClaudeConfig()
 
-  const mcpCommand = process.env.NOTION_MCP_COMMAND ?? 'npx'
-  const mcpArgs = process.env.NOTION_MCP_ARGS
+  const command = process.env.NOTION_MCP_COMMAND ?? 'npx'
+  const args = process.env.NOTION_MCP_ARGS
     ? process.env.NOTION_MCP_ARGS.split(' ')
     : ['-y', '@notionhq/notion-mcp-server']
 
-  const mcpProcess = spawn(mcpCommand, mcpArgs, {
-    stdio: ['pipe', 'pipe', 'pipe'],
-    env: {
-      ...process.env,
-      OPENAPI_MCP_HEADERS: JSON.stringify({
-        Authorization: `Bearer ${notionToken}`,
-        'Notion-Version': '2022-06-28',
-      }),
-    },
-  })
-
-  mcpProcess.stderr?.on('data', (data: Buffer) => {
-    // Silently consume stderr to avoid cluttering logs
-    const text = data.toString()
-    if (process.env.DEBUG_NOTION_MCP) {
-      console.error('[notion-mcp stderr]', text)
-    }
-  })
-
-  return mcpProcess
-}
-
-/** Initialize the MCP server by sending an initialize handshake (10s timeout). */
-async function initializeMcp(mcpProcess: ChildProcess): Promise<void> {
-  const id = nextRpcId()
-  const request = JSON.stringify({
-    jsonrpc: '2.0',
-    id,
-    method: 'initialize',
-    params: {
-      protocolVersion: '2024-11-05',
-      capabilities: {},
-      clientInfo: { name: 'kobo', version: getPackageVersion() },
-    },
-  })
-
-  await new Promise<void>((resolve, reject) => {
-    if (!mcpProcess.stdin || !mcpProcess.stdout) {
-      reject(new Error('MCP process not ready'))
-      return
-    }
-
-    let buffer = ''
-
-    const timeout = setTimeout(() => {
-      mcpProcess.stdout?.removeListener('data', onData)
-      mcpProcess.kill()
-      reject(new Error('initializeMcp timed out after 10s'))
-    }, 10_000)
-
-    const onData = (chunk: Buffer | string) => {
-      buffer += chunk.toString()
-      const lines = buffer.split('\n')
-      buffer = lines.pop() ?? ''
-
-      for (const line of lines) {
-        const trimmed = line.trim()
-        if (!trimmed) continue
-        try {
-          const parsed = JSON.parse(trimmed) as JsonRpcResponse
-          if (parsed.id === id) {
-            clearTimeout(timeout)
-            mcpProcess.stdout?.removeListener('data', onData)
-
-            const initialized = JSON.stringify({
-              jsonrpc: '2.0',
-              method: 'notifications/initialized',
-            })
-            mcpProcess.stdin?.write(`${initialized}\n`)
-
-            resolve()
-          }
-        } catch {
-          // ignore
-        }
-      }
-    }
-
-    const onError = (err: Error) => {
-      clearTimeout(timeout)
-      mcpProcess.stdout?.removeListener('data', onData)
-      reject(err)
-    }
-
-    mcpProcess.stdout.on('data', onData)
-    mcpProcess.stdout.once('error', onError)
-
-    mcpProcess.stdin.write(`${request}\n`)
-  })
-}
-
-/**
- * Unwrap MCP tool response.
- * MCP returns { content: [{ type: "text", text: "..." }] }
- * where text is a JSON-stringified API response.
- */
-function unwrapMcpResult(result: unknown): unknown {
-  if (result && typeof result === 'object') {
-    const obj = result as Record<string, unknown>
-    if (Array.isArray(obj.content)) {
-      const first = obj.content[0] as { type?: string; text?: string } | undefined
-      if (first?.type === 'text' && first.text) {
-        try {
-          return JSON.parse(first.text)
-        } catch {
-          return first.text
-        }
-      }
-    }
+  const env: Record<string, string> = {
+    ...(process.env as Record<string, string>),
+    OPENAPI_MCP_HEADERS: JSON.stringify({
+      Authorization: `Bearer ${notionToken}`,
+      'Notion-Version': '2022-06-28',
+    }),
   }
-  return result
+
+  return { command, args, env }
+}
+
+function spawnNotionMcp(): ChildProcess {
+  const { command, args, env } = buildNotionMcpConfig()
+  return spawnMcpProcess(command, args, env)
 }
 
 function extractTextFromRichText(richText: unknown[]): string {
@@ -418,7 +237,7 @@ export function parseBlocks(blocks: NotionBlock[]): {
 export async function extractNotionPage(notionUrl: string): Promise<NotionPageContent> {
   const pageId = parseNotionUrl(notionUrl)
 
-  const mcpProcess = spawnMcpProcess()
+  const mcpProcess = spawnNotionMcp()
 
   // Give the process a moment to start
   await new Promise<void>((resolve, reject) => {
@@ -491,7 +310,7 @@ export async function extractNotionPage(notionUrl: string): Promise<NotionPageCo
 /** Update a status property on a Notion page. Best-effort, does not throw. */
 export async function updateNotionStatus(notionUrl: string, propertyName: string, statusValue: string): Promise<void> {
   const pageId = parseNotionUrl(notionUrl)
-  const mcpProcess = spawnMcpProcess()
+  const mcpProcess = spawnNotionMcp()
 
   try {
     await new Promise<void>((resolve, reject) => {

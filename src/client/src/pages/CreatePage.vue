@@ -90,6 +90,15 @@ function toggleNotion() {
   if (!useNotion.value) notionUrl.value = ''
 }
 
+const useSentry = ref(false)
+const sentryUrl = ref('')
+const isValidSentryUrl = computed(() => /\/issues\/\d+/.test(sentryUrl.value.trim()))
+
+function toggleSentry() {
+  useSentry.value = !useSentry.value
+  if (!useSentry.value) sentryUrl.value = ''
+}
+
 // Fetch branches when project path changes
 async function fetchBranches(path: string) {
   if (!path.trim()) {
@@ -217,8 +226,12 @@ function branchNameFromNotionUrl(url: string): string {
 // Form validation
 function validate(): string | null {
   if (useNotion.value && !isValidNotionUrl.value) return t('createPage.validationNotionUrl')
-  if (!useNotion.value && !description.value.trim()) return t('createPage.validationDescription')
-  if (!useNotion.value && (!getFinalName() || getFinalName() === 'workspace')) {
+  if (useSentry.value && !isValidSentryUrl.value) return t('createPage.sentryValidation')
+  // Description is optional when Notion or Sentry provides the workspace context
+  if (!useNotion.value && !useSentry.value && !description.value.trim()) {
+    return t('createPage.validationDescription')
+  }
+  if (!useNotion.value && !useSentry.value && (!getFinalName() || getFinalName() === 'workspace')) {
     if (!workspaceName.value.trim() && !description.value.trim()) return t('createPage.validationName')
   }
   if (!projectPath.value.trim()) return t('createPage.validationPath')
@@ -260,6 +273,7 @@ async function handleCreate() {
       workingBranch,
       model: model.value,
       ...(useNotion.value && isValidNotionUrl.value ? { notionUrl: notionUrl.value.trim() } : {}),
+      ...(useSentry.value && isValidSentryUrl.value ? { sentryUrl: sentryUrl.value.trim() } : {}),
       ...(showManualSections.value && manualTasks.value.length > 0 ? { tasks: manualTasks.value } : {}),
       ...(showManualSections.value && manualCriteria.value.length > 0
         ? { acceptanceCriteria: manualCriteria.value }
@@ -316,6 +330,18 @@ async function handleCreate() {
             <q-icon name="description" size="14px" class="q-mr-xs" />
             {{ useNotion ? $t('createPage.notionEnabled') : $t('createPage.importNotion') }}
           </q-btn>
+          <q-btn
+            flat
+            dense
+            no-caps
+            size="sm"
+            :color="useSentry ? 'red-4' : 'grey-5'"
+            class="sentry-toggle-btn text-caption rounded-borders q-ml-sm"
+            @click="toggleSentry"
+          >
+            <q-icon name="bug_report" size="14px" class="q-mr-xs" />
+            {{ useSentry ? $t('createPage.sentryEnabled') : $t('createPage.importSentry') }}
+          </q-btn>
         </div>
 
         <q-separator color="grey-9" />
@@ -345,6 +371,32 @@ async function handleCreate() {
         </transition>
 
         <q-separator v-if="useNotion" color="grey-9" />
+
+        <!-- Sentry URL input (when toggled) -->
+        <transition name="slide">
+          <div v-if="useSentry" class="sentry-url-wrap">
+            <q-input
+              v-model="sentryUrl"
+              borderless
+              dense
+              :placeholder="$t('createPage.sentryPlaceholder')"
+              class="sentry-url-input"
+              input-class="sentry-url-input-inner"
+            >
+              <template #prepend>
+                <q-icon name="link" size="16px" :color="isValidSentryUrl ? 'red-4' : 'grey-6'" />
+              </template>
+            </q-input>
+            <div v-if="sentryUrl.trim() && !isValidSentryUrl" class="sentry-error text-caption q-px-md q-pb-xs text-red-5">
+              {{ $t('createPage.sentryValidation') }}
+            </div>
+            <div v-if="isValidSentryUrl" class="sentry-valid text-caption q-px-md q-pb-xs text-red-4">
+              {{ $t('createPage.sentryAutoExtract') }}
+            </div>
+          </div>
+        </transition>
+
+        <q-separator v-if="useSentry" color="grey-9" />
 
         <!-- Workspace name -->
         <div class="card-name-wrap">
@@ -785,6 +837,44 @@ async function handleCreate() {
 }
 
 .notion-valid {
+  padding-bottom: 6px;
+}
+
+.sentry-toggle-btn {
+  padding: 2px 10px;
+  background: #333;
+}
+
+.sentry-url-wrap {
+  background: #1e1e3a;
+  padding: 8px 0 0;
+}
+
+.sentry-url-input {
+  padding: 0 12px;
+
+  :deep(.q-field__control) {
+    padding: 0;
+    height: 36px;
+    min-height: 36px;
+  }
+
+  :deep(input) {
+    font-size: 13px;
+    color: #d0d0d0;
+
+    &::placeholder {
+      color: #555;
+      font-size: 12px;
+    }
+  }
+}
+
+.sentry-error {
+  padding-bottom: 6px;
+}
+
+.sentry-valid {
   padding-bottom: 6px;
 }
 
