@@ -43,6 +43,7 @@ describe('paths — package root resolution', () => {
 
 describe('paths — Kōbō home resolution', () => {
   const originalKoboHome = process.env.KOBO_HOME
+  const originalEnforceLocalHome = process.env.KOBO_ENFORCE_LOCAL_HOME
   const originalXdgConfigHome = process.env.XDG_CONFIG_HOME
 
   afterEach(() => {
@@ -56,24 +57,46 @@ describe('paths — Kōbō home resolution', () => {
     } else {
       process.env.XDG_CONFIG_HOME = originalXdgConfigHome
     }
+    if (originalEnforceLocalHome === undefined) {
+      delete process.env.KOBO_ENFORCE_LOCAL_HOME
+    } else {
+      process.env.KOBO_ENFORCE_LOCAL_HOME = originalEnforceLocalHome
+    }
   })
 
   it('KOBO_HOME env var overrides everything else', () => {
+    delete process.env.KOBO_ENFORCE_LOCAL_HOME
     process.env.KOBO_HOME = '/tmp/custom-kobo-home'
     delete process.env.XDG_CONFIG_HOME
     expect(getKoboHome()).toBe('/tmp/custom-kobo-home')
   })
 
   it('falls back to XDG_CONFIG_HOME/kobo when set', () => {
+    delete process.env.KOBO_ENFORCE_LOCAL_HOME
     delete process.env.KOBO_HOME
     process.env.XDG_CONFIG_HOME = '/tmp/xdg-config'
     expect(getKoboHome()).toBe(path.join('/tmp/xdg-config', 'kobo'))
   })
 
   it('falls back to ~/.config/kobo when neither env var is set', () => {
+    delete process.env.KOBO_ENFORCE_LOCAL_HOME
     delete process.env.KOBO_HOME
     delete process.env.XDG_CONFIG_HOME
     expect(getKoboHome()).toBe(path.join(os.homedir(), '.config', 'kobo'))
+  })
+
+  it('forces local KOBO_HOME when KOBO_ENFORCE_LOCAL_HOME=1 and KOBO_HOME is set', () => {
+    process.env.KOBO_ENFORCE_LOCAL_HOME = '1'
+    process.env.KOBO_HOME = './data'
+    process.env.XDG_CONFIG_HOME = '/tmp/xdg-config'
+    expect(getKoboHome()).toBe(path.resolve('./data'))
+  })
+
+  it('forces packageRoot/data when KOBO_ENFORCE_LOCAL_HOME=1 and KOBO_HOME is unset', () => {
+    process.env.KOBO_ENFORCE_LOCAL_HOME = '1'
+    delete process.env.KOBO_HOME
+    process.env.XDG_CONFIG_HOME = '/tmp/xdg-config'
+    expect(getKoboHome()).toBe(getPackageAssetPath('data'))
   })
 
   it('getDbPath joins Kōbō home with kobo.db', () => {

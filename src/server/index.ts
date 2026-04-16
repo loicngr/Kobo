@@ -266,6 +266,7 @@ setMessageHandler((type, payload) => {
             true,
             workspace.permissionMode,
             p.sessionId,
+            workspace.reasoningEffort,
           )
           updateWorkspaceStatus(p.workspaceId, 'executing')
         }
@@ -284,7 +285,16 @@ setMessageHandler((type, payload) => {
       }
       const worktreePath = `${workspace.projectPath}/.worktrees/${workspace.workingBranch}`
       const prompt = p.prompt ?? 'Continue the previous task where you left off.'
-      startAgent(p.workspaceId, worktreePath, prompt, workspace.model, false, workspace.permissionMode)
+      startAgent(
+        p.workspaceId,
+        worktreePath,
+        prompt,
+        workspace.model,
+        false,
+        workspace.permissionMode,
+        undefined,
+        workspace.reasoningEffort,
+      )
     } catch (err) {
       console.error('[ws] Failed to start agent:', err)
     }

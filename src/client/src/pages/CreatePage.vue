@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
+import { MODEL_OPTION_DEFS } from 'src/constants/models'
 import { useSettingsStore } from 'src/stores/settings'
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
@@ -21,6 +22,7 @@ const description = ref('')
 const notionUrl = ref('')
 const useNotion = ref(false)
 const model = ref('auto')
+const reasoningEffort = ref('auto')
 const projectPath = ref('')
 const branch = ref<string | null>(null)
 const branchType = ref('feature')
@@ -44,10 +46,29 @@ const submitting = ref(false)
 
 // Model options — Claude Code Max
 const modelOptions = computed(() => [
-  { label: t('model.auto'), value: 'auto', description: 'Claude picks the optimal model' },
-  { label: t('model.opus'), value: 'claude-opus-4-6', description: 'Most powerful' },
-  { label: t('model.sonnet'), value: 'claude-sonnet-4-6', description: 'Balanced' },
-  { label: t('model.haiku'), value: 'claude-haiku-4-5-20251001', description: 'Fastest' },
+  ...MODEL_OPTION_DEFS.map((option) => ({
+    label: t(option.i18nLabelKey),
+    value: option.value,
+    description: t(option.i18nDescriptionKey),
+  })),
+])
+
+function formatReasoningLabel(label: string): string {
+  const separatorIndex = label.indexOf(':')
+  if (separatorIndex >= 0) return label.slice(separatorIndex + 1).trim()
+  return label
+}
+
+const reasoningOptions = computed(() => [
+  { label: formatReasoningLabel(t('reasoning.auto')), value: 'auto', description: t('reasoning.autoDescription') },
+  { label: formatReasoningLabel(t('reasoning.low')), value: 'low', description: t('reasoning.lowDescription') },
+  {
+    label: formatReasoningLabel(t('reasoning.medium')),
+    value: 'medium',
+    description: t('reasoning.mediumDescription'),
+  },
+  { label: formatReasoningLabel(t('reasoning.high')), value: 'high', description: t('reasoning.highDescription') },
+  { label: formatReasoningLabel(t('reasoning.max')), value: 'max', description: t('reasoning.maxDescription') },
 ])
 
 // Validate Notion URL
@@ -272,6 +293,7 @@ async function handleCreate() {
       sourceBranch: branch.value as string,
       workingBranch,
       model: model.value,
+      reasoningEffort: reasoningEffort.value,
       ...(useNotion.value && isValidNotionUrl.value ? { notionUrl: notionUrl.value.trim() } : {}),
       ...(useSentry.value && isValidSentryUrl.value ? { sentryUrl: sentryUrl.value.trim() } : {}),
       ...(showManualSections.value && manualTasks.value.length > 0 ? { tasks: manualTasks.value } : {}),
@@ -566,6 +588,36 @@ async function handleCreate() {
             </template>
             <template #option="{ opt, itemProps }">
               <q-item v-bind="itemProps" class="model-option">
+                <q-item-section>
+                  <q-item-label class="text-white">{{ opt.label }}</q-item-label>
+                  <q-item-label caption class="text-grey-5">{{ opt.description }}</q-item-label>
+                </q-item-section>
+              </q-item>
+            </template>
+          </q-select>
+
+          <!-- Reasoning effort selector -->
+          <q-select
+            v-model="reasoningEffort"
+            :options="reasoningOptions"
+            dense
+            borderless
+            class="bottom-select rounded-borders"
+            hide-dropdown-icon
+            emit-value
+            map-options
+            option-value="value"
+            option-label="label"
+          >
+            <template #selected>
+              <span class="bottom-select-label row items-center no-wrap">
+                <q-icon name="psychology" size="12px" color="grey-5" class="q-mr-xs" />
+                {{ reasoningOptions.find(r => r.value === reasoningEffort)?.label ?? reasoningEffort }}
+                <q-icon name="expand_more" size="12px" color="grey-5" />
+              </span>
+            </template>
+            <template #option="{ opt, itemProps }">
+              <q-item v-bind="itemProps">
                 <q-item-section>
                   <q-item-label class="text-white">{{ opt.label }}</q-item-label>
                   <q-item-label caption class="text-grey-5">{{ opt.description }}</q-item-label>

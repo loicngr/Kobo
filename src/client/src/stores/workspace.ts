@@ -11,6 +11,7 @@ export interface Workspace {
   notionUrl: string | null
   notionPageId: string | null
   model: string
+  reasoningEffort: string
   permissionMode: string
   devServerStatus: string
   hasUnread: boolean
@@ -57,6 +58,7 @@ export interface CreateWorkspaceInput {
   workingBranch: string
   notionUrl?: string
   model?: string
+  reasoningEffort?: string
   tasks?: string[]
   acceptanceCriteria?: string[]
 }
@@ -95,6 +97,19 @@ export interface AgentTodo {
   content: string
   status: string
   activeForm?: string
+}
+
+export interface RateLimitUsageBucket {
+  id: string
+  label?: string
+  usedPct: number
+  resetAt?: string
+  details?: string
+}
+
+export interface RateLimitUsageSnapshot {
+  updatedAt: string
+  buckets: RateLimitUsageBucket[]
 }
 
 /**
@@ -157,6 +172,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       string,
       { inputTokens: number; outputTokens: number; costUsd: number; sessionCount: number }
     >,
+    rateLimitUsage: {} as Record<string, RateLimitUsageSnapshot | undefined>,
     chatDraft: '',
     queuedMessages: {} as Record<string, { content: string; sessionId?: string }>,
     gitRefreshTrigger: 0,
@@ -339,6 +355,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         delete this.subagents[id]
         delete this.agentTodos[id]
         delete this.usageStats[id]
+        delete this.rateLimitUsage[id]
         if (this.selectedWorkspaceId === id) {
           this.selectedWorkspaceId = null
           this.tasks = []
@@ -362,6 +379,23 @@ export const useWorkspaceStore = defineStore('workspace', {
         if (idx >= 0) this.workspaces[idx] = updated
       } catch (err) {
         console.error('[workspace store] updateModel failed:', err)
+        throw err
+      }
+    },
+
+    async updateReasoningEffort(id: string, reasoningEffort: string) {
+      try {
+        const res = await fetch(`/api/workspaces/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ reasoningEffort }),
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const updated = (await res.json()) as Workspace
+        const idx = this.workspaces.findIndex((w) => w.id === id)
+        if (idx >= 0) this.workspaces[idx] = updated
+      } catch (err) {
+        console.error('[workspace store] updateReasoningEffort failed:', err)
         throw err
       }
     },
@@ -728,6 +762,10 @@ export const useWorkspaceStore = defineStore('workspace', {
       s.outputTokens += data.outputTokens ?? 0
       s.costUsd += data.costUsd ?? 0
       s.sessionCount++
+    },
+
+    setRateLimitUsage(workspaceId: string, snapshot: RateLimitUsageSnapshot) {
+      this.rateLimitUsage[workspaceId] = snapshot
     },
 
     triggerGitRefresh() {

@@ -75,6 +75,7 @@ const stats = computed(() => {
 
   // Usage (tokens / cost)
   const usage = store.usageStats[wid] ?? { inputTokens: 0, outputTokens: 0, costUsd: 0, sessionCount: 0 }
+  const rateLimitUsage = store.rateLimitUsage[wid]
 
   // Model & branch
   const model = ws?.model ?? 'auto'
@@ -106,6 +107,7 @@ const stats = computed(() => {
     branch,
     status,
     usage,
+    rateLimitUsage,
   }
 })
 
@@ -135,6 +137,16 @@ function formatTime(d: Date): string {
 
 function formatDateTime(d: Date): string {
   return `${formatDate(d)} ${formatTime(d)}`
+}
+
+function formatUsageBucketLabel(label: string | undefined, idx: number): string {
+  if (!label) return t('stats.usageBucket', { n: idx + 1 })
+  return label.replace(/[_-]+/g, ' ')
+}
+
+function toPercent(value: number, total: number): number {
+  if (total <= 0) return 0
+  return Math.max(0, Math.min(100, (value / total) * 100))
 }
 </script>
 
@@ -239,13 +251,33 @@ function formatDateTime(d: Date): string {
       <div v-if="stats.usage.inputTokens > 0 || stats.usage.outputTokens > 0">
         <q-separator dark class="q-my-sm" />
         <div class="stat-group-label q-mb-xs">{{ $t('stats.usage') }}</div>
+        <div class="usage-breakdown q-mb-sm">
+          <div
+            class="usage-breakdown-input"
+            :style="{ width: `${toPercent(stats.usage.inputTokens, stats.usage.inputTokens + stats.usage.outputTokens)}%` }"
+          />
+          <div
+            class="usage-breakdown-output"
+            :style="{ width: `${toPercent(stats.usage.outputTokens, stats.usage.inputTokens + stats.usage.outputTokens)}%` }"
+          />
+        </div>
         <div class="stat-row">
           <span class="stat-label">{{ $t('stats.inputTokens') }}</span>
-          <span class="stat-value">{{ formatTokens(stats.usage.inputTokens) }}</span>
+          <span class="stat-value">
+            {{ formatTokens(stats.usage.inputTokens) }}
+            <span class="stat-value-muted">
+              ({{ toPercent(stats.usage.inputTokens, stats.usage.inputTokens + stats.usage.outputTokens).toFixed(0) }}%)
+            </span>
+          </span>
         </div>
         <div class="stat-row">
           <span class="stat-label">{{ $t('stats.outputTokens') }}</span>
-          <span class="stat-value">{{ formatTokens(stats.usage.outputTokens) }}</span>
+          <span class="stat-value">
+            {{ formatTokens(stats.usage.outputTokens) }}
+            <span class="stat-value-muted">
+              ({{ toPercent(stats.usage.outputTokens, stats.usage.inputTokens + stats.usage.outputTokens).toFixed(0) }}%)
+            </span>
+          </span>
         </div>
         <div class="stat-row">
           <span class="stat-label">{{ $t('stats.totalTokens') }}</span>
@@ -254,6 +286,32 @@ function formatDateTime(d: Date): string {
         <div v-if="stats.usage.costUsd > 0" class="stat-row">
           <span class="stat-label">{{ $t('stats.cost') }}</span>
           <span class="stat-value">${{ stats.usage.costUsd.toFixed(4) }}</span>
+        </div>
+      </div>
+
+      <div v-if="stats.rateLimitUsage?.buckets?.length">
+        <q-separator dark class="q-my-sm" />
+        <div class="stat-group-label q-mb-xs">{{ $t('stats.usageLimits') }}</div>
+        <div
+          v-for="(bucket, idx) in stats.rateLimitUsage.buckets"
+          :key="bucket.id"
+          class="q-mb-sm"
+        >
+          <div class="stat-row q-mb-xxs">
+            <span class="stat-label">{{ formatUsageBucketLabel(bucket.label, idx) }}</span>
+            <span class="stat-value">{{ bucket.usedPct.toFixed(0) }}% {{ $t('stats.used') }}</span>
+          </div>
+          <q-linear-progress
+            :value="bucket.usedPct / 100"
+            color="indigo-4"
+            track-color="grey-9"
+            style="height: 6px; border-radius: 999px;"
+          />
+          <div v-if="bucket.details || bucket.resetAt" class="stat-subtext q-mt-xxs">
+            <span v-if="bucket.details">{{ bucket.details }}</span>
+            <span v-if="bucket.details && bucket.resetAt"> · </span>
+            <span v-if="bucket.resetAt">{{ $t('stats.resetsAt', { value: bucket.resetAt }) }}</span>
+          </div>
         </div>
       </div>
 
@@ -338,6 +396,37 @@ function formatDateTime(d: Date): string {
   color: #ddd;
   font-weight: 500;
   font-family: 'Roboto Mono', monospace;
+}
+
+.stat-value-muted {
+  color: #999;
+  font-size: 11px;
+  margin-left: 4px;
+}
+
+.stat-subtext {
+  color: #8a8aa8;
+  font-size: 11px;
+}
+
+.usage-breakdown {
+  display: flex;
+  width: 100%;
+  height: 8px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: #2a2a4f;
+  border: 1px solid #3b3b61;
+}
+
+.usage-breakdown-input {
+  height: 100%;
+  background: linear-gradient(90deg, #6d76ff 0%, #8f96ff 100%);
+}
+
+.usage-breakdown-output {
+  height: 100%;
+  background: linear-gradient(90deg, #7f6bff 0%, #a598ff 100%);
 }
 
 .stat-value-ellipsis {

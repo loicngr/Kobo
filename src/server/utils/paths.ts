@@ -31,8 +31,16 @@ export function getPackageAssetPath(...parts: string[]): string {
  *
  * Dev workflow: `npm run dev` sets KOBO_HOME=./data so local development uses
  * the repo-relative data/ directory and never touches the user's real home.
+ * For stricter isolation, set KOBO_ENFORCE_LOCAL_HOME=1 to force local writes
+ * to either KOBO_HOME (if provided) or <packageRoot>/data.
  */
 export function getKoboHome(): string {
+  if (process.env.KOBO_ENFORCE_LOCAL_HOME === '1') {
+    if (process.env.KOBO_HOME) {
+      return path.resolve(process.env.KOBO_HOME)
+    }
+    return getPackageAssetPath('data')
+  }
   if (process.env.KOBO_HOME) {
     return path.resolve(process.env.KOBO_HOME)
   }

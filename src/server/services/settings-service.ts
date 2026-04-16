@@ -198,6 +198,7 @@ export interface EffectiveSettings {
 }
 
 let settingsFilePath = getSettingsPath()
+let settingsBackupSequence = 0
 
 /** Override the settings file path (used by tests). */
 export function _setSettingsPath(p: string): void {
@@ -309,11 +310,24 @@ function readSettings(): Settings {
   return migrated
 }
 
-function writeSettings(settings: Settings): void {
+function createSettingsBackupIfPresent(): void {
+  if (!fs.existsSync(settingsFilePath)) return
+
+  const dir = path.dirname(settingsFilePath)
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  settingsBackupSequence += 1
+  const backupPath = path.join(dir, `settings.json.backup-${stamp}-${settingsBackupSequence}`)
+  fs.copyFileSync(settingsFilePath, backupPath)
+}
+
+function writeSettings(settings: Settings, options?: { backup?: boolean }): void {
   const tmpPath = `${settingsFilePath}.tmp`
   const dir = path.dirname(settingsFilePath)
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true })
+  }
+  if (options?.backup) {
+    createSettingsBackupIfPresent()
   }
   fs.writeFileSync(tmpPath, JSON.stringify(settings, null, 2), 'utf-8')
   fs.renameSync(tmpPath, settingsFilePath)
@@ -386,7 +400,7 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
   ]
   const filtered = pickKnownKeys<GlobalSettings>(data as Record<string, unknown>, allowedGlobalKeys)
   settings.global = { ...settings.global, ...filtered }
-  writeSettings(settings)
+  writeSettings(settings, { backup: true })
   return settings.global
 }
 
@@ -439,7 +453,7 @@ export function upsertProject(projectPath: string, data: Partial<Omit<ProjectSet
     settings.projects.push(newProject)
   }
 
-  writeSettings(settings)
+  writeSettings(settings, { backup: true })
   return settings.projects.find((p) => p.path === projectPath) as ProjectSettings
 }
 
@@ -447,7 +461,7 @@ export function upsertProject(projectPath: string, data: Partial<Omit<ProjectSet
 export function deleteProject(projectPath: string): void {
   const settings = readSettings()
   settings.projects = settings.projects.filter((p) => p.path !== projectPath)
-  writeSettings(settings)
+  writeSettings(settings, { backup: true })
 }
 
 /** List all configured projects. */

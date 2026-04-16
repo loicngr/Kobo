@@ -161,6 +161,7 @@ export function startAgent(
   resume = false,
   permissionMode: 'auto-accept' | 'plan' = 'auto-accept',
   existingSessionId?: string,
+  reasoningEffort?: string,
 ): AgentInstance {
   // Check if agent already running for this workspace
   if (agents.has(workspaceId)) {
@@ -186,6 +187,9 @@ export function startAgent(
   }
   if (model && model !== 'auto') {
     args.push('--model', model)
+  }
+  if (reasoningEffort && reasoningEffort !== 'auto') {
+    args.push('--effort', reasoningEffort)
   }
   if (resume) {
     // Prefer resuming the specific session requested by the caller (existingSessionId).

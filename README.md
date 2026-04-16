@@ -69,7 +69,7 @@ npm install
 npm run dev:all
 ```
 
-This starts the Hono backend on port `3000` (via `tsx watch`, with `KOBO_HOME=./data` so dev uses the repo-local data directory and never touches your real `~/.config/kobo/`) and the Quasar dev server on port `8080` concurrently. Open <http://localhost:8080> in your browser.
+This starts the Hono backend on port `3300` (via `tsx watch`, with `KOBO_HOME=./data` so dev uses the repo-local data directory and never touches your real `~/.config/kobo/`) and the Quasar dev server on port `8080` concurrently. Open <http://localhost:8080> in your browser.
 
 You can run a production-installed Kōbō (`npx @loicngr/kobo`) alongside a dev server without any conflict — they use different data directories by design.
 

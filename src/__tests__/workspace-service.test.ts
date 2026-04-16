@@ -57,6 +57,7 @@ describe('createWorkspace()', () => {
     expect(ws.notionUrl).toBeNull()
     expect(ws.notionPageId).toBeNull()
     expect(ws.model).toBe('claude-opus-4-6')
+    expect(ws.reasoningEffort).toBe('auto')
     expect(ws.createdAt).toBeTruthy()
     expect(ws.updatedAt).toBeTruthy()
   })
@@ -70,9 +71,10 @@ describe('createWorkspace()', () => {
       workingBranch: 'feat/x',
     })
     expect(ws.model).toBe('claude-opus-4-6')
+    expect(ws.reasoningEffort).toBe('auto')
   })
 
-  it('accepte les champs optionnels notionUrl, notionPageId, model', async () => {
+  it('accepte les champs optionnels notionUrl, notionPageId, model, reasoningEffort', async () => {
     const { createWorkspace } = await import('../server/services/workspace-service.js')
     const ws = createWorkspace({
       name: 'Notion WS',
@@ -82,10 +84,12 @@ describe('createWorkspace()', () => {
       notionUrl: 'https://www.notion.so/page-abc',
       notionPageId: 'abc123',
       model: 'claude-sonnet-4-6',
+      reasoningEffort: 'high',
     })
     expect(ws.notionUrl).toBe('https://www.notion.so/page-abc')
     expect(ws.notionPageId).toBe('abc123')
     expect(ws.model).toBe('claude-sonnet-4-6')
+    expect(ws.reasoningEffort).toBe('high')
   })
 
   it('génère un ID unique pour chaque workspace', async () => {
@@ -460,6 +464,22 @@ describe('updateWorkspaceModel() throws when workspace not found', () => {
   it("lève une erreur si le workspace n'existe pas", async () => {
     const { updateWorkspaceModel } = await import('../server/services/workspace-service.js')
     expect(() => updateWorkspaceModel('nonexistent', 'claude-sonnet-4-20250514')).toThrow(/not found/)
+  })
+})
+
+describe('updateWorkspaceReasoningEffort() throws when workspace not found', () => {
+  it("lève une erreur si le workspace n'existe pas", async () => {
+    const { updateWorkspaceReasoningEffort } = await import('../server/services/workspace-service.js')
+    expect(() => updateWorkspaceReasoningEffort('nonexistent', 'high')).toThrow(/not found/)
+  })
+})
+
+describe('updateWorkspaceReasoningEffort()', () => {
+  it('met à jour le niveau de raisonnement', async () => {
+    const { createWorkspace, updateWorkspaceReasoningEffort } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'Reasoning', projectPath: '/p', sourceBranch: 'main', workingBranch: 'b' })
+    const updated = updateWorkspaceReasoningEffort(ws.id, 'max')
+    expect(updated.reasoningEffort).toBe('max')
   })
 })
 

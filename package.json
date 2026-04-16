@@ -47,8 +47,8 @@
     "node": ">=20"
   },
   "scripts": {
-    "dev": "KOBO_HOME=./data tsx watch src/server/index.ts",
-    "dev:client": "cd src/client && npx quasar dev",
+    "dev": "KOBO_ENFORCE_LOCAL_HOME=1 KOBO_HOME=./data PORT=3300 tsx watch src/server/index.ts",
+    "dev:client": "cd src/client && KOBO_BACKEND_PORT=3300 npx quasar dev",
     "dev:all": "concurrently \"npm run dev\" \"npm run dev:client\"",
     "build:client": "cd src/client && npx quasar build",
     "build:server": "npx tsc && chmod +x dist/server/index.js",

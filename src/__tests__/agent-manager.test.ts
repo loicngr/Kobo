@@ -173,6 +173,44 @@ describe('startAgent()', () => {
     expect(() => startAgent('ws-dup', '/tmp', 'prompt2')).toThrow(/already running/)
   })
 
+  it('ajoute --effort quand un niveau explicite est fourni', async () => {
+    const mockProc = createMockProcess()
+    mockSpawn.mockReturnValue(mockProc)
+
+    const { startAgent } = await import('../server/services/agent-manager.js')
+
+    startAgent(
+      'ws-reasoning',
+      '/tmp/project',
+      'Think deeply',
+      'claude-sonnet-4-6',
+      false,
+      'auto-accept',
+      undefined,
+      'high',
+    )
+
+    expect(mockSpawn).toHaveBeenCalledWith(
+      'claude',
+      expect.arrayContaining(['--model', 'claude-sonnet-4-6', '--effort', 'high']),
+      { cwd: '/tmp/project', stdio: ['pipe', 'pipe', 'pipe'] },
+    )
+  })
+
+  it('passe le modèle 1m tel quel au format CLI', async () => {
+    const mockProc = createMockProcess()
+    mockSpawn.mockReturnValue(mockProc)
+
+    const { startAgent } = await import('../server/services/agent-manager.js')
+
+    startAgent('ws-model-1m', '/tmp/project', 'Think deeply', 'claude-sonnet-4-6[1m]')
+
+    expect(mockSpawn).toHaveBeenCalledWith('claude', expect.arrayContaining(['--model', 'claude-sonnet-4-6[1m]']), {
+      cwd: '/tmp/project',
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+  })
+
   it('parse les lignes NDJSON de stdout et emet agent:output', async () => {
     const mockProc = createMockProcess()
     mockSpawn.mockReturnValue(mockProc)

@@ -1,6 +1,10 @@
 import { defineConfig } from '#q-app/wrappers'
 
 export default defineConfig(() => {
+  const backendPort = process.env.KOBO_BACKEND_PORT || '3300'
+  const apiTarget = `http://localhost:${backendPort}`
+  const wsTarget = `ws://localhost:${backendPort}`
+
   return {
     boot: ['i18n'],
 
@@ -20,11 +24,11 @@ export default defineConfig(() => {
       port: 8080,
       proxy: {
         '/api': {
-          target: 'http://localhost:3000',
+          target: apiTarget,
           changeOrigin: true,
         },
         '/ws': {
-          target: 'ws://localhost:3000',
+          target: wsTarget,
           ws: true,
           changeOrigin: true,
         },

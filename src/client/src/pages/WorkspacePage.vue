@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
+import { MODEL_OPTION_DEFS } from 'src/constants/models'
 import type { AgentSession } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { useTimeAgo } from 'src/utils/formatters'
@@ -23,11 +24,25 @@ const { timeAgo } = useTimeAgo()
 
 const starting = ref(false)
 const stopping = ref(false)
+const pendingWorkspaceUpdates = new Set<Promise<unknown>>()
+
+function trackWorkspaceUpdate(promise: Promise<unknown>) {
+  pendingWorkspaceUpdates.add(promise)
+  promise.finally(() => {
+    pendingWorkspaceUpdates.delete(promise)
+  })
+}
+
+async function waitForPendingWorkspaceUpdates() {
+  if (pendingWorkspaceUpdates.size === 0) return
+  await Promise.allSettled([...pendingWorkspaceUpdates])
+}
 
 async function handleStart() {
   if (!store.selectedWorkspaceId) return
   starting.value = true
   try {
+    await waitForPendingWorkspaceUpdates()
     await store.startWorkspace(store.selectedWorkspaceId)
   } catch (e) {
     const msg = e instanceof Error ? e.message : t('workspacePage.startFailed')
@@ -67,10 +82,15 @@ async function handleStop() {
 }
 
 const modelOptions = computed(() => [
-  { label: t('model.auto'), value: 'auto' },
-  { label: t('model.opus'), value: 'claude-opus-4-6' },
-  { label: t('model.sonnet'), value: 'claude-sonnet-4-6' },
-  { label: t('model.haiku'), value: 'claude-haiku-4-5-20251001' },
+  ...MODEL_OPTION_DEFS.map((option) => ({ label: t(option.i18nLabelKey), value: option.value })),
+])
+
+const reasoningOptions = computed(() => [
+  { label: formatReasoningLabel(t('reasoning.auto')), value: 'auto' },
+  { label: formatReasoningLabel(t('reasoning.low')), value: 'low' },
+  { label: formatReasoningLabel(t('reasoning.medium')), value: 'medium' },
+  { label: formatReasoningLabel(t('reasoning.high')), value: 'high' },
+  { label: formatReasoningLabel(t('reasoning.max')), value: 'max' },
 ])
 
 const permissionModeOptions = computed(() => [
@@ -82,19 +102,56 @@ const currentModel = computed({
   get: () => store.selectedWorkspace?.model ?? 'auto',
   set: (val: string) => {
     if (store.selectedWorkspaceId) {
-      store.updateModel(store.selectedWorkspaceId, val)
+      trackWorkspaceUpdate(store.updateModel(store.selectedWorkspaceId, val))
     }
   },
 })
+
+const currentReasoningEffort = computed({
+  get: () => store.selectedWorkspace?.reasoningEffort ?? 'auto',
+  set: (val: string) => {
+    if (store.selectedWorkspaceId) {
+      trackWorkspaceUpdate(store.updateReasoningEffort(store.selectedWorkspaceId, val))
+    }
+  },
+})
+
+function formatReasoningLabel(label: string): string {
+  const separatorIndex = label.indexOf(':')
+  if (separatorIndex >= 0) return label.slice(separatorIndex + 1).trim()
+  return label
+}
+
+function formatReasoningSelectedLabel(value: string): string {
+  return reasoningOptions.value.find((r) => r.value === value)?.label ?? value
+}
 
 const currentPermissionMode = computed({
   get: () => store.selectedWorkspace?.permissionMode ?? 'auto-accept',
   set: (val: string) => {
     if (store.selectedWorkspaceId) {
-      store.updatePermissionMode(store.selectedWorkspaceId, val)
+      trackWorkspaceUpdate(store.updatePermissionMode(store.selectedWorkspaceId, val))
     }
   },
 })
+
+const currentUsage = computed(() => {
+  const wid = store.selectedWorkspaceId
+  if (!wid) return { inputTokens: 0, outputTokens: 0, costUsd: 0, totalTokens: 0 }
+  const usage = store.usageStats[wid] ?? { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+  return {
+    inputTokens: usage.inputTokens,
+    outputTokens: usage.outputTokens,
+    costUsd: usage.costUsd,
+    totalTokens: usage.inputTokens + usage.outputTokens,
+  }
+})
+
+function formatTokenCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
+  return String(n)
+}
 const route = useRoute()
 const router = useRouter()
 
@@ -213,6 +270,32 @@ watch(
           class="q-ml-sm"
           style="font-size: 10px;"
         />
+        <q-chip
+          v-if="currentUsage.totalTokens > 0"
+          dense
+          color="grey-9"
+          text-color="grey-3"
+          class="q-ml-sm"
+          style="font-size: 10px;"
+        >
+          <q-icon name="toll" size="12px" class="q-mr-xs" />
+          <span>{{ $t('stats.tokens') }}: {{ formatTokenCount(currentUsage.totalTokens) }}</span>
+          <q-tooltip>
+            {{ $t('stats.inputTokens') }}: {{ formatTokenCount(currentUsage.inputTokens) }}<br>
+            {{ $t('stats.outputTokens') }}: {{ formatTokenCount(currentUsage.outputTokens) }}
+          </q-tooltip>
+        </q-chip>
+        <q-chip
+          v-if="currentUsage.costUsd > 0"
+          dense
+          color="grey-9"
+          text-color="grey-3"
+          class="q-ml-xs"
+          style="font-size: 10px;"
+        >
+          <q-icon name="attach_money" size="12px" class="q-mr-xs" />
+          <span>{{ $t('stats.cost') }}: ${{ currentUsage.costUsd.toFixed(4) }}</span>
+        </q-chip>
         <q-select
           v-if="sessions.length > 0"
           v-model="selectedSessionId"
@@ -287,6 +370,25 @@ watch(
             <span class="row items-center no-wrap text-caption text-grey-5">
               <q-icon name="auto_awesome" size="12px" color="indigo-4" class="q-mr-xs" />
               {{ modelOptions.find(m => m.value === currentModel)?.label ?? currentModel }}
+            </span>
+          </template>
+        </q-select>
+        <q-select
+          v-model="currentReasoningEffort"
+          :options="reasoningOptions"
+          emit-value
+          map-options
+          dense
+          dark
+          borderless
+          options-dense
+          class="q-mr-sm"
+          style="min-width: 90px; max-width: 140px; font-size: 11px;"
+        >
+          <template #selected>
+            <span class="row items-center no-wrap text-caption text-grey-5">
+              <q-icon name="psychology" size="12px" color="amber-6" class="q-mr-xs" />
+              {{ formatReasoningSelectedLabel(currentReasoningEffort) }}
             </span>
           </template>
         </q-select>

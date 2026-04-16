@@ -4,6 +4,7 @@ import { notify } from 'src/utils/notifications'
 import type { DevServerStatus } from './dev-server'
 import { useDevServerStore } from './dev-server'
 import { useSettingsStore } from './settings'
+import type { RateLimitUsageSnapshot } from './workspace'
 import { isSubagentTerminalEvent, useWorkspaceStore } from './workspace'
 
 const t = i18n.global.t
@@ -404,9 +405,15 @@ export const useWebSocketStore = defineStore('websocket', {
               }
             }
           } else if (outputType === 'rate_limit_event') {
-            if (!useSettingsStore().showVerboseSystemMessages) break
             const info = payload.rate_limit_info as Record<string, unknown> | undefined
             if (info) {
+              if (wid) {
+                const snapshot = this._normalizeRateLimitUsage(info, timestamp)
+                if (snapshot) {
+                  workspaceStore.setRateLimitUsage(wid, snapshot)
+                }
+              }
+              if (!useSettingsStore().showVerboseSystemMessages) break
               const status = (info.status as string) ?? 'unknown'
               const utilization = info.utilization as number | undefined
               workspaceStore.addActivityItem(wid, {
@@ -648,6 +655,80 @@ export const useWebSocketStore = defineStore('websocket', {
 
       // Last resort: JSON
       return JSON.stringify(obj, null, 2)
+    },
+
+    _normalizeRateLimitUsage(info: Record<string, unknown>, timestamp: string): RateLimitUsageSnapshot | null {
+      const buckets: Array<{ id: string; label?: string; usedPct: number; resetAt?: string; details?: string }> = []
+      const seen = new Set<string>()
+
+      const addBucket = (id: string, source: Record<string, unknown>) => {
+        if (seen.has(id)) return
+
+        const usedPctRaw =
+          source.used_percent ??
+          source.percent_used ??
+          source.utilization ??
+          source.usage_ratio ??
+          source.used_ratio ??
+          source.usedPct
+        let usedPct: number | null = null
+        if (typeof usedPctRaw === 'number' && Number.isFinite(usedPctRaw)) {
+          usedPct = usedPctRaw <= 1 ? usedPctRaw * 100 : usedPctRaw
+        } else {
+          const used = source.used ?? source.current ?? source.spent
+          const limit = source.limit ?? source.max ?? source.allowed
+          if (typeof used === 'number' && typeof limit === 'number' && limit > 0) {
+            usedPct = (used / limit) * 100
+          }
+        }
+
+        if (usedPct === null) return
+        const bounded = Math.max(0, Math.min(100, usedPct))
+
+        const label =
+          (typeof source.label === 'string' && source.label) ||
+          (typeof source.name === 'string' && source.name) ||
+          undefined
+        const resetAt =
+          (typeof source.resets_at === 'string' && source.resets_at) ||
+          (typeof source.reset_at === 'string' && source.reset_at) ||
+          (typeof source.resetsAt === 'string' && source.resetsAt) ||
+          (typeof source.resetAt === 'string' && source.resetAt) ||
+          undefined
+
+        const usedVal = source.used ?? source.current ?? source.spent
+        const limitVal = source.limit ?? source.max ?? source.allowed
+        const details =
+          usedVal !== undefined && limitVal !== undefined ? `${String(usedVal)} / ${String(limitVal)}` : undefined
+
+        buckets.push({ id, label, usedPct: bounded, resetAt, details })
+        seen.add(id)
+      }
+
+      if (Array.isArray(info.buckets)) {
+        for (let i = 0; i < info.buckets.length; i++) {
+          const bucket = info.buckets[i]
+          if (bucket && typeof bucket === 'object') {
+            addBucket(`bucket-${i}`, bucket as Record<string, unknown>)
+          }
+        }
+      }
+
+      for (const [key, value] of Object.entries(info)) {
+        if (!value || typeof value !== 'object' || Array.isArray(value)) continue
+        addBucket(key, value as Record<string, unknown>)
+      }
+
+      if (buckets.length === 0) {
+        addBucket('global', info)
+      }
+
+      if (buckets.length === 0) return null
+
+      return {
+        updatedAt: timestamp,
+        buckets,
+      }
     },
 
     /**

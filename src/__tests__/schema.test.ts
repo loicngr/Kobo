@@ -73,13 +73,15 @@ describe('initSchema(db)', () => {
       VALUES ('1', 'test', '/path', 'main', 'feat/x', '2024-01-01', '2024-01-01')
     `).run()
 
-    const row = db.prepare('SELECT status, model FROM workspaces WHERE id=?').get('1') as {
+    const row = db.prepare('SELECT status, model, reasoning_effort FROM workspaces WHERE id=?').get('1') as {
       status: string
       model: string
+      reasoning_effort: string
     }
 
     expect(row.status).toBe('created')
     expect(row.model).toBe('claude-opus-4-6')
+    expect(row.reasoning_effort).toBe('auto')
     db.close()
   })
 

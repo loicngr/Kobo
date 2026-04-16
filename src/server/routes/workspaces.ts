@@ -49,6 +49,7 @@ app.post('/', async (c) => {
       notionPageId?: string
       sentryUrl?: string
       model?: string
+      reasoningEffort?: string
       tasks?: string[]
       acceptanceCriteria?: string[]
       skipSetupScript?: boolean
@@ -72,6 +73,7 @@ app.post('/', async (c) => {
       notionUrl: body.notionUrl,
       notionPageId: body.notionPageId,
       model: body.model,
+      reasoningEffort: body.reasoningEffort,
       permissionMode: body.permissionMode || globalSettings.defaultPermissionMode || 'plan',
     })
 
@@ -479,7 +481,16 @@ app.post('/', async (c) => {
       brainstormPrompt += `\n\nThen brainstorm the implementation approach. Explore the codebase to understand the existing structure. Ask clarifying questions if needed. When you're done brainstorming and have a clear plan, create a plan file and proceed with implementation. Once you have completed the brainstorming phase, output [BRAINSTORM_COMPLETE] on its own line.`
 
       try {
-        const agent = agentManager.startAgent(workspace.id, worktreePath, brainstormPrompt, workspace.model)
+        const agent = agentManager.startAgent(
+          workspace.id,
+          worktreePath,
+          brainstormPrompt,
+          workspace.model,
+          false,
+          workspace.permissionMode,
+          undefined,
+          workspace.reasoningEffort,
+        )
         // Persist the initial prompt in the feed so it's visible in the chat,
         // tagged with the freshly created session id so the strict session filter shows it.
         wsService.emit(
@@ -860,6 +871,7 @@ app.patch('/:id', async (c) => {
     const body = await c.req.json<{
       status?: WorkspaceStatus
       model?: string
+      reasoningEffort?: string
       permissionMode?: PermissionMode
       name?: string
     }>()
@@ -872,6 +884,9 @@ app.patch('/:id', async (c) => {
     let updated = workspace
     if (body.model !== undefined) {
       updated = workspaceService.updateWorkspaceModel(id, body.model)
+    }
+    if (body.reasoningEffort !== undefined) {
+      updated = workspaceService.updateWorkspaceReasoningEffort(id, body.reasoningEffort)
     }
     if (body.permissionMode !== undefined) {
       const validModes: PermissionMode[] = ['auto-accept', 'plan']
@@ -886,8 +901,14 @@ app.patch('/:id', async (c) => {
     if (body.name !== undefined) {
       updated = workspaceService.updateWorkspaceName(id, body.name)
     }
-    if (!body.status && body.model === undefined && body.permissionMode === undefined && body.name === undefined) {
-      return c.json({ error: 'Missing field: status, model, permissionMode, or name' }, 400)
+    if (
+      !body.status &&
+      body.model === undefined &&
+      body.reasoningEffort === undefined &&
+      body.permissionMode === undefined &&
+      body.name === undefined
+    ) {
+      return c.json({ error: 'Missing field: status, model, reasoningEffort, permissionMode, or name' }, 400)
     }
 
     return c.json(updated)
@@ -1158,6 +1179,7 @@ app.post('/:id/start', async (c) => {
       resume,
       workspace.permissionMode,
       agentSessionId,
+      workspace.reasoningEffort,
     )
     workspaceService.updateWorkspaceStatus(id, 'executing')
 
@@ -1485,6 +1507,8 @@ app.post('/:id/open-pr', async (c) => {
           workspace.model,
           true,
           workspace.permissionMode,
+          undefined,
+          workspace.reasoningEffort,
         )
         workspaceService.updateWorkspaceStatus(workspace.id, 'executing')
         messageSent = true

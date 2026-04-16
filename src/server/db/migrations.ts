@@ -70,6 +70,13 @@ export const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 7,
+    name: 'add-reasoning-effort',
+    migrate: (db) => {
+      db.exec("ALTER TABLE workspaces ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT 'auto'")
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

@@ -12,6 +12,7 @@ vi.mock('../server/services/workspace-service.js', () => ({
   updateWorkspaceName: vi.fn(),
   updateWorkingBranch: vi.fn(),
   updateWorkspaceModel: vi.fn(),
+  updateWorkspaceReasoningEffort: vi.fn(),
   updateWorkspacePermissionMode: vi.fn(),
   deleteWorkspace: vi.fn(),
   createTask: vi.fn(),
@@ -170,6 +171,7 @@ const fakeWorkspace = {
   notionUrl: null,
   notionPageId: null,
   model: 'claude-opus-4-6',
+  reasoningEffort: 'auto',
   permissionMode: 'auto-accept' as const,
   devServerStatus: 'stopped',
   hasUnread: false,
@@ -826,6 +828,23 @@ describe('POST /api/workspaces/:id/tasks/:taskId/notify-done', () => {
     })
     expect(res.status).toBe(404)
   })
+
+  it('updates workspace reasoning effort', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(workspaceService.updateWorkspaceReasoningEffort).mockReturnValue({
+      ...fakeWorkspace,
+      reasoningEffort: 'high',
+    } as any)
+
+    const res = await app.request('/api/workspaces/ws-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reasoningEffort: 'high' }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(workspaceService.updateWorkspaceReasoningEffort).toHaveBeenCalledWith('ws-1', 'high')
+  })
 })
 
 describe('POST /api/workspaces/:id/tasks/notify-updated', () => {
@@ -880,7 +899,7 @@ describe('PATCH /api/workspaces/:id', () => {
 
     expect(res.status).toBe(400)
     const data = await res.json()
-    expect(data.error).toContain('Missing field: status, model, permissionMode, or name')
+    expect(data.error).toContain('Missing field: status, model, reasoningEffort, permissionMode, or name')
   })
 
   it('returns 404 for unknown workspace', async () => {
@@ -921,6 +940,7 @@ describe('POST /api/workspaces/:id/start', () => {
       false,
       'auto-accept',
       undefined,
+      'auto',
     )
     expect(workspaceService.updateWorkspaceStatus).toHaveBeenCalledWith('ws-1', 'executing')
   })
@@ -943,6 +963,7 @@ describe('POST /api/workspaces/:id/start', () => {
       false,
       'auto-accept',
       undefined,
+      'auto',
     )
   })
 
@@ -1928,6 +1949,7 @@ describe('POST /api/workspaces/:id/start avec agentSessionId', () => {
       false,
       'auto-accept',
       'sess-idle-1',
+      'auto',
     )
   })
 
@@ -1949,6 +1971,7 @@ describe('POST /api/workspaces/:id/start avec agentSessionId', () => {
       false,
       'auto-accept',
       undefined,
+      'auto',
     )
   })
 })

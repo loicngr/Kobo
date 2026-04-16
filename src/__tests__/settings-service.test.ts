@@ -267,6 +267,53 @@ describe('atomic write', () => {
   })
 })
 
+describe('automatic settings backups', () => {
+  it('creates a backup before updateGlobalSettings writes', () => {
+    getSettings()
+    const before = fs.readFileSync(settingsPath, 'utf-8')
+
+    updateGlobalSettings({ defaultModel: 'claude-sonnet-4-6' })
+
+    const backups = fs
+      .readdirSync(tmpDir)
+      .filter((name) => /^settings\.json\.backup-/.test(name))
+      .sort()
+    expect(backups.length).toBe(1)
+    const backupContent = fs.readFileSync(path.join(tmpDir, backups[0]), 'utf-8')
+    expect(backupContent).toBe(before)
+  })
+
+  it('creates a backup before upsertProject writes', () => {
+    getSettings()
+    const before = fs.readFileSync(settingsPath, 'utf-8')
+
+    upsertProject('/tmp/proj', { displayName: 'Proj' })
+
+    const backups = fs
+      .readdirSync(tmpDir)
+      .filter((name) => /^settings\.json\.backup-/.test(name))
+      .sort()
+    expect(backups.length).toBe(1)
+    const backupContent = fs.readFileSync(path.join(tmpDir, backups[0]), 'utf-8')
+    expect(backupContent).toBe(before)
+  })
+
+  it('creates a backup before deleteProject writes', () => {
+    getSettings()
+    upsertProject('/tmp/a', { displayName: 'A' })
+    const beforeDelete = fs.readFileSync(settingsPath, 'utf-8')
+
+    deleteProject('/tmp/a')
+
+    const backups = fs.readdirSync(tmpDir).filter((name) => /^settings\.json\.backup-/.test(name))
+    expect(backups.length).toBeGreaterThanOrEqual(2)
+    const matching = backups
+      .map((name) => fs.readFileSync(path.join(tmpDir, name), 'utf-8'))
+      .some((content) => content === beforeDelete)
+    expect(matching).toBe(true)
+  })
+})
+
 describe('gitConventions', () => {
   it('includes gitConventions in GlobalSettings as a string', () => {
     const global = getGlobalSettings()

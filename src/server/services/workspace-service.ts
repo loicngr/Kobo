@@ -29,6 +29,7 @@ export interface Workspace {
   notionUrl: string | null
   notionPageId: string | null
   model: string
+  reasoningEffort: string
   permissionMode: PermissionMode
   devServerStatus: string
   hasUnread: boolean
@@ -63,6 +64,7 @@ export interface CreateWorkspaceInput {
   notionUrl?: string
   notionPageId?: string
   model?: string
+  reasoningEffort?: string
   permissionMode?: string
 }
 
@@ -95,6 +97,7 @@ interface WorkspaceRow {
   notion_url: string | null
   notion_page_id: string | null
   model: string
+  reasoning_effort: string
   permission_mode: string
   dev_server_status: string
   has_unread: number
@@ -125,6 +128,7 @@ function mapWorkspace(row: WorkspaceRow): Workspace {
     notionUrl: row.notion_url,
     notionPageId: row.notion_page_id,
     model: row.model,
+    reasoningEffort: row.reasoning_effort ?? 'auto',
     permissionMode: (row.permission_mode ?? 'auto-accept') as PermissionMode,
     devServerStatus: row.dev_server_status,
     hasUnread: row.has_unread === 1,
@@ -154,8 +158,8 @@ export function createWorkspace(data: CreateWorkspaceInput): Workspace {
   const id = nanoid()
 
   db.prepare(`
-    INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, status, notion_url, notion_page_id, model, permission_mode, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?)
+    INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, status, notion_url, notion_page_id, model, reasoning_effort, permission_mode, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     data.name,
@@ -165,6 +169,7 @@ export function createWorkspace(data: CreateWorkspaceInput): Workspace {
     data.notionUrl ?? null,
     data.notionPageId ?? null,
     data.model ?? 'claude-opus-4-6',
+    data.reasoningEffort ?? 'auto',
     data.permissionMode ?? 'auto-accept',
     now,
     now,
@@ -251,6 +256,19 @@ export function updateWorkspaceModel(id: string, model: string): Workspace {
   const db = getDb()
   const now = new Date().toISOString()
   const result = db.prepare('UPDATE workspaces SET model = ?, updated_at = ? WHERE id = ?').run(model, now, id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+  return getWorkspace(id) as Workspace
+}
+
+/** Update the reasoning effort used by a workspace's agent. */
+export function updateWorkspaceReasoningEffort(id: string, reasoningEffort: string): Workspace {
+  const db = getDb()
+  const now = new Date().toISOString()
+  const result = db
+    .prepare('UPDATE workspaces SET reasoning_effort = ?, updated_at = ? WHERE id = ?')
+    .run(reasoningEffort, now, id)
   if (result.changes === 0) {
     throw new Error(`Workspace '${id}' not found`)
   }

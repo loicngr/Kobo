@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
+import { MODEL_OPTION_DEFS } from 'src/constants/models'
 import type { ProjectSettings } from 'src/stores/settings'
 import { useSettingsStore } from 'src/stores/settings'
 import { type Template, useTemplatesStore } from 'src/stores/templates'
@@ -172,10 +173,7 @@ function onLanguageChange(val: string) {
 
 // Model options
 const modelOptions = computed(() => [
-  { label: t('model.auto'), value: 'auto' },
-  { label: t('model.opus'), value: 'claude-opus-4-6' },
-  { label: t('model.sonnet'), value: 'claude-sonnet-4-6' },
-  { label: t('model.haiku'), value: 'claude-haiku-4-5-20251001' },
+  ...MODEL_OPTION_DEFS.map((option) => ({ label: t(option.i18nLabelKey), value: option.value })),
 ])
 
 const projectModelOptions = computed(() => [{ label: t('settings.useGlobal'), value: '' }, ...modelOptions.value])
