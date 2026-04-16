@@ -44,4 +44,3 @@ describe('buildNotionMcpConfig', () => {
     expect(headers.Authorization).toBe('Bearer default-token')
   })
 })
-

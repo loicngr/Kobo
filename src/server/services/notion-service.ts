@@ -81,10 +81,19 @@ function readNotionMcpEntryFromClaudeConfig(preferredKey?: string) {
   return match
 }
 
-export function buildNotionMcpConfig(preferredKey?: string): { command: string; args: string[]; env: Record<string, string> } {
+export function buildNotionMcpConfig(preferredKey?: string): {
+  command: string
+  args: string[]
+  env: Record<string, string>
+} {
   const configEntry = readNotionMcpEntryFromClaudeConfig(preferredKey)
   const configEnv = configEntry?.entry.env ?? {}
-  const notionToken = process.env.NOTION_API_TOKEN ?? process.env.NOTION_TOKEN ?? configEnv.NOTION_TOKEN ?? configEnv.NOTION_API_TOKEN ?? ''
+  const notionToken =
+    process.env.NOTION_API_TOKEN ??
+    process.env.NOTION_TOKEN ??
+    configEnv.NOTION_TOKEN ??
+    configEnv.NOTION_API_TOKEN ??
+    ''
 
   const command = process.env.NOTION_MCP_COMMAND ?? configEntry?.entry.command ?? 'npx'
   const args = process.env.NOTION_MCP_ARGS

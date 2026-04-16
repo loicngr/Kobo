@@ -2,7 +2,12 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
-import { listClaudeMcpEntries, readClaudeMcpEntry, spawnMcpProcess, unwrapMcpResult } from '../server/utils/mcp-client.js'
+import {
+  listClaudeMcpEntries,
+  readClaudeMcpEntry,
+  spawnMcpProcess,
+  unwrapMcpResult,
+} from '../server/utils/mcp-client.js'
 
 describe('spawnMcpProcess(command, args, env)', () => {
   // NOTE: spawnMcpProcess passes env verbatim to child_process.spawn, so callers
