@@ -184,6 +184,28 @@ describe('readSentryMcpConfig()', () => {
     )
     expect(() => readSentryMcpConfig()).toThrow(/Sentry MCP server not configured/)
   })
+
+  it('prefers explicit configured MCP key when provided', () => {
+    readFileSyncSpy.mockReturnValue(
+      JSON.stringify({
+        mcpServers: {
+          sentry: {
+            command: 'npx',
+            args: ['-y', 'default'],
+            env: { SENTRY_HOST: 'default.example.com' },
+          },
+          'sentry-eu': {
+            command: 'npx',
+            args: ['-y', 'eu'],
+            env: { SENTRY_HOST: 'eu.example.com' },
+          },
+        },
+      }),
+    )
+    const cfg = readSentryMcpConfig('sentry-eu')
+    expect(cfg.args).toEqual(['-y', 'eu'])
+    expect(cfg.env.SENTRY_HOST).toBe('eu.example.com')
+  })
 })
 
 // ─── parseSentryResponse ──────────────────────────────────────────────────────

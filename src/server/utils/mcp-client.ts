@@ -22,6 +22,25 @@ interface ClaudeConfig {
   mcpServers?: Record<string, ClaudeMcpEntry>
 }
 
+export interface ActiveClaudeMcpEntry {
+  key: string
+  entry: ClaudeMcpEntry
+}
+
+function getClaudeConfigPath(): string {
+  const homedir = process.env.HOME ?? process.env.USERPROFILE ?? ''
+  return `${homedir}/.claude.json`
+}
+
+function readClaudeConfig(): ClaudeConfig | null {
+  try {
+    const raw = readFileSync(getClaudeConfigPath(), 'utf-8')
+    return JSON.parse(raw) as ClaudeConfig
+  } catch {
+    return null
+  }
+}
+
 /**
  * Read `~/.claude.json` and return the first `mcpServers` entry whose key
  * matches the predicate AND is not disabled (`disabled !== true`).
@@ -31,19 +50,25 @@ interface ClaudeConfig {
  * (Notion, Sentry, …) picks entries by the same rule.
  */
 export function readClaudeMcpEntry(match: (key: string) => boolean): { key: string; entry: ClaudeMcpEntry } | null {
-  const homedir = process.env.HOME ?? process.env.USERPROFILE ?? ''
-  const configPath = `${homedir}/.claude.json`
+  const config = readClaudeConfig()
+  if (!config) return null
+  const servers = config.mcpServers ?? {}
+  const key = Object.keys(servers).find((k) => match(k) && servers[k].disabled !== true)
+  if (!key) return null
+  return { key, entry: servers[key] }
+}
 
-  try {
-    const raw = readFileSync(configPath, 'utf-8')
-    const config = JSON.parse(raw) as ClaudeConfig
-    const servers = config.mcpServers ?? {}
-    const key = Object.keys(servers).find((k) => match(k) && servers[k].disabled !== true)
-    if (!key) return null
-    return { key, entry: servers[key] }
-  } catch {
-    return null
-  }
+/**
+ * Read all enabled MCP entries from `~/.claude.json`.
+ * Disabled entries (`disabled === true`) are excluded.
+ */
+export function listClaudeMcpEntries(): ActiveClaudeMcpEntry[] {
+  const config = readClaudeConfig()
+  if (!config) return []
+  const servers = config.mcpServers ?? {}
+  return Object.keys(servers)
+    .filter((key) => servers[key].disabled !== true)
+    .map((key) => ({ key, entry: servers[key] }))
 }
 
 const nextRpcId = (() => {

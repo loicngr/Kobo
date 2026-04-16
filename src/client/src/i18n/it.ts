@@ -185,6 +185,12 @@ export default {
   'settings.editorCommandPlaceholder': 'code, phpstorm, subl, vim...',
   'settings.editorCommandHint':
     'Comando per aprire il worktree nel proprio editor. Il percorso del worktree viene passato come argomento.',
+  'settings.mcpSelection': 'Selezione MCP Claude',
+  'settings.mcpAutoSelect': 'Auto (primo MCP attivo corrispondente)',
+  'settings.notionMcp': 'Chiave MCP Notion',
+  'settings.sentryMcp': 'Chiave MCP Sentry',
+  'settings.mcpSelectionHint':
+    'Le voci attive vengono lette da ~/.claude.json. Lascia Auto per usare il comportamento predefinito.',
   'settings.configuredProjects': 'Progetti configurati',
   'settings.noProjects': 'Nessun progetto configurato',
   'settings.addProject': 'Aggiungi progetto',

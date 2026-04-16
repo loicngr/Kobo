@@ -7,6 +7,7 @@ vi.mock('../server/services/settings-service.js', () => ({
   getSettings: vi.fn(),
   getGlobalSettings: vi.fn(),
   updateGlobalSettings: vi.fn(),
+  listActiveClaudeMcpServers: vi.fn(),
   listProjects: vi.fn(),
   getProjectSettings: vi.fn(),
   upsertProject: vi.fn(),
@@ -91,6 +92,34 @@ describe('GET /api/settings/global', () => {
     const data = await res.json()
     expect(data).toEqual(fakeGlobalSettings)
     expect(settingsService.getGlobalSettings).toHaveBeenCalledOnce()
+  })
+})
+
+describe('GET /api/settings/mcp-servers', () => {
+  it('returns active MCP servers only', async () => {
+    vi.mocked(settingsService.listActiveClaudeMcpServers).mockReturnValue([
+      { key: 'notion', command: 'npx', args: ['-y', '@notionhq/notion-mcp-server'] },
+      { key: 'sentry', command: 'npx', args: ['-y', '@sentry/mcp-server'] },
+    ])
+
+    const res = await app.request('/api/settings/mcp-servers')
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data).toEqual([
+      { key: 'notion', command: 'npx', args: ['-y', '@notionhq/notion-mcp-server'] },
+      { key: 'sentry', command: 'npx', args: ['-y', '@sentry/mcp-server'] },
+    ])
+  })
+
+  it('returns 500 on service error', async () => {
+    vi.mocked(settingsService.listActiveClaudeMcpServers).mockImplementation(() => {
+      throw new Error('Read failed')
+    })
+
+    const res = await app.request('/api/settings/mcp-servers')
+    expect(res.status).toBe(500)
+    const data = await res.json()
+    expect(data.error).toBe('Read failed')
   })
 })
 

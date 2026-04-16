@@ -30,6 +30,14 @@ interface GlobalSettings {
   notionStatusProperty: string
   notionInProgressStatus: string
   defaultPermissionMode: string
+  notionMcpKey: string
+  sentryMcpKey: string
+}
+
+interface ActiveMcpServer {
+  key: string
+  command: string
+  args: string[]
 }
 
 function toBase64Url(str: string): string {
@@ -51,7 +59,10 @@ export const useSettingsStore = defineStore('settings', {
       notionStatusProperty: '',
       notionInProgressStatus: '',
       defaultPermissionMode: 'plan',
+      notionMcpKey: '',
+      sentryMcpKey: '',
     } as GlobalSettings,
+    activeMcpServers: [] as ActiveMcpServer[],
     projects: [] as ProjectSettings[],
     loading: false,
     showVerboseSystemMessages: localStorage.getItem('kobo:showVerboseSystemMessages') === 'true',
@@ -76,6 +87,17 @@ export const useSettingsStore = defineStore('settings', {
         console.error('[settings store] fetchSettings failed:', err)
       } finally {
         this.loading = false
+      }
+    },
+
+    async fetchActiveMcpServers() {
+      try {
+        const res = await fetch('/api/settings/mcp-servers')
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        this.activeMcpServers = await res.json()
+      } catch (err) {
+        console.error('[settings store] fetchActiveMcpServers failed:', err)
+        this.activeMcpServers = []
       }
     },
 

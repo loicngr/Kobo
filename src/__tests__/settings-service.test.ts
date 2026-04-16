@@ -90,9 +90,16 @@ describe('updateGlobalSettings()', () => {
 
   it('patches multiple fields at once', () => {
     getSettings()
-    const updated = updateGlobalSettings({ defaultModel: 'opus', prPromptTemplate: 'tmpl' })
+    const updated = updateGlobalSettings({
+      defaultModel: 'opus',
+      prPromptTemplate: 'tmpl',
+      notionMcpKey: 'notion',
+      sentryMcpKey: 'sentry',
+    })
     expect(updated.defaultModel).toBe('opus')
     expect(updated.prPromptTemplate).toBe('tmpl')
+    expect(updated.notionMcpKey).toBe('notion')
+    expect(updated.sentryMcpKey).toBe('sentry')
   })
 })
 
@@ -311,6 +318,13 @@ describe('gitConventions', () => {
     const project = getProjectSettings('/tmp/project-w')
     expect(project?.gitConventions).toBe('rules')
     expect((project as never as { bar?: string }).bar).toBeUndefined()
+  })
+
+  it('persists notionMcpKey and sentryMcpKey on global settings', () => {
+    updateGlobalSettings({ notionMcpKey: 'notion-prod', sentryMcpKey: 'sentry-us' })
+    const global = getGlobalSettings()
+    expect(global.notionMcpKey).toBe('notion-prod')
+    expect(global.sentryMcpKey).toBe('sentry-us')
   })
 })
 

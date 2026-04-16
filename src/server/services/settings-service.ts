@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { listClaudeMcpEntries } from '../utils/mcp-client.js'
 import { getSettingsPath } from '../utils/paths.js'
 
 const DEFAULT_GIT_CONVENTIONS = `# Git conventions
@@ -88,6 +89,8 @@ export interface GlobalSettings {
   notionStatusProperty: string
   notionInProgressStatus: string
   defaultPermissionMode: string
+  notionMcpKey: string
+  sentryMcpKey: string
 }
 
 /** Top-level settings structure persisted to settings.json. */
@@ -167,6 +170,14 @@ const settingsMigrations: SettingsMigration[] = [
       if (typeof global.defaultPermissionMode !== 'string') global.defaultPermissionMode = 'plan'
     },
   },
+  {
+    version: 7,
+    name: 'add-mcp-selection-keys',
+    migrate({ global }) {
+      if (typeof global.notionMcpKey !== 'string') global.notionMcpKey = ''
+      if (typeof global.sentryMcpKey !== 'string') global.sentryMcpKey = ''
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -207,6 +218,8 @@ function defaultSettings(): Settings {
       notionStatusProperty: '',
       notionInProgressStatus: '',
       defaultPermissionMode: 'plan',
+      notionMcpKey: '',
+      sentryMcpKey: '',
     },
     projects: [],
   }
@@ -368,6 +381,8 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'notionStatusProperty',
     'notionInProgressStatus',
     'defaultPermissionMode',
+    'notionMcpKey',
+    'sentryMcpKey',
   ]
   const filtered = pickKnownKeys<GlobalSettings>(data as Record<string, unknown>, allowedGlobalKeys)
   settings.global = { ...settings.global, ...filtered }
@@ -438,4 +453,19 @@ export function deleteProject(projectPath: string): void {
 /** List all configured projects. */
 export function listProjects(): ProjectSettings[] {
   return readSettings().projects
+}
+
+export interface ActiveClaudeMcpServerSummary {
+  key: string
+  command: string
+  args: string[]
+}
+
+/** List active MCP servers from Claude Code config (~/.claude.json). */
+export function listActiveClaudeMcpServers(): ActiveClaudeMcpServerSummary[] {
+  return listClaudeMcpEntries().map(({ key, entry }) => ({
+    key,
+    command: entry.command ?? 'npx',
+    args: entry.args ?? [],
+  }))
 }

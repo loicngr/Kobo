@@ -6,6 +6,7 @@ import {
   spawnMcpProcess,
   unwrapMcpResult,
 } from '../utils/mcp-client.js'
+import { getGlobalSettings } from './settings-service.js'
 
 /** A to-do item extracted from a Notion page. */
 export interface NotionTodo {
@@ -64,34 +65,48 @@ export function parseNotionUrl(url: string): string {
  * Picks the first enabled `mcpServers` entry named `notion` (disabled entries
  * are skipped). Returns an empty string when none is found.
  */
-function readNotionTokenFromClaudeConfig(): string {
-  const match = readClaudeMcpEntry((k) => k === 'notion')
-  if (!match) return ''
-  const env = match.entry.env ?? {}
-  return env.NOTION_TOKEN ?? env.NOTION_API_TOKEN ?? ''
+function readNotionMcpEntryFromClaudeConfig(preferredKey?: string) {
+  const normalizedPreferred = preferredKey?.trim()
+  const match = normalizedPreferred
+    ? readClaudeMcpEntry((k) => k === normalizedPreferred)
+    : readClaudeMcpEntry((k) => k === 'notion')
+  if (!match) {
+    if (normalizedPreferred) {
+      throw new Error(
+        `Notion MCP key '${normalizedPreferred}' not found or disabled in ~/.claude.json (mcpServers section)`,
+      )
+    }
+    return null
+  }
+  return match
 }
 
-function buildNotionMcpConfig(): { command: string; args: string[]; env: Record<string, string> } {
-  const notionToken = process.env.NOTION_API_TOKEN ?? process.env.NOTION_TOKEN ?? readNotionTokenFromClaudeConfig()
+export function buildNotionMcpConfig(preferredKey?: string): { command: string; args: string[]; env: Record<string, string> } {
+  const configEntry = readNotionMcpEntryFromClaudeConfig(preferredKey)
+  const configEnv = configEntry?.entry.env ?? {}
+  const notionToken = process.env.NOTION_API_TOKEN ?? process.env.NOTION_TOKEN ?? configEnv.NOTION_TOKEN ?? configEnv.NOTION_API_TOKEN ?? ''
 
-  const command = process.env.NOTION_MCP_COMMAND ?? 'npx'
+  const command = process.env.NOTION_MCP_COMMAND ?? configEntry?.entry.command ?? 'npx'
   const args = process.env.NOTION_MCP_ARGS
     ? process.env.NOTION_MCP_ARGS.split(' ')
-    : ['-y', '@notionhq/notion-mcp-server']
+    : (configEntry?.entry.args ?? ['-y', '@notionhq/notion-mcp-server'])
 
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
-    OPENAPI_MCP_HEADERS: JSON.stringify({
+    ...configEnv,
+  }
+  if (!env.OPENAPI_MCP_HEADERS && notionToken) {
+    env.OPENAPI_MCP_HEADERS = JSON.stringify({
       Authorization: `Bearer ${notionToken}`,
       'Notion-Version': '2022-06-28',
-    }),
+    })
   }
 
   return { command, args, env }
 }
 
-function spawnNotionMcp(): ChildProcess {
-  const { command, args, env } = buildNotionMcpConfig()
+function spawnNotionMcp(preferredKey?: string): ChildProcess {
+  const { command, args, env } = buildNotionMcpConfig(preferredKey)
   return spawnMcpProcess(command, args, env)
 }
 
@@ -236,8 +251,9 @@ export function parseBlocks(blocks: NotionBlock[]): {
  */
 export async function extractNotionPage(notionUrl: string): Promise<NotionPageContent> {
   const pageId = parseNotionUrl(notionUrl)
+  const global = getGlobalSettings()
 
-  const mcpProcess = spawnNotionMcp()
+  const mcpProcess = spawnNotionMcp(global.notionMcpKey)
 
   // Give the process a moment to start
   await new Promise<void>((resolve, reject) => {
@@ -310,7 +326,8 @@ export async function extractNotionPage(notionUrl: string): Promise<NotionPageCo
 /** Update a status property on a Notion page. Best-effort, does not throw. */
 export async function updateNotionStatus(notionUrl: string, propertyName: string, statusValue: string): Promise<void> {
   const pageId = parseNotionUrl(notionUrl)
-  const mcpProcess = spawnNotionMcp()
+  const global = getGlobalSettings()
+  const mcpProcess = spawnNotionMcp(global.notionMcpKey)
 
   try {
     await new Promise<void>((resolve, reject) => {

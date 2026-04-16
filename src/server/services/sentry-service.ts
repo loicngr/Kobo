@@ -5,6 +5,7 @@ import {
   spawnMcpProcess,
   unwrapMcpResult,
 } from '../utils/mcp-client.js'
+import { getGlobalSettings } from './settings-service.js'
 
 // ─── parseSentryUrl ───────────────────────────────────────────────────────────
 
@@ -40,8 +41,11 @@ const SENTRY_CONFIG_ERROR =
  *
  * Throws with a clear setup message when no enabled Sentry entry exists.
  */
-export function readSentryMcpConfig(): SentryMcpConfig {
-  const match = readClaudeMcpEntry((k) => /sentry/i.test(k))
+export function readSentryMcpConfig(preferredKey?: string): SentryMcpConfig {
+  const normalizedPreferred = preferredKey?.trim()
+  const match = normalizedPreferred
+    ? readClaudeMcpEntry((k) => k === normalizedPreferred)
+    : readClaudeMcpEntry((k) => /sentry/i.test(k))
   if (!match) {
     throw new Error(SENTRY_CONFIG_ERROR)
   }
@@ -152,7 +156,8 @@ export function parseSentryResponse(markdown: string, numericId: string): Sentry
  */
 export async function extractSentryIssue(url: string): Promise<SentryIssueContent> {
   const numericId = parseSentryUrl(url)
-  const config = readSentryMcpConfig()
+  const global = getGlobalSettings()
+  const config = readSentryMcpConfig(global.sentryMcpKey)
 
   const mcpProcess = spawnMcpProcess(config.command, config.args, config.env)
 

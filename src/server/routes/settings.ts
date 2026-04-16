@@ -27,6 +27,17 @@ app.get('/global', (c) => {
   }
 })
 
+// GET /api/settings/mcp-servers — list active MCP servers from Claude config
+app.get('/mcp-servers', (c) => {
+  try {
+    const servers = settingsService.listActiveClaudeMcpServers()
+    return c.json(servers)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
 // PUT /api/settings/global — update global settings
 app.put('/global', async (c) => {
   try {

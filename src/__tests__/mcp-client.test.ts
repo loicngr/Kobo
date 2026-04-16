@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest'
-import { spawnMcpProcess, unwrapMcpResult } from '../server/utils/mcp-client.js'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { afterEach, describe, expect, it } from 'vitest'
+import { listClaudeMcpEntries, readClaudeMcpEntry, spawnMcpProcess, unwrapMcpResult } from '../server/utils/mcp-client.js'
 
 describe('spawnMcpProcess(command, args, env)', () => {
   // NOTE: spawnMcpProcess passes env verbatim to child_process.spawn, so callers
@@ -39,5 +42,79 @@ describe('unwrapMcpResult', () => {
   it('returns the original value when shape does not match', () => {
     expect(unwrapMcpResult(null)).toBeNull()
     expect(unwrapMcpResult({ other: true })).toEqual({ other: true })
+  })
+})
+
+describe('readClaudeMcpEntry', () => {
+  let homeDir = ''
+  const oldHome = process.env.HOME
+
+  function writeClaudeConfig(content: object) {
+    const claudePath = path.join(homeDir, '.claude.json')
+    fs.writeFileSync(claudePath, JSON.stringify(content), 'utf-8')
+  }
+
+  function removeClaudeConfig() {
+    const claudePath = path.join(homeDir, '.claude.json')
+    if (fs.existsSync(claudePath)) fs.rmSync(claudePath)
+  }
+
+  it('returns first enabled matching entry', () => {
+    homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kobo-mcp-home-'))
+    process.env.HOME = homeDir
+    writeClaudeConfig({
+      mcpServers: {
+        sentry: { disabled: true, command: 'x' },
+        'sentry-prod': { command: 'npx', args: ['-y', '@sentry/mcp-server'], env: { TOKEN: 'abc' } },
+      },
+    })
+    const match = readClaudeMcpEntry((k) => k.includes('sentry'))
+    expect(match).not.toBeNull()
+    expect(match?.key).toBe('sentry-prod')
+    expect(match?.entry.env?.TOKEN).toBe('abc')
+    removeClaudeConfig()
+    fs.rmSync(homeDir, { recursive: true, force: true })
+  })
+
+  afterEach(() => {
+    if (homeDir) fs.rmSync(homeDir, { recursive: true, force: true })
+    homeDir = ''
+    process.env.HOME = oldHome
+  })
+})
+
+describe('listClaudeMcpEntries', () => {
+  let homeDir = ''
+  const oldHome = process.env.HOME
+
+  function writeClaudeConfig(content: object) {
+    const claudePath = path.join(homeDir, '.claude.json')
+    fs.writeFileSync(claudePath, JSON.stringify(content), 'utf-8')
+  }
+
+  afterEach(() => {
+    if (homeDir) fs.rmSync(homeDir, { recursive: true, force: true })
+    homeDir = ''
+    process.env.HOME = oldHome
+  })
+
+  it('returns only active entries and excludes disabled', () => {
+    homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kobo-mcp-home-'))
+    process.env.HOME = homeDir
+    writeClaudeConfig({
+      mcpServers: {
+        notion: { command: 'npx', args: ['-y', '@notionhq/notion-mcp-server'], env: { NOTION_TOKEN: 'secret' } },
+        'sentry-disabled': { command: 'npx', disabled: true, env: { SENTRY_ACCESS_TOKEN: 'secret' } },
+        sentry: { command: 'npx', args: ['-y', '@sentry/mcp-server'] },
+      },
+    })
+    const entries = listClaudeMcpEntries()
+    expect(entries.map((e) => e.key)).toEqual(['notion', 'sentry'])
+  })
+
+  it('returns empty array when file is unreadable', () => {
+    homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'kobo-mcp-home-'))
+    process.env.HOME = homeDir
+    expect(listClaudeMcpEntries()).toEqual([])
   })
 })

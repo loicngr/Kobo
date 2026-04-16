@@ -25,6 +25,8 @@ const globalAudioNotifications = ref(true)
 const globalNotionStatusProperty = ref('')
 const globalNotionStatus = ref('')
 const globalDefaultPermissionMode = ref('plan')
+const globalNotionMcpKey = ref('')
+const globalSentryMcpKey = ref('')
 const savingGlobal = ref(false)
 
 // Project form
@@ -193,6 +195,14 @@ const availableVariables = computed(() => [
   { name: '{{acceptance_criteria}}', description: t('settings.var.acceptanceCriteria') },
 ])
 
+const mcpServerOptions = computed(() => [
+  { label: t('settings.mcpAutoSelect'), value: '' },
+  ...store.activeMcpServers.map((server) => ({
+    label: server.key,
+    value: server.key,
+  })),
+])
+
 // Selected project
 const selectedProject = computed<ProjectSettings | null>(() => {
   if (selectedProjectIndex.value < 0 || selectedProjectIndex.value >= store.projects.length) {
@@ -213,6 +223,8 @@ function syncGlobalForm() {
   globalNotionStatusProperty.value = store.global.notionStatusProperty ?? ''
   globalNotionStatus.value = store.global.notionInProgressStatus ?? ''
   globalDefaultPermissionMode.value = store.global.defaultPermissionMode || 'plan'
+  globalNotionMcpKey.value = store.global.notionMcpKey ?? ''
+  globalSentryMcpKey.value = store.global.sentryMcpKey ?? ''
 }
 
 // Init project form from selected project
@@ -307,6 +319,8 @@ async function saveGlobal() {
       notionStatusProperty: globalNotionStatusProperty.value,
       notionInProgressStatus: globalNotionStatus.value,
       defaultPermissionMode: globalDefaultPermissionMode.value,
+      notionMcpKey: globalNotionMcpKey.value,
+      sentryMcpKey: globalSentryMcpKey.value,
     })
     $q.notify({ type: 'positive', message: t('settings.saved'), position: 'top' })
   } catch {
@@ -398,7 +412,7 @@ function filterBranches(val: string, update: (fn: () => void) => void) {
 
 // Init
 onMounted(async () => {
-  await store.fetchSettings()
+  await Promise.all([store.fetchSettings(), store.fetchActiveMcpServers()])
   syncGlobalForm()
 })
 
@@ -576,7 +590,6 @@ onUnmounted(() => {
                 dark
                 outlined
                 :rows="8"
-                autogrow
                 :placeholder="$t('settings.prPromptPlaceholder')"
                 class="settings-input mono-textarea"
               />
@@ -610,6 +623,37 @@ onUnmounted(() => {
                 class="settings-input"
               />
               <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.editorCommandHint') }}</div>
+            </div>
+
+            <div class="q-mb-lg">
+              <div class="field-label text-body2 text-weight-medium q-mb-sm text-grey-6">{{ $t('settings.mcpSelection') }}</div>
+              <div class="q-mb-sm">
+                <div class="field-label-sub text-caption q-mb-xs text-grey-7">{{ $t('settings.notionMcp') }}</div>
+                <q-select
+                  v-model="globalNotionMcpKey"
+                  :options="mcpServerOptions"
+                  emit-value
+                  map-options
+                  dense
+                  dark
+                  outlined
+                  class="settings-input"
+                />
+              </div>
+              <div class="q-mb-sm">
+                <div class="field-label-sub text-caption q-mb-xs text-grey-7">{{ $t('settings.sentryMcp') }}</div>
+                <q-select
+                  v-model="globalSentryMcpKey"
+                  :options="mcpServerOptions"
+                  emit-value
+                  map-options
+                  dense
+                  dark
+                  outlined
+                  class="settings-input"
+                />
+              </div>
+              <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.mcpSelectionHint') }}</div>
             </div>
 
             <div class="q-mb-lg">
