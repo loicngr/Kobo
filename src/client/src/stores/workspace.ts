@@ -249,30 +249,35 @@ export const useWorkspaceStore = defineStore('workspace', {
 
   actions: {
     async toggleFavorite(id: string) {
-      const idx = this.workspaces.findIndex((w) => w.id === id)
-      if (idx === -1) return
-      const previous = this.workspaces[idx].favoritedAt
+      // Resolve by id both before and after the network call — the workspace
+      // array can be reordered (or the workspace removed) by a concurrent
+      // WS event while the request is in flight. A captured index would write
+      // the update to the wrong row.
+      const before = this.workspaces.find((w) => w.id === id)
+      if (!before) return
+      const previous = before.favoritedAt
       const nextFavorited = previous === null
       const optimistic = nextFavorited ? new Date().toISOString() : null
-      this.workspaces[idx] = { ...this.workspaces[idx], favoritedAt: optimistic }
+      this.workspaces = this.workspaces.map((w) => (w.id === id ? { ...w, favoritedAt: optimistic } : w))
       try {
         const res = await fetch(`/api/workspaces/${id}/favorite`, {
           method: nextFavorited ? 'POST' : 'DELETE',
         })
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const updated = (await res.json()) as Workspace
-        this.workspaces[idx] = updated
+        this.workspaces = this.workspaces.map((w) => (w.id === id ? updated : w))
       } catch (err) {
-        this.workspaces[idx] = { ...this.workspaces[idx], favoritedAt: previous }
+        this.workspaces = this.workspaces.map((w) => (w.id === id ? { ...w, favoritedAt: previous } : w))
         throw err
       }
     },
 
     async setWorkspaceTags(id: string, tags: string[]) {
-      const idx = this.workspaces.findIndex((w) => w.id === id)
-      if (idx === -1) return
-      const previous = this.workspaces[idx].tags
-      this.workspaces[idx] = { ...this.workspaces[idx], tags: [...tags] }
+      const before = this.workspaces.find((w) => w.id === id)
+      if (!before) return
+      const previous = before.tags
+      const optimistic = [...tags]
+      this.workspaces = this.workspaces.map((w) => (w.id === id ? { ...w, tags: optimistic } : w))
       try {
         const res = await fetch(`/api/workspaces/${id}/tags`, {
           method: 'PUT',
@@ -281,9 +286,9 @@ export const useWorkspaceStore = defineStore('workspace', {
         })
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const updated = (await res.json()) as Workspace
-        this.workspaces[idx] = updated
+        this.workspaces = this.workspaces.map((w) => (w.id === id ? updated : w))
       } catch (err) {
-        this.workspaces[idx] = { ...this.workspaces[idx], tags: previous }
+        this.workspaces = this.workspaces.map((w) => (w.id === id ? { ...w, tags: previous } : w))
         throw err
       }
     },
