@@ -15,7 +15,7 @@ interface WorktreeCheck {
 
 interface HealthReport {
   koboHome: string
-  db: { path: string; sizeBytes: number; schemaVersion: number; currentSchemaVersion: number }
+  db: { path: string; sizeBytes: number | null; schemaVersion: number; currentSchemaVersion: number }
   settings: { schemaVersion: number }
   claudeCli: { available: boolean; version: string | null }
   workspaces: { total: number; archived: number; worktreesMissing: WorktreeCheck[] }
@@ -46,7 +46,8 @@ async function refresh() {
 onMounted(refresh)
 
 const dbSizeHuman = computed(() => {
-  const b = report.value?.db.sizeBytes ?? 0
+  const b = report.value?.db.sizeBytes
+  if (b === null || b === undefined) return '—'
   if (b < 1024) return `${b} B`
   if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`
   return `${(b / 1024 / 1024).toFixed(1)} MB`

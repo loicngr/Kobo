@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
+import path from 'node:path'
 import { Hono } from 'hono'
 import { getDb } from '../db/index.js'
 import { SCHEMA_VERSION } from '../db/migrations.js'
@@ -19,7 +20,7 @@ interface HealthReport {
   koboHome: string
   db: {
     path: string
-    sizeBytes: number
+    sizeBytes: number | null
     schemaVersion: number
     currentSchemaVersion: number
   }
@@ -64,11 +65,11 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-function safeFileSize(p: string): number {
+function safeFileSize(p: string): number | null {
   try {
     return fs.statSync(p).size
   } catch {
-    return 0
+    return null
   }
 }
 
@@ -96,7 +97,7 @@ app.get('/report', (c) => {
   const worktreesMissing: WorktreeCheck[] = []
   for (const ws of workspaces) {
     if (ws.archived_at) continue
-    const wtPath = `${ws.project_path}/.worktrees/${ws.working_branch}`
+    const wtPath = path.join(ws.project_path, '.worktrees', ws.working_branch)
     if (!fs.existsSync(wtPath)) {
       worktreesMissing.push({ workspaceId: ws.id, name: ws.name, path: wtPath, exists: false })
     }

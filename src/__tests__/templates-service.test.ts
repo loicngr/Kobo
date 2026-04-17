@@ -220,4 +220,67 @@ describe('templates-service', () => {
       expect(after.length).toBe(initial.length)
     })
   })
+
+  describe('replaceAllTemplates()', () => {
+    it('accepts a valid array and replaces all templates atomically', async () => {
+      const { replaceAllTemplates, listTemplates } = await import('../server/services/templates-service.js')
+      replaceAllTemplates([
+        { slug: 'hello', description: 'hi', content: 'content-a' },
+        { slug: 'world', description: 'desc', content: 'content-b' },
+      ])
+      const after = listTemplates()
+      expect(after).toHaveLength(2)
+      expect(after.map((t) => t.slug).sort()).toEqual(['hello', 'world'])
+    })
+
+    it('rejects non-array payload', async () => {
+      const { replaceAllTemplates } = await import('../server/services/templates-service.js')
+      expect(() => replaceAllTemplates('not-an-array' as unknown as unknown[])).toThrow('expected an array')
+    })
+
+    it('rejects when an entry is not an object', async () => {
+      const { replaceAllTemplates } = await import('../server/services/templates-service.js')
+      expect(() => replaceAllTemplates(['not-an-object'])).toThrow('not an object')
+    })
+
+    it('rejects invalid slug (propagates validator error)', async () => {
+      const { replaceAllTemplates } = await import('../server/services/templates-service.js')
+      expect(() => replaceAllTemplates([{ slug: 'Invalid Slug With Spaces', description: 'x', content: 'y' }])).toThrow(
+        'Invalid slug',
+      )
+    })
+
+    it('rejects empty description', async () => {
+      const { replaceAllTemplates } = await import('../server/services/templates-service.js')
+      expect(() => replaceAllTemplates([{ slug: 'ok', description: '', content: 'y' }])).toThrow('Invalid description')
+    })
+
+    it('rejects duplicate slugs', async () => {
+      const { replaceAllTemplates } = await import('../server/services/templates-service.js')
+      expect(() =>
+        replaceAllTemplates([
+          { slug: 'dup', description: 'd', content: 'c' },
+          { slug: 'dup', description: 'd2', content: 'c2' },
+        ]),
+      ).toThrow('Duplicate')
+    })
+
+    it('does not touch the file when validation fails mid-array', async () => {
+      const { replaceAllTemplates, listTemplates, createTemplate } = await import(
+        '../server/services/templates-service.js'
+      )
+      // Seed a known state
+      createTemplate({ slug: 'existing', description: 'd', content: 'c' })
+      const before = listTemplates()
+      // The first entry is valid, but the second is not — the whole write must reject.
+      expect(() =>
+        replaceAllTemplates([
+          { slug: 'ok', description: 'valid', content: 'valid' },
+          { slug: 'bad slug', description: 'd', content: 'c' },
+        ]),
+      ).toThrow('Invalid slug')
+      const after = listTemplates()
+      expect(after).toEqual(before)
+    })
+  })
 })

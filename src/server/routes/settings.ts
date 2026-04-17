@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import type { ConfigBundle, GlobalSettings, ProjectSettings } from '../services/settings-service.js'
 import * as settingsService from '../services/settings-service.js'
-import { listTemplates, replaceAllTemplates, type Template } from '../services/templates-service.js'
+import { listTemplates, replaceAllTemplates } from '../services/templates-service.js'
 
 /** Hono sub-router for global and per-project settings CRUD. */
 const app = new Hono()
@@ -122,15 +122,17 @@ app.get('/export', (c) => {
 app.post('/import', async (c) => {
   try {
     const body = (await c.req.json()) as ConfigBundle
+    // Validate settings first — throws on malformed payload before we touch disk.
     settingsService.importConfigBundle(body)
-    if (Array.isArray(body.templates)) {
-      replaceAllTemplates(body.templates as unknown as Template[])
+    if (body.templates !== undefined) {
+      // Accept missing templates (backward-compatible). Otherwise validate and replace.
+      replaceAllTemplates(body.templates as unknown[])
     }
     return c.json({ ok: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    const status = message.includes('Invalid bundle') ? 400 : 500
-    return c.json({ error: message }, status)
+    const isValidation = message.includes('Invalid bundle') || message.includes('Invalid template')
+    return c.json({ error: message }, isValidation ? 400 : 500)
   }
 })
 

@@ -119,9 +119,36 @@ function writeTemplates(templates: Template[]): void {
   writeFileSync(filePath, JSON.stringify(file, null, 2), 'utf-8')
 }
 
-/** Replace the entire templates list in one write. Used by config import. */
-export function replaceAllTemplates(templates: Template[]): void {
-  writeTemplates(templates)
+/**
+ * Replace the entire templates list atomically. Validates each entry and
+ * rejects the whole write on any invalid row — do not partially accept.
+ * Used by config import.
+ */
+export function replaceAllTemplates(templates: unknown[]): void {
+  if (!Array.isArray(templates)) {
+    throw new Error('Invalid templates payload: expected an array')
+  }
+  const now = new Date().toISOString()
+  const validated: Template[] = []
+  const seenSlugs = new Set<string>()
+  for (let i = 0; i < templates.length; i++) {
+    const t = templates[i] as Record<string, unknown> | null
+    if (!t || typeof t !== 'object') {
+      throw new Error(`Invalid template at index ${i}: not an object`)
+    }
+    const slug = typeof t.slug === 'string' ? t.slug : ''
+    const description = typeof t.description === 'string' ? t.description : ''
+    const content = typeof t.content === 'string' ? t.content : ''
+    validateTemplateInput({ slug, description, content })
+    if (seenSlugs.has(slug)) {
+      throw new Error(`Duplicate template slug: '${slug}'`)
+    }
+    seenSlugs.add(slug)
+    const createdAt = typeof t.createdAt === 'string' ? t.createdAt : now
+    const updatedAt = typeof t.updatedAt === 'string' ? t.updatedAt : now
+    validated.push({ slug, description, content, createdAt, updatedAt })
+  }
+  writeTemplates(validated)
 }
 
 function seedTemplates(): void {

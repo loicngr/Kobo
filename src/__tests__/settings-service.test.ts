@@ -6,10 +6,12 @@ import type { Settings } from '../server/services/settings-service.js'
 import {
   _setSettingsPath,
   deleteProject,
+  exportConfigBundle,
   getEffectiveSettings,
   getGlobalSettings,
   getProjectSettings,
   getSettings,
+  importConfigBundle,
   listProjects,
   runSettingsMigrations,
   SETTINGS_SCHEMA_VERSION,
@@ -525,5 +527,81 @@ describe('settings file persistence with migrations', () => {
     expect(loaded.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
     const mtimeAfter = fs.statSync(settingsPath).mtimeMs
     expect(mtimeAfter).toBe(mtimeBefore)
+  })
+})
+
+describe('exportConfigBundle()', () => {
+  it('strips MCP secrets (notionMcpKey, sentryMcpKey) from exported settings', () => {
+    updateGlobalSettings({ notionMcpKey: 'secret-notion', sentryMcpKey: 'secret-sentry' })
+    const bundle = exportConfigBundle([])
+    expect(bundle.settings.global.notionMcpKey).toBe('')
+    expect(bundle.settings.global.sentryMcpKey).toBe('')
+  })
+
+  it('tags bundleVersion = 1 and includes the passed templates array', () => {
+    const templates = [{ slug: 'hello', description: 'desc', content: 'hi', createdAt: '', updatedAt: '' }]
+    const bundle = exportConfigBundle(templates as unknown as Array<Record<string, unknown>>)
+    expect(bundle.bundleVersion).toBe(1)
+    expect(bundle.templates).toEqual(templates)
+    expect(bundle.exportedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+  })
+})
+
+describe('importConfigBundle()', () => {
+  it('rejects a bundle without bundleVersion = 1', () => {
+    expect(() => importConfigBundle({ bundleVersion: 2 } as unknown as never)).toThrow('Invalid bundle')
+  })
+
+  it('rejects a non-object payload', () => {
+    expect(() => importConfigBundle(null as unknown as never)).toThrow('Invalid bundle')
+  })
+
+  it('rejects a bundle with missing settings', () => {
+    expect(() => importConfigBundle({ bundleVersion: 1 } as unknown as never)).toThrow('Invalid bundle')
+  })
+
+  it('rejects a bundle when settings.global is not an object', () => {
+    const bundle = { bundleVersion: 1, settings: { global: [], projects: [] } } as unknown
+    expect(() => importConfigBundle(bundle as never)).toThrow('settings.global')
+  })
+
+  it('rejects a bundle when settings.projects is not an array', () => {
+    const bundle = { bundleVersion: 1, settings: { global: {}, projects: 'not-an-array' } } as unknown
+    expect(() => importConfigBundle(bundle as never)).toThrow('settings.projects')
+  })
+
+  it('rejects a bundle with a non-object project entry', () => {
+    const bundle = { bundleVersion: 1, settings: { global: {}, projects: ['hello'] } } as unknown
+    expect(() => importConfigBundle(bundle as never)).toThrow('settings.projects[0]')
+  })
+
+  it('preserves local MCP keys when importing', () => {
+    // Set local MCP keys
+    updateGlobalSettings({ notionMcpKey: 'local-notion', sentryMcpKey: 'local-sentry' })
+    const incoming: Settings = {
+      schemaVersion: SETTINGS_SCHEMA_VERSION,
+      global: {
+        defaultModel: 'claude-opus-4-7',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: 'imported',
+        gitConventions: 'imported',
+        editorCommand: '',
+        browserNotifications: true,
+        audioNotifications: true,
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+        defaultPermissionMode: 'plan',
+        notionMcpKey: '', // stripped on export
+        sentryMcpKey: '', // stripped on export
+        tags: ['imported-tag'],
+      },
+      projects: [],
+    }
+    importConfigBundle({ bundleVersion: 1, exportedAt: '', settings: incoming, templates: [] })
+    const after = getGlobalSettings()
+    expect(after.notionMcpKey).toBe('local-notion')
+    expect(after.sentryMcpKey).toBe('local-sentry')
+    expect(after.prPromptTemplate).toBe('imported')
+    expect(after.tags).toEqual(['imported-tag'])
   })
 })

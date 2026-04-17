@@ -398,16 +398,36 @@ export function exportConfigBundle(templates: Array<Record<string, unknown>>): C
 
 /** Replace the settings file with an imported bundle. MCP keys in the current settings are preserved. */
 export function importConfigBundle(bundle: ConfigBundle): void {
-  if (!bundle || bundle.bundleVersion !== 1) {
+  if (!bundle || typeof bundle !== 'object') {
+    throw new Error('Invalid bundle: payload must be an object')
+  }
+  if (bundle.bundleVersion !== 1) {
     throw new Error('Invalid bundle: expected bundleVersion = 1')
   }
-  if (!bundle.settings || typeof bundle.settings !== 'object') {
-    throw new Error('Invalid bundle: missing settings')
+  const incoming = bundle.settings as unknown
+  if (!incoming || typeof incoming !== 'object') {
+    throw new Error('Invalid bundle: missing or malformed settings')
+  }
+  const incomingSettings = incoming as { global?: unknown; projects?: unknown }
+  if (
+    !incomingSettings.global ||
+    typeof incomingSettings.global !== 'object' ||
+    Array.isArray(incomingSettings.global)
+  ) {
+    throw new Error('Invalid bundle: settings.global must be an object')
+  }
+  if (!Array.isArray(incomingSettings.projects)) {
+    throw new Error('Invalid bundle: settings.projects must be an array')
+  }
+  for (let i = 0; i < incomingSettings.projects.length; i++) {
+    const p = incomingSettings.projects[i]
+    if (!p || typeof p !== 'object' || Array.isArray(p)) {
+      throw new Error(`Invalid bundle: settings.projects[${i}] must be an object`)
+    }
   }
   const current = readSettings()
-  const incoming = bundle.settings as Settings
   // Run the incoming through the migration pipeline in case an older version is imported.
-  const migrated = runSettingsMigrations(incoming as unknown as Record<string, unknown>)
+  const migrated = runSettingsMigrations(incoming as Record<string, unknown>)
   // Preserve existing MCP keys — the export stripped them and we don't want to clobber a local config.
   for (const key of SECRET_GLOBAL_KEYS) {
     migrated.global[key] = current.global[key]
