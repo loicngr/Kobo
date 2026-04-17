@@ -479,4 +479,11 @@ export default {
   'workspace.favorite': 'Als Favorit markieren',
   'workspace.unfavorite': 'Aus Favoriten entfernen',
   'workspace.showFavoritesOnly': 'Nur Favoriten anzeigen',
+  'tags.manage': 'Tags verwalten',
+  'tags.manageTitle': 'Workspace-Tags verwalten',
+  'tags.noTagsDefined': 'Keine Tags definiert. Füge welche in Einstellungen > Global > Tags hinzu.',
+  'settings.tagsTitle': 'Workspace-Tags',
+  'settings.tagsHint':
+    'Definiere die Tags, die Workspaces zugewiesen werden können. Tippe zum Hinzufügen, klicke auf das Kreuz zum Entfernen.',
+  'settings.tagsLabel': 'Verfügbare Tags',
 }

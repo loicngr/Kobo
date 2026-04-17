@@ -28,6 +28,7 @@ const globalNotionStatus = ref('')
 const globalDefaultPermissionMode = ref('plan')
 const globalNotionMcpKey = ref('')
 const globalSentryMcpKey = ref('')
+const globalTags = ref<string[]>([])
 const savingGlobal = ref(false)
 
 // Project form
@@ -223,6 +224,7 @@ function syncGlobalForm() {
   globalDefaultPermissionMode.value = store.global.defaultPermissionMode || 'plan'
   globalNotionMcpKey.value = store.global.notionMcpKey ?? ''
   globalSentryMcpKey.value = store.global.sentryMcpKey ?? ''
+  globalTags.value = Array.isArray(store.global.tags) ? [...store.global.tags] : []
 }
 
 // Init project form from selected project
@@ -315,6 +317,7 @@ async function saveGlobal() {
       defaultPermissionMode: globalDefaultPermissionMode.value,
       notionMcpKey: globalNotionMcpKey.value,
       sentryMcpKey: globalSentryMcpKey.value,
+      tags: globalTags.value,
     })
     $q.notify({ type: 'positive', message: t('settings.saved'), position: 'top' })
   } catch {
@@ -673,6 +676,25 @@ onUnmounted(() => {
                 />
               </div>
               <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.notionStatusHint') }}</div>
+            </div>
+
+            <!-- Workspace tags -->
+            <div class="settings-card q-pa-md rounded-borders">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.tagsTitle') }}</div>
+              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.tagsHint') }}</div>
+              <q-select
+                v-model="globalTags"
+                :label="$t('settings.tagsLabel')"
+                dark
+                outlined
+                multiple
+                use-input
+                use-chips
+                new-value-mode="add-unique"
+                hide-dropdown-icon
+                input-debounce="0"
+                class="settings-input"
+              />
             </div>
 
             <!-- Save button -->

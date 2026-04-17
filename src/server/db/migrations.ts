@@ -84,6 +84,13 @@ export const migrations: Migration[] = [
       db.prepare('ALTER TABLE workspaces ADD COLUMN favorited_at TEXT').run()
     },
   },
+  {
+    version: 9,
+    name: 'add-workspace-tags',
+    migrate: (db) => {
+      db.prepare("ALTER TABLE workspaces ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'").run()
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

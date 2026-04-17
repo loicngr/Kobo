@@ -19,6 +19,7 @@ export function initSchema(db: Database.Database): void {
       has_unread INTEGER NOT NULL DEFAULT 0,
       archived_at TEXT,
       favorited_at TEXT,
+      tags TEXT NOT NULL DEFAULT '[]',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );

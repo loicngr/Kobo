@@ -899,6 +899,23 @@ app.delete('/:id/favorite', (c) => {
   }
 })
 
+// PUT /api/workspaces/:id/tags — replace the workspace's tag list
+app.put('/:id/tags', async (c) => {
+  const { id } = c.req.param()
+  try {
+    const body = await c.req.json<{ tags?: unknown }>()
+    if (!Array.isArray(body.tags)) {
+      return c.json({ error: 'tags must be an array of strings' }, 400)
+    }
+    const ws = workspaceService.setWorkspaceTags(id, body.tags as string[])
+    return c.json(ws)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error'
+    const status = msg.includes('not found') ? 404 : 500
+    return c.json({ error: msg }, status)
+  }
+})
+
 // PATCH /api/workspaces/:id — update workspace fields (status, model, permissionMode, name)
 app.patch('/:id', async (c) => {
   try {

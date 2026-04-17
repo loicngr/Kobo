@@ -35,6 +35,7 @@ export interface Workspace {
   hasUnread: boolean
   archivedAt: string | null
   favoritedAt: string | null
+  tags: string[]
   createdAt: string
   updatedAt: string
 }
@@ -104,6 +105,7 @@ interface WorkspaceRow {
   has_unread: number
   archived_at: string | null
   favorited_at: string | null
+  tags: string | null
   created_at: string
   updated_at: string
 }
@@ -136,8 +138,21 @@ function mapWorkspace(row: WorkspaceRow): Workspace {
     hasUnread: row.has_unread === 1,
     archivedAt: row.archived_at,
     favoritedAt: row.favorited_at,
+    tags: parseTags(row.tags),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  }
+}
+
+/** Parse the JSON-serialized tags column to a string[]. Returns [] on null/invalid. */
+function parseTags(raw: string | null): string[] {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((t): t is string => typeof t === 'string')
+  } catch {
+    return []
   }
 }
 
@@ -456,6 +471,22 @@ export function unsetFavorite(id: string): Workspace {
   const db = getDb()
   const now = new Date().toISOString()
   const result = db.prepare('UPDATE workspaces SET favorited_at = NULL, updated_at = ? WHERE id = ?').run(now, id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+  return getWorkspace(id) as Workspace
+}
+
+/** Replace the workspace's tag list with the provided array. Deduplicates and trims. */
+export function setWorkspaceTags(id: string, tags: string[]): Workspace {
+  const normalized = Array.from(
+    new Set(tags.map((t) => (typeof t === 'string' ? t.trim() : '')).filter((t) => t.length > 0 && t.length <= 50)),
+  )
+  const db = getDb()
+  const now = new Date().toISOString()
+  const result = db
+    .prepare('UPDATE workspaces SET tags = ?, updated_at = ? WHERE id = ?')
+    .run(JSON.stringify(normalized), now, id)
   if (result.changes === 0) {
     throw new Error(`Workspace '${id}' not found`)
   }

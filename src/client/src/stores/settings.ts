@@ -30,6 +30,7 @@ interface GlobalSettings {
   defaultPermissionMode: string
   notionMcpKey: string
   sentryMcpKey: string
+  tags: string[]
 }
 
 interface ActiveMcpServer {
@@ -59,6 +60,7 @@ export const useSettingsStore = defineStore('settings', {
       defaultPermissionMode: 'plan',
       notionMcpKey: '',
       sentryMcpKey: '',
+      tags: [],
     } as GlobalSettings,
     activeMcpServers: [] as ActiveMcpServer[],
     projects: [] as ProjectSettings[],

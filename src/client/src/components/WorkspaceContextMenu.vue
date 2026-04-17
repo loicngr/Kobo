@@ -16,6 +16,7 @@ const emit = defineEmits<{
   openEditor: [ws: Workspace]
   runSetup: [ws: Workspace]
   toggleFavorite: [ws: Workspace]
+  manageTags: [ws: Workspace]
   archive: [ws: Workspace, event: Event]
   unarchive: [ws: Workspace, event: Event]
   delete: [ws: Workspace, event: Event]
@@ -50,6 +51,10 @@ const settingsStore = useSettingsStore()
         <q-item-section>
           {{ workspace.favoritedAt ? $t('workspace.unfavorite') : $t('workspace.favorite') }}
         </q-item-section>
+      </q-item>
+      <q-item clickable v-close-popup @click="emit('manageTags', workspace)">
+        <q-item-section side><q-icon name="label" size="xs" /></q-item-section>
+        <q-item-section>{{ $t('tags.manage') }}</q-item-section>
       </q-item>
       <q-separator dark />
       <q-item v-if="archived" clickable v-close-popup @click="(e) => emit('unarchive', workspace, e)">

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
+import ManageTagsDialog from 'src/components/ManageTagsDialog.vue'
 import WorkspaceContextMenu from 'src/components/WorkspaceContextMenu.vue'
 import { useDevServerStore } from 'src/stores/dev-server'
 import { useSettingsStore } from 'src/stores/settings'
@@ -23,6 +24,13 @@ const router = useRouter()
 const searchQuery = ref('')
 const favoritesOnly = ref<boolean>(localStorage.getItem('kobo:favorites-filter') === '1')
 watch(favoritesOnly, (v) => localStorage.setItem('kobo:favorites-filter', v ? '1' : '0'))
+
+const tagsDialogOpen = ref(false)
+const tagsDialogWorkspace = ref<Workspace | null>(null)
+function onManageTags(ws: Workspace) {
+  tagsDialogWorkspace.value = ws
+  tagsDialogOpen.value = true
+}
 
 interface ProjectGroup {
   projectPath: string
@@ -389,6 +397,7 @@ onMounted(async () => {
                 @open-editor="openInEditor"
                 @run-setup="runSetupScript"
                 @toggle-favorite="onToggleFavorite"
+                @manage-tags="onManageTags"
                 @archive="onArchiveClick"
                 @delete="openDeleteDialog"
               />
@@ -407,6 +416,9 @@ onMounted(async () => {
                   <q-icon name="warning" size="xs" color="red-5" class="q-mr-xs" />
                   <span class="text-red-5">{{ ws.status }}</span>
                   <span class="q-ml-xs text-grey-8">&middot; {{ timeAgo(ws.updatedAt) }}</span>
+                </div>
+                <div v-if="ws.tags.length > 0" class="row q-gutter-xs q-mt-xs">
+                  <q-chip v-for="tag in ws.tags" :key="tag" dense size="sm" color="grey-8" text-color="grey-3" :label="tag" />
                 </div>
               </div>
             </div>
@@ -462,6 +474,7 @@ onMounted(async () => {
                 @open-editor="openInEditor"
                 @run-setup="runSetupScript"
                 @toggle-favorite="onToggleFavorite"
+                @manage-tags="onManageTags"
                 @archive="onArchiveClick"
                 @delete="openDeleteDialog"
               />
@@ -479,6 +492,9 @@ onMounted(async () => {
                 <div class="text-caption q-mt-xs">
                   <span class="text-green-4">{{ ws.status }}</span>
                   <span class="q-ml-xs text-grey-8">&middot; {{ timeAgo(ws.updatedAt) }}</span>
+                </div>
+                <div v-if="ws.tags.length > 0" class="row q-gutter-xs q-mt-xs">
+                  <q-chip v-for="tag in ws.tags" :key="tag" dense size="sm" color="grey-8" text-color="grey-3" :label="tag" />
                 </div>
               </div>
             </div>
@@ -534,6 +550,7 @@ onMounted(async () => {
                 @open-editor="openInEditor"
                 @run-setup="runSetupScript"
                 @toggle-favorite="onToggleFavorite"
+                @manage-tags="onManageTags"
                 @archive="onArchiveClick"
                 @delete="openDeleteDialog"
               />
@@ -550,6 +567,9 @@ onMounted(async () => {
                 </div>
                 <div class="wl-item-meta text-caption text-grey-8">
                   {{ timeAgo(ws.updatedAt) }}
+                </div>
+                <div v-if="ws.tags.length > 0" class="row q-gutter-xs q-mt-xs">
+                  <q-chip v-for="tag in ws.tags" :key="tag" dense size="sm" color="grey-8" text-color="grey-3" :label="tag" />
                 </div>
               </div>
             </div>
@@ -601,6 +621,7 @@ onMounted(async () => {
               @open-editor="openInEditor"
               @run-setup="runSetupScript"
               @toggle-favorite="onToggleFavorite"
+              @manage-tags="onManageTags"
               @archive="onArchiveClick"
               @unarchive="onUnarchiveClick"
               @delete="openDeleteDialog"
@@ -612,6 +633,9 @@ onMounted(async () => {
               </div>
               <div class="wl-item-meta text-caption text-grey-8">
                 {{ $t('workspaceList.archived') }} {{ timeAgo(ws.archivedAt!) }}
+              </div>
+              <div v-if="ws.tags.length > 0" class="row q-gutter-xs q-mt-xs">
+                <q-chip v-for="tag in ws.tags" :key="tag" dense size="sm" color="grey-8" text-color="grey-3" :label="tag" />
               </div>
             </div>
           </div>
@@ -686,6 +710,12 @@ onMounted(async () => {
       </q-card-actions>
     </q-card>
   </q-dialog>
+
+  <ManageTagsDialog
+    v-if="tagsDialogWorkspace"
+    v-model="tagsDialogOpen"
+    :workspace="tagsDialogWorkspace"
+  />
 </template>
 
 <style lang="scss" scoped>

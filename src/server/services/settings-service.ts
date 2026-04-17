@@ -89,7 +89,11 @@ export interface GlobalSettings {
   defaultPermissionMode: string
   notionMcpKey: string
   sentryMcpKey: string
+  tags: string[]
 }
+
+/** Default workspace tags seeded on fresh install and on settings upgrade. */
+export const DEFAULT_WORKSPACE_TAGS: string[] = ['bug', 'feature', 'refactor', 'docs', 'wip', 'urgent', 'blocked']
 
 /** Top-level settings structure persisted to settings.json. */
 export interface Settings {
@@ -176,6 +180,13 @@ const settingsMigrations: SettingsMigration[] = [
       if (typeof global.sentryMcpKey !== 'string') global.sentryMcpKey = ''
     },
   },
+  {
+    version: 8,
+    name: 'add-workspace-tags',
+    migrate({ global }) {
+      if (!Array.isArray(global.tags)) global.tags = [...DEFAULT_WORKSPACE_TAGS]
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -236,6 +247,7 @@ function defaultSettings(): Settings {
       defaultPermissionMode: 'plan',
       notionMcpKey: '',
       sentryMcpKey: '',
+      tags: [...DEFAULT_WORKSPACE_TAGS],
     },
     projects: [],
   }
@@ -418,8 +430,20 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'defaultPermissionMode',
     'notionMcpKey',
     'sentryMcpKey',
+    'tags',
   ]
   const filtered = pickKnownKeys<GlobalSettings>(data as Record<string, unknown>, allowedGlobalKeys)
+  if (filtered.tags !== undefined) {
+    filtered.tags = Array.isArray(filtered.tags)
+      ? Array.from(
+          new Set(
+            (filtered.tags as unknown[])
+              .map((t) => (typeof t === 'string' ? t.trim() : ''))
+              .filter((t) => t.length > 0 && t.length <= 50),
+          ),
+        )
+      : settings.global.tags
+  }
   settings.global = { ...settings.global, ...filtered }
   writeSettings(settings, { backup: true })
   return settings.global

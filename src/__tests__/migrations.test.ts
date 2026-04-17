@@ -34,8 +34,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 8', () => {
-    expect(SCHEMA_VERSION).toBe(8)
+  it('exporte SCHEMA_VERSION = 9', () => {
+    expect(SCHEMA_VERSION).toBe(9)
   })
 
   it('migre depuis la legacy schema_version table', () => {

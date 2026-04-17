@@ -17,6 +17,7 @@ export interface Workspace {
   hasUnread: boolean
   archivedAt: string | null
   favoritedAt: string | null
+  tags: string[]
   createdAt: string
   updatedAt: string
 }
@@ -263,6 +264,26 @@ export const useWorkspaceStore = defineStore('workspace', {
         this.workspaces[idx] = updated
       } catch (err) {
         this.workspaces[idx] = { ...this.workspaces[idx], favoritedAt: previous }
+        throw err
+      }
+    },
+
+    async setWorkspaceTags(id: string, tags: string[]) {
+      const idx = this.workspaces.findIndex((w) => w.id === id)
+      if (idx === -1) return
+      const previous = this.workspaces[idx].tags
+      this.workspaces[idx] = { ...this.workspaces[idx], tags: [...tags] }
+      try {
+        const res = await fetch(`/api/workspaces/${id}/tags`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tags }),
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const updated = (await res.json()) as Workspace
+        this.workspaces[idx] = updated
+      } catch (err) {
+        this.workspaces[idx] = { ...this.workspaces[idx], tags: previous }
         throw err
       }
     },
