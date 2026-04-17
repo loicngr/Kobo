@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import AcceptancePanel from 'src/components/AcceptancePanel.vue'
 import AgentTodosPanel from 'src/components/AgentTodosPanel.vue'
-import DevServerPanel from 'src/components/DevServerPanel.vue'
 import GitPanel from 'src/components/GitPanel.vue'
 import NotionPanel from 'src/components/NotionPanel.vue'
 import PlansPanel from 'src/components/PlansPanel.vue'
@@ -15,7 +14,11 @@ import { computed, provide, ref } from 'vue'
 import { useRoute } from 'vue-router'
 
 const DRAWER_TAB_KEY = 'kobo:rightTab'
-const rightTab = ref(localStorage.getItem(DRAWER_TAB_KEY) ?? 'git')
+const VALID_RIGHT_TABS = ['git', 'tasks', 'subagents', 'stats', 'plans'] as const
+const storedRightTab = localStorage.getItem(DRAWER_TAB_KEY)
+const rightTab = ref(
+  storedRightTab && (VALID_RIGHT_TABS as readonly string[]).includes(storedRightTab) ? storedRightTab : 'git',
+)
 
 function setRightTab(val: string) {
   rightTab.value = val
@@ -69,7 +72,7 @@ const savedSplit = parseInt(localStorage.getItem(SPLIT_KEY) ?? '60', 10)
 const topPercent = ref(Math.min(80, Math.max(20, savedSplit)))
 const isResizingVertical = ref(false)
 
-const bottomTab = ref('terminal')
+const bottomTab = ref('tools')
 
 function startVerticalResize(event: MouseEvent) {
   event.preventDefault()
@@ -137,7 +140,6 @@ function startVerticalResize(event: MouseEvent) {
             @update:model-value="setRightTab"
           >
             <q-tab name="git" icon="commit" />
-            <q-tab name="server" icon="dns" />
             <q-tab name="tasks" icon="checklist" />
             <q-tab name="subagents" icon="smart_toy" />
             <q-tab name="stats" icon="bar_chart" />
@@ -150,10 +152,6 @@ function startVerticalResize(event: MouseEvent) {
             <q-tab-panels v-model="rightTab" animated keep-alive>
               <q-tab-panel name="git" class="q-pa-none">
                 <GitPanel :workspace="store.selectedWorkspace" />
-              </q-tab-panel>
-
-              <q-tab-panel name="server" class="q-pa-none">
-                <DevServerPanel :workspace="store.selectedWorkspace" />
               </q-tab-panel>
 
               <q-tab-panel name="tasks" class="q-pa-none">
@@ -192,19 +190,19 @@ function startVerticalResize(event: MouseEvent) {
             indicator-color="indigo-4"
             narrow-indicator
           >
-            <q-tab name="terminal" icon="terminal" />
             <q-tab name="tools" icon="build" />
+            <q-tab name="terminal" icon="terminal" />
           </q-tabs>
 
           <q-separator dark />
 
           <q-tab-panels v-model="bottomTab" animated keep-alive class="col" style="overflow: hidden;">
-            <q-tab-panel name="terminal" class="q-pa-none" style="height: 100%;">
-              <TerminalPanel />
-            </q-tab-panel>
-
             <q-tab-panel name="tools" class="q-pa-none" style="overflow: auto;">
               <ToolsPanel :workspace="store.selectedWorkspace" />
+            </q-tab-panel>
+
+            <q-tab-panel name="terminal" class="q-pa-none" style="height: 100%;">
+              <TerminalPanel />
             </q-tab-panel>
           </q-tab-panels>
         </div>

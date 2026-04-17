@@ -15,7 +15,7 @@ app.get('/:workspaceId/status', (c) => {
       return c.json({ error: `Workspace '${workspaceId}' not found` }, 404)
     }
 
-    const status = getStatus(workspace.projectPath, workspace.workingBranch)
+    const status = getStatus(workspace.projectPath, workspace.workingBranch, workspaceId)
     // If runtime detection returns unknown, use persisted status from DB
     if (status.status === 'unknown' && workspace.devServerStatus && workspace.devServerStatus !== 'stopped') {
       status.status = workspace.devServerStatus as typeof status.status

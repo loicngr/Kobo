@@ -14,8 +14,6 @@ interface ProjectSettings {
   prPromptTemplate: string
   gitConventions: string
   setupScript: string
-  notionStatusProperty: string
-  notionInProgressStatus: string
   devServer: DevServerConfig
 }
 

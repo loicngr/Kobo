@@ -42,6 +42,11 @@ export interface InstanceConfig {
 /** workspaceId -> spawned dev-server process */
 const trackedProcesses = new Map<string, ChildProcess>()
 
+/** Test-only: clear the tracked-processes map between tests. */
+export function _resetTrackedProcessesForTests(): void {
+  trackedProcesses.clear()
+}
+
 // ── Pure helpers ───────────────────────────────────────────────────────────────
 
 /**
@@ -134,8 +139,14 @@ export function listRunningContainers(): string[] {
 
 /**
  * Get the dev-server status for a given project + branch.
+ *
+ * When `workspaceId` is provided and a start process for that workspace is
+ * still running (e.g. `docker compose up -d` is pulling/building images), the
+ * status is reported as `'starting'` even if no matching container is visible
+ * in `docker ps` yet. This prevents the UI from flashing to `'stopped'` during
+ * long build phases.
  */
-export function getStatus(projectPath: string, workingBranch: string): DevServerStatus {
+export function getStatus(projectPath: string, workingBranch: string, workspaceId?: string): DevServerStatus {
   const config = resolveInstance(projectPath, workingBranch)
 
   if (!config) {
@@ -160,6 +171,20 @@ export function getStatus(projectPath: string, workingBranch: string): DevServer
       httpPort: config.httpPort,
       url: `http://localhost:${config.httpPort}`,
       containers: matching,
+    }
+  }
+
+  // No matching container yet — but is a start process still in flight?
+  // This covers the long `docker compose up -d` build/pull phase where the
+  // CLI hasn't exited yet and containers haven't appeared in `docker ps`.
+  if (workspaceId && trackedProcesses.has(workspaceId)) {
+    return {
+      status: 'starting',
+      instanceName: config.instanceName,
+      projectName: config.projectName,
+      httpPort: config.httpPort,
+      url: '',
+      containers: [],
     }
   }
 

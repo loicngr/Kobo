@@ -90,6 +90,19 @@ export default {
   'workspacePage.interruptFailed': 'Unterbrechung fehlgeschlagen',
   'workspacePage.interruptTooltip':
     'Sanfte Unterbrechung (wie Escape) — stoppt das aktuelle Tool, hält die Sitzung aktiv',
+  'workspacePage.pendingNextRun': 'Beim nächsten Start angewendet',
+
+  // Search
+  'search.title': 'Suche',
+  'search.tooltip': 'Agent-Verlauf durchsuchen',
+  'search.placeholder': 'In allen Agent-Nachrichten suchen…',
+  'search.includeArchived': 'Archivierte Arbeitsbereiche einbeziehen',
+  'search.loading': 'Suche läuft…',
+  'search.noResults': 'Keine Treffer',
+  'search.error': 'Suche fehlgeschlagen: {message}',
+  'search.resultCount': '{n} Treffer',
+  'search.eventType.userMessage': 'Sie',
+  'search.eventType.agentOutput': 'Agent',
 
   // Activity Feed
   'activityFeed.empty': 'Noch keine Aktivität',
@@ -407,6 +420,8 @@ export default {
   'quotaFooter.tooltipTitle': 'Claude-Konto-Nutzung',
   'quotaFooter.lastUpdated': 'Letzte Aktualisierung: {time}',
   'quotaFooter.noData': 'Noch keine Daten',
+  'rateLimitType.fiveHour': '5h-Sitzung',
+  'rateLimitType.sevenDay': 'Wöchentlich',
   'stats.subagents': 'Sub-Agents',
   'stats.completed': 'Abgeschlossen',
   'stats.tokens': 'Tokens',

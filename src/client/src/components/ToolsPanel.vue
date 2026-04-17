@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
+import DevServerPanel from 'src/components/DevServerPanel.vue'
 import { useSettingsStore } from 'src/stores/settings'
 import type { Workspace } from 'src/stores/workspace'
 import { computed, ref } from 'vue'
@@ -85,18 +86,24 @@ async function openEditor() {
 </script>
 
 <template>
-  <div class="tools-panel q-px-md q-py-sm">
-    <div class="text-caption text-uppercase text-weight-bold text-grey-5 q-mb-xs">
-      {{ $t('tools.title') }}
-    </div>
+  <div class="tools-panel">
+    <!-- Dev server section (formerly its own top-tab) -->
+    <DevServerPanel :workspace="workspace" />
 
-    <template v-if="!workspace">
-      <div class="text-caption text-grey-8">
-        {{ $t('devServer.noWorkspace') }}
+    <q-separator dark />
+
+    <div class="q-px-md q-py-sm">
+      <div class="text-caption text-uppercase text-weight-bold text-grey-5 q-mb-xs">
+        {{ $t('tools.title') }}
       </div>
-    </template>
 
-    <template v-else>
+      <template v-if="!workspace">
+        <div class="text-caption text-grey-8">
+          {{ $t('devServer.noWorkspace') }}
+        </div>
+      </template>
+
+      <template v-else>
       <q-btn
         no-caps
         dense
@@ -127,11 +134,12 @@ async function openEditor() {
         @click="openEditor"
       />
 
-      <div v-if="!hasSetupScript" class="text-caption text-grey-8">
-        {{ $t('tools.noSetupScript') }}
-        <router-link to="/settings" style="color: #6c63ff;">{{ $t('devServer.goToSettings') }}</router-link>
-      </div>
-    </template>
+        <div v-if="!hasSetupScript" class="text-caption text-grey-8">
+          {{ $t('tools.noSetupScript') }}
+          <router-link to="/settings" style="color: #6c63ff;">{{ $t('devServer.goToSettings') }}</router-link>
+        </div>
+      </template>
+    </div>
   </div>
 </template>
 

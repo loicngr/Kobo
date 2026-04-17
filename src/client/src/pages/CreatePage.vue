@@ -750,7 +750,10 @@ async function handleCreate() {
             </template>
           </q-select>
 
-          <!-- Create button -->
+        </div>
+
+        <!-- Create button (centered, full-width row below the bottom bar) -->
+        <div class="row justify-center q-px-sm q-py-sm">
           <q-btn
             :label="$t('createPage.create')"
             no-caps
@@ -1022,12 +1025,13 @@ async function handleCreate() {
 .create-btn {
   background: #4f46e5;
   color: #fff;
-  font-size: 12px;
-  height: 28px;
-  padding: 0 14px;
+  font-size: 13px;
+  height: 32px;
+  min-width: 220px;
+  padding: 0 32px;
 
   :deep(.q-btn__content) {
-    height: 28px;
+    height: 32px;
   }
 }
 

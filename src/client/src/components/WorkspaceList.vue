@@ -222,6 +222,10 @@ function goToSettings() {
   router.push({ name: 'settings' })
 }
 
+function goToSearch() {
+  router.push({ name: 'search' })
+}
+
 onMounted(async () => {
   await store.fetchWorkspaces()
   // Silently fetch archived workspaces so the Archived group header renders
@@ -259,6 +263,18 @@ onMounted(async () => {
             color="negative"
             class="q-ml-xs"
         />
+        <q-btn
+            flat
+            round
+            dense
+            icon="search"
+            class="q-ml-xs"
+            size="sm"
+            color="grey-5"
+            @click="goToSearch"
+        >
+          <q-tooltip>{{ $t('search.tooltip') }}</q-tooltip>
+        </q-btn>
         <q-btn
             flat
             round

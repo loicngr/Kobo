@@ -69,7 +69,7 @@ describe('GET /api/dev-server/:workspaceId/status', () => {
     const data = await res.json()
     expect(data.status).toBe('running')
     expect(data.instanceName).toBe('feature-test')
-    expect(devServerService.getStatus).toHaveBeenCalledWith('/tmp/project', 'feature/test')
+    expect(devServerService.getStatus).toHaveBeenCalledWith('/tmp/project', 'feature/test', 'ws-1')
   })
 
   it('falls back to persisted devServerStatus when runtime returns unknown', async () => {

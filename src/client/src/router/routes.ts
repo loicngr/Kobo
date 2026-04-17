@@ -24,6 +24,11 @@ const routes: RouteRecordRaw[] = [
         name: 'settings',
         component: () => import('../pages/SettingsPage.vue'),
       },
+      {
+        path: 'search',
+        name: 'search',
+        component: () => import('../pages/SearchPage.vue'),
+      },
     ],
   },
   // Always leave this as last

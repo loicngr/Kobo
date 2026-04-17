@@ -25,6 +25,7 @@ vi.mock('../server/services/websocket-service.js', () => ({
 
 import { execSync, spawn } from 'node:child_process'
 import {
+  _resetTrackedProcessesForTests,
   getDevServerLogs,
   getStatus,
   listRunningContainers,
@@ -40,6 +41,7 @@ import { getWorkspace } from '../server/services/workspace-service.js'
 
 beforeEach(() => {
   vi.clearAllMocks()
+  _resetTrackedProcessesForTests()
 })
 
 // ── sanitizeBranchName ─────────────────────────────────────────────────────────
@@ -237,6 +239,100 @@ describe('getStatus', () => {
     expect(status.status).toBe('unknown')
     expect(status.instanceName).toBe('')
     expect(status.containers).toEqual([])
+  })
+
+  it('returns starting when a start process is in flight and no containers visible yet', () => {
+    const instancesDir = path.join(tmpDir, '.container', 'instances')
+    fs.mkdirSync(instancesDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(instancesDir, 'app.env'),
+      'INSTANCE_NAME=feature-test\nPROJECT_NAME=myapp\nHTTP_PORT=3000',
+    )
+
+    // 1) Simulate a running Docker build: spawn() returns a mock proc that never
+    //    fires 'exit'. startDevServer registers it in trackedProcesses.
+    vi.mocked(getWorkspace).mockReturnValue({
+      id: 'ws-build',
+      name: 'Test',
+      projectPath: tmpDir,
+      sourceBranch: 'main',
+      workingBranch: 'feature/test',
+      status: 'idle',
+      notionUrl: null,
+      notionPageId: null,
+      model: 'auto',
+      createdAt: '',
+      updatedAt: '',
+    })
+    vi.mocked(getProjectSettings).mockReturnValue({
+      path: tmpDir,
+      displayName: 'Test',
+      defaultSourceBranch: 'main',
+      defaultModel: 'auto',
+      prPromptTemplate: '',
+      devServer: { startCommand: 'docker compose up -d', stopCommand: '' },
+    })
+    const mockProc = { on: vi.fn(), kill: vi.fn(), stdout: null, stderr: null, pid: 1234 }
+    vi.mocked(spawn).mockReturnValue(mockProc as unknown as ReturnType<typeof spawn>)
+    startDevServer('ws-build')
+
+    // 2) Polling hits getStatus() mid-build — docker ps still shows nothing matching.
+    vi.mocked(execSync).mockReturnValue('other-container\n')
+
+    const status = getStatus(tmpDir, 'feature/test', 'ws-build')
+    expect(status.status).toBe('starting')
+  })
+
+  it('returns stopped when no tracked process and no containers match', () => {
+    const instancesDir = path.join(tmpDir, '.container', 'instances')
+    fs.mkdirSync(instancesDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(instancesDir, 'app.env'),
+      'INSTANCE_NAME=feature-test\nPROJECT_NAME=myapp\nHTTP_PORT=3000',
+    )
+    vi.mocked(execSync).mockReturnValue('other-app\n')
+
+    const status = getStatus(tmpDir, 'feature/test', 'ws-not-tracked')
+    expect(status.status).toBe('stopped')
+  })
+
+  it('prefers running over starting when containers are visible even if a process is tracked', () => {
+    const instancesDir = path.join(tmpDir, '.container', 'instances')
+    fs.mkdirSync(instancesDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(instancesDir, 'app.env'),
+      'INSTANCE_NAME=feature-test\nPROJECT_NAME=myapp\nHTTP_PORT=3000',
+    )
+
+    vi.mocked(getWorkspace).mockReturnValue({
+      id: 'ws-running',
+      name: 'Test',
+      projectPath: tmpDir,
+      sourceBranch: 'main',
+      workingBranch: 'feature/test',
+      status: 'idle',
+      notionUrl: null,
+      notionPageId: null,
+      model: 'auto',
+      createdAt: '',
+      updatedAt: '',
+    })
+    vi.mocked(getProjectSettings).mockReturnValue({
+      path: tmpDir,
+      displayName: 'Test',
+      defaultSourceBranch: 'main',
+      defaultModel: 'auto',
+      prPromptTemplate: '',
+      devServer: { startCommand: 'docker compose up -d', stopCommand: '' },
+    })
+    const mockProc = { on: vi.fn(), kill: vi.fn(), stdout: null, stderr: null, pid: 1234 }
+    vi.mocked(spawn).mockReturnValue(mockProc as unknown as ReturnType<typeof spawn>)
+    startDevServer('ws-running')
+
+    vi.mocked(execSync).mockReturnValue('myapp-web-1\n')
+
+    const status = getStatus(tmpDir, 'feature/test', 'ws-running')
+    expect(status.status).toBe('running')
   })
 })
 

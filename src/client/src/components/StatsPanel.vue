@@ -2,6 +2,7 @@
 import type { Workspace } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { useTimeAgo } from 'src/utils/formatters'
+import { formatRateLimitLabel } from 'src/utils/rate-limit-labels'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -141,7 +142,7 @@ function formatDateTime(d: Date): string {
 
 function formatUsageBucketLabel(label: string | undefined, idx: number): string {
   if (!label) return t('stats.usageBucket', { n: idx + 1 })
-  return label.replace(/[_-]+/g, ' ')
+  return formatRateLimitLabel(label, t)
 }
 
 function toPercent(value: number, total: number): number {

@@ -237,8 +237,6 @@ function syncProjectForm(project: ProjectSettings | null) {
       prPromptTemplate: '',
       gitConventions: '',
       setupScript: '',
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
       devServer: { startCommand: '', stopCommand: '' },
     }
     projectBranches.value = []
@@ -253,8 +251,6 @@ function syncProjectForm(project: ProjectSettings | null) {
     prPromptTemplate: project.prPromptTemplate,
     gitConventions: project.gitConventions ?? '',
     setupScript: project.setupScript ?? '',
-    notionStatusProperty: project.notionStatusProperty ?? '',
-    notionInProgressStatus: project.notionInProgressStatus ?? '',
     devServer: {
       startCommand: project.devServer?.startCommand ?? '',
       stopCommand: project.devServer?.stopCommand ?? '',
@@ -344,8 +340,6 @@ async function saveProject() {
       prPromptTemplate: projectForm.value.prPromptTemplate,
       gitConventions: projectForm.value.gitConventions,
       setupScript: projectForm.value.setupScript,
-      notionStatusProperty: projectForm.value.notionStatusProperty,
-      notionInProgressStatus: projectForm.value.notionInProgressStatus,
       devServer: projectForm.value.devServer,
     })
     isNewProject.value = false
@@ -895,34 +889,6 @@ onUnmounted(() => {
                       class="settings-input mono-textarea"
                     />
                     <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.setupScriptHint') }}</div>
-                  </div>
-
-                  <!-- Notion status -->
-                  <div class="q-mb-lg">
-                    <div class="field-label text-body2 text-weight-medium q-mb-sm text-grey-6">{{ $t('settings.notionStatus') }}</div>
-                    <div class="q-mb-sm">
-                      <div class="field-label-sub text-caption q-mb-xs text-grey-7">{{ $t('settings.notionStatusProperty') }}</div>
-                      <q-input
-                        v-model="projectForm.notionStatusProperty"
-                        dense
-                        dark
-                        outlined
-                        :placeholder="$t('settings.notionStatusPropertyPlaceholder')"
-                        class="settings-input"
-                      />
-                    </div>
-                    <div class="q-mb-sm">
-                      <div class="field-label-sub text-caption q-mb-xs text-grey-7">{{ $t('settings.notionInProgressStatus') }}</div>
-                      <q-input
-                        v-model="projectForm.notionInProgressStatus"
-                        dense
-                        dark
-                        outlined
-                        :placeholder="$t('settings.notionInProgressStatusPlaceholder')"
-                        class="settings-input"
-                      />
-                    </div>
-                    <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.notionStatusHint') }}</div>
                   </div>
 
                   <!-- Dev Server -->

@@ -90,6 +90,19 @@ export default {
   'workspacePage.interruptFailed': "Échec de l'interruption",
   'workspacePage.interruptTooltip':
     'Interruption douce (comme Escape) — arrête le tool en cours mais garde la session active',
+  'workspacePage.pendingNextRun': 'Appliqué au prochain démarrage',
+
+  // Search
+  'search.title': 'Recherche',
+  'search.tooltip': "Rechercher dans l'historique des agents",
+  'search.placeholder': 'Rechercher dans tous les messages agents…',
+  'search.includeArchived': 'Inclure les workspaces archivés',
+  'search.loading': 'Recherche en cours…',
+  'search.noResults': 'Aucun résultat',
+  'search.error': 'Échec de la recherche : {message}',
+  'search.resultCount': '{n} résultat(s)',
+  'search.eventType.userMessage': 'Vous',
+  'search.eventType.agentOutput': 'Agent',
 
   // Activity Feed
   'activityFeed.empty': 'Aucune activité',
@@ -407,6 +420,8 @@ export default {
   'quotaFooter.tooltipTitle': 'Utilisation du compte Claude',
   'quotaFooter.lastUpdated': 'Dernière mise à jour : {time}',
   'quotaFooter.noData': 'Aucune donnée pour le moment',
+  'rateLimitType.fiveHour': 'Session 5h',
+  'rateLimitType.sevenDay': 'Hebdo',
   'stats.subagents': 'Sub-agents',
   'stats.completed': 'Terminés',
   'stats.tokens': 'Tokens',

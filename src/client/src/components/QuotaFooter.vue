@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { formatRateLimitLabel } from 'src/utils/rate-limit-labels'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -9,7 +10,8 @@ const { t } = useI18n()
 const snapshot = computed(() => store.globalRateLimitUsage)
 
 function bucketLabel(label: string | undefined, idx: number): string {
-  return label && label.trim().length > 0 ? label : t('stats.usageBucket', { n: idx + 1 })
+  if (!label || label.trim().length === 0) return t('stats.usageBucket', { n: idx + 1 })
+  return formatRateLimitLabel(label, t)
 }
 
 const summary = computed(() => {

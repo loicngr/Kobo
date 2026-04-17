@@ -72,8 +72,6 @@ export interface ProjectSettings {
   prPromptTemplate: string
   gitConventions: string
   setupScript: string
-  notionStatusProperty: string
-  notionInProgressStatus: string
   devServer: DevServerConfig
 }
 
@@ -253,8 +251,6 @@ function defaultProjectSettings(projectPath: string): ProjectSettings {
     prPromptTemplate: '',
     gitConventions: '',
     setupScript: '',
-    notionInProgressStatus: '',
-    notionStatusProperty: '',
     devServer: {
       startCommand: '',
       stopCommand: '',
@@ -401,8 +397,8 @@ export function getEffectiveSettings(projectPath: string): EffectiveSettings {
     sourceBranch: project.defaultSourceBranch,
     devServer: project.devServer,
     setupScript: project.setupScript || '',
-    notionStatusProperty: project.notionStatusProperty || settings.global.notionStatusProperty,
-    notionInProgressStatus: project.notionInProgressStatus || settings.global.notionInProgressStatus,
+    notionStatusProperty: settings.global.notionStatusProperty,
+    notionInProgressStatus: settings.global.notionInProgressStatus,
   }
 }
 
@@ -439,8 +435,6 @@ export function upsertProject(projectPath: string, data: Partial<Omit<ProjectSet
     'prPromptTemplate',
     'gitConventions',
     'setupScript',
-    'notionStatusProperty',
-    'notionInProgressStatus',
     'devServer',
   ]
   const allowedDevServerKeys = ['startCommand', 'stopCommand']

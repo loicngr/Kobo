@@ -12,6 +12,7 @@ import gitRouter from './routes/git.js'
 import imagesRouter from './routes/images.js'
 import notionRouter from './routes/notion.js'
 import plansRouter from './routes/plans.js'
+import searchRouter from './routes/search.js'
 import sentryRouter from './routes/sentry.js'
 import settingsRouter from './routes/settings.js'
 import templatesRouter from './routes/templates.js'
@@ -25,12 +26,13 @@ import {
   stopAgent,
   stopWatchdog,
 } from './services/agent-manager.js'
+import { createDailyDbBackupIfNeeded } from './services/db-backup-service.js'
 import { startDevServer, stopDevServer } from './services/dev-server-service.js'
 import { startPrWatcher, stopPrWatcher } from './services/pr-watcher-service.js'
 import { createTerminal, destroyAllTerminals, getTerminal } from './services/terminal-service.js'
 import { emit, handleConnection, setMessageHandler } from './services/websocket-service.js'
 import { getActiveSession, getWorkspace, updateWorkspaceStatus } from './services/workspace-service.js'
-import { getClientSpaPath, getKoboHome, getPackageVersion } from './utils/paths.js'
+import { getClientSpaPath, getDbPath, getKoboHome, getPackageVersion } from './utils/paths.js'
 import { initProcessCleanup, killAll as killAllTrackedProcesses } from './utils/process-tracker.js'
 
 // Runtime prerequisite check — warn if the claude CLI is missing. Don't block
@@ -49,6 +51,18 @@ console.log(`[kobo] Kōbō home: ${getKoboHome()}`)
 // Initialize DB + run migrations
 const db = getDb()
 runMigrations(db)
+
+// Daily DB backup (best-effort, fire-and-forget — never blocks boot).
+// Creates a WAL-safe snapshot alongside kobo.db if no backup exists in the
+// last 24h, and rotates out older backups beyond the retention window.
+void createDailyDbBackupIfNeeded(db, getDbPath()).then((r) => {
+  if (r.created) {
+    console.log(`[kobo] Daily DB backup: ${r.created}`)
+    if (r.deleted.length > 0) {
+      console.log(`[kobo] Rotated ${r.deleted.length} old DB backup(s)`)
+    }
+  }
+})
 
 // Initialize process cleanup, agent watchdog, and PR watcher
 initProcessCleanup()
@@ -71,6 +85,7 @@ app.route('/api/settings', settingsRouter)
 app.route('/api/dev-server', devServerRouter)
 app.route('/api/templates', templatesRouter)
 app.route('/api/workspaces', plansRouter)
+app.route('/api/search', searchRouter)
 
 // Skills endpoint
 app.get('/api/skills', (c) => c.json(getAvailableSkills()))

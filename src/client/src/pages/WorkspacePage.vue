@@ -26,6 +26,37 @@ const starting = ref(false)
 const stopping = ref(false)
 const pendingWorkspaceUpdates = new Set<Promise<unknown>>()
 
+// Fields that deal with agent-spawn-time flags (--model, --effort, plan mode).
+// When the user changes them while an agent is already running, the change
+// doesn't affect the current turn — it's only picked up on the next spawn.
+// We surface a small "pending" indicator until the workspace leaves its running
+// state, at which point any new start will naturally consume the fresh values.
+type SpawnField = 'model' | 'reasoningEffort' | 'permissionMode'
+const pendingSpawnChanges = ref<Set<SpawnField>>(new Set())
+
+const isAgentRunning = computed(() => {
+  const status = store.selectedWorkspace?.status
+  return status === 'executing' || status === 'extracting' || status === 'brainstorming'
+})
+
+watch(isAgentRunning, (running) => {
+  if (!running) pendingSpawnChanges.value = new Set()
+})
+
+watch(
+  () => store.selectedWorkspaceId,
+  () => {
+    pendingSpawnChanges.value = new Set()
+  },
+)
+
+function markSpawnFieldPending(field: SpawnField): void {
+  if (!isAgentRunning.value) return
+  const next = new Set(pendingSpawnChanges.value)
+  next.add(field)
+  pendingSpawnChanges.value = next
+}
+
 function trackWorkspaceUpdate(promise: Promise<unknown>) {
   pendingWorkspaceUpdates.add(promise)
   promise.finally(() => {
@@ -103,6 +134,7 @@ const currentModel = computed({
   get: () => store.selectedWorkspace?.model ?? 'auto',
   set: (val: string) => {
     if (store.selectedWorkspaceId) {
+      markSpawnFieldPending('model')
       trackWorkspaceUpdate(store.updateModel(store.selectedWorkspaceId, val))
     }
   },
@@ -112,6 +144,7 @@ const currentReasoningEffort = computed({
   get: () => store.selectedWorkspace?.reasoningEffort ?? 'auto',
   set: (val: string) => {
     if (store.selectedWorkspaceId) {
+      markSpawnFieldPending('reasoningEffort')
       trackWorkspaceUpdate(store.updateReasoningEffort(store.selectedWorkspaceId, val))
     }
   },
@@ -131,6 +164,7 @@ const currentPermissionMode = computed({
   get: () => store.selectedWorkspace?.permissionMode ?? 'auto-accept',
   set: (val: string) => {
     if (store.selectedWorkspaceId) {
+      markSpawnFieldPending('permissionMode')
       trackWorkspaceUpdate(store.updatePermissionMode(store.selectedWorkspaceId, val))
     }
   },
@@ -352,6 +386,9 @@ watch(
             <span class="row items-center no-wrap text-caption text-grey-5">
               <q-icon :name="currentPermissionMode === 'plan' ? 'visibility' : 'flash_on'" size="12px" color="amber-6" class="q-mr-xs" />
               {{ permissionModeOptions.find(m => m.value === currentPermissionMode)?.label ?? currentPermissionMode }}
+              <q-icon v-if="pendingSpawnChanges.has('permissionMode')" name="schedule" size="11px" color="orange-6" class="q-ml-xs">
+                <q-tooltip>{{ $t('workspacePage.pendingNextRun') }}</q-tooltip>
+              </q-icon>
             </span>
           </template>
         </q-select>
@@ -371,6 +408,9 @@ watch(
             <span class="row items-center no-wrap text-caption text-grey-5">
               <q-icon name="auto_awesome" size="12px" color="indigo-4" class="q-mr-xs" />
               {{ modelOptions.find(m => m.value === currentModel)?.label ?? currentModel }}
+              <q-icon v-if="pendingSpawnChanges.has('model')" name="schedule" size="11px" color="orange-6" class="q-ml-xs">
+                <q-tooltip>{{ $t('workspacePage.pendingNextRun') }}</q-tooltip>
+              </q-icon>
             </span>
           </template>
         </q-select>
@@ -390,6 +430,9 @@ watch(
             <span class="row items-center no-wrap text-caption text-grey-5">
               <q-icon name="psychology" size="12px" color="amber-6" class="q-mr-xs" />
               {{ formatReasoningSelectedLabel(currentReasoningEffort) }}
+              <q-icon v-if="pendingSpawnChanges.has('reasoningEffort')" name="schedule" size="11px" color="orange-6" class="q-ml-xs">
+                <q-tooltip>{{ $t('workspacePage.pendingNextRun') }}</q-tooltip>
+              </q-icon>
             </span>
           </template>
         </q-select>
