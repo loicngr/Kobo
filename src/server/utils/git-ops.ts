@@ -1,5 +1,5 @@
 import { execFile as execFileCb, execFileSync } from 'node:child_process'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 
@@ -151,7 +151,46 @@ export function pullBranch(repoPath: string, branchName: string, remote = 'origi
   }
 }
 
-/** Rebase the current branch onto the given base branch. Fetches origin first to get latest changes. */
+/** Thrown when a rebase or merge produces conflicts. Leaves the repo in the mid-operation state
+ *  so the caller can decide between abort and agent-assisted resolution. */
+export class GitConflictError extends Error {
+  readonly operation: 'rebase' | 'merge'
+  readonly files: string[]
+  constructor(operation: 'rebase' | 'merge', files: string[]) {
+    super(`${operation} produced ${files.length} conflicted file(s)`)
+    this.name = 'GitConflictError'
+    this.operation = operation
+    this.files = files
+  }
+}
+
+/** List files currently in a conflicted state (unmerged paths). */
+export function getConflictedFiles(repoPath: string): string[] {
+  try {
+    const output = git(repoPath, ['diff', '--name-only', '--diff-filter=U'])
+    return output
+      .split('\n')
+      .map((f) => f.trim())
+      .filter(Boolean)
+  } catch {
+    return []
+  }
+}
+
+/** Detect whether a merge or rebase is currently in progress in the worktree. */
+export function getOngoingGitOperation(repoPath: string): 'merge' | 'rebase' | null {
+  try {
+    const gitDir = git(repoPath, ['rev-parse', '--git-dir'])
+    const dir = gitDir.startsWith('/') ? gitDir : join(repoPath, gitDir)
+    if (existsSync(join(dir, 'MERGE_HEAD'))) return 'merge'
+    if (existsSync(join(dir, 'rebase-merge')) || existsSync(join(dir, 'rebase-apply'))) return 'rebase'
+    return null
+  } catch {
+    return null
+  }
+}
+
+/** Rebase the current branch onto the given base branch. Fetches origin first. Leaves conflicts in place. */
 export function rebaseBranch(repoPath: string, baseBranch: string): void {
   try {
     git(repoPath, ['fetch', 'origin', baseBranch])
@@ -161,15 +200,44 @@ export function rebaseBranch(repoPath: string, baseBranch: string): void {
   try {
     git(repoPath, ['rebase', `origin/${baseBranch}`])
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    // Abort the rebase if it fails (conflicts etc.)
-    try {
-      git(repoPath, ['rebase', '--abort'])
-    } catch {
-      /* best-effort */
+    const conflicted = getConflictedFiles(repoPath)
+    if (conflicted.length > 0 || getOngoingGitOperation(repoPath) === 'rebase') {
+      // Leave the rebase in progress so the caller can abort or request agent-assisted resolution.
+      throw new GitConflictError('rebase', conflicted)
     }
+    const message = err instanceof Error ? err.message : String(err)
     throw new Error(`Rebase onto '${baseBranch}' failed: ${message}`)
   }
+}
+
+/** Merge `origin/<baseBranch>` into the current branch. Fetches first. Leaves conflicts in place. */
+export function mergeBranch(repoPath: string, baseBranch: string): void {
+  try {
+    git(repoPath, ['fetch', 'origin', baseBranch])
+  } catch {
+    // offline — continue with local ref
+  }
+  try {
+    git(repoPath, ['merge', '--no-ff', '--no-edit', `origin/${baseBranch}`])
+  } catch (err) {
+    const conflicted = getConflictedFiles(repoPath)
+    if (conflicted.length > 0 || getOngoingGitOperation(repoPath) === 'merge') {
+      throw new GitConflictError('merge', conflicted)
+    }
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`Merge of 'origin/${baseBranch}' failed: ${message}`)
+  }
+}
+
+/** Abort an in-progress merge or rebase. No-op if nothing is in progress. */
+export function abortOngoingGitOperation(repoPath: string): 'merge' | 'rebase' | null {
+  const op = getOngoingGitOperation(repoPath)
+  if (op === 'merge') {
+    git(repoPath, ['merge', '--abort'])
+  } else if (op === 'rebase') {
+    git(repoPath, ['rebase', '--abort'])
+  }
+  return op
 }
 
 /** Try a git command with `base`, falling back to `origin/base` if the local ref is missing. */

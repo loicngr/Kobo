@@ -1416,6 +1416,126 @@ app.post('/:id/rebase', (c) => {
 
     return c.json({ success: true })
   } catch (err) {
+    if (err instanceof gitOps.GitConflictError) {
+      return c.json({ error: err.message, conflict: true, operation: err.operation, files: err.files }, 409)
+    }
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+/** Merge the source branch into the workspace branch (non-fast-forward). */
+app.post('/:id/merge', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    gitOps.mergeBranch(worktreePath, workspace.sourceBranch)
+
+    return c.json({ success: true })
+  } catch (err) {
+    if (err instanceof gitOps.GitConflictError) {
+      return c.json({ error: err.message, conflict: true, operation: err.operation, files: err.files }, 409)
+    }
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+/** Abort any in-progress merge or rebase in the worktree. */
+app.post('/:id/git/abort', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    const aborted = gitOps.abortOngoingGitOperation(worktreePath)
+    return c.json({ success: true, aborted })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+/** Hand off merge/rebase conflicts to the workspace agent with an intelligent-resolution prompt. */
+app.post('/:id/git/resolve-with-agent', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const body = (await c.req.json<{ operation?: 'merge' | 'rebase'; files?: string[] }>().catch(() => ({}))) as {
+      operation?: 'merge' | 'rebase'
+      files?: string[]
+    }
+    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    const operation = body.operation ?? gitOps.getOngoingGitOperation(worktreePath) ?? 'merge'
+    const files = body.files && body.files.length > 0 ? body.files : gitOps.getConflictedFiles(worktreePath)
+
+    if (files.length === 0) {
+      return c.json({ error: 'No conflicted files detected — nothing for the agent to resolve' }, 400)
+    }
+
+    const fileList = files.map((f) => `- ${f}`).join('\n')
+    const continueCmd = operation === 'merge' ? 'git merge --continue' : 'git rebase --continue'
+    const prompt = `I started a \`git ${operation}\` of \`origin/${workspace.sourceBranch}\` into our working branch \`${workspace.workingBranch}\` and it produced conflicts that I need your help to resolve INTELLIGENTLY.
+
+Conflicted files (${files.length}):
+${fileList}
+
+## Resolution rules — read carefully
+
+1. **Our branch is the source of truth for the feature we are building.** Its behavior must be preserved.
+2. **The source branch (\`${workspace.sourceBranch}\`) carries legitimate upstream changes** (bug fixes, refactors, dependency bumps). Integrate these where they don't conflict with our intent.
+3. **Do NOT blindly pick a side.** Neither \`--ours\` nor \`--theirs\` wholesale. Read each conflict hunk and reason about what the correct merged state is.
+4. **Think semantically, not syntactically.** If our branch renamed \`foo\` to \`bar\` and the source branch added a new call to \`foo\`, the correct resolution is a new call to \`bar\`, not "keep ours and drop the new call".
+5. **Preserve tests and contracts.** If both sides touched the same test, keep coverage from both.
+6. **Imports, versions, lock files:** prefer the superset (union) unless they genuinely conflict — in which case use the more recent / more restrictive.
+
+## Steps
+
+1. For each conflicted file, open it and read both conflict markers.
+2. Decide the merge intent. If unsure, investigate both sides' commit history (\`git log --oneline ours..HEAD <file>\` vs \`git log --oneline origin/${workspace.sourceBranch} <file>\`).
+3. Edit the file to the correct merged state and remove the conflict markers.
+4. Run the test suite to verify no regression (\`npm test\` or the project's equivalent).
+5. \`git add <resolved-files>\` then \`${continueCmd}\`.
+6. Report the summary: which files you touched, the key decisions you made, and the final test result.
+
+Start now.`
+
+    // Persist the prompt in the chat feed so the user sees what was dispatched.
+    const session = workspaceService.getActiveSession(workspace.id)
+    wsService.emit(workspace.id, 'user:message', { content: prompt, sender: 'user' }, session?.id ?? undefined)
+
+    let messageSent = false
+    try {
+      agentManager.sendMessage(workspace.id, prompt)
+      messageSent = true
+    } catch {
+      try {
+        agentManager.startAgent(
+          workspace.id,
+          worktreePath,
+          prompt,
+          workspace.model,
+          true,
+          workspace.permissionMode,
+          undefined,
+          workspace.reasoningEffort,
+        )
+        workspaceService.updateWorkspaceStatus(workspace.id, 'executing')
+        messageSent = true
+      } catch (resumeErr) {
+        const resumeMsg = resumeErr instanceof Error ? resumeErr.message : String(resumeErr)
+        console.warn(`[workspaces] resolve-with-agent: agent resume failed: ${resumeMsg}`)
+      }
+    }
+
+    return c.json({ ok: true, operation, files, messageSent })
+  } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
   }

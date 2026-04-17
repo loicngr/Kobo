@@ -20,9 +20,17 @@ const store = useWorkspaceStore()
 const pushing = ref(false)
 const pulling = ref(false)
 const rebasing = ref(false)
+const merging = ref(false)
 const openingPr = ref(false)
 const changingBase = ref(false)
 const showDiff = ref(false)
+
+// Conflict state for the shared merge/rebase resolution dialog
+const conflictDialog = ref(false)
+const conflictOperation = ref<'merge' | 'rebase' | null>(null)
+const conflictFiles = ref<string[]>([])
+const conflictAborting = ref(false)
+const conflictResolving = ref(false)
 
 function onSendToChat(text: string) {
   store.chatDraft = text
@@ -99,6 +107,11 @@ function handleRebase() {
     rebasing.value = true
     try {
       const res = await fetch(`/api/workspaces/${props.workspace!.id}/rebase`, { method: 'POST' })
+      if (res.status === 409) {
+        const data = await res.json()
+        openConflictDialog('rebase', Array.isArray(data.files) ? data.files : [])
+        return
+      }
       if (!res.ok) {
         const data = await res.json()
         throw new Error(data.error ?? 'Rebase failed')
@@ -112,6 +125,87 @@ function handleRebase() {
       rebasing.value = false
     }
   })
+}
+
+function handleMerge() {
+  if (!props.workspace) return
+  $q.dialog({
+    title: t('git.mergeConfirmTitle'),
+    message: t('git.mergeConfirmMessage', { branch: props.workspace.sourceBranch }),
+    dark: true,
+    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    ok: { flat: true, label: t('git.merge'), color: 'purple-4' },
+  }).onOk(async () => {
+    merging.value = true
+    try {
+      const res = await fetch(`/api/workspaces/${props.workspace!.id}/merge`, { method: 'POST' })
+      if (res.status === 409) {
+        const data = await res.json()
+        openConflictDialog('merge', Array.isArray(data.files) ? data.files : [])
+        return
+      }
+      if (!res.ok) {
+        const data = await res.json()
+        throw new Error(data.error ?? 'Merge failed')
+      }
+      $q.notify({ type: 'positive', message: t('git.mergeSuccess'), position: 'top' })
+      loadGitStats()
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : t('git.mergeFailed')
+      $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    } finally {
+      merging.value = false
+    }
+  })
+}
+
+function openConflictDialog(op: 'merge' | 'rebase', files: string[]) {
+  conflictOperation.value = op
+  conflictFiles.value = files
+  conflictDialog.value = true
+}
+
+async function abortGitOperation() {
+  if (!props.workspace) return
+  conflictAborting.value = true
+  try {
+    const res = await fetch(`/api/workspaces/${props.workspace.id}/git/abort`, { method: 'POST' })
+    if (!res.ok) {
+      const data = await res.json()
+      throw new Error(data.error ?? 'Abort failed')
+    }
+    $q.notify({ type: 'positive', message: t('git.conflictAborted'), position: 'top' })
+    conflictDialog.value = false
+    loadGitStats()
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'Abort failed'
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+  } finally {
+    conflictAborting.value = false
+  }
+}
+
+async function resolveWithAgent() {
+  if (!props.workspace || !conflictOperation.value) return
+  conflictResolving.value = true
+  try {
+    const res = await fetch(`/api/workspaces/${props.workspace.id}/git/resolve-with-agent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ operation: conflictOperation.value, files: conflictFiles.value }),
+    })
+    if (!res.ok) {
+      const data = await res.json()
+      throw new Error(data.error ?? 'Handoff failed')
+    }
+    $q.notify({ type: 'positive', message: t('git.conflictHandoffSuccess'), position: 'top' })
+    conflictDialog.value = false
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'Handoff failed'
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+  } finally {
+    conflictResolving.value = false
+  }
 }
 
 function handlePush() {
@@ -416,8 +510,20 @@ async function handleOpenPr() {
           :label="$t('git.rebase')"
           class="git-btn"
           :loading="rebasing"
-          :disable="!workspace || pushing || pulling"
+          :disable="!workspace || pushing || pulling || merging"
           @click="handleRebase"
+        />
+        <q-btn
+          dense
+          no-caps
+          size="sm"
+          outline
+          color="purple-4"
+          :label="$t('git.merge')"
+          class="git-btn"
+          :loading="merging"
+          :disable="!workspace || pushing || pulling || rebasing"
+          @click="handleMerge"
         />
         <q-btn
           dense
@@ -437,6 +543,61 @@ async function handleOpenPr() {
     <div v-else class="text-caption text-grey-8">
       {{ $t('common.selectWorkspace') }}
     </div>
+
+    <!-- Merge / rebase conflict resolution dialog -->
+    <q-dialog v-model="conflictDialog" persistent>
+      <q-card dark style="min-width: 420px; max-width: 600px;">
+        <q-card-section>
+          <div class="text-subtitle1 text-warning">
+            <q-icon name="warning" class="q-mr-xs" />
+            {{ conflictOperation === 'merge' ? $t('git.conflictTitleMerge') : $t('git.conflictTitleRebase') }}
+          </div>
+          <div class="text-caption text-grey-6 q-mt-xs">
+            {{ $t('git.conflictSubtitle', { count: conflictFiles.length }) }}
+          </div>
+        </q-card-section>
+        <q-card-section v-if="conflictFiles.length > 0" class="q-pt-none">
+          <q-list dense dark>
+            <q-item v-for="f in conflictFiles" :key="f">
+              <q-item-section side><q-icon name="insert_drive_file" size="xs" /></q-item-section>
+              <q-item-section>
+                <div class="text-caption text-mono">{{ f }}</div>
+              </q-item-section>
+            </q-item>
+          </q-list>
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn
+            flat
+            no-caps
+            :label="$t('common.cancel')"
+            color="grey-5"
+            :disable="conflictAborting || conflictResolving"
+            @click="conflictDialog = false"
+          />
+          <q-btn
+            flat
+            no-caps
+            color="red-4"
+            icon="undo"
+            :label="$t('git.conflictAbort')"
+            :loading="conflictAborting"
+            :disable="conflictResolving"
+            @click="abortGitOperation"
+          />
+          <q-btn
+            unelevated
+            no-caps
+            color="primary"
+            icon="smart_toy"
+            :label="$t('git.conflictResolveWithAgent')"
+            :loading="conflictResolving"
+            :disable="conflictAborting"
+            @click="resolveWithAgent"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
 
     <!-- Diff viewer dialog (fullscreen) -->
     <q-dialog v-model="showDiff" maximized>
