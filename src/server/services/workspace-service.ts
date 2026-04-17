@@ -34,6 +34,7 @@ export interface Workspace {
   devServerStatus: string
   hasUnread: boolean
   archivedAt: string | null
+  favoritedAt: string | null
   createdAt: string
   updatedAt: string
 }
@@ -102,6 +103,7 @@ interface WorkspaceRow {
   dev_server_status: string
   has_unread: number
   archived_at: string | null
+  favorited_at: string | null
   created_at: string
   updated_at: string
 }
@@ -133,6 +135,7 @@ function mapWorkspace(row: WorkspaceRow): Workspace {
     devServerStatus: row.dev_server_status,
     hasUnread: row.has_unread === 1,
     archivedAt: row.archived_at,
+    favoritedAt: row.favorited_at,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -434,6 +437,28 @@ export function unarchiveWorkspace(id: string): Workspace {
 
   const now = new Date().toISOString()
   db.prepare('UPDATE workspaces SET archived_at = NULL, updated_at = ? WHERE id = ?').run(now, id)
+  return getWorkspace(id) as Workspace
+}
+
+/** Mark a workspace as a favorite. Idempotent — refreshes the timestamp if already favorited. */
+export function setFavorite(id: string): Workspace {
+  const db = getDb()
+  const now = new Date().toISOString()
+  const result = db.prepare('UPDATE workspaces SET favorited_at = ?, updated_at = ? WHERE id = ?').run(now, now, id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+  return getWorkspace(id) as Workspace
+}
+
+/** Remove a workspace from favorites. Idempotent: safe to call on a non-favorite, though `updated_at` still refreshes. */
+export function unsetFavorite(id: string): Workspace {
+  const db = getDb()
+  const now = new Date().toISOString()
+  const result = db.prepare('UPDATE workspaces SET favorited_at = NULL, updated_at = ? WHERE id = ?').run(now, id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
   return getWorkspace(id) as Workspace
 }
 

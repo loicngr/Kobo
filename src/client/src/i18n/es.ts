@@ -474,4 +474,9 @@ export default {
   'contextMenu.copyPath': 'Copiar ruta del worktree',
   'contextMenu.openEditor': 'Abrir en editor',
   'contextMenu.runSetup': 'Ejecutar script de setup',
+
+  // Workspace
+  'workspace.favorite': 'Marcar como favorito',
+  'workspace.unfavorite': 'Quitar de favoritos',
+  'workspace.showFavoritesOnly': 'Mostrar solo favoritos',
 }

@@ -34,8 +34,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 7', () => {
-    expect(SCHEMA_VERSION).toBe(7)
+  it('exporte SCHEMA_VERSION = 8', () => {
+    expect(SCHEMA_VERSION).toBe(8)
   })
 
   it('migre depuis la legacy schema_version table', () => {
@@ -359,5 +359,114 @@ describe('runMigrations(db)', () => {
     expect(v6Entries.length).toBe(1)
 
     db.close()
+  })
+
+  it('v8: adds favorited_at column to workspaces (nullable, defaults to NULL)', () => {
+    const db = new Database(':memory:')
+    // Simulate a v7 database
+    db.exec(`
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+      CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, project_path TEXT NOT NULL,
+        source_branch TEXT NOT NULL, working_branch TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'created',
+        notion_url TEXT, notion_page_id TEXT, model TEXT NOT NULL DEFAULT 'claude-opus-4-7',
+        reasoning_effort TEXT NOT NULL DEFAULT 'auto',
+        permission_mode TEXT NOT NULL DEFAULT 'auto-accept',
+        dev_server_status TEXT NOT NULL DEFAULT 'stopped', has_unread INTEGER NOT NULL DEFAULT 0,
+        archived_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE tasks (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending', is_acceptance_criterion INTEGER NOT NULL DEFAULT 0,
+        sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL
+        REFERENCES workspaces(id) ON DELETE CASCADE, pid INTEGER, claude_session_id TEXT,
+        status TEXT NOT NULL DEFAULT 'running', started_at TEXT NOT NULL, ended_at TEXT, name TEXT);
+      CREATE TABLE ws_events (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, type TEXT NOT NULL,
+        payload TEXT NOT NULL, session_id TEXT, created_at TEXT NOT NULL);
+      INSERT INTO schema_migrations (version, name, applied_at) VALUES
+        (1, 'init-schema', '2025-01-01'),
+        (2, 'add-permission-mode', '2025-01-01'),
+        (3, 'add-workspace-id-indexes', '2025-01-01'),
+        (4, 'add-has-unread', '2025-01-01'),
+        (5, 'add-agent-session-name', '2025-01-01'),
+        (6, 'backfill-ws-events-session-id', '2025-01-01'),
+        (7, 'add-reasoning-effort', '2025-01-01');
+    `)
+
+    // Insert a workspace before migration
+    const now = new Date().toISOString()
+    db.prepare(
+      "INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at) VALUES ('w1', 'test', '/tmp', 'main', 'feat', ?, ?)",
+    ).run(now, now)
+
+    runMigrations(db)
+
+    // favorited_at column should exist and be nullable
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as {
+      name: string
+      notnull: number
+    }[]
+    const favoritedAtCol = cols.find((c) => c.name === 'favorited_at')
+    expect(favoritedAtCol).toBeDefined()
+    expect(favoritedAtCol?.notnull).toBe(0)
+
+    // Existing row should have favorited_at = NULL
+    const row = db.prepare('SELECT favorited_at FROM workspaces WHERE id = ?').get('w1') as {
+      favorited_at: string | null
+    }
+    expect(row.favorited_at).toBeNull()
+
+    // Migration should be recorded
+    const history = getMigrationHistory(db)
+    expect(history.find((h) => h.version === 8 && h.name === 'add-workspace-favorited-at')).toBeTruthy()
+
+    db.close()
+  })
+
+  it('v8: fresh install matches upgraded install (identical table_info)', () => {
+    // Fresh install DB
+    const freshDb = new Database(':memory:')
+    runMigrations(freshDb)
+
+    // Upgraded from v7 DB
+    const upgradedDb = new Database(':memory:')
+    upgradedDb.exec(`
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+      CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, project_path TEXT NOT NULL,
+        source_branch TEXT NOT NULL, working_branch TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'created',
+        notion_url TEXT, notion_page_id TEXT, model TEXT NOT NULL DEFAULT 'claude-opus-4-7',
+        reasoning_effort TEXT NOT NULL DEFAULT 'auto',
+        permission_mode TEXT NOT NULL DEFAULT 'auto-accept',
+        dev_server_status TEXT NOT NULL DEFAULT 'stopped', has_unread INTEGER NOT NULL DEFAULT 0,
+        archived_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE tasks (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending', is_acceptance_criterion INTEGER NOT NULL DEFAULT 0,
+        sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL
+        REFERENCES workspaces(id) ON DELETE CASCADE, pid INTEGER, claude_session_id TEXT,
+        status TEXT NOT NULL DEFAULT 'running', started_at TEXT NOT NULL, ended_at TEXT, name TEXT);
+      CREATE TABLE ws_events (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, type TEXT NOT NULL,
+        payload TEXT NOT NULL, session_id TEXT, created_at TEXT NOT NULL);
+      INSERT INTO schema_migrations (version, name, applied_at) VALUES
+        (1, 'init-schema', '2025-01-01'),
+        (2, 'add-permission-mode', '2025-01-01'),
+        (3, 'add-workspace-id-indexes', '2025-01-01'),
+        (4, 'add-has-unread', '2025-01-01'),
+        (5, 'add-agent-session-name', '2025-01-01'),
+        (6, 'backfill-ws-events-session-id', '2025-01-01'),
+        (7, 'add-reasoning-effort', '2025-01-01');
+    `)
+    runMigrations(upgradedDb)
+
+    const freshCols = (freshDb.prepare('PRAGMA table_info(workspaces)').all() as { name: string }[])
+      .map((c) => c.name)
+      .sort()
+    const upgradedCols = (upgradedDb.prepare('PRAGMA table_info(workspaces)').all() as { name: string }[])
+      .map((c) => c.name)
+      .sort()
+
+    expect(freshCols).toEqual(upgradedCols)
+    expect(freshCols).toContain('favorited_at')
+
+    freshDb.close()
+    upgradedDb.close()
   })
 })

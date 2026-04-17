@@ -1,6 +1,6 @@
 import { createPinia, setActivePinia } from 'pinia'
-import { beforeEach, describe, expect, it } from 'vitest'
-import { isSubagentTerminalEvent, useWorkspaceStore } from '../stores/workspace'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { isSubagentTerminalEvent, useWorkspaceStore, type Workspace } from '../stores/workspace'
 
 describe('workspace store', () => {
   beforeEach(() => {
@@ -244,6 +244,64 @@ describe('workspace store', () => {
       const feed = store.activityFeed
       // 'a' belongs to selected session, 'c' has no session (workspace-level)
       expect(feed.map((i) => i.id).sort()).toEqual(['a', 'c'])
+    })
+  })
+
+  describe('toggleFavorite', () => {
+    const baseWorkspace: Workspace = {
+      id: 'ws-1',
+      name: 'Test',
+      projectPath: '/tmp/test',
+      sourceBranch: 'main',
+      workingBranch: 'feature/test',
+      status: 'idle',
+      notionUrl: null,
+      notionPageId: null,
+      model: 'claude-opus-4-5',
+      reasoningEffort: 'normal',
+      permissionMode: 'default',
+      devServerStatus: 'stopped',
+      hasUnread: false,
+      archivedAt: null,
+      favoritedAt: null,
+      createdAt: '2026-01-01T00:00:00Z',
+      updatedAt: '2026-01-01T00:00:00Z',
+    }
+
+    beforeEach(() => {
+      vi.stubGlobal('fetch', vi.fn())
+    })
+
+    it('applies optimistic update and persists on success', async () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [{ ...baseWorkspace }]
+
+      const updatedAt = '2026-04-17T12:00:00.000Z'
+      const returnedWorkspace: Workspace = { ...baseWorkspace, favoritedAt: updatedAt }
+
+      vi.mocked(fetch).mockResolvedValueOnce({
+        ok: true,
+        json: async () => returnedWorkspace,
+      } as Response)
+
+      await store.toggleFavorite('ws-1')
+
+      expect(store.workspaces[0].favoritedAt).toBe(updatedAt)
+    })
+
+    it('reverts optimistic update on API error', async () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [{ ...baseWorkspace }]
+
+      vi.mocked(fetch).mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        json: async () => ({ error: 'boom' }),
+      } as Response)
+
+      await store.toggleFavorite('ws-1').catch(() => {})
+
+      expect(store.workspaces[0].favoritedAt).toBeNull()
     })
   })
 

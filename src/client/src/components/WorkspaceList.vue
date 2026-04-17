@@ -7,7 +7,7 @@ import { useWebSocketStore } from 'src/stores/websocket'
 import type { Workspace } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { useTimeAgo } from 'src/utils/formatters'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 
@@ -21,6 +21,8 @@ const settingsStore = useSettingsStore()
 const router = useRouter()
 
 const searchQuery = ref('')
+const favoritesOnly = ref<boolean>(localStorage.getItem('kobo:favorites-filter') === '1')
+watch(favoritesOnly, (v) => localStorage.setItem('kobo:favorites-filter', v ? '1' : '0'))
 
 interface ProjectGroup {
   projectPath: string
@@ -43,15 +45,21 @@ function groupByProject(workspaces: Workspace[]): ProjectGroup[] {
 }
 
 const filteredNeedsAttention = computed(() =>
-  store.needsAttention.filter((w) => w.name.toLowerCase().includes(searchQuery.value.toLowerCase())),
+  store.needsAttention
+    .filter((w) => w.name.toLowerCase().includes(searchQuery.value.toLowerCase()))
+    .filter((w) => !favoritesOnly.value || w.favoritedAt !== null),
 )
 
 const filteredRunning = computed(() =>
-  store.running.filter((w) => w.name.toLowerCase().includes(searchQuery.value.toLowerCase())),
+  store.running
+    .filter((w) => w.name.toLowerCase().includes(searchQuery.value.toLowerCase()))
+    .filter((w) => !favoritesOnly.value || w.favoritedAt !== null),
 )
 
 const filteredIdle = computed(() =>
-  store.idle.filter((w) => w.name.toLowerCase().includes(searchQuery.value.toLowerCase())),
+  store.idle
+    .filter((w) => w.name.toLowerCase().includes(searchQuery.value.toLowerCase()))
+    .filter((w) => !favoritesOnly.value || w.favoritedAt !== null),
 )
 
 const groupedNeedsAttention = computed(() => groupByProject(filteredNeedsAttention.value))
@@ -188,6 +196,12 @@ async function openInEditor(ws: Workspace) {
 
 const BUSY_STATUSES = ['executing', 'extracting', 'brainstorming']
 
+function onToggleFavorite(ws: Workspace) {
+  void store.toggleFavorite(ws.id).catch((err) => {
+    $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 4000 })
+  })
+}
+
 function runSetupScript(ws: Workspace) {
   // Guard: never run while the agent is busy — would race with the agent's work.
   if (BUSY_STATUSES.includes(ws.status)) {
@@ -298,19 +312,29 @@ onMounted(async () => {
     </div>
 
     <!-- Search -->
-    <div class="q-px-md q-pb-sm">
+    <div class="q-px-md q-pb-sm row items-center no-wrap q-gutter-xs">
       <q-input
         v-model="searchQuery"
         dense
         dark
         :placeholder="$t('common.search')"
-        class="wl-search rounded-borders"
+        class="wl-search rounded-borders col"
         borderless
       >
         <template #prepend>
           <q-icon name="search" size="xs" color="grey-6" />
         </template>
       </q-input>
+      <q-btn
+        :icon="favoritesOnly ? 'star' : 'star_outline'"
+        :color="favoritesOnly ? 'amber-7' : 'grey-7'"
+        flat
+        dense
+        round
+        @click="favoritesOnly = !favoritesOnly"
+      >
+        <q-tooltip>{{ $t('workspace.showFavoritesOnly') }}</q-tooltip>
+      </q-btn>
     </div>
 
     <q-separator dark />
@@ -351,7 +375,10 @@ onMounted(async () => {
               :key="ws.id"
               class="wl-item cursor-pointer q-pa-sm q-mx-xs rounded-borders"
               :class="{ 'wl-item--selected': ws.id === store.selectedWorkspaceId }"
-              style="border-left: 3px solid #ef4444;"
+              :style="[
+                { borderLeft: '3px solid #ef4444' },
+                ws.favoritedAt ? { borderBottom: '2px solid #f59e0b' } : {},
+              ]"
               @click="selectWorkspace(ws.id)"
               @contextmenu.prevent
             >
@@ -361,6 +388,7 @@ onMounted(async () => {
                 @copy-path="copyWorktreePath"
                 @open-editor="openInEditor"
                 @run-setup="runSetupScript"
+                @toggle-favorite="onToggleFavorite"
                 @archive="onArchiveClick"
                 @delete="openDeleteDialog"
               />
@@ -420,7 +448,10 @@ onMounted(async () => {
               :key="ws.id"
               class="wl-item cursor-pointer q-pa-sm q-mx-xs rounded-borders"
               :class="{ 'wl-item--selected': ws.id === store.selectedWorkspaceId }"
-              style="border-left: 3px solid #4ade80;"
+              :style="[
+                { borderLeft: '3px solid #4ade80' },
+                ws.favoritedAt ? { borderBottom: '2px solid #f59e0b' } : {},
+              ]"
               @click="selectWorkspace(ws.id)"
               @contextmenu.prevent
             >
@@ -430,6 +461,7 @@ onMounted(async () => {
                 @copy-path="copyWorktreePath"
                 @open-editor="openInEditor"
                 @run-setup="runSetupScript"
+                @toggle-favorite="onToggleFavorite"
                 @archive="onArchiveClick"
                 @delete="openDeleteDialog"
               />
@@ -488,7 +520,10 @@ onMounted(async () => {
               :key="ws.id"
               class="wl-item cursor-pointer q-pa-sm q-mx-xs rounded-borders"
               :class="{ 'wl-item--selected': ws.id === store.selectedWorkspaceId }"
-              style="border-left: 3px solid #666;"
+              :style="[
+                { borderLeft: '3px solid #666' },
+                ws.favoritedAt ? { borderBottom: '2px solid #f59e0b' } : {},
+              ]"
               @click="selectWorkspace(ws.id)"
               @contextmenu.prevent
             >
@@ -498,6 +533,7 @@ onMounted(async () => {
                 @copy-path="copyWorktreePath"
                 @open-editor="openInEditor"
                 @run-setup="runSetupScript"
+                @toggle-favorite="onToggleFavorite"
                 @archive="onArchiveClick"
                 @delete="openDeleteDialog"
               />
@@ -551,7 +587,10 @@ onMounted(async () => {
             v-for="ws in store.archived"
             :key="ws.id"
             class="wl-item wl-item--archived q-pa-sm q-mx-xs rounded-borders"
-            style="border-left: 3px solid #555;"
+            :style="[
+              { borderLeft: '3px solid #555' },
+              ws.favoritedAt ? { borderBottom: '2px solid #f59e0b' } : {},
+            ]"
             @contextmenu.prevent
           >
             <WorkspaceContextMenu
@@ -561,6 +600,7 @@ onMounted(async () => {
               @copy-path="copyWorktreePath"
               @open-editor="openInEditor"
               @run-setup="runSetupScript"
+              @toggle-favorite="onToggleFavorite"
               @archive="onArchiveClick"
               @unarchive="onUnarchiveClick"
               @delete="openDeleteDialog"

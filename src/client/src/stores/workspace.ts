@@ -16,6 +16,7 @@ export interface Workspace {
   devServerStatus: string
   hasUnread: boolean
   archivedAt: string | null
+  favoritedAt: string | null
   createdAt: string
   updatedAt: string
 }
@@ -188,6 +189,10 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     idle: (state) => state.workspaces.filter((w) => ['completed', 'idle', 'created'].includes(w.status)),
 
+    favorites(state): Workspace[] {
+      return state.workspaces.filter((w) => w.favoritedAt !== null)
+    },
+
     currentAgentTodos: (state): AgentTodo[] => {
       if (!state.selectedWorkspaceId) return []
       return state.agentTodos[state.selectedWorkspaceId] ?? []
@@ -242,6 +247,26 @@ export const useWorkspaceStore = defineStore('workspace', {
   },
 
   actions: {
+    async toggleFavorite(id: string) {
+      const idx = this.workspaces.findIndex((w) => w.id === id)
+      if (idx === -1) return
+      const previous = this.workspaces[idx].favoritedAt
+      const nextFavorited = previous === null
+      const optimistic = nextFavorited ? new Date().toISOString() : null
+      this.workspaces[idx] = { ...this.workspaces[idx], favoritedAt: optimistic }
+      try {
+        const res = await fetch(`/api/workspaces/${id}/favorite`, {
+          method: nextFavorited ? 'POST' : 'DELETE',
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const updated = (await res.json()) as Workspace
+        this.workspaces[idx] = updated
+      } catch (err) {
+        this.workspaces[idx] = { ...this.workspaces[idx], favoritedAt: previous }
+        throw err
+      }
+    },
+
     async fetchWorkspaces() {
       this.loading = true
       try {

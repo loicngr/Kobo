@@ -873,6 +873,32 @@ app.get('/:id', (c) => {
   }
 })
 
+// POST /api/workspaces/:id/favorite — mark workspace as favorite
+app.post('/:id/favorite', (c) => {
+  const { id } = c.req.param()
+  try {
+    const ws = workspaceService.setFavorite(id)
+    return c.json(ws)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error'
+    const status = msg.includes('not found') ? 404 : 500
+    return c.json({ error: msg }, status)
+  }
+})
+
+// DELETE /api/workspaces/:id/favorite — remove favorite from workspace
+app.delete('/:id/favorite', (c) => {
+  const { id } = c.req.param()
+  try {
+    const ws = workspaceService.unsetFavorite(id)
+    return c.json(ws)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error'
+    const status = msg.includes('not found') ? 404 : 500
+    return c.json({ error: msg }, status)
+  }
+})
+
 // PATCH /api/workspaces/:id — update workspace fields (status, model, permissionMode, name)
 app.patch('/:id', async (c) => {
   try {

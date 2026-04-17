@@ -782,6 +782,76 @@ describe('createIdleSession()', () => {
   })
 })
 
+describe('setFavorite / unsetFavorite', () => {
+  it('setFavorite sets favoritedAt to an ISO timestamp and bumps updatedAt', async () => {
+    const { createWorkspace, setFavorite } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'Fav', projectPath: '/p', sourceBranch: 'main', workingBranch: 'b' })
+    expect(ws.favoritedAt).toBeNull()
+
+    await new Promise((r) => setTimeout(r, 10))
+
+    const favorited = setFavorite(ws.id)
+    expect(favorited.favoritedAt).not.toBeNull()
+    expect(typeof favorited.favoritedAt).toBe('string')
+    expect(new Date(favorited.favoritedAt!).toString()).not.toBe('Invalid Date')
+    expect(favorited.updatedAt > ws.updatedAt).toBe(true)
+  })
+
+  it('setFavorite is idempotent — calling twice refreshes the timestamp', async () => {
+    const { createWorkspace, setFavorite } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'Fav2', projectPath: '/p', sourceBranch: 'main', workingBranch: 'b2' })
+
+    const first = setFavorite(ws.id)
+    expect(first.favoritedAt).not.toBeNull()
+
+    await new Promise((r) => setTimeout(r, 10))
+
+    const second = setFavorite(ws.id)
+    expect(second.favoritedAt).not.toBeNull()
+    // The second call must have produced a strictly later timestamp
+    expect(second.favoritedAt! > first.favoritedAt!).toBe(true)
+  })
+
+  it("setFavorite throws Workspace '<id>' not found on unknown id", async () => {
+    const { setFavorite } = await import('../server/services/workspace-service.js')
+    expect(() => setFavorite('ghost-id')).toThrow("Workspace 'ghost-id' not found")
+  })
+
+  it('unsetFavorite clears favoritedAt and bumps updatedAt', async () => {
+    const { createWorkspace, setFavorite, unsetFavorite } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'Unfav', projectPath: '/p', sourceBranch: 'main', workingBranch: 'b3' })
+
+    const favorited = setFavorite(ws.id)
+    expect(favorited.favoritedAt).not.toBeNull()
+
+    await new Promise((r) => setTimeout(r, 10))
+
+    const unfavorited = unsetFavorite(ws.id)
+    expect(unfavorited.favoritedAt).toBeNull()
+    expect(unfavorited.updatedAt > favorited.updatedAt).toBe(true)
+  })
+
+  it('unsetFavorite is idempotent on a non-favorite (returns workspace with favoritedAt === null)', async () => {
+    const { createWorkspace, unsetFavorite } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'NonFav', projectPath: '/p', sourceBranch: 'main', workingBranch: 'b4' })
+    expect(ws.favoritedAt).toBeNull()
+
+    const before = ws.updatedAt
+
+    await new Promise((r) => setTimeout(r, 10))
+
+    const result = unsetFavorite(ws.id)
+    expect(result.favoritedAt).toBeNull()
+    // updated_at still gets bumped even on a non-favorite
+    expect(result.updatedAt).not.toBe(before)
+  })
+
+  it("unsetFavorite throws Workspace '<id>' not found on unknown id", async () => {
+    const { unsetFavorite } = await import('../server/services/workspace-service.js')
+    expect(() => unsetFavorite('ghost-id')).toThrow("Workspace 'ghost-id' not found")
+  })
+})
+
 describe('renameSession()', () => {
   it('met à jour le name de la session', async () => {
     const { createWorkspace, createIdleSession, listSessions, renameSession } = await import(

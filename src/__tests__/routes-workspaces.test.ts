@@ -31,6 +31,8 @@ vi.mock('../server/services/workspace-service.js', () => ({
   listArchivedWorkspaces: vi.fn(),
   markWorkspaceRead: vi.fn(),
   markWorkspaceUnread: vi.fn(),
+  setFavorite: vi.fn(),
+  unsetFavorite: vi.fn(),
 }))
 
 vi.mock('../server/services/worktree-service.js', () => ({
@@ -2029,5 +2031,70 @@ describe('POST /api/workspaces/:id/start avec agentSessionId', () => {
       undefined,
       'auto',
     )
+  })
+})
+
+describe('favorite endpoints', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  const favoritedWorkspace = { ...fakeWorkspace, favoritedAt: '2026-04-17T10:00:00.000Z' } as any
+
+  it('POST /:id/favorite returns 200 + updated workspace and calls setFavorite', async () => {
+    vi.mocked(workspaceService.setFavorite).mockReturnValue(favoritedWorkspace)
+
+    const res = await app.request('/api/workspaces/ws-1/favorite', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.favoritedAt).toBe('2026-04-17T10:00:00.000Z')
+    expect(workspaceService.setFavorite).toHaveBeenCalledWith('ws-1')
+  })
+
+  it('POST /:id/favorite returns 404 when service throws not-found', async () => {
+    vi.mocked(workspaceService.setFavorite).mockImplementation(() => {
+      throw new Error("Workspace 'ws-missing' not found")
+    })
+
+    const res = await app.request('/api/workspaces/ws-missing/favorite', { method: 'POST' })
+
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body.error).toContain('not found')
+  })
+
+  it('DELETE /:id/favorite returns 200 + updated workspace and calls unsetFavorite', async () => {
+    const unfavoritedWorkspace = { ...fakeWorkspace, favoritedAt: null } as any
+    vi.mocked(workspaceService.unsetFavorite).mockReturnValue(unfavoritedWorkspace)
+
+    const res = await app.request('/api/workspaces/ws-1/favorite', { method: 'DELETE' })
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.favoritedAt).toBeNull()
+    expect(workspaceService.unsetFavorite).toHaveBeenCalledWith('ws-1')
+  })
+
+  it('DELETE /:id/favorite returns 404 when service throws not-found', async () => {
+    vi.mocked(workspaceService.unsetFavorite).mockImplementation(() => {
+      throw new Error("Workspace 'ws-missing' not found")
+    })
+
+    const res = await app.request('/api/workspaces/ws-missing/favorite', { method: 'DELETE' })
+
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body.error).toContain('not found')
+  })
+
+  it('POST /:id/favorite route order regression: reaches favorite handler (not GET /:id)', async () => {
+    vi.mocked(workspaceService.setFavorite).mockReturnValue(favoritedWorkspace)
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(null)
+
+    const res = await app.request('/api/workspaces/ws-1/favorite', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(workspaceService.setFavorite).toHaveBeenCalledWith('ws-1')
+    // GET /:id uses getWorkspaceWithTasks — if that was called, route order regressed
+    expect(workspaceService.getWorkspaceWithTasks).not.toHaveBeenCalled()
   })
 })

@@ -18,6 +18,7 @@ export function initSchema(db: Database.Database): void {
       dev_server_status TEXT NOT NULL DEFAULT 'stopped',
       has_unread INTEGER NOT NULL DEFAULT 0,
       archived_at TEXT,
+      favorited_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );

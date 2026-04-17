@@ -77,6 +77,13 @@ export const migrations: Migration[] = [
       db.exec("ALTER TABLE workspaces ADD COLUMN reasoning_effort TEXT NOT NULL DEFAULT 'auto'")
     },
   },
+  {
+    version: 8,
+    name: 'add-workspace-favorited-at',
+    migrate: (db) => {
+      db.prepare('ALTER TABLE workspaces ADD COLUMN favorited_at TEXT').run()
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */
