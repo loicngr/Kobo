@@ -371,6 +371,50 @@ export function getSettings(): Settings {
   return readSettings()
 }
 
+/** Keys stripped from exports — secrets that should stay on the machine. */
+const SECRET_GLOBAL_KEYS = ['notionMcpKey', 'sentryMcpKey'] as const
+
+export interface ConfigBundle {
+  bundleVersion: number
+  exportedAt: string
+  settings: Settings
+  templates: Array<Record<string, unknown>>
+}
+
+/** Build an export bundle with settings + templates. MCP keys are stripped. */
+export function exportConfigBundle(templates: Array<Record<string, unknown>>): ConfigBundle {
+  const settings = readSettings()
+  const sanitizedGlobal: GlobalSettings = { ...settings.global }
+  for (const key of SECRET_GLOBAL_KEYS) {
+    sanitizedGlobal[key] = ''
+  }
+  return {
+    bundleVersion: 1,
+    exportedAt: new Date().toISOString(),
+    settings: { ...settings, global: sanitizedGlobal },
+    templates,
+  }
+}
+
+/** Replace the settings file with an imported bundle. MCP keys in the current settings are preserved. */
+export function importConfigBundle(bundle: ConfigBundle): void {
+  if (!bundle || bundle.bundleVersion !== 1) {
+    throw new Error('Invalid bundle: expected bundleVersion = 1')
+  }
+  if (!bundle.settings || typeof bundle.settings !== 'object') {
+    throw new Error('Invalid bundle: missing settings')
+  }
+  const current = readSettings()
+  const incoming = bundle.settings as Settings
+  // Run the incoming through the migration pipeline in case an older version is imported.
+  const migrated = runSettingsMigrations(incoming as unknown as Record<string, unknown>)
+  // Preserve existing MCP keys — the export stripped them and we don't want to clobber a local config.
+  for (const key of SECRET_GLOBAL_KEYS) {
+    migrated.global[key] = current.global[key]
+  }
+  writeSettings(migrated, { backup: true })
+}
+
 /** Return only the global settings section. */
 export function getGlobalSettings(): GlobalSettings {
   return readSettings().global

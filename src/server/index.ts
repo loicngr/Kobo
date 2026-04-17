@@ -9,6 +9,7 @@ import { closeDb, getDb } from './db/index.js'
 import { runMigrations } from './db/migrations.js'
 import devServerRouter from './routes/dev-server.js'
 import gitRouter from './routes/git.js'
+import healthRouter from './routes/health.js'
 import imagesRouter from './routes/images.js'
 import notionRouter from './routes/notion.js'
 import plansRouter from './routes/plans.js'
@@ -86,6 +87,7 @@ app.route('/api/dev-server', devServerRouter)
 app.route('/api/templates', templatesRouter)
 app.route('/api/workspaces', plansRouter)
 app.route('/api/search', searchRouter)
+app.route('/api/health', healthRouter)
 
 // Skills endpoint
 app.get('/api/skills', (c) => c.json(getAvailableSkills()))

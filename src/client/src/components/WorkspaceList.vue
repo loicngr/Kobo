@@ -248,6 +248,10 @@ function goToSearch() {
   router.push({ name: 'search' })
 }
 
+function goToHealth() {
+  router.push({ name: 'health' })
+}
+
 onMounted(async () => {
   await store.fetchWorkspaces()
   // Silently fetch archived workspaces so the Archived group header renders
@@ -296,6 +300,18 @@ onMounted(async () => {
             @click="goToSearch"
         >
           <q-tooltip>{{ $t('search.tooltip') }}</q-tooltip>
+        </q-btn>
+        <q-btn
+            flat
+            round
+            dense
+            icon="monitor_heart"
+            class="q-ml-xs"
+            size="sm"
+            color="grey-5"
+            @click="goToHealth"
+        >
+          <q-tooltip>{{ $t('health.tooltip') }}</q-tooltip>
         </q-btn>
         <q-btn
             flat

@@ -119,6 +119,11 @@ function writeTemplates(templates: Template[]): void {
   writeFileSync(filePath, JSON.stringify(file, null, 2), 'utf-8')
 }
 
+/** Replace the entire templates list in one write. Used by config import. */
+export function replaceAllTemplates(templates: Template[]): void {
+  writeTemplates(templates)
+}
+
 function seedTemplates(): void {
   const now = new Date().toISOString()
   const seed: Template[] = [

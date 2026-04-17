@@ -301,6 +301,66 @@ watch(selectedProjectIndex, () => {
 })
 
 // Save global settings
+const importFileInput = ref<HTMLInputElement | null>(null)
+
+async function exportConfig() {
+  try {
+    const res = await fetch('/api/settings/export')
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const data = await res.json()
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `kobo-config-${new Date().toISOString().replace(/[:.]/g, '-')}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    $q.notify({ type: 'positive', message: t('settings.exportSuccess'), position: 'top', timeout: 3000 })
+  } catch (err) {
+    $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 4000 })
+  }
+}
+
+function triggerImport() {
+  importFileInput.value?.click()
+}
+
+async function onImportFile(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  try {
+    $q.dialog({
+      title: t('settings.importConfirmTitle'),
+      message: t('settings.importConfirmMessage'),
+      cancel: true,
+      persistent: true,
+      dark: true,
+    }).onOk(async () => {
+      try {
+        const text = await file.text()
+        const bundle = JSON.parse(text)
+        const res = await fetch('/api/settings/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(bundle),
+        })
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}))
+          throw new Error(body.error ?? `HTTP ${res.status}`)
+        }
+        await store.fetchSettings()
+        syncGlobalForm()
+        $q.notify({ type: 'positive', message: t('settings.importSuccess'), position: 'top', timeout: 3000 })
+      } catch (err) {
+        $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 5000 })
+      }
+    })
+  } finally {
+    input.value = ''
+  }
+}
+
 async function saveGlobal() {
   savingGlobal.value = true
   try {
@@ -695,6 +755,37 @@ onUnmounted(() => {
                 input-debounce="0"
                 class="settings-input"
               />
+            </div>
+
+            <!-- Import / Export config -->
+            <div class="settings-card q-pa-md rounded-borders">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.shareTitle') }}</div>
+              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.shareHint') }}</div>
+              <div class="row q-gutter-sm">
+                <q-btn
+                  :label="$t('settings.exportConfig')"
+                  icon="download"
+                  no-caps
+                  outline
+                  color="grey-4"
+                  @click="exportConfig"
+                />
+                <q-btn
+                  :label="$t('settings.importConfig')"
+                  icon="upload"
+                  no-caps
+                  outline
+                  color="grey-4"
+                  @click="triggerImport"
+                />
+                <input
+                  ref="importFileInput"
+                  type="file"
+                  accept="application/json,.json"
+                  style="display: none;"
+                  @change="onImportFile"
+                />
+              </div>
             </div>
 
             <!-- Save button -->
