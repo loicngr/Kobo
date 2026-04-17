@@ -56,7 +56,7 @@ describe('createWorkspace()', () => {
     expect(ws.status).toBe('created')
     expect(ws.notionUrl).toBeNull()
     expect(ws.notionPageId).toBeNull()
-    expect(ws.model).toBe('claude-opus-4-6')
+    expect(ws.model).toBe('claude-opus-4-7')
     expect(ws.reasoningEffort).toBe('auto')
     expect(ws.createdAt).toBeTruthy()
     expect(ws.updatedAt).toBeTruthy()
@@ -70,7 +70,7 @@ describe('createWorkspace()', () => {
       sourceBranch: 'main',
       workingBranch: 'feat/x',
     })
-    expect(ws.model).toBe('claude-opus-4-6')
+    expect(ws.model).toBe('claude-opus-4-7')
     expect(ws.reasoningEffort).toBe('auto')
   })
 

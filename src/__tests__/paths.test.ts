@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  _setDevModeProtection,
   ensureKoboHome,
   getCompiledMcpServerPath,
   getDbPath,
@@ -127,5 +128,47 @@ describe('paths — Kōbō home resolution', () => {
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true })
     }
+  })
+})
+
+describe('paths — dev-mode protection', () => {
+  const originalKoboHome = process.env.KOBO_HOME
+  const originalEnforceLocalHome = process.env.KOBO_ENFORCE_LOCAL_HOME
+  const originalXdgConfigHome = process.env.XDG_CONFIG_HOME
+
+  afterEach(() => {
+    _setDevModeProtection(false)
+    if (originalKoboHome === undefined) delete process.env.KOBO_HOME
+    else process.env.KOBO_HOME = originalKoboHome
+    if (originalEnforceLocalHome === undefined) delete process.env.KOBO_ENFORCE_LOCAL_HOME
+    else process.env.KOBO_ENFORCE_LOCAL_HOME = originalEnforceLocalHome
+    if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME
+    else process.env.XDG_CONFIG_HOME = originalXdgConfigHome
+  })
+
+  it('uses packageRoot/data when dev-mode is active and KOBO_HOME is unset', () => {
+    _setDevModeProtection(true)
+    delete process.env.KOBO_HOME
+    delete process.env.KOBO_ENFORCE_LOCAL_HOME
+    delete process.env.XDG_CONFIG_HOME
+    expect(getKoboHome()).toBe(getPackageAssetPath('data'))
+  })
+
+  it('uses KOBO_HOME when dev-mode is active and KOBO_HOME is set', () => {
+    _setDevModeProtection(true)
+    process.env.KOBO_HOME = '/tmp/custom-dev-data'
+    delete process.env.KOBO_ENFORCE_LOCAL_HOME
+    delete process.env.XDG_CONFIG_HOME
+    expect(getKoboHome()).toBe('/tmp/custom-dev-data')
+  })
+
+  it('never resolves to the production config directory when dev-mode is active', () => {
+    _setDevModeProtection(true)
+    delete process.env.KOBO_HOME
+    delete process.env.KOBO_ENFORCE_LOCAL_HOME
+    delete process.env.XDG_CONFIG_HOME
+    const home = getKoboHome()
+    expect(home).not.toBe(path.join(os.homedir(), '.config', 'kobo'))
+    expect(home).toBe(getPackageAssetPath('data'))
   })
 })

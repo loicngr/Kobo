@@ -21,7 +21,7 @@ const workspaceName = ref('')
 const description = ref('')
 const notionUrl = ref('')
 const useNotion = ref(false)
-const model = ref('auto')
+const model = ref('claude-opus-4-7')
 const reasoningEffort = ref('auto')
 const projectPath = ref('')
 const branch = ref<string | null>(null)
@@ -68,6 +68,11 @@ const reasoningOptions = computed(() => [
     description: t('reasoning.mediumDescription'),
   },
   { label: formatReasoningLabel(t('reasoning.high')), value: 'high', description: t('reasoning.highDescription') },
+  {
+    label: formatReasoningLabel(t('reasoning.xhigh')),
+    value: 'xhigh',
+    description: t('reasoning.xhighDescription'),
+  },
   { label: formatReasoningLabel(t('reasoning.max')), value: 'max', description: t('reasoning.maxDescription') },
 ])
 

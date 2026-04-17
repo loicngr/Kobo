@@ -23,6 +23,17 @@ export function getPackageAssetPath(...parts: string[]): string {
   return path.join(packageRoot, ...parts)
 }
 
+// Dev-mode protection: when this module is loaded from its TypeScript source
+// (i.e. via tsx/ts-node during development), automatically enforce the local
+// data directory so production settings in ~/.config/kobo are never touched.
+// Bypassed in Vitest (VITEST env var) so unit tests can exercise all paths.
+let _devModeProtection: boolean = fileURLToPath(import.meta.url).endsWith('.ts') && !process.env.VITEST
+
+/** Override the dev-mode protection flag. Used by tests only. */
+export function _setDevModeProtection(value: boolean): void {
+  _devModeProtection = value
+}
+
 /**
  * Resolves the Kōbō home directory for user data (DB, settings). Respects
  * KOBO_HOME when set, otherwise defaults to an XDG-compliant location under
@@ -33,9 +44,12 @@ export function getPackageAssetPath(...parts: string[]): string {
  * the repo-relative data/ directory and never touches the user's real home.
  * For stricter isolation, set KOBO_ENFORCE_LOCAL_HOME=1 to force local writes
  * to either KOBO_HOME (if provided) or <packageRoot>/data.
+ *
+ * Dev-mode auto-detection: when running from TypeScript source (tsx), the module
+ * automatically enforces the local data directory even without env vars set.
  */
 export function getKoboHome(): string {
-  if (process.env.KOBO_ENFORCE_LOCAL_HOME === '1') {
+  if (process.env.KOBO_ENFORCE_LOCAL_HOME === '1' || _devModeProtection) {
     if (process.env.KOBO_HOME) {
       return path.resolve(process.env.KOBO_HOME)
     }

@@ -246,4 +246,52 @@ describe('workspace store', () => {
       expect(feed.map((i) => i.id).sort()).toEqual(['a', 'c'])
     })
   })
+
+  describe('globalRateLimitUsage', () => {
+    it('returns null when no workspace has received a rate_limit_event', () => {
+      const store = useWorkspaceStore()
+      expect(store.globalRateLimitUsage).toBeNull()
+    })
+
+    it('returns the single snapshot when only one workspace has data', () => {
+      const store = useWorkspaceStore()
+      store.setRateLimitUsage('ws-1', {
+        updatedAt: '2026-04-17T10:00:00Z',
+        buckets: [{ id: 'five_hour', label: 'Session 5h', usedPct: 42 }],
+      })
+      expect(store.globalRateLimitUsage).toEqual({
+        updatedAt: '2026-04-17T10:00:00Z',
+        buckets: [{ id: 'five_hour', label: 'Session 5h', usedPct: 42 }],
+      })
+    })
+
+    it('returns the snapshot with the most recent updatedAt across workspaces', () => {
+      const store = useWorkspaceStore()
+      store.setRateLimitUsage('ws-older', {
+        updatedAt: '2026-04-17T09:00:00Z',
+        buckets: [{ id: 'five_hour', usedPct: 10 }],
+      })
+      store.setRateLimitUsage('ws-newer', {
+        updatedAt: '2026-04-17T11:00:00Z',
+        buckets: [{ id: 'five_hour', usedPct: 93 }],
+      })
+      store.setRateLimitUsage('ws-middle', {
+        updatedAt: '2026-04-17T10:00:00Z',
+        buckets: [{ id: 'five_hour', usedPct: 50 }],
+      })
+      expect(store.globalRateLimitUsage?.updatedAt).toBe('2026-04-17T11:00:00Z')
+      expect(store.globalRateLimitUsage?.buckets[0].usedPct).toBe(93)
+    })
+
+    it('ignores undefined entries (e.g. after workspace deletion)', () => {
+      const store = useWorkspaceStore()
+      store.setRateLimitUsage('ws-1', {
+        updatedAt: '2026-04-17T10:00:00Z',
+        buckets: [{ id: 'five_hour', usedPct: 42 }],
+      })
+      // Simulate the cleanup path (removeWorkspace sets the entry to undefined via delete)
+      store.rateLimitUsage['ws-ghost'] = undefined
+      expect(store.globalRateLimitUsage?.updatedAt).toBe('2026-04-17T10:00:00Z')
+    })
+  })
 })

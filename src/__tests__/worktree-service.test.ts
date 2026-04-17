@@ -6,12 +6,17 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createWorktree, listWorktrees, removeWorktree, worktreeExists } from '../server/services/worktree-service.js'
 
 let repoDir: string
+let bareDir: string
 
 function gitSetup(cwd: string, args: string[]): void {
   execFileSync('git', args, { cwd })
 }
 
 beforeAll(() => {
+  // Bare repo acting as origin — required so createWorktree can use origin/main.
+  bareDir = fs.mkdtempSync(path.join(os.tmpdir(), 'at-wt-svc-bare-'))
+  gitSetup(bareDir, ['init', '--bare'])
+
   repoDir = fs.mkdtempSync(path.join(os.tmpdir(), 'at-wt-svc-test-'))
   gitSetup(repoDir, ['init'])
   gitSetup(repoDir, ['config', 'user.email', 'test@test.com'])
@@ -24,11 +29,17 @@ beforeAll(() => {
   } catch {
     // already on main
   }
+  // Add the bare repo as origin and push so origin/main tracking ref exists.
+  gitSetup(repoDir, ['remote', 'add', 'origin', bareDir])
+  gitSetup(repoDir, ['push', 'origin', 'main'])
 })
 
 afterAll(() => {
   if (repoDir && fs.existsSync(repoDir)) {
     fs.rmSync(repoDir, { recursive: true, force: true })
+  }
+  if (bareDir && fs.existsSync(bareDir)) {
+    fs.rmSync(bareDir, { recursive: true, force: true })
   }
 })
 

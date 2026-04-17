@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { QInput } from 'quasar'
 import { useQuasar } from 'quasar'
+import QuotaFooter from 'src/components/QuotaFooter.vue'
 import { useTemplatesStore } from 'src/stores/templates'
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
@@ -839,6 +840,7 @@ function onKeydown(event: KeyboardEvent) {
         <kbd>Enter</kbd> {{ $t('common.send') }} <span class="q-mx-xs">&middot;</span> <kbd>Shift+Enter</kbd> {{ $t('common.newLine') }} <span class="q-mx-xs">&middot;</span> <kbd>↑↓</kbd> {{ $t('common.history') }}
       </div>
       <q-space />
+      <QuotaFooter class="q-mr-md" />
       <q-btn
         v-if="showInterrupt"
         flat

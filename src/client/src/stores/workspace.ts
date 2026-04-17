@@ -223,6 +223,22 @@ export const useWorkspaceStore = defineStore('workspace', {
     acceptanceCriteria: (state) => state.tasks.filter((t) => t.isAcceptanceCriterion),
 
     archived: (state) => state.archivedWorkspaces,
+
+    /**
+     * Most recent rate-limit snapshot across all workspaces, or `null` if none
+     * received yet. The Claude Code account-level quota is shared globally, so
+     * any workspace's latest `rate_limit_event` is representative of the account.
+     */
+    globalRateLimitUsage: (state): RateLimitUsageSnapshot | null => {
+      let latest: RateLimitUsageSnapshot | null = null
+      for (const snapshot of Object.values(state.rateLimitUsage)) {
+        if (!snapshot) continue
+        if (!latest || snapshot.updatedAt > latest.updatedAt) {
+          latest = snapshot
+        }
+      }
+      return latest
+    },
   },
 
   actions: {

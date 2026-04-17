@@ -37,7 +37,7 @@ describe('getSettings()', () => {
     expect(fs.existsSync(settingsPath)).toBe(false)
     const settings = getSettings()
     expect(fs.existsSync(settingsPath)).toBe(true)
-    expect(settings.global.defaultModel).toBe('auto')
+    expect(settings.global.defaultModel).toBe('claude-opus-4-7')
     expect(typeof settings.global.prPromptTemplate).toBe('string')
     expect(settings.projects).toEqual([])
   })
@@ -65,6 +65,53 @@ describe('getSettings()', () => {
     expect(settings.projects[0].path).toBe('/home/user/project')
     expect(settings.projects[0].devServer.startCommand).toBe('make dev')
   })
+
+  it('creates a backup before overwriting with defaults when JSON is invalid', () => {
+    fs.writeFileSync(settingsPath, 'not valid json }{', 'utf-8')
+
+    getSettings()
+
+    const files = fs.readdirSync(tmpDir)
+    const backups = files.filter((f) => f.startsWith('settings.json.backup-'))
+    expect(backups.length).toBe(1)
+    // The new settings.json should contain valid defaults
+    const written = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'))
+    expect(written.global.defaultModel).toBe('claude-opus-4-7')
+  })
+
+  it('restores missing global fields to defaults when schemaVersion is current', () => {
+    // Simulates a settings file that was externally modified and is missing
+    // standard fields like defaultModel and prPromptTemplate
+    const corrupted = {
+      schemaVersion: SETTINGS_SCHEMA_VERSION,
+      global: {
+        gitConventions: 'my-conventions',
+        dangerouslySkipPermissions: false,
+        editorCommand: 'vim',
+        browserNotifications: false,
+        audioNotifications: false,
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+        defaultPermissionMode: 'plan',
+        notionMcpKey: '',
+        sentryMcpKey: '',
+        // intentionally missing: defaultModel, prPromptTemplate
+      },
+      projects: [],
+    }
+    fs.writeFileSync(settingsPath, JSON.stringify(corrupted, null, 2), 'utf-8')
+
+    const settings = getSettings()
+
+    // Missing fields must be restored to their defaults
+    expect(settings.global.defaultModel).toBe('claude-opus-4-7')
+    expect(typeof settings.global.prPromptTemplate).toBe('string')
+    expect(settings.global.prPromptTemplate.length).toBeGreaterThan(0)
+    // Existing custom values must be preserved
+    expect(settings.global.gitConventions).toBe('my-conventions')
+    expect(settings.global.dangerouslySkipPermissions).toBe(false)
+    expect(settings.global.editorCommand).toBe('vim')
+  })
 })
 
 describe('getGlobalSettings()', () => {
@@ -84,7 +131,7 @@ describe('updateGlobalSettings()', () => {
     updateGlobalSettings({ prPromptTemplate: 'new template' })
 
     const global = getGlobalSettings()
-    expect(global.defaultModel).toBe('auto') // unchanged
+    expect(global.defaultModel).toBe('claude-opus-4-7') // unchanged
     expect(global.prPromptTemplate).toBe('new template') // updated
   })
 

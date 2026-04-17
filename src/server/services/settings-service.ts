@@ -197,8 +197,25 @@ export interface EffectiveSettings {
   notionInProgressStatus: string
 }
 
-let settingsFilePath = getSettingsPath()
+// In Vitest runs, default to a sentinel path so any test that reaches a real
+// read/write without explicitly calling `_setSettingsPath()` first fails loud
+// instead of silently clobbering the user's production `~/.config/kobo/settings.json`.
+// A past incident (see investigation 2026-04-17) showed a `vi.spyOn(fs, 'readFileSync')`
+// in another test file indirectly triggered `readSettings()` and overwrote the
+// real settings file. This guard ensures such a regression cannot recur.
+const VITEST_UNINITIALIZED_PATH = '__VITEST_SETTINGS_PATH_NOT_SET__'
+let settingsFilePath: string = process.env.VITEST ? VITEST_UNINITIALIZED_PATH : getSettingsPath()
 let settingsBackupSequence = 0
+
+function ensureSettingsPathInitialized(): void {
+  if (settingsFilePath === VITEST_UNINITIALIZED_PATH) {
+    throw new Error(
+      '[settings-service] Attempted to access settings in test mode without calling `_setSettingsPath()` first. ' +
+        'This means a test is exercising settings-service indirectly (e.g. via `extractSentryIssue`, `getEffectiveSettings`) ' +
+        'without proper isolation. Either `vi.mock("../server/services/settings-service.js", ...)` or call `_setSettingsPath(tmpPath)` in `beforeEach`.',
+    )
+  }
+}
 
 /** Override the settings file path (used by tests). */
 export function _setSettingsPath(p: string): void {
@@ -209,7 +226,7 @@ function defaultSettings(): Settings {
   return {
     schemaVersion: SETTINGS_SCHEMA_VERSION,
     global: {
-      defaultModel: 'auto',
+      defaultModel: 'claude-opus-4-7',
       dangerouslySkipPermissions: true,
       prPromptTemplate: DEFAULT_PR_PROMPT_TEMPLATE,
       gitConventions: DEFAULT_GIT_CONVENTIONS,
@@ -277,6 +294,7 @@ export function runSettingsMigrations(raw: Record<string, unknown>): Settings {
 }
 
 function readSettings(): Settings {
+  ensureSettingsPathInitialized()
   if (!fs.existsSync(settingsFilePath)) {
     const defaults = defaultSettings()
     writeSettings(defaults)
@@ -288,11 +306,13 @@ function readSettings(): Settings {
   try {
     parsed = JSON.parse(raw)
   } catch {
+    createSettingsBackupIfPresent()
     const defaults = defaultSettings()
     writeSettings(defaults)
     return defaults
   }
   if (!parsed || typeof parsed !== 'object') {
+    createSettingsBackupIfPresent()
     const defaults = defaultSettings()
     writeSettings(defaults)
     return defaults
@@ -301,8 +321,12 @@ function readSettings(): Settings {
   const originalVersion = (parsed as { schemaVersion?: number }).schemaVersion
   const migrated = runSettingsMigrations(parsed as Record<string, unknown>)
 
-  // If migrations bumped the version, persist the upgraded settings so the
-  // next process doesn't re-run them on every load.
+  // Restore any global fields that may have been removed by external edits.
+  // Defaults act as fallback for missing keys; existing values are preserved.
+  const globalDefaults = defaultSettings().global
+  migrated.global = { ...globalDefaults, ...migrated.global } as GlobalSettings
+
+  // Persist if migrations bumped the version, or if global fields were restored.
   if (migrated.schemaVersion !== originalVersion) {
     writeSettings(migrated)
   }
@@ -321,6 +345,7 @@ function createSettingsBackupIfPresent(): void {
 }
 
 function writeSettings(settings: Settings, options?: { backup?: boolean }): void {
+  ensureSettingsPathInitialized()
   const tmpPath = `${settingsFilePath}.tmp`
   const dir = path.dirname(settingsFilePath)
   if (!fs.existsSync(dir)) {

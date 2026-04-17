@@ -127,6 +127,20 @@ export function pushBranch(repoPath: string, branchName: string, remote = 'origi
   }
 }
 
+/**
+ * Fetch a single branch from the remote. Throws if the fetch fails (no remote,
+ * branch absent on remote, network error, etc.). Call this before creating a
+ * worktree to ensure `origin/<sourceBranch>` is up to date.
+ */
+export function fetchSourceBranch(repoPath: string, sourceBranch: string, remote = 'origin'): void {
+  try {
+    git(repoPath, ['fetch', remote, sourceBranch])
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`Failed to fetch '${sourceBranch}' from '${remote}': ${message}`)
+  }
+}
+
 /** Pull the current branch from the remote using fast-forward only. */
 export function pullBranch(repoPath: string, branchName: string, remote = 'origin'): void {
   try {

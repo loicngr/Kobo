@@ -73,6 +73,7 @@ vi.mock('../server/services/notion-service.js', () => ({
 }))
 
 vi.mock('../server/utils/git-ops.js', () => ({
+  fetchSourceBranch: vi.fn(),
   deleteLocalBranch: vi.fn(),
   deleteRemoteBranch: vi.fn(),
   pushBranch: vi.fn(),
@@ -209,6 +210,8 @@ const fakeSession = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // fetchSourceBranch succeeds by default; individual tests can override.
+  vi.mocked(gitOps.fetchSourceBranch).mockReturnValue(undefined)
   vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
     model: 'auto',
     dangerouslySkipPermissions: true,
@@ -341,6 +344,59 @@ describe('POST /api/workspaces', () => {
     expect(workspaceService.createTask).toHaveBeenCalled()
     expect(workspaceService.updateWorkspaceName).toHaveBeenCalledWith('ws-1', 'Notion Page Title')
     expect(workspaceService.updateWorkingBranch).toHaveBeenCalledWith('ws-1', 'feature/TK-123--notion-page-title')
+  })
+
+  it('calls fetchSourceBranch before createWorkspace on workspace creation', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktree).mockReturnValue('/tmp/worktree')
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const callOrder: string[] = []
+    vi.mocked(gitOps.fetchSourceBranch).mockImplementation(() => {
+      callOrder.push('fetchSourceBranch')
+    })
+    vi.mocked(workspaceService.createWorkspace).mockImplementation(() => {
+      callOrder.push('createWorkspace')
+      return fakeWorkspace
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(callOrder).toEqual(['fetchSourceBranch', 'createWorkspace'])
+    expect(gitOps.fetchSourceBranch).toHaveBeenCalledWith('/tmp/project', 'main')
+  })
+
+  it('returns 422 when fetchSourceBranch fails, without creating any workspace record', async () => {
+    vi.mocked(gitOps.fetchSourceBranch).mockImplementation(() => {
+      throw new Error("Failed to fetch 'main' from 'origin': fatal: no remote")
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    expect(res.status).toBe(422)
+    const data = await res.json()
+    expect(data.error).toMatch(/fetch.*main/i)
+    expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
   })
 
   it('returns 400 when required fields are missing', async () => {

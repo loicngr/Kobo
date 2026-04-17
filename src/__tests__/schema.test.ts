@@ -80,7 +80,7 @@ describe('initSchema(db)', () => {
     }
 
     expect(row.status).toBe('created')
-    expect(row.model).toBe('claude-opus-4-6')
+    expect(row.model).toBe('claude-opus-4-7')
     expect(row.reasoning_effort).toBe('auto')
     db.close()
   })

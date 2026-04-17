@@ -1,5 +1,7 @@
 export const MODEL_IDS = {
   AUTO: 'auto',
+  OPUS_47_CLASSIC: 'claude-opus-4-7',
+  OPUS_47_1M: 'claude-opus-4-7[1m]',
   OPUS_CLASSIC: 'claude-opus-4-6',
   OPUS_1M: 'claude-opus-4-6[1m]',
   SONNET_CLASSIC: 'claude-sonnet-4-6',
@@ -9,6 +11,12 @@ export const MODEL_IDS = {
 
 export const MODEL_OPTION_DEFS = [
   { i18nLabelKey: 'model.auto', value: MODEL_IDS.AUTO, i18nDescriptionKey: 'model.autoDescription' },
+  {
+    i18nLabelKey: 'model.opus47Classic',
+    value: MODEL_IDS.OPUS_47_CLASSIC,
+    i18nDescriptionKey: 'model.opus47ClassicDescription',
+  },
+  { i18nLabelKey: 'model.opus471m', value: MODEL_IDS.OPUS_47_1M, i18nDescriptionKey: 'model.opus471mDescription' },
   {
     i18nLabelKey: 'model.opusClassic',
     value: MODEL_IDS.OPUS_CLASSIC,

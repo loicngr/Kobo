@@ -90,6 +90,7 @@ const reasoningOptions = computed(() => [
   { label: formatReasoningLabel(t('reasoning.low')), value: 'low' },
   { label: formatReasoningLabel(t('reasoning.medium')), value: 'medium' },
   { label: formatReasoningLabel(t('reasoning.high')), value: 'high' },
+  { label: formatReasoningLabel(t('reasoning.xhigh')), value: 'xhigh' },
   { label: formatReasoningLabel(t('reasoning.max')), value: 'max' },
 ])
 

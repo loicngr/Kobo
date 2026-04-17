@@ -64,8 +64,9 @@ export function createWorktree(projectPath: string, branchName: string, sourceBr
   const worktreePath = path.join(worktreesDir, branchName)
 
   try {
-    // Try creating a new branch + worktree
-    git(projectPath, ['worktree', 'add', '-b', branchName, worktreePath, sourceBranch])
+    // Use origin/<sourceBranch> as the base so the worktree starts from the
+    // freshly-fetched remote ref (fetchSourceBranch is always called first).
+    git(projectPath, ['worktree', 'add', '-b', branchName, worktreePath, `origin/${sourceBranch}`])
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
 

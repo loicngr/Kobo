@@ -49,7 +49,7 @@ export type { DevServerConfig, GlobalSettings, ProjectSettings }
 export const useSettingsStore = defineStore('settings', {
   state: () => ({
     global: {
-      defaultModel: 'auto',
+      defaultModel: 'claude-opus-4-7',
       dangerouslySkipPermissions: true,
       prPromptTemplate: '',
       gitConventions: '',

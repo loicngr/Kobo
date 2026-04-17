@@ -168,7 +168,7 @@ export function createWorkspace(data: CreateWorkspaceInput): Workspace {
     data.workingBranch,
     data.notionUrl ?? null,
     data.notionPageId ?? null,
-    data.model ?? 'claude-opus-4-6',
+    data.model ?? 'claude-opus-4-7',
     data.reasoningEffort ?? 'auto',
     data.permissionMode ?? 'auto-accept',
     now,

@@ -61,6 +61,15 @@ app.post('/', async (c) => {
       return c.json({ error: 'Missing required fields: name, projectPath, sourceBranch, workingBranch' }, 400)
     }
 
+    // Fetch the source branch from origin first — if this fails, block creation
+    // immediately (no DB records created, user stays on the create page).
+    try {
+      gitOps.fetchSourceBranch(body.projectPath, body.sourceBranch)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return c.json({ error: message }, 422)
+    }
+
     // Create workspace record
     const globalSettings = settingsService.getGlobalSettings()
     // workingBranch may be updated after Notion extraction to inject the ticket ID

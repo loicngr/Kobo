@@ -1,28 +1,38 @@
-import fs from 'node:fs'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-// Module-level spy so it is accessible in all describe blocks
-const readFileSyncSpy = vi.spyOn(fs, 'readFileSync')
+// Shared state for the mocked `readClaudeMcpEntry` — tests set this via
+// `setFakeClaudeMcpServers()` to control what the MCP client returns without
+// touching `fs.readFileSync` (which would leak into `settings-service`'s reads
+// of the real `~/.config/kobo/settings.json` and cause data loss).
+const mcpState = vi.hoisted(() => {
+  type Entry = { command?: string; args?: string[]; env?: Record<string, string>; disabled?: boolean }
+  let servers: Record<string, Entry> | null = null
+  return {
+    set(next: Record<string, Entry> | null): void {
+      servers = next
+    },
+    get(): Record<string, Entry> | null {
+      return servers
+    },
+  }
+})
+
+function setFakeClaudeMcpServers(
+  servers: Record<
+    string,
+    { command?: string; args?: string[]; env?: Record<string, string>; disabled?: boolean }
+  > | null,
+): void {
+  mcpState.set(servers)
+}
 
 vi.mock('../server/utils/mcp-client.js', () => {
-  // `readClaudeMcpEntry` goes through `fs.readFileSync` (spied above) so tests
-  // can continue to stub the config via `readFileSyncSpy.mockReturnValue(...)`.
   const readClaudeMcpEntry = (match: (key: string) => boolean) => {
-    try {
-      const raw = fs.readFileSync('/fake', 'utf-8')
-      const config = JSON.parse(raw as string) as {
-        mcpServers?: Record<
-          string,
-          { command?: string; args?: string[]; env?: Record<string, string>; disabled?: boolean }
-        >
-      }
-      const servers = config.mcpServers ?? {}
-      const key = Object.keys(servers).find((k) => match(k) && servers[k].disabled !== true)
-      if (!key) return null
-      return { key, entry: servers[key] }
-    } catch {
-      return null
-    }
+    const servers = mcpState.get()
+    if (!servers) return null
+    const key = Object.keys(servers).find((k) => match(k) && servers[k].disabled !== true)
+    if (!key) return null
+    return { key, entry: servers[key] }
   }
 
   return {
@@ -51,6 +61,12 @@ vi.mock('../server/utils/mcp-client.js', () => {
     }),
   }
 })
+
+// Mock the real settings service so `extractSentryIssue` (which calls
+// `getGlobalSettings`) never reaches the on-disk `settings.json`.
+vi.mock('../server/services/settings-service.js', () => ({
+  getGlobalSettings: vi.fn(() => ({ sentryMcpKey: '' })),
+}))
 
 import {
   extractSentryIssue,
@@ -96,21 +112,17 @@ describe('parseSentryUrl(url)', () => {
 
 describe('readSentryMcpConfig()', () => {
   afterEach(() => {
-    readFileSyncSpy.mockReset()
+    setFakeClaudeMcpServers(null)
   })
 
   it('returns the sentry entry from ~/.claude.json', () => {
-    readFileSyncSpy.mockReturnValue(
-      JSON.stringify({
-        mcpServers: {
-          sentry: {
-            command: 'npx',
-            args: ['-y', '@sentry/mcp-server@latest'],
-            env: { SENTRY_ACCESS_TOKEN: 'tok', SENTRY_HOST: 'sentry.example.com' },
-          },
-        },
-      }),
-    )
+    setFakeClaudeMcpServers({
+      sentry: {
+        command: 'npx',
+        args: ['-y', '@sentry/mcp-server@latest'],
+        env: { SENTRY_ACCESS_TOKEN: 'tok', SENTRY_HOST: 'sentry.example.com' },
+      },
+    })
     const cfg = readSentryMcpConfig()
     expect(cfg.command).toBe('npx')
     expect(cfg.args).toEqual(['-y', '@sentry/mcp-server@latest'])
@@ -120,88 +132,70 @@ describe('readSentryMcpConfig()', () => {
   })
 
   it('matches the first key whose name contains "sentry" (case-insensitive)', () => {
-    readFileSyncSpy.mockReturnValue(
-      JSON.stringify({
-        mcpServers: {
-          notion: { command: 'npx', args: [], env: {} },
-          'My-Sentry-Server': { command: 'sentry-cli', args: ['mcp'], env: { TOKEN: 'x' } },
-        },
-      }),
-    )
+    setFakeClaudeMcpServers({
+      notion: { command: 'npx', args: [], env: {} },
+      'My-Sentry-Server': { command: 'sentry-cli', args: ['mcp'], env: { TOKEN: 'x' } },
+    })
     const cfg = readSentryMcpConfig()
     expect(cfg.command).toBe('sentry-cli')
     expect(cfg.env.TOKEN).toBe('x')
   })
 
   it('throws when no sentry entry exists', () => {
-    readFileSyncSpy.mockReturnValue(JSON.stringify({ mcpServers: { notion: { command: 'npx', args: [], env: {} } } }))
+    setFakeClaudeMcpServers({ notion: { command: 'npx', args: [], env: {} } })
     expect(() => readSentryMcpConfig()).toThrow(/Sentry MCP server not configured/)
   })
 
   it('throws when ~/.claude.json is unreadable', () => {
-    readFileSyncSpy.mockImplementation(() => {
-      throw new Error('ENOENT')
-    })
+    setFakeClaudeMcpServers(null)
     expect(() => readSentryMcpConfig()).toThrow(/Sentry MCP server not configured/)
   })
 
   it('throws when mcpServers is missing', () => {
-    readFileSyncSpy.mockReturnValue(JSON.stringify({}))
+    setFakeClaudeMcpServers({})
     expect(() => readSentryMcpConfig()).toThrow(/Sentry MCP server not configured/)
   })
 
   it('skips disabled sentry entries and picks the next enabled one', () => {
-    readFileSyncSpy.mockReturnValue(
-      JSON.stringify({
-        mcpServers: {
-          'sentry-old': {
-            command: 'npx',
-            args: ['-y', 'old'],
-            env: { SENTRY_HOST: 'old.example.com' },
-            disabled: true,
-          },
-          sentry: {
-            command: 'npx',
-            args: ['-y', 'new'],
-            env: { SENTRY_HOST: 'new.example.com' },
-            disabled: false,
-          },
-        },
-      }),
-    )
+    setFakeClaudeMcpServers({
+      'sentry-old': {
+        command: 'npx',
+        args: ['-y', 'old'],
+        env: { SENTRY_HOST: 'old.example.com' },
+        disabled: true,
+      },
+      sentry: {
+        command: 'npx',
+        args: ['-y', 'new'],
+        env: { SENTRY_HOST: 'new.example.com' },
+        disabled: false,
+      },
+    })
     const cfg = readSentryMcpConfig()
     expect(cfg.args).toEqual(['-y', 'new'])
     expect(cfg.env.SENTRY_HOST).toBe('new.example.com')
   })
 
   it('throws when the only sentry entry is disabled', () => {
-    readFileSyncSpy.mockReturnValue(
-      JSON.stringify({
-        mcpServers: {
-          sentry: { command: 'npx', args: [], env: {}, disabled: true },
-        },
-      }),
-    )
+    setFakeClaudeMcpServers({
+      sentry: { command: 'npx', args: [], env: {}, disabled: true },
+    })
     expect(() => readSentryMcpConfig()).toThrow(/Sentry MCP server not configured/)
   })
 
   it('prefers explicit configured MCP key when provided', () => {
-    readFileSyncSpy.mockReturnValue(
-      JSON.stringify({
-        mcpServers: {
-          sentry: {
-            command: 'npx',
-            args: ['-y', 'default'],
-            env: { SENTRY_HOST: 'default.example.com' },
-          },
-          'sentry-eu': {
-            command: 'npx',
-            args: ['-y', 'eu'],
-            env: { SENTRY_HOST: 'eu.example.com' },
-          },
-        },
-      }),
-    )
+    setFakeClaudeMcpServers({
+      sentry: {
+        command: 'npx',
+        args: ['-y', 'default'],
+        env: { SENTRY_HOST: 'default.example.com' },
+      },
+      'sentry-eu': {
+        command: 'npx',
+        args: ['-y', 'eu'],
+        env: { SENTRY_HOST: 'eu.example.com' },
+      },
+    })
     const cfg = readSentryMcpConfig('sentry-eu')
     expect(cfg.args).toEqual(['-y', 'eu'])
     expect(cfg.env.SENTRY_HOST).toBe('eu.example.com')
@@ -321,16 +315,13 @@ os: Linux
 
 describe('extractSentryIssue(url)', () => {
   beforeEach(() => {
-    const fakeConfig = {
-      mcpServers: {
-        sentry: { command: 'npx', args: ['-y', 'x'], env: { TOKEN: 'x' } },
-      },
-    }
-    readFileSyncSpy.mockReturnValue(JSON.stringify(fakeConfig))
+    setFakeClaudeMcpServers({
+      sentry: { command: 'npx', args: ['-y', '@sentry/mcp-server@latest'], env: { SENTRY_ACCESS_TOKEN: 'tok' } },
+    })
   })
 
   afterEach(() => {
-    readFileSyncSpy.mockReset()
+    setFakeClaudeMcpServers(null)
   })
 
   it('extracts and parses the issue via the Sentry MCP server', async () => {

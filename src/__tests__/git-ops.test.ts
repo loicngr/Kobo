@@ -8,6 +8,7 @@ import {
   createBranch,
   deleteLocalBranch,
   deleteRemoteBranch,
+  fetchSourceBranch,
   getCommitCount,
   getCommitsBetween,
   getCurrentBranch,
@@ -354,6 +355,65 @@ describe('getCommitCount', () => {
     expect(count).toBe(0)
 
     rmSync(repo, { recursive: true, force: true })
+  })
+})
+
+describe('fetchSourceBranch(repoPath, sourceBranch)', () => {
+  it('fetches a branch from origin successfully', () => {
+    const bare = mkdtempSync(path.join(tmpdir(), 'at-fetch-bare-'))
+    execFileSync('git', ['init', '--bare', '-b', 'main'], { cwd: bare })
+
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-fetch-repo-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+    writeFileSync(path.join(repo, 'f.txt'), 'hello')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: repo })
+    execFileSync('git', ['remote', 'add', 'origin', bare], { cwd: repo })
+    execFileSync('git', ['push', 'origin', 'main'], { cwd: repo })
+
+    expect(() => fetchSourceBranch(repo, 'main')).not.toThrow()
+
+    rmSync(repo, { recursive: true, force: true })
+    rmSync(bare, { recursive: true, force: true })
+  })
+
+  it('throws with wrapped message when remote does not exist', () => {
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-fetch-no-remote-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+    writeFileSync(path.join(repo, 'f.txt'), 'hello')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: repo })
+    // No remote configured — fetch must fail
+
+    expect(() => fetchSourceBranch(repo, 'main')).toThrow(/Failed to fetch 'main' from 'origin'/)
+
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('throws with wrapped message when branch does not exist on remote', () => {
+    const bare = mkdtempSync(path.join(tmpdir(), 'at-fetch-bare2-'))
+    execFileSync('git', ['init', '--bare', '-b', 'main'], { cwd: bare })
+
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-fetch-repo2-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+    writeFileSync(path.join(repo, 'f.txt'), 'hello')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: repo })
+    execFileSync('git', ['remote', 'add', 'origin', bare], { cwd: repo })
+    execFileSync('git', ['push', 'origin', 'main'], { cwd: repo })
+
+    expect(() => fetchSourceBranch(repo, 'feature/does-not-exist')).toThrow(
+      /Failed to fetch 'feature\/does-not-exist' from 'origin'/,
+    )
+
+    rmSync(repo, { recursive: true, force: true })
+    rmSync(bare, { recursive: true, force: true })
   })
 })
 
