@@ -4,6 +4,8 @@
 
 > [!WARNING]
 > 🚧 **Work in progress** — This project is under active development. Breaking changes may occur at any time.
+>
+> **Engine refactor planned.** Kōbō currently drives the `claude` CLI via `spawn(..., ['-p', ...])` and parses stdout, which is brittle on edge cases (interrupts, long-running sessions, MCP lifecycle, tool-use streaming). A rewrite is planned to use the [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents-and-tools/claude-agent-sdk/overview) directly so the agent runs in-process, with proper streaming primitives, structured tool-use events, and cleaner interrupt / resume semantics. Expect churn in `src/server/services/agent-manager.ts` and the WebSocket event shape during that migration.
 
 Kōbō lets you delegate multiple coding missions to Claude Code agents in parallel. Each workspace lives in its own isolated git worktree with its own branch, its own Claude session, optionally its own dev server, and a custom MCP tools server the agent uses to track progress. A Vue 3 dashboard shows live agent output, tasks, acceptance criteria, and git state across every workspace.
 

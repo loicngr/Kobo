@@ -33,6 +33,13 @@ const savedWidth = parseInt(localStorage.getItem(DRAWER_WIDTH_KEY) ?? '260', 10)
 const leftDrawerWidth = ref(Math.min(500, Math.max(140, savedWidth)))
 const isResizing = ref(false)
 
+const RIGHT_DRAWER_WIDTH_KEY = 'kobo:rightDrawerWidth'
+const RIGHT_DRAWER_MIN = 240
+const RIGHT_DRAWER_MAX = 800
+const savedRightWidth = parseInt(localStorage.getItem(RIGHT_DRAWER_WIDTH_KEY) ?? '300', 10)
+const rightDrawerWidth = ref(Math.min(RIGHT_DRAWER_MAX, Math.max(RIGHT_DRAWER_MIN, savedRightWidth)))
+const isResizingRight = ref(false)
+
 function startResize(event: MouseEvent) {
   event.preventDefault()
   isResizing.value = true
@@ -45,6 +52,30 @@ function startResize(event: MouseEvent) {
   const onMouseUp = () => {
     isResizing.value = false
     localStorage.setItem(DRAWER_WIDTH_KEY, String(leftDrawerWidth.value))
+    document.removeEventListener('mousemove', onMouseMove)
+    document.removeEventListener('mouseup', onMouseUp)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+  }
+
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+  document.addEventListener('mousemove', onMouseMove)
+  document.addEventListener('mouseup', onMouseUp)
+}
+
+function startRightResize(event: MouseEvent) {
+  event.preventDefault()
+  isResizingRight.value = true
+
+  const onMouseMove = (e: MouseEvent) => {
+    const newWidth = Math.min(RIGHT_DRAWER_MAX, Math.max(RIGHT_DRAWER_MIN, window.innerWidth - e.clientX))
+    rightDrawerWidth.value = newWidth
+  }
+
+  const onMouseUp = () => {
+    isResizingRight.value = false
+    localStorage.setItem(RIGHT_DRAWER_WIDTH_KEY, String(rightDrawerWidth.value))
     document.removeEventListener('mousemove', onMouseMove)
     document.removeEventListener('mouseup', onMouseUp)
     document.body.style.cursor = ''
@@ -121,12 +152,13 @@ function startVerticalResize(event: MouseEvent) {
     <q-drawer
       :model-value="showRightDrawer"
       side="right"
-      :width="300"
+      :width="rightDrawerWidth"
       :breakpoint="0"
       persistent
       bordered
       class="bg-dark"
     >
+      <div class="resize-handle resize-handle--right" @mousedown="startRightResize" />
       <div class="column no-wrap" style="position: absolute; inset: 0; overflow: hidden;">
         <!-- Upper zone -->
         <div :style="{ flex: `${topPercent} 1 0%` }" class="column no-wrap" style="overflow: hidden;">
@@ -234,6 +266,11 @@ function startVerticalResize(event: MouseEvent) {
   &:hover,
   &:active {
     background-color: rgba(108, 99, 255, 0.5);
+  }
+
+  &--right {
+    right: auto;
+    left: -2px;
   }
 }
 
