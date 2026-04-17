@@ -477,11 +477,19 @@ export function unsetFavorite(id: string): Workspace {
   return getWorkspace(id) as Workspace
 }
 
-/** Replace the workspace's tag list with the provided array. Deduplicates and trims. */
+/** Maximum tag length (characters) and max number of tags per workspace. */
+export const MAX_TAG_LENGTH = 50
+export const MAX_WORKSPACE_TAGS = 50
+
+/** Replace the workspace's tag list. Trims, dedupes, caps length per tag and count total. */
 export function setWorkspaceTags(id: string, tags: string[]): Workspace {
   const normalized = Array.from(
-    new Set(tags.map((t) => (typeof t === 'string' ? t.trim() : '')).filter((t) => t.length > 0 && t.length <= 50)),
-  )
+    new Set(
+      tags
+        .map((t) => (typeof t === 'string' ? t.trim() : ''))
+        .filter((t) => t.length > 0 && t.length <= MAX_TAG_LENGTH),
+    ),
+  ).slice(0, MAX_WORKSPACE_TAGS)
   const db = getDb()
   const now = new Date().toISOString()
   const result = db

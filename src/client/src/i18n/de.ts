@@ -482,6 +482,7 @@ export default {
   'tags.manage': 'Tags verwalten',
   'tags.manageTitle': 'Workspace-Tags verwalten',
   'tags.noTagsDefined': 'Keine Tags definiert. Füge welche in Einstellungen > Global > Tags hinzu.',
+  'tags.orphanedHint': '{count} Tag(s) sind nicht mehr im globalen Katalog. Abwählen zum Entfernen.',
   'settings.tagsTitle': 'Workspace-Tags',
   'settings.tagsHint':
     'Definiere die Tags, die Workspaces zugewiesen werden können. Tippe zum Hinzufügen, klicke auf das Kreuz zum Entfernen.',

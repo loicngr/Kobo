@@ -907,6 +907,9 @@ app.put('/:id/tags', async (c) => {
     if (!Array.isArray(body.tags)) {
       return c.json({ error: 'tags must be an array of strings' }, 400)
     }
+    if (body.tags.some((t) => typeof t !== 'string')) {
+      return c.json({ error: 'tags must contain only strings' }, 400)
+    }
     const ws = workspaceService.setWorkspaceTags(id, body.tags as string[])
     return c.json(ws)
   } catch (err) {

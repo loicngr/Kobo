@@ -482,6 +482,7 @@ export default {
   'tags.manage': 'Gestionar etiquetas',
   'tags.manageTitle': 'Gestionar etiquetas del workspace',
   'tags.noTagsDefined': 'Sin etiquetas. Añádelas en Ajustes > Global > Etiquetas.',
+  'tags.orphanedHint': '{count} etiqueta(s) ya no están en el catálogo global. Desmárcalas para quitarlas.',
   'settings.tagsTitle': 'Etiquetas de workspace',
   'settings.tagsHint':
     'Define las etiquetas asignables a los workspaces. Escribe para añadir, clic en la cruz para quitar.',

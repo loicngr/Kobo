@@ -30,7 +30,19 @@ watch(
   { immediate: true },
 )
 
-const availableTags = computed<string[]>(() => settingsStore.global.tags ?? [])
+// Union of the global catalog plus any tags already assigned to this workspace,
+// so orphaned tags (removed from the catalog after being assigned) remain visible
+// and the user can uncheck them.
+const availableTags = computed<string[]>(() => {
+  const catalog = settingsStore.global.tags ?? []
+  const assigned = props.workspace.tags ?? []
+  return Array.from(new Set([...catalog, ...assigned]))
+})
+
+const orphanedTags = computed<string[]>(() => {
+  const catalog = new Set(settingsStore.global.tags ?? [])
+  return (props.workspace.tags ?? []).filter((t) => !catalog.has(t))
+})
 
 async function save() {
   saving.value = true
@@ -60,12 +72,18 @@ function close() {
         <q-option-group
           v-if="availableTags.length > 0"
           v-model="selected"
-          :options="availableTags.map((tag) => ({ label: tag, value: tag }))"
+          :options="availableTags.map((tag) => ({
+            label: orphanedTags.includes(tag) ? `${tag}` : tag,
+            value: tag,
+          }))"
           type="checkbox"
           dense
           dark
         />
-        <div v-else class="text-grey-6 text-caption">
+        <div v-if="orphanedTags.length > 0" class="text-caption text-orange-5 q-mt-sm">
+          {{ $t('tags.orphanedHint', { count: orphanedTags.length }) }}
+        </div>
+        <div v-if="availableTags.length === 0" class="text-grey-6 text-caption">
           {{ $t('tags.noTagsDefined') }}
         </div>
       </q-card-section>

@@ -33,6 +33,7 @@ vi.mock('../server/services/workspace-service.js', () => ({
   markWorkspaceUnread: vi.fn(),
   setFavorite: vi.fn(),
   unsetFavorite: vi.fn(),
+  setWorkspaceTags: vi.fn(),
 }))
 
 vi.mock('../server/services/worktree-service.js', () => ({
@@ -2096,5 +2097,56 @@ describe('favorite endpoints', () => {
     expect(workspaceService.setFavorite).toHaveBeenCalledWith('ws-1')
     // GET /:id uses getWorkspaceWithTasks — if that was called, route order regressed
     expect(workspaceService.getWorkspaceWithTasks).not.toHaveBeenCalled()
+  })
+})
+
+describe('PUT /api/workspaces/:id/tags', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  const taggedWorkspace = { id: 'ws-1', tags: ['bug', 'urgent'] } as unknown as ReturnType<
+    typeof workspaceService.setWorkspaceTags
+  >
+
+  it('returns 200 + updated workspace on happy path', async () => {
+    vi.mocked(workspaceService.setWorkspaceTags).mockReturnValue(taggedWorkspace)
+    const res = await app.request('/api/workspaces/ws-1/tags', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tags: ['bug', 'urgent'] }),
+    })
+    expect(res.status).toBe(200)
+    expect(workspaceService.setWorkspaceTags).toHaveBeenCalledWith('ws-1', ['bug', 'urgent'])
+  })
+
+  it('returns 400 when tags is not an array', async () => {
+    const res = await app.request('/api/workspaces/ws-1/tags', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tags: 'bug' }),
+    })
+    expect(res.status).toBe(400)
+    expect(workspaceService.setWorkspaceTags).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 when tags contains non-strings', async () => {
+    const res = await app.request('/api/workspaces/ws-1/tags', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tags: ['bug', 42, 'urgent'] }),
+    })
+    expect(res.status).toBe(400)
+    expect(workspaceService.setWorkspaceTags).not.toHaveBeenCalled()
+  })
+
+  it('returns 404 when workspace missing', async () => {
+    vi.mocked(workspaceService.setWorkspaceTags).mockImplementation(() => {
+      throw new Error("Workspace 'ws-missing' not found")
+    })
+    const res = await app.request('/api/workspaces/ws-missing/tags', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tags: ['bug'] }),
+    })
+    expect(res.status).toBe(404)
   })
 })

@@ -913,3 +913,74 @@ describe('renameSession()', () => {
     expect(result).toBeNull()
   })
 })
+
+describe('setWorkspaceTags(id, tags)', () => {
+  it('stores the normalized tag list on the workspace', async () => {
+    const { createWorkspace, setWorkspaceTags } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'tags-test', projectPath: '/p', sourceBranch: 'main', workingBranch: 'f' })
+    const updated = setWorkspaceTags(ws.id, ['bug', 'urgent'])
+    expect(updated.tags).toEqual(['bug', 'urgent'])
+  })
+
+  it('trims whitespace and drops empty strings', async () => {
+    const { createWorkspace, setWorkspaceTags } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'trim', projectPath: '/p', sourceBranch: 'main', workingBranch: 'f' })
+    const updated = setWorkspaceTags(ws.id, ['  bug  ', '', '   ', 'feature'])
+    expect(updated.tags).toEqual(['bug', 'feature'])
+  })
+
+  it('deduplicates identical tags (after trim)', async () => {
+    const { createWorkspace, setWorkspaceTags } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'dedupe', projectPath: '/p', sourceBranch: 'main', workingBranch: 'f' })
+    const updated = setWorkspaceTags(ws.id, ['bug', 'BUG', 'bug ', ' bug'])
+    // Trim yields the same value; case mismatch is intentionally kept as-is (case-sensitive).
+    expect(updated.tags).toEqual(['bug', 'BUG'])
+  })
+
+  it('drops tags longer than 50 characters', async () => {
+    const { createWorkspace, setWorkspaceTags } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'long', projectPath: '/p', sourceBranch: 'main', workingBranch: 'f' })
+    const updated = setWorkspaceTags(ws.id, ['ok', 'x'.repeat(51)])
+    expect(updated.tags).toEqual(['ok'])
+  })
+
+  it('caps the total number of tags at 50', async () => {
+    const { createWorkspace, setWorkspaceTags } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'many', projectPath: '/p', sourceBranch: 'main', workingBranch: 'f' })
+    const hundred = Array.from({ length: 100 }, (_, i) => `tag-${i}`)
+    const updated = setWorkspaceTags(ws.id, hundred)
+    expect(updated.tags).toHaveLength(50)
+    expect(updated.tags[0]).toBe('tag-0')
+    expect(updated.tags[49]).toBe('tag-49')
+  })
+
+  it('silently filters non-string values from the input', async () => {
+    const { createWorkspace, setWorkspaceTags } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'mixed', projectPath: '/p', sourceBranch: 'main', workingBranch: 'f' })
+    // Tolerant normalization — but see the route test for the strict 400 rejection.
+    const updated = setWorkspaceTags(ws.id, ['bug', 42 as unknown as string, 'urgent'])
+    expect(updated.tags).toEqual(['bug', 'urgent'])
+  })
+
+  it('bumps updatedAt on write', async () => {
+    const { createWorkspace, setWorkspaceTags } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'ua', projectPath: '/p', sourceBranch: 'main', workingBranch: 'f' })
+    const before = ws.updatedAt
+    await new Promise((r) => setTimeout(r, 10))
+    const updated = setWorkspaceTags(ws.id, ['bug'])
+    expect(updated.updatedAt).not.toBe(before)
+  })
+
+  it('throws "Workspace \'<id>\' not found" on unknown id', async () => {
+    const { setWorkspaceTags } = await import('../server/services/workspace-service.js')
+    expect(() => setWorkspaceTags('does-not-exist', ['bug'])).toThrow("Workspace 'does-not-exist' not found")
+  })
+
+  it('allows clearing tags by passing an empty array', async () => {
+    const { createWorkspace, setWorkspaceTags } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'clear', projectPath: '/p', sourceBranch: 'main', workingBranch: 'f' })
+    setWorkspaceTags(ws.id, ['bug'])
+    const cleared = setWorkspaceTags(ws.id, [])
+    expect(cleared.tags).toEqual([])
+  })
+})

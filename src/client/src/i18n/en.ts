@@ -480,6 +480,7 @@ export default {
   'tags.manage': 'Manage tags',
   'tags.manageTitle': 'Manage workspace tags',
   'tags.noTagsDefined': 'No tags defined. Add some in Settings > Global > Tags.',
+  'tags.orphanedHint': '{count} tag(s) are no longer in the global catalog. Uncheck to remove them.',
   'settings.tagsTitle': 'Workspace tags',
   'settings.tagsHint': 'Define the tags you can assign to workspaces. Type to add, click the cross to remove.',
   'settings.tagsLabel': 'Available tags',
