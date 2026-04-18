@@ -4,6 +4,8 @@
 
 > [!WARNING]
 > 🚧 **Work in progress** — This project is under active development. Breaking changes may occur at any time.
+> ⚠️ **Planned refactor with potential data loss** — A major refactor is planned and may require database/schema changes that can cause data loss.
+> ❌ **Do not use in production** until this refactor is complete and a stable migration path is documented.
 >
 > **Engine refactor planned.** Kōbō currently drives the `claude` CLI via `spawn(..., ['-p', ...])` and parses stdout, which is brittle on edge cases (interrupts, long-running sessions, MCP lifecycle, tool-use streaming). A rewrite is planned to use the [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents-and-tools/claude-agent-sdk/overview) directly so the agent runs in-process, with proper streaming primitives, structured tool-use events, and cleaner interrupt / resume semantics. Expect churn in `src/server/services/agent-manager.ts` and the WebSocket event shape during that migration.
 
