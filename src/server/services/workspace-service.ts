@@ -36,6 +36,7 @@ export interface Workspace {
   archivedAt: string | null
   favoritedAt: string | null
   tags: string[]
+  engine: string
   createdAt: string
   updatedAt: string
 }
@@ -68,6 +69,7 @@ export interface CreateWorkspaceInput {
   model?: string
   reasoningEffort?: string
   permissionMode?: string
+  engine?: string
 }
 
 /** Input payload for creating a new task. */
@@ -106,6 +108,7 @@ interface WorkspaceRow {
   archived_at: string | null
   favorited_at: string | null
   tags: string | null
+  engine: string | null
   created_at: string
   updated_at: string
 }
@@ -121,6 +124,11 @@ interface TaskRow {
   updated_at: string
 }
 
+// NOTE: `engine` is stored as a plain TEXT column and returned as a `string` on
+// the `Workspace` interface rather than the stricter `EngineId` union. The DB
+// is untyped, so we intentionally do not narrow here — validation against
+// `listEngines()` is expected to happen at workspace creation (see the
+// routes/engines handler) and when resolving an engine at agent-start time.
 function mapWorkspace(row: WorkspaceRow): Workspace {
   return {
     id: row.id,
@@ -139,6 +147,7 @@ function mapWorkspace(row: WorkspaceRow): Workspace {
     archivedAt: row.archived_at,
     favoritedAt: row.favorited_at,
     tags: parseTags(row.tags),
+    engine: row.engine ?? 'claude-code',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -176,8 +185,8 @@ export function createWorkspace(data: CreateWorkspaceInput): Workspace {
   const id = nanoid()
 
   db.prepare(`
-    INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, status, notion_url, notion_page_id, model, reasoning_effort, permission_mode, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, status, notion_url, notion_page_id, model, reasoning_effort, permission_mode, engine, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     data.name,
@@ -189,6 +198,7 @@ export function createWorkspace(data: CreateWorkspaceInput): Workspace {
     data.model ?? 'claude-opus-4-7',
     data.reasoningEffort ?? 'auto',
     data.permissionMode ?? 'auto-accept',
+    data.engine ?? 'claude-code',
     now,
     now,
   )
@@ -503,12 +513,12 @@ export function setWorkspaceTags(id: string, tags: string[]): Workspace {
 
 // ── Agent Sessions ────────────────────────────────────────────────────────────
 
-/** A persisted record of a Claude Code CLI invocation for a workspace. */
+/** A persisted record of an agent engine invocation for a workspace. */
 export interface AgentSession {
   id: string
   workspaceId: string
   pid: number | null
-  claudeSessionId: string | null
+  engineSessionId: string | null
   status: string
   startedAt: string
   endedAt: string | null
@@ -519,7 +529,7 @@ interface AgentSessionRow {
   id: string
   workspace_id: string
   pid: number | null
-  claude_session_id: string | null
+  engine_session_id: string | null
   status: string
   started_at: string
   ended_at: string | null
@@ -531,7 +541,7 @@ function mapSession(row: AgentSessionRow): AgentSession {
     id: row.id,
     workspaceId: row.workspace_id,
     pid: row.pid,
-    claudeSessionId: row.claude_session_id,
+    engineSessionId: row.engine_session_id,
     status: row.status,
     startedAt: row.started_at,
     endedAt: row.ended_at,
@@ -596,7 +606,7 @@ export function createIdleSession(workspaceId: string): AgentSession {
     id,
     workspaceId,
     pid: null,
-    claudeSessionId: null,
+    engineSessionId: null,
     status: 'idle',
     startedAt: now,
     endedAt: null,

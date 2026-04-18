@@ -1,1119 +1,456 @@
 <script setup lang="ts">
-import DOMPurify from 'dompurify'
-import { marked } from 'marked'
-import { useWebSocketStore } from 'src/stores/websocket'
-import type { ActivityItem } from 'src/stores/workspace'
+import type { QScrollArea } from 'quasar'
+import { foldEvents, mergeWithUserMessages, type UserMessage } from 'src/services/agent-event-view'
+import { groupIntoTurns } from 'src/services/conversation-turns'
+import { useAgentStreamStore } from 'src/stores/agent-stream'
+import { useSettingsStore } from 'src/stores/settings'
 import { useWorkspaceStore } from 'src/stores/workspace'
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
-import { useI18n } from 'vue-i18n'
+import type { AgentEvent } from 'src/types/agent-event'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import TurnCard from './TurnCard.vue'
 
-function renderMarkdown(text: string): string {
-  const html = marked.parse(text, { async: false, breaks: true, gfm: true }) as string
-  return DOMPurify.sanitize(html)
-}
+const props = defineProps<{ workspaceId: string }>()
+const stream = useAgentStreamStore()
+const settings = useSettingsStore()
+const workspaceStore = useWorkspaceStore()
 
-const { t } = useI18n()
-const store = useWorkspaceStore()
-const wsStore = useWebSocketStore()
-const feedContainer = ref<HTMLElement | null>(null)
-const isLoadingMore = ref(false)
-const expandedItems = ref<Set<string>>(new Set())
-
-// Cache for getAskUserQuestions — avoids double-call in v-if + v-for
-const askUserCache = new Map<string, AskUserQuestion[] | null>()
-function getCachedAskUser(itemId: string, item: ActivityItem): AskUserQuestion[] | null {
-  if (!askUserCache.has(itemId)) {
-    askUserCache.set(itemId, getAskUserQuestions(item))
-  }
-  return askUserCache.get(itemId)!
-}
-
-// Cache for renderMarkdown — avoids re-rendering on every re-render
-const markdownCache = new Map<string, string>()
-function getCachedMarkdown(id: string, content: string): string {
-  if (!markdownCache.has(id)) {
-    markdownCache.set(id, renderMarkdown(content))
-  }
-  return markdownCache.get(id)!
-}
-
-// Show AskUserQuestion buttons only if the user hasn't replied yet.
-// Scan backwards: user message before finding the question → answered.
-// AskUserQuestion found first → active. Everything else is skipped.
-const activeAskId = computed(() => {
-  const items = store.activityFeed
-  for (let i = items.length - 1; i >= 0; i--) {
-    const item = items[i]
-    if (item.meta?.sender === 'user') return null
-    if (item.type === 'tool_use' && item.content === 'AskUserQuestion') return item.id
-  }
-  return null
+const userMessages = computed<(UserMessage & { sessionId?: string })[]>(() => {
+  const feed = workspaceStore.activityFeeds[props.workspaceId] ?? []
+  return feed
+    .filter((i) => i.type === 'text' && typeof i.content === 'string')
+    .map((i) => ({
+      content: i.content,
+      sender: (i.meta?.sender as string) ?? 'user',
+      ts: i.timestamp,
+      sessionId: i.sessionId,
+    }))
 })
 
-// Multi-question answer selection state: Map<itemId, Map<questionIndex, selectedOptionIndex>>
-const askSelections = ref(new Map<string, Map<number, number>>())
-
-function toggleAskSelection(itemId: string, questionIndex: number, optionIndex: number) {
-  if (!askSelections.value.has(itemId)) {
-    askSelections.value.set(itemId, new Map())
-  }
-  const selections = askSelections.value.get(itemId)!
-  if (selections.get(questionIndex) === optionIndex) {
-    selections.delete(questionIndex)
-  } else {
-    selections.set(questionIndex, optionIndex)
-  }
-}
-
-function isAskSelected(itemId: string, questionIndex: number, optionIndex: number): boolean {
-  return askSelections.value.get(itemId)?.get(questionIndex) === optionIndex
-}
-
-function hasAnySelection(itemId: string): boolean {
-  const sel = askSelections.value.get(itemId)
-  return !!sel && sel.size > 0
-}
-
-function sendAskAnswers(itemId: string, questions: AskUserQuestion[]) {
-  const workspaceId = store.selectedWorkspaceId
-  if (!workspaceId) return
-  const selections = askSelections.value.get(itemId)
-  if (!selections || selections.size === 0) return
-
-  const lines: string[] = []
-  for (const [qi, oi] of selections.entries()) {
-    const q = questions[qi]
-    if (!q) continue
-    const opt = q.options[oi]
-    if (!opt) continue
-    lines.push(`${q.question}: ${opt.label}`)
-  }
-  if (lines.length > 0) {
-    wsStore.sendChatMessage(workspaceId, lines.join('\n'))
-  }
-}
-
-// Scroll to previous user message
-const userMessageCursor = ref(-1)
-
-function scrollToPreviousUserMessage() {
-  const items = store.activityFeed
-  const userItems = items.map((item, idx) => ({ item, idx })).filter(({ item }) => item.meta?.sender === 'user')
-
-  if (userItems.length === 0) return
-
-  // Move cursor backward (wraps around)
-  if (userMessageCursor.value <= 0) {
-    userMessageCursor.value = userItems.length - 1
-  } else {
-    userMessageCursor.value--
-  }
-
-  const targetIdx = userItems[userMessageCursor.value].idx
-  const targetId = userItems[userMessageCursor.value].item.id
-
-  // Ensure the target item is loaded (increase displayCount if needed)
-  const itemsFromEnd = items.length - targetIdx
-  if (itemsFromEnd > displayCount.value) {
-    displayCount.value = Math.min(itemsFromEnd + 10, items.length)
-  }
-
-  // Wait for DOM update before scrolling
-  nextTick(() => {
-    const el = feedContainer.value?.querySelector(`[data-item-id="${targetId}"]`)
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
-    }
-  })
-}
-
-// Reset cursor and clear caches when workspace changes (not on every new message)
-watch(
-  () => store.selectedWorkspaceId,
-  () => {
-    userMessageCursor.value = -1
-    askUserCache.clear()
-    askSelections.value.clear()
-    markdownCache.clear()
-    diffCache.clear()
-    lastScrollTop = 0
-    isLoadingMore.value = false
-  },
-)
-
-// Infinite scroll: only render the last N items, load more when user scrolls up
-const INITIAL_COUNT = 50
-const LOAD_STEP = 50
-const displayCount = ref(INITIAL_COUNT)
-
-const visibleItems = computed(() => {
-  const items = store.activityFeed
-  if (items.length <= displayCount.value) return items
-  return items.slice(-displayCount.value)
+const sessionActive = computed(() => {
+  const ws = workspaceStore.workspaces.find((w) => w.id === props.workspaceId)
+  if (!ws) return false
+  return ws.status === 'extracting' || ws.status === 'brainstorming' || ws.status === 'executing'
 })
 
-// Reset display count when workspace changes (but not when new items arrive)
-watch(
-  () => store.selectedWorkspaceId,
-  () => {
-    displayCount.value = INITIAL_COUNT
-  },
-)
-
-// Clean up caches for items ejected by MAX_FEED_ITEMS cap (I2)
-watch(
-  visibleItems,
-  (items) => {
-    const visibleIds = new Set(items.map((i) => i.id))
-    for (const key of askUserCache.keys()) {
-      if (!visibleIds.has(key)) askUserCache.delete(key)
-    }
-    for (const key of askSelections.value.keys()) {
-      if (!visibleIds.has(key)) askSelections.value.delete(key)
-    }
-    for (const key of markdownCache.keys()) {
-      if (!visibleIds.has(key)) markdownCache.delete(key)
-    }
-    for (const key of diffCache.keys()) {
-      if (!visibleIds.has(key)) diffCache.delete(key)
-    }
-  },
-  { flush: 'post' },
-)
-
-// Auto-scroll: stick to bottom unless user scrolled up.
-// We track the previous scrollTop to distinguish user scrolls (up) from
-// programmatic/content-growth scrolls that shift the position.
-const isUserScrolledUp = ref(false)
-let lastScrollTop = 0
-
-function onFeedScroll() {
-  const el = feedContainer.value
-  if (!el) return
-  const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 50
-
-  if (atBottom) {
-    // User scrolled back to the bottom — re-enable auto-scroll
-    isUserScrolledUp.value = false
-  } else if (el.scrollTop < lastScrollTop) {
-    // User scrolled UP — disable auto-scroll
-    isUserScrolledUp.value = true
-  }
-  // If scrollTop increased (content grew or programmatic scroll), don't change the flag
-
-  lastScrollTop = el.scrollTop
-
-  // Load more older items when user scrolls near the top
-  if (el.scrollTop < 200 && !isLoadingMore.value) {
-    const total = store.activityFeed.length
-    if (displayCount.value < total) {
-      // Reveal more in-memory items first
-      isLoadingMore.value = true
-      const prevScrollHeight = el.scrollHeight
-      displayCount.value = Math.min(displayCount.value + LOAD_STEP, total)
-      nextTick(() => {
-        if (feedContainer.value) {
-          feedContainer.value.scrollTop += feedContainer.value.scrollHeight - prevScrollHeight
-        }
-        isLoadingMore.value = false
-      })
-    } else if (store.selectedWorkspaceId && store.hasMoreEvents[store.selectedWorkspaceId] !== false) {
-      // All in-memory items shown — fetch older events from server
-      isLoadingMore.value = true
-      const prevScrollHeight = el.scrollHeight
-      store.fetchOlderEvents(store.selectedWorkspaceId).then((loaded) => {
-        if (loaded) {
-          // More items were added to the feed — increase display count
-          displayCount.value = store.activityFeed.length
-          nextTick(() => {
-            if (feedContainer.value) {
-              feedContainer.value.scrollTop += feedContainer.value.scrollHeight - prevScrollHeight
-            }
-            isLoadingMore.value = false
-          })
-        } else {
-          isLoadingMore.value = false
-        }
-      })
-    }
-  }
-}
-
-function scrollToBottom() {
-  if (isUserScrolledUp.value) return
-  const el = feedContainer.value
-  if (!el) return
-  el.scrollTop = el.scrollHeight
-}
-
-function jumpToBottom() {
-  isUserScrolledUp.value = false
-  displayCount.value = INITIAL_COUNT
-  nextTick(() => {
-    const el = feedContainer.value
-    if (el) el.scrollTop = el.scrollHeight
-  })
-}
-
-// Watch for new items and auto-scroll
-watch(
-  () => store.activityFeed.length,
-  () => {
-    nextTick(scrollToBottom)
-  },
-)
-
-onMounted(() => {
-  feedContainer.value?.addEventListener('scroll', onFeedScroll)
-  nextTick(scrollToBottom)
+const turns = computed(() => {
+  const allEvents = stream.eventsFor(props.workspaceId)
+  const allTs = stream.timestampsFor(props.workspaceId)
+  const agentItems = foldEvents(allEvents, allTs, sessionActive.value)
+  const merged = mergeWithUserMessages(agentItems, userMessages.value)
+  const filtered = settings.showVerboseSystemMessages ? merged : merged.filter((it) => it.type !== 'session')
+  return groupIntoTurns(filtered)
 })
 
-onUnmounted(() => {
-  feedContainer.value?.removeEventListener('scroll', onFeedScroll)
+const rawLines = computed(() => {
+  if (!settings.showVerboseSystemMessages) return []
+  return stream
+    .eventsFor(props.workspaceId)
+    .filter((e: AgentEvent): e is Extract<AgentEvent, { kind: 'message:raw' }> => e.kind === 'message:raw')
+    .map((e) => e.content)
 })
 
-function formatTime(dateStr: string): string {
-  const d = new Date(dateStr)
-  return d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+// ── Auto-scroll + infinite-scroll-up ─────────────────────────────────────
+const scrollRef = ref<QScrollArea | null>(null)
+const STICKY_THRESHOLD_PX = 60
+const FETCH_MORE_THRESHOLD_PX = 200
+let stickToBottom = true
+const loadingOlder = ref(false)
+let initialScrollDone = false
+
+// Workspace-switch spinner: true on mount and whenever the workspace id
+// changes, flipped back to false once BOTH (a) the minimum display time
+// has elapsed AND (b) the first event batch has arrived. Guarantees a
+// visible loader even on instant switches and hides the mid-swap flicker.
+const switching = ref(true)
+
+interface ScrollInfo {
+  verticalPosition: number
+  verticalSize: number
+  verticalContainerSize: number
 }
 
-// ── Inline diff rendering for Edit/Write tool calls ───────────────────────────
+function onScroll(info: ScrollInfo) {
+  const distanceFromBottom = info.verticalSize - info.verticalPosition - info.verticalContainerSize
+  stickToBottom = distanceFromBottom <= STICKY_THRESHOLD_PX
 
-interface FileChangeInfo {
-  toolName: 'Edit' | 'Write' | 'Bash:rm'
-  filePath: string
-  oldString?: string
-  newString?: string
-  content?: string
-  replaceAll?: boolean
-  additions: number
-  deletions: number
+  if (!initialScrollDone) return
+
+  if (
+    info.verticalPosition <= FETCH_MORE_THRESHOLD_PX &&
+    !loadingOlder.value &&
+    stream.hasMoreOlderFor(props.workspaceId)
+  ) {
+    void loadOlder()
+  }
 }
 
-interface DiffLine {
-  type: 'add' | 'del' | 'context'
-  content: string
+interface FetchedEvent {
+  id: string
+  workspaceId: string
+  type: string
+  payload: Record<string, unknown>
+  sessionId: string | null
+  createdAt: string
 }
 
-/**
- * Compute an inline line-by-line diff using the LCS (Longest Common
- * Subsequence) algorithm. Shared lines are kept as context, differing
- * lines are emitted as `del` (from a) then `add` (from b), grouped per
- * change block.
- */
-function computeInlineDiff(oldText: string, newText: string): DiffLine[] {
-  const a = oldText.split('\n')
-  const b = newText.split('\n')
-  const m = a.length
-  const n = b.length
+const MIN_LOADER_MS = 200
+const COOLDOWN_AFTER_PREPEND_MS = 400
+const WORKSPACE_SWITCH_SPINNER_MS = 200
 
-  // Build LCS table
-  const lcs: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0))
-  for (let i = m - 1; i >= 0; i--) {
-    for (let j = n - 1; j >= 0; j--) {
-      if (a[i] === b[j]) lcs[i][j] = lcs[i + 1][j + 1] + 1
-      else lcs[i][j] = Math.max(lcs[i + 1][j], lcs[i][j + 1])
+async function loadOlder(): Promise<void> {
+  const workspaceId = props.workspaceId
+  const before = stream.oldestIdFor(workspaceId)
+  if (!before) return
+  loadingOlder.value = true
+  const startedAt = Date.now()
+  try {
+    const area = scrollRef.value
+    const prevSize = area?.getScroll().verticalSize ?? 0
+    const prevPos = area?.getScroll().verticalPosition ?? 0
+
+    // Fetch and (in parallel) a minimum-display delay so the loader stays
+    // visible long enough for the user to see what's happening — avoids a
+    // flashing spinner on fast networks.
+    const fetchPromise = fetch(`/api/workspaces/${workspaceId}/events?before=${encodeURIComponent(before)}&limit=200`)
+    const minDelay = new Promise((r) => setTimeout(r, MIN_LOADER_MS))
+    const [res] = await Promise.all([fetchPromise, minDelay])
+
+    if (!res.ok) {
+      stream.prepend(workspaceId, [], [], { oldestId: before, hasMoreOlder: false })
+      return
     }
-  }
+    const body = (await res.json()) as { events: FetchedEvent[]; hasMore: boolean }
+    const fetched = body.events ?? []
 
-  // Walk the table to produce the diff
-  const result: DiffLine[] = []
-  let i = 0
-  let j = 0
-  while (i < m && j < n) {
-    if (a[i] === b[j]) {
-      result.push({ type: 'context', content: a[i] })
-      i++
-      j++
-    } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
-      result.push({ type: 'del', content: a[i] })
-      i++
-    } else {
-      result.push({ type: 'add', content: b[j] })
-      j++
+    const agentEvents = fetched.filter((e) => e.type === 'agent:event' && e.workspaceId === workspaceId)
+    const userMsgs = fetched.filter((e) => e.type === 'user:message' && e.workspaceId === workspaceId)
+
+    const olderEvents = agentEvents.map((e) => e.payload as unknown as AgentEvent)
+    const olderTs = agentEvents.map((e) => e.createdAt)
+    const olderSids = agentEvents.map((e) => e.sessionId ?? null)
+    const newOldestId = fetched.length > 0 ? fetched[0].id : before
+
+    stream.prepend(workspaceId, olderEvents, olderTs, {
+      oldestId: newOldestId,
+      hasMoreOlder: body.hasMore,
+      sessionIds: olderSids,
+    })
+
+    for (const m of userMsgs) {
+      const p = m.payload
+      if (typeof p.content === 'string') {
+        workspaceStore.addActivityItem(workspaceId, {
+          id: m.id,
+          type: 'text',
+          content: p.content,
+          timestamp: m.createdAt,
+          sessionId: m.sessionId ?? undefined,
+          meta: { sender: (p.sender as string) ?? 'user' },
+        })
+      }
     }
+
+    // Preserve the user's visual position AND push them below the
+    // fetch-more threshold so the next scroll event doesn't immediately
+    // re-trigger loadOlder. This matters on small-batch fetches where the
+    // newly-inserted content is shorter than the threshold.
+    await nextTick()
+    if (area) {
+      const newSize = area.getScroll().verticalSize
+      const delta = newSize - prevSize
+      const desired = Math.max(prevPos + delta, FETCH_MORE_THRESHOLD_PX + 50)
+      area.setScrollPosition('vertical', desired, 0)
+    }
+  } catch (err) {
+    console.error('[ActivityFeed] failed to load older events:', err)
+    // Best-effort: stop trying if a transient network error hit — user
+    // can refresh to retry. We still allow subsequent loads since we
+    // don't mark hasMoreOlder=false here.
+  } finally {
+    // Keep the loader flag on for a short cooldown after all the DOM has
+    // settled. Guarantees that an onScroll firing immediately after the
+    // position-preserve won't re-trigger loadOlder before the dust settles.
+    const elapsed = Date.now() - startedAt
+    const remainingMin = Math.max(0, MIN_LOADER_MS - elapsed)
+    await new Promise((r) => setTimeout(r, remainingMin + COOLDOWN_AFTER_PREPEND_MS))
+    loadingOlder.value = false
   }
-  while (i < m) {
-    result.push({ type: 'del', content: a[i++] })
+}
+
+async function scrollToBottom(duration = 0) {
+  await nextTick()
+  const area = scrollRef.value
+  if (!area) return
+  const scroll = area.getScroll()
+  area.setScrollPosition('vertical', scroll.verticalSize, duration)
+}
+
+// Collected via Vue template refs on <TurnCard v-for … ref="turnRefs">.
+// Parallel to `turns.value` — same index, same length.
+const turnRefs = ref<Array<{ $el: HTMLElement } | null>>([])
+
+// Zero-height marker rendered at the very top of the scroll content.
+// Its viewport Y gives us a stable "origin" for Y coords inside the
+// content, independent of q-scroll-area's internal DOM structure and
+// whatever transform strategy it uses.
+const contentOriginRef = ref<HTMLElement | null>(null)
+
+// Resolve the list of <user turn> DOM elements in DOM order. Prefers
+// template refs (typed, in sync with `turns`); falls back to querying
+// the `.turn-card--user` class if refs haven't populated yet.
+function collectUserTurnElements(): HTMLElement[] {
+  const turnList = turns.value
+  const refList = turnRefs.value
+  const result: HTMLElement[] = []
+  if (refList.length === turnList.length) {
+    for (let i = 0; i < turnList.length; i++) {
+      if (turnList[i].speaker !== 'user') continue
+      const instance = refList[i]
+      const el = instance?.$el as HTMLElement | undefined
+      if (el) result.push(el)
+    }
+    if (result.length > 0) return result
   }
-  while (j < n) {
-    result.push({ type: 'add', content: b[j++] })
+  // Fallback path — direct DOM selector on the content origin's parent
+  // (the scroll content). Covers the first-click-before-refs-populate case.
+  const origin = contentOriginRef.value
+  const host = origin?.parentElement
+  if (host) {
+    const cards = host.querySelectorAll<HTMLElement>('.turn-card--user')
+    for (const c of cards) result.push(c)
   }
   return result
 }
 
-const diffCache = new Map<string, DiffLine[]>()
-function getCachedDiff(itemId: string, oldText: string, newText: string): DiffLine[] {
-  if (!diffCache.has(itemId)) {
-    diffCache.set(itemId, computeInlineDiff(oldText, newText))
+// Find the absolute Y (relative to the content origin marker) of the last
+// user turn card whose top sits strictly *above* the current scroll
+// position. Returns null if no such card exists in the currently-rendered
+// DOM.
+function findPreviousUserTurnY(): number | null {
+  const area = scrollRef.value
+  if (!area) return null
+  const origin = contentOriginRef.value
+  if (!origin) return null
+  const currentPos = area.getScroll().verticalPosition
+  const originTop = origin.getBoundingClientRect().top
+  // Margin so a user card pinned at the top doesn't count as "previous".
+  const margin = 40
+  let bestY: number | null = null
+  for (const el of collectUserTurnElements()) {
+    // cardY = distance from the content-origin marker (at scroll-pos 0)
+    //       = el.top - origin.top in viewport coords.
+    // Since both move together with the scroll, their difference stays
+    // equal to the card's position in the content.
+    const cardY = el.getBoundingClientRect().top - originTop
+    if (cardY < currentPos - margin) bestY = cardY
+    else break
   }
-  return diffCache.get(itemId)!
+  return bestY
 }
 
-function getFileChangeInfo(item: ActivityItem): FileChangeInfo | null {
-  if (item.type !== 'tool_use') return null
-  const input = (item.meta as Record<string, unknown>)?.input as Record<string, unknown> | undefined
-
-  if (item.content === 'Edit') {
-    if (!input?.file_path) return null
-    const filePath = input.file_path as string
-    const oldStr = (input.old_string as string) ?? ''
-    const newStr = (input.new_string as string) ?? ''
-    const oldLines = oldStr.split('\n')
-    const newLines = newStr.split('\n')
-    return {
-      toolName: 'Edit',
-      filePath,
-      oldString: oldStr,
-      newString: newStr,
-      replaceAll: (input.replace_all as boolean) ?? false,
-      additions: newLines.length,
-      deletions: oldLines.length,
+async function goToPreviousUserMessage(): Promise<void> {
+  const area = scrollRef.value
+  if (!area) return
+  let targetY = findPreviousUserTurnY()
+  // Long workspaces may open with 300 recent agent events and *zero* user
+  // turns in the current DOM (agent dominates the tail of the stream).
+  // Keep fetching older batches until a user turn appears, we run out of
+  // history, or we hit a safety cap (≈15 * 200 = 3000 events back).
+  if (targetY === null) {
+    const MAX_ATTEMPTS = 15
+    for (let i = 0; i < MAX_ATTEMPTS; i++) {
+      if (!stream.hasMoreOlderFor(props.workspaceId)) break
+      while (loadingOlder.value) await new Promise((r) => setTimeout(r, 50))
+      await loadOlder()
+      await nextTick()
+      targetY = findPreviousUserTurnY()
+      if (targetY !== null) break
     }
   }
-
-  if (item.content === 'Write') {
-    if (!input?.file_path) return null
-    const filePath = input.file_path as string
-    const content = (input.content as string) ?? ''
-    const lines = content.split('\n').length
-    return {
-      toolName: 'Write',
-      filePath,
-      content,
-      additions: lines,
-      deletions: 0,
-    }
-  }
-
-  // Bash — detect rm/unlink commands
-  if (item.content === 'Bash') {
-    const cmd = (input?.command as string) ?? ''
-    const rmMatch = cmd.match(/^\s*rm\s+(?:-[a-zA-Z]*\s+)*(.+)/)
-    if (rmMatch) {
-      const filePath = rmMatch[1].trim().replace(/["']/g, '')
-      return {
-        toolName: 'Bash:rm',
-        filePath,
-        additions: 0,
-        deletions: 1,
-      }
-    }
-  }
-
-  return null
-}
-
-function shortenFilePath(filePath: string): string {
-  const ws = store.selectedWorkspace
-  if (ws) {
-    const worktreePrefix = `${ws.projectPath}/.worktrees/${ws.workingBranch}/`
-    if (filePath.startsWith(worktreePrefix)) return filePath.slice(worktreePrefix.length)
-    if (filePath.startsWith(`${ws.projectPath}/`)) return filePath.slice(ws.projectPath.length + 1)
-  }
-  // For any absolute path, show only the last 3 segments
-  if (filePath.startsWith('/') && filePath.split('/').length > 4) {
-    const parts = filePath.split('/')
-    return `…/${parts.slice(-3).join('/')}`
-  }
-  return filePath
-}
-
-function fileBasename(filePath: string): string {
-  return filePath.split('/').pop() ?? filePath
-}
-
-function fileExtension(filePath: string): string {
-  const name = fileBasename(filePath)
-  const dot = name.lastIndexOf('.')
-  return dot >= 0 ? name.substring(dot + 1) : ''
-}
-
-function langIconForExt(ext: string): string {
-  const map: Record<string, string> = {
-    ts: 'JS',
-    tsx: 'TS',
-    js: 'JS',
-    jsx: 'JS',
-    vue: 'VU',
-    py: 'PY',
-    rs: 'RS',
-    go: 'GO',
-    java: 'JA',
-    php: 'PH',
-    css: 'CS',
-    scss: 'SC',
-    html: 'HT',
-    md: 'MD',
-    json: 'JS',
-    sql: 'SQ',
-    sh: 'SH',
-    yaml: 'YA',
-    yml: 'YA',
-    toml: 'TM',
-  }
-  return map[ext.toLowerCase()] ?? ext.substring(0, 2).toUpperCase()
-}
-
-function iconColorForExt(ext: string): string {
-  const map: Record<string, string> = {
-    ts: 'blue-5',
-    tsx: 'blue-5',
-    js: 'yellow-8',
-    jsx: 'yellow-8',
-    vue: 'green-5',
-    py: 'blue-4',
-    rs: 'orange-5',
-    go: 'cyan-5',
-    java: 'red-5',
-    php: 'indigo-4',
-    css: 'purple-4',
-    scss: 'pink-4',
-    html: 'orange-4',
-    md: 'grey-5',
-    json: 'yellow-6',
-  }
-  return map[ext.toLowerCase()] ?? 'grey-5'
-}
-
-function iconForToolUse(content: string): string {
-  const lower = content.toLowerCase()
-  if (lower.includes('read') || lower.includes('grep') || lower.includes('glob')) return 'search'
-  if (lower.includes('write') || lower.includes('edit')) return 'edit'
-  if (lower.includes('bash') || lower.includes('terminal')) return 'terminal'
-  if (lower.includes('agent') || lower.includes('task')) return 'smart_toy'
-  return 'build'
-}
-
-function itemClass(item: ActivityItem): string {
-  switch (item.type) {
-    case 'text': {
-      if (item.meta?.sender === 'system-prompt') return 'af-item--prompt'
-      if (item.meta?.sender === 'user') return 'af-item--user'
-      return 'af-item--text'
-    }
-    case 'system':
-      return 'af-item--system'
-    case 'error':
-      return 'af-item--error'
-    case 'tool_use':
-      return 'af-item--tool'
-    case 'raw':
-      return 'af-item--raw'
-    default:
-      return ''
+  if (targetY !== null) {
+    area.setScrollPosition('vertical', Math.max(0, targetY - 12), 250)
   }
 }
 
-function senderLabel(item: ActivityItem): string {
-  switch (item.meta?.sender) {
-    case 'system-prompt':
-      return t('activityFeed.initialPrompt')
-    case 'user':
-      return t('activityFeed.you')
-    default:
-      return t('activityFeed.agent')
+async function armInitialScroll() {
+  initialScrollDone = false
+  // Run through a few paint cycles so the feed's items are laid out before
+  // we try to measure/scroll. sync:response may arrive AFTER onMounted, so
+  // we rely on the watcher below to re-arm whenever turns populate.
+  await nextTick()
+  await scrollToBottom(0)
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      initialScrollDone = true
+    })
+  })
+}
+
+// Count of raw events in the stream — this bumps on every streaming chunk
+// (each `message:text` delta is its own event), so watching it gives us a
+// tick for live typing, not just for new turn creation.
+const eventCount = computed(() => stream.eventsFor(props.workspaceId).length)
+
+/**
+ * Shows the switching spinner for at least `WORKSPACE_SWITCH_SPINNER_MS`
+ * AND until events have landed. Flip to false once both conditions meet.
+ */
+async function showSwitchingSpinner() {
+  switching.value = true
+  const startedAt = Date.now()
+  await new Promise((r) => setTimeout(r, WORKSPACE_SWITCH_SPINNER_MS))
+  // Poll briefly if the sync:response hasn't landed yet (capped).
+  const deadline = startedAt + 5000
+  while (eventCount.value === 0 && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 50))
   }
+  switching.value = false
 }
 
-function senderColor(item: ActivityItem): string {
-  switch (item.meta?.sender) {
-    case 'system-prompt':
-      return 'text-indigo-4'
-    case 'user':
-      return 'text-green-4'
-    default:
-      return 'text-blue-4'
+// When the spinner disappears and the scroll-area is (re-)mounted, we need
+// to anchor at the bottom. armInitialScroll waits for a nextTick so it
+// works even if the scroll-area just transitioned from v-if=false.
+watch(switching, async (isSwitching) => {
+  if (!isSwitching && eventCount.value > 0) {
+    await armInitialScroll()
   }
-}
+})
 
-function toolDisplayName(item: ActivityItem): string {
-  if (item.content === 'Skill' && item.meta) {
-    const input = (item.meta as Record<string, unknown>).input as Record<string, unknown> | undefined
-    if (input && typeof input.skill === 'string') return `Skill — ${input.skill}`
+onMounted(() => {
+  void showSwitchingSpinner()
+  if (eventCount.value > 0) void armInitialScroll()
+})
+
+// First-populate + live-follow watcher. Fires on any new event (including
+// streaming chunks). Skips auto-scroll while `loadOlder` is prepending —
+// that path preserves the user's visual position on its own.
+let firstPopulateDone = false
+watch(eventCount, async (newLen, oldLen) => {
+  if (!firstPopulateDone && newLen > 0) {
+    firstPopulateDone = true
+    await armInitialScroll()
+    return
   }
-  return item.content
-}
-
-function toolDescription(item: ActivityItem): string {
-  if (!item.meta) return ''
-  const input = (item.meta as Record<string, unknown>).input as Record<string, unknown> | undefined
-  if (!input) return ''
-  if (typeof input.description === 'string') return input.description
-  if (typeof input.file_path === 'string') return shortenFilePath(input.file_path as string)
-  if (typeof input.pattern === 'string') {
-    const base = typeof input.path === 'string' ? `${shortenFilePath(input.path as string)}/` : ''
-    return `${base}${input.pattern}`
+  if (newLen > oldLen && stickToBottom && !loadingOlder.value) {
+    await scrollToBottom(180)
   }
-  if (typeof input.path === 'string') return shortenFilePath(input.path as string)
-  if (typeof input.command === 'string') {
-    const cmd = input.command as string
-    return cmd.length > 80 ? `${cmd.slice(0, 80)}…` : cmd
+})
+
+watch(
+  () => props.workspaceId,
+  () => {
+    stickToBottom = true
+    firstPopulateDone = false
+    initialScrollDone = false
+    void showSwitchingSpinner()
+    if (eventCount.value > 0) void armInitialScroll()
+  },
+)
+
+// When the user flips between sessions ("All" / session-1 / session-2…),
+// re-anchor the feed at the bottom on the newly-filtered view.
+watch(
+  () => workspaceStore.selectedSessionId,
+  async () => {
+    stickToBottom = true
+    initialScrollDone = false
+    await armInitialScroll()
+  },
+)
+
+// When the user sends a message, force the feed to the bottom even if
+// they were reading earlier history. Detect by counting non-system-prompt
+// user messages — increments exactly once per user send.
+const userSendCount = computed(() => userMessages.value.filter((m) => m.sender !== 'system-prompt').length)
+watch(userSendCount, async (newLen, oldLen) => {
+  if (newLen > oldLen) {
+    stickToBottom = true
+    await scrollToBottom(180)
   }
-  return ''
-}
-
-interface AskUserOption {
-  label: string
-  description?: string
-}
-
-interface AskUserQuestion {
-  question: string
-  options: AskUserOption[]
-}
-
-function getAskUserQuestions(item: ActivityItem): AskUserQuestion[] | null {
-  if (item.type !== 'tool_use' || item.content !== 'AskUserQuestion') return null
-  const input = (item.meta as Record<string, unknown>)?.input as Record<string, unknown> | undefined
-  if (!input?.questions || !Array.isArray(input.questions)) return null
-  const questions = input.questions as Array<Record<string, unknown>>
-  return questions
-    .filter((q) => Array.isArray(q.options) && q.options.length > 0)
-    .map((q) => ({
-      question: (q.question as string) ?? '',
-      options: (q.options as Array<Record<string, unknown>>).map((o) => ({
-        label: (o.label as string) ?? '',
-        description: (o.description as string) ?? '',
-      })),
-    }))
-}
-
-function hasExpandableArgs(item: ActivityItem): boolean {
-  if (!item.meta) return false
-  const meta = item.meta as Record<string, unknown>
-  return meta.input !== undefined && meta.input !== null
-}
-
-function toggleExpand(itemId: string) {
-  if (expandedItems.value.has(itemId)) {
-    expandedItems.value.delete(itemId)
-  } else {
-    expandedItems.value.add(itemId)
-  }
-}
-
-function isExpanded(itemId: string): boolean {
-  return expandedItems.value.has(itemId)
-}
-
-function formatArgs(item: ActivityItem): string {
-  if (!item.meta) return ''
-  const meta = item.meta as Record<string, unknown>
-  if (!meta.input) return ''
-  try {
-    return JSON.stringify(meta.input, null, 2)
-  } catch {
-    return String(meta.input)
-  }
-}
-
-// M11: extract template .some() into a computed
-const hasUserMessages = computed(() => store.activityFeed.some((i) => i.meta?.sender === 'user'))
-
-function hasSystemDetails(item: ActivityItem): boolean {
-  if (item.type !== 'system' || !item.meta) return false
-  return Object.keys(item.meta).length > 0
-}
-
-function formatSystemDetails(item: ActivityItem): string {
-  if (!item.meta) return ''
-  try {
-    return JSON.stringify(item.meta, null, 2)
-  } catch {
-    return ''
-  }
-}
+})
 </script>
 
 <template>
-  <div ref="feedContainer" class="activity-feed q-pa-sm">
-    <!-- Empty state -->
-    <div
-      v-if="store.activityFeed.length === 0"
-      class="af-empty column items-center justify-center text-center q-pa-xl"
-    >
-      <q-icon name="forum" size="48px" color="grey-8" />
-      <div class="text-grey-6 q-mt-md text-body2">{{ $t('activityFeed.empty') }}</div>
-      <div class="text-grey-8 text-caption q-mt-xs">
-        {{ $t('activityFeed.emptyHint') }}
+  <!-- Workspace-switch spinner: shown at least WORKSPACE_SWITCH_SPINNER_MS
+       every time the user clicks a workspace, hiding the mid-swap flicker
+       and the empty transition while sync:response arrives. -->
+  <div v-if="switching" class="activity-feed-switching">
+    <q-spinner-dots size="40px" color="indigo-4" />
+  </div>
+  <div v-else class="activity-feed-wrap">
+    <q-scroll-area ref="scrollRef" class="activity-feed-scroll" @scroll="onScroll">
+      <!-- Zero-height origin marker — always at scroll position 0 within the
+           scroll content. Used to compute accurate card Y coordinates
+           without depending on Quasar's internal DOM. -->
+      <div ref="contentOriginRef" class="content-origin-marker" />
+      <div v-if="loadingOlder" class="text-center q-py-sm text-caption text-grey-6">
+        <q-spinner size="sm" /> {{ $t('activity.loading_older') }}
       </div>
-    </div>
-
-    <!-- Loading indicator shown at the top when user scrolls up and more items are available -->
-    <div v-if="isLoadingMore" class="row justify-center q-my-sm">
-      <q-spinner-dots size="24px" color="grey-6" />
-    </div>
-    <div
-      v-for="item in visibleItems"
-      :key="item.id"
-      :data-item-id="item.id"
-      class="af-item text-caption rounded-borders"
-      :class="itemClass(item)"
-    >
-      <!-- Tool use: AskUserQuestion -->
-      <template v-if="item.type === 'tool_use' && getCachedAskUser(item.id, item)">
-        <div class="af-tool row items-center q-gutter-xs">
-          <q-icon name="help_outline" size="14px" color="indigo-4" />
-          <span class="af-tool-label text-indigo-4">{{ $t('activityFeed.question') }}</span>
-          <q-space />
-          <span class="af-time">{{ formatTime(item.timestamp) }}</span>
-        </div>
-        <div v-for="(q, qi) in getCachedAskUser(item.id, item)" :key="qi" class="q-mt-sm">
-          <div v-if="q.question" class="text-grey-4 q-mb-xs">{{ q.question }}</div>
-          <div class="af-ask-options-list q-mb-sm">
-            <div v-for="(opt, oi) in q.options" :key="oi" class="af-ask-option-item text-caption text-grey-5">
-              <span class="text-weight-bold text-grey-3">{{ oi + 1 }}. {{ opt.label }}</span>
-              <span v-if="opt.description"> — {{ opt.description }}</span>
-            </div>
+      <div class="q-pa-md">
+        <TurnCard v-for="(turn, i) in turns" :key="i" ref="turnRefs" :turn="turn" />
+      </div>
+      <div v-if="rawLines.length" class="q-px-md q-pb-md">
+        <q-expansion-item :label="$t('activity.raw_lines', { n: rawLines.length })" dense>
+          <div v-for="(line, i) in rawLines" :key="i" class="text-caption text-grey q-pa-xs">
+            {{ line }}
           </div>
-          <div v-if="item.id === activeAskId" class="af-ask-buttons q-gutter-xs">
-            <q-btn
-              v-for="(opt, oi) in q.options"
-              :key="opt.label"
-              no-caps
-              dense
-              :outline="!isAskSelected(item.id, qi, oi)"
-              :unelevated="isAskSelected(item.id, qi, oi)"
-              :color="isAskSelected(item.id, qi, oi) ? 'indigo-6' : 'indigo-4'"
-              :text-color="isAskSelected(item.id, qi, oi) ? 'white' : undefined"
-              class="af-option-btn"
-              @click="toggleAskSelection(item.id, qi, oi)"
-            >
-              {{ opt.label }}
-            </q-btn>
-          </div>
-        </div>
-        <div v-if="item.id === activeAskId" class="q-mt-sm row justify-end">
-          <q-btn
-            no-caps
-            unelevated
-            dense
-            color="indigo-6"
-            :label="$t('activityFeed.sendAnswers')"
-            icon="send"
-            :disable="!hasAnySelection(item.id)"
-            @click="sendAskAnswers(item.id, getCachedAskUser(item.id, item)!)"
-          />
-        </div>
-      </template>
-
-      <!-- Tool use: Edit / Write — inline diff -->
-      <template v-else-if="item.type === 'tool_use' && getFileChangeInfo(item)">
-        <div
-          class="af-file-change cursor-pointer"
-          @click="toggleExpand(item.id)"
-        >
-          <div class="af-file-header row items-center no-wrap q-gutter-xs">
-            <span
-              class="af-lang-badge"
-              :class="`text-${iconColorForExt(fileExtension(getFileChangeInfo(item)!.filePath))}`"
-            >{{ langIconForExt(fileExtension(getFileChangeInfo(item)!.filePath)) }}</span>
-            <span class="af-file-path text-grey-4 ellipsis">{{ shortenFilePath(getFileChangeInfo(item)!.filePath) }}</span>
-            <span class="af-diff-stats">
-              <span v-if="getFileChangeInfo(item)!.additions" class="text-green-5">+{{ getFileChangeInfo(item)!.additions }}</span>
-              <span v-if="getFileChangeInfo(item)!.deletions" class="text-red-5 q-ml-xs">-{{ getFileChangeInfo(item)!.deletions }}</span>
-            </span>
-            <q-icon
-              :name="isExpanded(item.id) ? 'expand_less' : 'expand_more'"
-              size="14px"
-              color="grey-6"
-            />
-            <q-space />
-            <span class="af-time">{{ formatTime(item.timestamp) }}</span>
-          </div>
-          <div v-if="isExpanded(item.id)" class="af-diff-body q-mt-xs" @click.stop>
-            <template v-if="getFileChangeInfo(item)!.toolName === 'Edit'">
-              <div
-                v-for="(line, li) in getCachedDiff(item.id, getFileChangeInfo(item)!.oldString ?? '', getFileChangeInfo(item)!.newString ?? '')"
-                :key="li"
-                class="af-diff-line"
-                :class="{
-                  'af-diff-del': line.type === 'del',
-                  'af-diff-add': line.type === 'add',
-                  'af-diff-context': line.type === 'context',
-                }"
-              ><span class="af-diff-sign">{{ line.type === 'del' ? '-' : line.type === 'add' ? '+' : ' ' }}</span>{{ line.content }}</div>
-            </template>
-            <template v-else-if="getFileChangeInfo(item)!.toolName === 'Bash:rm'">
-              <div class="af-diff-line af-diff-del"><span class="af-diff-sign">-</span>File deleted</div>
-            </template>
-            <template v-else>
-              <div
-                v-for="(line, li) in (getFileChangeInfo(item)!.content ?? '').split('\n').slice(0, 30)"
-                :key="`w-${li}`"
-                class="af-diff-line af-diff-add"
-              ><span class="af-diff-sign">+</span>{{ line }}</div>
-              <div
-                v-if="(getFileChangeInfo(item)!.content ?? '').split('\n').length > 30"
-                class="af-diff-line text-grey-7 text-italic"
-              >… {{ (getFileChangeInfo(item)!.content ?? '').split('\n').length - 30 }} more lines</div>
-            </template>
-          </div>
-        </div>
-      </template>
-
-      <!-- Tool use: generic -->
-      <template v-else-if="item.type === 'tool_use'">
-        <div
-          class="af-tool row items-center q-gutter-xs"
-          :class="{ 'cursor-pointer': hasExpandableArgs(item) }"
-          @click="hasExpandableArgs(item) && toggleExpand(item.id)"
-        >
-          <q-icon :name="iconForToolUse(item.content)" size="14px" color="grey-6" />
-          <span class="af-tool-label text-grey-7">{{ toolDisplayName(item) }}</span>
-          <span v-if="toolDescription(item)" class="af-tool-desc text-grey-8">— {{ toolDescription(item) }}</span>
-          <q-icon
-            v-if="hasExpandableArgs(item)"
-            :name="isExpanded(item.id) ? 'expand_less' : 'expand_more'"
-            size="14px"
-            color="grey-7"
-          />
-          <q-space />
-          <span class="af-time">{{ formatTime(item.timestamp) }}</span>
-        </div>
-        <div v-if="isExpanded(item.id)" class="af-tool-args q-mt-xs rounded-borders">
-          <pre class="af-args-pre">{{ formatArgs(item) }}</pre>
-        </div>
-      </template>
-
-      <!-- Text (user or agent message) -->
-      <template v-else-if="item.type === 'text'">
-        <div class="af-text-header row items-center q-mb-xs">
-          <span
-            class="text-caption text-weight-bold"
-            :class="senderColor(item)"
-          >
-            {{ senderLabel(item) }}
-          </span>
-          <q-spinner-dots v-if="item.meta?.pending" size="14px" color="grey-5" class="q-ml-sm" />
-          <q-space />
-          <span class="af-time">{{ formatTime(item.timestamp) }}</span>
-        </div>
-        <div class="af-text-content af-markdown" v-html="getCachedMarkdown(item.id, item.content)" />
-      </template>
-
-      <!-- System -->
-      <template v-else-if="item.type === 'system'">
-        <div
-          class="row items-center"
-          :class="{ 'cursor-pointer': hasSystemDetails(item) }"
-          @click="hasSystemDetails(item) && toggleExpand(item.id)"
-        >
-          <q-icon name="info" size="14px" color="amber-6" class="q-mr-xs" />
-          <span class="af-system-content text-caption text-amber-6">{{ item.content }}</span>
-          <q-icon
-            v-if="hasSystemDetails(item)"
-            :name="isExpanded(item.id) ? 'expand_less' : 'expand_more'"
-            size="14px"
-            color="amber-8"
-            class="q-ml-xs"
-          />
-          <q-space />
-          <span class="af-time">{{ formatTime(item.timestamp) }}</span>
-        </div>
-        <div v-if="isExpanded(item.id) && hasSystemDetails(item)" class="af-system-details q-mt-xs rounded-borders">
-          <pre class="af-args-pre">{{ formatSystemDetails(item) }}</pre>
-        </div>
-      </template>
-
-      <!-- Error -->
-      <template v-else-if="item.type === 'error'">
-        <div class="row items-center">
-          <q-icon name="error" size="14px" color="red-5" class="q-mr-xs" />
-          <span class="af-error-content text-red-5">{{ item.content }}</span>
-          <q-space />
-          <span class="af-time">{{ formatTime(item.timestamp) }}</span>
-        </div>
-      </template>
-
-      <!-- Raw -->
-      <template v-else>
-        <div class="row items-center">
-          <span class="af-raw-content text-grey-7">{{ item.content }}</span>
-          <q-space />
-          <span class="af-time">{{ formatTime(item.timestamp) }}</span>
-        </div>
-      </template>
-    </div>
-
-    <!-- Sticky bottom buttons -->
-    <div class="scroll-buttons">
-      <q-btn
-        v-if="hasUserMessages"
-        round
-        dense
-        size="sm"
-        icon="person_search"
-        color="indigo-8"
-        class="scroll-btn"
-        @click="scrollToPreviousUserMessage"
-      >
-        <q-tooltip>{{ $t('activityFeed.goToPrevious') }}</q-tooltip>
-      </q-btn>
-      <q-btn
-        v-if="isUserScrolledUp"
-        round
-        dense
-        size="sm"
-        icon="keyboard_double_arrow_down"
-        color="indigo-8"
-        class="scroll-btn"
-        @click="jumpToBottom"
-      >
-        <q-tooltip>{{ $t('activityFeed.scrollToBottom') }}</q-tooltip>
-      </q-btn>
-    </div>
+        </q-expansion-item>
+      </div>
+    </q-scroll-area>
+    <q-btn
+      round
+      dense
+      unelevated
+      color="grey-9"
+      text-color="grey-3"
+      icon="arrow_upward"
+      size="sm"
+      class="activity-feed-prev-btn"
+      :title="$t('activity.prev_user_message')"
+      @click="goToPreviousUserMessage"
+    />
   </div>
 </template>
 
-<style lang="scss" scoped>
-.activity-feed {
-  overflow-y: auto;
-  overflow-x: hidden;
-  display: flex;
+<style scoped>
+.activity-feed-wrap {
   position: relative;
-  flex-direction: column;
-  gap: 4px;
+  height: 100%;
+  width: 100%;
 }
-
-.af-item {
-  padding: 6px 10px;
-  overflow-x: hidden;
-  word-break: break-word;
-  overflow-wrap: break-word;
-  flex-shrink: 0;
+.activity-feed-scroll {
+  height: 100%;
+  width: 100%;
 }
-
-.af-time {
-  font-size: 10px;
-  color: #555;
-  flex-shrink: 0;
+.activity-feed-prev-btn {
+  position: absolute;
+  right: 14px;
+  bottom: 14px;
+  z-index: 2;
+  opacity: 0.8;
+  transition: opacity 120ms ease;
 }
-
-.af-tool-label {
-  font-family: 'Roboto Mono', monospace;
-  font-size: 11px;
+.activity-feed-prev-btn:hover {
+  opacity: 1;
 }
-
-.af-tool-desc {
-  font-size: 11px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.af-ask-option-item {
-  padding: 2px 0;
-}
-
-.af-tool-args {
-  padding: 6px 8px;
-  background-color: rgba(255, 255, 255, 0.04);
-  overflow-x: auto;
-}
-
-.af-args-pre {
+.content-origin-marker {
+  height: 0;
+  width: 0;
   margin: 0;
-  font-family: 'Roboto Mono', monospace;
-  font-size: 10px;
-  color: #888;
-  white-space: pre-wrap;
-  word-break: break-word;
+  padding: 0;
+  pointer-events: none;
 }
-
-// File change (Edit/Write) inline diff
-.af-file-change {
-  padding: 6px 8px;
-  background: rgba(255, 255, 255, 0.03);
-  border-radius: 6px;
-  border: 1px solid rgba(255, 255, 255, 0.06);
+/* Kill any horizontal overflow from long file paths, long words in code
+   blocks, or oversized bash commands. We only want vertical scrolling. */
+.activity-feed-scroll :deep(.q-scrollarea__content) {
+  max-width: 100%;
+  overflow-x: hidden;
 }
-
-.af-file-header {
-  font-size: 11px;
-  font-family: 'Roboto Mono', monospace;
-}
-
-.af-lang-badge {
-  font-size: 9px;
-  font-weight: 700;
-  font-family: 'Roboto Mono', monospace;
-  background: rgba(255, 255, 255, 0.06);
-  padding: 1px 4px;
-  border-radius: 3px;
-  min-width: 20px;
-  text-align: center;
-}
-
-.af-file-path {
-  font-size: 11px;
-  max-width: 70%;
-}
-
-.af-diff-stats {
-  font-size: 10px;
-  font-family: 'Roboto Mono', monospace;
-  white-space: nowrap;
-}
-
-.af-diff-body {
-  background: rgba(0, 0, 0, 0.2);
-  border-radius: 4px;
-  padding: 4px 0;
-  max-height: 300px;
-  overflow-y: auto;
-  overflow-x: auto;
-}
-
-.af-diff-line {
-  font-family: 'Roboto Mono', monospace;
-  font-size: 10px;
-  padding: 0 8px;
-  white-space: pre;
-  line-height: 1.5;
-  min-width: fit-content;
-}
-
-.af-diff-sign {
-  display: inline-block;
-  width: 12px;
-  user-select: none;
-}
-
-.af-diff-del {
-  background: rgba(248, 81, 73, 0.1);
-  color: #f85149;
-}
-
-.af-diff-add {
-  background: rgba(63, 185, 80, 0.1);
-  color: #3fb950;
-}
-
-.af-diff-context {
-  color: #8b949e;
-}
-
-// Text (agent)
-.af-item--text {
-  background-color: #1a2a3a;
-  border-left: 3px solid #3b82f6;
-}
-
-.af-item--user {
-  background-color: #1a2a1a;
-  border-left: 3px solid #22c55e;
-}
-
-.af-item--prompt {
-  background-color: #1a1a2e;
-  border-left: 3px solid #6c63ff;
-}
-
-.af-text-content {
-  color: #d0d0d0;
-  word-break: break-word;
-  line-height: 1.5;
-}
-
-.af-markdown {
-  :deep(p) {
-    margin: 0 0 8px 0;
-    &:last-child { margin-bottom: 0; }
-  }
-  :deep(h1), :deep(h2), :deep(h3) {
-    margin: 12px 0 6px 0;
-    color: #e0e0e0;
-  }
-  :deep(h1) { font-size: 16px; }
-  :deep(h2) { font-size: 14px; }
-  :deep(h3) { font-size: 13px; }
-  :deep(ul), :deep(ol) {
-    margin: 4px 0;
-    padding-left: 20px;
-  }
-  :deep(li) { margin: 2px 0; }
-  :deep(code) {
-    background-color: rgba(255, 255, 255, 0.08);
-    padding: 1px 4px;
-    border-radius: 3px;
-    font-family: 'Roboto Mono', monospace;
-    font-size: 11px;
-  }
-  :deep(pre) {
-    background-color: rgba(0, 0, 0, 0.3);
-    padding: 8px;
-    border-radius: 4px;
-    overflow-x: auto;
-    margin: 6px 0;
-    code {
-      background: none;
-      padding: 0;
-    }
-  }
-  :deep(strong) { color: #fff; }
-  :deep(a) { color: #6c63ff; }
-  :deep(blockquote) {
-    border-left: 3px solid #6c63ff;
-    margin: 6px 0;
-    padding: 4px 12px;
-    color: #aaa;
-  }
-  :deep(table) {
-    border-collapse: collapse;
-    margin: 6px 0;
-    font-size: 11px;
-    th, td {
-      border: 1px solid #2a2a4a;
-      padding: 4px 8px;
-    }
-    th { background-color: rgba(255, 255, 255, 0.05); }
-  }
-}
-
-// System
-.af-item--system {
-  background-color: #2a2a1a;
-  border-left: 3px solid #f59e0b;
-}
-
-.af-system-details {
-  padding: 6px 8px;
-  background-color: rgba(255, 255, 255, 0.04);
-  overflow-x: auto;
-}
-
-.af-system-content {
-  white-space: pre-wrap;
-}
-
-// Error
-.af-item--error {
-  background-color: #2a1a1a;
-  border-left: 3px solid #ef4444;
-}
-
-// Raw
-.af-item--raw {
-  font-family: 'Roboto Mono', monospace;
-  white-space: pre-wrap;
-}
-.scroll-buttons {
-  position: sticky;
-  bottom: 8px;
-  align-self: flex-end;
-  margin-right: 8px;
+.activity-feed-switching {
+  height: 100%;
+  width: 100%;
   display: flex;
-  gap: 6px;
-}
-
-.scroll-btn {
-  opacity: 0.7;
-  transition: opacity 0.15s;
-
-  &:hover {
-    opacity: 1;
-  }
+  align-items: center;
+  justify-content: center;
 }
 </style>

@@ -34,8 +34,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 9', () => {
-    expect(SCHEMA_VERSION).toBe(9)
+  it('exporte SCHEMA_VERSION = 10', () => {
+    expect(SCHEMA_VERSION).toBe(10)
   })
 
   it('migre depuis la legacy schema_version table', () => {
@@ -336,7 +336,7 @@ describe('runMigrations(db)', () => {
     db.exec(`
       INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
         VALUES ('w1', 'test', '/tmp', 'main', 'feat', '2025-01-01', '2025-01-01');
-      INSERT INTO agent_sessions (id, workspace_id, pid, claude_session_id, status, started_at)
+      INSERT INTO agent_sessions (id, workspace_id, pid, engine_session_id, status, started_at)
         VALUES ('sess-1', 'w1', 100, 'claude-legacy', 'completed', '2025-01-01');
       INSERT INTO ws_events (id, workspace_id, type, payload, session_id, created_at)
         VALUES ('e1', 'w1', 'agent:output', '{}', 'claude-legacy', '2025-01-01');
@@ -465,6 +465,133 @@ describe('runMigrations(db)', () => {
 
     expect(freshCols).toEqual(upgradedCols)
     expect(freshCols).toContain('favorited_at')
+
+    freshDb.close()
+    upgradedDb.close()
+  })
+
+  it('v10: adds engine column to workspaces and renames claude_session_id → engine_session_id without data loss', () => {
+    const db = new Database(':memory:')
+    // Simulate a v9 database (all migrations up to v9 applied manually)
+    db.exec(`
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+      CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, project_path TEXT NOT NULL,
+        source_branch TEXT NOT NULL, working_branch TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'created',
+        notion_url TEXT, notion_page_id TEXT, model TEXT NOT NULL DEFAULT 'claude-opus-4-7',
+        reasoning_effort TEXT NOT NULL DEFAULT 'auto',
+        permission_mode TEXT NOT NULL DEFAULT 'auto-accept',
+        dev_server_status TEXT NOT NULL DEFAULT 'stopped', has_unread INTEGER NOT NULL DEFAULT 0,
+        archived_at TEXT, favorited_at TEXT, tags TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE tasks (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending', is_acceptance_criterion INTEGER NOT NULL DEFAULT 0,
+        sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL
+        REFERENCES workspaces(id) ON DELETE CASCADE, pid INTEGER, claude_session_id TEXT,
+        status TEXT NOT NULL DEFAULT 'running', started_at TEXT NOT NULL, ended_at TEXT, name TEXT);
+      CREATE TABLE ws_events (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, type TEXT NOT NULL,
+        payload TEXT NOT NULL, session_id TEXT, created_at TEXT NOT NULL);
+      INSERT INTO schema_migrations (version, name, applied_at) VALUES
+        (1, 'init-schema', '2025-01-01'),
+        (2, 'add-permission-mode', '2025-01-01'),
+        (3, 'add-workspace-id-indexes', '2025-01-01'),
+        (4, 'add-has-unread', '2025-01-01'),
+        (5, 'add-agent-session-name', '2025-01-01'),
+        (6, 'backfill-ws-events-session-id', '2025-01-01'),
+        (7, 'add-reasoning-effort', '2025-01-01'),
+        (8, 'add-workspace-favorited-at', '2025-01-01'),
+        (9, 'add-workspace-tags', '2025-01-01');
+      INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+        VALUES ('w1', 'existing', '/tmp', 'main', 'feat', '2025-01-01', '2025-01-01');
+      INSERT INTO agent_sessions (id, workspace_id, pid, claude_session_id, status, started_at)
+        VALUES ('s1', 'w1', 123, 'claude-uuid-preserved', 'completed', '2025-01-01');
+    `)
+
+    runMigrations(db)
+
+    // Migration should be recorded
+    const history = getMigrationHistory(db)
+    expect(history.find((h) => h.version === 10 && h.name === 'agent-engine-abstraction')).toBeTruthy()
+
+    // workspaces.engine column should exist with default 'claude-code'
+    const wsCols = db.prepare('PRAGMA table_info(workspaces)').all() as { name: string; dflt_value: string | null }[]
+    const engineCol = wsCols.find((c) => c.name === 'engine')
+    expect(engineCol).toBeDefined()
+
+    // Existing workspace row should have engine = 'claude-code'
+    const wsRow = db.prepare('SELECT engine FROM workspaces WHERE id = ?').get('w1') as { engine: string }
+    expect(wsRow.engine).toBe('claude-code')
+
+    // agent_sessions column should be renamed
+    const sessCols = (db.prepare('PRAGMA table_info(agent_sessions)').all() as { name: string }[]).map((c) => c.name)
+    expect(sessCols).toContain('engine_session_id')
+    expect(sessCols).not.toContain('claude_session_id')
+
+    // Existing session data should be preserved under the new column name
+    const sessRow = db.prepare('SELECT engine_session_id FROM agent_sessions WHERE id = ?').get('s1') as {
+      engine_session_id: string
+    }
+    expect(sessRow.engine_session_id).toBe('claude-uuid-preserved')
+
+    db.close()
+  })
+
+  it('v10: fresh install matches upgraded install (identical table_info)', () => {
+    // Fresh install DB
+    const freshDb = new Database(':memory:')
+    runMigrations(freshDb)
+
+    // Upgraded from v9 DB
+    const upgradedDb = new Database(':memory:')
+    upgradedDb.exec(`
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+      CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, project_path TEXT NOT NULL,
+        source_branch TEXT NOT NULL, working_branch TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'created',
+        notion_url TEXT, notion_page_id TEXT, model TEXT NOT NULL DEFAULT 'claude-opus-4-7',
+        reasoning_effort TEXT NOT NULL DEFAULT 'auto',
+        permission_mode TEXT NOT NULL DEFAULT 'auto-accept',
+        dev_server_status TEXT NOT NULL DEFAULT 'stopped', has_unread INTEGER NOT NULL DEFAULT 0,
+        archived_at TEXT, favorited_at TEXT, tags TEXT NOT NULL DEFAULT '[]',
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE tasks (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, title TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending', is_acceptance_criterion INTEGER NOT NULL DEFAULT 0,
+        sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+      CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL
+        REFERENCES workspaces(id) ON DELETE CASCADE, pid INTEGER, claude_session_id TEXT,
+        status TEXT NOT NULL DEFAULT 'running', started_at TEXT NOT NULL, ended_at TEXT, name TEXT);
+      CREATE TABLE ws_events (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, type TEXT NOT NULL,
+        payload TEXT NOT NULL, session_id TEXT, created_at TEXT NOT NULL);
+      INSERT INTO schema_migrations (version, name, applied_at) VALUES
+        (1, 'init-schema', '2025-01-01'),
+        (2, 'add-permission-mode', '2025-01-01'),
+        (3, 'add-workspace-id-indexes', '2025-01-01'),
+        (4, 'add-has-unread', '2025-01-01'),
+        (5, 'add-agent-session-name', '2025-01-01'),
+        (6, 'backfill-ws-events-session-id', '2025-01-01'),
+        (7, 'add-reasoning-effort', '2025-01-01'),
+        (8, 'add-workspace-favorited-at', '2025-01-01'),
+        (9, 'add-workspace-tags', '2025-01-01');
+    `)
+    runMigrations(upgradedDb)
+
+    const freshWsCols = (freshDb.prepare('PRAGMA table_info(workspaces)').all() as { name: string }[])
+      .map((c) => c.name)
+      .sort()
+    const upgradedWsCols = (upgradedDb.prepare('PRAGMA table_info(workspaces)').all() as { name: string }[])
+      .map((c) => c.name)
+      .sort()
+    expect(freshWsCols).toEqual(upgradedWsCols)
+    expect(freshWsCols).toContain('engine')
+
+    const freshSessCols = (freshDb.prepare('PRAGMA table_info(agent_sessions)').all() as { name: string }[])
+      .map((c) => c.name)
+      .sort()
+    const upgradedSessCols = (upgradedDb.prepare('PRAGMA table_info(agent_sessions)').all() as { name: string }[])
+      .map((c) => c.name)
+      .sort()
+    expect(freshSessCols).toEqual(upgradedSessCols)
+    expect(freshSessCols).toContain('engine_session_id')
+    expect(freshSessCols).not.toContain('claude_session_id')
 
     freshDb.close()
     upgradedDb.close()

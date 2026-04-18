@@ -58,7 +58,12 @@ src/
 │   │   └── migrations.ts           # incremental migrations, bumped per feature
 │   ├── services/                   # business logic — pure functions over db + external processes
 │   │   ├── workspace-service.ts    # workspaces + tasks + agent_sessions CRUD
-│   │   ├── agent-manager.ts        # spawns Claude Code CLI, streams stdout, tracks sessions, interrupt/stop
+│   │   ├── agent/                  # agent engine abstraction (replaces former agent-manager.ts)
+│   │   │   ├── orchestrator.ts     # per-workspace engine map, retry/quota handling, watchdog, public API
+│   │   │   ├── session-controller.ts # lifecycle wrapper around an AgentEngine instance
+│   │   │   ├── event-router.ts     # maps engine AgentEvent stream to WS emit + DB side-effects
+│   │   │   └── engines/claude-code/ # Claude Code engine (spawn + stream-parser + args-builder + mcp-config + capabilities)
+│   │   ├── content-migration-service.ts # runtime legacy ws_events → normalised AgentEvent migration
 │   │   ├── templates-service.ts    # prompt templates CRUD (JSON file persistence, seeding)
 │   │   ├── dev-server-service.ts   # per-workspace dev server lifecycle (docker or npm process)
 │   │   ├── websocket-service.ts    # emit / emitEphemeral to subscribed clients

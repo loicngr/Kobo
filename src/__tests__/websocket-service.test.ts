@@ -448,30 +448,6 @@ describe('handleSyncRequest() — workspaceIds optionnel (I2)', () => {
   })
 })
 
-describe('cleanupOldEvents()', () => {
-  it('supprime les anciens evenements en gardant les N derniers', async () => {
-    const { emit, cleanupOldEvents } = await import('../server/services/websocket-service.js')
-    const { getDb } = await import('../server/db/index.js')
-
-    const db = getDb()
-    const now = new Date().toISOString()
-    db.prepare(
-      'INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, status, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
-    ).run('ws-cleanup-1', 'Test', '/tmp', 'main', 'feat', 'created', 'claude-opus-4-6', now, now)
-
-    // Emit 5 events
-    for (let i = 0; i < 5; i++) {
-      emit('ws-cleanup-1', `event:${i}`, { i })
-    }
-
-    // Keep only last 2
-    cleanupOldEvents('ws-cleanup-1', 2)
-
-    const rows = db.prepare('SELECT * FROM ws_events WHERE workspace_id = ?').all('ws-cleanup-1')
-    expect(rows.length).toBe(2)
-  })
-})
-
 describe('getClientCount()', () => {
   it("retourne 0 quand aucun client n'est connecte", async () => {
     const { getClientCount } = await import('../server/services/websocket-service.js')
@@ -555,5 +531,21 @@ describe('emitEphemeral()', () => {
 
     expect(wsSub.sentMessages.length).toBe(1)
     expect(wsNotSub.sentMessages.length).toBe(0)
+  })
+})
+
+describe('broadcastAll', () => {
+  it('sends to every connected client regardless of workspace subscription', async () => {
+    // Mock WebSocket with minimal shape
+    const sent: string[] = []
+    const fakeClient = { readyState: 1, send: (m: string) => sent.push(m) }
+    const { broadcastAll, _connectionsForTest } = await import('../server/services/websocket-service.js')
+    _connectionsForTest().add(fakeClient as unknown as import('ws').WebSocket)
+    broadcastAll('migration:progress', { state: 'running', processed: 5, total: 10 })
+    expect(sent).toHaveLength(1)
+    const parsed = JSON.parse(sent[0]) as { type: string; payload: { state: string } }
+    expect(parsed.type).toBe('migration:progress')
+    expect(parsed.payload.state).toBe('running')
+    _connectionsForTest().delete(fakeClient as unknown as import('ws').WebSocket)
   })
 })

@@ -25,10 +25,6 @@ export interface WsMessage {
 /** Maps each WS client to the set of workspaceIds they are subscribed to */
 const clients = new Map<WebSocket, Set<string>>()
 
-/** Per-workspace emit counter for periodic cleanup. */
-const emitCounters = new Map<string, number>()
-const EMIT_CLEANUP_THRESHOLD = 2000
-
 // ── Message handler (decoupled routing) ────────────────────────────────────────
 
 /** Callback for routed WS messages (chat, workspace, devserver commands). */
@@ -91,7 +87,7 @@ export function handleConnection(ws: WebSocket): void {
         break
       }
 
-      // Routed messages — delegated to agent-manager via messageHandler
+      // Routed messages — delegated to the orchestrator via messageHandler
       case 'chat:message':
       case 'workspace:start':
       case 'workspace:stop':
@@ -145,15 +141,6 @@ export function emit(workspaceId: string, type: string, payload: unknown, sessio
     db.prepare(
       'INSERT INTO ws_events (id, workspace_id, type, payload, session_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
     ).run(id, workspaceId, type, JSON.stringify(payload), sessionId ?? null, createdAt)
-
-    // Periodic cleanup — trigger when emit threshold is reached
-    const count = (emitCounters.get(workspaceId) ?? 0) + 1
-    if (count >= EMIT_CLEANUP_THRESHOLD) {
-      cleanupOldEvents(workspaceId)
-      emitCounters.set(workspaceId, 0)
-    } else {
-      emitCounters.set(workspaceId, count)
-    }
   } catch (err) {
     console.error(`[websocket-service] Failed to persist event (workspace=${workspaceId}, type=${type}):`, err)
   }
@@ -162,10 +149,19 @@ export function emit(workspaceId: string, type: string, payload: unknown, sessio
   const event: WsEvent = { id, workspaceId, type, payload, sessionId, createdAt }
   const message = JSON.stringify(event)
 
-  // Broadcast to subscribed clients
+  // Broadcast to subscribed clients. Wrap `.send` in try/catch so a dropped
+  // client doesn't throw and abort delivery to the remaining subscribers.
+  let emitSendErrorLogged = false
   for (const [ws, subs] of clients) {
     if (subs.has(workspaceId) && ws.readyState === 1 /* WebSocket.OPEN */) {
-      ws.send(message)
+      try {
+        ws.send(message)
+      } catch (err) {
+        if (!emitSendErrorLogged) {
+          console.warn(`[ws] emit send failed (workspace=${workspaceId}, type=${type}):`, err)
+          emitSendErrorLogged = true
+        }
+      }
     }
   }
 
@@ -182,9 +178,17 @@ export function emitEphemeral(workspaceId: string, type: string, payload: unknow
   const event: WsEvent = { id, workspaceId, type, payload, createdAt }
   const message = JSON.stringify(event)
 
+  let sendErrorLogged = false
   for (const [ws, subs] of clients) {
     if (subs.has(workspaceId) && ws.readyState === 1 /* WebSocket.OPEN */) {
-      ws.send(message)
+      try {
+        ws.send(message)
+      } catch (err) {
+        if (!sendErrorLogged) {
+          console.warn(`[ws] emitEphemeral send failed (workspace=${workspaceId}, type=${type}):`, err)
+          sendErrorLogged = true
+        }
+      }
     }
   }
 }
@@ -223,8 +227,17 @@ export function handleSyncRequest(ws: WebSocket, lastEventId: string, workspaceI
     created_at: string
   }>
 
+  // Initial window size: on a fresh connection (no lastEventId), we only
+  // replay the most recent slice of history. The client fetches older
+  // events on-demand via GET /api/workspaces/:id/events as the user scrolls
+  // up. This keeps first-paint fast on long-lived workspaces with tens of
+  // thousands of events without ever deleting anything from the DB.
+  const INITIAL_WINDOW = 300
+
   if (lastEventId) {
-    // Get the rowid of the last event to compare ordering
+    // Resume path: replay every event strictly after the cursor (delta
+    // since last seen). If the cursor is stale/unknown, fall back to the
+    // recent window rather than streaming the entire history.
     const lastRow = db.prepare('SELECT rowid FROM ws_events WHERE id = ?').get(lastEventId) as
       | { rowid: number }
       | undefined
@@ -234,16 +247,17 @@ export function handleSyncRequest(ws: WebSocket, lastEventId: string, workspaceI
         .prepare(`SELECT * FROM ws_events WHERE workspace_id IN (${placeholders}) AND rowid > ? ORDER BY rowid ASC`)
         .all(...resolvedIds, lastRow.rowid) as typeof rows
     } else {
-      // lastEventId not found — send events capped to avoid unbounded memory usage
       rows = db
-        .prepare(`SELECT * FROM ws_events WHERE workspace_id IN (${placeholders}) ORDER BY rowid ASC LIMIT 10000`)
-        .all(...resolvedIds) as typeof rows
+        .prepare(`SELECT * FROM ws_events WHERE workspace_id IN (${placeholders}) ORDER BY rowid DESC LIMIT ?`)
+        .all(...resolvedIds, INITIAL_WINDOW) as typeof rows
+      rows.reverse()
     }
   } else {
-    // No lastEventId — send all events (capped to avoid unbounded memory usage)
+    // Fresh connect: most recent INITIAL_WINDOW events, in chronological order.
     rows = db
-      .prepare(`SELECT * FROM ws_events WHERE workspace_id IN (${placeholders}) ORDER BY rowid ASC LIMIT 10000`)
-      .all(...resolvedIds) as typeof rows
+      .prepare(`SELECT * FROM ws_events WHERE workspace_id IN (${placeholders}) ORDER BY rowid DESC LIMIT ?`)
+      .all(...resolvedIds, INITIAL_WINDOW) as typeof rows
+    rows.reverse()
   }
 
   const events: WsEvent[] = rows.map((row) => {
@@ -251,6 +265,11 @@ export function handleSyncRequest(ws: WebSocket, lastEventId: string, workspaceI
     try {
       parsedPayload = JSON.parse(row.payload)
     } catch {
+      console.error('[ws] corrupt ws_events row, falling back to raw:', {
+        id: row.id,
+        workspace_id: row.workspace_id,
+        type: row.type,
+      })
       parsedPayload = { raw: row.payload }
     }
     return {
@@ -264,33 +283,6 @@ export function handleSyncRequest(ws: WebSocket, lastEventId: string, workspaceI
   })
 
   ws.send(JSON.stringify({ type: 'sync:response', payload: { events } }))
-
-  // Trigger cleanup when the event count is high to prevent unbounded growth
-  const CLEANUP_THRESHOLD = 5000
-  if (rows.length >= CLEANUP_THRESHOLD) {
-    for (const wid of resolvedIds) {
-      cleanupOldEvents(wid)
-    }
-  }
-}
-
-// ── Cleanup ────────────────────────────────────────────────────────────────────
-
-/**
- * Delete old events keeping only the last N (default 1000) per workspace.
- */
-export function cleanupOldEvents(workspaceId: string, keepCount = 1000): void {
-  const db = getDb()
-  db.prepare(`
-    DELETE FROM ws_events
-    WHERE workspace_id = ?
-      AND rowid NOT IN (
-        SELECT rowid FROM ws_events
-        WHERE workspace_id = ?
-        ORDER BY rowid DESC
-        LIMIT ?
-      )
-  `).run(workspaceId, workspaceId, keepCount)
 }
 
 // ── Utilities ──────────────────────────────────────────────────────────────────
@@ -310,10 +302,44 @@ export function _getClients(): Map<WebSocket, Set<string>> {
   return clients
 }
 
+// ── Global broadcast ───────────────────────────────────────────────────────────
+
 /**
- * Get the internal emit counters map — exposed for testing only.
+ * Broadcast an ephemeral event to every connected WebSocket client,
+ * regardless of which workspaces they have subscribed to. Used for
+ * global events like migration progress.
+ */
+export function broadcastAll(type: string, payload: unknown): void {
+  const message = JSON.stringify({ type, payload })
+  let sendErrorLogged = false
+  for (const client of clients.keys()) {
+    if (client.readyState === 1 /* WebSocket.OPEN */) {
+      try {
+        client.send(message)
+      } catch (err) {
+        // client dropped; next iteration will fail its .readyState check.
+        // Log the first occurrence so real regressions surface without
+        // flooding the console if many clients die at once.
+        if (!sendErrorLogged) {
+          console.warn('[ws] broadcastAll send failed:', err)
+          sendErrorLogged = true
+        }
+      }
+    }
+  }
+}
+
+/**
+ * Return a mutable set view of connected clients — exposed for testing only.
+ * Adding/removing clients via this handle registers/unregisters them with the
+ * internal `clients` map so helpers like `broadcastAll` see them.
  * @internal
  */
-export function _getEmitCounters(): Map<string, number> {
-  return emitCounters
+export function _connectionsForTest(): { add: (ws: WebSocket) => void; delete: (ws: WebSocket) => boolean } {
+  return {
+    add: (ws: WebSocket) => {
+      if (!clients.has(ws)) clients.set(ws, new Set())
+    },
+    delete: (ws: WebSocket) => clients.delete(ws),
+  }
 }

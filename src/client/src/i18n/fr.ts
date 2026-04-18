@@ -432,6 +432,10 @@ export default {
   'quotaFooter.tooltipTitle': 'Utilisation du compte Claude',
   'quotaFooter.lastUpdated': 'Dernière mise à jour : {time}',
   'quotaFooter.noData': 'Aucune donnée pour le moment',
+  'agent.error.spawn_failed': "Échec du lancement de l'agent",
+  'agent.error.parse_error': "Impossible d'analyser un message de l'agent",
+  'agent.error.rate_limit': 'Limite de débit atteinte',
+  'agent.error.other': "Erreur de l'agent",
   'rateLimitType.fiveHour': 'Session 5h',
   'rateLimitType.sevenDay': 'Hebdo',
   'stats.subagents': 'Sub-agents',
@@ -526,4 +530,33 @@ export default {
   'health.integrationsTitle': 'Intégrations',
   'health.integrationConfigured': 'configurée',
   'health.integrationMissing': 'non configurée',
+
+  // Agent event stream — session, tool, activity
+  'session.started': 'Session démarrée',
+  'session.ended': 'Session terminée',
+  'session.compacted': 'Contexte compacté',
+  'tool.running': 'En cours...',
+  'activity.raw_lines': 'Lignes de sortie brutes ({n})',
+  'activity.loading_older': 'Chargement des messages plus anciens…',
+  'activity.prev_user_message': 'Message utilisateur précédent',
+  'chat.systemPrompt': 'Prompt système',
+  'chat.agent': 'Agent',
+  'chat.you': 'Vous',
+  'chat.session': 'Session',
+  'chat.nActions': '{n} action | {n} actions',
+
+  // Migration overlay
+  'migration.backing_up': 'Sauvegarde de la base de données…',
+  'migration.running': "Migration des données d'agent — {processed}/{total}",
+  'migration.error': 'Échec de la migration',
+  'migration.backup_location': 'Une sauvegarde a été enregistrée à {path}. Redémarre Kōbō pour réessayer.',
+  'migration.retry': 'Redémarre Kōbō pour réessayer.',
+
+  // Engine selector
+  'engine.select': 'Moteur',
+  'engine.model': 'Modèle',
+  'engine.effort': 'Effort de réflexion',
+  'engine.permission': 'Mode de permission',
+  'engine.permission.auto-accept': 'Acceptation auto',
+  'engine.permission.plan': 'Plan (lecture seule)',
 }

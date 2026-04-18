@@ -7,7 +7,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { Hono } from 'hono'
 import { getDb } from '../db/index.js'
-import * as agentManager from '../services/agent-manager.js'
+import { migrationGuard } from '../middleware/migration-guard.js'
+import { listEngines } from '../services/agent/engines/registry.js'
+import * as agentManager from '../services/agent/orchestrator.js'
 import * as devServerService from '../services/dev-server-service.js'
 import * as notionService from '../services/notion-service.js'
 import { renderPrTemplate } from '../services/pr-template-service.js'
@@ -38,7 +40,7 @@ app.get('/', (c) => {
 })
 
 // POST /api/workspaces — create workspace
-app.post('/', async (c) => {
+app.post('/', migrationGuard, async (c) => {
   try {
     const body = await c.req.json<{
       name: string
@@ -55,10 +57,21 @@ app.post('/', async (c) => {
       skipSetupScript?: boolean
       description?: string
       permissionMode?: string
+      engine?: string
     }>()
 
     if (!body.name || !body.projectPath || !body.sourceBranch || !body.workingBranch) {
       return c.json({ error: 'Missing required fields: name, projectPath, sourceBranch, workingBranch' }, 400)
+    }
+
+    // Validate the engine id (if provided) against the registry. An unknown
+    // engine is rejected up-front so we don't create orphan workspaces that
+    // can't spawn an agent.
+    if (body.engine) {
+      const validEngineIds = listEngines().map((e) => e.id as string)
+      if (!validEngineIds.includes(body.engine)) {
+        return c.json({ error: `Unknown engine '${body.engine}'. Valid engines: ${validEngineIds.join(', ')}` }, 400)
+      }
     }
 
     // Fetch the source branch from origin first — if this fails, block creation
@@ -84,6 +97,7 @@ app.post('/', async (c) => {
       model: body.model,
       reasoningEffort: body.reasoningEffort,
       permissionMode: body.permissionMode || globalSettings.defaultPermissionMode || 'plan',
+      engine: body.engine,
     })
 
     let notionContent: notionService.NotionPageContent | null = null
@@ -529,7 +543,7 @@ app.post('/', async (c) => {
 })
 
 // POST /api/workspaces/:id/sessions — create a new idle agent session
-app.post('/:id/sessions', (c) => {
+app.post('/:id/sessions', migrationGuard, (c) => {
   try {
     const id = c.req.param('id')
     const workspace = workspaceService.getWorkspace(id)
@@ -920,7 +934,7 @@ app.put('/:id/tags', async (c) => {
 })
 
 // PATCH /api/workspaces/:id — update workspace fields (status, model, permissionMode, name)
-app.patch('/:id', async (c) => {
+app.patch('/:id', migrationGuard, async (c) => {
   try {
     const id = c.req.param('id')
     const body = await c.req.json<{
@@ -1067,7 +1081,7 @@ app.post('/:id/run-setup-script', async (c) => {
 })
 
 // POST /api/workspaces/:id/archive — mark workspace as archived (soft-delete)
-app.post('/:id/archive', (c) => {
+app.post('/:id/archive', migrationGuard, (c) => {
   try {
     const id = c.req.param('id')
     const workspace = workspaceService.getWorkspace(id)
@@ -1109,7 +1123,7 @@ app.post('/:id/archive', (c) => {
 })
 
 // POST /api/workspaces/:id/unarchive — restore an archived workspace
-app.post('/:id/unarchive', (c) => {
+app.post('/:id/unarchive', migrationGuard, (c) => {
   try {
     const id = c.req.param('id')
     const workspace = workspaceService.getWorkspace(id)
@@ -1130,7 +1144,7 @@ app.post('/:id/unarchive', (c) => {
 })
 
 // DELETE /api/workspaces/:id — delete workspace
-app.delete('/:id', async (c) => {
+app.delete('/:id', migrationGuard, async (c) => {
   try {
     const id = c.req.param('id')
 
@@ -1201,13 +1215,29 @@ app.delete('/:id', async (c) => {
 })
 
 // POST /api/workspaces/:id/start — start/restart agent
-app.post('/:id/start', async (c) => {
+app.post('/:id/start', migrationGuard, async (c) => {
   try {
     const id = c.req.param('id')
 
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+
+    // If the workspace declares an engine, ensure it is still registered.
+    // Otherwise startAgent() would throw from deep inside resolveEngine and
+    // surface as an opaque 500 — better to fail fast with a clear 400.
+    const workspaceEngine = (workspace as { engine?: string }).engine
+    if (workspaceEngine) {
+      const validEngineIds = listEngines().map((e) => e.id as string)
+      if (!validEngineIds.includes(workspaceEngine)) {
+        return c.json(
+          {
+            error: `Workspace uses engine '${workspaceEngine}' which is no longer available. Recreate or reconfigure the workspace.`,
+          },
+          400,
+        )
+      }
     }
 
     const body = await c.req
@@ -1461,7 +1491,7 @@ app.post('/:id/git/abort', (c) => {
 })
 
 /** Hand off merge/rebase conflicts to the workspace agent with an intelligent-resolution prompt. */
-app.post('/:id/git/resolve-with-agent', async (c) => {
+app.post('/:id/git/resolve-with-agent', migrationGuard, async (c) => {
   try {
     const id = c.req.param('id')
     const workspace = workspaceService.getWorkspace(id)
@@ -1720,7 +1750,7 @@ app.post('/:id/mark-read', (c) => {
 })
 
 // POST /api/workspaces/:id/stop — stop agent
-app.post('/:id/stop', (c) => {
+app.post('/:id/stop', migrationGuard, (c) => {
   try {
     const id = c.req.param('id')
 
@@ -1750,7 +1780,7 @@ app.post('/:id/stop', (c) => {
 })
 
 // POST /api/workspaces/:id/interrupt — soft-interrupt agent (SIGINT, like Escape in Claude Code)
-app.post('/:id/interrupt', (c) => {
+app.post('/:id/interrupt', migrationGuard, (c) => {
   try {
     const id = c.req.param('id')
 

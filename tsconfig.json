@@ -9,6 +9,6 @@
     "skipLibCheck": true,
     "esModuleInterop": true
   },
-  "include": ["src/server/**/*", "src/mcp-server/**/*"],
+  "include": ["src/server/**/*", "src/mcp-server/**/*", "src/shared/**/*"],
   "exclude": ["node_modules", "dist", "src/client", "src/__tests__"]
 }

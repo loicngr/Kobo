@@ -4,7 +4,7 @@ Standalone MCP (Model Context Protocol) server spawned by Kōbō for each Claude
 
 ## How it runs
 
-Kōbō's `agent-manager.ts` writes a `.mcp.json` file into each worktree and passes it to Claude Code via `--mcp-config`. Claude spawns this server as a child process with stdio transport and injects these environment variables:
+Kōbō's Claude Code engine (under `src/server/services/agent/engines/claude-code/`) writes a `.mcp.json` file into each worktree and passes it to Claude Code via `--mcp-config`. Claude spawns this server as a child process with stdio transport and injects these environment variables:
 
 | Env var | Purpose |
 |---|---|

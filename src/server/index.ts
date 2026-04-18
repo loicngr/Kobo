@@ -8,9 +8,11 @@ import WebSocket, { WebSocketServer } from 'ws'
 import { closeDb, getDb } from './db/index.js'
 import { runMigrations } from './db/migrations.js'
 import devServerRouter from './routes/dev-server.js'
+import { enginesRouter } from './routes/engines.js'
 import gitRouter from './routes/git.js'
 import healthRouter from './routes/health.js'
 import imagesRouter from './routes/images.js'
+import { migrationRouter } from './routes/migration.js'
 import notionRouter from './routes/notion.js'
 import plansRouter from './routes/plans.js'
 import searchRouter from './routes/search.js'
@@ -20,13 +22,15 @@ import templatesRouter from './routes/templates.js'
 import workspacesRouter from './routes/workspaces.js'
 import {
   getAvailableSkills,
+  reconcileOrphanSessions,
   sendMessage,
   setBackendPort,
   startAgent,
   startWatchdog,
   stopAgent,
   stopWatchdog,
-} from './services/agent-manager.js'
+} from './services/agent/orchestrator.js'
+import { runContentMigrationIfNeeded } from './services/content-migration-service.js'
 import { createDailyDbBackupIfNeeded } from './services/db-backup-service.js'
 import { startDevServer, stopDevServer } from './services/dev-server-service.js'
 import { startPrWatcher, stopPrWatcher } from './services/pr-watcher-service.js'
@@ -67,6 +71,7 @@ void createDailyDbBackupIfNeeded(db, getDbPath()).then((r) => {
 
 // Initialize process cleanup, agent watchdog, and PR watcher
 initProcessCleanup()
+reconcileOrphanSessions()
 startWatchdog()
 startPrWatcher()
 
@@ -88,6 +93,8 @@ app.route('/api/templates', templatesRouter)
 app.route('/api/workspaces', plansRouter)
 app.route('/api/search', searchRouter)
 app.route('/api/health', healthRouter)
+app.route('/api/engines', enginesRouter)
+app.route('/api/migration', migrationRouter)
 
 // Skills endpoint
 app.get('/api/skills', (c) => c.json(getAvailableSkills()))
@@ -149,6 +156,13 @@ const server = serve(
   (info) => {
     setBackendPort(info.port)
     console.log(`Server running at http://localhost:${info.port}`)
+    // Content migration runs AFTER the HTTP listener is up so the frontend
+    // can observe progress via WS broadcasts + GET /api/migration/status.
+    // Not awaited — the callback returns quickly, the migration runs in the
+    // background.
+    void runContentMigrationIfNeeded(getDb(), getDbPath()).catch((err) => {
+      console.error('[boot] content migration failed:', err)
+    })
   },
 )
 
@@ -253,7 +267,7 @@ terminalWss.on('connection', (ws: WebSocket, workspaceId: string) => {
   })
 })
 
-// Wire websocket-service message handler to agent-manager
+// Wire websocket-service message handler to the agent orchestrator
 setMessageHandler((type, payload) => {
   const p = payload as { workspaceId?: string; content?: string; prompt?: string; sessionId?: string } | null
 
@@ -268,7 +282,15 @@ setMessageHandler((type, payload) => {
 
     try {
       sendMessage(p.workspaceId, p.content)
-    } catch {
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      // Only resume on the specific "No agent running" path. Other errors
+      // (stdin closed, process dead mid-write, etc.) should surface to the
+      // logs instead of silently respawning a fresh agent.
+      if (!msg.includes('No agent running')) {
+        console.error(`[ws] chat:message failed for workspace ${p.workspaceId}:`, err)
+        return
+      }
       // Agent not running — resume the session hinted by the client if any,
       // otherwise the most-recent active session.
       try {

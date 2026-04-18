@@ -90,3 +90,23 @@ export async function createDailyDbBackupIfNeeded(
 
   return result
 }
+
+const PREMIGRATION_PREFIX = 'kobo.db.premigration-'
+
+export async function createPreMigrationBackup(
+  db: Database.Database,
+  dbPath: string,
+  tag: string,
+): Promise<DbBackupResult> {
+  const dir = path.dirname(dbPath)
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  backupSequence += 1
+  const backupPath = path.join(dir, `${PREMIGRATION_PREFIX}${tag}-${stamp}-${backupSequence}`)
+  try {
+    await db.backup(backupPath)
+    return { created: backupPath, deleted: [] }
+  } catch (err) {
+    console.error('[kobo] Pre-migration backup failed:', err)
+    throw err
+  }
+}

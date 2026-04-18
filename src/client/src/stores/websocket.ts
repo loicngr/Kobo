@@ -1,11 +1,13 @@
 import { defineStore } from 'pinia'
 import i18n from 'src/i18n'
+import { useAgentStreamStore } from 'src/stores/agent-stream'
+import type { AgentEvent } from 'src/types/agent-event'
 import { notify } from 'src/utils/notifications'
-import { normalizeRateLimitUsage } from 'src/utils/rate-limit-normalizer'
 import type { DevServerStatus } from './dev-server'
 import { useDevServerStore } from './dev-server'
-import { useSettingsStore } from './settings'
-import { isSubagentTerminalEvent, useWorkspaceStore } from './workspace'
+import type { MigrationStatus } from './migration'
+import { useMigrationStore } from './migration'
+import { useWorkspaceStore } from './workspace'
 
 const t = i18n.global.t
 
@@ -13,6 +15,106 @@ const t = i18n.global.t
 let _ws: WebSocket | null = null
 let _reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let _reconnectAttempt = 0
+// Suppress notifications when the dispatcher is invoked during sync:response
+// replay. Mutated by the store's `_replaying` guard via `setReplaying`.
+let _replayingNotifications = false
+
+/** Internal: set by the store while processing `sync:response` to mute notifications. */
+export function _setReplayingForDispatch(value: boolean): void {
+  _replayingNotifications = value
+}
+
+/**
+ * Central dispatcher for normalised `AgentEvent`s received via WebSocket
+ * (`agent:event` frames or `sync:response` replays).
+ *
+ * Always appends to the per-workspace event stream (consumed by ActivityFeed
+ * + sibling panels via `foldEvents`), and routes the side-effect-bearing
+ * kinds (`usage`, `rate_limit`, `subagent:progress`, `session:ended`,
+ * `error{quota}`) to the workspace store so the existing Stats / Quota /
+ * Subagents panels keep working and the user gets completion notifications.
+ *
+ * Exported so it can be tested in isolation without spinning up the WS.
+ */
+export function dispatchAgentEvent(
+  workspaceId: string,
+  event: AgentEvent,
+  timestamp?: string,
+  eventId?: string,
+  sessionId?: string | null,
+): void {
+  useAgentStreamStore().append(workspaceId, event, timestamp, eventId, sessionId)
+
+  const workspaceStore = useWorkspaceStore()
+
+  if (event.kind === 'usage') {
+    workspaceStore.addUsageStats(workspaceId, {
+      inputTokens: event.inputTokens,
+      outputTokens: event.outputTokens,
+      costUsd: event.costUsd ?? 0,
+    })
+    return
+  }
+
+  if (event.kind === 'rate_limit') {
+    workspaceStore.setRateLimitUsage(workspaceId, event.info)
+    return
+  }
+
+  if (event.kind === 'subagent:progress') {
+    workspaceStore.upsertSubagent(workspaceId, {
+      toolUseId: event.toolCallId,
+      status: event.status,
+      description: event.description,
+      taskType: event.taskType,
+      lastToolName: event.lastToolName,
+      totalTokens: event.totalTokens,
+      toolUses: event.toolUses,
+      durationMs: event.durationMs,
+    })
+    return
+  }
+
+  // session:started: a new turn just spun up. Flip the workspace status
+  // to `executing` in the local cache so downstream UI (ActivityFeed's
+  // `sessionActive` check, AgentBusyBanner, start/stop buttons) reflects
+  // the live state without waiting for a GET /workspaces round-trip.
+  if (event.kind === 'session:started') {
+    const cur = workspaceStore.workspaces.find((w) => w.id === workspaceId)
+    if (
+      cur &&
+      (cur.status === 'completed' || cur.status === 'idle' || cur.status === 'error' || cur.status === 'quota')
+    ) {
+      workspaceStore.updateWorkspaceFromEvent(workspaceId, { status: 'executing' })
+    }
+    return
+  }
+
+  // Session lifecycle: session:ended signals completion/error/kill. Refresh
+  // the workspace list so the new DB status shows up, and surface a
+  // notification if not replaying.
+  if (event.kind === 'session:ended') {
+    const derivedStatus = event.reason === 'completed' ? 'completed' : event.reason === 'error' ? 'error' : 'idle'
+    workspaceStore.updateWorkspaceFromEvent(workspaceId, { status: derivedStatus })
+    workspaceStore.fetchWorkspaces()
+    if (!_replayingNotifications && event.reason !== 'killed') {
+      const wsName = workspaceStore.workspaces.find((w) => w.id === workspaceId)?.name ?? ''
+      const title =
+        event.reason === 'error'
+          ? t('notification.agentError', { name: wsName })
+          : t('notification.agentFinished', { name: wsName })
+      notify(title, undefined, workspaceId)
+    }
+    return
+  }
+
+  // Quota errors: flip the workspace to 'quota' in the local cache and fetch
+  // the authoritative state. No notification — the user will see the panel.
+  if (event.kind === 'error' && event.category === 'quota') {
+    workspaceStore.updateWorkspaceFromEvent(workspaceId, { status: 'quota' })
+    workspaceStore.fetchWorkspaces()
+  }
+}
 
 export const useWebSocketStore = defineStore('websocket', {
   state: () => ({
@@ -141,7 +243,6 @@ export const useWebSocketStore = defineStore('websocket', {
       const workspaceStore = useWorkspaceStore()
 
       // Track event ID for sync — server sends WsEvent with 'id' field
-      const eventId = msg.id ?? msg.eventId ?? Date.now().toString()
       if (msg.id) {
         this.lastEventId = msg.id
       } else if (msg.eventId) {
@@ -149,326 +250,18 @@ export const useWebSocketStore = defineStore('websocket', {
       }
 
       const payload = msg.payload ?? {}
-      const timestamp = msg.createdAt ?? new Date().toISOString()
-      const sessionId = (msg as Record<string, unknown>).sessionId as string | undefined
 
       const wid = msg.workspaceId ?? (payload.workspaceId as string | undefined) ?? ''
 
       switch (msg.type) {
-        case 'agent:output': {
-          const outputType = payload.type as string | undefined
-
-          if (outputType === 'assistant') {
-            // Claude stream-json wraps content in message.content
-            const message = payload.message as Record<string, unknown> | undefined
-            const rawContent = message?.content ?? payload.content
-            const contentBlocks = Array.isArray(rawContent) ? rawContent : []
-            const textContent = contentBlocks
-              .filter((b: unknown) => (b as Record<string, unknown>).type === 'text')
-              .map((b: unknown) => (b as Record<string, unknown>).text as string)
-              .join('\n')
-
-            if (textContent) {
-              workspaceStore.addActivityItem(wid, {
-                id: eventId,
-                type: 'text',
-                content: textContent,
-                timestamp,
-                sessionId,
-                meta: payload,
-              })
-            }
-
-            const toolUseBlocks = contentBlocks.filter(
-              (b: unknown) => (b as Record<string, unknown>).type === 'tool_use',
-            )
-            for (const block of toolUseBlocks) {
-              const b = block as Record<string, unknown>
-              const toolName = (b.name as string) ?? 'tool'
-              workspaceStore.addActivityItem(wid, {
-                id: `${eventId}-${(b.id as string) ?? Math.random()}`,
-                type: 'tool_use',
-                content: toolName,
-                timestamp,
-                sessionId,
-                meta: b,
-              })
-              // Trigger git panel refresh when agent runs git-related Bash commands
-              if (toolName === 'Bash' && wid) {
-                const input = b.input as Record<string, unknown> | undefined
-                const cmd = ((input?.command as string) ?? '') + ((input?.description as string) ?? '')
-                if (/\bgit\b|commit|push|pull|merge|rebase|checkout|branch/i.test(cmd)) {
-                  workspaceStore.triggerGitRefresh()
-                }
-              }
-              // Capture TodoWrite to track agent's internal todos
-              if (toolName === 'TodoWrite' && wid) {
-                const input = b.input as Record<string, unknown> | undefined
-                if (input?.todos && Array.isArray(input.todos)) {
-                  workspaceStore.updateAgentTodos(
-                    wid,
-                    (input.todos as Array<Record<string, unknown>>).map((t) => ({
-                      content: (t.content as string) ?? '',
-                      status: (t.status as string) ?? 'pending',
-                      activeForm: (t.activeForm as string) ?? undefined,
-                    })),
-                  )
-                }
-              }
-            }
-          } else if (outputType === 'tool_use') {
-            const toolName = (payload.name as string) ?? 'tool'
-            workspaceStore.addActivityItem(wid, {
-              id: eventId,
-              type: 'tool_use',
-              content: toolName,
-              timestamp,
-              sessionId,
-              meta: payload,
-            })
-            // Capture TodoWrite to track agent's internal todos
-            if (toolName === 'TodoWrite' && wid) {
-              const input = payload.input as Record<string, unknown> | undefined
-              if (input?.todos && Array.isArray(input.todos)) {
-                workspaceStore.updateAgentTodos(
-                  wid,
-                  (input.todos as Array<Record<string, unknown>>).map((t) => ({
-                    content: (t.content as string) ?? '',
-                    status: (t.status as string) ?? 'pending',
-                    activeForm: (t.activeForm as string) ?? undefined,
-                  })),
-                )
-              }
-            }
-          } else if (outputType === 'tool_result') {
-            const resultContent = this._extractToolResultContent(payload.content)
-            if (resultContent) {
-              workspaceStore.addActivityItem(wid, {
-                id: eventId,
-                type: 'tool_use',
-                content: resultContent,
-                timestamp,
-                sessionId,
-                meta: payload,
-              })
-            }
-          } else if (outputType === 'system') {
-            const subtype = payload.subtype as string | undefined
-            // Skip noisy events (hooks, and optionally subagent task progress)
-            if (subtype === 'hook_started' || subtype === 'hook_response') {
-              break
-            }
-
-            // Capture subagent state from task_started / task_progress / task_notification.
-            // In-flight updates use task_progress; terminal lifecycle events use
-            // task_notification with an explicit status — see `isSubagentTerminalEvent`.
-            if (subtype === 'task_started' || subtype === 'task_progress' || subtype === 'task_notification') {
-              const toolUseId = payload.tool_use_id as string | undefined
-              if (wid && toolUseId) {
-                const usage = payload.usage as Record<string, unknown> | undefined
-                const taskStatus = payload.status as string | undefined
-                const isDone = isSubagentTerminalEvent(subtype, taskStatus)
-                workspaceStore.upsertSubagent(wid, {
-                  toolUseId,
-                  description: (payload.description as string) ?? (payload.summary as string) ?? undefined,
-                  taskType: (payload.task_type as string) ?? undefined,
-                  status: isDone ? 'done' : 'running',
-                  lastToolName: (payload.last_tool_name as string) ?? undefined,
-                  totalTokens: (usage?.total_tokens as number) ?? undefined,
-                  toolUses: (usage?.tool_uses as number) ?? undefined,
-                  durationMs: (usage?.duration_ms as number) ?? undefined,
-                })
-              }
-            }
-
-            if (
-              (subtype === 'task_progress' || subtype === 'task_started' || subtype === 'task_notification') &&
-              !useSettingsStore().showVerboseSystemMessages
-            ) {
-              break
-            }
-
-            // Map known subtypes to readable messages
-            const systemMessages: Record<string, string | ((p: Record<string, unknown>) => string | null)> = {
-              init: 'Session started',
-              compact: 'Context compacted — conversation history was summarized',
-              compact_boundary: (p) =>
-                `Compact boundary (${(p.compact_metadata as Record<string, unknown>)?.trigger ?? 'auto'}, ${(p.compact_metadata as Record<string, unknown>)?.pre_tokens ?? '?'} tokens before)`,
-              status: (p) => {
-                if (p.status === 'compacting') return 'Compacting context...'
-                if (p.status) return `Status: ${p.status}`
-                return null
-              },
-            }
-
-            if (subtype === 'init') {
-              workspaceStore.fetchSessions(wid)
-              // Never auto-switch session on init — let the user stay on
-              // "All sessions" so the feed is not filtered and previous
-              // activity remains visible across agent restarts/resumes.
-              if (!useSettingsStore().showVerboseSystemMessages) break
-            }
-
-            const handler = subtype ? systemMessages[subtype] : undefined
-            let content: string | null = null
-
-            if (typeof handler === 'function') {
-              content = handler(payload)
-            } else if (typeof handler === 'string') {
-              content = handler
-            } else if (useSettingsStore().showVerboseSystemMessages) {
-              // Unknown subtype — only show in verbose mode
-              const summary = (payload.summary as string) ?? null
-              if (summary) {
-                content = `[${subtype ?? 'system'}] ${summary}`
-              } else {
-                content = `[${subtype ?? 'system'}]`
-              }
-            }
-
-            if (content) {
-              workspaceStore.addActivityItem(wid, {
-                id: eventId,
-                type: 'system',
-                content,
-                timestamp,
-                sessionId,
-                meta: payload,
-              })
-            }
-          } else if (outputType === 'result') {
-            // Always capture usage stats for the stats panel, regardless of verbose mode
-            const usage = payload.usage as Record<string, unknown> | undefined
-            if (usage && wid) {
-              const inputTokens = (usage.input_tokens ?? usage.inputTokens ?? 0) as number
-              const outputTokens = (usage.output_tokens ?? usage.outputTokens ?? 0) as number
-              const cost = (payload.cost_usd ?? payload.costUsd ?? usage.cost_usd ?? usage.costUsd ?? 0) as number
-              workspaceStore.addUsageStats(wid, { inputTokens, outputTokens, costUsd: cost })
-            }
-
-            if (!useSettingsStore().showVerboseSystemMessages) break
-            // Show cost/token summary — the result text is already shown as an assistant message
-            if (usage) {
-              const inputTokens = usage.input_tokens ?? usage.inputTokens
-              const outputTokens = usage.output_tokens ?? usage.outputTokens
-              const cost = payload.cost_usd ?? payload.costUsd ?? usage.cost_usd ?? usage.costUsd
-              const parts: string[] = []
-              if (inputTokens) parts.push(`in: ${this._formatTokenCount(inputTokens as number)}`)
-              if (outputTokens) parts.push(`out: ${this._formatTokenCount(outputTokens as number)}`)
-              if (cost) parts.push(`$${(cost as number).toFixed(4)}`)
-              if (parts.length > 0) {
-                workspaceStore.addActivityItem(wid, {
-                  id: eventId,
-                  type: 'system',
-                  content: `Session ended [${parts.join(' | ')}]`,
-                  timestamp,
-                  sessionId,
-                  meta: payload,
-                })
-              }
-            }
-          } else if (outputType === 'user') {
-            // User messages = tool results sent back to Claude
-            const message = payload.message as Record<string, unknown> | undefined
-            const content = message?.content
-            if (typeof content === 'string') {
-              workspaceStore.addActivityItem(wid, {
-                id: eventId,
-                type: 'tool_use',
-                content: content.length > 300 ? `${content.slice(0, 300)}...` : content,
-                timestamp,
-                sessionId,
-                meta: payload,
-              })
-            } else if (Array.isArray(content)) {
-              // Tool result with content blocks
-              for (const block of content) {
-                const b = block as Record<string, unknown>
-                if (b.type === 'tool_result') {
-                  const toolId = (b.tool_use_id as string) ?? ''
-                  // Mark any tracked subagent as done when its tool_result arrives
-                  if (wid && toolId && workspaceStore.subagents[wid]?.[toolId]) {
-                    workspaceStore.upsertSubagent(wid, { toolUseId: toolId, status: 'done' })
-                  }
-                  const resultText = typeof b.content === 'string' ? b.content : this._extractReadableContent(b.content)
-                  if (resultText) {
-                    workspaceStore.addActivityItem(wid, {
-                      id: `${eventId}-${toolId}`,
-                      type: 'tool_use',
-                      content: `Result: ${resultText.length > 300 ? `${resultText.slice(0, 300)}...` : resultText}`,
-                      timestamp,
-                      sessionId,
-                      meta: b,
-                    })
-                  }
-                }
-              }
-            }
-          } else if (outputType === 'rate_limit_event') {
-            const info = payload.rate_limit_info as Record<string, unknown> | undefined
-            if (info) {
-              if (wid) {
-                const existing = workspaceStore.rateLimitUsage[wid] ?? null
-                const snapshot = normalizeRateLimitUsage(info, timestamp, existing)
-                if (snapshot) {
-                  workspaceStore.setRateLimitUsage(wid, snapshot)
-                }
-              }
-              if (!useSettingsStore().showVerboseSystemMessages) break
-              const status = (info.status as string) ?? 'unknown'
-              const utilization = info.utilization as number | undefined
-              workspaceStore.addActivityItem(wid, {
-                id: eventId,
-                type: 'system',
-                content: `Rate limit: ${status}${utilization !== undefined ? ` (${Math.round(utilization * 100)}% used)` : ''}`,
-                timestamp,
-                sessionId,
-                meta: payload,
-              })
-            }
-          } else if (outputType === 'raw') {
-            const rawContent = this._extractReadableContent(payload.content ?? payload)
-            if (rawContent) {
-              workspaceStore.addActivityItem(wid, {
-                id: eventId,
-                type: 'raw',
-                content: rawContent,
-                timestamp,
-                sessionId,
-                meta: payload,
-              })
-            }
-          } else {
-            // Unknown type — show it so nothing is hidden
-            const fallbackContent = this._extractReadableContent(payload)
-            if (fallbackContent) {
-              workspaceStore.addActivityItem(wid, {
-                id: eventId,
-                type: 'raw',
-                content: `[${outputType ?? 'unknown'}] ${fallbackContent}`,
-                timestamp,
-                sessionId,
-                meta: payload,
-              })
-            }
-          }
-          break
-        }
-
-        case 'agent:status': {
-          if (wid) {
-            const status = payload.status as string
-            workspaceStore.updateWorkspaceFromEvent(wid, { status })
-            workspaceStore.fetchWorkspaces()
-            if (!this._replaying && (status === 'completed' || status === 'idle' || status === 'error')) {
-              const wsName = workspaceStore.workspaces.find((w) => w.id === wid)?.name ?? ''
-              const title =
-                status === 'error'
-                  ? t('notification.agentError', { name: wsName })
-                  : t('notification.agentFinished', { name: wsName })
-              notify(title, undefined, wid)
-            }
-          }
+        case 'agent:event': {
+          if (!wid) break
+          // The payload IS the normalised AgentEvent — emitted by
+          // event-router.ts as `emit(workspaceId, 'agent:event', event)`.
+          const ts = (msg as { createdAt?: string }).createdAt
+          const evtId = msg.id ?? msg.eventId
+          const sid = (msg as { sessionId?: string | null }).sessionId ?? null
+          dispatchAgentEvent(wid, payload as unknown as AgentEvent, ts, evtId, sid)
           break
         }
 
@@ -478,32 +271,22 @@ export const useWebSocketStore = defineStore('websocket', {
           }
           break
 
-        case 'agent:error': {
-          if (wid) {
-            workspaceStore.updateWorkspaceFromEvent(wid, { status: 'error' })
-            workspaceStore.addActivityItem(wid, {
-              id: eventId,
-              type: 'error',
-              content: (payload.message as string) ?? 'Unknown error',
-              timestamp,
-              sessionId,
-              meta: payload,
-            })
-          }
-          break
-        }
-
         case 'user:message': {
           if (wid && payload.content) {
+            // User messages are now represented as `message:text` events in
+            // the agent-stream, but we still surface them via the workspace
+            // store's legacy activityFeeds slot so ChatInput's "pending"
+            // resolution logic keeps working.
             const content = payload.content as string
             const sender = (payload.sender as string) ?? 'user'
+            const sessionId = (msg as Record<string, unknown>).sessionId as string | undefined
+            const eventId = msg.id ?? msg.eventId ?? `user-${Date.now()}`
+            const timestamp = msg.createdAt ?? new Date().toISOString()
             const items = workspaceStore.activityFeeds[wid] ?? []
-            // Check if this message was already added locally (by ChatInput)
             const alreadyExists =
               sender === 'user' &&
               items.some((i) => i.meta?.sender === 'user' && i.content === content && i.meta?.pending)
             if (alreadyExists) {
-              // Update ID and sessionId but keep pending=true until agent responds
               const idx = items.findIndex((i) => i.meta?.sender === 'user' && i.content === content && i.meta?.pending)
               if (idx >= 0) {
                 items[idx] = { ...items[idx], id: eventId, sessionId }
@@ -523,8 +306,9 @@ export const useWebSocketStore = defineStore('websocket', {
         }
 
         case 'sync:response': {
-          // Replay persisted events — suppress notifications during replay
+          // Replay persisted events — suppress notifications during replay.
           this._replaying = true
+          _setReplayingForDispatch(true)
           try {
             const events =
               (payload.events as Array<{
@@ -533,13 +317,90 @@ export const useWebSocketStore = defineStore('websocket', {
                 type: string
                 payload: Record<string, unknown>
                 createdAt: string
+                sessionId?: string | null
               }>) ?? []
+            // Group agent:event payloads per workspace for bulk reset (O(1)
+            // reactivity instead of O(n) append notifications), then route
+            // every other event through the normal dispatcher.
+            const grouped = new Map<
+              string,
+              {
+                events: AgentEvent[]
+                timestamps: string[]
+                sessionIds: Array<string | null>
+                oldestId: string | undefined
+              }
+            >()
             for (const evt of events) {
               if (evt.type === 'sync:response') continue
+              if (evt.type === 'agent:event' && evt.workspaceId) {
+                const bucket = grouped.get(evt.workspaceId) ?? {
+                  events: [],
+                  timestamps: [],
+                  sessionIds: [],
+                  oldestId: undefined,
+                }
+                bucket.events.push(evt.payload as unknown as AgentEvent)
+                bucket.timestamps.push(evt.createdAt)
+                bucket.sessionIds.push(evt.sessionId ?? null)
+                if (!bucket.oldestId) bucket.oldestId = evt.id
+                grouped.set(evt.workspaceId, bucket)
+                continue
+              }
               this._routeMessage(evt)
+            }
+            if (grouped.size > 0) {
+              const streamStore = useAgentStreamStore()
+              for (const [workspaceId, { events: list, timestamps: tsList, sessionIds: sList, oldestId }] of grouped) {
+                // `hasMoreOlder` starts true optimistically — the infinite
+                // scroll fetch will learn the real answer on its first hit.
+                streamStore.reset(workspaceId, list, tsList, {
+                  oldestId,
+                  hasMoreOlder: true,
+                  sessionIds: sList,
+                })
+                // Replay side-effects (usage/rate_limit/subagent) without
+                // re-appending — append was already replaced by reset().
+                for (const ev of list) {
+                  if (ev.kind === 'usage' || ev.kind === 'rate_limit' || ev.kind === 'subagent:progress') {
+                    // reset() already pushed the event into the stream, so
+                    // only route the side-effect — but dispatchAgentEvent
+                    // also calls append(). To keep things simple we accept
+                    // the duplicate-in-stream cost of the replayed event on
+                    // the side-effect branches; the conversation view is
+                    // driven by foldEvents, and these kinds are filtered out
+                    // of the conversation anyway.
+                    //
+                    // Call the side-effect bits manually to avoid appending
+                    // twice to the stream.
+                    const workspaceStore = useWorkspaceStore()
+                    if (ev.kind === 'usage') {
+                      workspaceStore.addUsageStats(workspaceId, {
+                        inputTokens: ev.inputTokens,
+                        outputTokens: ev.outputTokens,
+                        costUsd: ev.costUsd ?? 0,
+                      })
+                    } else if (ev.kind === 'rate_limit') {
+                      workspaceStore.setRateLimitUsage(workspaceId, ev.info)
+                    } else if (ev.kind === 'subagent:progress') {
+                      workspaceStore.upsertSubagent(workspaceId, {
+                        toolUseId: ev.toolCallId,
+                        status: ev.status,
+                        description: ev.description,
+                        taskType: ev.taskType,
+                        lastToolName: ev.lastToolName,
+                        totalTokens: ev.totalTokens,
+                        toolUses: ev.toolUses,
+                        durationMs: ev.durationMs,
+                      })
+                    }
+                  }
+                }
+              }
             }
           } finally {
             this._replaying = false
+            _setReplayingForDispatch(false)
           }
           break
         }
@@ -606,65 +467,12 @@ export const useWebSocketStore = defineStore('websocket', {
           }
           break
         }
+
+        case 'migration:progress':
+        case 'migration:error':
+          useMigrationStore().update(payload as unknown as MigrationStatus)
+          break
       }
-    },
-
-    /**
-     * Extract readable content from a tool_result payload.
-     * Returns a short summary string, or empty string to skip.
-     */
-    _extractToolResultContent(content: unknown): string {
-      if (typeof content === 'string') return content
-      if (Array.isArray(content)) {
-        const texts = content
-          .filter((b) => typeof b === 'object' && b !== null && (b as Record<string, unknown>).type === 'text')
-          .map((b) => (b as Record<string, unknown>).text as string)
-        const joined = texts.join('\n')
-        if (joined) return joined
-      }
-      if (content && typeof content === 'object') {
-        return this._extractReadableContent(content)
-      }
-      return ''
-    },
-
-    /**
-     * Extract human-readable text from an unknown value.
-     * Tries common fields (content, text, message), falls back to truncated JSON.
-     */
-    _extractReadableContent(value: unknown): string {
-      if (typeof value === 'string') return value
-      if (!value || typeof value !== 'object') return ''
-
-      const obj = value as Record<string, unknown>
-
-      // Try common text fields
-      for (const key of ['content', 'text', 'message', 'description', 'summary']) {
-        if (typeof obj[key] === 'string' && obj[key]) {
-          return obj[key] as string
-        }
-      }
-
-      // If there's a nested content array (Claude format), extract text blocks
-      if (Array.isArray(obj.content)) {
-        const texts = obj.content
-          .filter((b: unknown) => typeof b === 'object' && b !== null && (b as Record<string, unknown>).type === 'text')
-          .map((b: unknown) => (b as Record<string, unknown>).text as string)
-          .filter(Boolean)
-        if (texts.length > 0) return texts.join('\n')
-      }
-
-      // Last resort: JSON
-      return JSON.stringify(obj, null, 2)
-    },
-
-    /**
-     * Format a token count for display (e.g., 1234 -> "1.2k")
-     */
-    _formatTokenCount(count: number): string {
-      if (count >= 1_000_000) return `${(count / 1_000_000).toFixed(1)}M`
-      if (count >= 1_000) return `${(count / 1_000).toFixed(1)}k`
-      return String(count)
     },
   },
 })
