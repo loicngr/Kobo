@@ -1,6 +1,6 @@
-import fs from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
+import fs, { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import os, { tmpdir } from 'node:os'
+import path, { join } from 'node:path'
 import Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { _resetBackupSequenceForTests, createDailyDbBackupIfNeeded } from '../server/services/db-backup-service.js'
@@ -108,5 +108,37 @@ describe('createDailyDbBackupIfNeeded', () => {
     const badPath = path.join(tmpDir, 'subdir-does-not-exist', 'kobo.db')
     const result = await createDailyDbBackupIfNeeded(db, badPath)
     expect(result.created).toBeNull()
+  })
+})
+
+describe('createPreMigrationBackup', () => {
+  it('creates a backup file with the premigration prefix regardless of the daily throttle', async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'kobo-premig-'))
+    const dbPath = join(tmpDir, 'kobo.db')
+    const db = new Database(dbPath)
+    // Seed a daily backup that would normally throttle
+    const now = Date.now()
+    writeFileSync(join(tmpDir, `kobo.db.backup-${new Date(now).toISOString()}-0`), 'stub')
+
+    const { createPreMigrationBackup } = await import('../server/services/db-backup-service.js')
+    const result = await createPreMigrationBackup(db, dbPath, 'v10')
+    expect(result.created).toMatch(/kobo\.db\.premigration-v10-/)
+    expect(existsSync(result.created!)).toBe(true)
+
+    rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  it('does NOT rotate/delete previous premigration backups', async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), 'kobo-premig-'))
+    const dbPath = join(tmpDir, 'kobo.db')
+    const db = new Database(dbPath)
+    const existing = join(tmpDir, 'kobo.db.premigration-v9-2025-01-01T00-00-00-000Z-1')
+    writeFileSync(existing, 'stub')
+
+    const { createPreMigrationBackup } = await import('../server/services/db-backup-service.js')
+    await createPreMigrationBackup(db, dbPath, 'v10')
+    expect(existsSync(existing)).toBe(true)
+
+    rmSync(tmpDir, { recursive: true, force: true })
   })
 })

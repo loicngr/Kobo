@@ -352,16 +352,16 @@ describe('getLatestSession(workspaceId)', () => {
 
     const db = getDb()
     db.prepare(
-      'INSERT INTO agent_sessions (id, workspace_id, pid, claude_session_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?)',
+      'INSERT INTO agent_sessions (id, workspace_id, pid, engine_session_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?)',
     ).run('s1', ws.id, 123, 'claude-abc', 'completed', '2024-01-01T00:00:00Z')
     db.prepare(
-      'INSERT INTO agent_sessions (id, workspace_id, pid, claude_session_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?)',
+      'INSERT INTO agent_sessions (id, workspace_id, pid, engine_session_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?)',
     ).run('s2', ws.id, 456, 'claude-def', 'running', '2024-01-02T00:00:00Z')
 
     const latest = getLatestSession(ws.id)
     expect(latest).not.toBeNull()
     expect(latest?.id).toBe('s2')
-    expect(latest?.claudeSessionId).toBe('claude-def')
+    expect(latest?.engineSessionId).toBe('claude-def')
   })
 })
 
@@ -380,11 +380,11 @@ describe('getActiveSession(workspaceId)', () => {
     const db = getDb()
     // Completed session at T0
     db.prepare(
-      'INSERT INTO agent_sessions (id, workspace_id, pid, claude_session_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?)',
+      'INSERT INTO agent_sessions (id, workspace_id, pid, engine_session_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?)',
     ).run('s-completed', ws.id, 100, 'claude-A', 'completed', '2024-01-01T00:00:00Z')
     // Idle session at T1 (more recent than the completed one)
     db.prepare(
-      'INSERT INTO agent_sessions (id, workspace_id, pid, claude_session_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?)',
+      'INSERT INTO agent_sessions (id, workspace_id, pid, engine_session_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?)',
     ).run('s-idle', ws.id, null, null, 'idle', '2024-01-02T00:00:00Z')
 
     const active = getActiveSession(ws.id)
@@ -398,10 +398,10 @@ describe('getActiveSession(workspaceId)', () => {
 
     const db = getDb()
     db.prepare(
-      'INSERT INTO agent_sessions (id, workspace_id, pid, claude_session_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?)',
+      'INSERT INTO agent_sessions (id, workspace_id, pid, engine_session_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?)',
     ).run('s-running', ws.id, 100, 'claude-R', 'running', '2024-01-01T00:00:00Z')
     db.prepare(
-      'INSERT INTO agent_sessions (id, workspace_id, pid, claude_session_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?)',
+      'INSERT INTO agent_sessions (id, workspace_id, pid, engine_session_id, status, started_at) VALUES (?, ?, ?, ?, ?, ?)',
     ).run('s-completed', ws.id, 200, 'claude-C', 'completed', '2024-01-02T00:00:00Z')
 
     const active = getActiveSession(ws.id)
@@ -761,7 +761,7 @@ describe('createIdleSession()', () => {
     expect(session.workspaceId).toBe(ws.id)
     expect(session.status).toBe('idle')
     expect(session.pid).toBeNull()
-    expect(session.claudeSessionId).toBeNull()
+    expect(session.engineSessionId).toBeNull()
     expect(session.name).toBeNull()
     expect(session.endedAt).toBeNull()
   })

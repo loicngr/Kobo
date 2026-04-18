@@ -432,6 +432,10 @@ export default {
   'quotaFooter.tooltipTitle': 'Claude-Konto-Nutzung',
   'quotaFooter.lastUpdated': 'Letzte Aktualisierung: {time}',
   'quotaFooter.noData': 'Noch keine Daten',
+  'agent.error.spawn_failed': 'Agent konnte nicht gestartet werden',
+  'agent.error.parse_error': 'Eine Agent-Nachricht konnte nicht verarbeitet werden',
+  'agent.error.rate_limit': 'Ratenlimit erreicht',
+  'agent.error.other': 'Agent-Fehler',
   'rateLimitType.fiveHour': '5h-Sitzung',
   'rateLimitType.sevenDay': 'Wöchentlich',
   'stats.subagents': 'Sub-Agents',
@@ -527,4 +531,33 @@ export default {
   'health.integrationsTitle': 'Integrationen',
   'health.integrationConfigured': 'konfiguriert',
   'health.integrationMissing': 'nicht konfiguriert',
+
+  // Agent event stream — session, tool, activity
+  'session.started': 'Sitzung gestartet',
+  'session.ended': 'Sitzung beendet',
+  'session.compacted': 'Kontext komprimiert',
+  'tool.running': 'Läuft...',
+  'activity.raw_lines': 'Rohausgabezeilen ({n})',
+  'activity.loading_older': 'Ältere Nachrichten werden geladen…',
+  'activity.prev_user_message': 'Vorherige Nachricht des Benutzers',
+  'chat.systemPrompt': 'System-Prompt',
+  'chat.agent': 'Agent',
+  'chat.you': 'Du',
+  'chat.session': 'Sitzung',
+  'chat.nActions': '{n} Aktion | {n} Aktionen',
+
+  // Migration overlay
+  'migration.backing_up': 'Datenbank wird gesichert…',
+  'migration.running': 'Agent-Daten werden migriert — {processed}/{total}',
+  'migration.error': 'Migration fehlgeschlagen',
+  'migration.backup_location': 'Ein Backup wurde unter {path} gespeichert. Starte Kōbō neu, um erneut zu versuchen.',
+  'migration.retry': 'Starte Kōbō neu, um erneut zu versuchen.',
+
+  // Engine selector
+  'engine.select': 'Engine',
+  'engine.model': 'Modell',
+  'engine.effort': 'Reasoning-Aufwand',
+  'engine.permission': 'Berechtigungsmodus',
+  'engine.permission.auto-accept': 'Automatisch akzeptieren',
+  'engine.permission.plan': 'Plan (schreibgeschützt)',
 }

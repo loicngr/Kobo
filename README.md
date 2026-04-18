@@ -7,7 +7,7 @@
 > ⚠️ **Planned refactor with potential data loss** — A major refactor is planned and may require database/schema changes that can cause data loss.
 > ❌ **Do not use in production** until this refactor is complete and a stable migration path is documented.
 >
-> **Engine refactor planned.** Kōbō currently drives the `claude` CLI via `spawn(..., ['-p', ...])` and parses stdout, which is brittle on edge cases (interrupts, long-running sessions, MCP lifecycle, tool-use streaming). A rewrite is planned to use the [Claude Agent SDK](https://docs.anthropic.com/en/docs/agents-and-tools/claude-agent-sdk/overview) directly so the agent runs in-process, with proper streaming primitives, structured tool-use events, and cleaner interrupt / resume semantics. Expect churn in `src/server/services/agent-manager.ts` and the WebSocket event shape during that migration.
+> **Engine refactor in progress.** The legacy `agent-manager.ts` has been split into an agent engine abstraction (`src/server/services/agent/`) with a pluggable `AgentEngine` contract, a shared `Orchestrator`, and a normalised `AgentEvent` stream. The Claude Code CLI is now one engine among potentially several (`src/server/services/agent/engines/claude-code/`). A runtime migration (`content-migration-service.ts`) converts legacy `ws_events` into the new normalised form on first boot after upgrade; **a timestamped copy of `kobo.db` is written alongside it before the migration runs**, so you can roll back by restoring the backup if anything goes sideways. Expect continued churn until the WebSocket event surface and UI stream reducers stabilise.
 
 Kōbō lets you delegate multiple coding missions to Claude Code agents in parallel. Each workspace lives in its own isolated git worktree with its own branch, its own Claude session, optionally its own dev server, and a custom MCP tools server the agent uses to track progress. A Vue 3 dashboard shows live agent output, tasks, acceptance criteria, and git state across every workspace.
 
@@ -94,7 +94,9 @@ npm start           # runs the compiled server
 ### Test & lint
 
 ```bash
-npm test            # full vitest suite (366+ tests)
+npm test            # backend vitest suite (740+ tests)
+npm run test:client # client vitest suite (Pinia stores + pure utils, 85+ tests)
+npm run test:all    # backend + client suites
 npm run lint        # biome check (lint + format verification)
 npm run lint:fix    # biome check with safe auto-fixes
 npm run format      # biome format --write
@@ -209,22 +211,31 @@ Then start a new workspace in Kōbō — the agent will pick up the skills autom
 
 ```
 src/
-├── server/                         # Hono backend
-│   ├── index.ts                    # app bootstrap + WS upgrade
-│   ├── db/                         # SQLite schema and singleton
-│   ├── services/                   # business logic (workspace, agent, dev-server, ws, notion, settings, pr-template)
-│   ├── routes/                     # Hono handlers
-│   └── utils/                      # git-ops, process-tracker
-├── client/                         # Vue 3 + Quasar SPA
+├── server/                                 # Hono backend
+│   ├── index.ts                            # app bootstrap + WS upgrade
+│   ├── db/                                 # SQLite schema, migrations, singleton
+│   ├── services/
+│   │   ├── agent/                          # agent engine abstraction (replaces agent-manager.ts)
+│   │   │   ├── orchestrator.ts             # per-workspace engine map, retry/quota, watchdog, public API
+│   │   │   ├── session-controller.ts       # lifecycle wrapper around one AgentEngine instance
+│   │   │   ├── event-router.ts             # maps engine AgentEvent stream to WS emit + DB side-effects
+│   │   │   └── engines/claude-code/        # spawn + NDJSON stream-parser + args-builder + mcp-config + capabilities
+│   │   ├── content-migration-service.ts    # legacy ws_events → normalised AgentEvent rows, with DB backup
+│   │   └── …                               # workspace, dev-server, ws, notion, sentry, settings, pr-template
+│   ├── routes/                             # Hono handlers (workspaces, engines, migration, templates, …)
+│   └── utils/                              # git-ops, process-tracker, paths
+├── shared/                                 # modules shared by backend and frontend (e.g. model catalogue)
+├── client/                                 # Vue 3 + Quasar SPA
 │   └── src/
-│       ├── stores/                 # Pinia state management
-│       ├── components/             # WorkspaceList, NotionPanel, ChatInput, GitPanel, …
-│       ├── pages/                  # WorkspacePage, CreatePage, SettingsPage
+│       ├── stores/                         # Pinia: workspace, websocket, agent-stream, migration, settings, …
+│       ├── components/                     # ActivityFeed, TurnCard, WorkspaceList, ChatInput, GitPanel, …
+│       ├── services/                       # agent-event-view (foldEvents), conversation-turns (groupIntoTurns), inline-diff
+│       ├── pages/                          # WorkspacePage, CreatePage, SettingsPage
 │       └── router/
-├── mcp-server/                     # Standalone MCP server spawned per workspace
-│   ├── kobo-tasks-server.ts        # entry point, registers list_tasks & mark_task_done
-│   └── kobo-tasks-handlers.ts      # pure handlers over SQLite
-└── __tests__/                      # Vitest suite
+├── mcp-server/                             # standalone MCP server spawned per workspace
+│   ├── kobo-tasks-server.ts                # entry point, registers list_tasks & mark_task_done
+│   └── kobo-tasks-handlers.ts              # pure handlers over SQLite
+└── __tests__/                              # Vitest suite (engines, orchestrator, migration, routes, …)
 ```
 
 See [`AGENTS.md`](./AGENTS.md) for a deeper dive into conventions, data model, WebSocket protocol, and contribution guidelines.

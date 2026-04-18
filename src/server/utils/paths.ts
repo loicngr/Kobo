@@ -110,7 +110,7 @@ export function getTemplatesPath(): string {
 /**
  * Absolute path to the compiled MCP server entry (shipped in the published
  * package as dist/mcp-server/kobo-tasks-server.js). Returns null if not
- * present — callers (agent-manager) then fall back to the TS source for dev.
+ * present — callers (orchestrator) then fall back to the TS source for dev.
  */
 export function getCompiledMcpServerPath(): string | null {
   const compiled = getPackageAssetPath('dist', 'mcp-server', 'kobo-tasks-server.js')

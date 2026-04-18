@@ -41,11 +41,16 @@ vi.mock('../server/services/worktree-service.js', () => ({
   removeWorktree: vi.fn(),
 }))
 
-vi.mock('../server/services/agent-manager.js', () => ({
+vi.mock('../server/services/agent/orchestrator.js', () => ({
   startAgent: vi.fn().mockReturnValue({ agentSessionId: 'mock-agent-session-id' }),
   stopAgent: vi.fn(),
   sendMessage: vi.fn(),
   getAgentStatus: vi.fn().mockReturnValue(null),
+}))
+
+vi.mock('../server/services/agent/engines/registry.js', () => ({
+  listEngines: vi.fn().mockReturnValue([{ id: 'claude-code' }]),
+  resolveEngine: vi.fn(),
 }))
 
 // I10: workspaces.ts now uses promisify(execFile) instead of execFileSync.
@@ -148,7 +153,7 @@ vi.mock('node:fs', async () => {
 
 import * as fs from 'node:fs'
 import router from '../server/routes/workspaces.js'
-import * as agentManager from '../server/services/agent-manager.js'
+import * as agentManager from '../server/services/agent/orchestrator.js'
 import * as devServerService from '../server/services/dev-server-service.js'
 import * as notionService from '../server/services/notion-service.js'
 import * as settingsService from '../server/services/settings-service.js'
@@ -1032,6 +1037,22 @@ describe('POST /api/workspaces/:id/start', () => {
     const res = await app.request('/api/workspaces/nonexistent/start', { method: 'POST' })
     expect(res.status).toBe(404)
   })
+
+  it('returns 400 when the workspace engine is no longer registered', async () => {
+    const { listEngines } = await import('../server/services/agent/engines/registry.js')
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      engine: 'unregistered-engine',
+    } as unknown as ReturnType<typeof workspaceService.getWorkspace>)
+    vi.mocked(listEngines).mockReturnValue([{ id: 'claude-code' } as unknown as ReturnType<typeof listEngines>[number]])
+
+    const res = await app.request('/api/workspaces/ws-1/start', { method: 'POST' })
+    expect(res.status).toBe(400)
+    const data = (await res.json()) as { error: string }
+    expect(data.error).toMatch(/unregistered-engine/)
+    expect(data.error).toMatch(/no longer available/i)
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+  })
 })
 
 describe('POST /api/workspaces/:id/stop', () => {
@@ -1296,7 +1317,7 @@ describe('POST /api/workspaces/:id/push', () => {
     } as never)
     vi.mocked(workspaceService.getActiveSession).mockReturnValue({
       id: 's-1',
-      claudeSessionId: 'session-uuid',
+      engineSessionId: 'session-uuid',
     } as never)
 
     await app.request('/api/workspaces/ws-1/push', { method: 'POST' })
@@ -1364,7 +1385,7 @@ describe('POST /api/workspaces/:id/pull', () => {
     } as never)
     vi.mocked(workspaceService.getActiveSession).mockReturnValue({
       id: 's-active',
-      claudeSessionId: 'claude-uuid',
+      engineSessionId: 'claude-uuid',
     } as never)
 
     await app.request('/api/workspaces/ws-1/pull', { method: 'POST' })
@@ -1393,7 +1414,7 @@ describe('POST /api/workspaces/:id/open-pr', () => {
     vi.mocked(workspaceService.listTasks).mockReturnValue([])
     vi.mocked(workspaceService.getActiveSession).mockReturnValue({
       id: 's-1',
-      claudeSessionId: 'sess-uuid',
+      engineSessionId: 'sess-uuid',
     } as never)
   })
 
@@ -1899,7 +1920,7 @@ describe('POST /api/workspaces/:id/sessions', () => {
       status: 'idle',
       startedAt: new Date().toISOString(),
       pid: null,
-      claudeSessionId: null,
+      engineSessionId: null,
       endedAt: null,
       name: null,
     }
@@ -1939,7 +1960,7 @@ describe('PATCH /api/workspaces/:id/sessions/:sessionId', () => {
       status: 'idle',
       startedAt: new Date().toISOString(),
       pid: null,
-      claudeSessionId: null,
+      engineSessionId: null,
       endedAt: null,
     }
     vi.mocked(workspaceService.renameSession).mockReturnValue(updated as any)

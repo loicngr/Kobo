@@ -20,6 +20,7 @@ export function initSchema(db: Database.Database): void {
       archived_at TEXT,
       favorited_at TEXT,
       tags TEXT NOT NULL DEFAULT '[]',
+      engine TEXT NOT NULL DEFAULT 'claude-code',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -39,7 +40,7 @@ export function initSchema(db: Database.Database): void {
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
       pid INTEGER,
-      claude_session_id TEXT,
+      engine_session_id TEXT,
       status TEXT NOT NULL DEFAULT 'running',
       started_at TEXT NOT NULL,
       ended_at TEXT,

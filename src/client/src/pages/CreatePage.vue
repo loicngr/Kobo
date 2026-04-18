@@ -8,6 +8,19 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 
+interface EngineDto {
+  id: string
+  displayName: string
+  capabilities: {
+    models: Array<{ id: string; label: string }>
+    effortLevels?: Array<{ id: string; label: string }>
+    permissionModes: Array<'auto-accept' | 'plan'>
+    supportsResume: boolean
+    supportsMcp: boolean
+    supportsSkills: boolean
+  }
+}
+
 const router = useRouter()
 const $q = useQuasar()
 const store = useWorkspaceStore()
@@ -28,6 +41,20 @@ const branch = ref<string | null>(null)
 const branchType = ref('feature')
 const skipSetupScript = ref(false)
 
+// Engine selector state — engine list is loaded from `/api/engines` on mount.
+const engines = ref<EngineDto[]>([])
+const selectedEngineId = ref<string>('claude-code')
+const selectedEngine = computed<EngineDto | undefined>(() => engines.value.find((e) => e.id === selectedEngineId.value))
+const engineSelectOptions = computed(() => engines.value.map((e) => ({ value: e.id, label: e.displayName })))
+// Permission options: only the ones the selected engine declares it
+// supports, labelled via i18n keys.
+const enginePermissionOptions = computed(() =>
+  (selectedEngine.value?.capabilities.permissionModes ?? ['auto-accept', 'plan']).map((p) => ({
+    value: p,
+    label: t(`engine.permission.${p}`),
+  })),
+)
+
 const branchTypeOptions = [
   { label: 'feature/', value: 'feature' },
   { label: 'fix/', value: 'fix' },
@@ -44,14 +71,18 @@ const branches = ref<string[]>([])
 const loadingBranches = ref(false)
 const submitting = ref(false)
 
-// Model options — Claude Code Max
-const modelOptions = computed(() => [
-  ...MODEL_OPTION_DEFS.map((option) => ({
+// Model options — `MODEL_OPTION_DEFS` is the single source of truth for
+// the display list (i18n labels + descriptions). The backend capabilities
+// are used only for server-side validation in `POST /api/workspaces`, not
+// for UI rendering, so we don't override the local list when /api/engines
+// responds. Any future model additions go in `src/constants/models.ts`.
+const modelOptions = computed(() =>
+  MODEL_OPTION_DEFS.map((option) => ({
     label: t(option.i18nLabelKey),
     value: option.value,
     description: t(option.i18nDescriptionKey),
   })),
-])
+)
 
 function formatReasoningLabel(label: string): string {
   const separatorIndex = label.indexOf(':')
@@ -59,6 +90,10 @@ function formatReasoningLabel(label: string): string {
   return label
 }
 
+// Reasoning effort options — local i18n-driven list. Same story as
+// `modelOptions`: UI rendering comes from the frontend translations, not
+// from /api/engines. The backend's `effortLevels` field is used only for
+// server-side validation on the POST route.
 const reasoningOptions = computed(() => [
   { label: formatReasoningLabel(t('reasoning.auto')), value: 'auto', description: t('reasoning.autoDescription') },
   { label: formatReasoningLabel(t('reasoning.low')), value: 'low', description: t('reasoning.lowDescription') },
@@ -182,9 +217,18 @@ function filterProjectPaths(val: string, update: (fn: () => void) => void) {
   })
 }
 
-// Fetch settings on mount
-onMounted(() => {
+// Fetch settings + available engines on mount. The engine list powers the
+// engine selector and drives the model / effort / permission options.
+onMounted(async () => {
   settingsStore.fetchSettings()
+  try {
+    const res = await fetch('/api/engines')
+    if (res.ok) {
+      engines.value = (await res.json()) as EngineDto[]
+    }
+  } catch {
+    // Best-effort: the legacy hardcoded fallback keeps the form usable.
+  }
 })
 
 // Cleanup debounce timer on unmount
@@ -297,6 +341,7 @@ async function handleCreate() {
       projectPath: projectPath.value.trim(),
       sourceBranch: branch.value as string,
       workingBranch,
+      engine: selectedEngineId.value,
       model: model.value,
       reasoningEffort: reasoningEffort.value,
       ...(useNotion.value && isValidNotionUrl.value ? { notionUrl: notionUrl.value.trim() } : {}),
@@ -342,7 +387,9 @@ async function handleCreate() {
         <div class="card-top-bar row items-center q-px-md q-py-xs">
           <span class="model-badge cursor-default row items-center q-gutter-xs">
             <q-icon name="auto_awesome" size="14px" color="indigo-4" />
-            <span class="text-indigo-3 text-weight-medium text-caption">{{ $t('createPage.claudeCode') }}</span>
+            <span class="text-indigo-3 text-weight-medium text-caption">
+              {{ selectedEngine?.displayName ?? $t('createPage.claudeCode') }}
+            </span>
           </span>
           <q-space />
           <q-btn
@@ -570,8 +617,35 @@ async function handleCreate() {
           <q-separator color="grey-9" />
         </template>
 
-        <!-- Bottom bar -->
-        <div class="card-bottom-bar row items-center wrap q-px-sm q-py-xs q-gutter-xs">
+        <!-- Bottom bar: agent config (row 1) + git config (row 2) -->
+        <div class="card-bottom-bar">
+
+        <!-- Row 1: agent configuration (engine, model, reasoning, permission, setup-toggle) -->
+        <div class="bottom-row bottom-row-agent row items-center q-gutter-xs q-px-sm q-py-xs">
+          <!-- Engine selector — dynamically populated from /api/engines -->
+          <q-select
+            v-if="engineSelectOptions.length > 0"
+            v-model="selectedEngineId"
+            :options="engineSelectOptions"
+            dense
+            borderless
+            class="bottom-select rounded-borders"
+            hide-dropdown-icon
+            emit-value
+            map-options
+            option-value="value"
+            option-label="label"
+          >
+            <template #selected>
+              <span class="bottom-select-label row items-center no-wrap">
+                <q-icon name="hub" size="12px" color="grey-5" class="q-mr-xs" />
+                {{ engineSelectOptions.find((e) => e.value === selectedEngineId)?.label ?? selectedEngineId }}
+                <q-icon name="expand_more" size="12px" color="grey-5" />
+              </span>
+            </template>
+            <q-tooltip>{{ $t('engine.select') }}</q-tooltip>
+          </q-select>
+
           <!-- Model selector -->
           <q-select
             v-model="model"
@@ -631,43 +705,51 @@ async function handleCreate() {
             </template>
           </q-select>
 
-          <!-- Permission mode selector -->
+          <!-- Permission mode selector — options come from the selected
+               engine's capabilities; labels resolve to i18n keys. -->
           <q-select
             v-model="permissionMode"
-            :options="[
-              { label: $t('permissionMode.plan'), value: 'plan' },
-              { label: $t('permissionMode.autoAccept'), value: 'auto-accept' },
-            ]"
+            :options="enginePermissionOptions"
             dense
             borderless
             class="bottom-select rounded-borders"
             hide-dropdown-icon
             emit-value
             map-options
+            option-value="value"
+            option-label="label"
           >
             <template #selected>
               <span class="bottom-select-label row items-center no-wrap">
                 <q-icon :name="permissionMode === 'plan' ? 'visibility' : 'flash_on'" size="12px" color="amber-6" class="q-mr-xs" />
-                {{ permissionMode === 'plan' ? $t('permissionMode.plan') : $t('permissionMode.autoAccept') }}
+                {{ enginePermissionOptions.find((p) => p.value === permissionMode)?.label ?? permissionMode }}
                 <q-icon name="expand_more" size="12px" color="grey-5" />
               </span>
             </template>
+            <q-tooltip>{{ $t('engine.permission') }}</q-tooltip>
           </q-select>
 
+          <q-space />
+
+          <!-- Skip-setup toggle: compact button grouped with the agent config
+               selectors. Click toggles the icon state. -->
           <q-btn
             flat
-            round
             dense
             size="sm"
+            no-caps
             :icon="skipSetupScript ? 'play_disabled' : 'play_circle'"
-            :color="skipSetupScript ? 'orange-4' : 'grey-6'"
+            :color="skipSetupScript ? 'orange-4' : 'grey-5'"
+            :label="$t('createPage.skipSetupScript')"
+            class="skip-setup-btn"
             @click="skipSetupScript = !skipSetupScript"
           >
             <q-tooltip>{{ $t('createPage.skipSetupScript') }}</q-tooltip>
           </q-btn>
+        </div>
 
-          <q-space />
-
+        <!-- Row 2: git configuration (repo path, branch type, source branch) -->
+        <div class="bottom-row bottom-row-git row items-center q-gutter-xs q-px-sm q-py-xs">
           <!-- Repo path input with suggestions -->
           <q-select
             v-model="projectPath"
@@ -675,23 +757,20 @@ async function handleCreate() {
             dense
             borderless
             use-input
-            hide-selected
             fill-input
+            hide-selected
             input-debounce="0"
             new-value-mode="add"
             class="bottom-select rounded-borders repo-select"
             hide-dropdown-icon
+            :input-class="!projectPath ? 'repo-input-empty' : ''"
+            :placeholder="$t('createPage.projectPath')"
             :behavior="settingsStore.projectPaths.length > 0 ? 'menu' : 'dialog'"
             @filter="filterProjectPaths"
             @input-value="(val: string) => { projectPath = val }"
           >
             <template #prepend>
-              <q-icon name="attach_file" size="12px" color="grey-5" />
-            </template>
-            <template #selected>
-              <span class="bottom-select-label row items-center no-wrap">
-                {{ projectPath || $t('createPage.projectPath') }}
-              </span>
+              <q-icon name="folder" size="14px" color="grey-5" />
             </template>
             <template #no-option>
               <q-item>
@@ -749,7 +828,7 @@ async function handleCreate() {
               </q-item>
             </template>
           </q-select>
-
+        </div>
         </div>
 
         <!-- Create button (centered, full-width row below the bottom bar) -->
@@ -957,7 +1036,50 @@ async function handleCreate() {
 
 .card-bottom-bar {
   background: #1e1e3a;
+}
+
+.bottom-row {
   min-height: 40px;
+  flex-wrap: wrap;
+}
+
+.bottom-row-agent {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.bottom-row-agent + .bottom-row-git {
+  /* Slight contrast so the two concerns read as separate groups */
+  background: rgba(0, 0, 0, 0.15);
+}
+
+.skip-setup-btn {
+  font-size: 11px;
+  padding: 2px 10px;
+  min-height: 28px;
+}
+.skip-setup-btn :deep(.q-btn__content) {
+  gap: 4px;
+}
+.skip-setup-btn :deep(.q-icon) {
+  font-size: 14px;
+}
+
+.bottom-row-git .bottom-select.repo-select {
+  flex: 1 1 280px;
+  min-width: 220px;
+}
+.bottom-row-git .bottom-select.repo-select :deep(input) {
+  font-size: 11px;
+  color: #bbb;
+  padding: 0 4px;
+}
+.bottom-row-git .bottom-select.repo-select :deep(input::placeholder) {
+  color: #666;
+  font-style: italic;
+}
+.bottom-row-git .bottom-select.branch-type-select,
+.bottom-row-git .bottom-select.branch-select {
+  flex: 0 0 auto;
 }
 
 .bottom-select {

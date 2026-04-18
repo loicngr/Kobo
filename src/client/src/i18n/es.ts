@@ -432,6 +432,10 @@ export default {
   'quotaFooter.tooltipTitle': 'Uso de la cuenta Claude',
   'quotaFooter.lastUpdated': 'Última actualización: {time}',
   'quotaFooter.noData': 'Sin datos por ahora',
+  'agent.error.spawn_failed': 'No se pudo iniciar el agente',
+  'agent.error.parse_error': 'No se pudo analizar un mensaje del agente',
+  'agent.error.rate_limit': 'Límite de tasa alcanzado',
+  'agent.error.other': 'Error del agente',
   'rateLimitType.fiveHour': 'Sesión 5h',
   'rateLimitType.sevenDay': 'Semanal',
   'stats.subagents': 'Sub-agentes',
@@ -527,4 +531,33 @@ export default {
   'health.integrationsTitle': 'Integraciones',
   'health.integrationConfigured': 'configurada',
   'health.integrationMissing': 'sin configurar',
+
+  // Agent event stream — session, tool, activity
+  'session.started': 'Sesión iniciada',
+  'session.ended': 'Sesión finalizada',
+  'session.compacted': 'Contexto compactado',
+  'tool.running': 'Ejecutando...',
+  'activity.raw_lines': 'Líneas de salida brutas ({n})',
+  'activity.loading_older': 'Cargando mensajes anteriores…',
+  'activity.prev_user_message': 'Mensaje anterior del usuario',
+  'chat.systemPrompt': 'Prompt del sistema',
+  'chat.agent': 'Agente',
+  'chat.you': 'Tú',
+  'chat.session': 'Sesión',
+  'chat.nActions': '{n} acción | {n} acciones',
+
+  // Migration overlay
+  'migration.backing_up': 'Haciendo copia de seguridad de la base de datos…',
+  'migration.running': 'Migrando datos del agente — {processed}/{total}',
+  'migration.error': 'La migración falló',
+  'migration.backup_location': 'Se guardó una copia de seguridad en {path}. Reinicia Kōbō para reintentar.',
+  'migration.retry': 'Reinicia Kōbō para reintentar.',
+
+  // Engine selector
+  'engine.select': 'Motor',
+  'engine.model': 'Modelo',
+  'engine.effort': 'Esfuerzo de razonamiento',
+  'engine.permission': 'Modo de permisos',
+  'engine.permission.auto-accept': 'Aceptar automáticamente',
+  'engine.permission.plan': 'Plan (solo lectura)',
 }

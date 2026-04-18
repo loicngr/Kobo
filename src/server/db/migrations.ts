@@ -91,6 +91,16 @@ export const migrations: Migration[] = [
       db.prepare("ALTER TABLE workspaces ADD COLUMN tags TEXT NOT NULL DEFAULT '[]'").run()
     },
   },
+  {
+    version: 10,
+    name: 'agent-engine-abstraction',
+    migrate: (db) => {
+      db.transaction(() => {
+        db.prepare("ALTER TABLE workspaces ADD COLUMN engine TEXT NOT NULL DEFAULT 'claude-code'").run()
+        db.prepare('ALTER TABLE agent_sessions RENAME COLUMN claude_session_id TO engine_session_id').run()
+      })()
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

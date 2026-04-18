@@ -1,0 +1,2 @@
+{"type":"assistant","session_id":"abc-123-def","message":{"id":"msg_4","role":"assistant","content":[{"type":"text","text":"Plan is ready.\n[BRAINSTORM_COMPLETE]"}]}}
+[BRAINSTORM_COMPLETE]

@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import type { RateLimitInfo } from '../types/agent-event'
 import { useWebSocketStore } from './websocket'
 
 export interface Workspace {
@@ -37,7 +38,7 @@ export interface AgentSession {
   id: string
   workspaceId: string
   pid: number | null
-  claudeSessionId: string | null
+  engineSessionId: string | null
   status: string
   startedAt: string
   endedAt: string | null
@@ -58,6 +59,7 @@ export interface CreateWorkspaceInput {
   projectPath: string
   sourceBranch: string
   workingBranch: string
+  engine?: string
   notionUrl?: string
   model?: string
   reasoningEffort?: string
@@ -215,11 +217,11 @@ export const useWorkspaceStore = defineStore('workspace', {
       if (!state.selectedSessionId) {
         return state.sessions.length === 0 ? items : []
       }
-      // Resolve the claude_session_id of the selected session to also accept
-      // legacy events that were tagged with the Claude UUID before the
+      // Resolve the engine_session_id of the selected session to also accept
+      // legacy events that were tagged with the engine UUID before the
       // backfill migration (v6) had a chance to run.
       const selectedSession = state.sessions.find((s) => s.id === state.selectedSessionId)
-      const legacyTag = selectedSession?.claudeSessionId ?? null
+      const legacyTag = selectedSession?.engineSessionId ?? null
       return items.filter(
         (i) =>
           !i.sessionId || i.sessionId === state.selectedSessionId || (legacyTag !== null && i.sessionId === legacyTag),
@@ -831,8 +833,34 @@ export const useWorkspaceStore = defineStore('workspace', {
       s.sessionCount++
     },
 
-    setRateLimitUsage(workspaceId: string, snapshot: RateLimitUsageSnapshot) {
-      this.rateLimitUsage[workspaceId] = snapshot
+    /**
+     * Record a rate-limit snapshot for a workspace.
+     *
+     * Accepts either:
+     *  - a full `RateLimitUsageSnapshot` (legacy test helpers & callers that
+     *    already own an `updatedAt`), OR
+     *  - a `RateLimitInfo` as produced by the backend's normalised
+     *    `rate_limit` AgentEvent — in which case we stamp `updatedAt = now`
+     *    and map the bucket shape (server side uses `resetsAt`, the UI
+     *    historically uses `resetAt`; we keep both names aligned here).
+     */
+    setRateLimitUsage(workspaceId: string, input: RateLimitUsageSnapshot | RateLimitInfo) {
+      const hasUpdatedAt = typeof (input as RateLimitUsageSnapshot).updatedAt === 'string'
+      if (hasUpdatedAt) {
+        this.rateLimitUsage[workspaceId] = input as RateLimitUsageSnapshot
+        return
+      }
+      const info = input as RateLimitInfo
+      this.rateLimitUsage[workspaceId] = {
+        updatedAt: new Date().toISOString(),
+        buckets: info.buckets.map((b) => ({
+          id: b.id,
+          label: b.label,
+          usedPct: b.usedPct,
+          resetAt: b.resetsAt,
+          details: b.details,
+        })),
+      }
     },
 
     triggerGitRefresh() {

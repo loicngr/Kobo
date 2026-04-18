@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { migrationGuard } from '../middleware/migration-guard.js'
 import { getDevServerLogs, getStatus, startDevServer, stopDevServer } from '../services/dev-server-service.js'
 import { getWorkspace } from '../services/workspace-service.js'
 
@@ -28,7 +29,7 @@ app.get('/:workspaceId/status', (c) => {
 })
 
 // POST /api/dev-server/:workspaceId/start
-app.post('/:workspaceId/start', (c) => {
+app.post('/:workspaceId/start', migrationGuard, (c) => {
   try {
     const workspaceId = c.req.param('workspaceId')
     const workspace = getWorkspace(workspaceId)
@@ -46,7 +47,7 @@ app.post('/:workspaceId/start', (c) => {
 })
 
 // POST /api/dev-server/:workspaceId/stop
-app.post('/:workspaceId/stop', (c) => {
+app.post('/:workspaceId/stop', migrationGuard, (c) => {
   try {
     const workspaceId = c.req.param('workspaceId')
     const workspace = getWorkspace(workspaceId)

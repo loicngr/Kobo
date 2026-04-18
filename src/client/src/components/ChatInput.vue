@@ -550,8 +550,8 @@ async function sendMessage() {
   }
   const sessionTag = store.selectedSessionId ?? undefined
 
-  // Early guard: completed/error session without claudeSessionId can't be resumed.
-  if ((session?.status === 'completed' || session?.status === 'error') && !session.claudeSessionId) {
+  // Early guard: completed/error session without engineSessionId can't be resumed.
+  if ((session?.status === 'completed' || session?.status === 'error') && !session.engineSessionId) {
     $q.notify({
       type: 'warning',
       message: t('workspacePage.sessionEndedNotice'),

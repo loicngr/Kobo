@@ -15,6 +15,7 @@ const ActivityFeed = defineAsyncComponent(() =>
 )
 
 import AgentBusyBanner from 'src/components/AgentBusyBanner.vue'
+import AgentErrorBanner from 'src/components/AgentErrorBanner.vue'
 import ChatInput from 'src/components/ChatInput.vue'
 
 const $q = useQuasar()
@@ -437,19 +438,6 @@ watch(
           </template>
         </q-select>
         <q-btn
-          v-if="['created', 'idle', 'completed', 'error', 'quota'].includes(selectedWs.status)"
-          dense
-          no-caps
-          size="sm"
-          color="positive"
-          icon="play_arrow"
-          :label="$t('common.start')"
-          class="q-mr-xs"
-          :loading="starting"
-          :disable="starting"
-          @click="handleStart"
-        />
-        <q-btn
           v-if="['extracting', 'brainstorming', 'executing'].includes(selectedWs.status)"
           dense
           no-caps
@@ -472,9 +460,11 @@ watch(
 
     <q-separator dark />
 
+    <AgentErrorBanner v-if="selectedId" :workspace-id="selectedId" />
+
     <!-- Activity Feed with Suspense -->
-    <Suspense>
-      <ActivityFeed class="col" style="min-height: 0;" />
+    <Suspense v-if="selectedId">
+      <ActivityFeed class="col" style="min-height: 0;" :workspace-id="selectedId" />
       <template #fallback>
         <div class="col column items-center justify-center">
           <q-spinner-dots size="40px" color="indigo-4" />

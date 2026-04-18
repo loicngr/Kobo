@@ -1,0 +1,2 @@
+{"type":"system","subtype":"rate_limit_event","session_id":"abc-123-def","rate_limit_info":{"rateLimitType":"five_hour","utilization":0.42,"resets_at":1713443200}}
+{"type":"system","subtype":"rate_limit_event","session_id":"abc-123-def","rate_limit_info":{"buckets":[{"id":"weekly","label":"Weekly","used":12000,"limit":50000,"resets_at":"2026-04-25T00:00:00Z"}]}}

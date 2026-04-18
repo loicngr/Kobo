@@ -178,7 +178,7 @@ describe('workspace store', () => {
           id: 'sess-1',
           workspaceId: 'ws-1',
           pid: null,
-          claudeSessionId: null,
+          engineSessionId: null,
           status: 'running',
           startedAt: '2026-01-01T00:00:00Z',
           endedAt: null,
