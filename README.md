@@ -2,12 +2,8 @@
 
 > **Kōbō** (工房) — Japanese for *workshop*. A multi-workspace agent manager for [Claude Code](https://claude.com/claude-code).
 
-> [!WARNING]
-> 🚧 **Work in progress** — This project is under active development. Breaking changes may occur at any time.
-> ⚠️ **Planned refactor with potential data loss** — A major refactor is planned and may require database/schema changes that can cause data loss.
-> ❌ **Do not use in production** until this refactor is complete and a stable migration path is documented.
->
-> **Engine refactor in progress.** The legacy `agent-manager.ts` has been split into an agent engine abstraction (`src/server/services/agent/`) with a pluggable `AgentEngine` contract, a shared `Orchestrator`, and a normalised `AgentEvent` stream. The Claude Code CLI is now one engine among potentially several (`src/server/services/agent/engines/claude-code/`). A runtime migration (`content-migration-service.ts`) converts legacy `ws_events` into the new normalised form on first boot after upgrade; **a timestamped copy of `kobo.db` is written alongside it before the migration runs**, so you can roll back by restoring the backup if anything goes sideways. Expect continued churn until the WebSocket event surface and UI stream reducers stabilise.
+> [!NOTE]
+> 🚧 **Active development** — breaking changes may still land on `develop`. The database layer ships with forward-only migrations and a timestamped pre-migration backup of `kobo.db` before any schema change, so upgrades preserve your data even across invasive refactors.
 
 Kōbō lets you delegate multiple coding missions to Claude Code agents in parallel. Each workspace lives in its own isolated git worktree with its own branch, its own Claude session, optionally its own dev server, and a custom MCP tools server the agent uses to track progress. A Vue 3 dashboard shows live agent output, tasks, acceptance criteria, and git state across every workspace.
 
@@ -16,25 +12,31 @@ Think of it as an apprentice's hall: you hand out missions, each apprentice sets
 ## Features
 
 - **Isolated git worktrees** — every workspace runs on its own branch in its own directory, so concurrent Claude sessions never step on each other
-- **Live agent output** — stream `stdout`/`stderr` from Claude Code to the browser via WebSocket, with persisted event replay on reconnect
+- **Pluggable agent engine** — Kōbō talks to agents through an `AgentEngine` contract with a normalised `AgentEvent` stream (`src/server/services/agent/engines/`). Claude Code is the first engine; dropping in another runtime (e.g. the Claude Agent SDK) only requires a new adapter, not a rewrite of the UI or orchestration layer
+- **Rich chat feed** — live streaming text, thinking blocks, inline tool calls with expandable diffs for Edit/Write, per-turn session cards, markdown rendering, jump-to-previous-user-message button, and infinite scroll-up over persisted history
 - **Task & acceptance criteria tracking** — the agent reports progress through a dedicated MCP server (`kobo-tasks`) that reads and updates tasks directly from the SQLite database
+- **Documents panel** — tree view in the right drawer that surfaces every AI-generated markdown file under `docs/plans/`, `docs/superpowers/`, and `.ai/thoughts/`. Paths mentioned in chat messages are auto-detected against the catalogue and become one-click deep-links into the panel
+- **Git panel with inline diff viewer** — Monaco-powered side-by-side / inline diff of the working branch against its source, with file tree (same q-tree as Documents), inline rebase/merge conflict resolution, and a clean action bar: `Sync` split-button (pull / rebase / merge), `Push`, `Diff`, `Create PR`
 - **Notion integration** — pull workspace missions straight from Notion pages, extract markdown, and use it as the source of truth for acceptance criteria
 - **Sentry integration** — paste a Sentry issue URL to spin up a dedicated "fix workspace" with the stacktrace, tags, and offending spans written to `.ai/thoughts/SENTRY-<id>.md`; the agent is primed with a TDD fix workflow and has access to the Sentry MCP tools for deeper digging
 - **Per-workspace dev servers** — start/stop Docker or Node dev servers scoped to each branch, with log streaming
 - **Conventional-commit enforcement** — project-level git conventions are written to `.ai/.git-conventions.md` inside every workspace so Claude follows them during commits
-- **Pull request automation** — one-click `push`, `pull`, and `open-pr` endpoints integrate with the GitHub CLI, using a configurable prompt template
+- **Pull request automation** — one-click `push`, `pull`, `open-pr`, and "change PR base" endpoints integrate with the GitHub CLI, using a configurable prompt template
 - **Multi-session support** — create multiple Claude agent sessions per workspace, each with its own chat history; resume completed sessions via `--resume`; sessions are named and persisted in localStorage
 - **Prompt templates** — personal library of reusable prompts with variable substitution (`{working_branch}`, `{commit_count}`, etc.), insertable from the chat input via `/` autocomplete; editable in Settings > Templates
-- **Plan browser** — read-only viewer for markdown plan files produced by agents, rendered directly in the right-side panel
+- **Favorites and tags** — pin workspaces to the top via right-click favourite, organise with per-workspace tags filterable from the sidebar; a global tag catalogue keeps colours consistent across workspaces
+- **Health panel + config export/import** — inspect backend health (agent sessions, migration state, dev servers, DB size) and roundtrip your Kōbō config (settings, templates, skills) between machines via JSON
+- **Usage tracking** — rolling input/output token counts and cost estimates per workspace, aggregated across sessions and live-updated from `usage` events
+- **Resizable right drawer** — drag-to-resize horizontally and vertically, with tab state and split ratio persisted to localStorage
 - **Soft interrupt** — pause an agent mid-execution (SIGINT, like pressing Escape in Claude Code) without killing the process; the agent stops the current tool and waits for the next message
 - **Archive instead of delete** — soft-remove workspaces without losing the worktree, branches, or history; unarchive restores the exact pre-archive state
 
 ## Tech stack
 
 - **Backend** — Node.js ≥ 20, [Hono](https://hono.dev/), [better-sqlite3](https://github.com/WiseLibs/better-sqlite3), [ws](https://github.com/websockets/ws), [`@modelcontextprotocol/sdk`](https://github.com/modelcontextprotocol/typescript-sdk)
-- **Frontend** — [Vue 3](https://vuejs.org/), [Quasar 2](https://quasar.dev/), [Pinia](https://pinia.vuejs.org/), `vue-router`
+- **Frontend** — [Vue 3](https://vuejs.org/), [Quasar 2](https://quasar.dev/), [Pinia](https://pinia.vuejs.org/), `vue-router`, [Monaco Editor](https://microsoft.github.io/monaco-editor/) (git diff viewer), `marked` + `dompurify` (markdown rendering)
 - **Tooling** — TypeScript, [Vitest](https://vitest.dev/), [Biome](https://biomejs.dev/) (lint + format), `tsx` for dev
-- **Storage** — single SQLite file (`~/.config/kobo/kobo.db` by default, overridable via `KOBO_HOME`) with WAL mode
+- **Storage** — single SQLite file (`~/.config/kobo/kobo.db` by default, overridable via `KOBO_HOME`) with WAL mode and forward-only migrations
 
 ## Quick start
 
@@ -244,10 +246,10 @@ See [`AGENTS.md`](./AGENTS.md) for a deeper dive into conventions, data model, W
 
 | Table | Purpose |
 |---|---|
-| `workspaces` | the unit of work — branch, status, Notion link, model, `archived_at`, … |
+| `workspaces` | the unit of work — branch, status, model, engine, `archived_at`, `favorited_at`, `tags`, Notion link, … |
 | `tasks` | workspace sub-items — tasks and acceptance criteria |
-| `agent_sessions` | Claude Code CLI invocations — `claude_session_id`, pid, lifecycle |
-| `ws_events` | persisted WebSocket events for replay on reconnect |
+| `agent_sessions` | agent runs — pid, `engine_session_id`, lifecycle |
+| `ws_events` | persisted WebSocket events (chat history, `agent:event` stream, user messages) for replay on reconnect |
 
 ## MCP server
 
@@ -274,7 +276,6 @@ This is a personal tool, but PRs and issues are welcome. Before submitting:
 1. Read [`AGENTS.md`](./AGENTS.md) — it covers the commit rules, branching model, and code conventions
 2. Run `npm run lint`, `npx tsc --noEmit`, and `npm test` locally
 3. Base your branch on `develop` (not `main`); PRs target `develop`
-4. **Do not add `Co-Authored-By` trailers** in commits, even for AI-assisted work
 
 CI runs lint + type check + tests on every PR to `develop`.
 
