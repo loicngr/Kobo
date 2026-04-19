@@ -298,12 +298,12 @@ export default {
   'chatInput.dropdownKobo': 'Kōbō commands',
   'chatInput.dropdownTemplates': 'Templates',
 
-  // Plans
-  'plans.title': 'Plans',
-  'plans.empty': 'No plans found',
-  'plans.refresh': 'Refresh',
-  'plans.back': 'Back',
-  'plans.loadFailed': 'Failed to load plan',
+  // Documents
+  'documents.title': 'Documents',
+  'documents.empty': 'No documents found',
+  'documents.refresh': 'Refresh',
+  'documents.back': 'Back',
+  'documents.loadFailed': 'Failed to load document',
 
   // Git Panel
   'git.title': 'Git',

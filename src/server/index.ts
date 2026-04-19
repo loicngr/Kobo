@@ -8,13 +8,13 @@ import WebSocket, { WebSocketServer } from 'ws'
 import { closeDb, getDb } from './db/index.js'
 import { runMigrations } from './db/migrations.js'
 import devServerRouter from './routes/dev-server.js'
+import documentsRouter from './routes/documents.js'
 import { enginesRouter } from './routes/engines.js'
 import gitRouter from './routes/git.js'
 import healthRouter from './routes/health.js'
 import imagesRouter from './routes/images.js'
 import { migrationRouter } from './routes/migration.js'
 import notionRouter from './routes/notion.js'
-import plansRouter from './routes/plans.js'
 import searchRouter from './routes/search.js'
 import sentryRouter from './routes/sentry.js'
 import settingsRouter from './routes/settings.js'
@@ -90,7 +90,7 @@ app.route('/api/git', gitRouter)
 app.route('/api/settings', settingsRouter)
 app.route('/api/dev-server', devServerRouter)
 app.route('/api/templates', templatesRouter)
-app.route('/api/workspaces', plansRouter)
+app.route('/api/workspaces', documentsRouter)
 app.route('/api/search', searchRouter)
 app.route('/api/health', healthRouter)
 app.route('/api/engines', enginesRouter)

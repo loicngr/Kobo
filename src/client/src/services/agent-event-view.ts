@@ -176,5 +176,25 @@ export function mergeWithUserMessages(agentItems: ConversationItem[], userMessag
     if (!tb) return -1
     return ta < tb ? -1 : 1
   })
+
+  // Close any text item still marked `streaming` that predates the most
+  // recent user message. The user taking another turn is a hard signal
+  // that the previous assistant response is done — its `message:end` may
+  // be missing from the stream (CLI hard-stop, resume boundary, old
+  // sessions) but logically it cannot still be typing.
+  let latestUserTs: string | undefined
+  for (const it of merged) {
+    if (it.type === 'user' && it.sender !== 'system-prompt' && it.ts) {
+      if (!latestUserTs || it.ts > latestUserTs) latestUserTs = it.ts
+    }
+  }
+  if (latestUserTs) {
+    for (const it of merged) {
+      if (it.type === 'text' && it.streaming && (!it.ts || it.ts < latestUserTs)) {
+        it.streaming = false
+      }
+    }
+  }
+
   return merged
 }

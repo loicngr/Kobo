@@ -2,18 +2,42 @@
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import type { ConversationItem } from 'src/services/agent-event-view'
+import { useDocumentsStore } from 'src/stores/documents'
+import { useWorkspaceStore } from 'src/stores/workspace'
+import { injectDocumentLinks } from 'src/utils/inject-document-links'
 import { computed } from 'vue'
 
 const props = defineProps<{ item: Extract<ConversationItem, { type: 'text' }> }>()
 
+const documentsStore = useDocumentsStore()
+const workspaceStore = useWorkspaceStore()
+
+const knownDocumentPaths = computed(() => {
+  const wsId = workspaceStore.selectedWorkspaceId
+  if (!wsId) return [] as string[]
+  return documentsStore.documentsFor(wsId).map((d) => d.path)
+})
+
 const html = computed(() => {
   const raw = marked.parse(props.item.text, { async: false, breaks: true, gfm: true }) as string
-  return DOMPurify.sanitize(raw)
+  const withLinks = injectDocumentLinks(raw, knownDocumentPaths.value)
+  // Allow the data-document-path attribute through the sanitizer.
+  return DOMPurify.sanitize(withLinks, { ADD_ATTR: ['data-document-path'] })
 })
+
+function onMessageClick(event: MouseEvent) {
+  const target = (event.target as HTMLElement | null)?.closest('.document-link') as HTMLElement | null
+  if (!target) return
+  event.preventDefault()
+  const path = target.getAttribute('data-document-path')
+  const wsId = workspaceStore.selectedWorkspaceId
+  if (!path || !wsId) return
+  void documentsStore.openDocumentByPath(wsId, path)
+}
 </script>
 
 <template>
-  <div class="markdown-message">
+  <div class="markdown-message" @click="onMessageClick">
     <!-- eslint-disable-next-line vue/no-v-html -->
     <div v-html="html" />
     <q-spinner v-if="item.streaming" size="xs" class="q-ml-xs" />
@@ -68,6 +92,15 @@ const html = computed(() => {
 .markdown-message :deep(a) {
   color: #7986cb;
   text-decoration: underline;
+}
+.markdown-message :deep(.document-link) {
+  color: #9fa8da;
+  text-decoration: underline dotted;
+  cursor: pointer;
+}
+.markdown-message :deep(.document-link:hover) {
+  color: #c5cae9;
+  text-decoration: underline solid;
 }
 .markdown-message :deep(h1),
 .markdown-message :deep(h2),

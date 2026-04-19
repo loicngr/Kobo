@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { foldEvents } from '../services/agent-event-view.js'
+import { type ConversationItem, foldEvents, mergeWithUserMessages } from '../services/agent-event-view.js'
 import type { AgentEvent } from '../types/agent-event'
 
 describe('foldEvents', () => {
@@ -59,5 +59,79 @@ describe('foldEvents', () => {
       { kind: 'error', category: 'other', message: 'x' },
     ])
     expect(items).toEqual([])
+  })
+})
+
+describe('mergeWithUserMessages', () => {
+  it('closes a streaming text that predates the latest user message', () => {
+    const streamingText: ConversationItem = {
+      type: 'text',
+      messageId: 'm1',
+      text: 'hi',
+      streaming: true,
+      ts: '2026-04-01T10:00:00Z',
+    }
+    const merged = mergeWithUserMessages(
+      [streamingText],
+      [{ content: 'follow-up', sender: 'user', ts: '2026-04-01T10:05:00Z' }],
+    )
+    const textItem = merged.find((i) => i.type === 'text') as Extract<ConversationItem, { type: 'text' }>
+    expect(textItem.streaming).toBe(false)
+  })
+
+  it('keeps a streaming text that is newer than the last user message', () => {
+    const userEarly: ConversationItem = {
+      type: 'text',
+      messageId: 'm1',
+      text: 'later-agent',
+      streaming: true,
+      ts: '2026-04-01T10:10:00Z',
+    }
+    const merged = mergeWithUserMessages(
+      [userEarly],
+      [{ content: 'older-user', sender: 'user', ts: '2026-04-01T10:00:00Z' }],
+    )
+    const textItem = merged.find((i) => i.type === 'text') as Extract<ConversationItem, { type: 'text' }>
+    expect(textItem.streaming).toBe(true)
+  })
+
+  it('ignores system-prompt user entries when deciding what to close', () => {
+    const streamingText: ConversationItem = {
+      type: 'text',
+      messageId: 'm1',
+      text: 'hi',
+      streaming: true,
+      ts: '2026-04-01T10:00:00Z',
+    }
+    const merged = mergeWithUserMessages(
+      [streamingText],
+      [{ content: 'system', sender: 'system-prompt', ts: '2026-04-01T10:05:00Z' }],
+    )
+    const textItem = merged.find((i) => i.type === 'text') as Extract<ConversationItem, { type: 'text' }>
+    expect(textItem.streaming).toBe(true)
+  })
+
+  it('closes every streaming text before the most recent user message, keeps the newer one', () => {
+    const oldStreaming: ConversationItem = {
+      type: 'text',
+      messageId: 'm1',
+      text: 'old',
+      streaming: true,
+      ts: '2026-04-01T10:00:00Z',
+    }
+    const newStreaming: ConversationItem = {
+      type: 'text',
+      messageId: 'm2',
+      text: 'new',
+      streaming: true,
+      ts: '2026-04-01T10:10:00Z',
+    }
+    const merged = mergeWithUserMessages(
+      [oldStreaming, newStreaming],
+      [{ content: 'in-between', sender: 'user', ts: '2026-04-01T10:05:00Z' }],
+    )
+    const texts = merged.filter((i) => i.type === 'text') as Array<Extract<ConversationItem, { type: 'text' }>>
+    expect(texts.find((t) => t.messageId === 'm1')?.streaming).toBe(false)
+    expect(texts.find((t) => t.messageId === 'm2')?.streaming).toBe(true)
   })
 })

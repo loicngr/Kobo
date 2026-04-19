@@ -1,20 +1,21 @@
 <script setup lang="ts">
 import AcceptancePanel from 'src/components/AcceptancePanel.vue'
 import AgentTodosPanel from 'src/components/AgentTodosPanel.vue'
+import DocumentsPanel from 'src/components/DocumentsPanel.vue'
 import GitPanel from 'src/components/GitPanel.vue'
 import NotionPanel from 'src/components/NotionPanel.vue'
-import PlansPanel from 'src/components/PlansPanel.vue'
 import StatsPanel from 'src/components/StatsPanel.vue'
 import SubagentsPanel from 'src/components/SubagentsPanel.vue'
 import TerminalPanel from 'src/components/TerminalPanel.vue'
 import ToolsPanel from 'src/components/ToolsPanel.vue'
 import WorkspaceList from 'src/components/WorkspaceList.vue'
+import { useDocumentsStore } from 'src/stores/documents'
 import { useWorkspaceStore } from 'src/stores/workspace'
-import { computed, provide, ref } from 'vue'
+import { computed, provide, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
 const DRAWER_TAB_KEY = 'kobo:rightTab'
-const VALID_RIGHT_TABS = ['git', 'tasks', 'subagents', 'stats', 'plans'] as const
+const VALID_RIGHT_TABS = ['git', 'tasks', 'subagents', 'documents', 'stats'] as const
 const storedRightTab = localStorage.getItem(DRAWER_TAB_KEY)
 const rightTab = ref(
   storedRightTab && (VALID_RIGHT_TABS as readonly string[]).includes(storedRightTab) ? storedRightTab : 'git',
@@ -24,6 +25,19 @@ function setRightTab(val: string) {
   rightTab.value = val
   localStorage.setItem(DRAWER_TAB_KEY, val)
 }
+
+// External deep-link: when the documents store signals a request to open
+// (e.g. user clicked a plan path inside a chat message), switch to the
+// Documents tab so the opened file is visible.
+const documentsStore = useDocumentsStore()
+watch(
+  () => documentsStore.requestOpen,
+  () => setRightTab('documents'),
+)
+
+// Keep the documents list populated for the selected workspace regardless
+// of whether the user has opened the Documents tab yet — otherwise the
+// in-chat clickable-path detection has no catalogue to match against.
 
 const leftDrawerOpen = ref(true)
 const rightDrawerOpen = ref(true)
@@ -90,6 +104,14 @@ function startRightResize(event: MouseEvent) {
 
 const route = useRoute()
 const store = useWorkspaceStore()
+
+watch(
+  () => store.selectedWorkspaceId,
+  (wsId) => {
+    if (wsId) void documentsStore.fetchDocuments(wsId)
+  },
+  { immediate: true },
+)
 
 const showRightDrawer = computed(() => route.name === 'workspace')
 
@@ -174,8 +196,8 @@ function startVerticalResize(event: MouseEvent) {
             <q-tab name="git" icon="commit" />
             <q-tab name="tasks" icon="checklist" />
             <q-tab name="subagents" icon="smart_toy" />
+            <q-tab name="documents" icon="description" />
             <q-tab name="stats" icon="bar_chart" />
-            <q-tab name="plans" icon="description" />
           </q-tabs>
 
           <q-separator dark />
@@ -198,12 +220,12 @@ function startVerticalResize(event: MouseEvent) {
                 <SubagentsPanel />
               </q-tab-panel>
 
-              <q-tab-panel name="stats" class="q-pa-none">
-                <StatsPanel :workspace="store.selectedWorkspace" />
+              <q-tab-panel name="documents" class="q-pa-none">
+                <DocumentsPanel :workspace="store.selectedWorkspace" />
               </q-tab-panel>
 
-              <q-tab-panel name="plans" class="q-pa-none">
-                <PlansPanel :workspace="store.selectedWorkspace" />
+              <q-tab-panel name="stats" class="q-pa-none">
+                <StatsPanel :workspace="store.selectedWorkspace" />
               </q-tab-panel>
             </q-tab-panels>
           </div>
