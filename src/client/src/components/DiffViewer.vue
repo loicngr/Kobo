@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { buildPathTree, countLeaves } from 'src/utils/build-path-tree'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -18,23 +19,6 @@ interface DiffFile {
   status: 'added' | 'modified' | 'deleted' | 'renamed'
 }
 
-interface TreeNode {
-  name: string
-  path: string
-  isDir: boolean
-  status?: DiffFile['status']
-  children: TreeNode[]
-}
-
-interface FlatNode {
-  name: string
-  path: string
-  isDir: boolean
-  depth: number
-  status?: DiffFile['status']
-  fileCount?: number
-}
-
 const files = ref<DiffFile[]>([])
 const sourceBranch = ref('')
 const workingBranch = ref('')
@@ -43,7 +27,6 @@ const loading = ref(false)
 const loadingFile = ref(false)
 const editorContainer = ref<HTMLElement | null>(null)
 const viewMode = ref<'side' | 'inline'>('side')
-const collapsedDirs = ref<Set<string>>(new Set())
 
 // Monaco instances (lazy loaded)
 let monaco: typeof import('monaco-editor') | null = null
@@ -52,95 +35,8 @@ let selectionDisposables: Array<{ dispose(): void }> = []
 
 // ── File tree ────────────────────────────────────────────────────────────────
 
-function countFiles(nodes: TreeNode[]): number {
-  let count = 0
-  for (const n of nodes) {
-    if (n.isDir) count += countFiles(n.children)
-    else count++
-  }
-  return count
-}
-
-const fileTree = computed<TreeNode[]>(() => {
-  const root: TreeNode[] = []
-
-  for (const file of files.value) {
-    const parts = file.path.split('/')
-    let currentLevel = root
-
-    for (let i = 0; i < parts.length; i++) {
-      const name = parts[i]
-      const isLast = i === parts.length - 1
-      const partialPath = parts.slice(0, i + 1).join('/')
-
-      let existing = currentLevel.find((n) => n.name === name && n.isDir === !isLast)
-      if (!existing) {
-        existing = {
-          name,
-          path: isLast ? file.path : partialPath,
-          isDir: !isLast,
-          status: isLast ? file.status : undefined,
-          children: [],
-        }
-        currentLevel.push(existing)
-      }
-      currentLevel = existing.children
-    }
-  }
-
-  function sortNodes(nodes: TreeNode[]): void {
-    nodes.sort((a, b) => {
-      if (a.isDir !== b.isDir) return a.isDir ? -1 : 1
-      return a.name.localeCompare(b.name)
-    })
-    for (const n of nodes) {
-      if (n.children.length > 0) sortNodes(n.children)
-    }
-  }
-
-  sortNodes(root)
-  return root
-})
-
-const flatTree = computed<FlatNode[]>(() => {
-  const result: FlatNode[] = []
-
-  function walk(nodes: TreeNode[], depth: number) {
-    for (const node of nodes) {
-      if (node.isDir) {
-        result.push({
-          name: node.name,
-          path: node.path,
-          isDir: true,
-          depth,
-          fileCount: countFiles(node.children),
-        })
-        if (!collapsedDirs.value.has(node.path)) {
-          walk(node.children, depth + 1)
-        }
-      } else {
-        result.push({
-          name: node.name,
-          path: node.path,
-          isDir: false,
-          depth,
-          status: node.status,
-        })
-      }
-    }
-  }
-
-  walk(fileTree.value, 0)
-  return result
-})
-
-function toggleDir(dirPath: string) {
-  if (collapsedDirs.value.has(dirPath)) {
-    collapsedDirs.value.delete(dirPath)
-  } else {
-    collapsedDirs.value.add(dirPath)
-  }
-}
+const tree = computed(() => buildPathTree(files.value))
+const selectedNodeKey = computed(() => (selectedFile.value ? `file:${selectedFile.value}` : ''))
 
 // ── Data loading ─────────────────────────────────────────────────────────────
 
@@ -319,19 +215,6 @@ watch(viewMode, () => {
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-function statusIcon(status: DiffFile['status']): string {
-  switch (status) {
-    case 'added':
-      return 'add_circle'
-    case 'deleted':
-      return 'remove_circle'
-    case 'renamed':
-      return 'drive_file_rename_outline'
-    default:
-      return 'edit'
-  }
-}
-
 function statusColor(status: DiffFile['status']): string {
   switch (status) {
     case 'added':
@@ -412,53 +295,58 @@ onUnmounted(() => {
     <div class="row col no-wrap" style="min-height: 0;">
       <!-- File tree sidebar -->
       <q-scroll-area class="diff-file-list q-pa-xs" style="width: 280px; min-width: 200px; height: 100%; border-right: 1px solid #2a2a4a;">
-
         <q-spinner-dots v-if="loading" size="24px" color="grey-6" class="q-ma-md" />
         <div v-else-if="files.length === 0" class="text-caption text-grey-8 q-pa-sm">{{ $t('diff.noChanges') }}</div>
-        <template v-else>
-          <template v-for="node in flatTree" :key="node.path">
-            <!-- Directory -->
-            <div
-              v-if="node.isDir"
-              class="diff-dir-item cursor-pointer"
-              :style="{ paddingLeft: `${node.depth * 12 + 4}px` }"
-              @click="toggleDir(node.path)"
-            >
-              <q-icon
-                :name="collapsedDirs.has(node.path) ? 'chevron_right' : 'expand_more'"
-                size="14px"
-                color="grey-6"
-              />
-              <q-icon name="folder" size="13px" color="amber-7" class="q-mx-xs" />
-              <span class="text-caption text-grey-4" style="font-size: 11px;">{{ node.name }}</span>
+        <q-tree
+          v-else
+          :nodes="tree"
+          node-key="nodeKey"
+          label-key="label"
+          children-key="children"
+          dark
+          dense
+          default-expand-all
+          no-selection-unset
+          :selected="selectedNodeKey"
+          class="diff-tree"
+          @update:selected="
+            (key) => {
+              if (typeof key !== 'string' || !key.startsWith('file:')) return
+              selectedFile = key.slice('file:'.length)
+            }
+          "
+        >
+          <template #default-header="{ node }">
+            <template v-if="node.isFolder">
+              <q-icon name="folder" size="14px" color="indigo-4" class="q-mr-xs" />
+              <span
+                class="text-grey-4"
+                style="font-family: 'Roboto Mono', monospace; font-size: 11px;"
+              >{{ node.label }}</span>
               <q-badge
-                :label="node.fileCount"
+                :label="node.children ? countLeaves(node.children) : 0"
                 color="grey-9"
                 text-color="grey-5"
                 class="q-ml-xs"
                 style="font-size: 9px;"
               />
-            </div>
-            <!-- File -->
-            <div
-              v-else
-              class="diff-file-item cursor-pointer"
-              :class="{ 'diff-file-item--active': selectedFile === node.path }"
-              :style="{ paddingLeft: `${node.depth * 12 + 20}px` }"
-              @click="selectedFile = node.path"
-            >
+            </template>
+            <template v-else>
               <q-icon
-                :name="statusIcon(node.status!)"
-                size="11px"
-                :style="{ color: statusColor(node.status!) }"
+                name="description"
+                size="14px"
+                :style="{ color: statusColor(node.file.status) }"
                 class="q-mr-xs"
-              />
-              <span class="text-caption text-grey-3 ellipsis" style="font-size: 11px;">
-                {{ node.name }}
-              </span>
-            </div>
+              >
+                <q-tooltip>{{ node.file.status }}</q-tooltip>
+              </q-icon>
+              <span
+                class="text-grey-3 ellipsis"
+                style="font-family: 'Roboto Mono', monospace; font-size: 11px;"
+              >{{ node.label }}</span>
+            </template>
           </template>
-        </template>
+        </q-tree>
       </q-scroll-area>
 
       <!-- Monaco diff editor -->
@@ -510,32 +398,19 @@ onUnmounted(() => {
   border-color: #2a2a4a;
 }
 
-// Same hover as .wl-group-header in WorkspaceList
-.diff-dir-item {
-  display: flex;
-  align-items: center;
-  padding: 4px 0;
-
-  &:hover {
-    background-color: rgba(255, 255, 255, 0.03);
+.diff-tree {
+  :deep(.q-tree__node-header) {
+    padding: 2px 4px;
+    min-height: 22px;
+    align-items: center;
   }
-}
-
-// Same style as .wl-item in WorkspaceList
-.diff-file-item {
-  display: flex;
-  align-items: center;
-  padding: 4px 0;
-  transition: background-color 0.15s;
-
-  &:hover {
-    background-color: #2a2a4a;
-  }
-
-  &--active {
+  :deep(.q-tree__node--selected) > .q-tree__node-header {
     background-color: #2a2a4a;
     outline: 1px solid rgba(108, 99, 255, 0.4);
     border-left: 2px solid #6c63ff;
+  }
+  :deep(.q-tree__node-header:hover) {
+    background-color: rgba(255, 255, 255, 0.03);
   }
 }
 

@@ -1,18 +1,18 @@
-import type { DocumentFile } from 'src/stores/documents'
-
-export interface DocumentTreeNode {
+export interface PathTreeNode<T> {
   label: string
   nodeKey: string
   /** Only set on folder nodes. */
   isFolder?: true
-  /** Only set on leaf nodes. */
-  file?: DocumentFile
-  children?: DocumentTreeNode[]
+  /** Only set on leaf nodes — payload the caller attached to this path. */
+  file?: T
+  children?: PathTreeNode<T>[]
 }
 
 /**
- * Turn a flat list of document paths into a nested tree ready for q-tree.
- * Folders come before files at every level; both sets are sorted alphabetically.
+ * Turn a flat list of objects with a `path` field into a nested tree ready
+ * for `q-tree`. Folders come before files at every level; both sets are
+ * sorted alphabetically. Node keys are stable (`dir:<partial-path>` /
+ * `file:<full-path>`) so q-tree selection survives re-renders.
  *
  * Example:
  *   [{ path: 'docs/plans/x.md' }, { path: 'docs/superpowers/y.md' }]
@@ -22,8 +22,8 @@ export interface DocumentTreeNode {
  *       { label: 'superpowers', children: [{ label: 'y.md', file: … }] },
  *     ] }]
  */
-export function buildDocumentTree(files: DocumentFile[]): DocumentTreeNode[] {
-  const root: DocumentTreeNode[] = []
+export function buildPathTree<T extends { path: string }>(files: readonly T[]): PathTreeNode<T>[] {
+  const root: PathTreeNode<T>[] = []
 
   for (const file of files) {
     const parts = file.path.split('/').filter((p) => p.length > 0)
@@ -38,7 +38,7 @@ export function buildDocumentTree(files: DocumentFile[]): DocumentTreeNode[] {
         node = { label: part, nodeKey: `dir:${currentPath}`, isFolder: true, children: [] }
         level.push(node)
       }
-      level = node.children as DocumentTreeNode[]
+      level = node.children as PathTreeNode<T>[]
     }
     level.push({
       label: parts[parts.length - 1],
@@ -47,7 +47,7 @@ export function buildDocumentTree(files: DocumentFile[]): DocumentTreeNode[] {
     })
   }
 
-  function sortLevel(nodes: DocumentTreeNode[]): void {
+  function sortLevel(nodes: PathTreeNode<T>[]): void {
     nodes.sort((a, b) => {
       const aIsFolder = a.isFolder === true
       const bIsFolder = b.isFolder === true
@@ -59,4 +59,17 @@ export function buildDocumentTree(files: DocumentFile[]): DocumentTreeNode[] {
   sortLevel(root)
 
   return root
+}
+
+/**
+ * Count the number of leaf (file) nodes reachable from the given subtree.
+ * Useful when rendering a folder node with a `(N files)` badge.
+ */
+export function countLeaves<T>(nodes: readonly PathTreeNode<T>[]): number {
+  let n = 0
+  for (const node of nodes) {
+    if (node.file) n++
+    if (node.children) n += countLeaves(node.children)
+  }
+  return n
 }

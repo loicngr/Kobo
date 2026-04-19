@@ -4,7 +4,7 @@ import { marked } from 'marked'
 import { useQuasar } from 'quasar'
 import { type DocumentFile, useDocumentsStore } from 'src/stores/documents'
 import type { Workspace } from 'src/stores/workspace'
-import { buildDocumentTree } from 'src/utils/build-document-tree'
+import { buildPathTree } from 'src/utils/build-path-tree'
 import { computed, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -17,7 +17,7 @@ const $q = useQuasar()
 const store = useDocumentsStore()
 
 const documents = computed<DocumentFile[]>(() => (props.workspace ? store.documentsFor(props.workspace.id) : []))
-const tree = computed(() => buildDocumentTree(documents.value))
+const tree = computed(() => buildPathTree(documents.value))
 const selectedPath = computed(() => store.selected?.path ?? null)
 
 const renderedMarkdown = computed(() => {
