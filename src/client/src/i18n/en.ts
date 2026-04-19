@@ -319,6 +319,7 @@ export default {
   'git.createPr': 'Create PR',
   'git.push': 'Push',
   'git.pull': 'Pull',
+  'git.sync': 'Sync',
   'git.createPrNoRemote': 'Push the branch first',
   'git.pullConfirmTitle': 'Pull branch?',
   'git.pullConfirmMessage': 'Pull {branch} from remote (fast-forward only).',

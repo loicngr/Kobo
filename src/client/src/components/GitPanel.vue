@@ -338,7 +338,7 @@ async function handleOpenPr() {
 </script>
 
 <template>
-  <div class="git-panel q-pa-md">
+  <div class="git-panel q-px-sm q-py-md">
     <div class="row items-center justify-between q-mb-sm">
       <div class="text-caption text-uppercase text-weight-bold text-grey-6" style="letter-spacing: 0.05em;">
         {{ $t('git.title') }}
@@ -432,19 +432,70 @@ async function handleOpenPr() {
         <div v-else class="q-mb-md" />
       </template>
 
-      <!-- Actions -->
-      <div class="row q-gutter-xs">
-        <q-btn
-          v-if="gitStats?.prUrl"
+      <!-- Actions — single row, uniform outlined look. PR button shares the
+           same size/shape but keeps its indigo accent as the primary CTA. -->
+      <div class="row items-center q-gutter-xs">
+        <q-btn-dropdown
+          v-if="gitStats && gitStats.unpushedCount !== -1"
+          split
           dense
           no-caps
           size="sm"
           outline
-          color="green-4"
-          :label="$t('git.viewPr')"
-          icon="open_in_new"
+          color="grey-5"
+          icon="sync"
+          :label="$t('git.sync')"
+          class="git-btn git-sync-btn"
+          :loading="pulling || rebasing || merging"
+          :disable="!workspace || pushing"
+          @click="handlePull"
+        >
+          <q-list dark dense style="min-width: 140px;">
+            <q-item clickable v-close-popup :disable="pulling || rebasing || merging" @click="handlePull">
+              <q-item-section avatar style="min-width: 28px;">
+                <q-icon name="download" size="16px" color="grey-5" />
+              </q-item-section>
+              <q-item-section>{{ $t('git.pull') }}</q-item-section>
+            </q-item>
+            <q-item clickable v-close-popup :disable="pulling || rebasing || merging" @click="handleRebase">
+              <q-item-section avatar style="min-width: 28px;">
+                <q-icon name="replay" size="16px" color="orange-4" />
+              </q-item-section>
+              <q-item-section>{{ $t('git.rebase') }}</q-item-section>
+            </q-item>
+            <q-item clickable v-close-popup :disable="pulling || rebasing || merging" @click="handleMerge">
+              <q-item-section avatar style="min-width: 28px;">
+                <q-icon name="merge" size="16px" color="purple-4" />
+              </q-item-section>
+              <q-item-section>{{ $t('git.merge') }}</q-item-section>
+            </q-item>
+          </q-list>
+        </q-btn-dropdown>
+        <q-btn
+          v-if="!gitStats || gitStats.unpushedCount !== 0"
+          dense
+          no-caps
+          size="sm"
+          outline
+          color="grey-5"
+          icon="upload"
+          :label="$t('git.push')"
           class="git-btn"
-          @click="viewPr"
+          :loading="pushing"
+          :disable="!workspace || openingPr || pulling || rebasing"
+          @click="handlePush"
+        />
+        <q-btn
+          dense
+          no-caps
+          size="sm"
+          outline
+          color="grey-5"
+          icon="difference"
+          :label="$t('git.diff')"
+          class="git-btn"
+          :disable="!workspace"
+          @click="showDiff = true"
         />
         <q-btn
           v-if="gitStats?.prUrl && gitStats.prState === 'OPEN'"
@@ -461,11 +512,25 @@ async function handleOpenPr() {
           <q-tooltip>{{ $t('git.changePrBase') }}</q-tooltip>
         </q-btn>
         <q-btn
+          v-if="gitStats?.prUrl"
+          dense
+          no-caps
+          size="sm"
+          outline
+          color="green-4"
+          icon="open_in_new"
+          :label="$t('git.viewPr')"
+          class="git-btn"
+          @click="viewPr"
+        />
+        <q-btn
           v-if="!gitStats?.prUrl || gitStats.prState === 'CLOSED' || gitStats.prState === 'MERGED'"
           dense
           no-caps
           size="sm"
-          color="primary"
+          outline
+          color="indigo-4"
+          icon="open_in_new"
           :label="$t('git.createPr')"
           class="git-btn"
           :loading="openingPr"
@@ -474,69 +539,6 @@ async function handleOpenPr() {
         >
           <q-tooltip v-if="!canOpenPr && createPrDisabledReason">{{ createPrDisabledReason }}</q-tooltip>
         </q-btn>
-        <q-btn
-          v-if="!gitStats || gitStats.unpushedCount !== 0"
-          dense
-          no-caps
-          size="sm"
-          outline
-          color="grey-5"
-          :label="$t('git.push')"
-          class="git-btn"
-          :loading="pushing"
-          :disable="!workspace || openingPr || pulling || rebasing"
-          @click="handlePush"
-        />
-        <q-btn
-          v-if="gitStats && gitStats.unpushedCount !== -1"
-          dense
-          no-caps
-          size="sm"
-          outline
-          color="grey-5"
-          icon="download"
-          :label="$t('git.pull')"
-          class="git-btn"
-          :loading="pulling"
-          :disable="!workspace || pushing || rebasing"
-          @click="handlePull"
-        />
-        <q-btn
-          dense
-          no-caps
-          size="sm"
-          outline
-          color="orange-4"
-          :label="$t('git.rebase')"
-          class="git-btn"
-          :loading="rebasing"
-          :disable="!workspace || pushing || pulling || merging"
-          @click="handleRebase"
-        />
-        <q-btn
-          dense
-          no-caps
-          size="sm"
-          outline
-          color="purple-4"
-          :label="$t('git.merge')"
-          class="git-btn"
-          :loading="merging"
-          :disable="!workspace || pushing || pulling || rebasing"
-          @click="handleMerge"
-        />
-        <q-btn
-          dense
-          no-caps
-          size="sm"
-          outline
-          color="indigo-4"
-          :label="$t('git.diff')"
-          icon="difference"
-          class="git-btn"
-          :disable="!workspace"
-          @click="showDiff = true"
-        />
       </div>
     </template>
 
@@ -614,6 +616,25 @@ async function handleOpenPr() {
 <style lang="scss" scoped>
 .git-btn {
   font-size: 11px;
-  padding: 2px 10px;
+  padding: 2px 8px;
+}
+// Split button — the outer dropdown wraps two child buttons. `.git-btn`
+// padding on the outer edge would double-pad on the right, so we move the
+// horizontal padding from the outer shell to each inner half. Result: the
+// dropdown ends flush with the chevron, identical right-edge rhythm to
+// the siblings (so `q-gutter-xs` between Sync and Diff equals the gap
+// between Diff and Create PR).
+.git-sync-btn {
+  padding: 2px 0;
+}
+.git-sync-btn :deep(.q-btn__content) {
+  padding: 0 8px;
+}
+.git-sync-btn :deep(.q-btn-dropdown__arrow-container) {
+  padding: 0 4px;
+  border-left: 1px solid rgba(255, 255, 255, 0.12);
+}
+.git-sync-btn :deep(.q-btn-dropdown--split) {
+  gap: 0;
 }
 </style>
