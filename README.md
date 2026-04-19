@@ -53,7 +53,7 @@ Think of it as an apprentice's hall: you hand out missions, each apprentice sets
 ### Run via `npx` (recommended)
 
 ```bash
-PORT=9999 npx @loicngr/kobo@latest
+SERVER_PORT=9998 PORT=9999 npx @loicngr/kobo@latest
 ```
 
 That's it. npm downloads the package, installs dependencies, starts the Kōbō server on the port you specified, and serves the web UI at `http://localhost:9999`. Data is persisted to `~/.config/kobo/` (overridable via `KOBO_HOME`).
