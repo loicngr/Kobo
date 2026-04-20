@@ -306,3 +306,194 @@ export function listWorkspaceImagesHandler(worktreePath: string): WorkspaceImage
     }
   })
 }
+
+// ── Documents ────────────────────────────────────────────────────────────────
+
+/** Directories (relative to the worktree root) scanned for AI-generated docs. */
+export const DOCUMENT_DIRS = ['docs/plans', 'docs/superpowers', '.ai/thoughts'] as const
+
+/** Depth cap to keep recursion bounded even on pathological symlink loops. */
+const DOC_MAX_DEPTH = 8
+
+/** Metadata for a markdown document surfaced by the documents tools. */
+export interface DocumentDto {
+  path: string
+  name: string
+  modifiedAt: string
+}
+
+/** Content payload returned when reading a single document. */
+export interface DocumentContentDto {
+  path: string
+  content: string
+}
+
+function walkMarkdownFiles(rootAbs: string, rootRel: string, out: DocumentDto[], depth = 0): void {
+  if (depth > DOC_MAX_DEPTH) return
+  let entries: string[]
+  try {
+    entries = fs.readdirSync(rootAbs)
+  } catch {
+    return
+  }
+  for (const entry of entries) {
+    if (entry.startsWith('.') && entry !== '.ai') continue
+    const absEntry = path.join(rootAbs, entry)
+    const relEntry = `${rootRel}/${entry}`
+    let stat: ReturnType<typeof fs.statSync>
+    try {
+      stat = fs.statSync(absEntry)
+    } catch {
+      continue
+    }
+    if (stat.isDirectory()) {
+      walkMarkdownFiles(absEntry, relEntry, out, depth + 1)
+    } else if (stat.isFile() && entry.endsWith('.md')) {
+      out.push({ path: relEntry, name: entry, modifiedAt: stat.mtime.toISOString() })
+    }
+  }
+}
+
+/**
+ * Recursively list every `.md` file under `docs/plans/`, `docs/superpowers/`,
+ * and `.ai/thoughts/` inside the given worktree. Sorted by modifiedAt desc.
+ */
+export function listDocumentsHandler(worktreePath: string): DocumentDto[] {
+  const documents: DocumentDto[] = []
+  for (const dir of DOCUMENT_DIRS) {
+    const absDir = path.join(worktreePath, dir)
+    if (!fs.existsSync(absDir)) continue
+    walkMarkdownFiles(absDir, dir, documents)
+  }
+  documents.sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime())
+  return documents
+}
+
+/**
+ * Read a single document. The caller-supplied path must be relative to the
+ * worktree root and live under one of the allowed DOCUMENT_DIRS; `.md` only;
+ * traversal (`..`) is rejected.
+ */
+export function readDocumentHandler(worktreePath: string, relPath: string): DocumentContentDto {
+  if (!relPath) throw new Error('path is required')
+  const normalized = path.normalize(relPath)
+  if (
+    normalized.includes('..') ||
+    !DOCUMENT_DIRS.some((dir) => normalized.startsWith(`${dir}/`) || normalized === dir)
+  ) {
+    throw new Error(`Invalid path: must be under ${DOCUMENT_DIRS.map((d) => `${d}/`).join(', ')}`)
+  }
+  if (!normalized.endsWith('.md')) {
+    throw new Error('Only .md files can be read')
+  }
+  const abs = path.join(worktreePath, normalized)
+  if (!fs.existsSync(abs)) {
+    throw new Error(`Document not found: ${normalized}`)
+  }
+  return { path: normalized, content: fs.readFileSync(abs, 'utf-8') }
+}
+
+/**
+ * Append a thought / decision / note to `.ai/thoughts/<YYYY-MM-DD>-<slug>.md`.
+ * Creates the directory if missing. Returns the path (worktree-relative) of
+ * the file actually written — useful for the agent to reference it in chat.
+ */
+export function logThoughtHandler(
+  worktreePath: string,
+  data: { title: string; content: string; tag?: string },
+): { path: string } {
+  const title = data.title?.trim()
+  if (!title) throw new Error('title is required')
+  const content = data.content?.trim()
+  if (!content) throw new Error('content is required')
+
+  const thoughtsDir = path.join(worktreePath, '.ai', 'thoughts')
+  fs.mkdirSync(thoughtsDir, { recursive: true })
+
+  const date = new Date().toISOString().slice(0, 10)
+  const slug =
+    title
+      .toLowerCase()
+      .normalize('NFKD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 60) || 'note'
+  const tagSuffix = data.tag ? `-${data.tag.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}` : ''
+  const filename = `${date}-${slug}${tagSuffix}.md`
+  const abs = path.join(thoughtsDir, filename)
+  const relPath = `.ai/thoughts/${filename}`
+
+  const header = `# ${title}\n\n_${new Date().toISOString()}_${data.tag ? ` · tag: \`${data.tag}\`` : ''}\n\n`
+  fs.writeFileSync(abs, header + content + (content.endsWith('\n') ? '' : '\n'), 'utf-8')
+
+  return { path: relPath }
+}
+
+// ── Session usage ────────────────────────────────────────────────────────────
+
+/** Aggregated token / cost usage for a workspace. */
+export interface SessionUsageDto {
+  workspaceTotals: { inputTokens: number; outputTokens: number; costUsd: number }
+  currentSession: {
+    sessionId: string | null
+    inputTokens: number
+    outputTokens: number
+    costUsd: number
+  }
+}
+
+interface UsagePayload {
+  kind?: string
+  inputTokens?: number
+  outputTokens?: number
+  costUsd?: number
+}
+
+/**
+ * Aggregate `usage` events from `ws_events` to report how many tokens and
+ * dollars the workspace has consumed — both in total and for the currently
+ * running agent_session (if any). Silently skips rows whose payload is not
+ * valid JSON or not a usage event.
+ */
+export function getSessionUsageHandler(db: Database.Database, workspaceId: string): SessionUsageDto {
+  const runningSession = db
+    .prepare(
+      "SELECT id FROM agent_sessions WHERE workspace_id = ? AND status = 'running' ORDER BY started_at DESC LIMIT 1",
+    )
+    .get(workspaceId) as { id: string } | undefined
+  const currentSessionId = runningSession?.id ?? null
+
+  const rows = db
+    .prepare("SELECT payload, session_id FROM ws_events WHERE workspace_id = ? AND type = 'agent:event'")
+    .all(workspaceId) as Array<{ payload: string; session_id: string | null }>
+
+  const totals = { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+  const current = { inputTokens: 0, outputTokens: 0, costUsd: 0 }
+
+  for (const row of rows) {
+    let parsed: UsagePayload
+    try {
+      parsed = JSON.parse(row.payload) as UsagePayload
+    } catch {
+      continue
+    }
+    if (parsed.kind !== 'usage') continue
+    const input = typeof parsed.inputTokens === 'number' ? parsed.inputTokens : 0
+    const output = typeof parsed.outputTokens === 'number' ? parsed.outputTokens : 0
+    const cost = typeof parsed.costUsd === 'number' ? parsed.costUsd : 0
+    totals.inputTokens += input
+    totals.outputTokens += output
+    totals.costUsd += cost
+    if (currentSessionId && row.session_id === currentSessionId) {
+      current.inputTokens += input
+      current.outputTokens += output
+      current.costUsd += cost
+    }
+  }
+
+  return {
+    workspaceTotals: totals,
+    currentSession: { sessionId: currentSessionId, ...current },
+  }
+}

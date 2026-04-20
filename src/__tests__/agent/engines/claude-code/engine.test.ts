@@ -93,7 +93,9 @@ describe('createClaudeCodeEngine', () => {
     expect(args).toContain('--output-format')
     expect(args).toContain('stream-json')
     expect(args).toContain('-p')
-    expect(args).toContain('hi')
+    // `hi` is embedded in the effective prompt alongside the MCP brief —
+    // assert via substring match instead of exact equality.
+    expect(args.some((a: string) => a.endsWith('hi'))).toBe(true)
     expect(process.pid).toBe(42000)
 
     // Drive the fake stdout

@@ -75,6 +75,40 @@ export function dispatchAgentEvent(
     return
   }
 
+  // The agent's own internal todo list is carried by the `TodoWrite` tool
+  // call. Mirror its latest snapshot into the workspace store so the
+  // "Agent todos" panel on the right can render it. No ack/ordering logic —
+  // each call fully replaces the previous list, matching the tool's contract.
+  if (event.kind === 'tool:call' && event.name === 'TodoWrite') {
+    const input = event.input as Record<string, unknown> | undefined
+    const rawTodos = input?.todos
+    if (Array.isArray(rawTodos)) {
+      workspaceStore.updateAgentTodos(
+        workspaceId,
+        (rawTodos as Array<Record<string, unknown>>).map((t) => ({
+          content: typeof t.content === 'string' ? t.content : '',
+          status: typeof t.status === 'string' ? t.status : 'pending',
+          activeForm: typeof t.activeForm === 'string' ? t.activeForm : undefined,
+        })),
+      )
+    }
+    return
+  }
+
+  // Detect Bash tool calls that perform git operations and bump the
+  // `gitRefreshTrigger` so GitPanel re-fetches stats a few seconds after
+  // the command completes. The regex is deliberately loose — false
+  // positives just cause an extra stats refresh, whereas a miss means
+  // the panel stays stale until the user clicks refresh.
+  if (event.kind === 'tool:call' && event.name === 'Bash') {
+    const input = event.input as Record<string, unknown> | undefined
+    const cmd = `${(input?.command as string | undefined) ?? ''} ${(input?.description as string | undefined) ?? ''}`
+    if (/\bgit\b|commit|push|pull|merge|rebase|checkout|branch/i.test(cmd)) {
+      workspaceStore.triggerGitRefresh()
+    }
+    // Don't return — tool:call may need other side-effects in the future.
+  }
+
   // session:started: a new turn just spun up. Flip the workspace status
   // to `executing` in the local cache so downstream UI (ActivityFeed's
   // `sessionActive` check, AgentBusyBanner, start/stop buttons) reflects

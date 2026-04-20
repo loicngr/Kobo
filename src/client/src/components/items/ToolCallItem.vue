@@ -3,7 +3,7 @@ import type { ConversationItem } from 'src/services/agent-event-view'
 import { computeInlineDiff, type DiffLine, getFileChangeInfo } from 'src/services/inline-diff'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { compactPath } from 'src/utils/compact-path'
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 
 const props = defineProps<{ item: Extract<ConversationItem, { type: 'tool' }> }>()
 
@@ -90,9 +90,32 @@ const outputSummary = computed(() => {
   }
 })
 
+// Tools whose output is pure noise (file content the user already knows,
+// directory listings, etc.). The header stays visible but the expandable
+// body and chevron are hidden entirely — the UI should show "Read foo.ts"
+// and nothing else. Errors still auto-expand via the watcher below.
+const NOISY_OUTPUT_TOOLS = new Set(['Read'])
+
+const canToggleOutput = computed(
+  () =>
+    Boolean(props.item.result && outputSummary.value) &&
+    (!NOISY_OUTPUT_TOOLS.has(props.item.name) || props.item.result?.isError === true),
+)
+
 function toggleExpand() {
   expanded.value = !expanded.value
 }
+
+// Auto-expand whenever the tool result arrives with `isError === true` so
+// failures are visible without the user having to click. A subsequent
+// manual collapse still works (watcher only sets true, never false).
+watch(
+  () => props.item.result?.isError === true,
+  (isErr) => {
+    if (isErr) expanded.value = true
+  },
+  { immediate: true },
+)
 </script>
 
 <template>
@@ -129,8 +152,12 @@ function toggleExpand() {
   </div>
 
   <!-- Generic tool: one compact line with icon + name + primary arg + status -->
-  <div v-else class="tool-row tool-row-generic">
-    <div class="tool-header">
+  <div
+    v-else
+    class="tool-row tool-row-generic"
+    :class="{ 'tool-row-expanded': expanded, 'tool-row--toggleable': canToggleOutput }"
+  >
+    <div class="tool-header" @click="canToggleOutput && toggleExpand()">
       <q-icon :name="toolIcon" size="14px" class="tool-icon" />
       <span class="tool-name">{{ item.name }}</span>
       <span v-if="fallbackLabel" class="tool-arg" :title="extractRawLabel(item.input) || fallbackLabel">{{ fallbackLabel }}</span>
@@ -142,10 +169,17 @@ function toggleExpand() {
         class="q-ml-auto"
       />
       <q-icon v-else-if="item.result" name="check" color="positive" size="xs" class="q-ml-auto" />
+      <q-icon
+        v-if="canToggleOutput"
+        :name="expanded ? 'expand_less' : 'expand_more'"
+        size="xs"
+        class="q-ml-xs text-grey-6"
+      />
     </div>
     <div
-      v-if="item.result && outputSummary"
+      v-if="expanded && canToggleOutput"
       class="tool-output"
+      @click.stop
     >
       {{ outputSummary }}
     </div>
@@ -168,10 +202,12 @@ function toggleExpand() {
   min-width: 0;
 }
 .tool-row:has(.tool-diff) .tool-header,
-.tool-row:not(.tool-row-generic) .tool-header {
+.tool-row:not(.tool-row-generic) .tool-header,
+.tool-row--toggleable .tool-header {
   cursor: pointer;
 }
-.tool-row:not(.tool-row-generic) .tool-header:hover {
+.tool-row:not(.tool-row-generic) .tool-header:hover,
+.tool-row--toggleable .tool-header:hover {
   background: rgba(255, 255, 255, 0.03);
 }
 .tool-icon {

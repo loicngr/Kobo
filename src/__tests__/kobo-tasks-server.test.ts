@@ -7,11 +7,15 @@ import {
   createTaskHandler,
   deleteTaskHandler,
   getDevServerStatusHandler,
+  getSessionUsageHandler,
   getSettingsHandler,
   getWorkspaceInfoHandler,
+  listDocumentsHandler,
   listTasksHandler,
   listWorkspaceImagesHandler,
+  logThoughtHandler,
   markTaskDoneHandler,
+  readDocumentHandler,
   updateTaskHandler,
 } from '../mcp-server/kobo-tasks-handlers.js'
 import { initSchema } from '../server/db/schema.js'
@@ -360,6 +364,160 @@ describe('MCP tasks server handlers', () => {
       // Pas de fichier orphan.png
       const result = listWorkspaceImagesHandler(worktreePath)
       expect(result[0].relativePath).toBe('')
+    })
+  })
+
+  describe('listDocumentsHandler', () => {
+    let worktreePath: string
+
+    beforeEach(() => {
+      worktreePath = path.join(tmpDir, 'doc-wt')
+      fs.mkdirSync(worktreePath, { recursive: true })
+    })
+
+    it('retourne un array vide quand aucun dossier de docs existe', () => {
+      expect(listDocumentsHandler(worktreePath)).toEqual([])
+    })
+
+    it('liste les .md de docs/plans, docs/superpowers et .ai/thoughts (récursif)', () => {
+      const plansDir = path.join(worktreePath, 'docs', 'plans')
+      const superNested = path.join(worktreePath, 'docs', 'superpowers', 'plans', '2026-04')
+      const thoughtsDir = path.join(worktreePath, '.ai', 'thoughts')
+      fs.mkdirSync(plansDir, { recursive: true })
+      fs.mkdirSync(superNested, { recursive: true })
+      fs.mkdirSync(thoughtsDir, { recursive: true })
+      fs.writeFileSync(path.join(plansDir, 'a.md'), '# A')
+      fs.writeFileSync(path.join(superNested, 'b.md'), '# B')
+      fs.writeFileSync(path.join(thoughtsDir, 'SENTRY-1.md'), '# S')
+      fs.writeFileSync(path.join(plansDir, 'notes.txt'), 'ignore') // non-md ignoré
+
+      const docs = listDocumentsHandler(worktreePath)
+      expect(docs.map((d) => d.path).sort()).toEqual([
+        '.ai/thoughts/SENTRY-1.md',
+        'docs/plans/a.md',
+        'docs/superpowers/plans/2026-04/b.md',
+      ])
+    })
+
+    it('ignore les fichiers hors DOCUMENT_DIRS', () => {
+      fs.mkdirSync(path.join(worktreePath, 'src'), { recursive: true })
+      fs.writeFileSync(path.join(worktreePath, 'src', 'README.md'), '# NO')
+      expect(listDocumentsHandler(worktreePath)).toEqual([])
+    })
+  })
+
+  describe('readDocumentHandler', () => {
+    let worktreePath: string
+
+    beforeEach(() => {
+      worktreePath = path.join(tmpDir, 'doc-wt-read')
+      fs.mkdirSync(path.join(worktreePath, 'docs', 'plans'), { recursive: true })
+      fs.writeFileSync(path.join(worktreePath, 'docs', 'plans', 'x.md'), '# X\n\nhello')
+    })
+
+    it('retourne le contenu pour un path valide', () => {
+      const res = readDocumentHandler(worktreePath, 'docs/plans/x.md')
+      expect(res.path).toBe('docs/plans/x.md')
+      expect(res.content).toBe('# X\n\nhello')
+    })
+
+    it('rejette les path traversal', () => {
+      expect(() => readDocumentHandler(worktreePath, 'docs/plans/../../etc/passwd')).toThrow(/Invalid path/)
+    })
+
+    it('rejette les path hors DOCUMENT_DIRS', () => {
+      expect(() => readDocumentHandler(worktreePath, 'src/server/index.ts')).toThrow(/Invalid path/)
+    })
+
+    it('rejette les non-.md', () => {
+      fs.writeFileSync(path.join(worktreePath, 'docs', 'plans', 'foo.txt'), 'nope')
+      expect(() => readDocumentHandler(worktreePath, 'docs/plans/foo.txt')).toThrow(/Only \.md/)
+    })
+
+    it('throw si le fichier est absent', () => {
+      expect(() => readDocumentHandler(worktreePath, 'docs/plans/ghost.md')).toThrow(/not found/)
+    })
+  })
+
+  describe('logThoughtHandler', () => {
+    let worktreePath: string
+
+    beforeEach(() => {
+      worktreePath = path.join(tmpDir, 'log-wt')
+      fs.mkdirSync(worktreePath, { recursive: true })
+    })
+
+    it('crée un fichier dans .ai/thoughts/ avec un slug depuis le titre', () => {
+      const res = logThoughtHandler(worktreePath, { title: 'Decision: use pinia', content: 'Reason is X.' })
+      expect(res.path).toMatch(/^\.ai\/thoughts\/\d{4}-\d{2}-\d{2}-decision-use-pinia\.md$/)
+      const absolutePath = path.join(worktreePath, res.path)
+      expect(fs.existsSync(absolutePath)).toBe(true)
+      const content = fs.readFileSync(absolutePath, 'utf-8')
+      expect(content).toContain('# Decision: use pinia')
+      expect(content).toContain('Reason is X.')
+    })
+
+    it('ajoute le tag en suffixe quand fourni', () => {
+      const res = logThoughtHandler(worktreePath, { title: 'Note', content: 'body', tag: 'arch' })
+      expect(res.path).toMatch(/-note-arch\.md$/)
+    })
+
+    it('throw si title ou content manquent', () => {
+      expect(() => logThoughtHandler(worktreePath, { title: '', content: 'x' })).toThrow(/title/)
+      expect(() => logThoughtHandler(worktreePath, { title: 'y', content: '' })).toThrow(/content/)
+    })
+  })
+
+  describe('getSessionUsageHandler', () => {
+    it('retourne 0 quand il n’y a aucun event usage', () => {
+      const res = getSessionUsageHandler(db, workspaceId)
+      expect(res.workspaceTotals).toEqual({ inputTokens: 0, outputTokens: 0, costUsd: 0 })
+      expect(res.currentSession.sessionId).toBeNull()
+    })
+
+    it('agrège les usage events et scope la session courante sur la session running', () => {
+      const now = new Date().toISOString()
+      db.prepare(
+        "INSERT INTO agent_sessions (id, workspace_id, status, started_at) VALUES ('sess-running', ?, 'running', ?)",
+      ).run(workspaceId, now)
+      db.prepare(
+        "INSERT INTO agent_sessions (id, workspace_id, status, started_at, ended_at) VALUES ('sess-old', ?, 'completed', ?, ?)",
+      ).run(workspaceId, now, now)
+
+      const insert = db.prepare(
+        "INSERT INTO ws_events (id, workspace_id, type, payload, session_id, created_at) VALUES (?, ?, 'agent:event', ?, ?, ?)",
+      )
+      insert.run(
+        'e1',
+        workspaceId,
+        JSON.stringify({ kind: 'usage', inputTokens: 100, outputTokens: 50, costUsd: 0.01 }),
+        'sess-old',
+        now,
+      )
+      insert.run(
+        'e2',
+        workspaceId,
+        JSON.stringify({ kind: 'usage', inputTokens: 200, outputTokens: 75, costUsd: 0.02 }),
+        'sess-running',
+        now,
+      )
+      // Non-usage event — doit être ignoré
+      insert.run(
+        'e3',
+        workspaceId,
+        JSON.stringify({ kind: 'message:text', text: 'x', streaming: false, messageId: 'm' }),
+        'sess-running',
+        now,
+      )
+
+      const res = getSessionUsageHandler(db, workspaceId)
+      expect(res.workspaceTotals).toEqual({ inputTokens: 300, outputTokens: 125, costUsd: 0.03 })
+      expect(res.currentSession).toEqual({
+        sessionId: 'sess-running',
+        inputTokens: 200,
+        outputTokens: 75,
+        costUsd: 0.02,
+      })
     })
   })
 })
