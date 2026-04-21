@@ -103,6 +103,24 @@ app.post('/', migrationGuard, async (c) => {
     let notionContent: notionService.NotionPageContent | null = null
     let sentryContent: sentryService.SentryIssueContent | null = null
 
+    // Auto-tag the workspace based on its creation source — `notion` when
+    // imported from a Notion page, `sentry` when bootstrapped from a Sentry
+    // issue URL. Pre-seeded in the global tag catalogue via migration v9.
+    // Skip any tag the user has removed from the catalogue so we respect
+    // their choice (they may have pruned "notion"/"sentry" on purpose).
+    const catalogTags = new Set(globalSettings.tags ?? [])
+    const autoTags: string[] = []
+    if (body.notionUrl && catalogTags.has('notion')) autoTags.push('notion')
+    if (body.sentryUrl && catalogTags.has('sentry')) autoTags.push('sentry')
+    if (autoTags.length > 0) {
+      try {
+        const tagged = workspaceService.setWorkspaceTags(workspace.id, autoTags)
+        if (tagged) workspace = tagged
+      } catch (err) {
+        console.error('[workspaces] Failed to apply auto tags:', err)
+      }
+    }
+
     // Extract Notion page content if a URL was provided
     if (body.notionUrl) {
       workspaceService.updateWorkspaceStatus(workspace.id, 'extracting')
@@ -1319,19 +1337,30 @@ app.get('/:id/git-stats', async (c) => {
   }
 })
 
-// GET /api/workspaces/:id/diff — list changed files
+// GET /api/workspaces/:id/diff?mode=branch|unpushed — list changed files
+// - `branch` (default): committed + working tree changes vs sourceBranch,
+//   i.e. what the PR will contain.
+// - `unpushed`: committed-only changes vs `origin/<workingBranch>`,
+//   i.e. what the next `git push` will send.
 app.get('/:id/diff', (c) => {
   try {
     const id = c.req.param('id')
+    const mode = c.req.query('mode') === 'unpushed' ? 'unpushed' : 'branch'
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
     }
 
     const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
-    const files = gitOps.getChangedFiles(worktreePath, workspace.sourceBranch)
+    const files =
+      mode === 'unpushed'
+        ? gitOps.getUnpushedChangedFiles(worktreePath, workspace.workingBranch)
+        : gitOps.getChangedFiles(worktreePath, workspace.sourceBranch)
+
+    c.header('Cache-Control', 'no-store')
     return c.json({
       files,
+      mode,
       sourceBranch: workspace.sourceBranch,
       workingBranch: workspace.workingBranch,
     })
@@ -1341,11 +1370,16 @@ app.get('/:id/diff', (c) => {
   }
 })
 
-// GET /api/workspaces/:id/diff/:filePath — get original and modified content for a file
+// GET /api/workspaces/:id/diff-file?path=...&mode=branch|unpushed
+// Resolves `original` at the appropriate base ref:
+//  - `branch`   → sourceBranch
+//  - `unpushed` → origin/<workingBranch>
+// `modified` is always the current worktree content.
 app.get('/:id/diff-file', (c) => {
   try {
     const id = c.req.param('id')
     const filePath = c.req.query('path')
+    const mode = c.req.query('mode') === 'unpushed' ? 'unpushed' : 'branch'
     if (!filePath) {
       return c.json({ error: 'Missing path query parameter' }, 400)
     }
@@ -1356,10 +1390,33 @@ app.get('/:id/diff-file', (c) => {
     }
 
     const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
-    const original = gitOps.getFileAtRef(worktreePath, workspace.sourceBranch, filePath)
+    const baseRef = mode === 'unpushed' ? `origin/${workspace.workingBranch}` : workspace.sourceBranch
+    const original = gitOps.getFileAtRef(worktreePath, baseRef, filePath)
     const modified = gitOps.getFileContent(worktreePath, filePath)
 
-    return c.json({ original: original ?? '', modified: modified ?? '', filePath })
+    c.header('Cache-Control', 'no-store')
+    return c.json({ original: original ?? '', modified: modified ?? '', filePath, mode })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// GET /api/workspaces/:id/commits?limit=50 — list commits between sourceBranch
+// and HEAD, each tagged with whether it's already pushed to origin/<branch>.
+app.get('/:id/commits', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+    const limitRaw = c.req.query('limit')
+    const limit = Math.min(Math.max(1, parseInt(limitRaw ?? '50', 10) || 50), 200)
+    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    const commits = gitOps.listBranchCommits(worktreePath, workspace.sourceBranch, workspace.workingBranch, limit)
+    c.header('Cache-Control', 'no-store')
+    return c.json({ commits, sourceBranch: workspace.sourceBranch, workingBranch: workspace.workingBranch })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)

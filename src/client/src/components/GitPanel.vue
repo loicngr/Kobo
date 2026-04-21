@@ -25,6 +25,61 @@ const openingPr = ref(false)
 const changingBase = ref(false)
 const showDiff = ref(false)
 
+// Commit list expand state + cache per workspace
+interface BranchCommit {
+  sha: string
+  shortSha: string
+  subject: string
+  author: string
+  date: string
+  isPushed: boolean
+}
+const showCommits = ref(false)
+const loadingCommits = ref(false)
+const commits = ref<BranchCommit[]>([])
+
+async function fetchCommits() {
+  if (!props.workspace) return
+  loadingCommits.value = true
+  try {
+    const res = await fetch(`/api/workspaces/${props.workspace.id}/commits?limit=50`, {
+      cache: 'no-store',
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const body = (await res.json()) as { commits: BranchCommit[] }
+    commits.value = body.commits
+  } catch (err) {
+    console.error('[GitPanel] fetchCommits failed:', err)
+    commits.value = []
+  } finally {
+    loadingCommits.value = false
+  }
+}
+
+async function toggleCommits() {
+  showCommits.value = !showCommits.value
+  if (!showCommits.value) return
+  // Flip the loader on synchronously — fetchCommits() is async, so without
+  // this the header loader + expanded list would both flicker the empty
+  // state for one tick before the network round-trip sets loadingCommits.
+  loadingCommits.value = true
+  // Fetch on every expand (cheap, git state may have changed since last time).
+  await fetchCommits()
+}
+
+function appendCommitToChat(sha: string) {
+  // Reuse the existing `chatDraft` mechanism — ChatInput.vue watches it and
+  // appends to the textarea (preserving existing content). Reset happens there.
+  store.chatDraft = sha
+}
+
+function formatCommitDate(iso: string): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return iso
+  return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+}
+
 // Conflict state for the shared merge/rebase resolution dialog
 const conflictDialog = ref(false)
 const conflictOperation = ref<'merge' | 'rebase' | null>(null)
@@ -389,12 +444,72 @@ async function handleOpenPr() {
 
       <!-- Git stats -->
       <template v-if="gitStats">
-        <!-- Commit count -->
-        <div class="row items-center q-mb-xs">
+        <!-- Commit count (clickable to expand the commit list) -->
+        <div
+          v-if="gitStats.commitCount > 0"
+          class="row items-center q-mb-xs commit-toggle cursor-pointer"
+          @click="toggleCommits"
+        >
           <q-icon name="commit" size="14px" color="grey-6" class="q-mr-xs" />
           <span class="text-caption text-grey-4" style="font-size: 11px;">
             {{ $t('git.commits', { count: gitStats.commitCount }, gitStats.commitCount) }}
           </span>
+          <q-spinner
+            v-if="loadingCommits"
+            size="12px"
+            color="indigo-4"
+            class="q-ml-xs"
+          />
+          <q-icon
+            v-else
+            :name="showCommits ? 'expand_less' : 'expand_more'"
+            size="14px"
+            color="grey-6"
+            class="q-ml-xs"
+          />
+        </div>
+        <div v-else class="row items-center q-mb-xs">
+          <q-icon name="commit" size="14px" color="grey-6" class="q-mr-xs" />
+          <span class="text-caption text-grey-4" style="font-size: 11px;">
+            {{ $t('git.commits', { count: 0 }, 0) }}
+          </span>
+        </div>
+
+        <!-- Commit list (click row → append SHA to chat draft, hover → full SHA tooltip) -->
+        <div v-if="showCommits" class="commit-list q-mb-sm">
+          <div v-if="loadingCommits" class="text-caption text-grey-6 q-pa-xs">
+            <q-spinner size="xs" class="q-mr-xs" />{{ $t('git.commits.loading') }}
+          </div>
+          <div v-else-if="commits.length === 0" class="text-caption text-grey-7 q-pa-xs">
+            {{ $t('git.commits.empty') }}
+          </div>
+          <template v-else>
+            <div
+              v-for="commit in commits"
+              :key="commit.sha"
+              class="commit-item row no-wrap items-center cursor-pointer"
+              @click="appendCommitToChat(commit.sha)"
+            >
+              <q-icon
+                :name="commit.isPushed ? 'cloud_done' : 'cloud_upload'"
+                size="12px"
+                :color="commit.isPushed ? 'grey-6' : 'orange-5'"
+                class="q-mr-xs commit-item-icon"
+              />
+              <span class="commit-sha text-grey-5">{{ commit.shortSha }}</span>
+              <span class="commit-subject text-grey-4 ellipsis q-ml-sm">{{ commit.subject }}</span>
+              <q-tooltip anchor="top middle" self="bottom middle" class="commit-tooltip">
+                <div class="text-caption">
+                  <div><code>{{ commit.sha }}</code></div>
+                  <div class="text-grey-5 q-mt-xs">{{ commit.author }} · {{ formatCommitDate(commit.date) }}</div>
+                  <div class="text-grey-6 q-mt-xs" style="font-style: italic;">
+                    {{ commit.isPushed ? $t('git.commits.pushed') : $t('git.commits.unpushed') }}
+                    · {{ $t('git.commits.clickToAppend') }}
+                  </div>
+                </div>
+              </q-tooltip>
+            </div>
+          </template>
         </div>
 
         <!-- File changes -->
@@ -636,5 +751,39 @@ async function handleOpenPr() {
 }
 .git-sync-btn :deep(.q-btn-dropdown--split) {
   gap: 0;
+}
+// Commit list — compact rows, clickable, hoverable.
+.commit-toggle:hover {
+  background-color: rgba(255, 255, 255, 0.03);
+  border-radius: 3px;
+}
+.commit-list {
+  max-height: 260px;
+  overflow-y: auto;
+  border-left: 2px solid rgba(255, 255, 255, 0.04);
+  margin-left: 7px; // align with the commit icon above
+  padding-left: 6px;
+}
+.commit-item {
+  padding: 3px 4px;
+  font-size: 11px;
+  line-height: 1.3;
+  border-radius: 3px;
+  transition: background-color 0.1s;
+}
+.commit-item:hover {
+  background-color: rgba(129, 140, 248, 0.08);
+}
+.commit-item-icon {
+  flex-shrink: 0;
+}
+.commit-sha {
+  font-family: 'Roboto Mono', monospace;
+  font-size: 10.5px;
+  flex-shrink: 0;
+}
+.commit-subject {
+  font-size: 11px;
+  min-width: 0;
 }
 </style>

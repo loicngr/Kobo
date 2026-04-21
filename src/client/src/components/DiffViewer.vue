@@ -28,6 +28,43 @@ const loadingFile = ref(false)
 const editorContainer = ref<HTMLElement | null>(null)
 const viewMode = ref<'side' | 'inline'>('side')
 
+/**
+ * Diff scope:
+ *  - `branch`   → working branch vs sourceBranch (= what the PR will contain)
+ *  - `unpushed` → committed-only changes vs origin/<workingBranch>
+ *                 (= what the next `git push` will send)
+ */
+const diffMode = ref<'branch' | 'unpushed'>('branch')
+
+// ── File tree drawer width (resizable) ────────────────────────────────────
+const FILE_LIST_WIDTH_KEY = 'kobo:diffViewerFileListWidth'
+const FILE_LIST_MIN = 180
+const FILE_LIST_MAX = 600
+const savedFileListWidth = parseInt(localStorage.getItem(FILE_LIST_WIDTH_KEY) ?? '280', 10)
+const fileListWidth = ref(Math.min(FILE_LIST_MAX, Math.max(FILE_LIST_MIN, savedFileListWidth)))
+
+function startFileListResize(event: MouseEvent) {
+  event.preventDefault()
+  const viewerEl = (event.target as HTMLElement).closest('.diff-viewer') as HTMLElement | null
+  if (!viewerEl) return
+  const viewerLeft = viewerEl.getBoundingClientRect().left
+
+  const onMouseMove = (e: MouseEvent) => {
+    fileListWidth.value = Math.min(FILE_LIST_MAX, Math.max(FILE_LIST_MIN, e.clientX - viewerLeft))
+  }
+  const onMouseUp = () => {
+    localStorage.setItem(FILE_LIST_WIDTH_KEY, String(fileListWidth.value))
+    document.removeEventListener('mousemove', onMouseMove)
+    document.removeEventListener('mouseup', onMouseUp)
+    document.body.style.cursor = ''
+    document.body.style.userSelect = ''
+  }
+  document.body.style.cursor = 'col-resize'
+  document.body.style.userSelect = 'none'
+  document.addEventListener('mousemove', onMouseMove)
+  document.addEventListener('mouseup', onMouseUp)
+}
+
 // Monaco instances (lazy loaded)
 let monaco: typeof import('monaco-editor') | null = null
 let diffEditor: import('monaco-editor').editor.IStandaloneDiffEditor | null = null
@@ -43,7 +80,9 @@ const selectedNodeKey = computed(() => (selectedFile.value ? `file:${selectedFil
 async function loadFiles() {
   loading.value = true
   try {
-    const res = await fetch(`/api/workspaces/${props.workspaceId}/diff`)
+    const res = await fetch(`/api/workspaces/${props.workspaceId}/diff?mode=${diffMode.value}`, {
+      cache: 'no-store',
+    })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = await res.json()
     files.value = data.files
@@ -103,7 +142,10 @@ async function loadFileDiff(filePath: string) {
       })
     }
 
-    const res = await fetch(`/api/workspaces/${props.workspaceId}/diff-file?path=${encodeURIComponent(filePath)}`)
+    const res = await fetch(
+      `/api/workspaces/${props.workspaceId}/diff-file?path=${encodeURIComponent(filePath)}&mode=${diffMode.value}`,
+      { cache: 'no-store' },
+    )
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = await res.json()
 
@@ -213,6 +255,20 @@ watch(viewMode, () => {
   }
 })
 
+// When the user toggles between Branch / Unpushed scopes, reload the list
+// and the currently-opened file (if any). If the file is no longer in the
+// new scope, clear the selection so the editor shows the empty state.
+watch(diffMode, async () => {
+  const previouslySelected = selectedFile.value
+  await loadFiles()
+  if (previouslySelected && files.value.some((f) => f.path === previouslySelected)) {
+    // Same file still in scope → reload its diff against the new base ref.
+    loadFileDiff(previouslySelected)
+  } else {
+    selectedFile.value = null
+  }
+})
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 function statusColor(status: DiffFile['status']): string {
@@ -259,9 +315,16 @@ onUnmounted(() => {
         style="font-size: 10px;"
       />
       <span v-if="sourceBranch" class="text-caption text-grey-6 q-ml-md" style="font-size: 11px;">
-        <span class="text-grey-7">{{ sourceBranch }}</span>
-        <q-icon name="arrow_forward" size="11px" color="grey-8" class="q-mx-xs" />
-        <span class="text-green-4">{{ workingBranch }}</span>
+        <template v-if="diffMode === 'branch'">
+          <span class="text-grey-7">{{ sourceBranch }}</span>
+          <q-icon name="arrow_forward" size="11px" color="grey-8" class="q-mx-xs" />
+          <span class="text-green-4">{{ workingBranch }}</span>
+        </template>
+        <template v-else>
+          <span class="text-grey-7">origin/{{ workingBranch }}</span>
+          <q-icon name="arrow_forward" size="11px" color="grey-8" class="q-mx-xs" />
+          <span class="text-green-4">HEAD</span>
+        </template>
       </span>
       <span
         v-if="selectedFile"
@@ -271,6 +334,20 @@ onUnmounted(() => {
         {{ selectedFile }}
       </span>
       <q-space />
+      <q-btn-toggle
+        v-model="diffMode"
+        dense
+        no-caps
+        size="sm"
+        toggle-color="indigo-8"
+        color="grey-9"
+        text-color="grey-5"
+        :options="[
+          { label: $t('diff.scopeBranch'), value: 'branch' },
+          { label: $t('diff.scopeUnpushed'), value: 'unpushed' },
+        ]"
+        class="q-mr-sm"
+      />
       <q-btn-toggle
         v-model="viewMode"
         dense
@@ -293,8 +370,12 @@ onUnmounted(() => {
     <q-separator dark />
 
     <div class="row col no-wrap" style="min-height: 0;">
-      <!-- File tree sidebar -->
-      <q-scroll-area class="diff-file-list q-pa-xs" style="width: 280px; min-width: 200px; height: 100%; border-right: 1px solid #2a2a4a;">
+      <!-- File tree sidebar (resizable via the drag handle on its right edge) -->
+      <div
+        class="diff-file-list-wrapper"
+        :style="{ width: `${fileListWidth}px`, minWidth: `${FILE_LIST_MIN}px` }"
+      >
+      <q-scroll-area class="diff-file-list q-pa-xs" style="width: 100%; height: 100%; border-right: 1px solid #2a2a4a;">
         <q-spinner-dots v-if="loading" size="24px" color="grey-6" class="q-ma-md" />
         <div v-else-if="files.length === 0" class="text-caption text-grey-8 q-pa-sm">{{ $t('diff.noChanges') }}</div>
         <q-tree
@@ -348,6 +429,8 @@ onUnmounted(() => {
           </template>
         </q-tree>
       </q-scroll-area>
+        <div class="diff-file-list-resize-handle" @mousedown="startFileListResize" />
+      </div>
 
       <!-- Monaco diff editor -->
       <div class="col column" style="min-width: 0; position: relative;">
@@ -392,6 +475,26 @@ onUnmounted(() => {
   border-bottom: 1px solid #2a2a4a;
 }
 
+.diff-file-list-wrapper {
+  position: relative;
+  height: 100%;
+  flex-shrink: 0;
+}
+.diff-file-list-resize-handle {
+  position: absolute;
+  top: 0;
+  right: -2px;
+  width: 4px;
+  height: 100%;
+  cursor: col-resize;
+  z-index: 10;
+  transition: background-color 0.15s;
+
+  &:hover,
+  &:active {
+    background-color: rgba(108, 99, 255, 0.5);
+  }
+}
 // Same as .left-sidebar in MainLayout
 .diff-file-list {
   background-color: #16162a;

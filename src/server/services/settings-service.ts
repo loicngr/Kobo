@@ -93,7 +93,17 @@ export interface GlobalSettings {
 }
 
 /** Default workspace tags seeded on fresh install and on settings upgrade. */
-export const DEFAULT_WORKSPACE_TAGS: string[] = ['bug', 'feature', 'refactor', 'docs', 'wip', 'urgent', 'blocked']
+export const DEFAULT_WORKSPACE_TAGS: string[] = [
+  'bug',
+  'feature',
+  'refactor',
+  'docs',
+  'wip',
+  'urgent',
+  'blocked',
+  'notion',
+  'sentry',
+]
 
 /** Top-level settings structure persisted to settings.json. */
 export interface Settings {
@@ -185,6 +195,19 @@ const settingsMigrations: SettingsMigration[] = [
     name: 'add-workspace-tags',
     migrate({ global }) {
       if (!Array.isArray(global.tags)) global.tags = [...DEFAULT_WORKSPACE_TAGS]
+    },
+  },
+  {
+    version: 9,
+    name: 'add-notion-sentry-default-tags',
+    migrate({ global }) {
+      if (!Array.isArray(global.tags)) {
+        global.tags = [...DEFAULT_WORKSPACE_TAGS]
+        return
+      }
+      for (const t of ['notion', 'sentry']) {
+        if (!(global.tags as string[]).includes(t)) (global.tags as string[]).push(t)
+      }
     },
   },
 ]

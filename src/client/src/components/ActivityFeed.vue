@@ -53,7 +53,10 @@ const rawLines = computed(() => {
 const scrollRef = ref<QScrollArea | null>(null)
 const STICKY_THRESHOLD_PX = 60
 const FETCH_MORE_THRESHOLD_PX = 200
-let stickToBottom = true
+// Reactive so the conditional "scroll to bottom" button can watch it — the
+// button is hidden as long as the user is pinned to the bottom, and pops up
+// as soon as they scroll up past STICKY_THRESHOLD_PX.
+const stickToBottom = ref(true)
 const loadingOlder = ref(false)
 let initialScrollDone = false
 
@@ -71,7 +74,7 @@ interface ScrollInfo {
 
 function onScroll(info: ScrollInfo) {
   const distanceFromBottom = info.verticalSize - info.verticalPosition - info.verticalContainerSize
-  stickToBottom = distanceFromBottom <= STICKY_THRESHOLD_PX
+  stickToBottom.value = distanceFromBottom <= STICKY_THRESHOLD_PX
 
   if (!initialScrollDone) return
 
@@ -183,6 +186,16 @@ async function scrollToBottom(duration = 0) {
   if (!area) return
   const scroll = area.getScroll()
   area.setScrollPosition('vertical', scroll.verticalSize, duration)
+}
+
+// Handler for the `scrollTo` event emitted by TurnCard's "scroll to top of
+// this message" button. The payload is the absolute Y in the scroll content
+// — TurnCard computes it locally via getBoundingClientRect so it doesn't
+// need access to the QScrollArea instance.
+function onTurnScrollTo(y: number) {
+  const area = scrollRef.value
+  if (!area) return
+  area.setScrollPosition('vertical', Math.max(0, y), 250)
 }
 
 // Collected via Vue template refs on <TurnCard v-for … ref="turnRefs">.
@@ -331,7 +344,7 @@ watch(eventCount, async (newLen, oldLen) => {
     await armInitialScroll()
     return
   }
-  if (newLen > oldLen && stickToBottom && !loadingOlder.value) {
+  if (newLen > oldLen && stickToBottom.value && !loadingOlder.value) {
     await scrollToBottom(180)
   }
 })
@@ -339,7 +352,7 @@ watch(eventCount, async (newLen, oldLen) => {
 watch(
   () => props.workspaceId,
   () => {
-    stickToBottom = true
+    stickToBottom.value = true
     firstPopulateDone = false
     initialScrollDone = false
     void showSwitchingSpinner()
@@ -352,7 +365,7 @@ watch(
 watch(
   () => workspaceStore.selectedSessionId,
   async () => {
-    stickToBottom = true
+    stickToBottom.value = true
     initialScrollDone = false
     await armInitialScroll()
   },
@@ -364,10 +377,17 @@ watch(
 const userSendCount = computed(() => userMessages.value.filter((m) => m.sender !== 'system-prompt').length)
 watch(userSendCount, async (newLen, oldLen) => {
   if (newLen > oldLen) {
-    stickToBottom = true
+    stickToBottom.value = true
     await scrollToBottom(180)
   }
 })
+
+// Click handler for the scroll-to-bottom button. Uses the existing helper
+// (smooth 250ms). The button is rendered only when `!stickToBottom`.
+async function handleScrollToBottomClick() {
+  stickToBottom.value = true
+  await scrollToBottom(250)
+}
 </script>
 
 <template>
@@ -387,7 +407,13 @@ watch(userSendCount, async (newLen, oldLen) => {
         <q-spinner size="sm" /> {{ $t('activity.loading_older') }}
       </div>
       <div class="q-pa-md">
-        <TurnCard v-for="(turn, i) in turns" :key="i" ref="turnRefs" :turn="turn" />
+        <TurnCard
+          v-for="(turn, i) in turns"
+          :key="i"
+          ref="turnRefs"
+          :turn="turn"
+          @scroll-to="onTurnScrollTo"
+        />
       </div>
       <div v-if="rawLines.length" class="q-px-md q-pb-md">
         <q-expansion-item :label="$t('activity.raw_lines', { n: rawLines.length })" dense>
@@ -397,18 +423,33 @@ watch(userSendCount, async (newLen, oldLen) => {
         </q-expansion-item>
       </div>
     </q-scroll-area>
-    <q-btn
-      round
-      dense
-      unelevated
-      color="grey-9"
-      text-color="grey-3"
-      icon="arrow_upward"
-      size="sm"
-      class="activity-feed-prev-btn"
-      :title="$t('activity.prev_user_message')"
-      @click="goToPreviousUserMessage"
-    />
+    <div class="activity-feed-nav-cluster">
+      <q-btn
+        v-if="!stickToBottom"
+        round
+        dense
+        unelevated
+        color="grey-9"
+        text-color="grey-3"
+        icon="arrow_downward"
+        size="sm"
+        class="activity-feed-nav-btn"
+        :title="$t('activity.scroll_to_bottom')"
+        @click="handleScrollToBottomClick"
+      />
+      <q-btn
+        round
+        dense
+        unelevated
+        color="grey-9"
+        text-color="grey-3"
+        icon="arrow_upward"
+        size="sm"
+        class="activity-feed-nav-btn"
+        :title="$t('activity.prev_user_message')"
+        @click="goToPreviousUserMessage"
+      />
+    </div>
   </div>
 </template>
 
@@ -422,15 +463,20 @@ watch(userSendCount, async (newLen, oldLen) => {
   height: 100%;
   width: 100%;
 }
-.activity-feed-prev-btn {
+.activity-feed-nav-cluster {
   position: absolute;
   right: 14px;
   bottom: 14px;
   z-index: 2;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.activity-feed-nav-btn {
   opacity: 0.8;
   transition: opacity 120ms ease;
 }
-.activity-feed-prev-btn:hover {
+.activity-feed-nav-btn:hover {
   opacity: 1;
 }
 .content-origin-marker {

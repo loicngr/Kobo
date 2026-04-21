@@ -33,7 +33,17 @@ const KOBO_MCP_BRIEF = [
 
 export function buildClaudeArgs(input: BuildClaudeArgsInput): BuildClaudeArgsResult {
   const args: string[] = ['--output-format', 'stream-json', '--verbose']
-  if (input.skipPermissions) args.push('--dangerously-skip-permissions')
+
+  // `plan` mode is handled by Claude Code natively via `--permission-mode plan`.
+  // Under plan mode, Claude restricts itself to read-only tools and surfaces an
+  // `ExitPlanMode` tool call when the plan is ready for the user to approve.
+  // `--dangerously-skip-permissions` is incompatible with plan mode (it would
+  // bypass the very restriction plan mode enforces), so we skip it here.
+  if (input.permissionMode === 'plan') {
+    args.push('--permission-mode', 'plan')
+  } else if (input.skipPermissions) {
+    args.push('--dangerously-skip-permissions')
+  }
 
   let prompt = input.prompt
 
@@ -41,10 +51,6 @@ export function buildClaudeArgs(input: BuildClaudeArgsInput): BuildClaudeArgsRes
   // turn's context already contains it, and re-prepending would spam.
   if (!input.resumeFromEngineSessionId) {
     prompt = `${KOBO_MCP_BRIEF}\n\n${prompt}`
-  }
-
-  if (input.permissionMode === 'plan') {
-    prompt = `[PLAN MODE] You are in PLAN/READ-ONLY mode. You MUST NOT create, edit, write, or delete any files. Only use read-only tools (Read, Grep, Glob, LS, Bash for read-only commands). Analyze the codebase, plan your approach, and present your findings — but do NOT execute any changes.\n\n${prompt}`
   }
 
   if (input.model && input.model !== 'auto') args.push('--model', input.model)

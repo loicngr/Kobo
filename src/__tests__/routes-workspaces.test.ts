@@ -100,6 +100,9 @@ vi.mock('../server/utils/git-ops.js', () => ({
   getPrUrlAsync: vi.fn().mockResolvedValue(null),
   getUnpushedCountAsync: vi.fn().mockResolvedValue(0),
   getWorkingTreeStatus: vi.fn().mockReturnValue({ staged: 0, modified: 0, untracked: 0 }),
+  getChangedFiles: vi.fn().mockReturnValue([]),
+  getUnpushedChangedFiles: vi.fn().mockReturnValue([]),
+  listBranchCommits: vi.fn().mockReturnValue([]),
 }))
 
 vi.mock('../server/services/websocket-service.js', () => ({
@@ -2168,6 +2171,192 @@ describe('PUT /api/workspaces/:id/tags', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tags: ['bug'] }),
     })
+    expect(res.status).toBe(404)
+  })
+})
+
+describe('GET /api/workspaces/:id/diff', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      id: 'w1',
+      name: 'W',
+      projectPath: '/p',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/x',
+      status: 'idle',
+      model: 'auto',
+      engine: 'claude-code',
+      reasoningEffort: 'auto',
+      permissionMode: 'auto-accept',
+      devServerStatus: 'stopped',
+      hasUnread: false,
+      archivedAt: null,
+      favoritedAt: null,
+      tags: [],
+      createdAt: '2026-04-21',
+      updatedAt: '2026-04-21',
+    } as never)
+  })
+
+  it('returns branch diff by default (vs sourceBranch)', async () => {
+    const branchFiles = [{ path: 'a.ts', status: 'modified' }]
+    vi.mocked(gitOps.getChangedFiles).mockReturnValue(branchFiles as never)
+    vi.mocked(gitOps.getUnpushedChangedFiles).mockReturnValue([])
+
+    const res = await app.request('/api/workspaces/w1/diff')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.mode).toBe('branch')
+    expect(body.files).toEqual(branchFiles)
+    expect(gitOps.getChangedFiles).toHaveBeenCalledWith(expect.any(String), 'develop')
+    expect(gitOps.getUnpushedChangedFiles).not.toHaveBeenCalled()
+  })
+
+  it('returns unpushed diff when mode=unpushed (vs origin/<workingBranch>)', async () => {
+    const unpushedFiles = [{ path: 'b.ts', status: 'added' }]
+    vi.mocked(gitOps.getChangedFiles).mockReturnValue([])
+    vi.mocked(gitOps.getUnpushedChangedFiles).mockReturnValue(unpushedFiles as never)
+
+    const res = await app.request('/api/workspaces/w1/diff?mode=unpushed')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.mode).toBe('unpushed')
+    expect(body.files).toEqual(unpushedFiles)
+    expect(gitOps.getUnpushedChangedFiles).toHaveBeenCalledWith(expect.any(String), 'feature/x')
+    expect(gitOps.getChangedFiles).not.toHaveBeenCalled()
+  })
+
+  it('falls back to branch mode when mode is anything other than "unpushed"', async () => {
+    vi.mocked(gitOps.getChangedFiles).mockReturnValue([])
+    const res = await app.request('/api/workspaces/w1/diff?mode=bogus')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.mode).toBe('branch')
+  })
+})
+
+describe('GET /api/workspaces/:id/diff-file', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      id: 'w1',
+      name: 'W',
+      projectPath: '/p',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/x',
+      status: 'idle',
+      model: 'auto',
+      engine: 'claude-code',
+      reasoningEffort: 'auto',
+      permissionMode: 'auto-accept',
+      devServerStatus: 'stopped',
+      hasUnread: false,
+      archivedAt: null,
+      favoritedAt: null,
+      tags: [],
+      createdAt: '2026-04-21',
+      updatedAt: '2026-04-21',
+    } as never)
+    vi.mocked(gitOps.getFileContent).mockReturnValue('modified content')
+  })
+
+  it('reads original from sourceBranch when mode=branch (default)', async () => {
+    vi.mocked(gitOps.getFileAtRef).mockReturnValue('branch original')
+    const res = await app.request('/api/workspaces/w1/diff-file?path=a.ts')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.mode).toBe('branch')
+    expect(body.original).toBe('branch original')
+    expect(body.modified).toBe('modified content')
+    expect(gitOps.getFileAtRef).toHaveBeenCalledWith(expect.any(String), 'develop', 'a.ts')
+  })
+
+  it('reads original from origin/<workingBranch> when mode=unpushed', async () => {
+    vi.mocked(gitOps.getFileAtRef).mockReturnValue('remote original')
+    const res = await app.request('/api/workspaces/w1/diff-file?path=a.ts&mode=unpushed')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.mode).toBe('unpushed')
+    expect(body.original).toBe('remote original')
+    expect(gitOps.getFileAtRef).toHaveBeenCalledWith(expect.any(String), 'origin/feature/x', 'a.ts')
+  })
+
+  it('returns 400 when path query param is missing', async () => {
+    const res = await app.request('/api/workspaces/w1/diff-file')
+    expect(res.status).toBe(400)
+  })
+})
+
+describe('GET /api/workspaces/:id/commits', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      id: 'w1',
+      name: 'W',
+      projectPath: '/p',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/x',
+      status: 'idle',
+      model: 'auto',
+      engine: 'claude-code',
+      reasoningEffort: 'auto',
+      permissionMode: 'auto-accept',
+      devServerStatus: 'stopped',
+      hasUnread: false,
+      archivedAt: null,
+      favoritedAt: null,
+      tags: [],
+      createdAt: '2026-04-21',
+      updatedAt: '2026-04-21',
+    } as never)
+  })
+
+  it('returns commits with their push state and the branches context', async () => {
+    const fakeCommits = [
+      {
+        sha: 'abc1234567890',
+        shortSha: 'abc1234',
+        subject: 'feat: add X',
+        author: 'Dev',
+        date: '2026-04-21T10:00:00Z',
+        isPushed: true,
+      },
+      {
+        sha: 'def1234567890',
+        shortSha: 'def1234',
+        subject: 'fix: Y',
+        author: 'Dev',
+        date: '2026-04-21T11:00:00Z',
+        isPushed: false,
+      },
+    ]
+    vi.mocked(gitOps.listBranchCommits).mockReturnValue(fakeCommits as never)
+
+    const res = await app.request('/api/workspaces/w1/commits')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.commits).toEqual(fakeCommits)
+    expect(body.sourceBranch).toBe('develop')
+    expect(body.workingBranch).toBe('feature/x')
+    expect(gitOps.listBranchCommits).toHaveBeenCalledWith(expect.any(String), 'develop', 'feature/x', 50)
+  })
+
+  it('respects the limit query param within [1, 200]', async () => {
+    vi.mocked(gitOps.listBranchCommits).mockReturnValue([])
+    await app.request('/api/workspaces/w1/commits?limit=10')
+    expect(gitOps.listBranchCommits).toHaveBeenCalledWith(expect.any(String), 'develop', 'feature/x', 10)
+  })
+
+  it('clamps invalid limit values to the default 50', async () => {
+    vi.mocked(gitOps.listBranchCommits).mockReturnValue([])
+    await app.request('/api/workspaces/w1/commits?limit=notanumber')
+    expect(gitOps.listBranchCommits).toHaveBeenCalledWith(expect.any(String), 'develop', 'feature/x', 50)
+  })
+
+  it('returns 404 for unknown workspace', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(undefined as never)
+    const res = await app.request('/api/workspaces/w1/commits')
     expect(res.status).toBe(404)
   })
 })

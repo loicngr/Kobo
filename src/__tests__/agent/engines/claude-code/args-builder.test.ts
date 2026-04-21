@@ -52,13 +52,15 @@ describe('buildClaudeArgs', () => {
     expect(args).not.toContain('--dangerously-skip-permissions')
   })
 
-  it('prepends plan-mode instructions when permissionMode is "plan"', () => {
+  it('passes --permission-mode plan to the CLI when permissionMode is "plan"', () => {
     const { args, effectivePrompt } = buildClaudeArgs({ ...base, permissionMode: 'plan' })
-    expect(effectivePrompt).toContain('[PLAN MODE]')
-    expect(effectivePrompt.startsWith('[PLAN MODE]')).toBe(true)
-    expect(effectivePrompt.endsWith('\n\nhello')).toBe(true)
-    // The -p value must match effectivePrompt (not the original prompt).
-    expect(args[args.length - 1]).toBe(effectivePrompt)
+    const idx = args.indexOf('--permission-mode')
+    expect(idx).toBeGreaterThan(-1)
+    expect(args[idx + 1]).toBe('plan')
+    // Plan mode is exclusive with --dangerously-skip-permissions.
+    expect(args).not.toContain('--dangerously-skip-permissions')
+    // No more [PLAN MODE] textual prepend — Claude CLI owns plan mode natively.
+    expect(effectivePrompt).not.toContain('[PLAN MODE]')
   })
 
   it('adds --resume <id> followed by -p <prompt> when resuming (no MCP brief on resume)', () => {
@@ -77,13 +79,19 @@ describe('buildClaudeArgs', () => {
     expect(args[i + 1]).toBe('/tmp/.mcp.json')
   })
 
-  it('preserves plan-mode prompt when combined with resume', () => {
+  it('combines plan mode with resume correctly (flag + resume + bare prompt, no MCP brief, no [PLAN MODE] text)', () => {
     const { args, effectivePrompt } = buildClaudeArgs({
       ...base,
       permissionMode: 'plan',
       resumeFromEngineSessionId: 'sess-xyz',
     })
-    expect(effectivePrompt).toContain('[PLAN MODE]')
-    expect(args[args.length - 1]).toBe(effectivePrompt)
+    expect(args).toContain('--permission-mode')
+    expect(args).toContain('plan')
+    expect(effectivePrompt).not.toContain('[PLAN MODE]')
+    expect(effectivePrompt).not.toContain('[Kōbō MCP]')
+    expect(effectivePrompt).toBe('hello')
+    const i = args.indexOf('--resume')
+    expect(i).toBeGreaterThan(-1)
+    expect(args[i + 1]).toBe('sess-xyz')
   })
 })

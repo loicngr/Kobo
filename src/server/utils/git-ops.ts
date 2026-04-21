@@ -291,6 +291,73 @@ export function getCommitsBetween(repoPath: string, base: string, head: string):
   }
 }
 
+/** A single commit on the working branch, with its push state. */
+export interface BranchCommit {
+  sha: string
+  shortSha: string
+  subject: string
+  author: string
+  date: string
+  isPushed: boolean
+}
+
+/**
+ * List commits between the source branch and HEAD, each flagged with whether
+ * it's already present on `origin/<workingBranch>`. Used by the Git panel
+ * to surface "commits waiting to be pushed" vs "commits already pushed".
+ * Up to `limit` commits (most recent first).
+ */
+export function listBranchCommits(
+  repoPath: string,
+  sourceBranch: string,
+  workingBranch: string,
+  limit = 50,
+  remote = 'origin',
+): BranchCommit[] {
+  const sourceRef = resolveBase(repoPath, sourceBranch)
+  const remoteRef = `${remote}/${workingBranch}`
+
+  // NUL-delimited format: sha \0 shortSha \0 subject \0 author \0 iso date \n
+  const FORMAT = '--pretty=format:%H%x00%h%x00%s%x00%an%x00%aI'
+
+  let raw: string
+  try {
+    raw = git(repoPath, ['log', `${sourceRef}..HEAD`, `--max-count=${limit}`, FORMAT])
+  } catch {
+    return []
+  }
+  if (!raw) return []
+
+  // Figure out which commits are already on the remote — bail out quietly if
+  // the remote ref doesn't exist (branch never pushed → every commit is unpushed).
+  const pushedShas = new Set<string>()
+  try {
+    git(repoPath, ['rev-parse', '--verify', remoteRef])
+    const pushedRaw = git(repoPath, ['log', `${sourceRef}..${remoteRef}`, '--pretty=format:%H'])
+    for (const line of pushedRaw.split('\n')) {
+      if (line) pushedShas.add(line.trim())
+    }
+  } catch {
+    // remote ref unknown → leave pushedShas empty
+  }
+
+  const commits: BranchCommit[] = []
+  for (const line of raw.split('\n')) {
+    if (!line) continue
+    const [sha, shortSha, subject, author, date] = line.split('\x00')
+    if (!sha) continue
+    commits.push({
+      sha,
+      shortSha: shortSha ?? '',
+      subject: subject ?? '',
+      author: author ?? '',
+      date: date ?? '',
+      isPushed: pushedShas.has(sha),
+    })
+  }
+  return commits
+}
+
 /** Get the GitHub PR URL for a branch using `gh pr view`. Returns null if no PR exists. */
 export function getPrUrl(repoPath: string, branchName: string): string | null {
   try {
@@ -380,6 +447,47 @@ export function getChangedFiles(repoPath: string, base: string): DiffFile[] {
     }
   } catch {
     // Ignore
+  }
+
+  return files
+}
+
+/**
+ * List committed files between `origin/<branch>` and local HEAD — the set
+ * of files the next `git push` would send. Working tree changes are NOT
+ * included: uncommitted edits aren't about to be pushed. Returns an empty
+ * list if there is no remote tracking branch yet.
+ */
+export function getUnpushedChangedFiles(repoPath: string, branchName: string, remote = 'origin'): DiffFile[] {
+  const remoteRef = `${remote}/${branchName}`
+  // Bail out cleanly if the remote branch doesn't exist (branch never pushed).
+  try {
+    git(repoPath, ['rev-parse', '--verify', remoteRef])
+  } catch {
+    return []
+  }
+
+  const files: DiffFile[] = []
+  try {
+    const output = git(repoPath, ['diff', '--name-status', `${remoteRef}..HEAD`])
+    for (const line of output.split('\n')) {
+      if (!line) continue
+      const [statusCode, ...pathParts] = line.split('\t')
+      if (!statusCode || pathParts.length === 0) continue
+      const filePath =
+        (statusCode.startsWith('R') || statusCode.startsWith('C')
+          ? pathParts[pathParts.length - 1]
+          : pathParts[0]
+        )?.replace(/\/$/, '') ?? ''
+      if (!filePath) continue
+      let status: DiffFile['status'] = 'modified'
+      if (statusCode.startsWith('A')) status = 'added'
+      else if (statusCode.startsWith('D')) status = 'deleted'
+      else if (statusCode.startsWith('R')) status = 'renamed'
+      files.push({ path: filePath, status })
+    }
+  } catch {
+    // Unlikely after the rev-parse check, but keep the happy path robust.
   }
 
   return files

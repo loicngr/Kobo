@@ -109,6 +109,24 @@ export function dispatchAgentEvent(
     // Don't return — tool:call may need other side-effects in the future.
   }
 
+  // `ExitPlanMode` is the native Claude CLI tool that signals the agent is
+  // leaving plan-read-only mode to start implementation. Kōbō mirrors that
+  // transition into `workspace.permissionMode` so the next turn no longer
+  // spawns the CLI with `--permission-mode plan` (and the UI badge updates
+  // from "Plan" to "Auto-accept" in real time).
+  if (event.kind === 'tool:call' && event.name === 'ExitPlanMode') {
+    const cur = workspaceStore.workspaces.find((w) => w.id === workspaceId)
+    if (cur?.permissionMode === 'plan') {
+      // Optimistic local update so the badge flips immediately.
+      workspaceStore.updateWorkspaceFromEvent(workspaceId, { permissionMode: 'auto-accept' })
+      // Persist to DB — best-effort. If it fails the local state will be
+      // corrected on the next fetchWorkspaces / workspace refresh.
+      void workspaceStore.updatePermissionMode(workspaceId, 'auto-accept').catch((err) => {
+        console.error('[websocket] failed to persist ExitPlanMode flip:', err)
+      })
+    }
+  }
+
   // session:started: a new turn just spun up. Flip the workspace status
   // to `executing` in the local cache so downstream UI (ActivityFeed's
   // `sessionActive` check, AgentBusyBanner, start/stop buttons) reflects
@@ -243,6 +261,21 @@ export const useWebSocketStore = defineStore('websocket', {
         type: 'chat:message',
         payload: { workspaceId, content, sessionId },
       })
+
+      // Optimistic status update — flip to `executing` instantly if the
+      // workspace is in a terminal state so the "Agent busy" banner,
+      // typing spinner and stop button show without waiting 1-3s for the
+      // round-trip: client → WS → backend → CLI spawn → init → session:started.
+      // If the backend actually fails to start, a session:ended event will
+      // come back soon and correct the status via the existing handler.
+      const ws = useWorkspaceStore()
+      const cur = ws.workspaces.find((w) => w.id === workspaceId)
+      if (
+        cur &&
+        (cur.status === 'completed' || cur.status === 'idle' || cur.status === 'error' || cur.status === 'quota')
+      ) {
+        ws.updateWorkspaceFromEvent(workspaceId, { status: 'executing' })
+      }
     },
 
     _send(data: Record<string, unknown>) {

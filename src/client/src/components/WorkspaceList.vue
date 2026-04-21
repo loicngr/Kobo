@@ -390,7 +390,7 @@ onMounted(async () => {
 
         <div v-show="attentionExpanded">
           <div v-for="group in groupedNeedsAttention" :key="group.projectPath" class="wl-project-group">
-            <div v-if="groupedNeedsAttention.length > 1" class="wl-project-label q-px-md q-pt-xs">
+            <div class="wl-project-label q-px-md q-pt-xs">
               <q-icon name="folder" size="12px" color="grey-7" class="q-mr-xs" />
               <span class="text-caption text-grey-7">{{ group.projectName }}</span>
             </div>
@@ -467,7 +467,7 @@ onMounted(async () => {
 
         <div v-show="runningExpanded">
           <div v-for="group in groupedRunning" :key="group.projectPath" class="wl-project-group">
-            <div v-if="groupedRunning.length > 1" class="wl-project-label q-px-md q-pt-xs">
+            <div class="wl-project-label q-px-md q-pt-xs">
               <q-icon name="folder" size="12px" color="grey-7" class="q-mr-xs" />
               <span class="text-caption text-grey-7">{{ group.projectName }}</span>
             </div>
@@ -543,7 +543,7 @@ onMounted(async () => {
 
         <div v-show="idleExpanded">
           <div v-for="group in groupedIdle" :key="group.projectPath" class="wl-project-group">
-            <div v-if="groupedIdle.length > 1" class="wl-project-label q-px-md q-pt-xs">
+            <div class="wl-project-label q-px-md q-pt-xs">
               <q-icon name="folder" size="12px" color="grey-7" class="q-mr-xs" />
               <span class="text-caption text-grey-7">{{ group.projectName }}</span>
             </div>
