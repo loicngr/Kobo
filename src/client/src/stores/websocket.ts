@@ -106,6 +106,17 @@ export function dispatchAgentEvent(
     if (/\bgit\b|commit|push|pull|merge|rebase|checkout|branch/i.test(cmd)) {
       workspaceStore.triggerGitRefresh()
     }
+    // Extra: when the agent renames the current branch in-place
+    // (`git branch -m [<old>] <new>`), the DB's `workingBranch` drifts from
+    // what git actually tracks. Fire a resync so the rest of Kōbō (push,
+    // PR, diff scopes, commits panel) stays aligned.
+    if (/\bgit\s+branch\s+-m\b/i.test(cmd)) {
+      setTimeout(() => {
+        void workspaceStore.resyncWorkspaceBranch(workspaceId).catch((err) => {
+          console.error('[websocket] Branch resync failed:', err)
+        })
+      }, 2500)
+    }
     // Don't return — tool:call may need other side-effects in the future.
   }
 

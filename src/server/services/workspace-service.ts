@@ -303,13 +303,21 @@ export function updateWorkspaceReasoningEffort(id: string, reasoningEffort: stri
   return getWorkspace(id) as Workspace
 }
 
-/** Update the working branch for a workspace (e.g. after ticket ID injection). */
+/**
+ * Update the working branch for a workspace. Used both after ticket-ID
+ * injection at creation time and after the rename-branch / resync-branch
+ * endpoints. Rejects empty / whitespace-only names.
+ */
 export function updateWorkingBranch(id: string, workingBranch: string): Workspace {
+  const sanitized = workingBranch.trim()
+  if (!sanitized) {
+    throw new Error('Branch name cannot be empty')
+  }
   const db = getDb()
   const now = new Date().toISOString()
   const result = db
     .prepare('UPDATE workspaces SET working_branch = ?, updated_at = ? WHERE id = ?')
-    .run(workingBranch, now, id)
+    .run(sanitized, now, id)
   if (result.changes === 0) {
     throw new Error(`Workspace '${id}' not found`)
   }

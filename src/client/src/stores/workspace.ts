@@ -469,6 +469,44 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
+    /**
+     * Rename the working branch in git, move its worktree dir to match, and
+     * persist the new name to the DB. Throws a WorkspaceActionError on
+     * conflict so the UI can surface a friendly message (e.g. the target
+     * name is already in use locally or on origin).
+     */
+    async renameWorkspaceBranch(id: string, newName: string): Promise<Workspace> {
+      const res = await fetch(`/api/workspaces/${id}/rename-branch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newName }),
+      })
+      const data = await res.json().catch(() => null)
+      if (!res.ok) {
+        throw new WorkspaceActionError(data?.error ?? 'Rename failed', data?.code)
+      }
+      const updated = data as Workspace
+      const idx = this.workspaces.findIndex((w) => w.id === id)
+      if (idx >= 0) this.workspaces[idx] = updated
+      return updated
+    },
+
+    /**
+     * Ask the backend to read the real HEAD of the worktree and update the
+     * DB's `workingBranch` if it drifted. Used after the agent renames the
+     * branch from within the chat (e.g. `git branch -m …`).
+     */
+    async resyncWorkspaceBranch(id: string): Promise<{ changed: boolean; workingBranch: string }> {
+      const res = await fetch(`/api/workspaces/${id}/resync-branch`, { method: 'POST' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const body = (await res.json()) as { changed: boolean; workingBranch: string }
+      if (body.changed) {
+        const idx = this.workspaces.findIndex((w) => w.id === id)
+        if (idx >= 0) this.workspaces[idx] = { ...this.workspaces[idx], workingBranch: body.workingBranch }
+      }
+      return body
+    },
+
     async updatePermissionMode(id: string, permissionMode: string) {
       try {
         const res = await fetch(`/api/workspaces/${id}`, {

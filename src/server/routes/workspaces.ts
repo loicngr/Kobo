@@ -1423,6 +1423,96 @@ app.get('/:id/commits', (c) => {
   }
 })
 
+// POST /api/workspaces/:id/rename-branch { newName }
+// Rename the working branch in git, move the worktree dir to match, and
+// update the DB. Run as one atomic operation from the UI "Rename branch"
+// action. If the worktree move fails (dirty tree, etc.) the branch rename
+// is kept — the DB is still updated so Kōbō tracks the current name.
+app.post('/:id/rename-branch', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const body = (await c.req.json().catch(() => ({}))) as { newName?: unknown }
+    const newName = typeof body.newName === 'string' ? body.newName.trim() : ''
+    if (!newName) {
+      return c.json({ error: 'newName is required' }, 400)
+    }
+    if (!/^[A-Za-z0-9/_\-.]+$/.test(newName)) {
+      return c.json({ error: 'Invalid branch name (only letters, digits, /, _, -, . allowed)' }, 400)
+    }
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+    if (newName === workspace.workingBranch) {
+      return c.json(workspace) // no-op
+    }
+
+    const oldWorktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    const newWorktreePath = path.join(workspace.projectPath, '.worktrees', newName)
+
+    // Reject early if the target name is already in use — either as a local
+    // branch or on origin. Avoids git's generic "already exists" error and
+    // protects against the same silent-fallback trap the create flow has.
+    if (gitOps.branchExists(oldWorktreePath, newName)) {
+      return c.json({ error: `Branch '${newName}' already exists (locally or on origin)`, code: 'branch_exists' }, 409)
+    }
+
+    try {
+      gitOps.renameBranch(oldWorktreePath, workspace.workingBranch, newName)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return c.json({ error: `Failed to rename git branch: ${message}` }, 500)
+    }
+
+    // Best-effort: align the worktree dir with the new branch name. If the
+    // tree is dirty or another process holds a lock, skip silently — the
+    // worktree keeps working under its old path, and Kōbō uses the ref name,
+    // not the dir, for git operations.
+    try {
+      gitOps.moveWorktree(workspace.projectPath, oldWorktreePath, newWorktreePath)
+    } catch (err) {
+      console.error('[workspaces] Failed to move worktree dir (branch renamed anyway):', err)
+    }
+
+    const updated = workspaceService.updateWorkingBranch(id, newName)
+    return c.json(updated)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// POST /api/workspaces/:id/resync-branch
+// Read the real current branch name inside the worktree (via
+// `git rev-parse --abbrev-ref HEAD`) and update the DB if it drifted. Used
+// after the agent renames the branch from the chat (`git branch -m …`).
+app.post('/:id/resync-branch', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    let actual: string
+    try {
+      actual = gitOps.getCurrentBranch(worktreePath).trim()
+    } catch (err) {
+      // Could mean the dir was moved too — try scanning worktrees.
+      const message = err instanceof Error ? err.message : String(err)
+      return c.json({ error: `Could not read HEAD: ${message}` }, 500)
+    }
+    if (!actual || actual === workspace.workingBranch) {
+      return c.json({ ok: true, changed: false, workingBranch: workspace.workingBranch })
+    }
+    const updated = workspaceService.updateWorkingBranch(id, actual)
+    return c.json({ ok: true, changed: true, workingBranch: updated.workingBranch })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
 // POST /api/workspaces/:id/push — push working branch to origin
 app.post('/:id/push', async (c) => {
   try {

@@ -24,6 +24,7 @@ const merging = ref(false)
 const openingPr = ref(false)
 const changingBase = ref(false)
 const showDiff = ref(false)
+const renamingBranch = ref(false)
 
 // Commit list expand state + cache per workspace
 interface BranchCommit {
@@ -149,6 +150,38 @@ watch(
 onUnmounted(() => {
   if (gitRefreshTimeout) clearTimeout(gitRefreshTimeout)
 })
+
+function openRenameBranchDialog() {
+  const ws = props.workspace
+  if (!ws) return
+  $q.dialog({
+    title: t('git.renameBranch'),
+    message: t('git.renameBranchPrompt', { branch: ws.workingBranch }),
+    prompt: { model: ws.workingBranch, type: 'text' },
+    dark: true,
+    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    ok: { flat: true, label: t('git.renameBranch'), color: 'indigo-4' },
+  }).onOk(async (newName: string) => {
+    const trimmed = (newName ?? '').trim()
+    if (!trimmed || trimmed === ws.workingBranch) return
+    renamingBranch.value = true
+    try {
+      await store.renameWorkspaceBranch(ws.id, trimmed)
+      $q.notify({ type: 'positive', message: t('git.renameBranchSuccess', { branch: trimmed }), position: 'top' })
+      loadGitStats()
+    } catch (e) {
+      const msg =
+        e instanceof WorkspaceActionError && e.code === 'branch_exists'
+          ? t('git.renameBranchExists', { branch: trimmed })
+          : e instanceof Error
+            ? e.message
+            : t('git.renameBranchFailed')
+      $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    } finally {
+      renamingBranch.value = false
+    }
+  })
+}
 
 function handleRebase() {
   if (!props.workspace) return
@@ -420,7 +453,7 @@ async function handleOpenPr() {
         <span class="text-caption text-grey-3">{{ repoName }}</span>
       </div>
 
-      <!-- Branch -->
+      <!-- Branch (click the pencil to rename in-place) -->
       <div class="row items-center q-mb-sm">
         <span
           style="width: 8px; height: 8px; border-radius: 50%; background-color: #4ade80; display: inline-block;"
@@ -429,6 +462,19 @@ async function handleOpenPr() {
         <span class="text-caption text-grey-4" style="font-family: 'Roboto Mono', monospace; font-size: 11px;">
           {{ workspace.workingBranch }}
         </span>
+        <q-btn
+          flat
+          round
+          dense
+          size="xs"
+          icon="edit"
+          color="grey-6"
+          class="q-ml-xs"
+          :loading="renamingBranch"
+          @click="openRenameBranchDialog"
+        >
+          <q-tooltip>{{ $t('git.renameBranch') }}</q-tooltip>
+        </q-btn>
       </div>
 
       <!-- Source branch info -->

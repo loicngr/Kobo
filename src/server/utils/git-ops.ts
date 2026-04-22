@@ -393,6 +393,48 @@ export function getPrStatus(repoPath: string, branchName: string): PrStatus | nu
   }
 }
 
+/**
+ * Rename a branch in-place (`git branch -m <old> <new>`). Must be run inside
+ * the worktree (or any directory tracking the repo) — the new name replaces
+ * the old one locally. The remote still has the old name; the caller is
+ * responsible for pushing the renamed branch if needed.
+ */
+export function renameBranch(repoPath: string, oldName: string, newName: string): void {
+  git(repoPath, ['branch', '-m', oldName, newName])
+}
+
+/**
+ * Check whether a branch name is already in use — either as a local branch
+ * or a remote tracking branch on the given remote. Used before renaming a
+ * branch to fail early with a clear error instead of letting git throw a
+ * generic "already exists" message.
+ */
+export function branchExists(repoPath: string, name: string, remote = 'origin'): boolean {
+  try {
+    git(repoPath, ['rev-parse', '--verify', '--quiet', `refs/heads/${name}`])
+    return true
+  } catch {
+    // not a local branch
+  }
+  try {
+    git(repoPath, ['rev-parse', '--verify', '--quiet', `refs/remotes/${remote}/${name}`])
+    return true
+  } catch {
+    // not a remote branch either
+  }
+  return false
+}
+
+/**
+ * Move a worktree directory on disk via `git worktree move`. Both the
+ * filesystem layout and the `worktrees` metadata file are updated atomically.
+ * Throws if the destination exists, the worktree is dirty, or the source
+ * is the main working tree.
+ */
+export function moveWorktree(projectPath: string, oldPath: string, newPath: string): void {
+  git(projectPath, ['worktree', 'move', oldPath, newPath])
+}
+
 /** A file entry in a diff with its path and change status. */
 export interface DiffFile {
   path: string
