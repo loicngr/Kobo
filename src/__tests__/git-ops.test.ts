@@ -15,6 +15,7 @@ import {
   getDiffStats,
   getDiffStatsBetween,
   getStructuredDiffStatsBetween,
+  listBranchCommits,
   listBranches,
   listRemoteBranches,
   pullBranch,
@@ -355,6 +356,106 @@ describe('getCommitCount', () => {
     expect(count).toBe(0)
 
     rmSync(repo, { recursive: true, force: true })
+  })
+})
+
+// Regression: local <base> ref may be stale relative to origin/<base> (e.g.,
+// a squash-merge happened upstream that local hasn't pulled). Feature branches
+// are created off origin/<base> by the worktree service, so their HEAD already
+// contains the upstream commits. Comparing against local <base> would falsely
+// report those upstream commits as "on the feature branch".
+describe('listBranchCommits — stale local base regression', () => {
+  function setupStaleLocalBase(): { local: string; remote: string } {
+    const remote = mkdtempSync(path.join(tmpdir(), 'at-stale-remote-'))
+    execFileSync('git', ['init', '--bare', '-b', 'main'], { cwd: remote })
+
+    const local = mkdtempSync(path.join(tmpdir(), 'at-stale-local-'))
+    execFileSync('git', ['clone', remote, local])
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: local })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: local })
+    writeFileSync(path.join(local, 'a.txt'), 'a')
+    execFileSync('git', ['add', '.'], { cwd: local })
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: local })
+    execFileSync('git', ['push', 'origin', 'main'], { cwd: local })
+
+    // Second clone to advance origin/main (simulates another dev's squash-merge).
+    const other = mkdtempSync(path.join(tmpdir(), 'at-stale-other-'))
+    execFileSync('git', ['clone', remote, other])
+    execFileSync('git', ['config', 'user.email', 'other@test.com'], { cwd: other })
+    execFileSync('git', ['config', 'user.name', 'other'], { cwd: other })
+    writeFileSync(path.join(other, 'b.txt'), 'b')
+    execFileSync('git', ['add', '.'], { cwd: other })
+    execFileSync('git', ['commit', '-m', 'squash: fix/TK-1150 merged'], { cwd: other })
+    execFileSync('git', ['push', 'origin', 'main'], { cwd: other })
+    rmSync(other, { recursive: true, force: true })
+
+    // Fetch so origin/main in local is up-to-date, but local main stays behind.
+    execFileSync('git', ['fetch', 'origin'], { cwd: local })
+
+    // Mimic worktree-service: branch feature FROM origin/main, not local main.
+    execFileSync('git', ['checkout', '-b', 'feature', 'origin/main'], { cwd: local })
+
+    return { local, remote }
+  }
+
+  it('returns [] when the feature branch has no own commits beyond origin/main', () => {
+    const { local, remote } = setupStaleLocalBase()
+    try {
+      const result = listBranchCommits(local, 'main', 'feature')
+      expect(result).toEqual([])
+    } finally {
+      rmSync(local, { recursive: true, force: true })
+      rmSync(remote, { recursive: true, force: true })
+    }
+  })
+
+  it("returns only the feature branch's own commits, ignoring upstream commits on origin/main", () => {
+    const { local, remote } = setupStaleLocalBase()
+    try {
+      writeFileSync(path.join(local, 'c.txt'), 'c')
+      execFileSync('git', ['add', '.'], { cwd: local })
+      execFileSync('git', ['commit', '-m', 'feat: add c'], { cwd: local })
+
+      const result = listBranchCommits(local, 'main', 'feature')
+      expect(result).toHaveLength(1)
+      expect(result[0].subject).toBe('feat: add c')
+    } finally {
+      rmSync(local, { recursive: true, force: true })
+      rmSync(remote, { recursive: true, force: true })
+    }
+  })
+
+  it('getCommitCount is symmetrically safe against stale local base', () => {
+    const { local, remote } = setupStaleLocalBase()
+    try {
+      expect(getCommitCount(local, 'main', 'feature')).toBe(0)
+
+      writeFileSync(path.join(local, 'c.txt'), 'c')
+      execFileSync('git', ['add', '.'], { cwd: local })
+      execFileSync('git', ['commit', '-m', 'feat: add c'], { cwd: local })
+      expect(getCommitCount(local, 'main', 'feature')).toBe(1)
+    } finally {
+      rmSync(local, { recursive: true, force: true })
+      rmSync(remote, { recursive: true, force: true })
+    }
+  })
+
+  it('getCommitsBetween is symmetrically safe against stale local base', () => {
+    const { local, remote } = setupStaleLocalBase()
+    try {
+      expect(getCommitsBetween(local, 'main', 'feature')).toBe('')
+
+      writeFileSync(path.join(local, 'c.txt'), 'c')
+      execFileSync('git', ['add', '.'], { cwd: local })
+      execFileSync('git', ['commit', '-m', 'feat: add c'], { cwd: local })
+
+      const out = getCommitsBetween(local, 'main', 'feature')
+      expect(out).toContain('feat: add c')
+      expect(out).not.toContain('squash: fix/TK-1150 merged')
+    } finally {
+      rmSync(local, { recursive: true, force: true })
+      rmSync(remote, { recursive: true, force: true })
+    }
   })
 })
 

@@ -7,6 +7,7 @@ import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { buildTemplateVars, expandTemplate } from 'src/utils/expand-template'
 import { KOBO_COMMANDS } from 'src/utils/kobo-commands'
+import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -22,10 +23,7 @@ const templatesStore = useTemplatesStore()
 const message = ref('')
 const interrupting = ref(false)
 
-const showInterrupt = computed(() => {
-  const ws = store.selectedWorkspace
-  return ws ? ['executing', 'extracting', 'brainstorming'].includes(ws.status) : false
-})
+const showInterrupt = computed(() => isBusyStatus(store.selectedWorkspace?.status))
 
 async function handleInterrupt() {
   if (!props.workspaceId) return
@@ -41,11 +39,7 @@ async function handleInterrupt() {
   }
 }
 
-const isAgentBusy = computed(() => {
-  const ws = store.selectedWorkspace
-  if (!ws) return false
-  return ['executing', 'extracting', 'brainstorming'].includes(ws.status)
-})
+const isAgentBusy = computed(() => isBusyStatus(store.selectedWorkspace?.status))
 
 const isQueued = computed(() => !!store.queuedMessages[props.workspaceId])
 

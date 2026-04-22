@@ -4,6 +4,7 @@ import { MODEL_OPTION_DEFS } from 'src/constants/models'
 import type { AgentSession } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { useTimeAgo } from 'src/utils/formatters'
+import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -35,10 +36,7 @@ const pendingWorkspaceUpdates = new Set<Promise<unknown>>()
 type SpawnField = 'model' | 'reasoningEffort' | 'permissionMode'
 const pendingSpawnChanges = ref<Set<SpawnField>>(new Set())
 
-const isAgentRunning = computed(() => {
-  const status = store.selectedWorkspace?.status
-  return status === 'executing' || status === 'extracting' || status === 'brainstorming'
-})
+const isAgentRunning = computed(() => isBusyStatus(store.selectedWorkspace?.status))
 
 watch(isAgentRunning, (running) => {
   if (!running) pendingSpawnChanges.value = new Set()
@@ -300,7 +298,7 @@ watch(
           :label="selectedWs.status"
           :color="
             ['error', 'quota'].includes(selectedWs.status) ? 'red-9' :
-            ['extracting', 'brainstorming', 'executing'].includes(selectedWs.status) ? 'green-9' :
+            isBusyStatus(selectedWs.status) ? 'green-9' :
             'grey-8'
           "
           class="q-ml-sm"
@@ -438,7 +436,7 @@ watch(
           </template>
         </q-select>
         <q-btn
-          v-if="['extracting', 'brainstorming', 'executing'].includes(selectedWs.status)"
+          v-if="isBusyStatus(selectedWs.status)"
           dense
           no-caps
           size="sm"

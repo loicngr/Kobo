@@ -258,7 +258,7 @@ function toKebabCase(str: string): string {
 // Get the final workspace name
 function getFinalName(): string {
   if (workspaceName.value.trim()) return workspaceName.value.trim().substring(0, 80)
-  if (!useNotion.value && description.value.trim()) {
+  if (!useNotion.value && !useSentry.value && description.value.trim()) {
     const firstLine = description.value.trim().split('\n')[0] ?? ''
     return firstLine.substring(0, 80) || 'workspace'
   }

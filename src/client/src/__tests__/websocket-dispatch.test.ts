@@ -33,4 +33,51 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
       expect.objectContaining({ toolUseId: 't1', status: 'done', totalTokens: 100 }),
     )
   })
+
+  it('triggers a git refresh 3 s after a `gh pr create` Bash tool:call', async () => {
+    vi.useFakeTimers()
+    try {
+      const { useWorkspaceStore } = await import('../stores/workspace.js')
+      const ws = useWorkspaceStore()
+      const spy = vi.spyOn(ws, 'triggerGitRefresh')
+      const { dispatchAgentEvent } = await import('../stores/websocket.js')
+
+      dispatchAgentEvent('w1', {
+        kind: 'tool:call',
+        messageId: 'm1',
+        toolCallId: 'c1',
+        name: 'Bash',
+        input: { command: 'gh pr create --title "X" --body "Y"', description: 'open PR' },
+      })
+
+      expect(spy).not.toHaveBeenCalled()
+      vi.advanceTimersByTime(3000)
+      expect(spy).toHaveBeenCalledTimes(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does NOT trigger a git refresh for `gh pr view` (read-only)', async () => {
+    vi.useFakeTimers()
+    try {
+      const { useWorkspaceStore } = await import('../stores/workspace.js')
+      const ws = useWorkspaceStore()
+      const spy = vi.spyOn(ws, 'triggerGitRefresh')
+      const { dispatchAgentEvent } = await import('../stores/websocket.js')
+
+      dispatchAgentEvent('w1', {
+        kind: 'tool:call',
+        messageId: 'm1',
+        toolCallId: 'c1',
+        name: 'Bash',
+        input: { command: 'gh pr view feature/foo', description: 'inspect PR' },
+      })
+
+      vi.advanceTimersByTime(5000)
+      expect(spy).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

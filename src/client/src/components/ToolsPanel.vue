@@ -3,16 +3,13 @@ import { useQuasar } from 'quasar'
 import DevServerPanel from 'src/components/DevServerPanel.vue'
 import { useSettingsStore } from 'src/stores/settings'
 import type { Workspace } from 'src/stores/workspace'
+import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{
   workspace: Workspace | null
 }>()
-
-// Statuses during which the agent is actively working and the setup script
-// must NOT be re-run (it would race with the agent's current operations).
-const BUSY_STATUSES = ['executing', 'extracting', 'brainstorming'] as const
 
 const { t } = useI18n()
 const $q = useQuasar()
@@ -31,9 +28,7 @@ const hasSetupScript = computed(() => {
 
 const hasEditorCommand = computed(() => !!settingsStore.global.editorCommand)
 
-const isAgentBusy = computed(() =>
-  props.workspace ? (BUSY_STATUSES as readonly string[]).includes(props.workspace.status) : false,
-)
+const isAgentBusy = computed(() => isBusyStatus(props.workspace?.status))
 
 function runSetupScript() {
   if (!workspaceId.value) return

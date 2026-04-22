@@ -117,6 +117,18 @@ export function dispatchAgentEvent(
         })
       }, 2500)
     }
+    // Extra: `gh pr create` opens a new PR on GitHub. The generic git
+    // regex above does not match `gh`, so without this block the
+    // GitPanel would only show the new PR after the 30 s pr-watcher
+    // poll (or a manual refresh). Schedule a refresh 3 s later — long
+    // enough for the `gh` CLI to finish its round-trip to GitHub so the
+    // subsequent `gh pr view` sees the freshly created PR. The regex is
+    // deliberately loose (would also match a hypothetical
+    // `gh pr create-from-template`) — a false positive just causes an
+    // extra idempotent refresh.
+    if (/\bgh\s+pr\s+create\b/i.test(cmd)) {
+      setTimeout(() => workspaceStore.triggerGitRefresh(), 3000)
+    }
     // Don't return — tool:call may need other side-effects in the future.
   }
 

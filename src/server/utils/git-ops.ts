@@ -242,13 +242,19 @@ export function abortOngoingGitOperation(repoPath: string): 'merge' | 'rebase' |
 
 /** Try a git command with `base`, falling back to `origin/base` if the local ref is missing. */
 function resolveBase(repoPath: string, base: string): string {
+  // Prefer `origin/<base>` when it exists: local <base> can lag behind origin
+  // (e.g. a squash-merge happened upstream that the user hasn't pulled), and
+  // worktrees are created off `origin/<sourceBranch>` anyway — so comparing
+  // against stale local <base> would surface upstream commits as "on this
+  // branch". Fall back to local only when the remote ref isn't reachable
+  // (offline, no remote configured, etc.).
   try {
-    git(repoPath, ['rev-parse', '--verify', base])
-    return base
+    git(repoPath, ['rev-parse', '--verify', `origin/${base}`])
+    return `origin/${base}`
   } catch {
     try {
-      git(repoPath, ['rev-parse', '--verify', `origin/${base}`])
-      return `origin/${base}`
+      git(repoPath, ['rev-parse', '--verify', base])
+      return base
     } catch {
       return base
     }

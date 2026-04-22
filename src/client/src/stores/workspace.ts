@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import type { RateLimitInfo } from '../types/agent-event'
+import { isBusyStatus } from '../utils/workspace-status'
 import { useWebSocketStore } from './websocket'
 
 export interface Workspace {
@@ -188,7 +189,7 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     needsAttention: (state) => state.workspaces.filter((w) => ['error', 'quota'].includes(w.status)),
 
-    running: (state) => state.workspaces.filter((w) => ['extracting', 'brainstorming', 'executing'].includes(w.status)),
+    running: (state) => state.workspaces.filter((w) => isBusyStatus(w.status)),
 
     idle: (state) => state.workspaces.filter((w) => ['completed', 'idle', 'created'].includes(w.status)),
 

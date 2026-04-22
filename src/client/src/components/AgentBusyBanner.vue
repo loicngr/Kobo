@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, inject } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -12,7 +13,7 @@ const runningSubagentCount = computed(() => store.currentSubagents.filter((s) =>
 const isVisible = computed(() => {
   const ws = store.selectedWorkspace
   if (!ws) return false
-  return ws.status === 'executing' || runningSubagentCount.value > 0
+  return isBusyStatus(ws.status) || runningSubagentCount.value > 0
 })
 
 function viewSubagents() {

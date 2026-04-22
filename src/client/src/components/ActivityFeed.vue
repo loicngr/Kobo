@@ -6,6 +6,7 @@ import { useAgentStreamStore } from 'src/stores/agent-stream'
 import { useSettingsStore } from 'src/stores/settings'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import type { AgentEvent } from 'src/types/agent-event'
+import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import TurnCard from './TurnCard.vue'
 
@@ -28,8 +29,7 @@ const userMessages = computed<(UserMessage & { sessionId?: string })[]>(() => {
 
 const sessionActive = computed(() => {
   const ws = workspaceStore.workspaces.find((w) => w.id === props.workspaceId)
-  if (!ws) return false
-  return ws.status === 'extracting' || ws.status === 'brainstorming' || ws.status === 'executing'
+  return isBusyStatus(ws?.status)
 })
 
 const turns = computed(() => {

@@ -8,6 +8,7 @@ import { useWebSocketStore } from 'src/stores/websocket'
 import type { Workspace } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { useTimeAgo } from 'src/utils/formatters'
+import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -202,8 +203,6 @@ async function openInEditor(ws: Workspace) {
   }
 }
 
-const BUSY_STATUSES = ['executing', 'extracting', 'brainstorming']
-
 function onToggleFavorite(ws: Workspace) {
   void store.toggleFavorite(ws.id).catch((err) => {
     $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 4000 })
@@ -212,7 +211,7 @@ function onToggleFavorite(ws: Workspace) {
 
 function runSetupScript(ws: Workspace) {
   // Guard: never run while the agent is busy — would race with the agent's work.
-  if (BUSY_STATUSES.includes(ws.status)) {
+  if (isBusyStatus(ws.status)) {
     $q.notify({
       type: 'warning',
       message: t('tools.runSetupScriptBusy'),
