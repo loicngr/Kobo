@@ -17,6 +17,7 @@ import * as sentryService from '../services/sentry-service.js'
 import * as settingsService from '../services/settings-service.js'
 import { runSetupScript } from '../services/setup-script-service.js'
 import * as terminalService from '../services/terminal-service.js'
+import * as wakeupService from '../services/wakeup-service.js'
 import * as wsService from '../services/websocket-service.js'
 import type { PermissionMode, WorkspaceStatus } from '../services/workspace-service.js'
 import * as workspaceService from '../services/workspace-service.js'
@@ -590,6 +591,30 @@ app.get('/:id/sessions', (c) => {
     if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
     const sessions = workspaceService.listSessions(id)
     return c.json(sessions)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// GET /api/workspaces/:id/pending-wakeup — returns the pending wakeup or null.
+app.get('/:id/pending-wakeup', (c) => {
+  try {
+    const id = c.req.param('id')
+    const pending = wakeupService.getPending(id)
+    return c.json(pending)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// DELETE /api/workspaces/:id/pending-wakeup — user-initiated cancel ("×" button).
+app.delete('/:id/pending-wakeup', (c) => {
+  try {
+    const id = c.req.param('id')
+    wakeupService.cancel(id, 'manual')
+    return c.json({ ok: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
@@ -1687,6 +1712,10 @@ Start now.`
     const session = workspaceService.getActiveSession(workspace.id)
     wsService.emit(workspace.id, 'user:message', { content: prompt, sender: 'user' }, session?.id ?? undefined)
 
+    // Cancel any pending wakeup: the user is driving this turn, the
+    // scheduler should not also wake the agent a few minutes later.
+    wakeupService.cancel(workspace.id, 'user-message')
+
     let messageSent = false
     try {
       agentManager.sendMessage(workspace.id, prompt)
@@ -1842,6 +1871,9 @@ app.post('/:id/open-pr', async (c) => {
     // Emit user:message into the chat feed
     const session = workspaceService.getActiveSession(workspace.id)
     wsService.emit(workspace.id, 'user:message', { content: rendered, sender: 'user' }, session?.id ?? undefined)
+
+    // Cancel any pending wakeup: the user is driving this turn.
+    wakeupService.cancel(workspace.id, 'user-message')
 
     // Send to the running agent, or resume the agent with the PR prompt
     let messageSent = false

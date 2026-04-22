@@ -575,4 +575,11 @@ export default {
   'engine.permission': 'Mode de permission',
   'engine.permission.auto-accept': 'Acceptation auto',
   'engine.permission.plan': 'Plan (lecture seule)',
+
+  // Scheduled wakeup banner
+  'wakeup.scheduledIn': 'Prochain réveil dans {n}s',
+  'wakeup.scheduledAt': 'Prochain réveil à {time}',
+  'wakeup.firing': 'Réveil en cours…',
+  'wakeup.reason': 'Raison : {reason}',
+  'wakeup.cancel': 'Annuler ce réveil',
 }

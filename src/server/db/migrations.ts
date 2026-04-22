@@ -101,6 +101,21 @@ export const migrations: Migration[] = [
       })()
     },
   },
+  {
+    version: 11,
+    name: 'add-pending-wakeups-table',
+    migrate: (db) => {
+      db.prepare(
+        `CREATE TABLE IF NOT EXISTS pending_wakeups (
+          workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+          target_at    TEXT NOT NULL,
+          prompt       TEXT NOT NULL,
+          reason       TEXT,
+          created_at   TEXT NOT NULL
+        )`,
+      ).run()
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

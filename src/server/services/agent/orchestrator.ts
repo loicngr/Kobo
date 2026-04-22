@@ -12,6 +12,7 @@ import {
 } from '../../utils/paths.js'
 import { unregisterProcess } from '../../utils/process-tracker.js'
 import { getEffectiveSettings } from '../settings-service.js'
+import * as wakeupService from '../wakeup-service.js'
 import { emitEphemeral } from '../websocket-service.js'
 import { getWorkspace as getWs, markWorkspaceUnread, updateWorkspaceStatus } from '../workspace-service.js'
 import { resolveEngine } from './engines/registry.js'
@@ -332,6 +333,16 @@ function reuseOrCreateFreshSession(workspaceId: string, existingSessionId: strin
 function handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent): void {
   routeEvent(workspaceId, agentSessionId, ev)
 
+  if (ev.kind === 'tool:call' && ev.name === 'ScheduleWakeup') {
+    const input = ev.input as Record<string, unknown> | undefined
+    const delay = typeof input?.delaySeconds === 'number' ? input.delaySeconds : 0
+    const prompt = typeof input?.prompt === 'string' ? input.prompt : ''
+    const reason = typeof input?.reason === 'string' ? input.reason : undefined
+    if (delay > 0 && prompt) {
+      wakeupService.schedule(workspaceId, delay, prompt, reason)
+    }
+  }
+
   if (ev.kind === 'skills:discovered') {
     availableSkills = ev.skills
     try {
@@ -572,6 +583,8 @@ export function stopAgent(workspaceId: string): void {
     throw new Error(`No agent running for workspace '${workspaceId}'`)
   }
 
+  wakeupService.cancel(workspaceId, 'stopped')
+
   // Remove from the map immediately so startAgent can proceed right away.
   // The session:ended handler checks identity before removing, so a new
   // controller started in the meantime is preserved.
@@ -595,12 +608,18 @@ export function sendMessage(workspaceId: string, content: string): void {
   if (!ctrl) {
     throw new Error(`No agent running for workspace '${workspaceId}'`)
   }
+  wakeupService.cancel(workspaceId, 'user-message')
   ctrl.sendMessage(content)
 }
 
 /** In-memory status of the agent for a workspace, or null if not running. */
 export function getAgentStatus(workspaceId: string): 'running' | 'stopping' | null {
   return controllers.get(workspaceId)?.status ?? null
+}
+
+/** True when an agent controller is currently running for the workspace. */
+export function hasController(workspaceId: string): boolean {
+  return controllers.has(workspaceId)
 }
 
 /** Number of currently running controllers. */
@@ -701,3 +720,6 @@ export function _getSessionIds(): Map<string, string> {
 export function _runWatchdogForTest(): void {
   runWatchdog()
 }
+
+/** Test-only export. Not part of the public module API. */
+export const __test__ = { handleEvent }

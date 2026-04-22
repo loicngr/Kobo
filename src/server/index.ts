@@ -35,6 +35,7 @@ import { createDailyDbBackupIfNeeded } from './services/db-backup-service.js'
 import { startDevServer, stopDevServer } from './services/dev-server-service.js'
 import { startPrWatcher, stopPrWatcher } from './services/pr-watcher-service.js'
 import { createTerminal, destroyAllTerminals, getTerminal } from './services/terminal-service.js'
+import * as wakeupService from './services/wakeup-service.js'
 import { emit, handleConnection, setMessageHandler } from './services/websocket-service.js'
 import { getActiveSession, getWorkspace, updateWorkspaceStatus } from './services/workspace-service.js'
 import { getClientSpaPath, getDbPath, getKoboHome, getPackageVersion } from './utils/paths.js'
@@ -69,10 +70,11 @@ void createDailyDbBackupIfNeeded(db, getDbPath()).then((r) => {
   }
 })
 
-// Initialize process cleanup, agent watchdog, and PR watcher
+// Initialize process cleanup, agent watchdog, PR watcher, and wakeup rehydration
 initProcessCleanup()
 reconcileOrphanSessions()
 startWatchdog()
+wakeupService.rehydrate()
 startPrWatcher()
 
 // Create Hono app

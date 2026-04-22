@@ -18,6 +18,7 @@ const ActivityFeed = defineAsyncComponent(() =>
 import AgentBusyBanner from 'src/components/AgentBusyBanner.vue'
 import AgentErrorBanner from 'src/components/AgentErrorBanner.vue'
 import ChatInput from 'src/components/ChatInput.vue'
+import WakeupBanner from 'src/components/WakeupBanner.vue'
 
 const $q = useQuasar()
 const store = useWorkspaceStore()
@@ -44,9 +45,11 @@ watch(isAgentRunning, (running) => {
 
 watch(
   () => store.selectedWorkspaceId,
-  () => {
+  (newId) => {
     pendingSpawnChanges.value = new Set()
+    if (newId) void store.fetchPendingWakeup(newId)
   },
+  { immediate: true },
 )
 
 function markSpawnFieldPending(field: SpawnField): void {
@@ -268,6 +271,10 @@ onMounted(() => {
   const id = route.params.id as string | undefined
   if (id) {
     store.selectWorkspace(id)
+    // Explicit fetch — the `immediate: true` watcher on selectedWorkspaceId
+    // above also covers this, but calling it here makes the mount-time
+    // hydration independent of that watcher's timing (defense-in-depth).
+    void store.fetchPendingWakeup(id)
   }
   const sessionParam = route.query.session as string | undefined
   if (sessionParam) {
@@ -472,6 +479,7 @@ watch(
     </Suspense>
 
     <AgentBusyBanner />
+    <WakeupBanner />
 
     <!-- Chat Input — pinned at bottom -->
     <ChatInput

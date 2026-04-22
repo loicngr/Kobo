@@ -1,5 +1,6 @@
 import { nanoid } from 'nanoid'
 import { getDb } from '../db/index.js'
+import * as wakeupService from './wakeup-service.js'
 
 /** Lifecycle states for a workspace. Transitions are validated against VALID_TRANSITIONS. */
 export type WorkspaceStatus =
@@ -357,6 +358,11 @@ export function markWorkspaceUnread(id: string): void {
 
 /** Delete a workspace and cascade-delete its tasks. */
 export function deleteWorkspace(id: string): void {
+  // Cancel any pending wakeup first so the in-memory timer is cleared.
+  // The DB row is removed via ON DELETE CASCADE, but the timer would
+  // otherwise fire and hit an empty workspace.
+  wakeupService.cancel(id, 'deleted')
+
   const db = getDb()
   db.prepare('DELETE FROM workspaces WHERE id = ?').run(id)
 }
@@ -451,6 +457,9 @@ export function archiveWorkspace(id: string): Workspace {
   if (workspace.archivedAt) {
     throw new Error(`Workspace '${id}' is already archived`)
   }
+
+  // Cancel any pending wakeup — archived workspaces should not wake up.
+  wakeupService.cancel(id, 'archived')
 
   const now = new Date().toISOString()
   db.prepare('UPDATE workspaces SET archived_at = ?, updated_at = ? WHERE id = ?').run(now, now, id)

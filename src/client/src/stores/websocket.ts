@@ -171,6 +171,10 @@ export function dispatchAgentEvent(
   if (event.kind === 'session:ended') {
     const derivedStatus = event.reason === 'completed' ? 'completed' : event.reason === 'error' ? 'error' : 'idle'
     workspaceStore.updateWorkspaceFromEvent(workspaceId, { status: derivedStatus })
+    // Subagents live inside the parent session: when it ends, any still in
+    // `running` are orphaned. Flip them to `done` so AgentBusyBanner doesn't
+    // keep reporting "1 sub-agent en cours" on a completed workspace.
+    workspaceStore.finalizeRunningSubagents(workspaceId)
     workspaceStore.fetchWorkspaces()
     if (!_replayingNotifications && event.reason !== 'killed') {
       const wsName = workspaceStore.workspaces.find((w) => w.id === workspaceId)?.name ?? ''
@@ -555,6 +559,23 @@ export const useWebSocketStore = defineStore('websocket', {
           if (workspaceStore.archivedLoaded) {
             workspaceStore.fetchArchivedWorkspaces()
           }
+          break
+        }
+
+        case 'wakeup:scheduled': {
+          if (wid) {
+            const p = payload as { targetAt?: string; reason?: string }
+            if (typeof p.targetAt === 'string') {
+              workspaceStore.setPendingWakeup(wid, { targetAt: p.targetAt, reason: p.reason })
+            }
+          }
+          break
+        }
+
+        case 'wakeup:cancelled':
+        case 'wakeup:fired':
+        case 'wakeup:skipped': {
+          if (wid) workspaceStore.clearPendingWakeup(wid)
           break
         }
 

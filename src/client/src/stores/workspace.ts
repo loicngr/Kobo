@@ -151,6 +151,11 @@ export interface GitStats {
   workingTree: { staged: number; modified: number; untracked: number }
 }
 
+export interface PendingWakeup {
+  targetAt: string
+  reason?: string
+}
+
 const MAX_FEED_ITEMS = 5000
 
 export const useWorkspaceStore = defineStore('workspace', {
@@ -182,6 +187,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     queuedMessages: {} as Record<string, { content: string; sessionId?: string }>,
     gitRefreshTrigger: 0,
     gitStatsCache: {} as Record<string, GitStats>,
+    pendingWakeups: {} as Record<string, PendingWakeup>,
   }),
 
   getters: {
@@ -906,8 +912,67 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.gitRefreshTrigger++
     },
 
+    async fetchPendingWakeup(workspaceId: string): Promise<void> {
+      try {
+        const res = await fetch(`/api/workspaces/${workspaceId}/pending-wakeup`, { cache: 'no-store' })
+        if (!res.ok) return
+        const data = (await res.json()) as PendingWakeup | null
+        if (data) this.pendingWakeups[workspaceId] = data
+        else delete this.pendingWakeups[workspaceId]
+      } catch (err) {
+        console.error('[workspace-store] fetchPendingWakeup failed:', err)
+      }
+    },
+
+    setPendingWakeup(workspaceId: string, wakeup: PendingWakeup): void {
+      this.pendingWakeups[workspaceId] = wakeup
+    },
+
+    clearPendingWakeup(workspaceId: string): void {
+      delete this.pendingWakeups[workspaceId]
+    },
+
+    async cancelPendingWakeup(workspaceId: string): Promise<void> {
+      // Optimistic local clear — the `wakeup:cancelled` WS event will do the
+      // same a moment later, but clearing now gives instant feedback. If the
+      // DELETE fails (network, 500, etc.), re-fetch to restore the truth so
+      // the banner doesn't lie about what the backend will actually do.
+      const hadPending = this.pendingWakeups[workspaceId] !== undefined
+      delete this.pendingWakeups[workspaceId]
+      try {
+        const res = await fetch(`/api/workspaces/${workspaceId}/pending-wakeup`, { method: 'DELETE' })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      } catch (err) {
+        console.error('[workspace-store] cancelPendingWakeup failed:', err)
+        if (hadPending) {
+          // Reconcile with backend — may restore the banner if the server
+          // still has the row, or confirm the clear if it was already gone.
+          await this.fetchPendingWakeup(workspaceId)
+        }
+      }
+    },
+
     updateAgentTodos(workspaceId: string, todos: AgentTodo[]) {
       this.agentTodos[workspaceId] = todos
+    },
+
+    /**
+     * Mark every subagent still in `running` state as `done`. Called on
+     * `session:ended` — the session is the unit that hosts subagents, so when
+     * it ends, any subagent still reported as running is orphaned and must
+     * not keep AgentBusyBanner visible. Preserves all other fields; only
+     * flips status. No-op if the workspace has no subagents.
+     */
+    finalizeRunningSubagents(workspaceId: string) {
+      const map = this.subagents[workspaceId]
+      if (!map) return
+      const now = new Date().toISOString()
+      for (const toolUseId of Object.keys(map)) {
+        const sub = map[toolUseId]
+        if (sub.status === 'running') {
+          map[toolUseId] = { ...sub, status: 'done', updatedAt: now }
+        }
+      }
     },
 
     upsertSubagent(workspaceId: string, data: Partial<Subagent> & { toolUseId: string }) {

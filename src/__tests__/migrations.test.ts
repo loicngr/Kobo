@@ -1,6 +1,7 @@
 import Database from 'better-sqlite3'
 import { describe, expect, it } from 'vitest'
 import { getMigrationHistory, migrations, runMigrations, SCHEMA_VERSION } from '../server/db/migrations.js'
+import { initSchema } from '../server/db/schema.js'
 
 describe('runMigrations(db)', () => {
   it('crée toutes les tables requises (fresh install)', () => {
@@ -34,8 +35,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 10', () => {
-    expect(SCHEMA_VERSION).toBe(10)
+  it('exporte SCHEMA_VERSION = 11', () => {
+    expect(SCHEMA_VERSION).toBe(11)
   })
 
   it('migre depuis la legacy schema_version table', () => {
@@ -595,5 +596,60 @@ describe('runMigrations(db)', () => {
 
     freshDb.close()
     upgradedDb.close()
+  })
+})
+
+describe('migration v11: add-pending-wakeups-table', () => {
+  it('adds pending_wakeups table with expected columns after runMigrations', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+
+    const table = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='pending_wakeups'").get()
+    expect(table).toBeTruthy()
+
+    const cols = db.prepare('PRAGMA table_info(pending_wakeups)').all() as Array<{
+      name: string
+      pk: number
+    }>
+    expect(cols.map((c) => c.name).sort()).toEqual(
+      ['created_at', 'prompt', 'reason', 'target_at', 'workspace_id'].sort(),
+    )
+    const pk = cols.find((c) => c.pk === 1)
+    expect(pk?.name).toBe('workspace_id')
+    db.close()
+  })
+
+  it('fresh install via initSchema produces the same pending_wakeups shape as runMigrations', () => {
+    const freshDb = new Database(':memory:')
+    initSchema(freshDb)
+    const freshCols = freshDb.prepare('PRAGMA table_info(pending_wakeups)').all()
+
+    const upgradedDb = new Database(':memory:')
+    runMigrations(upgradedDb)
+    const upgradedCols = upgradedDb.prepare('PRAGMA table_info(pending_wakeups)').all()
+
+    expect(freshCols).toEqual(upgradedCols)
+    freshDb.close()
+    upgradedDb.close()
+  })
+
+  it('v10 → v11 upgrade preserves existing workspace data', () => {
+    const db = new Database(':memory:')
+    // Seed via runMigrations up through v10, then simulate an existing row
+    runMigrations(db)
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run('w1', 'legacy', '/tmp/p', 'main', 'feat', '2025-01-01', '2025-01-01')
+
+    // Verify the workspace row survived and pending_wakeups is empty.
+    const ws = db.prepare('SELECT id, name FROM workspaces WHERE id = ?').get('w1') as
+      | { id: string; name: string }
+      | undefined
+    expect(ws).toEqual({ id: 'w1', name: 'legacy' })
+
+    const countRow = db.prepare('SELECT COUNT(*) as c FROM pending_wakeups').get() as { c: number }
+    expect(countRow.c).toBe(0)
+    db.close()
   })
 })

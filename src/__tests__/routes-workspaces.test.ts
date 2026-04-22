@@ -105,6 +105,13 @@ vi.mock('../server/utils/git-ops.js', () => ({
   listBranchCommits: vi.fn().mockReturnValue([]),
 }))
 
+vi.mock('../server/services/wakeup-service.js', () => ({
+  schedule: vi.fn(),
+  cancel: vi.fn(),
+  rehydrate: vi.fn(),
+  getPending: vi.fn(() => null),
+}))
+
 vi.mock('../server/services/websocket-service.js', () => ({
   emit: vi.fn(),
   emitEphemeral: vi.fn(),
@@ -161,6 +168,7 @@ import * as devServerService from '../server/services/dev-server-service.js'
 import * as notionService from '../server/services/notion-service.js'
 import * as settingsService from '../server/services/settings-service.js'
 import * as setupScriptService from '../server/services/setup-script-service.js'
+import * as wakeupService from '../server/services/wakeup-service.js'
 import * as wsService from '../server/services/websocket-service.js'
 import * as workspaceService from '../server/services/workspace-service.js'
 import * as worktreeService from '../server/services/worktree-service.js'
@@ -2358,5 +2366,36 @@ describe('GET /api/workspaces/:id/commits', () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(undefined as never)
     const res = await app.request('/api/workspaces/w1/commits')
     expect(res.status).toBe(404)
+  })
+})
+
+describe('GET /api/workspaces/:id/pending-wakeup', () => {
+  it('returns null when no wakeup is pending', async () => {
+    vi.mocked(wakeupService.getPending).mockReturnValue(null)
+    const res = await app.request('/api/workspaces/w1/pending-wakeup')
+    expect(res.status).toBe(200)
+    expect(await res.json()).toBeNull()
+  })
+
+  it('returns { targetAt, reason } when a wakeup is pending', async () => {
+    vi.mocked(wakeupService.getPending).mockReturnValue({ targetAt: '2026-04-22T10:00:00Z', reason: 'CI' })
+    const res = await app.request('/api/workspaces/w1/pending-wakeup')
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ targetAt: '2026-04-22T10:00:00Z', reason: 'CI' })
+  })
+})
+
+describe('DELETE /api/workspaces/:id/pending-wakeup', () => {
+  it('invokes wakeupService.cancel with reason "manual" and returns { ok: true }', async () => {
+    const res = await app.request('/api/workspaces/w1/pending-wakeup', { method: 'DELETE' })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true })
+    expect(wakeupService.cancel).toHaveBeenCalledWith('w1', 'manual')
+  })
+
+  it('is idempotent — returns 200 even when nothing is pending', async () => {
+    const res = await app.request('/api/workspaces/w1/pending-wakeup', { method: 'DELETE' })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true })
   })
 })
