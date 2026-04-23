@@ -112,6 +112,12 @@ vi.mock('../server/services/wakeup-service.js', () => ({
   getPending: vi.fn(() => null),
 }))
 
+vi.mock('../server/services/pr-watcher-service.js', () => ({
+  getAllPrStates: vi.fn(() => ({})),
+  startPrWatcher: vi.fn(),
+  stopPrWatcher: vi.fn(),
+}))
+
 vi.mock('../server/services/websocket-service.js', () => ({
   emit: vi.fn(),
   emitEphemeral: vi.fn(),
@@ -1749,6 +1755,39 @@ describe('GET /api/workspaces/archived', () => {
     const res = await app.request('/api/workspaces/archived')
     expect(res.status).toBe(200)
     expect(workspaceService.listArchivedWorkspaces).toHaveBeenCalled()
+    expect(workspaceService.getWorkspaceWithTasks).not.toHaveBeenCalled()
+  })
+})
+
+describe('GET /api/workspaces/pr-states', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('returns the snapshot from pr-watcher', async () => {
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.getAllPrStates).mockReturnValue({ w1: 'OPEN', w2: 'CLOSED' })
+
+    const res = await app.request('/api/workspaces/pr-states')
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ w1: 'OPEN', w2: 'CLOSED' })
+  })
+
+  it('returns an empty object when no PRs are known', async () => {
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.getAllPrStates).mockReturnValue({})
+
+    const res = await app.request('/api/workspaces/pr-states')
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({})
+  })
+
+  it('is not matched by GET /:id (route order regression)', async () => {
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.getAllPrStates).mockReturnValue({})
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(null)
+
+    const res = await app.request('/api/workspaces/pr-states')
+    expect(res.status).toBe(200)
+    expect(prWatcher.getAllPrStates).toHaveBeenCalled()
     expect(workspaceService.getWorkspaceWithTasks).not.toHaveBeenCalled()
   })
 })

@@ -13,6 +13,7 @@ import * as agentManager from '../services/agent/orchestrator.js'
 import * as devServerService from '../services/dev-server-service.js'
 import * as notionService from '../services/notion-service.js'
 import { renderPrTemplate } from '../services/pr-template-service.js'
+import { getAllPrStates } from '../services/pr-watcher-service.js'
 import * as sentryService from '../services/sentry-service.js'
 import * as settingsService from '../services/settings-service.js'
 import { runSetupScript } from '../services/setup-script-service.js'
@@ -591,6 +592,20 @@ app.get('/:id/sessions', (c) => {
     if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
     const sessions = workspaceService.listSessions(id)
     return c.json(sessions)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// GET /api/workspaces/pr-states — batch snapshot of PR states known to the
+// pr-watcher service, keyed by workspace id. Used by the drawer to show a
+// small PR indicator without N separate `gh pr view` calls. Workspaces
+// without a PR are absent from the response (do NOT assume keys are
+// exhaustive over the workspace list).
+app.get('/pr-states', (c) => {
+  try {
+    return c.json(getAllPrStates())
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)

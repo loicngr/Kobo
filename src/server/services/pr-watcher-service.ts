@@ -21,6 +21,21 @@ let checking = false
 /** Tracks the last known PR state per workspace to detect transitions. */
 const lastKnownState = new Map<string, string>()
 
+/**
+ * Read-only snapshot of PR states known to the watcher, keyed by workspace id.
+ * Used by the drawer to show a small PR-open indicator without N separate
+ * `gh pr view` calls per workspace. Only contains entries where a PR has been
+ * detected at least once by the watcher since boot; workspaces without a PR
+ * are absent from the map.
+ */
+export function getAllPrStates(): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [id, state] of lastKnownState) {
+    out[id] = state
+  }
+  return out
+}
+
 async function checkPrStatuses(): Promise<void> {
   const workspaces = listWorkspaces(false) // non-archived only
 

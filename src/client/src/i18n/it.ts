@@ -583,4 +583,8 @@ export default {
   'wakeup.firing': 'Risveglio in corso...',
   'wakeup.reason': 'Motivo: {reason}',
   'wakeup.cancel': 'Annulla questo risveglio',
+  'wakeup.pendingIndicator': 'Risveglio programmato',
+
+  // Workspace list drawer indicators
+  'workspaceList.prOpen': 'Pull request aperta',
 }

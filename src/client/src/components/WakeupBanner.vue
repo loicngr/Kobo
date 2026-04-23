@@ -54,10 +54,12 @@ function onCancel(): void {
 <template>
   <div v-if="isVisible" class="row items-center q-pa-xs q-px-sm bg-dark text-grey-5 text-caption">
     <q-icon name="schedule" size="14px" color="amber-4" class="q-mr-sm" />
-    <span>{{ display }}</span>
-    <q-tooltip v-if="wakeup?.reason" anchor="center middle" self="center middle">
-      {{ t('wakeup.reason', { reason: wakeup.reason }) }}
-    </q-tooltip>
+    <span>
+      {{ display }}
+      <q-tooltip v-if="wakeup?.reason" anchor="top middle" self="bottom middle" :offset="[0, 6]">
+        {{ t('wakeup.reason', { reason: wakeup.reason }) }}
+      </q-tooltip>
+    </span>
     <q-space />
     <q-btn
       flat

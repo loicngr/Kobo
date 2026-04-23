@@ -2,6 +2,7 @@
 import { useQuasar } from 'quasar'
 import ManageTagsDialog from 'src/components/ManageTagsDialog.vue'
 import WorkspaceContextMenu from 'src/components/WorkspaceContextMenu.vue'
+import WorkspaceDrawerIndicators from 'src/components/WorkspaceDrawerIndicators.vue'
 import { useDevServerStore } from 'src/stores/dev-server'
 import { useSettingsStore } from 'src/stores/settings'
 import { useWebSocketStore } from 'src/stores/websocket'
@@ -256,6 +257,10 @@ onMounted(async () => {
   // Silently fetch archived workspaces so the Archived group header renders
   // if any exist — the group stays collapsed by default.
   await store.fetchArchivedWorkspaces()
+  // Batch PR-state snapshot from pr-watcher cache (free — no gh calls).
+  // Drives the small PR indicator in the drawer. Refreshed on gitRefreshTrigger
+  // bumps (see store.triggerGitRefresh).
+  void store.fetchPrStates()
   await settingsStore.fetchSettings()
   // Subscribe to ALL workspaces so events are received even when not viewing them
   for (const ws of store.workspaces) {
@@ -418,10 +423,7 @@ onMounted(async () => {
               />
               <div class="col" style="min-width: 0;">
                 <div class="row items-center no-wrap q-gutter-xs">
-                  <div
-                    v-if="devServerStore.getStatus(ws.id)?.status === 'running'"
-                    class="dd-dot dd-dot--running"
-                  />
+                  <WorkspaceDrawerIndicators :workspace="ws" />
                   <div class="wl-item-name text-body2 text-grey-3 ellipsis" :style="{ fontWeight: ws.hasUnread ? 700 : 400, opacity: ws.hasUnread ? 1 : 0.75, maxWidth: '400px' }">
                     {{ ws.name }}
                     <q-tooltip>{{ ws.name }}</q-tooltip>
@@ -495,10 +497,7 @@ onMounted(async () => {
               />
               <div class="col" style="min-width: 0;">
                 <div class="row items-center no-wrap q-gutter-xs">
-                  <div
-                    v-if="devServerStore.getStatus(ws.id)?.status === 'running'"
-                    class="dd-dot dd-dot--running"
-                  />
+                  <WorkspaceDrawerIndicators :workspace="ws" />
                   <div class="wl-item-name text-body2 text-grey-3 ellipsis" :style="{ fontWeight: ws.hasUnread ? 700 : 400, opacity: ws.hasUnread ? 1 : 0.75, maxWidth: '400px' }">
                     {{ ws.name }}
                     <q-tooltip>{{ ws.name }}</q-tooltip>
@@ -571,10 +570,7 @@ onMounted(async () => {
               />
               <div class="col" style="min-width: 0;">
                 <div class="row items-center no-wrap q-gutter-xs">
-                  <div
-                    v-if="devServerStore.getStatus(ws.id)?.status === 'running'"
-                    class="dd-dot dd-dot--running"
-                  />
+                  <WorkspaceDrawerIndicators :workspace="ws" />
                   <div class="wl-item-name text-body2 text-grey-3 ellipsis" :style="{ fontWeight: ws.hasUnread ? 700 : 400, opacity: ws.hasUnread ? 1 : 0.75, maxWidth: '400px' }">
                     {{ ws.name }}
                     <q-tooltip>{{ ws.name }}</q-tooltip>

@@ -158,6 +158,13 @@ export interface PendingWakeup {
 
 const MAX_FEED_ITEMS = 5000
 
+// Debounce window for `fetchPrStates` called via `triggerGitRefresh`. The
+// backend cache (pr-watcher) only updates on its own 30 s poll, so coalescing
+// many git bumps into a single fetch costs nothing and keeps the network
+// quiet during loops like repeated `git status`.
+const PR_STATES_DEBOUNCE_MS = 500
+let _prStatesDebounceTimer: ReturnType<typeof setTimeout> | null = null
+
 export const useWorkspaceStore = defineStore('workspace', {
   state: () => ({
     workspaces: [] as Workspace[],
@@ -188,6 +195,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     gitRefreshTrigger: 0,
     gitStatsCache: {} as Record<string, GitStats>,
     pendingWakeups: {} as Record<string, PendingWakeup>,
+    prStates: {} as Record<string, string>,
   }),
 
   getters: {
@@ -910,6 +918,33 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     triggerGitRefresh() {
       this.gitRefreshTrigger++
+      this.schedulePrStatesRefresh()
+    },
+
+    /**
+     * Trailing-edge debounce for `fetchPrStates`. `triggerGitRefresh` fires
+     * on every git-matching Bash tool:call, which can be many per minute
+     * (`git status` loops, etc.). A single pr-states refetch per burst is
+     * enough — the backend snapshot is updated only every 30 s by the
+     * pr-watcher poll anyway.
+     */
+    schedulePrStatesRefresh() {
+      if (_prStatesDebounceTimer !== null) clearTimeout(_prStatesDebounceTimer)
+      _prStatesDebounceTimer = setTimeout(() => {
+        _prStatesDebounceTimer = null
+        void this.fetchPrStates()
+      }, PR_STATES_DEBOUNCE_MS)
+    },
+
+    async fetchPrStates(): Promise<void> {
+      try {
+        const res = await fetch('/api/workspaces/pr-states', { cache: 'no-store' })
+        if (!res.ok) return
+        const data = (await res.json()) as Record<string, string>
+        this.prStates = data
+      } catch (err) {
+        console.error('[workspace-store] fetchPrStates failed:', err)
+      }
     },
 
     async fetchPendingWakeup(workspaceId: string): Promise<void> {

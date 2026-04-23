@@ -580,4 +580,8 @@ export default {
   'wakeup.firing': 'Waking up...',
   'wakeup.reason': 'Reason: {reason}',
   'wakeup.cancel': 'Cancel this wakeup',
+  'wakeup.pendingIndicator': 'Wakeup scheduled',
+
+  // Workspace list drawer indicators
+  'workspaceList.prOpen': 'Pull request open',
 }
