@@ -35,8 +35,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 12', () => {
-    expect(SCHEMA_VERSION).toBe(12)
+  it('exporte SCHEMA_VERSION = 13', () => {
+    expect(SCHEMA_VERSION).toBe(13)
   })
 
   it('migre depuis la legacy schema_version table', () => {
@@ -720,6 +720,26 @@ describe('migration v12: add-auto-loop-columns', () => {
       auto_loop_ready: 0,
       no_progress_streak: 0,
     })
+    db.close()
+  })
+
+  // Migration v13: adds `permission_profile` so a user can switch a workspace
+  // to strict mode (respect the project's .claude/settings.json allow/deny
+  // list) instead of the --dangerously-skip-permissions bypass default.
+  it('v13 upgrade: workspaces gain permission_profile column defaulted to bypass', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run('w2', 'legacy-v13', '/tmp/p', 'main', 'feat', '2025-01-01', '2025-01-01')
+
+    const ws = db.prepare('SELECT id, permission_profile FROM workspaces WHERE id = ?').get('w2') as
+      | { id: string; permission_profile: string }
+      | undefined
+
+    expect(ws).toEqual({ id: 'w2', permission_profile: 'bypass' })
     db.close()
   })
 })

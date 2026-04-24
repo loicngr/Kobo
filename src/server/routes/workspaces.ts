@@ -1147,6 +1147,7 @@ app.patch('/:id', migrationGuard, async (c) => {
       model?: string
       reasoningEffort?: string
       permissionMode?: PermissionMode
+      permissionProfile?: 'bypass' | 'strict'
       name?: string
     }>()
 
@@ -1169,6 +1170,12 @@ app.patch('/:id', migrationGuard, async (c) => {
       }
       updated = workspaceService.updateWorkspacePermissionMode(id, body.permissionMode)
     }
+    if (body.permissionProfile !== undefined) {
+      if (body.permissionProfile !== 'bypass' && body.permissionProfile !== 'strict') {
+        return c.json({ error: "Invalid permission profile. Must be 'bypass' or 'strict'." }, 400)
+      }
+      updated = workspaceService.setPermissionProfile(id, body.permissionProfile)
+    }
     if (body.status) {
       updated = workspaceService.updateWorkspaceStatus(id, body.status)
     }
@@ -1180,9 +1187,13 @@ app.patch('/:id', migrationGuard, async (c) => {
       body.model === undefined &&
       body.reasoningEffort === undefined &&
       body.permissionMode === undefined &&
+      body.permissionProfile === undefined &&
       body.name === undefined
     ) {
-      return c.json({ error: 'Missing field: status, model, reasoningEffort, permissionMode, or name' }, 400)
+      return c.json(
+        { error: 'Missing field: status, model, reasoningEffort, permissionMode, permissionProfile, or name' },
+        400,
+      )
     }
 
     return c.json(updated)
@@ -1379,6 +1390,14 @@ app.delete('/:id', migrationGuard, async (c) => {
       // Terminal may not exist — ignore
     }
 
+    // Collected best-effort warnings: the DB deletion always proceeds, but
+    // side-effects (worktree, local/remote branches) can fail independently.
+    // We surface a user-friendly message per failure so the UI can show a
+    // sticky toast with a copy-pasteable recovery command — common case:
+    // Docker leaves root-owned files inside the worktree, git worktree
+    // remove fails with EACCES.
+    const warnings: string[] = []
+
     // Remove worktree
     const worktreesDir = `${workspace.projectPath}/.worktrees`
     const worktreePath = `${worktreesDir}/${workspace.workingBranch}`
@@ -1387,6 +1406,13 @@ app.delete('/:id', migrationGuard, async (c) => {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       console.error(`[workspaces] Failed to remove worktree: ${message}`)
+      warnings.push(
+        `Failed to remove worktree directory '${worktreePath}'. The git entry may still reference it. ` +
+          `Fix manually:\n` +
+          `  sudo rm -rf '${worktreePath}'\n` +
+          `  cd '${workspace.projectPath}' && git worktree prune\n` +
+          `Reason: ${message}`,
+      )
     }
 
     // Delete local branch if requested
@@ -1396,6 +1422,11 @@ app.delete('/:id', migrationGuard, async (c) => {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         console.error(`[workspaces] Failed to delete local branch: ${message}`)
+        warnings.push(
+          `Failed to delete local branch '${workspace.workingBranch}'. Fix manually:\n` +
+            `  cd '${workspace.projectPath}' && git branch -D '${workspace.workingBranch}'\n` +
+            `Reason: ${message}`,
+        )
       }
     }
 
@@ -1406,13 +1437,24 @@ app.delete('/:id', migrationGuard, async (c) => {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         console.error(`[workspaces] Failed to delete remote branch: ${message}`)
+        warnings.push(
+          `Failed to delete remote branch '${workspace.workingBranch}'. Fix manually:\n` +
+            `  cd '${workspace.projectPath}' && git push origin --delete '${workspace.workingBranch}'\n` +
+            `Reason: ${message}`,
+        )
       }
     }
 
     // Delete workspace from DB (cascades to tasks, sessions, events)
     workspaceService.deleteWorkspace(id)
 
-    return new Response(null, { status: 204 })
+    // When everything worked cleanly we keep the legacy 204 response so
+    // existing clients aren't surprised by a JSON body. Warnings promote the
+    // response to 200 so the body is readable.
+    if (warnings.length === 0) {
+      return new Response(null, { status: 204 })
+    }
+    return c.json({ ok: true, warnings }, 200)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
@@ -1692,6 +1734,21 @@ app.post('/:id/resync-branch', (c) => {
     if (!actual || actual === workspace.workingBranch) {
       return c.json({ ok: true, changed: false, workingBranch: workspace.workingBranch })
     }
+
+    // Branch was renamed in-place by the agent (`git branch -m ...`). The
+    // worktree directory is still at .worktrees/<old-name>; move it so it
+    // matches the new ref, otherwise Kōbō's path resolver (projectPath +
+    // .worktrees + workingBranch) breaks and subsequent session spawns fail
+    // with ENOENT on .mcp.json. Best-effort: if the move fails (dir already
+    // moved, lockfile, dirty tree), we still update the DB so git ops stay
+    // aligned with the current ref name — the user can repair the dir manually.
+    const newWorktreePath = path.join(workspace.projectPath, '.worktrees', actual)
+    try {
+      gitOps.moveWorktree(workspace.projectPath, worktreePath, newWorktreePath)
+    } catch (err) {
+      console.error('[workspaces] resync-branch: moveWorktree failed (DB update proceeds):', err)
+    }
+
     const updated = workspaceService.updateWorkingBranch(id, actual)
     return c.json({ ok: true, changed: true, workingBranch: updated.workingBranch })
   } catch (err) {
@@ -1709,10 +1766,20 @@ app.post('/:id/push', async (c) => {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
     }
 
+    const body = await c.req.json<{ force?: boolean }>().catch(() => ({}) as { force?: boolean })
+    const force = body?.force === true
+
     const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
 
     try {
-      gitOps.pushBranch(worktreePath, workspace.workingBranch)
+      // Only pass an options arg when force is requested — keeps the
+      // no-options call shape identical to before for callers/tests that
+      // assert on argument count.
+      if (force) {
+        gitOps.pushBranch(worktreePath, workspace.workingBranch, { force: true })
+      } else {
+        gitOps.pushBranch(worktreePath, workspace.workingBranch)
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       return c.json({ error: message }, 500)

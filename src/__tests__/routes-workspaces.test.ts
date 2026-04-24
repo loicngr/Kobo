@@ -103,6 +103,10 @@ vi.mock('../server/utils/git-ops.js', () => ({
   getChangedFiles: vi.fn().mockReturnValue([]),
   getUnpushedChangedFiles: vi.fn().mockReturnValue([]),
   listBranchCommits: vi.fn().mockReturnValue([]),
+  getCurrentBranch: vi.fn(),
+  moveWorktree: vi.fn(),
+  renameBranch: vi.fn(),
+  branchExists: vi.fn().mockReturnValue(false),
 }))
 
 vi.mock('../server/services/wakeup-service.js', () => ({
@@ -980,7 +984,7 @@ describe('PATCH /api/workspaces/:id', () => {
 
     expect(res.status).toBe(400)
     const data = await res.json()
-    expect(data.error).toContain('Missing field: status, model, reasoningEffort, permissionMode, or name')
+    expect(data.error).toContain('Missing field: status, model, reasoningEffort, permissionMode,')
   })
 
   it('returns 404 for unknown workspace', async () => {
@@ -1143,6 +1147,29 @@ describe('DELETE /api/workspaces/:id', () => {
 
     const res = await app.request('/api/workspaces/nonexistent', { method: 'DELETE' })
     expect(res.status).toBe(404)
+  })
+
+  it('surfaces a warning with copy-pasteable sudo command when the worktree removal fails (permission denied)', async () => {
+    // Common case: Docker containers created root-owned files inside the
+    // worktree. `git worktree remove` fails with EACCES. We still want the
+    // DB row gone, but the user needs to know the directory wasn't cleaned
+    // up and how to fix it manually.
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.removeWorktree).mockImplementation(() => {
+      throw new Error("Failed to remove worktree '/tmp/project/.worktrees/feature/test': EACCES: permission denied")
+    })
+
+    const res = await app.request('/api/workspaces/ws-1', { method: 'DELETE' })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok: boolean; warnings: string[] }
+    expect(body.ok).toBe(true)
+    expect(body.warnings.length).toBeGreaterThan(0)
+    expect(body.warnings.join('\n')).toContain('/tmp/project/.worktrees/feature/test')
+    expect(body.warnings.join('\n')).toMatch(/sudo rm -rf/)
+    expect(body.warnings.join('\n')).toMatch(/git worktree prune/)
+    // DB cleanup still ran
+    expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-1')
   })
 })
 
@@ -2436,5 +2463,85 @@ describe('DELETE /api/workspaces/:id/pending-wakeup', () => {
     const res = await app.request('/api/workspaces/w1/pending-wakeup', { method: 'DELETE' })
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ ok: true })
+  })
+})
+
+describe('POST /api/workspaces/:id/resync-branch', () => {
+  beforeEach(() => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      id: 'w1',
+      name: 'test',
+      projectPath: '/tmp/project',
+      sourceBranch: 'main',
+      workingBranch: 'feature/old-name',
+      status: 'idle',
+      notionUrl: null,
+      notionPageId: null,
+      model: 'sonnet',
+      reasoningEffort: 'auto',
+      permissionMode: 'auto-accept',
+      devServerStatus: 'stopped',
+      hasUnread: false,
+      archivedAt: null,
+      favoritedAt: null,
+      tags: [],
+      engine: 'claude-code',
+      autoLoop: false,
+      autoLoopReady: false,
+      noProgressStreak: 0,
+      permissionProfile: 'bypass',
+      createdAt: 'x',
+      updatedAt: 'x',
+    } as never)
+  })
+
+  it('moves the worktree directory when the branch has been renamed in git', async () => {
+    // Agent ran `git branch -m feature/old-name feature/new-name` inside the
+    // worktree; Kōbō detects it and calls /resync-branch. The worktree dir is
+    // still at .worktrees/feature/old-name → move it to match the new name,
+    // otherwise future session spawns fail with ENOENT on .mcp.json.
+    vi.mocked(gitOps.getCurrentBranch).mockReturnValue('feature/new-name')
+    vi.mocked(workspaceService.updateWorkingBranch).mockReturnValue({
+      workingBranch: 'feature/new-name',
+    } as never)
+
+    const res = await app.request('/api/workspaces/w1/resync-branch', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(vi.mocked(gitOps.moveWorktree)).toHaveBeenCalledWith(
+      '/tmp/project',
+      '/tmp/project/.worktrees/feature/old-name',
+      '/tmp/project/.worktrees/feature/new-name',
+    )
+    expect(vi.mocked(workspaceService.updateWorkingBranch)).toHaveBeenCalledWith('w1', 'feature/new-name')
+  })
+
+  it('does NOT move the worktree when the branch name is unchanged', async () => {
+    vi.mocked(gitOps.getCurrentBranch).mockReturnValue('feature/old-name')
+
+    const res = await app.request('/api/workspaces/w1/resync-branch', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.changed).toBe(false)
+    expect(vi.mocked(gitOps.moveWorktree)).not.toHaveBeenCalled()
+  })
+
+  it('updates the DB even if moveWorktree fails (dir already moved / dirty / locked)', async () => {
+    // Best-effort move: keep the DB aligned with the git ref even when the
+    // physical dir rename can't happen — that way subsequent operations at
+    // least know the correct branch, and the user can repair manually.
+    vi.mocked(gitOps.getCurrentBranch).mockReturnValue('feature/new-name')
+    vi.mocked(gitOps.moveWorktree).mockImplementation(() => {
+      throw new Error('fatal: directory is not empty')
+    })
+    vi.mocked(workspaceService.updateWorkingBranch).mockReturnValue({
+      workingBranch: 'feature/new-name',
+    } as never)
+
+    const res = await app.request('/api/workspaces/w1/resync-branch', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(vi.mocked(workspaceService.updateWorkingBranch)).toHaveBeenCalledWith('w1', 'feature/new-name')
   })
 })

@@ -1,9 +1,26 @@
+/**
+ * Permission profile for auto-accept mode:
+ *
+ * - `bypass` (default): emits `--dangerously-skip-permissions`. Maximum
+ *   permissiveness, but the CLI internally hard-denies writes under
+ *   `.claude/**` and `.github/workflows/**` regardless of the project's
+ *   `settings.json` allow list.
+ * - `strict`: emits `--permission-mode acceptEdits`. The CLI respects the
+ *   project's `settings.json` allow/deny lists, so explicit allows for
+ *   `.claude/**` or `.github/workflows/**` actually take effect. Bash / MCP
+ *   calls outside the allow list will prompt and (absent a human) stall —
+ *   only enable strict when the project has a well-curated allow list.
+ */
+export type PermissionProfile = 'bypass' | 'strict'
+
 export interface BuildClaudeArgsInput {
   prompt: string
   model?: string
   effort?: string
   permissionMode: 'auto-accept' | 'plan'
   skipPermissions: boolean
+  /** Optional — only relevant in `auto-accept` permissionMode. Defaults to `bypass`. */
+  permissionProfile?: PermissionProfile
   resumeFromEngineSessionId?: string
   mcpConfigPath?: string
 }
@@ -41,6 +58,11 @@ export function buildClaudeArgs(input: BuildClaudeArgsInput): BuildClaudeArgsRes
   // bypass the very restriction plan mode enforces), so we skip it here.
   if (input.permissionMode === 'plan') {
     args.push('--permission-mode', 'plan')
+  } else if (input.permissionProfile === 'strict') {
+    // Strict profile: respect the project's settings.json allow/deny.
+    // `acceptEdits` auto-accepts Edit/Write but enforces the allow list,
+    // so `Edit(.claude/**)` and similar take effect (unlike in bypass mode).
+    args.push('--permission-mode', 'acceptEdits')
   } else if (input.skipPermissions) {
     args.push('--dangerously-skip-permissions')
   }

@@ -23,6 +23,8 @@ export interface Workspace {
   autoLoop: boolean
   autoLoopReady: boolean
   noProgressStreak: number
+  /** 'bypass' (default) → --dangerously-skip-permissions; 'strict' → --permission-mode acceptEdits. */
+  permissionProfile: 'bypass' | 'strict'
   createdAt: string
   updatedAt: string
 }
@@ -328,6 +330,15 @@ export const useWorkspaceStore = defineStore('workspace', {
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const data = await res.json()
         this.workspaces = data.workspaces ?? data
+        // Finalize orphan sub-agents for workspaces that came back in a
+        // terminal state. Covers the rare case where `session:ended` was
+        // missed (WS reconnect, browser tab returning from sleep, etc.)
+        // and sub-agents still marked `running` keep AgentBusyBanner visible.
+        for (const ws of this.workspaces) {
+          if (['completed', 'idle', 'error', 'quota'].includes(ws.status)) {
+            this.finalizeRunningSubagents(ws.id)
+          }
+        }
       } catch (err) {
         console.error('[workspace store] fetchWorkspaces failed:', err)
       } finally {
@@ -441,7 +452,10 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
-    async deleteWorkspace(id: string, options?: { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean }) {
+    async deleteWorkspace(
+      id: string,
+      options?: { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean },
+    ): Promise<{ warnings: string[] }> {
       try {
         const res = await fetch(`/api/workspaces/${id}`, {
           method: 'DELETE',
@@ -449,7 +463,20 @@ export const useWorkspaceStore = defineStore('workspace', {
           body: JSON.stringify(options ?? {}),
         })
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
+
+        // Status 204 = clean. Status 200 = delete succeeded but with warnings
+        // (e.g. worktree dir couldn't be removed due to Docker-owned files).
+        let warnings: string[] = []
+        if (res.status === 200) {
+          const body = (await res.json().catch(() => ({}))) as { warnings?: string[] }
+          warnings = Array.isArray(body.warnings) ? body.warnings : []
+        }
+
         this.workspaces = this.workspaces.filter((w) => w.id !== id)
+        // Deletion can target an archived workspace from the "Archivés" list,
+        // so we must also drop it from that list — otherwise the entry lingers
+        // after the backend row is gone.
+        this.archivedWorkspaces = this.archivedWorkspaces.filter((w) => w.id !== id)
         delete this.activityFeeds[id]
         delete this.activityFeedIds[id]
         delete this.activityCounts[id]
@@ -461,6 +488,8 @@ export const useWorkspaceStore = defineStore('workspace', {
           this.selectedWorkspaceId = null
           this.tasks = []
         }
+
+        return { warnings }
       } catch (err) {
         console.error('[workspace store] deleteWorkspace failed:', err)
         throw err
@@ -556,8 +585,29 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
-    async pushBranch(id: string): Promise<void> {
-      const res = await fetch(`/api/workspaces/${id}/push`, { method: 'POST' })
+    async updatePermissionProfile(id: string, permissionProfile: 'bypass' | 'strict') {
+      try {
+        const res = await fetch(`/api/workspaces/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ permissionProfile }),
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const updated = (await res.json()) as Workspace
+        const idx = this.workspaces.findIndex((w) => w.id === id)
+        if (idx >= 0) this.workspaces[idx] = updated
+      } catch (err) {
+        console.error('[workspace store] updatePermissionProfile failed:', err)
+        throw err
+      }
+    },
+
+    async pushBranch(id: string, options: { force?: boolean } = {}): Promise<void> {
+      const res = await fetch(`/api/workspaces/${id}/push`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ force: options.force === true }),
+      })
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: 'Push failed' }))
         throw new WorkspaceActionError(err.error ?? 'Push failed', err.code)

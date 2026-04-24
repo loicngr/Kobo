@@ -591,6 +591,10 @@ export function startAgent(
     model,
     effort: reasoningEffort,
     permissionMode,
+    // Propagate the workspace's permission_profile to the engine (bypass vs
+    // strict). Defaults to 'bypass' — the pre-existing behavior — when the
+    // column is missing (fresh boot before migration landed) or unknown.
+    permissionProfile: ws?.permissionProfile === 'strict' ? 'strict' : 'bypass',
     resumeFromEngineSessionId,
     backendUrl: `http://127.0.0.1:${backendPort}`,
     koboHome: (() => {

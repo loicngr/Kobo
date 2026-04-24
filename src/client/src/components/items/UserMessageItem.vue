@@ -2,16 +2,35 @@
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import type { ConversationItem } from 'src/services/agent-event-view'
-import { computed } from 'vue'
+import { useWorkspaceStore } from 'src/stores/workspace'
+import { injectImagePreviews } from 'src/utils/inject-image-previews'
+import { computed, ref } from 'vue'
 
 const props = defineProps<{ item: Extract<ConversationItem, { type: 'user' }> }>()
+
+const workspaceStore = useWorkspaceStore()
 
 const isSystemPrompt = computed(() => props.item.sender === 'system-prompt')
 
 const html = computed(() => {
-  const raw = marked.parse(props.item.content, { async: false, breaks: true, gfm: true }) as string
+  const withImages = injectImagePreviews(props.item.content, workspaceStore.selectedWorkspaceId ?? '')
+  const raw = marked.parse(withImages, { async: false, breaks: true, gfm: true }) as string
   return DOMPurify.sanitize(raw)
 })
+
+// Lightbox state: clicking a rendered image opens it at full size in a
+// maximized dialog. Escape or click on the backdrop closes it.
+const zoomSrc = ref<string | null>(null)
+const zoomOpen = ref(false)
+
+function onMessageClick(event: MouseEvent) {
+  const target = event.target as HTMLElement | null
+  if (target?.tagName !== 'IMG') return
+  const img = target as HTMLImageElement
+  if (!img.src) return
+  zoomSrc.value = img.src
+  zoomOpen.value = true
+}
 </script>
 
 <template>
@@ -27,11 +46,27 @@ const html = computed(() => {
     <div class="q-py-xs markdown-user-prompt" v-html="html" />
   </q-expansion-item>
 
-  <!-- Regular user chat message: plain markdown inside the user turn card -->
-  <div v-else class="markdown-message">
+  <!-- Regular user chat message: plain markdown inside the user turn card.
+       Click delegation handles the image-lightbox — no per-image listener. -->
+  <div v-else class="markdown-message" @click="onMessageClick">
     <!-- eslint-disable-next-line vue/no-v-html -->
     <div v-html="html" />
   </div>
+
+  <!-- Image lightbox: opens when a user message image is clicked.
+       Using a raw <img> instead of q-img + q-card because the latter's
+       ratio/wrapping can collapse to 0×0 inside a q-dialog without an
+       explicit :ratio prop, which is what made the earlier version show
+       only the dim backdrop with no visible image. -->
+  <q-dialog v-model="zoomOpen">
+    <img
+      v-if="zoomSrc"
+      :src="zoomSrc"
+      alt=""
+      class="image-lightbox-img"
+      @click="zoomOpen = false"
+    />
+  </q-dialog>
 </template>
 
 <style scoped>
@@ -46,6 +81,18 @@ const html = computed(() => {
 }
 .markdown-message :deep(*) {
   max-width: 100%;
+}
+.markdown-message :deep(img) {
+  /* Small thumbnail — the message text stays the focus; clicking opens
+     the lightbox for full-size viewing. */
+  max-height: 100px;
+  max-width: 180px;
+  object-fit: contain;
+  border-radius: 4px;
+  display: block;
+  margin: 0.3em 0;
+  cursor: zoom-in;
+  background: rgba(0, 0, 0, 0.2);
 }
 .markdown-message :deep(code) {
   word-break: break-all;
@@ -98,5 +145,19 @@ const html = computed(() => {
   padding: 0.1em 0.3em;
   border-radius: 3px;
   font-style: normal;
+}
+</style>
+
+<!-- Non-scoped: the lightbox <img> is teleported by q-dialog outside this
+     component's DOM tree, so a scoped rule wouldn't reach it. -->
+<style lang="scss">
+.image-lightbox-img {
+  max-width: 92vw;
+  max-height: 92vh;
+  object-fit: contain;
+  display: block;
+  cursor: zoom-out;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.3);
 }
 </style>

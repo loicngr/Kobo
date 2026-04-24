@@ -43,6 +43,8 @@ export interface Workspace {
   autoLoop: boolean
   autoLoopReady: boolean
   noProgressStreak: number
+  /** 'bypass' (default) → --dangerously-skip-permissions; 'strict' → --permission-mode acceptEdits (respects settings.json allow/deny). */
+  permissionProfile: 'bypass' | 'strict'
   createdAt: string
   updatedAt: string
 }
@@ -118,6 +120,7 @@ interface WorkspaceRow {
   auto_loop: number | null
   auto_loop_ready: number | null
   no_progress_streak: number | null
+  permission_profile: string | null
   created_at: string
   updated_at: string
 }
@@ -160,6 +163,7 @@ function mapWorkspace(row: WorkspaceRow): Workspace {
     autoLoop: row.auto_loop === 1,
     autoLoopReady: row.auto_loop_ready === 1,
     noProgressStreak: row.no_progress_streak ?? 0,
+    permissionProfile: (row.permission_profile ?? 'bypass') as 'bypass' | 'strict',
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -520,6 +524,30 @@ export function setAutoLoopReady(id: string, ready: boolean): Workspace {
   if (!workspace) throw new Error(`Workspace '${id}' not found`)
   const db = getDb()
   db.prepare('UPDATE workspaces SET auto_loop_ready = ? WHERE id = ?').run(ready ? 1 : 0, id)
+  return getWorkspace(id) as Workspace
+}
+
+/**
+ * Set the permission profile for a workspace.
+ *
+ * - `bypass` (default): Kōbō passes `--dangerously-skip-permissions` — no
+ *   prompts, but the CLI hard-denies writes under `.claude/**` and
+ *   `.github/workflows/**` regardless of the project's settings.json.
+ * - `strict`: Kōbō passes `--permission-mode acceptEdits` — the CLI respects
+ *   the project's `.claude/settings.json` allow/deny lists. Enables writes
+ *   under `.claude/**` / `.github/workflows/**` when the user has explicitly
+ *   allowed them, at the cost of potential prompts on un-allow-listed Bash
+ *   or MCP calls.
+ *
+ * Takes effect on the next session spawn — running sessions keep whichever
+ * flag they were started with.
+ */
+export function setPermissionProfile(id: string, profile: 'bypass' | 'strict'): Workspace {
+  const workspace = getWorkspace(id)
+  if (!workspace) throw new Error(`Workspace '${id}' not found`)
+  const db = getDb()
+  const now = new Date().toISOString()
+  db.prepare('UPDATE workspaces SET permission_profile = ?, updated_at = ? WHERE id = ?').run(profile, now, id)
   return getWorkspace(id) as Workspace
 }
 

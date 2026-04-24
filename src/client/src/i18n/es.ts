@@ -58,6 +58,9 @@ export default {
   // Permission modes
   'permissionMode.autoAccept': 'Aceptación automática',
   'permissionMode.plan': 'Plan',
+  'permissionProfile.strict': 'Permisos estrictos',
+  'permissionProfile.strictTooltip':
+    'Activado: Claude respeta las listas allow/deny de .claude/settings.json del proyecto (permite escrituras bajo .claude/** o .github/workflows/** si las has allow-listado). Contrapartida: Bash o MCP fuera de la lista solicitarán confirmación y pueden parar el auto-loop. Desactivado (defecto): Kōbō pasa --dangerously-skip-permissions — máximo permisivo pero el CLI deniega .claude/** y .github/workflows/** pase lo que pase. Se aplica en la próxima sesión.',
 
   // Workspace List
   'workspaceList.title': 'Workspaces',
@@ -324,7 +327,13 @@ export default {
   'git.viewPr': 'Ver PR',
   'git.createPr': 'Crear PR',
   'git.push': 'Push',
+  'git.forcePush': 'Force push',
+  'git.forcePushToggle': 'Force push (--force-with-lease)',
+  'git.forcePushHint':
+    'Más seguro que --force: el push se rechaza si el remoto tiene commits que no has visto. Úsalo tras un rebase o amend de commits ya pusheados.',
+  'git.branchForcePushed': 'Rama force-pushed',
   'git.pull': 'Pull',
+  'git.pullNoUpstream': 'No hay upstream para esta rama — hazle push primero para habilitar Pull.',
   'git.sync': 'Sync',
   'git.createPrNoRemote': 'Push la rama primero',
   'git.pullConfirmTitle': '¿Pull la rama?',
@@ -356,6 +365,8 @@ export default {
   'git.conflictHandoffSuccess': 'El agente está resolviendo los conflictos',
   'git.pushConfirmTitle': '¿Pushar la rama?',
   'git.pushConfirmMessage': 'Pushar {branch} al remoto.',
+  'git.pushConfirmMessagePrefix': 'Pushar la rama',
+  'git.pushConfirmMessageSuffix': 'al remoto.',
   'git.changePrBase': 'Cambiar rama base de la PR',
   'git.changePrBaseTitle': 'Cambiar rama base',
   'git.changePrBaseMessage': 'Ingrese la nueva rama destino para el pull request.',

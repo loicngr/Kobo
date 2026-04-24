@@ -58,6 +58,9 @@ export default {
   // Permission modes
   'permissionMode.autoAccept': 'Accettazione automatica',
   'permissionMode.plan': 'Piano',
+  'permissionProfile.strict': 'Permessi stretti',
+  'permissionProfile.strictTooltip':
+    "Attivato: Claude rispetta le liste allow/deny in .claude/settings.json del progetto (permette scritture sotto .claude/** o .github/workflows/** se le hai allow-listate). Contropartita: Bash o MCP fuori dalla lista chiederanno conferma e possono bloccare l'auto-loop. Disattivato (default): Kōbō passa --dangerously-skip-permissions — massima permissività ma il CLI blocca .claude/** e .github/workflows/** in ogni caso. Si applica alla prossima sessione.",
 
   // Workspace List
   'workspaceList.title': 'Workspace',
@@ -324,7 +327,13 @@ export default {
   'git.viewPr': 'Vedi PR',
   'git.createPr': 'Crea PR',
   'git.push': 'Push',
+  'git.forcePush': 'Force push',
+  'git.forcePushToggle': 'Force push (--force-with-lease)',
+  'git.forcePushHint':
+    'Più sicuro di --force: il push viene rifiutato se il remoto ha commit che non hai visto. Da usare dopo un rebase o amend di commit già pushati.',
+  'git.branchForcePushed': 'Branch force-pushed',
   'git.pull': 'Pull',
+  'git.pullNoUpstream': 'Nessun upstream per questo branch — fai push prima per abilitare Pull.',
   'git.sync': 'Sync',
   'git.createPrNoRemote': 'Push del branch prima',
   'git.pullConfirmTitle': 'Pull della branch?',
@@ -356,6 +365,8 @@ export default {
   'git.conflictHandoffSuccess': "L'agente sta risolvendo i conflitti",
   'git.pushConfirmTitle': 'Push del branch?',
   'git.pushConfirmMessage': 'Push di {branch} al remoto.',
+  'git.pushConfirmMessagePrefix': 'Push del branch',
+  'git.pushConfirmMessageSuffix': 'al remoto.',
   'git.changePrBase': 'Cambiare branch base della PR',
   'git.changePrBaseTitle': 'Cambiare branch base',
   'git.changePrBaseMessage': 'Inserire il nuovo branch destinazione per la pull request.',

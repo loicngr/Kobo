@@ -24,6 +24,7 @@ export function createClaudeCodeEngine(): AgentEngine {
         effort: options.effort,
         permissionMode: options.permissionMode ?? 'auto-accept',
         skipPermissions: options.settings.dangerouslySkipPermissions ?? true,
+        permissionProfile: options.permissionProfile,
         resumeFromEngineSessionId: options.resumeFromEngineSessionId,
         mcpConfigPath,
       })

@@ -127,6 +127,17 @@ export const migrations: Migration[] = [
       })()
     },
   },
+  {
+    version: 13,
+    name: 'add-permission-profile-column',
+    migrate: (db) => {
+      // 'bypass' (default, pre-existing behavior) or 'strict' (respects
+      // the project's .claude/settings.json allow/deny lists — needed when
+      // the user wants to authorize writes under .claude/** or .github/workflows/**
+      // which the CLI hard-denies under --dangerously-skip-permissions).
+      db.prepare("ALTER TABLE workspaces ADD COLUMN permission_profile TEXT NOT NULL DEFAULT 'bypass'").run()
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

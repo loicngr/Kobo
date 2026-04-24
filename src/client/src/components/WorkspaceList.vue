@@ -111,7 +111,7 @@ async function confirmDelete() {
   const deletedId = deleteTarget.value.id
   deleting.value = true
   try {
-    await store.deleteWorkspace(deletedId, {
+    const { warnings } = await store.deleteWorkspace(deletedId, {
       deleteLocalBranch: deleteLocalBranch.value,
       deleteRemoteBranch: deleteRemoteBranch.value,
     })
@@ -120,6 +120,32 @@ async function confirmDelete() {
     // If we were viewing this workspace, navigate away
     if (store.selectedWorkspaceId === null) {
       router.push({ name: 'workspace' })
+    }
+
+    // Backend succeeded on the DB side but a side-effect (worktree / branch)
+    // failed — typically Docker left root-owned files the git remove couldn't
+    // touch. Show a persistent notification per warning with the command to
+    // copy, so the user can recover in one paste without digging in the logs.
+    for (const message of warnings) {
+      $q.notify({
+        type: 'warning',
+        message,
+        position: 'top',
+        timeout: 0, // sticky until user dismisses
+        multiLine: true,
+        classes: 'workspace-delete-warning',
+        actions: [
+          {
+            icon: 'content_copy',
+            color: 'white',
+            round: true,
+            handler: () => {
+              void navigator.clipboard.writeText(message)
+            },
+          },
+          { label: 'OK', color: 'white', handler: () => undefined },
+        ],
+      })
     }
   } catch (err) {
     console.error('Delete failed:', err)

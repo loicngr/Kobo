@@ -58,6 +58,9 @@ export default {
   // Permission modes
   'permissionMode.autoAccept': 'Auto-accept',
   'permissionMode.plan': 'Plan',
+  'permissionProfile.strict': 'Permissions strictes',
+  'permissionProfile.strictTooltip':
+    "Quand activé, Claude respecte les listes allow/deny du .claude/settings.json du projet (autorise les écritures sous .claude/** ou .github/workflows/** si tu les as allow-listées). Contrepartie : Bash ou MCP hors allow provoquent un prompt et peuvent stopper l'auto-loop. Désactivé (défaut) : Kōbō passe --dangerously-skip-permissions — max permissif mais le CLI hard-deny .claude/** et .github/workflows/** quelle que soit ta allow-list. Prend effet à la prochaine session.",
 
   // Workspace List
   'workspaceList.title': 'Espaces de travail',
@@ -324,7 +327,13 @@ export default {
   'git.viewPr': 'Voir la PR',
   'git.createPr': 'Créer une PR',
   'git.push': 'Push',
+  'git.forcePush': 'Force push',
+  'git.forcePushToggle': 'Force push (--force-with-lease)',
+  'git.forcePushHint':
+    'Plus sûr que --force : le push est rejeté si le remote a des commits que tu n\u2019as pas vus. À utiliser après un rebase ou un amend de commits déjà push.',
+  'git.branchForcePushed': 'Branche force-pushée',
   'git.pull': 'Pull',
+  'git.pullNoUpstream': "Pas d'upstream pour cette branche — push-la d'abord pour activer Pull.",
   'git.sync': 'Sync',
   'git.createPrNoRemote': "Push la branche d'abord",
   'git.pullConfirmTitle': 'Pull la branche ?',
@@ -356,6 +365,8 @@ export default {
   'git.conflictHandoffSuccess': "L'agent résout les conflits",
   'git.pushConfirmTitle': 'Pusher la branche ?',
   'git.pushConfirmMessage': 'Pusher {branch} vers le dépôt distant.',
+  'git.pushConfirmMessagePrefix': 'Pusher la branche',
+  'git.pushConfirmMessageSuffix': 'vers le dépôt distant.',
   'git.changePrBase': 'Changer la branche cible de la PR',
   'git.changePrBaseTitle': 'Changer la branche cible',
   'git.changePrBaseMessage': 'Entrez la nouvelle branche cible pour la pull request.',

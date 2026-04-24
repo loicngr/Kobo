@@ -32,6 +32,8 @@ export interface StartOptions {
   model?: string
   effort?: string
   permissionMode?: 'auto-accept' | 'plan'
+  /** Only relevant in auto-accept permissionMode. 'bypass' (default) or 'strict'. */
+  permissionProfile?: 'bypass' | 'strict'
   resumeFromEngineSessionId?: string
   backendUrl: string
   koboHome: string

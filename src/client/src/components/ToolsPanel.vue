@@ -4,6 +4,7 @@ import AutoLoopPanel from 'src/components/AutoLoopPanel.vue'
 import DevServerPanel from 'src/components/DevServerPanel.vue'
 import { useSettingsStore } from 'src/stores/settings'
 import type { Workspace } from 'src/stores/workspace'
+import { useWorkspaceStore } from 'src/stores/workspace'
 import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -15,6 +16,20 @@ const props = defineProps<{
 const { t } = useI18n()
 const $q = useQuasar()
 const settingsStore = useSettingsStore()
+const workspaceStore = useWorkspaceStore()
+
+const strictPermissionProfile = computed({
+  get: () => props.workspace?.permissionProfile === 'strict',
+  set: async (value: boolean) => {
+    if (!props.workspace) return
+    try {
+      await workspaceStore.updatePermissionProfile(props.workspace.id, value ? 'strict' : 'bypass')
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 4000 })
+    }
+  },
+})
 
 const running = ref(false)
 const openingEditor = ref(false)
@@ -135,6 +150,23 @@ async function openEditor() {
         <div v-if="!hasSetupScript" class="text-caption text-grey-8">
           {{ $t('tools.noSetupScript') }}
           <router-link to="/settings" style="color: #6c63ff;">{{ $t('devServer.goToSettings') }}</router-link>
+        </div>
+
+        <!-- Permission profile toggle: strict mode respects the project's
+             .claude/settings.json allow list (lets .claude/** writes through
+             when allowed), at the cost of potential prompts on un-allowed
+             Bash / MCP calls. Default is bypass. -->
+        <q-separator dark class="q-my-sm" />
+        <div class="row items-center no-wrap q-mt-xs">
+          <q-toggle
+            v-model="strictPermissionProfile"
+            :label="$t('permissionProfile.strict')"
+            color="orange-6"
+            dense
+          />
+          <q-icon name="info" size="14px" color="grey-5" class="q-ml-xs">
+            <q-tooltip max-width="320px">{{ $t('permissionProfile.strictTooltip') }}</q-tooltip>
+          </q-icon>
         </div>
       </template>
     </div>

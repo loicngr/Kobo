@@ -117,10 +117,22 @@ export function deleteRemoteBranch(repoPath: string, branchName: string, remote 
   }
 }
 
-/** Push a branch to the remote with upstream tracking (`git push -u`). */
-export function pushBranch(repoPath: string, branchName: string, remote = 'origin'): void {
+/**
+ * Push a branch to the remote with upstream tracking (`git push -u`).
+ * When `options.force` is true, adds `--force-with-lease` (safer than `--force`:
+ * the push is rejected if the remote has commits the local copy hasn't seen).
+ */
+export function pushBranch(
+  repoPath: string,
+  branchName: string,
+  options: { remote?: string; force?: boolean } = {},
+): void {
+  const remote = options.remote ?? 'origin'
+  const args = ['push', '-u']
+  if (options.force) args.push('--force-with-lease')
+  args.push(remote, branchName)
   try {
-    git(repoPath, ['push', '-u', remote, branchName])
+    git(repoPath, args)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     throw new Error(`Failed to push branch '${branchName}' to '${remote}': ${message}`)

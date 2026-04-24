@@ -183,11 +183,27 @@ function openRenameBranchDialog() {
   })
 }
 
+// HTML-escape a branch name before it lands in an `html: true` dialog message.
+// Defensive: branch names come from user input (workspace creation form) and
+// could in theory contain characters that would otherwise break layout or
+// inject markup. Cheap to apply, impossible to regret.
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;')
+}
+
 function handleRebase() {
   if (!props.workspace) return
   $q.dialog({
     title: t('git.rebaseConfirmTitle'),
-    message: t('git.rebaseConfirmMessage', { branch: props.workspace.sourceBranch }),
+    message: t('git.rebaseConfirmMessage', {
+      branch: `<code class="git-branch-code">${escapeHtml(props.workspace.sourceBranch)}</code>`,
+    }),
+    html: true,
     dark: true,
     cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
     ok: { flat: true, label: t('git.rebase'), color: 'orange-4' },
@@ -219,7 +235,10 @@ function handleMerge() {
   if (!props.workspace) return
   $q.dialog({
     title: t('git.mergeConfirmTitle'),
-    message: t('git.mergeConfirmMessage', { branch: props.workspace.sourceBranch }),
+    message: t('git.mergeConfirmMessage', {
+      branch: `<code class="git-branch-code">${escapeHtml(props.workspace.sourceBranch)}</code>`,
+    }),
+    html: true,
     dark: true,
     cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
     ok: { flat: true, label: t('git.merge'), color: 'purple-4' },
@@ -296,34 +315,46 @@ async function resolveWithAgent() {
   }
 }
 
+// Push confirmation dialog state — custom inline dialog (instead of $q.dialog)
+// so we can embed a Force Push toggle inside the body.
+const showPushDialog = ref(false)
+const pushForce = ref(false)
+
 function handlePush() {
   if (!props.workspace) return
-  $q.dialog({
-    title: t('git.pushConfirmTitle'),
-    message: t('git.pushConfirmMessage', { branch: props.workspace.workingBranch }),
-    dark: true,
-    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
-    ok: { flat: true, label: t('git.push'), color: 'grey-5' },
-  }).onOk(async () => {
-    pushing.value = true
-    try {
-      await store.pushBranch(props.workspace!.id)
-      $q.notify({ type: 'positive', message: t('git.branchPushed'), position: 'top' })
-      loadGitStats()
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Push failed'
-      $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
-    } finally {
-      pushing.value = false
-    }
-  })
+  pushForce.value = false // reset each time, never default to force
+  showPushDialog.value = true
+}
+
+async function confirmPush() {
+  if (!props.workspace) return
+  const force = pushForce.value
+  showPushDialog.value = false
+  pushing.value = true
+  try {
+    await store.pushBranch(props.workspace.id, { force })
+    $q.notify({
+      type: 'positive',
+      message: force ? t('git.branchForcePushed') : t('git.branchPushed'),
+      position: 'top',
+    })
+    loadGitStats()
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'Push failed'
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+  } finally {
+    pushing.value = false
+  }
 }
 
 function handlePull() {
   if (!props.workspace) return
   $q.dialog({
     title: t('git.pullConfirmTitle'),
-    message: t('git.pullConfirmMessage', { branch: props.workspace.workingBranch }),
+    message: t('git.pullConfirmMessage', {
+      branch: `<code class="git-branch-code">${escapeHtml(props.workspace.workingBranch)}</code>`,
+    }),
+    html: true,
     dark: true,
     cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
     ok: { flat: true, label: t('git.pull'), color: 'grey-5' },
@@ -597,7 +628,7 @@ async function handleOpenPr() {
            same size/shape but keeps its indigo accent as the primary CTA. -->
       <div class="row items-center q-gutter-xs">
         <q-btn-dropdown
-          v-if="gitStats && gitStats.unpushedCount !== -1"
+          v-if="gitStats"
           split
           dense
           no-caps
@@ -609,14 +640,20 @@ async function handleOpenPr() {
           class="git-btn git-sync-btn"
           :loading="pulling || rebasing || merging"
           :disable="!workspace || pushing"
-          @click="handlePull"
+          @click="gitStats.unpushedCount === -1 ? handleRebase() : handlePull()"
         >
           <q-list dark dense style="min-width: 140px;">
-            <q-item clickable v-close-popup :disable="pulling || rebasing || merging" @click="handlePull">
+            <q-item
+              clickable
+              v-close-popup
+              :disable="pulling || rebasing || merging || gitStats.unpushedCount === -1"
+              @click="handlePull"
+            >
               <q-item-section avatar style="min-width: 28px;">
                 <q-icon name="download" size="16px" color="grey-5" />
               </q-item-section>
               <q-item-section>{{ $t('git.pull') }}</q-item-section>
+              <q-tooltip v-if="gitStats.unpushedCount === -1">{{ $t('git.pullNoUpstream') }}</q-tooltip>
             </q-item>
             <q-item clickable v-close-popup :disable="pulling || rebasing || merging" @click="handleRebase">
               <q-item-section avatar style="min-width: 28px;">
@@ -706,6 +743,40 @@ async function handleOpenPr() {
     <div v-else class="text-caption text-grey-8">
       {{ $t('common.selectWorkspace') }}
     </div>
+
+    <!-- Push confirmation dialog with Force Push toggle (uses --force-with-lease) -->
+    <q-dialog v-model="showPushDialog">
+      <q-card dark style="min-width: 360px; max-width: 480px;">
+        <q-card-section>
+          <div class="text-subtitle1">{{ $t('git.pushConfirmTitle') }}</div>
+          <div class="text-body2 text-grey-5 q-mt-sm">
+            {{ $t('git.pushConfirmMessagePrefix') }}
+            <code class="git-branch-code">{{ workspace?.workingBranch ?? '' }}</code>
+            {{ $t('git.pushConfirmMessageSuffix') }}
+          </div>
+        </q-card-section>
+        <q-card-section class="q-pt-none">
+          <q-toggle
+            v-model="pushForce"
+            :label="$t('git.forcePushToggle')"
+            color="orange-6"
+            dense
+          />
+          <div class="text-caption text-grey-6 q-mt-xs" style="padding-left: 46px;">
+            {{ $t('git.forcePushHint') }}
+          </div>
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat :label="$t('common.cancel')" color="grey-5" v-close-popup />
+          <q-btn
+            flat
+            :label="pushForce ? $t('git.forcePush') : $t('git.push')"
+            :color="pushForce ? 'orange-4' : 'grey-5'"
+            @click="confirmPush"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
 
     <!-- Merge / rebase conflict resolution dialog -->
     <q-dialog v-model="conflictDialog" persistent>
@@ -831,5 +902,20 @@ async function handleOpenPr() {
 .commit-subject {
   font-size: 11px;
   min-width: 0;
+}
+</style>
+
+<!-- Non-scoped: .git-branch-code is also rendered inside Quasar dialogs
+     (message html:true) which teleport their DOM outside this component,
+     so a scoped rule wouldn't reach them. -->
+<style lang="scss">
+.git-branch-code {
+  font-family: 'Roboto Mono', monospace;
+  font-size: 11px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background-color: rgba(129, 140, 248, 0.14);
+  color: #c7d2fe;
+  white-space: nowrap;
 }
 </style>

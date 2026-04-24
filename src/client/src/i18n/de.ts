@@ -58,6 +58,9 @@ export default {
   // Permission modes
   'permissionMode.autoAccept': 'Auto-accept',
   'permissionMode.plan': 'Plan',
+  'permissionProfile.strict': 'Strenge Berechtigungen',
+  'permissionProfile.strictTooltip':
+    'Aktiviert: Claude respektiert die allow/deny-Listen aus .claude/settings.json (Schreibvorgänge unter .claude/** oder .github/workflows/** sind erlaubt, wenn du sie auf allow gesetzt hast). Nachteil: Bash/MCP außerhalb der Liste führen zu einem Prompt und können den Auto-Loop blockieren. Deaktiviert (Standard): Kōbō verwendet --dangerously-skip-permissions — maximal permissiv, aber die CLI blockiert .claude/** und .github/workflows/** hart. Wirksam ab der nächsten Session.',
 
   // Workspace List
   'workspaceList.title': 'Arbeitsbereiche',
@@ -324,7 +327,13 @@ export default {
   'git.viewPr': 'PR anzeigen',
   'git.createPr': 'PR erstellen',
   'git.push': 'Push',
+  'git.forcePush': 'Force push',
+  'git.forcePushToggle': 'Force push (--force-with-lease)',
+  'git.forcePushHint':
+    'Sicherer als --force: Der Push wird abgelehnt, wenn der Remote Commits hat, die du nicht gesehen hast. Nach einem Rebase oder Amend bereits gepushter Commits verwenden.',
+  'git.branchForcePushed': 'Branch force-pushed',
   'git.pull': 'Pull',
+  'git.pullNoUpstream': 'Kein Upstream für diesen Branch gesetzt — pushe ihn zuerst, um Pull zu aktivieren.',
   'git.sync': 'Sync',
   'git.createPrNoRemote': 'Branch zuerst pushen',
   'git.pullConfirmTitle': 'Branch pullen?',
@@ -356,6 +365,8 @@ export default {
   'git.conflictHandoffSuccess': 'Agent löst die Konflikte',
   'git.pushConfirmTitle': 'Branch pushen?',
   'git.pushConfirmMessage': '{branch} zum Remote pushen.',
+  'git.pushConfirmMessagePrefix': 'Branch',
+  'git.pushConfirmMessageSuffix': 'zum Remote pushen.',
   'git.changePrBase': 'PR-Zielbranch ändern',
   'git.changePrBaseTitle': 'Zielbranch ändern',
   'git.changePrBaseMessage': 'Geben Sie den neuen Zielbranch für den Pull Request ein.',

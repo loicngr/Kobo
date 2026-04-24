@@ -10,10 +10,15 @@ const openDrawerTab = inject<(tab: string) => void>('openDrawerTab')
 
 const runningSubagentCount = computed(() => store.currentSubagents.filter((s) => s.status === 'running').length)
 
+// Only show the banner when the workspace itself is busy. Orphaned sub-agents
+// (status=running on a workspace that has already completed) shouldn't keep
+// the banner up — they're a sign we missed a termination event, not that
+// anything is actually running. The running count is still rendered inside
+// the banner text when the banner IS visible (i.e. workspace busy + subs running).
 const isVisible = computed(() => {
   const ws = store.selectedWorkspace
   if (!ws) return false
-  return isBusyStatus(ws.status) || runningSubagentCount.value > 0
+  return isBusyStatus(ws.status)
 })
 
 function viewSubagents() {

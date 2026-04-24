@@ -52,6 +52,32 @@ describe('buildClaudeArgs', () => {
     expect(args).not.toContain('--dangerously-skip-permissions')
   })
 
+  it('uses --permission-mode acceptEdits (and NOT --dangerously-skip-permissions) when permissionProfile is "strict"', () => {
+    // Strict profile respects the project's settings.json allow/deny — needed
+    // to let allow lists authorize writes under .claude/** and .github/workflows/**.
+    const { args } = buildClaudeArgs({ ...base, permissionProfile: 'strict' })
+    expect(args).not.toContain('--dangerously-skip-permissions')
+    const idx = args.indexOf('--permission-mode')
+    expect(idx).toBeGreaterThan(-1)
+    expect(args[idx + 1]).toBe('acceptEdits')
+  })
+
+  it('keeps --dangerously-skip-permissions when permissionProfile is "bypass" (default)', () => {
+    // Explicit "bypass" is the pre-existing behavior: maximum permissiveness
+    // at the cost of ignoring the project's allow list.
+    const { args } = buildClaudeArgs({ ...base, permissionProfile: 'bypass' })
+    expect(args).toContain('--dangerously-skip-permissions')
+    expect(args).not.toContain('--permission-mode')
+  })
+
+  it('plan mode wins over permissionProfile (no skip flag, no acceptEdits)', () => {
+    const { args } = buildClaudeArgs({ ...base, permissionMode: 'plan', permissionProfile: 'strict' })
+    expect(args).not.toContain('--dangerously-skip-permissions')
+    expect(args).not.toContain('acceptEdits')
+    const idx = args.indexOf('--permission-mode')
+    expect(args[idx + 1]).toBe('plan')
+  })
+
   it('passes --permission-mode plan to the CLI when permissionMode is "plan"', () => {
     const { args, effectivePrompt } = buildClaudeArgs({ ...base, permissionMode: 'plan' })
     const idx = args.indexOf('--permission-mode')

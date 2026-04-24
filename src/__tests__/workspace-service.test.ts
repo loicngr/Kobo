@@ -984,3 +984,35 @@ describe('setWorkspaceTags(id, tags)', () => {
     expect(cleared.tags).toEqual([])
   })
 })
+
+describe('setPermissionProfile(id, profile)', () => {
+  it('defaults to bypass on a freshly created workspace', async () => {
+    const { createWorkspace } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'p', projectPath: '/p', sourceBranch: 'main', workingBranch: 'f' })
+    expect(ws.permissionProfile).toBe('bypass')
+  })
+
+  it('flips the profile to strict and reads it back', async () => {
+    const { createWorkspace, setPermissionProfile, getWorkspace } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const ws = createWorkspace({ name: 'p', projectPath: '/p', sourceBranch: 'main', workingBranch: 'f' })
+    setPermissionProfile(ws.id, 'strict')
+    expect(getWorkspace(ws.id)?.permissionProfile).toBe('strict')
+  })
+
+  it('flips back from strict to bypass', async () => {
+    const { createWorkspace, setPermissionProfile, getWorkspace } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const ws = createWorkspace({ name: 'p', projectPath: '/p', sourceBranch: 'main', workingBranch: 'f' })
+    setPermissionProfile(ws.id, 'strict')
+    setPermissionProfile(ws.id, 'bypass')
+    expect(getWorkspace(ws.id)?.permissionProfile).toBe('bypass')
+  })
+
+  it('throws on unknown workspace id', async () => {
+    const { setPermissionProfile } = await import('../server/services/workspace-service.js')
+    expect(() => setPermissionProfile('nope', 'strict')).toThrow("Workspace 'nope' not found")
+  })
+})
