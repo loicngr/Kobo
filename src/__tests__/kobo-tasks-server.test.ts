@@ -250,6 +250,19 @@ describe('MCP tasks server handlers', () => {
     it('lance une erreur si workspace inexistant', () => {
       expect(() => getWorkspaceInfoHandler(db, 'nonexistent')).toThrow(/not found/)
     })
+
+    it('expose les flags autoLoop et autoLoopReady (false par défaut)', () => {
+      const info = getWorkspaceInfoHandler(db, workspaceId)
+      expect(info.autoLoop).toBe(false)
+      expect(info.autoLoopReady).toBe(false)
+    })
+
+    it('expose autoLoop=true quand auto_loop=1 en DB', () => {
+      db.prepare('UPDATE workspaces SET auto_loop = 1, auto_loop_ready = 1 WHERE id = ?').run(workspaceId)
+      const info = getWorkspaceInfoHandler(db, workspaceId)
+      expect(info.autoLoop).toBe(true)
+      expect(info.autoLoopReady).toBe(true)
+    })
   })
 
   describe('getSettingsHandler', () => {

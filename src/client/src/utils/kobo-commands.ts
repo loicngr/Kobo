@@ -1,5 +1,6 @@
 import type { useWebSocketStore } from 'src/stores/websocket'
 import type { useWorkspaceStore } from 'src/stores/workspace'
+import { AUTO_LOOP_GROOMING_STEPS, AUTO_LOOP_HARD_RULES } from '../../../shared/auto-loop-prompts'
 
 const CHECK_PROGRESS_PROMPT = `Review your progress on the tasks and acceptance criteria. Use the kobo-tasks MCP server: call list_tasks() to check the current status, then update any tasks you have completed using mark_task_done(). Report what is done and what remains.
 
@@ -8,11 +9,21 @@ Then suggest concrete next actions. Format them exactly like this so I can click
 1. **Short label** → Description of the action
 2. **Short label** → Description of the action`
 
+const PREP_AUTOLOOP_PROMPT = `You are preparing this workspace for Kōbō auto-loop mode. This is a GROOMING session only — DO NOT implement anything, DO NOT write or edit code, DO NOT run tests or builds, DO NOT invoke \`superpowers:executing-plans\` or any implementation skill. Your ONLY job is to curate the Kōbō task list via MCP tools.
+
+${AUTO_LOOP_GROOMING_STEPS}
+
+${AUTO_LOOP_HARD_RULES}`
+
 /** Map of Kobo built-in slash commands. */
 export const KOBO_COMMANDS: Record<string, { prompt: string; descriptionKey: string }> = {
   '/kobo-check-progress': {
     prompt: CHECK_PROGRESS_PROMPT,
     descriptionKey: 'koboCommand.checkProgressDesc',
+  },
+  '/kobo-prep-autoloop': {
+    prompt: PREP_AUTOLOOP_PROMPT,
+    descriptionKey: 'koboCommand.prepAutoloopDesc',
   },
 }
 
@@ -28,6 +39,23 @@ export function sendCheckProgress(
     id: `user-${Date.now()}`,
     type: 'text',
     content: CHECK_PROGRESS_PROMPT,
+    timestamp: new Date().toISOString(),
+    meta: { sender: 'user', pending: true },
+  })
+}
+
+/** Send the prep-autoloop prompt — dispatched by the "Prepare for auto-loop" button in ToolsPanel. */
+export function sendPrepAutoloop(
+  workspaceId: string,
+  wsStore: ReturnType<typeof useWebSocketStore>,
+  workspaceStore: ReturnType<typeof useWorkspaceStore>,
+): void {
+  wsStore.sendChatMessage(workspaceId, PREP_AUTOLOOP_PROMPT)
+  workspaceStore.markRead(workspaceId)
+  workspaceStore.addActivityItem(workspaceId, {
+    id: `user-${Date.now()}`,
+    type: 'text',
+    content: PREP_AUTOLOOP_PROMPT,
     timestamp: new Date().toISOString(),
     meta: { sender: 'user', pending: true },
   })

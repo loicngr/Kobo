@@ -6,10 +6,12 @@ const execFileAsync = promisify(execFileCb)
 import fs from 'node:fs'
 import path from 'node:path'
 import { Hono } from 'hono'
+import { AUTO_LOOP_GROOMING_STEPS, AUTO_LOOP_HARD_RULES } from '../../shared/auto-loop-prompts.js'
 import { getDb } from '../db/index.js'
 import { migrationGuard } from '../middleware/migration-guard.js'
 import { listEngines } from '../services/agent/engines/registry.js'
 import * as agentManager from '../services/agent/orchestrator.js'
+import * as autoLoopService from '../services/auto-loop-service.js'
 import * as devServerService from '../services/dev-server-service.js'
 import * as notionService from '../services/notion-service.js'
 import { renderPrTemplate } from '../services/pr-template-service.js'
@@ -60,6 +62,7 @@ app.post('/', migrationGuard, async (c) => {
       description?: string
       permissionMode?: string
       engine?: string
+      autoLoop?: boolean
     }>()
 
     if (!body.name || !body.projectPath || !body.sourceBranch || !body.workingBranch) {
@@ -521,7 +524,23 @@ app.post('/', migrationGuard, async (c) => {
       }
 
       brainstormPrompt += `\nIMPORTANT: Start by reading CLAUDE.md and/or AGENTS.md at the project root if they exist — they contain project conventions and instructions you must follow.`
-      brainstormPrompt += `\n\nThen brainstorm the implementation approach. Explore the codebase to understand the existing structure. Ask clarifying questions if needed. When you're done brainstorming and have a clear plan, create a plan file and proceed with implementation. Once you have completed the brainstorming phase, output [BRAINSTORM_COMPLETE] on its own line.`
+
+      if (body.autoLoop === true) {
+        // Auto-loop is armed — brainstorm must end with task seeding + mark-ready,
+        // NOT with implementation. The auto-loop will drive implementation after.
+        // The grooming steps + hard rules are shared with the PREP_AUTOLOOP_PROMPT
+        // sent by the "Prepare for auto-loop" button (src/shared/auto-loop-prompts.ts).
+        brainstormPrompt += `\n\nThen brainstorm the implementation approach. Explore the codebase to understand the existing structure. Ask clarifying questions if needed. When you have a clear plan, create a plan file.
+
+Auto-loop mode is active for this workspace. After the plan is ready, DO NOT implement anything. Instead:
+
+${AUTO_LOOP_GROOMING_STEPS}
+5. Output [BRAINSTORM_COMPLETE] on its own line and end your turn cleanly.
+
+${AUTO_LOOP_HARD_RULES}`
+      } else {
+        brainstormPrompt += `\n\nThen brainstorm the implementation approach. Explore the codebase to understand the existing structure. Ask clarifying questions if needed. When you're done brainstorming and have a clear plan, create a plan file and proceed with implementation. Once you have completed the brainstorming phase, output [BRAINSTORM_COMPLETE] on its own line.`
+      }
 
       try {
         const agent = agentManager.startAgent(
@@ -550,6 +569,27 @@ app.post('/', migrationGuard, async (c) => {
         } catch {
           /* already logged */
         }
+      }
+    }
+
+    // Apply the auto-loop checkbox from CreatePage. Notion-imported workspaces
+    // with both todos AND gherkin features auto-unlock `auto_loop_ready=1` —
+    // they're considered good enough to drive the loop without grooming.
+    if (body.autoLoop === true) {
+      const notionProducedTasks =
+        body.notionUrl !== undefined &&
+        notionContent != null &&
+        notionContent.todos.length > 0 &&
+        notionContent.gherkinFeatures.length > 0
+      const db = getDb()
+      db.prepare('UPDATE workspaces SET auto_loop = 1, auto_loop_ready = ? WHERE id = ?').run(
+        notionProducedTasks ? 1 : 0,
+        workspace.id,
+      )
+      // Emit events so the frontend refreshes autoLoopStates without F5.
+      wsService.emitEphemeral(workspace.id, 'autoloop:enabled', {})
+      if (notionProducedTasks) {
+        wsService.emitEphemeral(workspace.id, 'autoloop:ready-flipped', {})
       }
     }
 
@@ -606,6 +646,80 @@ app.get('/:id/sessions', (c) => {
 app.get('/pr-states', (c) => {
   try {
     return c.json(getAllPrStates())
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// GET /api/workspaces/auto-loop-states — batch snapshot keyed by workspace id.
+// Used by the drawer + Pinia store. Static path — must be BEFORE /:id.
+app.get('/auto-loop-states', (c) => {
+  try {
+    const db = getDb()
+    const rows = db
+      .prepare('SELECT id, auto_loop, auto_loop_ready, no_progress_streak FROM workspaces WHERE archived_at IS NULL')
+      .all() as Array<{ id: string; auto_loop: number; auto_loop_ready: number; no_progress_streak: number }>
+    const out: Record<string, { auto_loop: boolean; auto_loop_ready: boolean; no_progress_streak: number }> = {}
+    for (const r of rows) {
+      out[r.id] = {
+        auto_loop: r.auto_loop === 1,
+        auto_loop_ready: r.auto_loop_ready === 1,
+        no_progress_streak: r.no_progress_streak,
+      }
+    }
+    return c.json(out)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// GET /api/workspaces/:id/auto-loop — current auto-loop status for one workspace.
+app.get('/:id/auto-loop', (c) => {
+  try {
+    return c.json(autoLoopService.getStatus(c.req.param('id')))
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// POST /api/workspaces/:id/auto-loop — enable the loop (user toggle ON).
+app.post('/:id/auto-loop', (c) => {
+  try {
+    autoLoopService.enable(c.req.param('id'))
+    return c.json({ ok: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 400)
+  }
+})
+
+// DELETE /api/workspaces/:id/auto-loop — disable the loop (user toggle OFF).
+app.delete('/:id/auto-loop', (c) => {
+  try {
+    autoLoopService.disable(c.req.param('id'), 'user-action')
+    return c.json({ ok: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// POST /api/workspaces/:id/auto-loop-ready — force auto_loop_ready=true.
+// Used by the "Force ready (skip grooming)" UI button AND by the MCP tool
+// `kobo__mark_auto_loop_ready` at the end of a grooming session. Emits a
+// WS event so any live frontend refreshes the toggle state immediately.
+app.post('/:id/auto-loop-ready', (c) => {
+  try {
+    const id = c.req.param('id')
+    const ws = workspaceService.getWorkspace(id)
+    if (!ws) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    workspaceService.setAutoLoopReady(id, true)
+    wsService.emitEphemeral(id, 'autoloop:ready-flipped', {})
+    autoLoopService.onAutoLoopReadySet(id)
+    return c.json({ ok: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
@@ -847,6 +961,9 @@ app.get('/:id/events', (c) => {
     }
 
     const before = c.req.query('before') // event ID cursor
+    // optional: scope to a session view. Session views also include
+    // workspace-level rows where session_id IS NULL (legacy/pre-session items).
+    const session = c.req.query('session')
     const limit = Math.min(parseInt(c.req.query('limit') ?? '100', 10) || 100, 500)
 
     const db = getDb()
@@ -867,18 +984,33 @@ app.get('/:id/events', (c) => {
       if (!cursorRow) {
         return c.json({ events: [], hasMore: false })
       }
-      rows = db
-        .prepare('SELECT * FROM ws_events WHERE workspace_id = ? AND rowid < ? ORDER BY rowid DESC LIMIT ?')
-        .all(id, cursorRow.rowid, limit) as typeof rows
+      rows = session
+        ? (db
+            .prepare(
+              'SELECT * FROM ws_events WHERE workspace_id = ? AND (session_id = ? OR session_id IS NULL) AND rowid < ? ORDER BY rowid DESC LIMIT ?',
+            )
+            .all(id, session, cursorRow.rowid, limit) as typeof rows)
+        : (db
+            .prepare('SELECT * FROM ws_events WHERE workspace_id = ? AND rowid < ? ORDER BY rowid DESC LIMIT ?')
+            .all(id, cursorRow.rowid, limit) as typeof rows)
     } else {
-      // No cursor — return the oldest events
-      rows = db
-        .prepare('SELECT * FROM ws_events WHERE workspace_id = ? ORDER BY rowid ASC LIMIT ?')
-        .all(id, limit) as typeof rows
+      // No cursor — return events. When filtering by session, we want the
+      // MOST RECENT events of that session first (so the feed renders from
+      // the end), reversed to chronological order below.
+      rows = session
+        ? (db
+            .prepare(
+              'SELECT * FROM ws_events WHERE workspace_id = ? AND (session_id = ? OR session_id IS NULL) ORDER BY rowid DESC LIMIT ?',
+            )
+            .all(id, session, limit) as typeof rows)
+        : (db
+            .prepare('SELECT * FROM ws_events WHERE workspace_id = ? ORDER BY rowid ASC LIMIT ?')
+            .all(id, limit) as typeof rows)
     }
 
-    // Reverse to chronological order (we queried DESC for "before" pagination)
-    if (before) rows.reverse()
+    // Reverse to chronological order (we queried DESC for "before" pagination,
+    // or for the "session + no cursor" case where we fetched the newest first).
+    if (before || session) rows.reverse()
 
     const events = rows.map((row) => {
       let parsedPayload: unknown
@@ -899,15 +1031,30 @@ app.get('/:id/events', (c) => {
 
     // Check if there are more older events beyond what we returned
     let hasMore = false
-    if (before && rows.length > 0) {
-      const firstRow = db.prepare('SELECT rowid FROM ws_events WHERE id = ?').get(rows[0].id) as
-        | { rowid: number }
-        | undefined
-      if (firstRow) {
-        const older = db
-          .prepare('SELECT COUNT(*) as c FROM ws_events WHERE workspace_id = ? AND rowid < ?')
-          .get(id, firstRow.rowid) as { c: number }
-        hasMore = older.c > 0
+    if (rows.length > 0) {
+      if (before) {
+        const firstRow = db.prepare('SELECT rowid FROM ws_events WHERE id = ?').get(rows[0].id) as
+          | { rowid: number }
+          | undefined
+        if (firstRow) {
+          const older = session
+            ? (db
+                .prepare(
+                  'SELECT COUNT(*) as c FROM ws_events WHERE workspace_id = ? AND (session_id = ? OR session_id IS NULL) AND rowid < ?',
+                )
+                .get(id, session, firstRow.rowid) as { c: number })
+            : (db
+                .prepare('SELECT COUNT(*) as c FROM ws_events WHERE workspace_id = ? AND rowid < ?')
+                .get(id, firstRow.rowid) as { c: number })
+          hasMore = older.c > 0
+        }
+      } else if (session) {
+        const total = db
+          .prepare(
+            'SELECT COUNT(*) as c FROM ws_events WHERE workspace_id = ? AND (session_id = ? OR session_id IS NULL)',
+          )
+          .get(id, session) as { c: number }
+        hasMore = total.c > rows.length
       }
     }
 

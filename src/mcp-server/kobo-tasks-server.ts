@@ -16,6 +16,7 @@ import {
   listTasksHandler,
   listWorkspaceImagesHandler,
   logThoughtHandler,
+  markAutoLoopReadyHandler,
   markTaskDoneHandler,
   readDocumentHandler,
   updateTaskHandler,
@@ -70,6 +71,22 @@ async function notifyTasksUpdated(): Promise<void> {
   }
 }
 
+/**
+ * Fire-and-forget POST that lands on `/auto-loop-ready`, which itself emits
+ * the `autoloop:ready-flipped` WS event so the frontend's toggle unlocks
+ * immediately after the grooming session completes. The handler already
+ * flipped the DB flag; this call is ONLY for the event emission + the
+ * (harmless) idempotent second write.
+ */
+async function notifyAutoLoopReady(): Promise<void> {
+  try {
+    const url = `${backendUrl}/api/workspaces/${workspaceId}/auto-loop-ready`
+    await fetch(url, { method: 'POST' })
+  } catch (err) {
+    console.error('[kobo-tasks-server] notify-autoloop-ready failed:', err)
+  }
+}
+
 /** Generic HTTP request to the Kobo backend, returning parsed JSON or null. */
 async function backendRequest(method: 'GET' | 'POST' | 'PATCH', pathname: string, body?: unknown): Promise<unknown> {
   const url = `${backendUrl}${pathname}`
@@ -108,6 +125,12 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
         required: ['task_id'],
       },
+    },
+    {
+      name: 'mark_auto_loop_ready',
+      description:
+        'CALL ONLY at the end of a `/kobo-prep-autoloop` grooming session, once all tasks look atomic and implementable in one session. Flips a flag on the workspace that unlocks the auto-loop toggle in the UI. Do NOT call during normal sessions.',
+      inputSchema: { type: 'object', properties: {}, required: [] },
     },
     {
       name: 'create_task',
@@ -338,6 +361,12 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!taskId) return fail('task_id parameter is required')
       const result = markTaskDoneHandler(db, workspaceId!, taskId)
       void notifyBackend(taskId)
+      return ok(result)
+    }
+
+    if (name === 'mark_auto_loop_ready') {
+      const result = markAutoLoopReadyHandler(db, workspaceId!)
+      void notifyAutoLoopReady()
       return ok(result)
     }
 

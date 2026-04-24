@@ -17,6 +17,7 @@ const ActivityFeed = defineAsyncComponent(() =>
 
 import AgentBusyBanner from 'src/components/AgentBusyBanner.vue'
 import AgentErrorBanner from 'src/components/AgentErrorBanner.vue'
+import AutoLoopChip from 'src/components/AutoLoopChip.vue'
 import ChatInput from 'src/components/ChatInput.vue'
 import WakeupBanner from 'src/components/WakeupBanner.vue'
 
@@ -311,6 +312,7 @@ watch(
           class="q-ml-sm"
           style="font-size: 10px;"
         />
+        <AutoLoopChip />
         <q-chip
           v-if="currentUsage.totalTokens > 0"
           dense

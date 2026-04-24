@@ -387,6 +387,7 @@ export default {
 
   // Notion Panel
   'notion.title': 'Notion',
+  'tasks.title': 'Tareas',
   'notion.addTask': 'Añadir tarea',
   'notion.openInNotion': 'Abrir en Notion',
   'notion.noUrl': 'Sin URL de Notion',
@@ -446,6 +447,7 @@ export default {
   'agent.error.spawn_failed': 'No se pudo iniciar el agente',
   'agent.error.parse_error': 'No se pudo analizar un mensaje del agente',
   'agent.error.rate_limit': 'Límite de tasa alcanzado',
+  'agent.error.resume_failed': 'Sesión no encontrada — iniciando sesión nueva',
   'agent.error.other': 'Error del agente',
   'rateLimitType.fiveHour': 'Sesión 5h',
   'rateLimitType.sevenDay': 'Semanal',
@@ -469,8 +471,6 @@ export default {
   'tooltip.refreshGitStats': 'Actualizar estadísticas Git',
   'tooltip.removeImage': 'Eliminar imagen',
   'tooltip.sendMessage': 'Enviar mensaje',
-  'tooltip.addNotionTask': 'Añadir tarea',
-  'tooltip.removeNotionTask': 'Eliminar tarea',
   'tooltip.refreshStats': 'Actualizar estadísticas',
 
   // Tools Panel
@@ -574,6 +574,8 @@ export default {
   'engine.model': 'Modelo',
   'engine.effort': 'Esfuerzo de razonamiento',
   'engine.permission': 'Modo de permisos',
+  'createPage.permissionLockedByAutoLoop':
+    'El auto-loop requiere Auto-accept (MCP + ediciones). Desactiva el auto-loop para elegir el modo Plan.',
   'engine.permission.auto-accept': 'Aceptar automáticamente',
   'engine.permission.plan': 'Plan (solo lectura)',
 
@@ -587,4 +589,23 @@ export default {
 
   // Workspace list drawer indicators
   'workspaceList.prOpen': 'Pull request abierta',
+
+  // Auto-loop
+  'autoLoop.toggle': 'Auto-loop',
+  'autoLoop.start': 'Iniciar auto-loop',
+  'autoLoop.prepare': 'Preparar para auto-loop',
+  'autoLoop.prepareBusy': 'Espera a que el agente termine antes de preparar',
+  'autoLoop.forceReady': 'Sé lo que hago — omitir preparación',
+  'autoLoop.forceReadyConfirm':
+    '¿Omitir la preparación y marcar auto-loop listo? El loop puede quedarse bloqueado si las tareas no son atómicas.',
+  'autoLoop.stop': 'Detener auto-loop',
+  'autoLoop.notReady': "Ejecute primero 'Preparar para auto-loop'",
+  'autoLoop.noTasks': 'Añada tareas primero',
+  'autoLoop.progress': 'Auto-loop · {done}/{total} tareas',
+  'autoLoop.preparing': 'Auto-loop · preparando',
+  'autoLoop.preparingTooltip':
+    'Preparación en curso — el agente está creando / revisando tareas. El bucle arrancará cuando llame a mark_auto_loop_ready.',
+  'autoLoop.running': 'Auto-loop en ejecución',
+  'autoLoop.startInMode': 'Iniciar en modo auto-loop',
+  'koboCommand.prepAutoloopDesc': 'Preparar tareas para modo auto-loop (atomicidad)',
 }

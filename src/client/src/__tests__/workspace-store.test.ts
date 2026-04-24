@@ -245,6 +245,40 @@ describe('workspace store', () => {
       // 'a' belongs to selected session, 'c' has no session (workspace-level)
       expect(feed.map((i) => i.id).sort()).toEqual(['a', 'c'])
     })
+
+    it('accepts legacy engine session ids for the selected session', () => {
+      const store = useWorkspaceStore()
+      store.selectedWorkspaceId = 'ws-1'
+      store.selectedSessionId = 'sess-1'
+      store.sessions = [
+        {
+          id: 'sess-1',
+          workspaceId: 'ws-1',
+          pid: null,
+          engineSessionId: 'engine-legacy-1',
+          status: 'completed',
+          startedAt: '2026-01-01T00:00:00Z',
+          endedAt: '2026-01-01T00:00:01Z',
+          name: null,
+        },
+      ]
+      store.addActivityItem('ws-1', {
+        id: 'legacy',
+        type: 'text',
+        content: 'legacy session event',
+        timestamp: '2026-01-01T00:00:00Z',
+        sessionId: 'engine-legacy-1',
+      })
+      store.addActivityItem('ws-1', {
+        id: 'other',
+        type: 'text',
+        content: 'other session event',
+        timestamp: '2026-01-01T00:00:01Z',
+        sessionId: 'sess-2',
+      })
+
+      expect(store.activityFeed.map((i) => i.id)).toEqual(['legacy'])
+    })
   })
 
   describe('toggleFavorite', () => {
@@ -264,6 +298,10 @@ describe('workspace store', () => {
       hasUnread: false,
       archivedAt: null,
       favoritedAt: null,
+      tags: [],
+      autoLoop: false,
+      autoLoopReady: false,
+      noProgressStreak: 0,
       createdAt: '2026-01-01T00:00:00Z',
       updatedAt: '2026-01-01T00:00:00Z',
     }
@@ -302,6 +340,23 @@ describe('workspace store', () => {
       await store.toggleFavorite('ws-1').catch(() => {})
 
       expect(store.workspaces[0].favoritedAt).toBeNull()
+    })
+  })
+
+  describe('disableAutoLoop', () => {
+    beforeEach(() => {
+      vi.stubGlobal('fetch', vi.fn())
+    })
+
+    it('throws when the API returns a non-ok status', async () => {
+      const store = useWorkspaceStore()
+      vi.mocked(fetch).mockResolvedValueOnce({
+        ok: false,
+        status: 500,
+        json: async () => ({ error: 'stop failed' }),
+      } as Response)
+
+      await expect(store.disableAutoLoop('ws-1')).rejects.toThrow('stop failed')
     })
   })
 

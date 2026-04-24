@@ -30,6 +30,7 @@ import {
   stopAgent,
   stopWatchdog,
 } from './services/agent/orchestrator.js'
+import * as autoLoopService from './services/auto-loop-service.js'
 import { runContentMigrationIfNeeded } from './services/content-migration-service.js'
 import { createDailyDbBackupIfNeeded } from './services/db-backup-service.js'
 import { startDevServer, stopDevServer } from './services/dev-server-service.js'
@@ -75,6 +76,7 @@ initProcessCleanup()
 reconcileOrphanSessions()
 startWatchdog()
 wakeupService.rehydrate()
+autoLoopService.rehydrate()
 startPrWatcher()
 
 // Create Hono app

@@ -11,12 +11,13 @@ import {
   getSkillsPath,
 } from '../../utils/paths.js'
 import { unregisterProcess } from '../../utils/process-tracker.js'
+import * as autoLoopService from '../auto-loop-service.js'
 import { getEffectiveSettings } from '../settings-service.js'
 import * as wakeupService from '../wakeup-service.js'
 import { emitEphemeral } from '../websocket-service.js'
 import { getWorkspace as getWs, markWorkspaceUnread, updateWorkspaceStatus } from '../workspace-service.js'
 import { resolveEngine } from './engines/registry.js'
-import type { AgentEvent, McpServerSpec, StartOptions } from './engines/types.js'
+import type { AgentEvent, McpServerSpec, RateLimitInfo, StartOptions } from './engines/types.js'
 import { routeEvent } from './event-router.js'
 import { SessionController } from './session-controller.js'
 
@@ -57,6 +58,9 @@ let availableSkills: string[] = (() => {
 
 /** workspaceId -> retry count (for quota backoff) */
 const retryCounts = new Map<string, number>()
+
+/** Tracks workspaces where the current session failed due to a stale --resume session ID. */
+const resumeFailedSet = new Set<string>()
 
 /** workspaceId -> backoff timer */
 const backoffTimers = new Map<string, ReturnType<typeof setTimeout>>()
@@ -330,8 +334,38 @@ function reuseOrCreateFreshSession(workspaceId: string, existingSessionId: strin
 
 // ── Event handler ─────────────────────────────────────────────────────────────
 
+/**
+ * Snapshot of the `tasks` done-count at `session:started`, read back and
+ * cleared at `session:ended` to compute the per-session delta. Used by
+ * `auto-loop-service.onSessionEnded` for stall detection.
+ */
+const tasksDoneSnapshot = new Map<string, number>()
+
+function getDoneTaskCount(workspaceId: string): number {
+  const db = getDb()
+  const row = db
+    .prepare('SELECT COUNT(*) AS c FROM tasks WHERE workspace_id = ? AND status = ?')
+    .get(workspaceId, 'done') as { c: number }
+  return row.c
+}
+
+/** Clear the in-memory done-count snapshot for a workspace (called on delete). */
+export function forgetTasksDoneSnapshot(workspaceId: string): void {
+  tasksDoneSnapshot.delete(workspaceId)
+}
+
 function handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent): void {
   routeEvent(workspaceId, agentSessionId, ev)
+
+  if (ev.kind === 'rate_limit') {
+    latestRateLimitInfo.set(workspaceId, ev.info)
+  }
+
+  // Snapshot the done-count at session start so the session:ended hook below
+  // can compute a delta for auto-loop stall detection.
+  if (ev.kind === 'session:started') {
+    tasksDoneSnapshot.set(workspaceId, getDoneTaskCount(workspaceId))
+  }
 
   if (ev.kind === 'tool:call' && ev.name === 'ScheduleWakeup') {
     const input = ev.input as Record<string, unknown> | undefined
@@ -354,7 +388,10 @@ function handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent
   }
   if (ev.kind === 'session:brainstorm-complete') {
     try {
-      updateWorkspaceStatus(workspaceId, 'executing')
+      const ws = getWs(workspaceId)
+      if (ws && ws.status !== 'executing') {
+        updateWorkspaceStatus(workspaceId, 'executing')
+      }
     } catch (err) {
       console.error('[orchestrator] Failed to transition to executing:', err)
     }
@@ -362,8 +399,34 @@ function handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent
   if (ev.kind === 'error' && ev.category === 'quota') {
     handleQuota(workspaceId, agentSessionId)
   }
+  if (ev.kind === 'error' && ev.category === 'resume_failed') {
+    resumeFailedSet.add(workspaceId)
+    clearStaleEngineSessionId(workspaceId)
+  }
   if (ev.kind === 'session:ended') {
-    onSessionEnded(workspaceId, agentSessionId, ev.exitCode)
+    // Pop the resume_failed flag before any cleanup so both onSessionEnded paths see it.
+    const isResumeFailed = resumeFailedSet.delete(workspaceId)
+
+    // Compute the auto-loop done-delta BEFORE the internal cleanup because
+    // onSessionEnded(internal) may throw / trigger follow-ups; also read the
+    // snapshot FIRST so a later re-entry can't overwrite it.
+    const before = tasksDoneSnapshot.get(workspaceId) ?? getDoneTaskCount(workspaceId)
+    const after = getDoneTaskCount(workspaceId)
+    const delta = Math.max(0, after - before)
+    tasksDoneSnapshot.delete(workspaceId)
+
+    // Internal cleanup REMOVES the controller from the map. This must run
+    // BEFORE autoLoopService.onSessionEnded → spawnNextIteration → startAgent,
+    // otherwise startAgent throws "Agent already running" because the
+    // just-ended controller is still in the map.
+    onSessionEnded(workspaceId, agentSessionId, ev.exitCode, isResumeFailed)
+
+    // When a resume failed the session exited with an error but there's
+    // nothing wrong with the workspace — the stale session ID has been cleared
+    // and the next iteration will start fresh. Treat it as 'completed' so
+    // auto-loop continues without disabling.
+    const effectiveReason = isResumeFailed ? 'completed' : ev.reason
+    autoLoopService.onSessionEnded(workspaceId, effectiveReason, delta)
   }
   if (ev.kind === 'session:started' && ev.engineSessionId) {
     sessionIds.set(workspaceId, ev.engineSessionId)
@@ -390,7 +453,14 @@ function handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent
   }
 }
 
-function onSessionEnded(workspaceId: string, agentSessionId: string, exitCode: number | null): void {
+function onSessionEnded(
+  workspaceId: string,
+  agentSessionId: string,
+  exitCode: number | null,
+  resumeFailed = false,
+): void {
+  const currentWorkspace = getWs(workspaceId)
+  const preserveQuotaBackoff = currentWorkspace?.status === 'quota'
   const ctrl = controllers.get(workspaceId)
   const wasStopping = ctrl?.status === 'stopping'
 
@@ -402,7 +472,9 @@ function onSessionEnded(workspaceId: string, agentSessionId: string, exitCode: n
   }
 
   unregisterProcess(workspaceId)
-  retryCounts.delete(workspaceId)
+  if (!preserveQuotaBackoff) {
+    retryCounts.delete(workspaceId)
+  }
 
   // Update the agent_sessions row
   try {
@@ -422,14 +494,28 @@ function onSessionEnded(workspaceId: string, agentSessionId: string, exitCode: n
     return
   }
 
-  // Clear any pending backoff timer on non-stopping exits
-  const pendingBackoff = backoffTimers.get(workspaceId)
-  if (pendingBackoff) {
-    clearTimeout(pendingBackoff)
-    backoffTimers.delete(workspaceId)
+  // When the session hit quota, handleQuota() already transitioned the
+  // workspace to `quota` and armed the retry timer. Keep that timer alive
+  // and preserve the `quota` status so auto-loop can resume after reset.
+  if (!preserveQuotaBackoff) {
+    const pendingBackoff = backoffTimers.get(workspaceId)
+    if (pendingBackoff) {
+      clearTimeout(pendingBackoff)
+      backoffTimers.delete(workspaceId)
+    }
   }
 
-  if (exitCode !== null && exitCode !== 0) {
+  if (preserveQuotaBackoff) {
+    try {
+      markWorkspaceUnread(workspaceId)
+      emitEphemeral(workspaceId, 'workspace:unread', { hasUnread: true })
+    } catch {
+      // best-effort
+    }
+    return
+  }
+
+  if (exitCode !== null && exitCode !== 0 && !resumeFailed) {
     try {
       updateWorkspaceStatus(workspaceId, 'error')
     } catch (err) {
@@ -628,7 +714,7 @@ export function getRunningCount(): number {
 }
 
 /** Kobo built-in slash commands injected into the skill list (without leading /). */
-const KOBO_COMMANDS = ['kobo-check-progress']
+const KOBO_COMMANDS = ['kobo-check-progress', 'kobo-prep-autoloop']
 
 /** Cached list of slash commands discovered from the last agent init, plus Kobo built-ins. */
 export function getAvailableSkills(): string[] {
@@ -636,6 +722,89 @@ export function getAvailableSkills(): string[] {
 }
 
 // ── Quota handling ────────────────────────────────────────────────────────────
+
+/**
+ * Last `rate_limit.info` received per workspace. Used by handleQuota to
+ * schedule the backoff at the actual reset time instead of a hardcoded
+ * exponential. In-memory only — rebuilt on the next rate_limit event after
+ * a server restart.
+ */
+const latestRateLimitInfo = new Map<string, RateLimitInfo>()
+
+/** Clear the rate-limit info cache for a workspace (called on deleteWorkspace). */
+export function forgetRateLimitInfo(workspaceId: string): void {
+  latestRateLimitInfo.delete(workspaceId)
+}
+
+/**
+ * Null out the engine_session_id on all agent_sessions rows for a workspace
+ * and clear the in-memory sessionIds cache. Called when a --resume attempt
+ * fails ("No conversation found with session ID") so that the next startAgent
+ * call starts a fresh conversation instead of retrying the stale ID.
+ */
+function clearStaleEngineSessionId(workspaceId: string): void {
+  try {
+    const db = getDb()
+    db.prepare('UPDATE agent_sessions SET engine_session_id = NULL WHERE workspace_id = ?').run(workspaceId)
+    sessionIds.delete(workspaceId)
+  } catch (err) {
+    console.error('[orchestrator] Failed to clear stale engine session ID:', err)
+  }
+}
+
+/** Return shape for computeQuotaBackoffMs — callers need delay + observability fields. */
+export interface QuotaBackoff {
+  delayMs: number
+  resetsAt?: string
+  source: 'rate_limit_info' | 'exponential_fallback'
+}
+
+const QUOTA_SAFETY_MARGIN_MS = 30_000
+const QUOTA_MAX_BACKOFF_MS = 24 * 60 * 60 * 1000
+const QUOTA_SATURATION_THRESHOLD_PCT = 95
+
+/**
+ * Fallback backoff ladder (in minutes) used when the `rate_limit` info
+ * isn't usable. Indexed by `retryCount`; anything past the last entry
+ * clamps to the final value (5 h) — long enough to cross a weekly
+ * bucket reset if the rate_limit info truly never arrives.
+ */
+const QUOTA_FALLBACK_LADDER_MINUTES = [15, 30, 60, 180, 300] as const
+
+/**
+ * Compute the delay before retrying a workspace hit by quota.
+ *
+ * Prefers the `resetsAt` of the saturated bucket with the furthest-future
+ * reset (a tighter bucket will unlock by then anyway). Falls back to a
+ * fixed ladder (15 → 30 → 60 → 180 → 300 min) whenever the rate_limit
+ * info is missing, malformed, or implausible.
+ */
+export function computeQuotaBackoffMs(workspaceId: string, retryCount: number): QuotaBackoff {
+  const info = latestRateLimitInfo.get(workspaceId)
+  if (info?.buckets?.length) {
+    const candidates = info.buckets
+      .filter((b) => b.usedPct >= QUOTA_SATURATION_THRESHOLD_PCT && typeof b.resetsAt === 'string')
+      .map((b) => ({ resetsAt: b.resetsAt as string, ts: new Date(b.resetsAt as string).getTime() }))
+      .filter((x) => !Number.isNaN(x.ts))
+      .sort((a, b) => b.ts - a.ts)
+
+    const chosen = candidates[0]
+    if (chosen) {
+      const delta = chosen.ts - Date.now() + QUOTA_SAFETY_MARGIN_MS
+      if (delta > 0 && delta <= QUOTA_MAX_BACKOFF_MS) {
+        return { delayMs: delta, resetsAt: chosen.resetsAt, source: 'rate_limit_info' }
+      }
+    }
+  }
+  const idx = Math.min(Math.max(0, retryCount), QUOTA_FALLBACK_LADDER_MINUTES.length - 1)
+  const backoffMinutes = QUOTA_FALLBACK_LADDER_MINUTES[idx]
+  return { delayMs: backoffMinutes * 60 * 1000, source: 'exponential_fallback' }
+}
+
+/** @internal Test-only. */
+export function _test_setRateLimitInfo(workspaceId: string, info: RateLimitInfo): void {
+  latestRateLimitInfo.set(workspaceId, info)
+}
 
 function handleQuota(workspaceId: string, _agentSessionId?: string): void {
   try {
@@ -648,10 +817,11 @@ function handleQuota(workspaceId: string, _agentSessionId?: string): void {
   // AgentEvent that triggered this handler. No legacy `agent:status { quota }`
   // emit needed.
 
-  // 15min first, then 30min, then 60min cap
+  // Prefer the actual resetsAt from the last rate_limit event; fall back to
+  // the 15/30/60min exponential schedule when that info isn't usable.
   const retryCount = retryCounts.get(workspaceId) ?? 0
-  const backoffMinutes = Math.min(15 * 2 ** retryCount, 60)
-  const backoffMs = backoffMinutes * 60 * 1000
+  const { delayMs, resetsAt, source } = computeQuotaBackoffMs(workspaceId, retryCount)
+  const backoffMs = delayMs
 
   retryCounts.set(workspaceId, retryCount + 1)
 
@@ -659,7 +829,9 @@ function handleQuota(workspaceId: string, _agentSessionId?: string): void {
   // retry count / wait time without polluting the persistent event log.
   emitEphemeral(workspaceId, 'agent:quota-backoff', {
     retryCount: retryCount + 1,
-    backoffMinutes,
+    backoffMinutes: Math.round(delayMs / 60_000),
+    resetsAt,
+    source,
   })
 
   const timer = setTimeout(() => {
@@ -671,8 +843,12 @@ function handleQuota(workspaceId: string, _agentSessionId?: string): void {
         return
       }
       try {
-        const freshWorkingDir = `${freshWs.projectPath}/.worktrees/${freshWs.workingBranch}`
-        startAgent(workspaceId, freshWorkingDir, 'Continue the previous task where you left off.', undefined, true)
+        if (freshWs.autoLoop) {
+          autoLoopService.onQuotaBackoffExpired(workspaceId)
+        } else {
+          const freshWorkingDir = `${freshWs.projectPath}/.worktrees/${freshWs.workingBranch}`
+          startAgent(workspaceId, freshWorkingDir, 'Continue the previous task where you left off.', undefined, true)
+        }
       } catch (err) {
         console.error(`[orchestrator] Quota retry for workspace '${workspaceId}' failed:`, err)
         const msg = err instanceof Error ? err.message : String(err)
@@ -722,4 +898,4 @@ export function _runWatchdogForTest(): void {
 }
 
 /** Test-only export. Not part of the public module API. */
-export const __test__ = { handleEvent }
+export const __test__ = { handleEvent, handleQuota }

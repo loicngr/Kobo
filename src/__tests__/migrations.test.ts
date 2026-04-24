@@ -35,8 +35,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 11', () => {
-    expect(SCHEMA_VERSION).toBe(11)
+  it('exporte SCHEMA_VERSION = 12', () => {
+    expect(SCHEMA_VERSION).toBe(12)
   })
 
   it('migre depuis la legacy schema_version table', () => {
@@ -650,6 +650,76 @@ describe('migration v11: add-pending-wakeups-table', () => {
 
     const countRow = db.prepare('SELECT COUNT(*) as c FROM pending_wakeups').get() as { c: number }
     expect(countRow.c).toBe(0)
+    db.close()
+  })
+})
+
+describe('migration v12: add-auto-loop-columns', () => {
+  it('adds 3 columns to workspaces with correct defaults', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{
+      name: string
+      dflt_value: string | null
+    }>
+    const names = cols.map((c) => c.name)
+    expect(names).toContain('auto_loop')
+    expect(names).toContain('auto_loop_ready')
+    expect(names).toContain('no_progress_streak')
+    expect(cols.find((c) => c.name === 'auto_loop')?.dflt_value).toBe('0')
+    expect(cols.find((c) => c.name === 'auto_loop_ready')?.dflt_value).toBe('0')
+    expect(cols.find((c) => c.name === 'no_progress_streak')?.dflt_value).toBe('0')
+    db.close()
+  })
+
+  it('fresh install via initSchema produces the same 3 columns', () => {
+    const freshDb = new Database(':memory:')
+    initSchema(freshDb)
+    const upgradedDb = new Database(':memory:')
+    runMigrations(upgradedDb)
+    const freshCols = (freshDb.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>)
+      .map((c) => c.name)
+      .sort()
+    const upgradedCols = (upgradedDb.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>)
+      .map((c) => c.name)
+      .sort()
+    expect(freshCols).toEqual(upgradedCols)
+    expect(freshCols).toContain('auto_loop')
+    freshDb.close()
+    upgradedDb.close()
+  })
+
+  // Per CLAUDE.md migration discipline: test the upgrade-with-data path,
+  // not just the fresh install. A workspace seeded at v11 must survive the
+  // v12 migration with its data intact and the 3 new columns defaulted to 0.
+  it('v11 → v12 upgrade preserves existing workspace data', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run('w1', 'legacy', '/tmp/p', 'main', 'feat', '2025-01-01', '2025-01-01')
+
+    const ws = db
+      .prepare('SELECT id, name, auto_loop, auto_loop_ready, no_progress_streak FROM workspaces WHERE id = ?')
+      .get('w1') as
+      | {
+          id: string
+          name: string
+          auto_loop: number
+          auto_loop_ready: number
+          no_progress_streak: number
+        }
+      | undefined
+
+    expect(ws).toEqual({
+      id: 'w1',
+      name: 'legacy',
+      auto_loop: 0,
+      auto_loop_ready: 0,
+      no_progress_streak: 0,
+    })
     db.close()
   })
 })

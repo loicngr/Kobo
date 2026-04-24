@@ -152,6 +152,7 @@ function toggleNotion() {
 }
 
 const useSentry = ref(false)
+const autoLoop = ref(false)
 const sentryUrl = ref('')
 const isValidSentryUrl = computed(() => /\/issues\/\d+/.test(sentryUrl.value.trim()))
 
@@ -352,7 +353,11 @@ async function handleCreate() {
         : {}),
       ...(skipSetupScript.value ? { skipSetupScript: true } : {}),
       ...(description.value.trim() ? { description: description.value.trim() } : {}),
-      permissionMode: permissionMode.value,
+      ...(autoLoop.value ? { autoLoop: true } : {}),
+      // Auto-loop needs MCP tools (kobo__list_tasks, kobo__create_task, etc.) for
+      // grooming. Plan mode blocks all MCP tools, so force auto-accept when
+      // autoLoop is on — otherwise the first session errors on "permission not granted".
+      permissionMode: autoLoop.value ? 'auto-accept' : permissionMode.value,
     }
 
     const workspace = await store.createWorkspace(payload)
@@ -706,10 +711,13 @@ async function handleCreate() {
           </q-select>
 
           <!-- Permission mode selector — options come from the selected
-               engine's capabilities; labels resolve to i18n keys. -->
+               engine's capabilities; labels resolve to i18n keys.
+               Disabled when auto-loop is on: auto-loop needs MCP + edits, which
+               plan mode blocks, so the permission is locked to auto-accept. -->
           <q-select
             v-model="permissionMode"
             :options="enginePermissionOptions"
+            :disable="autoLoop"
             dense
             borderless
             class="bottom-select rounded-borders"
@@ -721,31 +729,47 @@ async function handleCreate() {
           >
             <template #selected>
               <span class="bottom-select-label row items-center no-wrap">
-                <q-icon :name="permissionMode === 'plan' ? 'visibility' : 'flash_on'" size="12px" color="amber-6" class="q-mr-xs" />
-                {{ enginePermissionOptions.find((p) => p.value === permissionMode)?.label ?? permissionMode }}
-                <q-icon name="expand_more" size="12px" color="grey-5" />
+                <q-icon :name="autoLoop ? 'flash_on' : permissionMode === 'plan' ? 'visibility' : 'flash_on'" size="12px" color="amber-6" class="q-mr-xs" />
+                {{ autoLoop ? (enginePermissionOptions.find((p) => p.value === 'auto-accept')?.label ?? 'auto-accept') : (enginePermissionOptions.find((p) => p.value === permissionMode)?.label ?? permissionMode) }}
+                <q-icon v-if="!autoLoop" name="expand_more" size="12px" color="grey-5" />
               </span>
             </template>
-            <q-tooltip>{{ $t('engine.permission') }}</q-tooltip>
+            <q-tooltip>{{ autoLoop ? $t('createPage.permissionLockedByAutoLoop') : $t('engine.permission') }}</q-tooltip>
           </q-select>
 
           <q-space />
 
-          <!-- Skip-setup toggle: compact button grouped with the agent config
-               selectors. Click toggles the icon state. -->
-          <q-btn
-            flat
-            dense
-            size="sm"
-            no-caps
-            :icon="skipSetupScript ? 'play_disabled' : 'play_circle'"
-            :color="skipSetupScript ? 'orange-4' : 'grey-5'"
-            :label="$t('createPage.skipSetupScript')"
-            class="skip-setup-btn"
-            @click="skipSetupScript = !skipSetupScript"
-          >
-            <q-tooltip>{{ $t('createPage.skipSetupScript') }}</q-tooltip>
-          </q-btn>
+          <div class="row no-wrap items-center q-gutter-xs">
+            <!-- Auto-loop toggle -->
+            <q-btn
+              flat
+              dense
+              size="sm"
+              no-caps
+              :icon="autoLoop ? 'autorenew' : 'sync_disabled'"
+              :color="autoLoop ? 'amber-4' : 'grey-5'"
+              :label="$t('autoLoop.startInMode')"
+              class="skip-setup-btn"
+              @click="autoLoop = !autoLoop"
+            >
+              <q-tooltip>{{ $t('autoLoop.startInMode') }}</q-tooltip>
+            </q-btn>
+
+            <!-- Skip-setup toggle -->
+            <q-btn
+              flat
+              dense
+              size="sm"
+              no-caps
+              :icon="skipSetupScript ? 'play_disabled' : 'play_circle'"
+              :color="skipSetupScript ? 'orange-4' : 'grey-5'"
+              :label="$t('createPage.skipSetupScript')"
+              class="skip-setup-btn"
+              @click="skipSetupScript = !skipSetupScript"
+            >
+              <q-tooltip>{{ $t('createPage.skipSetupScript') }}</q-tooltip>
+            </q-btn>
+          </div>
         </div>
 
         <!-- Row 2: git configuration (repo path, branch type, source branch) -->

@@ -21,6 +21,11 @@ vi.mock('../../server/services/settings-service.js', () => ({
   }),
 }))
 
+async function flushControllerStart(): Promise<void> {
+  await Promise.resolve()
+  await Promise.resolve()
+}
+
 describe('Orchestrator — startAgent', () => {
   beforeEach(async () => {
     vi.resetModules()
@@ -63,7 +68,7 @@ describe('Orchestrator — startAgent', () => {
     expect(agentSessionId).toBeTypeOf('string')
     expect(getAgentStatus(ws.id)).toBe('running')
     // After the engine.start promise resolves, the controller has the pid
-    await new Promise((r) => setImmediate(r))
+    await flushControllerStart()
     expect(_getControllers().get(ws.id)?.pid).toBe(1111)
   })
 
@@ -164,7 +169,7 @@ describe('Orchestrator — event dispatch', () => {
       '../../server/services/agent/orchestrator.js'
     )
     startAgent(ws.id, '/tmp', 'hi')
-    await new Promise((r) => setImmediate(r))
+    await flushControllerStart()
     emitEv({ kind: 'error', category: 'quota', message: 'rate limit' })
     expect(getWorkspace(ws.id)?.status).toBe('quota')
     expect(_getBackoffTimers().has(ws.id)).toBe(true)
@@ -172,6 +177,56 @@ describe('Orchestrator — event dispatch', () => {
     for (const t of _getBackoffTimers().values()) clearTimeout(t)
     _getBackoffTimers().clear()
     _getRetryCounts().clear()
+  })
+
+  it('keeps quota status and the backoff timer when session:ended arrives after a quota error', async () => {
+    vi.useFakeTimers()
+    try {
+      const { createWorkspace, getWorkspace, updateWorkspaceStatus } = await import(
+        '../../server/services/workspace-service.js'
+      )
+      const ws = createWorkspace({ name: 'W', projectPath: '/tmp', sourceBranch: 'd', workingBranch: 'b' })
+      updateWorkspaceStatus(ws.id, 'brainstorming')
+      updateWorkspaceStatus(ws.id, 'executing')
+      let emitEv: (e: AgentEvent) => void = () => {}
+      const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+      _registerEngineForTest({
+        id: 'claude-code',
+        displayName: 'Claude Code',
+        capabilities: {
+          models: [],
+          permissionModes: ['auto-accept'],
+          supportsResume: true,
+          supportsMcp: true,
+          supportsSkills: true,
+        },
+        async start(_opts, onEvent) {
+          emitEv = onEvent
+          return { pid: 1, engineSessionId: 'sid', sendMessage() {}, interrupt() {}, async stop() {} }
+        },
+      })
+      const { startAgent, _getBackoffTimers, _getRetryCounts } = await import(
+        '../../server/services/agent/orchestrator.js'
+      )
+      startAgent(ws.id, '/tmp', 'hi')
+      await flushControllerStart()
+
+      emitEv({ kind: 'error', category: 'quota', message: 'rate limit' })
+      expect(getWorkspace(ws.id)?.status).toBe('quota')
+      expect(_getBackoffTimers().has(ws.id)).toBe(true)
+
+      emitEv({ kind: 'session:ended', reason: 'error', exitCode: 1 })
+
+      expect(getWorkspace(ws.id)?.status).toBe('quota')
+      expect(_getBackoffTimers().has(ws.id)).toBe(true)
+      expect(_getRetryCounts().get(ws.id)).toBe(1)
+
+      for (const t of _getBackoffTimers().values()) clearTimeout(t)
+      _getBackoffTimers().clear()
+      _getRetryCounts().clear()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('transitions workspace to executing on session:brainstorm-complete', async () => {
@@ -199,7 +254,7 @@ describe('Orchestrator — event dispatch', () => {
     })
     const { startAgent } = await import('../../server/services/agent/orchestrator.js')
     startAgent(ws.id, '/tmp', 'brainstorm')
-    await new Promise((r) => setImmediate(r))
+    await flushControllerStart()
     emitEv({ kind: 'session:brainstorm-complete' })
     expect(getWorkspace(ws.id)?.status).toBe('executing')
   })
@@ -230,7 +285,7 @@ describe('Orchestrator — event dispatch', () => {
     })
     const { startAgent, _getControllers, _getRetryCounts } = await import('../../server/services/agent/orchestrator.js')
     startAgent(ws.id, '/tmp', 'hi')
-    await new Promise((r) => setImmediate(r))
+    await flushControllerStart()
     emitEv({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
     expect(getWorkspace(ws.id)?.status).toBe('completed')
     expect(_getControllers().has(ws.id)).toBe(false)
@@ -263,7 +318,7 @@ describe('Orchestrator — event dispatch', () => {
     })
     const { startAgent, _getControllers } = await import('../../server/services/agent/orchestrator.js')
     startAgent(ws.id, '/tmp', 'hi')
-    await new Promise((r) => setImmediate(r))
+    await flushControllerStart()
     emitEv({ kind: 'session:ended', reason: 'error', exitCode: 1 })
     expect(getWorkspace(ws.id)?.status).toBe('error')
     expect(_getControllers().has(ws.id)).toBe(false)
@@ -355,7 +410,7 @@ describe('Orchestrator — watchdog', () => {
       '../../server/services/agent/orchestrator.js'
     )
     const { agentSessionId } = startAgent(ws.id, '/tmp', 'hi')
-    await new Promise((r) => setImmediate(r))
+    await flushControllerStart()
     expect(_getControllers().has(ws.id)).toBe(true)
 
     _runWatchdogForTest()
@@ -475,7 +530,7 @@ describe('Orchestrator — interruptAgent', () => {
     })
     const { startAgent, interruptAgent } = await import('../../server/services/agent/orchestrator.js')
     startAgent(ws.id, '/tmp', 'hi')
-    await new Promise((r) => setImmediate(r))
+    await flushControllerStart()
     interruptAgent(ws.id)
     expect(interruptCalls).toBe(1)
   })

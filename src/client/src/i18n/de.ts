@@ -387,6 +387,7 @@ export default {
 
   // Notion Panel
   'notion.title': 'Notion',
+  'tasks.title': 'Aufgaben',
   'notion.addTask': 'Aufgabe hinzufügen',
   'notion.openInNotion': 'In Notion öffnen',
   'notion.noUrl': 'Keine Notion-URL',
@@ -446,6 +447,7 @@ export default {
   'agent.error.spawn_failed': 'Agent konnte nicht gestartet werden',
   'agent.error.parse_error': 'Eine Agent-Nachricht konnte nicht verarbeitet werden',
   'agent.error.rate_limit': 'Ratenlimit erreicht',
+  'agent.error.resume_failed': 'Sitzung nicht gefunden — neue Sitzung wird gestartet',
   'agent.error.other': 'Agent-Fehler',
   'rateLimitType.fiveHour': '5h-Sitzung',
   'rateLimitType.sevenDay': 'Wöchentlich',
@@ -469,8 +471,6 @@ export default {
   'tooltip.refreshGitStats': 'Git-Statistiken aktualisieren',
   'tooltip.removeImage': 'Bild entfernen',
   'tooltip.sendMessage': 'Nachricht senden',
-  'tooltip.addNotionTask': 'Aufgabe hinzufügen',
-  'tooltip.removeNotionTask': 'Aufgabe entfernen',
   'tooltip.refreshStats': 'Statistiken aktualisieren',
 
   // Tools Panel
@@ -574,6 +574,8 @@ export default {
   'engine.model': 'Modell',
   'engine.effort': 'Reasoning-Aufwand',
   'engine.permission': 'Berechtigungsmodus',
+  'createPage.permissionLockedByAutoLoop':
+    'Auto-Schleife benötigt Auto-Accept (MCP + Änderungen). Deaktiviere die Auto-Schleife, um den Plan-Modus zu wählen.',
   'engine.permission.auto-accept': 'Automatisch akzeptieren',
   'engine.permission.plan': 'Plan (schreibgeschützt)',
 
@@ -587,4 +589,23 @@ export default {
 
   // Workspace list drawer indicators
   'workspaceList.prOpen': 'Pull Request offen',
+
+  // Auto-loop
+  'autoLoop.toggle': 'Auto-Schleife',
+  'autoLoop.start': 'Auto-Schleife starten',
+  'autoLoop.prepare': 'Auto-Schleife vorbereiten',
+  'autoLoop.prepareBusy': 'Warte, bis der Agent fertig ist, bevor du vorbereitest',
+  'autoLoop.forceReady': 'Ich weiß, was ich tue — Grooming überspringen',
+  'autoLoop.forceReadyConfirm':
+    'Grooming überspringen und Auto-Schleife als bereit markieren? Kann hängen bleiben, wenn Aufgaben nicht atomar sind.',
+  'autoLoop.stop': 'Auto-Schleife stoppen',
+  'autoLoop.notReady': 'Zuerst „Auto-Schleife vorbereiten" ausführen',
+  'autoLoop.noTasks': 'Zuerst Aufgaben hinzufügen',
+  'autoLoop.progress': 'Auto-Schleife · {done}/{total} Aufgaben',
+  'autoLoop.preparing': 'Auto-Schleife · Vorbereitung',
+  'autoLoop.preparingTooltip':
+    'Grooming läuft — der Agent erstellt / überprüft Aufgaben. Die Schleife startet, sobald mark_auto_loop_ready aufgerufen wird.',
+  'autoLoop.running': 'Auto-Schleife läuft',
+  'autoLoop.startInMode': 'Im Auto-Schleifen-Modus starten',
+  'koboCommand.prepAutoloopDesc': 'Aufgaben für Auto-Schleifen-Modus vorbereiten (auf Atomarität prüfen)',
 }

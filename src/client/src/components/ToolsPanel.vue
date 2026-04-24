@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
+import AutoLoopPanel from 'src/components/AutoLoopPanel.vue'
 import DevServerPanel from 'src/components/DevServerPanel.vue'
 import { useSettingsStore } from 'src/stores/settings'
 import type { Workspace } from 'src/stores/workspace'
@@ -99,6 +100,8 @@ async function openEditor() {
       </template>
 
       <template v-else>
+      <AutoLoopPanel class="q-mb-md" />
+
       <q-btn
         no-caps
         dense

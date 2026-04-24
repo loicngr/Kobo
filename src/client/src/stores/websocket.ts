@@ -25,6 +25,38 @@ export function _setReplayingForDispatch(value: boolean): void {
 }
 
 /**
+ * Handle `session:started` side-effects: flip the local workspace status to
+ * `executing` AND switch the selected session to the one that just started.
+ *
+ * The session switch matters for auto-loop: each iteration spawns a FRESH
+ * session (resume=false), and without this switch the UI stays on the
+ * previous session's chat while streaming happens in the new one.
+ * Skipped during sync:response replay so we don't clobber the user's
+ * selection when reconnecting.
+ */
+function _handleSessionStarted(workspaceId: string, event: AgentEvent, sessionId?: string): void {
+  if (event.kind !== 'session:started') return
+  const workspaceStore = useWorkspaceStore()
+
+  const cur = workspaceStore.workspaces.find((w) => w.id === workspaceId)
+  if (
+    cur &&
+    (cur.status === 'completed' || cur.status === 'idle' || cur.status === 'error' || cur.status === 'quota')
+  ) {
+    workspaceStore.updateWorkspaceFromEvent(workspaceId, { status: 'executing' })
+  }
+
+  if (_replayingNotifications) return
+  if (!sessionId) return
+  if (workspaceStore.selectedWorkspaceId !== workspaceId) return
+  if (workspaceStore.selectedSessionId === sessionId) return
+
+  void workspaceStore.fetchSessions(workspaceId, sessionId).catch((err) => {
+    console.error('[websocket] fetchSessions on session:started failed:', err)
+  })
+}
+
+/**
  * Central dispatcher for normalised `AgentEvent`s received via WebSocket
  * (`agent:event` frames or `sync:response` replays).
  *
@@ -44,6 +76,7 @@ export function dispatchAgentEvent(
   sessionId?: string | null,
 ): void {
   useAgentStreamStore().append(workspaceId, event, timestamp, eventId, sessionId)
+  _handleSessionStarted(workspaceId, event, sessionId ?? undefined)
 
   const workspaceStore = useWorkspaceStore()
 
@@ -150,26 +183,24 @@ export function dispatchAgentEvent(
     }
   }
 
-  // session:started: a new turn just spun up. Flip the workspace status
-  // to `executing` in the local cache so downstream UI (ActivityFeed's
-  // `sessionActive` check, AgentBusyBanner, start/stop buttons) reflects
-  // the live state without waiting for a GET /workspaces round-trip.
-  if (event.kind === 'session:started') {
-    const cur = workspaceStore.workspaces.find((w) => w.id === workspaceId)
-    if (
-      cur &&
-      (cur.status === 'completed' || cur.status === 'idle' || cur.status === 'error' || cur.status === 'quota')
-    ) {
-      workspaceStore.updateWorkspaceFromEvent(workspaceId, { status: 'executing' })
-    }
-    return
-  }
+  // session:started — handled separately in _handleSessionStarted (which also
+  // has access to the sessionId for auto-loop session switching). Nothing else
+  // to do here for this kind.
+  if (event.kind === 'session:started') return
 
   // Session lifecycle: session:ended signals completion/error/kill. Refresh
   // the workspace list so the new DB status shows up, and surface a
   // notification if not replaying.
   if (event.kind === 'session:ended') {
-    const derivedStatus = event.reason === 'completed' ? 'completed' : event.reason === 'error' ? 'error' : 'idle'
+    const currentStatus = workspaceStore.workspaces.find((w) => w.id === workspaceId)?.status
+    const derivedStatus =
+      currentStatus === 'quota'
+        ? 'quota'
+        : event.reason === 'completed'
+          ? 'completed'
+          : event.reason === 'error'
+            ? 'error'
+            : 'idle'
     workspaceStore.updateWorkspaceFromEvent(workspaceId, { status: derivedStatus })
     // Subagents live inside the parent session: when it ends, any still in
     // `running` are orphaned. Flip them to `done` so AgentBusyBanner doesn't
@@ -422,6 +453,7 @@ export const useWebSocketStore = defineStore('websocket', {
                 events: AgentEvent[]
                 timestamps: string[]
                 sessionIds: Array<string | null>
+                eventIds: Array<string | null>
                 oldestId: string | undefined
               }
             >()
@@ -432,11 +464,13 @@ export const useWebSocketStore = defineStore('websocket', {
                   events: [],
                   timestamps: [],
                   sessionIds: [],
+                  eventIds: [],
                   oldestId: undefined,
                 }
                 bucket.events.push(evt.payload as unknown as AgentEvent)
                 bucket.timestamps.push(evt.createdAt)
                 bucket.sessionIds.push(evt.sessionId ?? null)
+                bucket.eventIds.push(evt.id ?? null)
                 if (!bucket.oldestId) bucket.oldestId = evt.id
                 grouped.set(evt.workspaceId, bucket)
                 continue
@@ -445,13 +479,17 @@ export const useWebSocketStore = defineStore('websocket', {
             }
             if (grouped.size > 0) {
               const streamStore = useAgentStreamStore()
-              for (const [workspaceId, { events: list, timestamps: tsList, sessionIds: sList, oldestId }] of grouped) {
+              for (const [
+                workspaceId,
+                { events: list, timestamps: tsList, sessionIds: sList, eventIds: eList, oldestId },
+              ] of grouped) {
                 // `hasMoreOlder` starts true optimistically — the infinite
                 // scroll fetch will learn the real answer on its first hit.
                 streamStore.reset(workspaceId, list, tsList, {
                   oldestId,
                   hasMoreOlder: true,
                   sessionIds: sList,
+                  eventIds: eList,
                 })
                 // Replay side-effects (usage/rate_limit/subagent) without
                 // re-appending — append was already replaced by reset().
@@ -576,6 +614,15 @@ export const useWebSocketStore = defineStore('websocket', {
         case 'wakeup:fired':
         case 'wakeup:skipped': {
           if (wid) workspaceStore.clearPendingWakeup(wid)
+          break
+        }
+
+        case 'autoloop:enabled':
+        case 'autoloop:disabled':
+        case 'autoloop:iteration-started':
+        case 'autoloop:ready-flipped': {
+          // Refresh the full state map — small payload, keeps code simple.
+          void workspaceStore.fetchAutoLoopStates()
           break
         }
 

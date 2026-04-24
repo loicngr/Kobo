@@ -96,14 +96,17 @@ src/
 
 | Table | Purpose |
 |---|---|
-| `workspaces` | the unit of work — id, name, project_path, source_branch, working_branch, status, notion_url, model, dev_server_status, `archived_at`, timestamps |
+| `workspaces` | the unit of work — id, name, project_path, source_branch, working_branch, status, notion_url, model, dev_server_status, `archived_at`, `auto_loop`, `auto_loop_ready`, `no_progress_streak`, timestamps |
 | `tasks` | workspace sub-items — title, status, `is_acceptance_criterion`, sort_order; CASCADE DELETE on workspace |
 | `agent_sessions` | Claude Code CLI invocations — pid, `claude_session_id`, status, started_at, ended_at, `name` |
 | `ws_events` | persisted WebSocket events for replay on reconnect — type, payload, session_id, created_at |
+| `pending_wakeups` | one-row-per-workspace scheduler for the `ScheduleWakeup` tool — target_at (ISO UTC), prompt, reason; CASCADE DELETE on workspace |
 
 `status` enum: `created | extracting | brainstorming | executing | completed | idle | error | quota`. Transitions are validated in `updateWorkspaceStatus` against `VALID_TRANSITIONS`.
 
 `archived_at` is **orthogonal** to `status` — archiving is a visibility flag, not a lifecycle state. Unarchive restores the exact pre-archive `status`.
+
+`auto_loop` (bool, default 0), `auto_loop_ready` (bool, default 0) and `no_progress_streak` (int, default 0) drive the auto-loop feature: when `auto_loop=1`, `session:ended` triggers `auto-loop-service.onSessionEnded` which either spawns the next iteration via a fresh `startAgent(resume=false)`, disables with `reason='completed'` (no pending tasks), or disables with `reason='stall'` (3 consecutive sessions without a task completed). Archive + delete both auto-disable.
 
 ## Database migrations
 

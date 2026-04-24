@@ -20,6 +20,9 @@ export interface Workspace {
   archivedAt: string | null
   favoritedAt: string | null
   tags: string[]
+  autoLoop: boolean
+  autoLoopReady: boolean
+  noProgressStreak: number
   createdAt: string
   updatedAt: string
 }
@@ -66,6 +69,7 @@ export interface CreateWorkspaceInput {
   reasoningEffort?: string
   tasks?: string[]
   acceptanceCriteria?: string[]
+  autoLoop?: boolean
 }
 
 export class WorkspaceActionError extends Error {
@@ -156,6 +160,12 @@ export interface PendingWakeup {
   reason?: string
 }
 
+export interface AutoLoopStatus {
+  auto_loop: boolean
+  auto_loop_ready: boolean
+  no_progress_streak: number
+}
+
 const MAX_FEED_ITEMS = 5000
 
 // Debounce window for `fetchPrStates` called via `triggerGitRefresh`. The
@@ -196,6 +206,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     gitStatsCache: {} as Record<string, GitStats>,
     pendingWakeups: {} as Record<string, PendingWakeup>,
     prStates: {} as Record<string, string>,
+    autoLoopStates: {} as Record<string, AutoLoopStatus>,
   }),
 
   getters: {
@@ -371,6 +382,12 @@ export const useWorkspaceStore = defineStore('workspace', {
         const data = await res.json()
         const workspace = data.workspace ?? data
         this.workspaces.push(workspace)
+        // When created with autoLoop=true, the server flipped auto_loop=1 in DB
+        // but the event broadcast lands before this client is subscribed.
+        // Refresh states explicitly so the toggle reflects the new row.
+        if (input.autoLoop) {
+          void this.fetchAutoLoopStates()
+        }
         return workspace as Workspace
       } catch (err) {
         console.error('[workspace store] createWorkspace failed:', err)
@@ -674,7 +691,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
-    async fetchSessions(workspaceId: string) {
+    async fetchSessions(workspaceId: string, forceSelectId?: string) {
       try {
         const res = await fetch(`/api/workspaces/${workspaceId}/sessions`)
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -684,6 +701,12 @@ export const useWorkspaceStore = defineStore('workspace', {
         if (this.selectedWorkspaceId !== workspaceId) return
 
         this.sessions = await res.json()
+
+        // When auto-loop starts a new session, force-switch to it.
+        if (forceSelectId && this.sessions.some((s) => s.id === forceSelectId)) {
+          this.selectSession(forceSelectId)
+          return
+        }
 
         // Auto-select only if no session is currently selected (or current selection is stale)
         const currentStillExists = this.selectedSessionId && this.sessions.some((s) => s.id === this.selectedSessionId)
@@ -945,6 +968,49 @@ export const useWorkspaceStore = defineStore('workspace', {
       } catch (err) {
         console.error('[workspace-store] fetchPrStates failed:', err)
       }
+    },
+
+    async fetchAutoLoopStates(): Promise<void> {
+      try {
+        const res = await fetch('/api/workspaces/auto-loop-states', { cache: 'no-store' })
+        if (!res.ok) return
+        const data = (await res.json()) as Record<string, AutoLoopStatus>
+        this.autoLoopStates = data
+      } catch (err) {
+        console.error('[workspace-store] fetchAutoLoopStates failed:', err)
+      }
+    },
+
+    async enableAutoLoop(id: string): Promise<void> {
+      const res = await fetch(`/api/workspaces/${id}/auto-loop`, { method: 'POST' })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`)
+      }
+      await this.fetchAutoLoopStates()
+    },
+
+    async disableAutoLoop(id: string): Promise<void> {
+      const res = await fetch(`/api/workspaces/${id}/auto-loop`, { method: 'DELETE' })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`)
+      }
+      await this.fetchAutoLoopStates()
+    },
+
+    async forceAutoLoopReady(id: string): Promise<void> {
+      const res = await fetch(`/api/workspaces/${id}/auto-loop-ready`, { method: 'POST' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      await this.fetchAutoLoopStates()
+    },
+
+    setAutoLoopState(id: string, state: AutoLoopStatus): void {
+      this.autoLoopStates[id] = state
+    },
+
+    clearAutoLoopState(id: string): void {
+      delete this.autoLoopStates[id]
     },
 
     async fetchPendingWakeup(workspaceId: string): Promise<void> {

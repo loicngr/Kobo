@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useWorkspaceStore } from 'src/stores/workspace'
-import { formatRateLimitLabel } from 'src/utils/rate-limit-labels'
+import { formatRateLimitBucketLabel, formatRateLimitResetAt } from 'src/utils/rate-limit-labels'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -10,8 +10,10 @@ const { t } = useI18n()
 const snapshot = computed(() => store.globalRateLimitUsage)
 
 function bucketLabel(label: string | undefined, idx: number): string {
-  if (!label || label.trim().length === 0) return t('stats.usageBucket', { n: idx + 1 })
-  return formatRateLimitLabel(label, t)
+  const snap = snapshot.value
+  const bucket = snap?.buckets[idx]
+  if (!bucket) return t('stats.usageBucket', { n: idx + 1 })
+  return formatRateLimitBucketLabel({ id: bucket.id, label, usedPct: bucket.usedPct, resetAt: bucket.resetAt }, idx, t)
 }
 
 const summary = computed(() => {
@@ -45,7 +47,7 @@ const formattedUpdatedAt = computed(() => {
       >
         <div>{{ bucketLabel(bucket.label, idx) }} — {{ bucket.usedPct.toFixed(0) }}% {{ $t('stats.used') }}</div>
         <div v-if="bucket.details" class="text-caption">{{ bucket.details }}</div>
-        <div v-if="bucket.resetAt" class="text-caption">{{ $t('stats.resetsAt', { value: bucket.resetAt }) }}</div>
+        <div v-if="bucket.resetAt" class="text-caption">{{ $t('stats.resetsAt', { value: formatRateLimitResetAt(bucket.resetAt) }) }}</div>
       </div>
       <div class="text-caption q-mt-sm">{{ $t('quotaFooter.lastUpdated', { time: formattedUpdatedAt }) }}</div>
     </q-tooltip>

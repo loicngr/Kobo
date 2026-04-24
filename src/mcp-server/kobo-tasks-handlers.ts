@@ -55,6 +55,23 @@ export function listTasksHandler(db: Database.Database, workspaceId: string): Ta
   return rows.map(rowToDto)
 }
 
+/**
+ * Flip the workspace's `auto_loop_ready` flag. Called at the end of a
+ * `/kobo-prep-autoloop` grooming session to unlock the auto-loop toggle.
+ *
+ * The DB write itself happens here; the caller in kobo-tasks-server.ts
+ * also fires a notify-autoloop-ready POST so the backend emits
+ * `autoloop:ready-flipped` over WebSocket and any live frontend refreshes.
+ */
+export function markAutoLoopReadyHandler(db: Database.Database, workspaceId: string): { ok: true } {
+  const row = db.prepare('SELECT id FROM workspaces WHERE id = ?').get(workspaceId)
+  if (!row) {
+    throw new Error(`Workspace '${workspaceId}' not found`)
+  }
+  db.prepare('UPDATE workspaces SET auto_loop_ready = 1 WHERE id = ?').run(workspaceId)
+  return { ok: true }
+}
+
 /** Set a task's status to "done" and return the updated task. */
 export function markTaskDoneHandler(db: Database.Database, workspaceId: string, taskId: string): MarkDoneResult {
   const now = new Date().toISOString()
@@ -222,6 +239,8 @@ export interface WorkspaceInfoDto {
   notionPageId: string | null
   devServerStatus: string
   hasUnread: boolean
+  autoLoop: boolean
+  autoLoopReady: boolean
   createdAt: string
   updatedAt: string
 }
@@ -238,6 +257,8 @@ interface WorkspaceRow {
   model: string
   dev_server_status: string
   has_unread: number
+  auto_loop: number
+  auto_loop_ready: number
   created_at: string
   updated_at: string
 }
@@ -246,7 +267,7 @@ interface WorkspaceRow {
 export function getWorkspaceInfoHandler(db: Database.Database, workspaceId: string): WorkspaceInfoDto {
   const row = db
     .prepare(
-      'SELECT id, name, project_path, source_branch, working_branch, status, notion_url, notion_page_id, model, dev_server_status, has_unread, created_at, updated_at FROM workspaces WHERE id = ?',
+      'SELECT id, name, project_path, source_branch, working_branch, status, notion_url, notion_page_id, model, dev_server_status, has_unread, auto_loop, auto_loop_ready, created_at, updated_at FROM workspaces WHERE id = ?',
     )
     .get(workspaceId) as WorkspaceRow | undefined
 
@@ -267,6 +288,8 @@ export function getWorkspaceInfoHandler(db: Database.Database, workspaceId: stri
     notionPageId: row.notion_page_id,
     devServerStatus: row.dev_server_status,
     hasUnread: row.has_unread === 1,
+    autoLoop: row.auto_loop === 1,
+    autoLoopReady: row.auto_loop_ready === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }

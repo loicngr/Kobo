@@ -22,6 +22,48 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
     expect(spy).toHaveBeenCalled()
   })
 
+  it('does not regress local status from quota to error when session:ended follows a quota hit', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const ws = useWorkspaceStore()
+    ws.workspaces = [
+      {
+        id: 'w1',
+        name: 'Quota workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/quota',
+        status: 'quota',
+        notionUrl: null,
+        notionPageId: null,
+        model: 'claude-opus-4-5',
+        reasoningEffort: 'normal',
+        permissionMode: 'auto-accept',
+        devServerStatus: 'stopped',
+        hasUnread: false,
+        archivedAt: null,
+        favoritedAt: null,
+        tags: [],
+        autoLoop: true,
+        autoLoopReady: true,
+        noProgressStreak: 0,
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      },
+    ]
+    vi.spyOn(ws, 'fetchWorkspaces').mockResolvedValue()
+    vi.spyOn(ws, 'finalizeRunningSubagents').mockImplementation(() => {})
+    const { _setReplayingForDispatch, dispatchAgentEvent } = await import('../stores/websocket.js')
+
+    _setReplayingForDispatch(true)
+    try {
+      dispatchAgentEvent('w1', { kind: 'session:ended', reason: 'error', exitCode: 1 })
+    } finally {
+      _setReplayingForDispatch(false)
+    }
+
+    expect(ws.workspaces[0]?.status).toBe('quota')
+  })
+
   it('routes subagent:progress events to workspaceStore.upsertSubagent', async () => {
     const { useWorkspaceStore } = await import('../stores/workspace.js')
     const ws = useWorkspaceStore()

@@ -30,6 +30,9 @@ Think of it as an apprentice's hall: you hand out missions, each apprentice sets
 - **Resizable right drawer** — drag-to-resize horizontally and vertically, with tab state and split ratio persisted to localStorage
 - **Soft interrupt** — pause an agent mid-execution (SIGINT, like pressing Escape in Claude Code) without killing the process; the agent stops the current tool and waits for the next message
 - **Archive instead of delete** — soft-remove workspaces without losing the worktree, branches, or history; unarchive restores the exact pre-archive state
+- **Auto-loop mode** — opt-in, per-workspace: when enabled, Kōbō spawns a fresh Claude session for the next pending task after every `session:ended`, walking through the task list until all are `done`. Stops automatically on error, on stall (3 consecutive sessions with no task completed), or when the user clicks Stop. A grooming step (`/kobo-prep-autoloop`) ensures tasks are atomic before the loop runs; Notion-imported workspaces with both todos and acceptance criteria are auto-unlocked
+- **Quota-aware retry backoff** — when a Claude rate limit is hit mid-session, Kōbō schedules the retry at the actual reset time reported by the API (via `rate_limit.info.buckets[].resetsAt`), falling back to a 15 → 30 → 60 → 180 → 300 min ladder only when the reset info is missing or implausible
+- **Scheduled wakeups** — the `ScheduleWakeup` tool is honoured server-side: Kōbō persists the wakeup in SQLite, rehydrates on restart, and respawns the agent with `--resume` at the target time
 
 ## Tech stack
 

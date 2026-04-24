@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   createParserState,
   parseClaudeLine,
@@ -213,6 +213,119 @@ describe('parseClaudeLine — rate_limit', () => {
     expect(bucket.id).toBe('weekly')
     expect(bucket.usedPct).toBeCloseTo(24) // 12000 / 50000
     expect(bucket.details).toBe('12000 / 50000')
+  })
+})
+
+describe('parseClaudeLine — text-based quota detection', () => {
+  // Helper that wraps a text block inside the assistant-message stream-json
+  // frame shape Claude Code uses.
+  function assistantTextLine(text: string, messageId = 'msg_test'): string {
+    return JSON.stringify({
+      type: 'assistant',
+      message: {
+        id: messageId,
+        content: [{ type: 'text', text }],
+      },
+    })
+  }
+
+  it('emits rate_limit + error(quota) when the agent says "You\'ve hit your limit"', () => {
+    const state = createParserState()
+    const line = assistantTextLine("You've hit your limit · resets 1:20pm (Europe/Paris)")
+    const { events } = parseClaudeLine(line, state)
+
+    const error = events.find((e) => e.kind === 'error')
+    expect(error).toMatchObject({ kind: 'error', category: 'quota' })
+
+    const rl = events.find((e) => e.kind === 'rate_limit') as
+      | {
+          kind: 'rate_limit'
+          info: { buckets: Array<{ id: string; usedPct: number; resetsAt?: string; label?: string }> }
+        }
+      | undefined
+    expect(rl).toBeDefined()
+    const bucket = rl!.info.buckets[0]
+    expect(bucket.id).toBe('text-detected')
+    expect(bucket.usedPct).toBe(100)
+    expect(bucket.resetsAt).toBeDefined()
+    expect(bucket.label).toBeUndefined()
+  })
+
+  it('still emits the original message:text event (detection is additive, not a replacement)', () => {
+    const state = createParserState()
+    const line = assistantTextLine("You've hit your limit · resets 3pm")
+    const { events } = parseClaudeLine(line, state)
+    const text = events.find((e) => e.kind === 'message:text')
+    expect(text).toMatchObject({ kind: 'message:text', text: "You've hit your limit · resets 3pm" })
+  })
+
+  it('handles "resets 11am" without minute or timezone', () => {
+    const state = createParserState()
+    const line = assistantTextLine("You've hit your limit · resets 11am")
+    const { events } = parseClaudeLine(line, state)
+    const rl = events.find((e) => e.kind === 'rate_limit') as
+      | { kind: 'rate_limit'; info: { buckets: Array<{ resetsAt?: string }> } }
+      | undefined
+    expect(rl).toBeDefined()
+    expect(rl!.info.buckets[0].resetsAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/)
+  })
+
+  it('rolls the date forward when the reset time is already in the past today', () => {
+    // 23:30 local now, "reset 1am" → should parse as tomorrow 01:00 local.
+    const state = createParserState()
+    const line = assistantTextLine("You've hit your limit · resets 1am (UTC)")
+    // We can't easily fake Date here without vi.useFakeTimers; instead just
+    // assert the result is in the future (within 24h).
+    const before = Date.now()
+    const { events } = parseClaudeLine(line, state)
+    const rl = events.find((e) => e.kind === 'rate_limit') as
+      | { kind: 'rate_limit'; info: { buckets: Array<{ resetsAt?: string }> } }
+      | undefined
+    const ts = new Date(rl!.info.buckets[0].resetsAt as string).getTime()
+    expect(ts).toBeGreaterThan(before - 60_000)
+    expect(ts - before).toBeLessThan(24 * 60 * 60 * 1000 + 60_000)
+  })
+
+  it('parses the announced timezone into the correct UTC reset instant', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-04-23T13:29:37.000Z'))
+      const state = createParserState()
+      const line = assistantTextLine("You've hit your limit · resets 8am (Europe/Paris)")
+      const { events } = parseClaudeLine(line, state)
+      const rl = events.find((e) => e.kind === 'rate_limit') as
+        | { kind: 'rate_limit'; info: { buckets: Array<{ resetsAt?: string }> } }
+        | undefined
+      expect(rl).toBeDefined()
+      expect(rl!.info.buckets[0].resetsAt).toBe('2026-04-24T06:00:00.000Z')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('honours the announced timezone when it differs from the machine timezone', () => {
+    vi.useFakeTimers()
+    try {
+      vi.setSystemTime(new Date('2026-04-23T13:29:37.000Z'))
+      const state = createParserState()
+      const line = assistantTextLine("You've hit your limit · resets 8am (UTC)")
+      const { events } = parseClaudeLine(line, state)
+      const rl = events.find((e) => e.kind === 'rate_limit') as
+        | { kind: 'rate_limit'; info: { buckets: Array<{ resetsAt?: string }> } }
+        | undefined
+      expect(rl).toBeDefined()
+      expect(rl!.info.buckets[0].resetsAt).toBe('2026-04-24T08:00:00.000Z')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('does NOT synthesise quota events for unrelated text', () => {
+    const state = createParserState()
+    const line = assistantTextLine('Everything went fine, I committed the change.')
+    const { events } = parseClaudeLine(line, state)
+    expect(events.find((e) => e.kind === 'error')).toBeUndefined()
+    expect(events.find((e) => e.kind === 'rate_limit')).toBeUndefined()
   })
 })
 

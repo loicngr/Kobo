@@ -116,6 +116,17 @@ export const migrations: Migration[] = [
       ).run()
     },
   },
+  {
+    version: 12,
+    name: 'add-auto-loop-columns',
+    migrate: (db) => {
+      db.transaction(() => {
+        db.prepare('ALTER TABLE workspaces ADD COLUMN auto_loop INTEGER NOT NULL DEFAULT 0').run()
+        db.prepare('ALTER TABLE workspaces ADD COLUMN auto_loop_ready INTEGER NOT NULL DEFAULT 0').run()
+        db.prepare('ALTER TABLE workspaces ADD COLUMN no_progress_streak INTEGER NOT NULL DEFAULT 0').run()
+      })()
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

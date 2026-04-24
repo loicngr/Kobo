@@ -21,6 +21,9 @@ export function initSchema(db: Database.Database): void {
       favorited_at TEXT,
       tags TEXT NOT NULL DEFAULT '[]',
       engine TEXT NOT NULL DEFAULT 'claude-code',
+      auto_loop INTEGER NOT NULL DEFAULT 0,
+      auto_loop_ready INTEGER NOT NULL DEFAULT 0,
+      no_progress_streak INTEGER NOT NULL DEFAULT 0,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );

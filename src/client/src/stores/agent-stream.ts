@@ -18,6 +18,7 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
   const events = ref<Map<string, AgentEvent[]>>(new Map())
   const timestamps = ref<Map<string, string[]>>(new Map())
   const sessionIds = ref<Map<string, Array<string | null>>>(new Map())
+  const eventIds = ref<Map<string, Array<string | null>>>(new Map())
   const oldestIds = ref<Map<string, string>>(new Map())
   const hasMoreOlder = ref<Map<string, boolean>>(new Map())
   const version = ref(0)
@@ -35,6 +36,11 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
   function sessionIdsFor(workspaceId: string): Array<string | null> {
     version.value
     return sessionIds.value.get(workspaceId) ?? []
+  }
+
+  function eventIdsFor(workspaceId: string): Array<string | null> {
+    version.value
+    return eventIds.value.get(workspaceId) ?? []
   }
 
   function oldestIdFor(workspaceId: string): string | undefined {
@@ -57,13 +63,16 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
     const list = events.value.get(workspaceId) ?? []
     const tsList = timestamps.value.get(workspaceId) ?? []
     const sList = sessionIds.value.get(workspaceId) ?? []
+    const idList = eventIds.value.get(workspaceId) ?? []
     const isFirst = list.length === 0
     list.push(event)
     tsList.push(ts ?? new Date().toISOString())
     sList.push(sessionId ?? null)
+    idList.push(eventId ?? null)
     events.value.set(workspaceId, list)
     timestamps.value.set(workspaceId, tsList)
     sessionIds.value.set(workspaceId, sList)
+    eventIds.value.set(workspaceId, idList)
     if (isFirst && eventId) {
       oldestIds.value.set(workspaceId, eventId)
     }
@@ -74,11 +83,17 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
     workspaceId: string,
     list: AgentEvent[],
     tsList?: string[],
-    meta?: { oldestId?: string; hasMoreOlder?: boolean; sessionIds?: Array<string | null> },
+    meta?: {
+      oldestId?: string
+      hasMoreOlder?: boolean
+      sessionIds?: Array<string | null>
+      eventIds?: Array<string | null>
+    },
   ): void {
     events.value.set(workspaceId, [...list])
     timestamps.value.set(workspaceId, tsList ? [...tsList] : list.map(() => new Date().toISOString()))
     sessionIds.value.set(workspaceId, meta?.sessionIds ? [...meta.sessionIds] : list.map(() => null))
+    eventIds.value.set(workspaceId, meta?.eventIds ? [...meta.eventIds] : list.map(() => null))
     if (meta?.oldestId) oldestIds.value.set(workspaceId, meta.oldestId)
     else oldestIds.value.delete(workspaceId)
     if (meta && typeof meta.hasMoreOlder === 'boolean') hasMoreOlder.value.set(workspaceId, meta.hasMoreOlder)
@@ -90,7 +105,12 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
     workspaceId: string,
     olderEvents: AgentEvent[],
     olderTimestamps: string[],
-    meta: { oldestId: string | undefined; hasMoreOlder: boolean; sessionIds?: Array<string | null> },
+    meta: {
+      oldestId: string | undefined
+      hasMoreOlder: boolean
+      sessionIds?: Array<string | null>
+      eventIds?: Array<string | null>
+    },
   ): void {
     if (olderEvents.length === 0) {
       hasMoreOlder.value.set(workspaceId, meta.hasMoreOlder)
@@ -100,10 +120,13 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
     const list = events.value.get(workspaceId) ?? []
     const tsList = timestamps.value.get(workspaceId) ?? []
     const sList = sessionIds.value.get(workspaceId) ?? []
+    const idList = eventIds.value.get(workspaceId) ?? []
     const olderSids = meta.sessionIds ?? olderEvents.map(() => null)
+    const olderIds = meta.eventIds ?? olderEvents.map(() => null)
     events.value.set(workspaceId, [...olderEvents, ...list])
     timestamps.value.set(workspaceId, [...olderTimestamps, ...tsList])
     sessionIds.value.set(workspaceId, [...olderSids, ...sList])
+    eventIds.value.set(workspaceId, [...olderIds, ...idList])
     if (meta.oldestId) oldestIds.value.set(workspaceId, meta.oldestId)
     hasMoreOlder.value.set(workspaceId, meta.hasMoreOlder)
     version.value++
@@ -113,6 +136,7 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
     events.value.delete(workspaceId)
     timestamps.value.delete(workspaceId)
     sessionIds.value.delete(workspaceId)
+    eventIds.value.delete(workspaceId)
     oldestIds.value.delete(workspaceId)
     hasMoreOlder.value.delete(workspaceId)
     version.value++
@@ -122,10 +146,12 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
     events,
     timestamps,
     sessionIds,
+    eventIds,
     version,
     eventsFor,
     timestampsFor,
     sessionIdsFor,
+    eventIdsFor,
     oldestIdFor,
     hasMoreOlderFor,
     append,

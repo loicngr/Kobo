@@ -386,6 +386,7 @@ export default {
 
   // Notion Panel
   'notion.title': 'Notion',
+  'tasks.title': 'Tasks',
   'notion.addTask': 'Add task',
   'notion.openInNotion': 'Open in Notion',
   'notion.noUrl': 'No Notion URL',
@@ -445,6 +446,7 @@ export default {
   'agent.error.spawn_failed': 'Failed to launch the agent',
   'agent.error.parse_error': 'Unable to parse an agent message',
   'agent.error.rate_limit': 'Rate limit hit',
+  'agent.error.resume_failed': 'Session not found — starting fresh',
   'agent.error.other': 'Agent error',
   'rateLimitType.fiveHour': '5h session',
   'rateLimitType.sevenDay': 'Weekly',
@@ -468,8 +470,6 @@ export default {
   'tooltip.refreshGitStats': 'Refresh Git stats',
   'tooltip.removeImage': 'Remove image',
   'tooltip.sendMessage': 'Send message',
-  'tooltip.addNotionTask': 'Add task',
-  'tooltip.removeNotionTask': 'Remove task',
   'tooltip.refreshStats': 'Refresh statistics',
 
   // Tools Panel
@@ -571,6 +571,8 @@ export default {
   'engine.model': 'Model',
   'engine.effort': 'Reasoning effort',
   'engine.permission': 'Permission mode',
+  'createPage.permissionLockedByAutoLoop':
+    'Auto-loop requires Auto-accept (MCP + edits). Toggle auto-loop off to choose Plan mode.',
   'engine.permission.auto-accept': 'Auto-accept',
   'engine.permission.plan': 'Plan (read-only)',
 
@@ -584,4 +586,23 @@ export default {
 
   // Workspace list drawer indicators
   'workspaceList.prOpen': 'Pull request open',
+
+  // Auto-loop
+  'autoLoop.toggle': 'Auto-loop',
+  'autoLoop.start': 'Start auto-loop',
+  'autoLoop.prepare': 'Prepare for auto-loop',
+  'autoLoop.prepareBusy': 'Wait for the agent to finish before preparing',
+  'autoLoop.forceReady': "I know what I'm doing — skip grooming",
+  'autoLoop.forceReadyConfirm':
+    "Skip grooming and mark auto-loop ready? This may cause the loop to stall if tasks aren't atomic.",
+  'autoLoop.stop': 'Stop auto-loop',
+  'autoLoop.notReady': "Run 'Prepare for auto-loop' first",
+  'autoLoop.noTasks': 'Add tasks first',
+  'autoLoop.progress': 'Auto-loop · {done}/{total} tasks',
+  'autoLoop.preparing': 'Auto-loop · preparing',
+  'autoLoop.preparingTooltip':
+    'Grooming in progress — the agent is creating / reviewing tasks. The loop will start running once it calls mark_auto_loop_ready.',
+  'autoLoop.running': 'Auto-loop running',
+  'autoLoop.startInMode': 'Start in auto-loop mode',
+  'koboCommand.prepAutoloopDesc': 'Prepare tasks for auto-loop mode (groom for atomicity)',
 }

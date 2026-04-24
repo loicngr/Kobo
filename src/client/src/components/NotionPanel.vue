@@ -170,7 +170,7 @@ function statusColor(status: string): string {
   <div class="notion-panel q-pa-md">
     <div class="row items-center q-mb-sm">
       <div class="text-caption text-uppercase text-weight-bold text-grey-6" style="letter-spacing: 0.05em;">
-        {{ $t('notion.title') }}
+        {{ $t('tasks.title') }}
       </div>
       <q-space />
       <q-btn
@@ -195,12 +195,14 @@ function statusColor(status: string): string {
         color="indigo-4"
         @click="startAdd"
       >
-        <q-tooltip>{{ $t('tooltip.addNotionTask') }}</q-tooltip>
+        <q-tooltip>{{ $t('tooltip.addTask') }}</q-tooltip>
       </q-btn>
     </div>
 
     <template v-if="workspace">
-      <!-- Notion link -->
+      <!-- Link back to the source Notion page, when this workspace was
+           created from one. Absent when tasks were added manually or came
+           from another source. -->
       <div v-if="workspace.notionUrl" class="q-mb-sm">
         <a
           :href="workspace.notionUrl"
@@ -211,9 +213,6 @@ function statusColor(status: string): string {
           <q-icon name="open_in_new" size="12px" class="q-mr-xs" />
           {{ $t('notion.openInNotion') }}
         </a>
-      </div>
-      <div v-else class="text-caption q-mb-sm text-grey-8">
-        {{ $t('notion.noUrl') }}
       </div>
 
       <!-- Refresh button -->
@@ -312,7 +311,7 @@ function statusColor(status: string): string {
               class="task-delete-btn"
               @click="removeTask(task)"
             >
-              <q-tooltip>{{ $t('tooltip.removeNotionTask') }}</q-tooltip>
+              <q-tooltip>{{ $t('tooltip.removeTask') }}</q-tooltip>
             </q-btn>
           </template>
         </div>

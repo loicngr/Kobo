@@ -26,6 +26,179 @@ function makeBucket(id: string, source: Record<string, unknown>): RateLimitBucke
   return { id, label, usedPct: Math.max(0, Math.min(100, usedPct)), resetsAt, details }
 }
 
+// ── Text-based quota detection ────────────────────────────────────────────────
+// When the `claude -p` CLI hits a rate limit mid-turn, it often does NOT emit
+// a structured `rate_limit_event` nor an error on stderr — it just writes a
+// plain-text message like:
+//     "You've hit your limit · resets 1:20pm (Europe/Paris)"
+// and exits cleanly. Without the pattern below we'd see `session:ended` with
+// `reason: 'completed'` and the auto-loop would spawn the next iteration
+// immediately, only to hit the same wall again, N times, until stall kicks in.
+//
+// The regex captures the reset time (e.g. "1:20pm") and the timezone in
+// parentheses (e.g. "Europe/Paris") so we can convert to an ISO 8601
+// timestamp and feed handleQuota the same way a structured event would.
+
+const QUOTA_TEXT_PATTERN =
+  /you(?:'ve|\s+have)\s+hit\s+your\s+limit[^.\n]*?resets\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*(?:\(([^)]+)\))?/i
+
+interface ZonedDateTimeParts {
+  year: number
+  month: number
+  day: number
+  hour: number
+  minute: number
+  second: number
+}
+
+function extractZonedDateTimeParts(date: Date, timeZone: string): ZonedDateTimeParts | null {
+  try {
+    const formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    })
+    const parts = formatter.formatToParts(date)
+    const read = (type: Intl.DateTimeFormatPartTypes): number | null => {
+      const value = parts.find((part) => part.type === type)?.value
+      if (!value) return null
+      const parsed = Number.parseInt(value, 10)
+      return Number.isNaN(parsed) ? null : parsed
+    }
+    const year = read('year')
+    const month = read('month')
+    const day = read('day')
+    const hour = read('hour')
+    const minute = read('minute')
+    const second = read('second')
+    if ([year, month, day, hour, minute, second].some((value) => value === null)) return null
+    return {
+      year: year as number,
+      month: month as number,
+      day: day as number,
+      hour: hour as number,
+      minute: minute as number,
+      second: second as number,
+    }
+  } catch {
+    return null
+  }
+}
+
+function dateTimePartsToUtcMs(parts: ZonedDateTimeParts): number {
+  return Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second, 0)
+}
+
+function zonedDateTimeToUtc(parts: ZonedDateTimeParts, timeZone: string): string | undefined {
+  let guess = new Date(dateTimePartsToUtcMs(parts))
+  for (let i = 0; i < 4; i += 1) {
+    const observed = extractZonedDateTimeParts(guess, timeZone)
+    if (!observed) return undefined
+    const diffMs = dateTimePartsToUtcMs(parts) - dateTimePartsToUtcMs(observed)
+    if (diffMs === 0) return guess.toISOString()
+    guess = new Date(guess.getTime() + diffMs)
+  }
+  const observed = extractZonedDateTimeParts(guess, timeZone)
+  if (
+    observed &&
+    observed.year === parts.year &&
+    observed.month === parts.month &&
+    observed.day === parts.day &&
+    observed.hour === parts.hour &&
+    observed.minute === parts.minute
+  ) {
+    return guess.toISOString()
+  }
+  return undefined
+}
+
+/**
+ * Parse the time string Claude outputs (e.g. "1:20pm" + "Europe/Paris")
+ * into an ISO 8601 UTC timestamp. Returns `undefined` if anything looks
+ * off so handleQuota falls back to its ladder.
+ */
+function parseQuotaResetsAt(
+  hourStr: string,
+  minuteStr: string | undefined,
+  ampm: string | undefined,
+  tz: string | undefined,
+  now: Date = new Date(),
+): string | undefined {
+  const hour24 = (() => {
+    const h = Number.parseInt(hourStr, 10)
+    if (Number.isNaN(h) || h < 0 || h > 23) return null
+    if (!ampm) return h
+    const pm = ampm.toLowerCase() === 'pm'
+    if (h === 12) return pm ? 12 : 0
+    return pm ? h + 12 : h
+  })()
+  if (hour24 === null) return undefined
+  const minute = minuteStr ? Number.parseInt(minuteStr, 10) : 0
+  if (Number.isNaN(minute) || minute < 0 || minute > 59) return undefined
+
+  if (tz) {
+    const zonedNow = extractZonedDateTimeParts(now, tz)
+    if (zonedNow) {
+      const targetDate = new Date(Date.UTC(zonedNow.year, zonedNow.month - 1, zonedNow.day))
+      const nowInZoneMs = dateTimePartsToUtcMs(zonedNow)
+      const targetTodayMs = Date.UTC(zonedNow.year, zonedNow.month - 1, zonedNow.day, hour24, minute, 0, 0)
+      if (targetTodayMs < nowInZoneMs - 60_000) {
+        targetDate.setUTCDate(targetDate.getUTCDate() + 1)
+      }
+      const zonedIso = zonedDateTimeToUtc(
+        {
+          year: targetDate.getUTCFullYear(),
+          month: targetDate.getUTCMonth() + 1,
+          day: targetDate.getUTCDate(),
+          hour: hour24,
+          minute,
+          second: 0,
+        },
+        tz,
+      )
+      if (zonedIso) return zonedIso
+    }
+  }
+
+  // Fallback for missing/invalid timezone names: interpret the wall-clock time
+  // in the local machine timezone so quota handling still works on plain
+  // "resets 11am" messages.
+  const target = new Date(now)
+  target.setHours(hour24, minute, 0, 0)
+  if (target.getTime() < now.getTime() - 60_000) {
+    target.setDate(target.getDate() + 1)
+  }
+  return target.toISOString()
+}
+
+/**
+ * Scan a text block for a quota announcement. Returns synthetic
+ * `rate_limit` + `error { category: 'quota' }` events when the pattern
+ * matches, otherwise `null`. The caller pushes both events into the
+ * stream so handleQuota picks up the reset time and schedules the
+ * retry at the parsed moment.
+ */
+function extractQuotaFromText(text: string): { error: AgentEvent; rateLimit: AgentEvent } | null {
+  const match = QUOTA_TEXT_PATTERN.exec(text)
+  if (!match) return null
+  const [, hourStr, minuteStr, ampm, tz] = match
+  const resetsAt = parseQuotaResetsAt(hourStr, minuteStr, ampm, tz)
+  const bucket: RateLimitBucket = {
+    id: 'text-detected',
+    usedPct: 100,
+    resetsAt,
+  }
+  return {
+    error: { kind: 'error', category: 'quota', message: match[0] },
+    rateLimit: { kind: 'rate_limit', info: { buckets: [bucket] } },
+  }
+}
+
 function normalizeRateLimitInfo(info: Record<string, unknown>): RateLimitInfo {
   const buckets: RateLimitBucket[] = []
   if (typeof info.rateLimitType === 'string') {
@@ -171,6 +344,13 @@ export function parseClaudeLine(line: string, state: ParserState): ParseResult {
       if (blockType === 'text' && typeof block.text === 'string') {
         events.push({ kind: 'message:text', messageId, text: block.text, streaming: true })
         msgState.sawText = true
+        // Synthesise quota events when the CLI reports the limit in prose.
+        // See extractQuotaFromText above for why this is needed in `-p` mode.
+        const synth = extractQuotaFromText(block.text)
+        if (synth) {
+          events.push(synth.rateLimit)
+          events.push(synth.error)
+        }
       }
       if (blockType === 'tool_use') {
         events.push({

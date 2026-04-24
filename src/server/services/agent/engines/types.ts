@@ -108,7 +108,7 @@ export type AgentEvent =
   // Errors
   | {
       kind: 'error'
-      category: 'quota' | 'spawn_failed' | 'parse_error' | 'other'
+      category: 'quota' | 'spawn_failed' | 'parse_error' | 'resume_failed' | 'other'
       message: string
     }
 

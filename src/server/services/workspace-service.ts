@@ -1,5 +1,7 @@
 import { nanoid } from 'nanoid'
 import { getDb } from '../db/index.js'
+import * as orchestrator from './agent/orchestrator.js'
+import * as autoLoopService from './auto-loop-service.js'
 import * as wakeupService from './wakeup-service.js'
 
 /** Lifecycle states for a workspace. Transitions are validated against VALID_TRANSITIONS. */
@@ -38,6 +40,9 @@ export interface Workspace {
   favoritedAt: string | null
   tags: string[]
   engine: string
+  autoLoop: boolean
+  autoLoopReady: boolean
+  noProgressStreak: number
   createdAt: string
   updatedAt: string
 }
@@ -110,6 +115,9 @@ interface WorkspaceRow {
   favorited_at: string | null
   tags: string | null
   engine: string | null
+  auto_loop: number | null
+  auto_loop_ready: number | null
+  no_progress_streak: number | null
   created_at: string
   updated_at: string
 }
@@ -149,6 +157,9 @@ function mapWorkspace(row: WorkspaceRow): Workspace {
     favoritedAt: row.favorited_at,
     tags: parseTags(row.tags),
     engine: row.engine ?? 'claude-code',
+    autoLoop: row.auto_loop === 1,
+    autoLoopReady: row.auto_loop_ready === 1,
+    noProgressStreak: row.no_progress_streak ?? 0,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -363,6 +374,12 @@ export function deleteWorkspace(id: string): void {
   // otherwise fire and hit an empty workspace.
   wakeupService.cancel(id, 'deleted')
 
+  // Drop the cached rate_limit.info so memory doesn't leak on workspace
+  // churn. The Map has no FK to clean up for it automatically.
+  orchestrator.forgetRateLimitInfo(id)
+  orchestrator.forgetTasksDoneSnapshot(id)
+  autoLoopService.forgetAutoLoopState(id)
+
   const db = getDb()
   db.prepare('DELETE FROM workspaces WHERE id = ?').run(id)
 }
@@ -461,6 +478,10 @@ export function archiveWorkspace(id: string): Workspace {
   // Cancel any pending wakeup — archived workspaces should not wake up.
   wakeupService.cancel(id, 'archived')
 
+  // Disable auto-loop — archived workspaces should not keep looping.
+  // Idempotent: no-op if auto_loop was already 0.
+  autoLoopService.disable(id, 'user-action')
+
   const now = new Date().toISOString()
   db.prepare('UPDATE workspaces SET archived_at = ?, updated_at = ? WHERE id = ?').run(now, now, id)
   return getWorkspace(id) as Workspace
@@ -490,6 +511,15 @@ export function setFavorite(id: string): Workspace {
   if (result.changes === 0) {
     throw new Error(`Workspace '${id}' not found`)
   }
+  return getWorkspace(id) as Workspace
+}
+
+/** Flip the `auto_loop_ready` flag for a workspace. Used by the grooming MCP tool + the "Force ready" override. */
+export function setAutoLoopReady(id: string, ready: boolean): Workspace {
+  const workspace = getWorkspace(id)
+  if (!workspace) throw new Error(`Workspace '${id}' not found`)
+  const db = getDb()
+  db.prepare('UPDATE workspaces SET auto_loop_ready = ? WHERE id = ?').run(ready ? 1 : 0, id)
   return getWorkspace(id) as Workspace
 }
 

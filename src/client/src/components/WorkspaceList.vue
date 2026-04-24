@@ -261,6 +261,7 @@ onMounted(async () => {
   // Drives the small PR indicator in the drawer. Refreshed on gitRefreshTrigger
   // bumps (see store.triggerGitRefresh).
   void store.fetchPrStates()
+  void store.fetchAutoLoopStates()
   await settingsStore.fetchSettings()
   // Subscribe to ALL workspaces so events are received even when not viewing them
   for (const ws of store.workspaces) {

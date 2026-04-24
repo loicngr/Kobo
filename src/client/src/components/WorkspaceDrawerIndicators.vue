@@ -32,4 +32,28 @@ const { t } = useI18n()
   >
     <q-tooltip>{{ t('workspaceList.prOpen') }}</q-tooltip>
   </q-icon>
+  <q-icon
+    v-if="workspaceStore.autoLoopStates[workspace.id]?.auto_loop"
+    name="autorenew"
+    size="14px"
+    :color="workspaceStore.autoLoopStates[workspace.id]?.auto_loop_ready ? 'amber-4' : 'indigo-4'"
+    class="auto-loop-spin"
+  >
+    <q-tooltip>
+      {{ workspaceStore.autoLoopStates[workspace.id]?.auto_loop_ready ? t('autoLoop.running') : t('autoLoop.preparing') }}
+    </q-tooltip>
+  </q-icon>
 </template>
+
+<style scoped lang="scss">
+/* Custom CSS is allowed here because Quasar has no built-in "spin icon"
+   helper and the rotation is what signals "live work in progress" at a
+   glance. Scoped so no leakage. */
+.auto-loop-spin {
+  animation: auto-loop-spin 2s linear infinite;
+}
+@keyframes auto-loop-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+</style>

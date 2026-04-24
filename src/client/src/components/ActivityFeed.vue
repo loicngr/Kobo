@@ -15,10 +15,30 @@ const stream = useAgentStreamStore()
 const settings = useSettingsStore()
 const workspaceStore = useWorkspaceStore()
 
+// Resolve the engine_session_id of the selected session to also accept legacy
+// events tagged with the engine UUID (before the v6 backfill migration).
+const selectedSessionId = computed(() => workspaceStore.selectedSessionId)
+const selectedSessionLegacyTag = computed(() => {
+  const s = workspaceStore.sessions.find((x) => x.id === selectedSessionId.value)
+  return s?.engineSessionId ?? null
+})
+
+// An event (or user message) matches the currently selected session when:
+// - no session is selected (fallback to showing everything — typically during
+//   the brief window between workspace select and fetchSessions resolving), or
+// - the item has no sessionId (pre-session events, e.g. legacy rows), or
+// - its sessionId matches the selected session id, or
+// - its sessionId matches the engine_session_id of the selected session.
+function sessionMatches(sid: string | null | undefined): boolean {
+  if (!selectedSessionId.value) return true
+  if (!sid) return true
+  return sid === selectedSessionId.value || sid === selectedSessionLegacyTag.value
+}
+
 const userMessages = computed<(UserMessage & { sessionId?: string })[]>(() => {
   const feed = workspaceStore.activityFeeds[props.workspaceId] ?? []
   return feed
-    .filter((i) => i.type === 'text' && typeof i.content === 'string')
+    .filter((i) => i.type === 'text' && typeof i.content === 'string' && sessionMatches(i.sessionId))
     .map((i) => ({
       content: i.content,
       sender: (i.meta?.sender as string) ?? 'user',
@@ -33,9 +53,21 @@ const sessionActive = computed(() => {
 })
 
 const turns = computed(() => {
+  // Filter the stream's parallel arrays (events / timestamps / sessionIds) by
+  // the currently selected session BEFORE folding. Without this, session #1's
+  // tool calls bleed into session #2's view and vice-versa.
   const allEvents = stream.eventsFor(props.workspaceId)
   const allTs = stream.timestampsFor(props.workspaceId)
-  const agentItems = foldEvents(allEvents, allTs, sessionActive.value)
+  const allSids = stream.sessionIdsFor(props.workspaceId)
+  const filteredEvents: AgentEvent[] = []
+  const filteredTs: string[] = []
+  for (let i = 0; i < allEvents.length; i++) {
+    if (sessionMatches(allSids[i])) {
+      filteredEvents.push(allEvents[i])
+      filteredTs.push(allTs[i])
+    }
+  }
+  const agentItems = foldEvents(filteredEvents, filteredTs, sessionActive.value)
   const merged = mergeWithUserMessages(agentItems, userMessages.value)
   const filtered = settings.showVerboseSystemMessages ? merged : merged.filter((it) => it.type !== 'session')
   return groupIntoTurns(filtered)
@@ -65,6 +97,7 @@ let initialScrollDone = false
 // has elapsed AND (b) the first event batch has arrived. Guarantees a
 // visible loader even on instant switches and hides the mid-swap flicker.
 const switching = ref(true)
+const sessionHasMoreOlder = ref<Map<string, boolean>>(new Map())
 
 interface ScrollInfo {
   verticalPosition: number
@@ -78,11 +111,7 @@ function onScroll(info: ScrollInfo) {
 
   if (!initialScrollDone) return
 
-  if (
-    info.verticalPosition <= FETCH_MORE_THRESHOLD_PX &&
-    !loadingOlder.value &&
-    stream.hasMoreOlderFor(props.workspaceId)
-  ) {
+  if (info.verticalPosition <= FETCH_MORE_THRESHOLD_PX && !loadingOlder.value && currentHasMoreOlder()) {
     void loadOlder()
   }
 }
@@ -96,13 +125,40 @@ interface FetchedEvent {
   createdAt: string
 }
 
+function sessionCacheKey(workspaceId: string, sessionId: string): string {
+  return `${workspaceId}:${sessionId}`
+}
+
+function currentHasMoreOlder(): boolean {
+  const sid = selectedSessionId.value
+  if (!sid) return stream.hasMoreOlderFor(props.workspaceId)
+  return sessionHasMoreOlder.value.get(sessionCacheKey(props.workspaceId, sid)) ?? true
+}
+
+function setSessionHasMoreOlder(workspaceId: string, sessionId: string, hasMore: boolean): void {
+  sessionHasMoreOlder.value.set(sessionCacheKey(workspaceId, sessionId), hasMore)
+}
+
+function oldestVisibleEventId(workspaceId: string): string | undefined {
+  if (!selectedSessionId.value) return stream.oldestIdFor(workspaceId)
+  const allIds = stream.eventIdsFor(workspaceId)
+  const allSids = stream.sessionIdsFor(workspaceId)
+  for (let i = 0; i < allIds.length; i++) {
+    if (!sessionMatches(allSids[i])) continue
+    const eventId = allIds[i]
+    if (eventId) return eventId
+  }
+  return undefined
+}
+
 const MIN_LOADER_MS = 200
 const COOLDOWN_AFTER_PREPEND_MS = 400
 const WORKSPACE_SWITCH_SPINNER_MS = 200
 
 async function loadOlder(): Promise<void> {
   const workspaceId = props.workspaceId
-  const before = stream.oldestIdFor(workspaceId)
+  const sessionId = selectedSessionId.value
+  const before = oldestVisibleEventId(workspaceId)
   if (!before) return
   loadingOlder.value = true
   const startedAt = Date.now()
@@ -114,12 +170,18 @@ async function loadOlder(): Promise<void> {
     // Fetch and (in parallel) a minimum-display delay so the loader stays
     // visible long enough for the user to see what's happening — avoids a
     // flashing spinner on fast networks.
-    const fetchPromise = fetch(`/api/workspaces/${workspaceId}/events?before=${encodeURIComponent(before)}&limit=200`)
+    const params = new URLSearchParams({
+      before,
+      limit: '200',
+    })
+    if (sessionId) params.set('session', sessionId)
+    const fetchPromise = fetch(`/api/workspaces/${workspaceId}/events?${params.toString()}`)
     const minDelay = new Promise((r) => setTimeout(r, MIN_LOADER_MS))
     const [res] = await Promise.all([fetchPromise, minDelay])
 
     if (!res.ok) {
-      stream.prepend(workspaceId, [], [], { oldestId: before, hasMoreOlder: false })
+      if (sessionId) setSessionHasMoreOlder(workspaceId, sessionId, false)
+      else stream.prepend(workspaceId, [], [], { oldestId: before, hasMoreOlder: false })
       return
     }
     const body = (await res.json()) as { events: FetchedEvent[]; hasMore: boolean }
@@ -131,12 +193,15 @@ async function loadOlder(): Promise<void> {
     const olderEvents = agentEvents.map((e) => e.payload as unknown as AgentEvent)
     const olderTs = agentEvents.map((e) => e.createdAt)
     const olderSids = agentEvents.map((e) => e.sessionId ?? null)
+    const olderIds = agentEvents.map((e) => e.id)
     const newOldestId = fetched.length > 0 ? fetched[0].id : before
 
+    if (sessionId) setSessionHasMoreOlder(workspaceId, sessionId, body.hasMore)
     stream.prepend(workspaceId, olderEvents, olderTs, {
       oldestId: newOldestId,
-      hasMoreOlder: body.hasMore,
+      hasMoreOlder: sessionId ? stream.hasMoreOlderFor(workspaceId) : body.hasMore,
       sessionIds: olderSids,
+      eventIds: olderIds,
     })
 
     for (const m of userMsgs) {
@@ -272,7 +337,7 @@ async function goToPreviousUserMessage(): Promise<void> {
   if (targetY === null) {
     const MAX_ATTEMPTS = 15
     for (let i = 0; i < MAX_ATTEMPTS; i++) {
-      if (!stream.hasMoreOlderFor(props.workspaceId)) break
+      if (!currentHasMoreOlder()) break
       while (loadingOlder.value) await new Promise((r) => setTimeout(r, 50))
       await loadOlder()
       await nextTick()
@@ -299,14 +364,32 @@ async function armInitialScroll() {
   })
 }
 
-// Count of raw events in the stream — this bumps on every streaming chunk
-// (each `message:text` delta is its own event), so watching it gives us a
-// tick for live typing, not just for new turn creation.
-const eventCount = computed(() => stream.eventsFor(props.workspaceId).length)
+// Count of events *in the currently selected session*. Used by the auto-scroll
+// watcher so a burst of activity in a background session (e.g. auto-loop
+// iteration #2 running while the user reads session #1) does NOT snap the
+// visible feed to the bottom. Live typing (streaming chunks) still bumps this
+// counter as long as the active session owns them.
+const eventCount = computed(() => {
+  const sids = stream.sessionIdsFor(props.workspaceId)
+  if (!selectedSessionId.value) return sids.length
+  let n = 0
+  for (const sid of sids) {
+    if (sessionMatches(sid)) n++
+  }
+  return n
+})
+
+// Unfiltered count — used by the switching spinner to know whether the
+// workspace stream has been populated at all. We must NOT use `eventCount`
+// (session-filtered) here: an old session with zero events in the current
+// sync:response window would loop the spinner to its 5s timeout before the
+// session-scoped fetch even gets a chance to run.
+const rawEventCount = computed(() => stream.eventsFor(props.workspaceId).length)
 
 /**
  * Shows the switching spinner for at least `WORKSPACE_SWITCH_SPINNER_MS`
- * AND until events have landed. Flip to false once both conditions meet.
+ * AND until the workspace stream has at least one event. Flip to false
+ * once both conditions meet.
  */
 async function showSwitchingSpinner() {
   switching.value = true
@@ -314,7 +397,7 @@ async function showSwitchingSpinner() {
   await new Promise((r) => setTimeout(r, WORKSPACE_SWITCH_SPINNER_MS))
   // Poll briefly if the sync:response hasn't landed yet (capped).
   const deadline = startedAt + 5000
-  while (eventCount.value === 0 && Date.now() < deadline) {
+  while (rawEventCount.value === 0 && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 50))
   }
   switching.value = false
@@ -327,11 +410,21 @@ watch(switching, async (isSwitching) => {
   if (!isSwitching && eventCount.value > 0) {
     await armInitialScroll()
   }
+  // First mount with a session already selected (e.g. refresh on ?session=X)
+  // but no events landed yet for that session → targeted session-scoped fetch.
+  if (!isSwitching && eventCount.value === 0 && selectedSessionId.value) {
+    void fetchSessionIfMissing()
+  }
 })
 
 onMounted(() => {
   void showSwitchingSpinner()
   if (eventCount.value > 0) void armInitialScroll()
+  // Fire the session-scoped fetch in parallel with sync:response, not after
+  // the spinner ends. For refreshes on ?session=X where that session is
+  // outside the sync:response window, this shaves off the RTT latency so
+  // the feed paints at roughly the same speed as in-window sessions.
+  if (selectedSessionId.value) void fetchSessionIfMissing()
 })
 
 // First-populate + live-follow watcher. Fires on any new event (including
@@ -368,8 +461,74 @@ watch(
     stickToBottom.value = true
     initialScrollDone = false
     await armInitialScroll()
+    void fetchSessionIfMissing()
   },
 )
+
+// sync:response only replays the 300 most recent events of the workspace
+// (INITIAL_WINDOW backend-side). For workspaces with many sessions, older
+// sessions (e.g. session #1 after hours of auto-loop) have zero events in
+// the stream. When the user switches to such a session we do a targeted
+// fetch filtered by session_id — cheap (one request, server-side SQL filter)
+// and avoids walking unrelated events via infinite scroll.
+const sessionsFetched = new Set<string>()
+
+async function fetchSessionIfMissing(): Promise<void> {
+  const sid = selectedSessionId.value
+  if (!sid) return
+  if (eventCount.value > 0) return
+  const cacheKey = sessionCacheKey(props.workspaceId, sid)
+  if (sessionsFetched.has(cacheKey)) return
+  sessionsFetched.add(cacheKey)
+
+  try {
+    const res = await fetch(`/api/workspaces/${props.workspaceId}/events?session=${encodeURIComponent(sid)}&limit=500`)
+    if (!res.ok) return
+    const body = (await res.json()) as { events: FetchedEvent[]; hasMore: boolean }
+    const fetched = body.events ?? []
+    if (fetched.length === 0) return
+
+    const agentEvents = fetched.filter((e) => e.type === 'agent:event' && e.workspaceId === props.workspaceId)
+    const userMsgs = fetched.filter((e) => e.type === 'user:message' && e.workspaceId === props.workspaceId)
+
+    // Prepend into the stream — these events are older than whatever is
+    // currently loaded (the stream holds the most recent 300). Order is
+    // preserved inside the prepended batch.
+    const olderEvents = agentEvents.map((e) => e.payload as unknown as AgentEvent)
+    const olderTs = agentEvents.map((e) => e.createdAt)
+    const olderSids = agentEvents.map((e) => e.sessionId ?? null)
+    const olderIds = agentEvents.map((e) => e.id)
+    setSessionHasMoreOlder(props.workspaceId, sid, body.hasMore)
+    if (olderEvents.length > 0) {
+      stream.prepend(props.workspaceId, olderEvents, olderTs, {
+        oldestId: fetched[0].id,
+        hasMoreOlder: stream.hasMoreOlderFor(props.workspaceId),
+        sessionIds: olderSids,
+        eventIds: olderIds,
+      })
+    }
+
+    for (const m of userMsgs) {
+      const p = m.payload
+      if (typeof p.content === 'string') {
+        workspaceStore.addActivityItem(props.workspaceId, {
+          id: m.id,
+          type: 'text',
+          content: p.content,
+          timestamp: m.createdAt,
+          sessionId: m.sessionId ?? undefined,
+          meta: { sender: (p.sender as string) ?? 'user' },
+        })
+      }
+    }
+
+    await nextTick()
+    await scrollToBottom(0)
+  } catch (err) {
+    console.error('[ActivityFeed] fetchSessionIfMissing failed:', err)
+    sessionsFetched.delete(cacheKey) // allow retry
+  }
+}
 
 // When the user sends a message, force the feed to the bottom even if
 // they were reading earlier history. Detect by counting non-system-prompt

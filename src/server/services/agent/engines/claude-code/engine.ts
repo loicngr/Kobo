@@ -80,8 +80,12 @@ export function createClaudeCodeEngine(): AgentEngine {
           lower.includes('rate_limit_exceeded') ||
           (lower.includes('429') && lower.includes('rate')) ||
           lower.includes('quota exceeded')
+        const isResumeFailed = lower.includes('no conversation found with session id')
         if (isQuota) {
           onEvent({ kind: 'error', category: 'quota', message: line })
+        } else if (isResumeFailed) {
+          onEvent({ kind: 'error', category: 'resume_failed', message: line })
+          console.warn(`[claude-engine stderr] ${line}`)
         } else if (line.trim().length > 0 && !isBenignStderr(line)) {
           console.warn(`[claude-engine stderr] ${line}`)
         }
