@@ -1,10 +1,15 @@
 <script setup lang="ts">
+import type { QInput } from 'quasar'
 import { useQuasar } from 'quasar'
+import SlashSuggestionsPopup from 'src/components/SlashSuggestionsPopup.vue'
+import { type SlashDropdownItem, useSlashAutocomplete } from 'src/composables/use-slash-autocomplete'
 import { MODEL_OPTION_DEFS } from 'src/constants/models'
 import { useSettingsStore } from 'src/stores/settings'
+import { useTemplatesStore } from 'src/stores/templates'
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { buildTemplateVars, expandTemplate } from 'src/utils/expand-template'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 
@@ -32,6 +37,7 @@ const pathFilterOptions = ref<string[]>([])
 // Form fields
 const workspaceName = ref('')
 const description = ref('')
+const descriptionRef = ref<QInput | null>(null)
 const notionUrl = ref('')
 const useNotion = ref(false)
 const model = ref('claude-opus-4-7')
@@ -70,6 +76,67 @@ const permissionMode = ref(settingsStore.global.defaultPermissionMode || 'plan')
 const branches = ref<string[]>([])
 const loadingBranches = ref(false)
 const submitting = ref(false)
+
+// Slash autocomplete on the description textarea — same UX as ChatInput.
+// Kōbō built-in commands are excluded because there's no workspace yet
+// (e.g. `/kobo-prep-autoloop` makes no sense before the workspace exists).
+const templatesStore = useTemplatesStore()
+function getDescriptionEl(): HTMLTextAreaElement | null {
+  return (descriptionRef.value?.nativeEl as HTMLTextAreaElement | undefined) ?? null
+}
+const {
+  showSkills: showSlashPopup,
+  selectedSkillIndex: slashIndex,
+  groupedDropdown: slashGrouped,
+  flatDropdown: slashFlat,
+  fetchSkills: fetchSlashSkills,
+  detectSlashFragment: detectSlash,
+  replaceFragmentWith: replaceSlash,
+  closeDropdown: closeSlash,
+} = useSlashAutocomplete(description, getDescriptionEl, { excludeKoboCommands: true })
+
+void fetchSlashSkills()
+
+// Re-evaluate the dropdown after every textarea change.
+watch(description, async () => {
+  await nextTick()
+  await detectSlash()
+})
+
+function onSlashSelect(item: SlashDropdownItem) {
+  if (item.type === 'template') {
+    const tpl = templatesStore.templates.find((t) => t.slug === item.name)
+    if (!tpl) return
+    // No workspace context yet — variables resolve to placeholders / empty.
+    const expanded = expandTemplate(
+      tpl.content,
+      buildTemplateVars({ workspace: null, gitStats: null, sessionName: null }),
+    )
+    replaceSlash(expanded)
+    closeSlash()
+    return
+  }
+  // Skills (Claude or Kōbō): just complete the fragment with `/<name> `.
+  replaceSlash(`/${item.name} `)
+  closeSlash()
+}
+
+function onDescriptionKeydown(event: KeyboardEvent) {
+  if (!showSlashPopup.value || slashFlat.value.length === 0) return
+  if (event.key === 'ArrowDown') {
+    event.preventDefault()
+    slashIndex.value = (slashIndex.value + 1) % slashFlat.value.length
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault()
+    slashIndex.value = (slashIndex.value - 1 + slashFlat.value.length) % slashFlat.value.length
+  } else if (event.key === 'Enter' && !event.shiftKey && !event.ctrlKey && !event.metaKey) {
+    event.preventDefault()
+    onSlashSelect(slashFlat.value[slashIndex.value])
+  } else if (event.key === 'Escape') {
+    event.preventDefault()
+    closeSlash()
+  }
+}
 
 // Model options — `MODEL_OPTION_DEFS` is the single source of truth for
 // the display list (i18n labels + descriptions). The backend capabilities
@@ -491,9 +558,12 @@ async function handleCreate() {
 
         <q-separator color="grey-9" />
 
-        <!-- Textarea (description / additional instructions) -->
+        <!-- Textarea (description / additional instructions). Wrapped in a
+             relative container so the slash-autocomplete popup can be
+             positioned above the input via `position: absolute`. -->
         <div class="card-textarea-wrap">
           <q-input
+            ref="descriptionRef"
             v-model="description"
             type="textarea"
             borderless
@@ -502,8 +572,17 @@ async function handleCreate() {
             :placeholder="useNotion ? $t('createPage.instructions') : $t('createPage.instructionsPlaceholder')"
             class="create-textarea"
             input-class="create-textarea-input"
+            @keydown="onDescriptionKeydown"
             @keydown.ctrl.enter="handleCreate"
             @keydown.meta.enter="handleCreate"
+          />
+          <SlashSuggestionsPopup
+            v-if="showSlashPopup && slashFlat.length > 0"
+            class="create-slash-popup"
+            :grouped-dropdown="slashGrouped"
+            :flat-dropdown="slashFlat"
+            :selected-index="slashIndex"
+            @select="onSlashSelect"
           />
         </div>
 
@@ -930,6 +1009,20 @@ async function handleCreate() {
 
 .card-textarea-wrap {
   background: #222244;
+  position: relative; // anchor for the slash-autocomplete popup
+}
+
+// Slash-autocomplete popup positioning. CreatePage has plenty of empty
+// space below the textarea, so we float the dropdown DOWNWARDS (unlike
+// ChatInput where it must go up because the textarea sits at the bottom
+// of the viewport). Anchored 4 px under the textarea, flush with its
+// horizontal padding.
+.create-slash-popup {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 12px;
+  right: 12px;
+  z-index: 9999;
 }
 
 .repo-select {

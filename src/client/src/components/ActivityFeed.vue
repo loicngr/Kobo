@@ -571,6 +571,7 @@ async function handleScrollToBottomClick() {
           :key="i"
           ref="turnRefs"
           :turn="turn"
+          :is-latest-turn="i === turns.length - 1"
           @scroll-to="onTurnScrollTo"
         />
       </div>

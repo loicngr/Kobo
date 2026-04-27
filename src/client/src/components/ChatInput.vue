@@ -2,13 +2,15 @@
 import type { QInput } from 'quasar'
 import { useQuasar } from 'quasar'
 import QuotaFooter from 'src/components/QuotaFooter.vue'
+import SlashSuggestionsPopup from 'src/components/SlashSuggestionsPopup.vue'
+import { type SlashDropdownItem, useSlashAutocomplete } from 'src/composables/use-slash-autocomplete'
 import { useTemplatesStore } from 'src/stores/templates'
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { buildTemplateVars, expandTemplate } from 'src/utils/expand-template'
 import { KOBO_COMMANDS } from 'src/utils/kobo-commands'
 import { isBusyStatus } from 'src/utils/workspace-status'
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{
@@ -60,60 +62,20 @@ function getChatInputEl(): HTMLTextAreaElement | HTMLInputElement | null {
   return (el as HTMLTextAreaElement | HTMLInputElement | null) ?? null
 }
 
-// Skills autocomplete
-const skills = ref<string[]>([])
-const showSkills = ref(false)
-const skillFilter = ref('')
-const selectedSkillIndex = ref(0)
-
-// Dropdown item type
-interface DropdownItem {
-  type: 'skill' | 'kobo' | 'template'
-  name: string
-  description?: string
-}
-
-const groupedDropdown = computed<{ skills: DropdownItem[]; kobo: DropdownItem[]; templates: DropdownItem[] }>(() => {
-  const q = skillFilter.value.toLowerCase()
-  const matches = (name: string) => (q === '' ? true : name.toLowerCase().includes(q))
-
-  // Claude skills come from the existing `skills.value` list (no description available)
-  const claudeSkills = skills.value.filter((s) => matches(s)).map<DropdownItem>((s) => ({ type: 'skill', name: s }))
-
-  // Kōbō commands (without the leading "/") — KOBO_COMMANDS keys include the slash
-  const koboCommands = Object.keys(KOBO_COMMANDS)
-    .map((k) => k.replace(/^\//, ''))
-    .filter((k) => matches(k))
-    .map<DropdownItem>((name) => ({ type: 'kobo', name }))
-
-  // User templates
-  const templates = templatesStore.templates
-    .filter((t) => matches(t.slug))
-    .map<DropdownItem>((t) => ({ type: 'template', name: t.slug, description: t.description }))
-
-  return { skills: claudeSkills, kobo: koboCommands, templates }
-})
-
-// Flat list used for keyboard navigation (skips empty sections implicitly)
-const flatDropdown = computed(() => [
-  ...groupedDropdown.value.skills,
-  ...groupedDropdown.value.kobo,
-  ...groupedDropdown.value.templates,
-])
-
-// Clamp `selectedSkillIndex` when the filtered list shrinks
-watch(
-  () => flatDropdown.value.length,
-  (len) => {
-    if (len === 0) {
-      selectedSkillIndex.value = 0
-      return
-    }
-    if (selectedSkillIndex.value >= len) {
-      selectedSkillIndex.value = len - 1
-    }
-  },
-)
+// Slash autocomplete — state + computed lists handled by the composable.
+// Selection logic (template expansion, kobo auto-send, …) stays here because
+// it needs the workspace context which the composable can't see.
+const {
+  showSkills,
+  skillFilter,
+  selectedSkillIndex,
+  groupedDropdown,
+  flatDropdown,
+  fetchSkills,
+  detectSlashFragment,
+  replaceFragmentWith,
+  closeDropdown,
+} = useSlashAutocomplete(message, () => getChatInputEl())
 
 // Image upload
 interface PendingImage {
@@ -274,21 +236,9 @@ const hasUploading = computed(() => pendingImages.value.some((p) => p.status ===
 
 const currentSession = computed(() => store.sessions.find((s) => s.id === store.selectedSessionId) ?? null)
 
-let lastSkillsFetch = 0
-
-async function fetchSkills() {
-  const now = Date.now()
-  if (now - lastSkillsFetch < 5000) return
-  lastSkillsFetch = now
-  try {
-    const res = await fetch('/api/skills')
-    if (res.ok) skills.value = await res.json()
-  } catch {
-    /* ignore */
-  }
-}
-
-onMounted(fetchSkills)
+// Pre-fetch the skills catalogue so the dropdown opens instantly on the
+// first `/`. Throttling lives inside the composable.
+void fetchSkills()
 
 // Watch for chatDraft changes (e.g. from DiffViewer "Add to chat")
 watch(
@@ -325,36 +275,12 @@ watch(
   },
 )
 
-/**
- * Returns the slug fragment preceding the current caret position if the user
- * is currently typing a slash command. For example:
- *   - "/rev|"          → "rev"
- *   - "bug, /rev|ed"   → "rev"   (caret after "rev")
- *   - "hello"          → null
- *   - "/review-quality" → "review-quality"
- */
-function getSlashFragmentBeforeCaret(): string | null {
-  const el = getChatInputEl()
-  if (!el) return null
-  const caret = el.selectionStart ?? message.value.length
-  const before = message.value.slice(0, caret)
-  const match = before.match(/\/([\w:.-]*)$/)
-  return match ? match[1] : null
-}
-
-// Watch for / anywhere before caret to trigger autocomplete
+// Watch the message text: re-detect slash fragments + reconcile the image
+// placeholder list (so deleting "[image: …]" from the textarea also drops
+// the upload reference). The slash detection itself lives in the composable.
 watch(message, async () => {
-  // Run after the DOM has settled so selectionStart reflects the new caret
   await nextTick()
-  const fragment = getSlashFragmentBeforeCaret()
-  if (fragment !== null) {
-    await fetchSkills()
-    skillFilter.value = fragment
-    showSkills.value = true
-    selectedSkillIndex.value = 0
-  } else {
-    showSkills.value = false
-  }
+  await detectSlashFragment()
 
   // Detect placeholders removed by the user and delete the corresponding image.
   // Snapshot tempIds first to avoid mutating the list while iterating.
@@ -369,33 +295,7 @@ watch(message, async () => {
   }
 })
 
-function replaceSlashFragmentWith(expanded: string) {
-  const el = getChatInputEl()
-  if (!el) {
-    // No DOM access — fall back to replacing the whole input
-    message.value = expanded
-    return
-  }
-  const caret = el.selectionStart ?? message.value.length
-  const before = message.value.slice(0, caret)
-  const after = message.value.slice(caret)
-  const match = before.match(/\/[\w-]*$/)
-  if (!match) {
-    // No slash fragment found — fall back to whole-input replacement
-    message.value = expanded
-    return
-  }
-  const fragmentStart = match.index ?? caret
-  message.value = message.value.slice(0, fragmentStart) + expanded + after
-  // Move caret to the end of the inserted text
-  void nextTick(() => {
-    const newPos = fragmentStart + expanded.length
-    el.focus()
-    el.setSelectionRange(newPos, newPos)
-  })
-}
-
-function selectDropdownItem(item: DropdownItem | undefined) {
+function selectDropdownItem(item: SlashDropdownItem | undefined) {
   if (!item) return
 
   if (item.type === 'template') {
@@ -453,8 +353,8 @@ function selectDropdownItem(item: DropdownItem | undefined) {
       sessionName,
     })
     const expanded = expandTemplate(template.content, vars)
-    replaceSlashFragmentWith(expanded)
-    showSkills.value = false
+    replaceFragmentWith(expanded)
+    closeDropdown()
     return
   }
 
@@ -463,13 +363,13 @@ function selectDropdownItem(item: DropdownItem | undefined) {
   if (item.type === 'kobo' && KOBO_COMMANDS[asCommand]) {
     // Kōbō commands auto-send — preserve the existing behavior
     message.value = asCommand
-    showSkills.value = false
+    closeDropdown()
     sendMessage()
     return
   }
   // Claude skills: just complete the fragment in the input, user hits Enter to send
-  replaceSlashFragmentWith(`${asCommand} `)
-  showSkills.value = false
+  replaceFragmentWith(`${asCommand} `)
+  closeDropdown()
 }
 
 const isDisabled = computed(() => {
@@ -493,11 +393,6 @@ function pushToHistory(text: string) {
 function resetHistoryNav() {
   historyIndex.value = -1
   savedDraft.value = ''
-}
-
-function koboDescription(skill: string): string {
-  const key = KOBO_COMMANDS[`/${skill}`]?.descriptionKey
-  return key ? t(key) : ''
 }
 
 async function sendMessage() {
@@ -631,7 +526,7 @@ function onKeydown(event: KeyboardEvent) {
     }
     if (event.key === 'Escape') {
       event.preventDefault()
-      showSkills.value = false
+      closeDropdown()
       return
     }
   }
@@ -711,54 +606,14 @@ function onKeydown(event: KeyboardEvent) {
     </div>
 
     <!-- Grouped slash autocomplete popup -->
-    <div v-if="showSkills && flatDropdown.length > 0" class="skills-popup rounded-borders">
-      <!-- Claude skills -->
-      <template v-if="groupedDropdown.skills.length > 0">
-        <div class="skills-section-header">{{ $t('chatInput.dropdownSkills') }}</div>
-        <div
-          v-for="item in groupedDropdown.skills"
-          :key="`skill-${item.name}`"
-          class="skill-item row items-center q-px-sm q-py-xs cursor-pointer"
-          :class="{ 'skill-item--active': flatDropdown.indexOf(item) === selectedSkillIndex }"
-          @mousedown.prevent="selectDropdownItem(item)"
-        >
-          <q-icon name="bolt" size="12px" color="indigo-4" class="q-mr-xs" />
-          <span class="skill-name text-caption">{{ item.name }}</span>
-        </div>
-      </template>
-
-      <!-- Kōbō commands -->
-      <template v-if="groupedDropdown.kobo.length > 0">
-        <div class="skills-section-header">{{ $t('chatInput.dropdownKobo') }}</div>
-        <div
-          v-for="item in groupedDropdown.kobo"
-          :key="`kobo-${item.name}`"
-          class="skill-item row items-center q-px-sm q-py-xs cursor-pointer"
-          :class="{ 'skill-item--active': flatDropdown.indexOf(item) === selectedSkillIndex }"
-          @mousedown.prevent="selectDropdownItem(item)"
-        >
-          <q-icon name="terminal" size="12px" color="teal-4" class="q-mr-xs" />
-          <span class="skill-name text-caption">/{{ item.name }}</span>
-          <span v-if="koboDescription(item.name)" class="skill-description text-caption text-grey-7 q-ml-xs">— {{ koboDescription(item.name) }}</span>
-        </div>
-      </template>
-
-      <!-- User templates -->
-      <template v-if="groupedDropdown.templates.length > 0">
-        <div class="skills-section-header">{{ $t('chatInput.dropdownTemplates') }}</div>
-        <div
-          v-for="item in groupedDropdown.templates"
-          :key="`tpl-${item.name}`"
-          class="skill-item row items-center q-px-sm q-py-xs cursor-pointer"
-          :class="{ 'skill-item--active': flatDropdown.indexOf(item) === selectedSkillIndex }"
-          @mousedown.prevent="selectDropdownItem(item)"
-        >
-          <q-icon name="description" size="12px" color="amber-4" class="q-mr-xs" />
-          <span class="skill-name text-caption">/{{ item.name }}</span>
-          <span v-if="item.description" class="skill-description text-caption text-grey-7 q-ml-xs">— {{ item.description }}</span>
-        </div>
-      </template>
-    </div>
+    <SlashSuggestionsPopup
+      v-if="showSkills && flatDropdown.length > 0"
+      class="chat-slash-popup"
+      :grouped-dropdown="groupedDropdown"
+      :flat-dropdown="flatDropdown"
+      :selected-index="selectedSkillIndex"
+      @select="selectDropdownItem"
+    />
 
     <!-- Queued message banner -->
     <div
@@ -881,39 +736,15 @@ function onKeydown(event: KeyboardEvent) {
   }
 }
 
-.skills-popup {
+// Position the slash-suggestions popup above the chat textarea, flush with
+// the input edges. The popup's internal styling (sections + items) is owned
+// by SlashSuggestionsPopup itself.
+.chat-slash-popup {
   position: absolute;
   bottom: calc(100% + 4px);
   left: 8px;
   right: 48px;
-  max-height: 300px;
-  overflow-y: auto;
-  background-color: #1e1e3a;
-  border: 1px solid #2a2a4a;
-  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.4);
   z-index: 9999;
-}
-
-.skills-section-header {
-  padding: 4px 12px;
-  font-size: 10px;
-  text-transform: uppercase;
-  color: #6b7280;
-  letter-spacing: 0.05em;
-  border-top: 1px solid rgba(255, 255, 255, 0.05);
-
-  &:first-child {
-    border-top: none;
-  }
-}
-
-.skill-item {
-  font-family: 'Roboto Mono', monospace;
-
-  &:hover,
-  &--active {
-    background-color: rgba(108, 99, 255, 0.15);
-  }
 }
 
 .image-tag {

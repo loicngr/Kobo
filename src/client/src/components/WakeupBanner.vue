@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { useWorkspaceStore } from 'src/stores/workspace'
-import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -26,10 +25,13 @@ const wakeup = computed(() => {
   return store.pendingWakeups[ws.id] ?? null
 })
 
+// Visible whenever a wakeup is pending — including while the agent is still
+// running. The agent typically schedules a wake-up DURING a turn (e.g. "I'll
+// check back in 5 minutes after the test run") so the user wants to see
+// the countdown immediately, not only after the current session ends.
 const isVisible = computed(() => {
   const ws = store.selectedWorkspace
   if (!ws) return false
-  if (isBusyStatus(ws.status)) return false
   return !!wakeup.value
 })
 

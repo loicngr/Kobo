@@ -1,13 +1,22 @@
 <script setup lang="ts">
 import DOMPurify from 'dompurify'
 import { marked } from 'marked'
+import MessageChoices from 'src/components/MessageChoices.vue'
 import type { ConversationItem } from 'src/services/agent-event-view'
 import { useDocumentsStore } from 'src/stores/documents'
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { detectChoices } from 'src/utils/detect-choices'
 import { injectDocumentLinks } from 'src/utils/inject-document-links'
 import { computed } from 'vue'
 
-const props = defineProps<{ item: Extract<ConversationItem, { type: 'text' }> }>()
+const props = defineProps<{
+  item: Extract<ConversationItem, { type: 'text' }>
+  /** True when this message belongs to the most recent turn in the feed.
+      Drives whether multiple-choice buttons are still clickable: once a
+      newer message arrives, old prompts go inert so a click on a stale
+      A/B/C button doesn't reply to a question the agent has moved past. */
+  isLatestTurn?: boolean
+}>()
 
 const documentsStore = useDocumentsStore()
 const workspaceStore = useWorkspaceStore()
@@ -25,6 +34,12 @@ const html = computed(() => {
   return DOMPurify.sanitize(withLinks, { ADD_ATTR: ['data-document-path'] })
 })
 
+// Detect a multiple-choice block so we can render quick-reply buttons under
+// the message. Computed so streaming updates are reflected as the agent
+// finishes typing the choices. Returns null on plain prose / non-question
+// content.
+const choiceBlock = computed(() => detectChoices(props.item.text))
+
 function onMessageClick(event: MouseEvent) {
   const target = (event.target as HTMLElement | null)?.closest('.document-link') as HTMLElement | null
   if (!target) return
@@ -41,6 +56,11 @@ function onMessageClick(event: MouseEvent) {
     <!-- eslint-disable-next-line vue/no-v-html -->
     <div v-html="html" />
     <q-spinner v-if="item.streaming" size="xs" class="q-ml-xs" />
+    <MessageChoices
+      v-if="choiceBlock"
+      :choices="choiceBlock.choices"
+      :active="!!isLatestTurn && !item.streaming"
+    />
   </div>
 </template>
 
