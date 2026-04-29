@@ -799,14 +799,22 @@ onMounted(async () => {
 .wl-item {
   background-color: #222244;
   position: relative;
-  transition: background-color 0.15s;
+  transition: background-color 0.15s, box-shadow 0.15s;
   margin-bottom: 4px;
 
   &:last-child { margin-bottom: 0; }
   &:hover { background-color: #2a2a4a; }
   &--selected {
-    background-color: #2a2a4a;
-    outline: 1px solid rgba(108, 99, 255, 0.4);
+    background-color: #393969;
+    outline: 1.5px solid rgba(108, 99, 255, 0.95);
+    box-shadow: 0 0 0 1px rgba(108, 99, 255, 0.3), 0 2px 8px rgba(108, 99, 255, 0.25);
+
+    &:hover { background-color: #41417a; }
+
+    .wl-item-name {
+      color: #ffffff !important;
+      opacity: 1 !important;
+    }
   }
 }
 

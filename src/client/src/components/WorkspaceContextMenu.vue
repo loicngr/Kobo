@@ -22,6 +22,10 @@ const emit = defineEmits<{
   delete: [ws: Workspace, event: Event]
 }>()
 
+function openExternal(url: string) {
+  window.open(url, '_blank', 'noopener,noreferrer')
+}
+
 const settingsStore = useSettingsStore()
 </script>
 
@@ -55,6 +59,14 @@ const settingsStore = useSettingsStore()
       <q-item clickable v-close-popup @click="emit('manageTags', workspace)">
         <q-item-section side><q-icon name="label" size="xs" /></q-item-section>
         <q-item-section>{{ $t('tags.manage') }}</q-item-section>
+      </q-item>
+      <q-item v-if="workspace.notionUrl" clickable v-close-popup @click="openExternal(workspace.notionUrl)">
+        <q-item-section side><q-icon name="open_in_new" size="xs" /></q-item-section>
+        <q-item-section>{{ $t('contextMenu.openNotion') }}</q-item-section>
+      </q-item>
+      <q-item v-if="workspace.sentryUrl" clickable v-close-popup @click="openExternal(workspace.sentryUrl)">
+        <q-item-section side><q-icon name="open_in_new" size="xs" /></q-item-section>
+        <q-item-section>{{ $t('contextMenu.openSentry') }}</q-item-section>
       </q-item>
       <q-separator dark />
       <q-item v-if="archived" clickable v-close-popup @click="(e) => emit('unarchive', workspace, e)">

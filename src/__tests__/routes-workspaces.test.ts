@@ -80,6 +80,11 @@ vi.mock('../server/services/notion-service.js', () => ({
   parseNotionUrl: vi.fn(),
 }))
 
+vi.mock('../server/services/sentry-service.js', () => ({
+  extractSentryIssue: vi.fn(),
+  parseSentryUrl: vi.fn(),
+}))
+
 vi.mock('../server/utils/git-ops.js', () => ({
   fetchSourceBranch: vi.fn(),
   deleteLocalBranch: vi.fn(),
@@ -639,47 +644,6 @@ describe('GET /api/workspaces/:id/sessions', () => {
     expect(res.status).toBe(404)
     const data = await res.json()
     expect(data.error).toContain('not found')
-  })
-})
-
-describe('POST /api/workspaces/:id/refresh-notion', () => {
-  it('refreshes Notion content and recreates tasks', async () => {
-    const notionContent = {
-      title: 'Updated Page',
-      ticketId: '',
-      status: '',
-      goal: 'Updated goal',
-      todos: [{ title: 'New task', checked: false }],
-      gherkinFeatures: ['Feature: new feature'],
-    }
-
-    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
-      ...fakeWorkspace,
-      notionUrl: 'https://notion.so/page-123',
-    })
-    vi.mocked(notionService.extractNotionPage).mockResolvedValue(notionContent)
-    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
-
-    const res = await app.request('/api/workspaces/ws-1/refresh-notion', { method: 'POST' })
-    expect(res.status).toBe(200)
-    expect(notionService.extractNotionPage).toHaveBeenCalledWith('https://notion.so/page-123')
-    expect(workspaceService.createTask).toHaveBeenCalledTimes(2) // 1 todo + 1 gherkin
-  })
-
-  it('returns 404 when workspace not found', async () => {
-    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
-
-    const res = await app.request('/api/workspaces/nonexistent/refresh-notion', { method: 'POST' })
-    expect(res.status).toBe(404)
-  })
-
-  it('returns 400 when no Notion URL configured', async () => {
-    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace) // notionUrl is null
-
-    const res = await app.request('/api/workspaces/ws-1/refresh-notion', { method: 'POST' })
-    expect(res.status).toBe(400)
-    const data = await res.json()
-    expect(data.error).toContain('No Notion URL')
   })
 })
 
@@ -2543,5 +2507,142 @@ describe('POST /api/workspaces/:id/resync-branch', () => {
 
     expect(res.status).toBe(200)
     expect(vi.mocked(workspaceService.updateWorkingBranch)).toHaveBeenCalledWith('w1', 'feature/new-name')
+  })
+})
+
+describe('POST /api/workspaces — pre-flight URL validation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('returns 422 and creates nothing when notionUrl extraction fails', async () => {
+    const notionService = await import('../server/services/notion-service.js')
+    const wsService = await import('../server/services/workspace-service.js')
+    const worktreeService = await import('../server/services/worktree-service.js')
+
+    vi.mocked(notionService.extractNotionPage).mockRejectedValueOnce(
+      new Error('Could not extract page ID from Notion URL'),
+    )
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'doomed',
+        projectPath: '/tmp/proj',
+        sourceBranch: 'main',
+        workingBranch: 'feat/doomed',
+        notionUrl: 'https://www.notion.so/bad-url',
+      }),
+    })
+
+    expect(res.status).toBe(422)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toMatch(/Could not extract page ID/)
+    expect(vi.mocked(wsService.createWorkspace)).not.toHaveBeenCalled()
+    expect(vi.mocked(worktreeService.createWorktree)).not.toHaveBeenCalled()
+  })
+
+  it('returns 422 and creates nothing when sentryUrl extraction fails', async () => {
+    const sentryService = await import('../server/services/sentry-service.js')
+    const wsService = await import('../server/services/workspace-service.js')
+    const worktreeService = await import('../server/services/worktree-service.js')
+
+    vi.mocked(sentryService.extractSentryIssue).mockRejectedValueOnce(new Error('Sentry MCP failed to find issue'))
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'doomed',
+        projectPath: '/tmp/proj',
+        sourceBranch: 'main',
+        workingBranch: 'feat/doomed',
+        sentryUrl: 'https://my-org.sentry.io/issues/0/',
+      }),
+    })
+
+    expect(res.status).toBe(422)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toMatch(/Sentry/)
+    expect(vi.mocked(wsService.createWorkspace)).not.toHaveBeenCalled()
+    expect(vi.mocked(worktreeService.createWorktree)).not.toHaveBeenCalled()
+  })
+
+  it('happy path: extraction precedes createWorkspace, sentryUrl is forwarded', async () => {
+    const notionService = await import('../server/services/notion-service.js')
+    const sentryService = await import('../server/services/sentry-service.js')
+    const wsService = await import('../server/services/workspace-service.js')
+
+    vi.mocked(notionService.extractNotionPage).mockResolvedValueOnce({
+      title: 'Page title',
+      ticketId: 'TK-1',
+      status: '',
+      goal: '',
+      todos: [],
+      gherkinFeatures: [],
+    })
+    vi.mocked(sentryService.extractSentryIssue).mockResolvedValueOnce({
+      title: 'crash',
+      issueId: 'ACME-API-3',
+      issueNumericId: '42',
+      culprit: 'fn',
+      platform: 'js',
+      occurrences: 1,
+      firstSeen: '2026-01-01',
+      lastSeen: '2026-01-02',
+      tags: {},
+      offendingSpans: [],
+      extraContext: '',
+    })
+    vi.mocked(wsService.createWorkspace).mockReturnValue({
+      id: 'ws-new',
+      name: 'doomed',
+      projectPath: '/tmp/proj',
+      sourceBranch: 'main',
+      workingBranch: 'feat/x',
+      status: 'created',
+      notionUrl: 'https://www.notion.so/x',
+      notionPageId: null,
+      sentryUrl: 'https://my-org.sentry.io/issues/42/',
+      model: 'claude-opus-4-7',
+      reasoningEffort: 'auto',
+      permissionMode: 'auto-accept',
+      devServerStatus: 'stopped',
+      hasUnread: false,
+      archivedAt: null,
+      favoritedAt: null,
+      tags: [],
+      engine: 'claude-code',
+      autoLoop: false,
+      autoLoopReady: false,
+      noProgressStreak: 0,
+      permissionProfile: 'bypass',
+      createdAt: '2026-01-01',
+      updatedAt: '2026-01-01',
+    })
+
+    await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'doomed',
+        projectPath: '/tmp/proj',
+        sourceBranch: 'main',
+        workingBranch: 'feat/x',
+        notionUrl: 'https://www.notion.so/x',
+        sentryUrl: 'https://my-org.sentry.io/issues/42/',
+      }),
+    })
+
+    expect(vi.mocked(wsService.createWorkspace)).toHaveBeenCalledWith(
+      expect.objectContaining({ sentryUrl: 'https://my-org.sentry.io/issues/42/' }),
+    )
+
+    const notionOrder = vi.mocked(notionService.extractNotionPage).mock.invocationCallOrder[0]
+    const sentryOrder = vi.mocked(sentryService.extractSentryIssue).mock.invocationCallOrder[0]
+    const createOrder = vi.mocked(wsService.createWorkspace).mock.invocationCallOrder[0]
+    expect(notionOrder).toBeLessThan(createOrder)
+    expect(sentryOrder).toBeLessThan(createOrder)
   })
 })

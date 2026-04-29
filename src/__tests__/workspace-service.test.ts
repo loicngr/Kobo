@@ -98,6 +98,32 @@ describe('createWorkspace()', () => {
     const ws2 = createWorkspace({ name: 'B', projectPath: '/b', sourceBranch: 'main', workingBranch: 'f2' })
     expect(ws1.id).not.toBe(ws2.id)
   })
+
+  it('persists sentryUrl and returns it on read', async () => {
+    const { createWorkspace, getWorkspace } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'with-sentry',
+      projectPath: '/tmp/proj',
+      sourceBranch: 'main',
+      workingBranch: 'feat/x',
+      sentryUrl: 'https://my-org.sentry.io/issues/12345/',
+    })
+    expect(ws.sentryUrl).toBe('https://my-org.sentry.io/issues/12345/')
+
+    const fetched = getWorkspace(ws.id)
+    expect(fetched?.sentryUrl).toBe('https://my-org.sentry.io/issues/12345/')
+  })
+
+  it('defaults sentryUrl to null when not provided', async () => {
+    const { createWorkspace } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'no-sentry',
+      projectPath: '/tmp/proj',
+      sourceBranch: 'main',
+      workingBranch: 'feat/y',
+    })
+    expect(ws.sentryUrl).toBeNull()
+  })
 })
 
 describe('getWorkspace(id)', () => {

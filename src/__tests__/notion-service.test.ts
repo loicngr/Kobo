@@ -60,6 +60,28 @@ describe('parseNotionUrl(url)', () => {
     const result = parseNotionUrl(url)
     expect(result).toMatch(/^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$/)
   })
+
+  it("préfère ?p=<id> à l'ID du path (side-peek d'un sous-page d'un epic)", () => {
+    // Path = parent epic ID, ?p = actual sub-page being viewed
+    const url =
+      'https://www.notion.so/lewebfrancais/Epic-Title-2fb707714b1880be9424c1ee618da639?p=2b83ae0bcfe04630b39710505bf33f40&pm=s'
+    const result = parseNotionUrl(url)
+    expect(result).toBe('2b83ae0b-cfe0-4630-b397-10505bf33f40')
+  })
+
+  it("préfère ?p=<id> à l'ID du path (peek d'une page de database)", () => {
+    // Path = database ID, ?v = view ID, ?p = page ID
+    const url =
+      'https://www.notion.so/lewebfrancais/349707714b1880f0bda4cf52b8b22f08?v=2ff707714b1880e796bd000c35acf2e3&p=b9a4e0f8be0f4ca89284b392867ef854&pm=c'
+    const result = parseNotionUrl(url)
+    expect(result).toBe('b9a4e0f8-be0f-4ca8-9284-b392867ef854')
+  })
+
+  it("retombe sur l'ID du path si ?p= est absent", () => {
+    const url = 'https://www.notion.so/myworkspace/My-Page-0123456789abcdef0123456789abcdef?v=some_view'
+    const result = parseNotionUrl(url)
+    expect(result).toBe('01234567-89ab-cdef-0123-456789abcdef')
+  })
 })
 
 // ---------------------------------------------------------------------------

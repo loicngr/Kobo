@@ -74,8 +74,17 @@ const permissionMode = ref(settingsStore.global.defaultPermissionMode || 'plan')
 
 // State
 const branches = ref<string[]>([])
+const branchFilterOptions = ref<string[]>([])
 const loadingBranches = ref(false)
 const submitting = ref(false)
+
+function filterBranches(val: string, update: (fn: () => void) => void) {
+  update(() => {
+    branchFilterOptions.value = val
+      ? branches.value.filter((b) => b.toLowerCase().includes(val.toLowerCase()))
+      : branches.value
+  })
+}
 
 // Slash autocomplete on the description textarea — same UX as ChatInput.
 // Kōbō built-in commands are excluded because there's no workspace yet
@@ -180,6 +189,24 @@ const reasoningOptions = computed(() => [
 
 // Validate Notion URL
 const isValidNotionUrl = computed(() => notionUrl.value.trim().startsWith('https://www.notion.so/'))
+
+// Notion side-peek: when the URL embeds `?p=<32hex>`, the path component is a
+// parent page / database and the actual page being viewed sits in the query.
+// Ask the user explicitly which one they want to bootstrap the workspace from.
+const notionUrlHasPanelPeek = computed(() => /[?&]p=[0-9a-f]{32}(?:[&#]|$)/i.test(notionUrl.value))
+const notionPageChoice = ref<'panel' | 'parent'>('panel')
+
+function getEffectiveNotionUrl(): string {
+  const raw = notionUrl.value.trim()
+  if (notionPageChoice.value === 'parent' && notionUrlHasPanelPeek.value) {
+    return raw
+      .replace(/([?&])p=[0-9a-f]{32}(?=[&#]|$)/i, '$1')
+      .replace(/([?&])pm=[a-z]+(?=[&#]|$)/i, '$1')
+      .replace(/[?&]+$/, '')
+      .replace(/\?&/, '?')
+  }
+  return raw
+}
 
 // Manual tasks / criteria (when no Notion ticket)
 const manualTasks = ref<string[]>([])
@@ -396,7 +423,7 @@ async function handleCreate() {
     // timestamp when neither source is available.
     let branchSlug: string
     if (useNotion.value && isValidNotionUrl.value) {
-      branchSlug = branchNameFromNotionUrl(notionUrl.value.trim())
+      branchSlug = branchNameFromNotionUrl(getEffectiveNotionUrl())
     } else if (name !== 'workspace') {
       branchSlug = toKebabCase(name)
     } else {
@@ -412,7 +439,7 @@ async function handleCreate() {
       engine: selectedEngineId.value,
       model: model.value,
       reasoningEffort: reasoningEffort.value,
-      ...(useNotion.value && isValidNotionUrl.value ? { notionUrl: notionUrl.value.trim() } : {}),
+      ...(useNotion.value && isValidNotionUrl.value ? { notionUrl: getEffectiveNotionUrl() } : {}),
       ...(useSentry.value && isValidSentryUrl.value ? { sentryUrl: sentryUrl.value.trim() } : {}),
       ...(showManualSections.value && manualTasks.value.length > 0 ? { tasks: manualTasks.value } : {}),
       ...(showManualSections.value && manualCriteria.value.length > 0
@@ -512,6 +539,52 @@ async function handleCreate() {
             </div>
             <div v-if="isValidNotionUrl" class="notion-valid text-caption q-px-md q-pb-xs text-green-4">
               {{ $t('createPage.notionAutoExtract') }}
+            </div>
+            <div v-if="isValidNotionUrl && notionUrlHasPanelPeek" class="notion-peek-choice q-px-md q-pb-sm">
+              <div class="text-caption text-grey-4 q-mb-sm">
+                <q-icon name="info" size="14px" color="indigo-4" class="q-mr-xs" />
+                {{ $t('createPage.notionPanelChoiceLabel') }}
+              </div>
+              <div class="row q-gutter-sm">
+                <button
+                  type="button"
+                  class="peek-card col"
+                  :class="{ 'peek-card--active': notionPageChoice === 'panel' }"
+                  @click="notionPageChoice = 'panel'"
+                >
+                  <q-icon name="article" size="22px" class="peek-card-icon" />
+                  <div class="peek-card-text">
+                    <div class="peek-card-title">{{ $t('createPage.notionPanelOption') }}</div>
+                    <div class="peek-card-desc">{{ $t('createPage.notionPanelOptionDesc') }}</div>
+                  </div>
+                  <q-icon
+                    v-if="notionPageChoice === 'panel'"
+                    name="check_circle"
+                    size="18px"
+                    color="indigo-4"
+                    class="peek-card-check"
+                  />
+                </button>
+                <button
+                  type="button"
+                  class="peek-card col"
+                  :class="{ 'peek-card--active': notionPageChoice === 'parent' }"
+                  @click="notionPageChoice = 'parent'"
+                >
+                  <q-icon name="folder_open" size="22px" class="peek-card-icon" />
+                  <div class="peek-card-text">
+                    <div class="peek-card-title">{{ $t('createPage.notionParentOption') }}</div>
+                    <div class="peek-card-desc">{{ $t('createPage.notionParentOptionDesc') }}</div>
+                  </div>
+                  <q-icon
+                    v-if="notionPageChoice === 'parent'"
+                    name="check_circle"
+                    size="18px"
+                    color="indigo-4"
+                    class="peek-card-check"
+                  />
+                </button>
+              </div>
             </div>
           </div>
         </transition>
@@ -908,13 +981,16 @@ async function handleCreate() {
           <!-- Branch selector (source branch) -->
           <q-select
             v-model="branch"
-            :options="branches"
+            :options="branchFilterOptions"
             dense
             borderless
             class="bottom-select rounded-borders branch-select"
             hide-dropdown-icon
+            use-input
+            input-debounce="0"
             :loading="loadingBranches"
             :disable="!projectPath.trim() || loadingBranches"
+            @filter="filterBranches"
           >
             <template #selected>
               <span class="bottom-select-label row items-center no-wrap">
@@ -1094,6 +1170,77 @@ async function handleCreate() {
 
 .notion-valid {
   padding-bottom: 6px;
+}
+
+.notion-peek-choice {
+  padding-top: 4px;
+}
+
+.peek-card {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  color: #e0e0e0;
+  font-family: inherit;
+  font-size: inherit;
+  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+
+  &:hover {
+    background: rgba(255, 255, 255, 0.06);
+    border-color: rgba(108, 99, 255, 0.4);
+  }
+
+  &:active {
+    transform: scale(0.99);
+  }
+
+  &--active {
+    background: rgba(108, 99, 255, 0.12);
+    border-color: rgba(108, 99, 255, 0.85);
+    box-shadow: 0 0 0 1px rgba(108, 99, 255, 0.4);
+
+    .peek-card-icon {
+      color: #8a82ff;
+    }
+
+    .peek-card-title {
+      color: #ffffff;
+    }
+  }
+}
+
+.peek-card-icon {
+  flex-shrink: 0;
+  color: #999;
+}
+
+.peek-card-text {
+  flex: 1;
+  min-width: 0;
+  line-height: 1.25;
+}
+
+.peek-card-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #d0d0d0;
+}
+
+.peek-card-desc {
+  font-size: 10.5px;
+  color: #888;
+  margin-top: 2px;
+}
+
+.peek-card-check {
+  flex-shrink: 0;
 }
 
 .sentry-toggle-btn {

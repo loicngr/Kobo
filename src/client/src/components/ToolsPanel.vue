@@ -94,6 +94,10 @@ async function openEditor() {
     openingEditor.value = false
   }
 }
+
+function openExternal(url: string) {
+  window.open(url, '_blank', 'noopener,noreferrer')
+}
 </script>
 
 <template>
@@ -145,6 +149,29 @@ async function openEditor() {
         :loading="openingEditor"
         class="full-width q-mb-xs"
         @click="openEditor"
+      />
+
+      <q-btn
+        v-if="workspace?.notionUrl"
+        no-caps
+        dense
+        outline
+        color="indigo-4"
+        icon="open_in_new"
+        :label="$t('tools.openNotion')"
+        class="full-width q-mb-xs"
+        @click="openExternal(workspace.notionUrl)"
+      />
+      <q-btn
+        v-if="workspace?.sentryUrl"
+        no-caps
+        dense
+        outline
+        color="indigo-4"
+        icon="open_in_new"
+        :label="$t('tools.openSentry')"
+        class="full-width q-mb-xs"
+        @click="openExternal(workspace.sentryUrl)"
       />
 
         <div v-if="!hasSetupScript" class="text-caption text-grey-8">

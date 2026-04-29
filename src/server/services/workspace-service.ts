@@ -31,6 +31,7 @@ export interface Workspace {
   status: WorkspaceStatus
   notionUrl: string | null
   notionPageId: string | null
+  sentryUrl: string | null
   model: string
   reasoningEffort: string
   permissionMode: PermissionMode
@@ -74,6 +75,7 @@ export interface CreateWorkspaceInput {
   workingBranch: string
   notionUrl?: string
   notionPageId?: string
+  sentryUrl?: string
   model?: string
   reasoningEffort?: string
   permissionMode?: string
@@ -108,6 +110,7 @@ interface WorkspaceRow {
   status: string
   notion_url: string | null
   notion_page_id: string | null
+  sentry_url: string | null
   model: string
   reasoning_effort: string
   permission_mode: string
@@ -151,6 +154,7 @@ function mapWorkspace(row: WorkspaceRow): Workspace {
     status: row.status as WorkspaceStatus,
     notionUrl: row.notion_url,
     notionPageId: row.notion_page_id,
+    sentryUrl: row.sentry_url,
     model: row.model,
     reasoningEffort: row.reasoning_effort ?? 'auto',
     permissionMode: (row.permission_mode ?? 'auto-accept') as PermissionMode,
@@ -201,8 +205,8 @@ export function createWorkspace(data: CreateWorkspaceInput): Workspace {
   const id = nanoid()
 
   db.prepare(`
-    INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, status, notion_url, notion_page_id, model, reasoning_effort, permission_mode, engine, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, status, notion_url, notion_page_id, sentry_url, model, reasoning_effort, permission_mode, engine, created_at, updated_at)
+    VALUES (?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     data.name,
@@ -211,6 +215,7 @@ export function createWorkspace(data: CreateWorkspaceInput): Workspace {
     data.workingBranch,
     data.notionUrl ?? null,
     data.notionPageId ?? null,
+    data.sentryUrl ?? null,
     data.model ?? 'claude-opus-4-7',
     data.reasoningEffort ?? 'auto',
     data.permissionMode ?? 'auto-accept',

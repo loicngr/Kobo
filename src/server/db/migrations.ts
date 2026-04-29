@@ -138,6 +138,13 @@ export const migrations: Migration[] = [
       db.prepare("ALTER TABLE workspaces ADD COLUMN permission_profile TEXT NOT NULL DEFAULT 'bypass'").run()
     },
   },
+  {
+    version: 14,
+    name: 'add-workspace-sentry-url',
+    migrate: (db) => {
+      db.prepare('ALTER TABLE workspaces ADD COLUMN sentry_url TEXT').run()
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

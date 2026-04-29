@@ -138,6 +138,8 @@ export default {
   'chatInput.attachImage': 'Attach image',
   'chatInput.queueBanner': 'Message queued — will be sent when the agent finishes',
   'chatInput.cancelQueue': 'Cancel Queue',
+  'chatInput.autoLoopBanner': 'Auto-loop is running — stop it to send a message',
+  'chatInput.autoLoopStop': 'Stop',
   'koboCommand.checkProgressDesc': 'Verify progress on tasks and acceptance criteria',
   'chatInput.uploading': 'Uploading...',
 
@@ -149,6 +151,11 @@ export default {
   'createPage.notionPlaceholder': 'https://www.notion.so/workspace/Page-title-abc123...',
   'createPage.notionValidation': 'URL must start with https://www.notion.so/',
   'createPage.notionAutoExtract': 'Subtasks and acceptance criteria will be extracted automatically.',
+  'createPage.notionPanelChoiceLabel': 'This URL points to a sub-page (?p=). Which one do you want to work on?',
+  'createPage.notionPanelOption': 'Sub-page (panel)',
+  'createPage.notionPanelOptionDesc': 'The page you were viewing — recommended',
+  'createPage.notionParentOption': 'Parent page',
+  'createPage.notionParentOptionDesc': 'The epic / database it belongs to',
   'createPage.importSentry': 'Import Sentry',
   'createPage.sentryEnabled': 'Sentry enabled',
   'createPage.sentryPlaceholder': 'https://your-org.sentry.io/issues/123456',
@@ -399,7 +406,6 @@ export default {
   'notion.title': 'Notion',
   'tasks.title': 'Tasks',
   'notion.addTask': 'Add task',
-  'notion.openInNotion': 'Open in Notion',
   'notion.noUrl': 'No Notion URL',
   'notion.subtasks': '{done}/{total} subtasks',
   'notion.noTasks': 'No tasks',
@@ -492,6 +498,8 @@ export default {
   'tools.noSetupScript': 'No setup script configured —',
   'tools.setupScriptSuccess': 'Setup script completed successfully.',
   'tools.setupScriptFailed': 'Setup script failed.',
+  'tools.openNotion': 'Open in Notion',
+  'tools.openSentry': 'Open in Sentry',
 
   // Diff Viewer
   'diff.title': 'Diff',
@@ -512,6 +520,8 @@ export default {
   'contextMenu.copyPath': 'Copy worktree path',
   'contextMenu.openEditor': 'Open in editor',
   'contextMenu.runSetup': 'Run setup script',
+  'contextMenu.openNotion': 'Open in Notion',
+  'contextMenu.openSentry': 'Open in Sentry',
 
   // Workspace
   'workspace.favorite': 'Mark as favorite',

@@ -273,7 +273,13 @@ terminalWss.on('connection', (ws: WebSocket, workspaceId: string) => {
 
 // Wire websocket-service message handler to the agent orchestrator
 setMessageHandler((type, payload) => {
-  const p = payload as { workspaceId?: string; content?: string; prompt?: string; sessionId?: string } | null
+  const p = payload as {
+    workspaceId?: string
+    content?: string
+    prompt?: string
+    sessionId?: string
+    permissionModeOverride?: 'auto-accept' | 'plan'
+  } | null
 
   if (type === 'chat:message' && p?.workspaceId && p?.content) {
     // Prefer the session explicitly selected by the client (sessionId hint),
@@ -301,13 +307,17 @@ setMessageHandler((type, payload) => {
         const workspace = getWorkspace(p.workspaceId)
         if (workspace) {
           const worktreePath = `${workspace.projectPath}/.worktrees/${workspace.workingBranch}`
+          // Plan mode blocks MCP tools — when the caller knows the message
+          // requires them (e.g. grooming), it sets the override to bypass the
+          // workspace default for this spawn only.
+          const effectiveMode = p.permissionModeOverride ?? workspace.permissionMode
           startAgent(
             p.workspaceId,
             worktreePath,
             p.content,
             workspace.model,
             true,
-            workspace.permissionMode,
+            effectiveMode,
             p.sessionId,
             workspace.reasoningEffort,
           )

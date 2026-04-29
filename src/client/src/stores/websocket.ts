@@ -314,10 +314,15 @@ export const useWebSocketStore = defineStore('websocket', {
       })
     },
 
-    sendChatMessage(workspaceId: string, content: string, sessionId?: string) {
+    sendChatMessage(
+      workspaceId: string,
+      content: string,
+      sessionId?: string,
+      permissionModeOverride?: 'auto-accept' | 'plan',
+    ) {
       this._send({
         type: 'chat:message',
-        payload: { workspaceId, content, sessionId },
+        payload: { workspaceId, content, sessionId, permissionModeOverride },
       })
 
       // Optimistic status update — flip to `executing` instantly if the

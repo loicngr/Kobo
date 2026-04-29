@@ -88,6 +88,29 @@ app.post('/', migrationGuard, async (c) => {
       return c.json({ error: message }, 422)
     }
 
+    // Pre-flight: extract Notion / Sentry before any DB write. A throw here
+    // must not leave a half-built workspace behind, so we run extraction
+    // before createWorkspace and surface failures as 422.
+    let notionContent: notionService.NotionPageContent | null = null
+    if (body.notionUrl) {
+      try {
+        notionContent = await notionService.extractNotionPage(body.notionUrl)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        return c.json({ error: `Failed to extract Notion page: ${message}` }, 422)
+      }
+    }
+
+    let sentryContent: sentryService.SentryIssueContent | null = null
+    if (body.sentryUrl) {
+      try {
+        sentryContent = await sentryService.extractSentryIssue(body.sentryUrl)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        return c.json({ error: `Failed to extract Sentry issue: ${message}` }, 422)
+      }
+    }
+
     // Create workspace record
     const globalSettings = settingsService.getGlobalSettings()
     // workingBranch may be updated after Notion extraction to inject the ticket ID
@@ -99,14 +122,12 @@ app.post('/', migrationGuard, async (c) => {
       workingBranch,
       notionUrl: body.notionUrl,
       notionPageId: body.notionPageId,
+      sentryUrl: body.sentryUrl,
       model: body.model,
       reasoningEffort: body.reasoningEffort,
       permissionMode: body.permissionMode || globalSettings.defaultPermissionMode || 'plan',
       engine: body.engine,
     })
-
-    let notionContent: notionService.NotionPageContent | null = null
-    let sentryContent: sentryService.SentryIssueContent | null = null
 
     // Auto-tag the workspace based on its creation source — `notion` when
     // imported from a Notion page, `sentry` when bootstrapped from a Sentry
@@ -123,31 +144,6 @@ app.post('/', migrationGuard, async (c) => {
         if (tagged) workspace = tagged
       } catch (err) {
         console.error('[workspaces] Failed to apply auto tags:', err)
-      }
-    }
-
-    // Extract Notion page content if a URL was provided
-    if (body.notionUrl) {
-      workspaceService.updateWorkspaceStatus(workspace.id, 'extracting')
-
-      try {
-        notionContent = await notionService.extractNotionPage(body.notionUrl)
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        console.error(`[workspaces] Failed to extract Notion page: ${message}`)
-      }
-    }
-
-    // Extract Sentry issue content if a URL was provided. Done early (before
-    // worktree creation) so the issue ID can be injected into the branch name.
-    if (body.sentryUrl) {
-      workspaceService.updateWorkspaceStatus(workspace.id, 'extracting')
-
-      try {
-        sentryContent = await sentryService.extractSentryIssue(body.sentryUrl)
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        console.error(`[workspaces] Failed to extract Sentry issue: ${message}`)
       }
     }
 
@@ -771,49 +767,6 @@ app.patch('/:id/sessions/:sessionId', async (c) => {
       return c.json({ error: `Session '${sessionId}' not found` }, 404)
     }
 
-    return c.json(updated)
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
-  }
-})
-
-// POST /api/workspaces/:id/refresh-notion — re-extract Notion page and update tasks
-app.post('/:id/refresh-notion', async (c) => {
-  try {
-    const id = c.req.param('id')
-    const workspace = workspaceService.getWorkspace(id)
-    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
-    if (!workspace.notionUrl) return c.json({ error: 'No Notion URL configured' }, 400)
-
-    const notionContent = await notionService.extractNotionPage(workspace.notionUrl)
-
-    // Delete existing tasks and recreate from Notion
-    const db = getDb()
-    db.prepare('DELETE FROM tasks WHERE workspace_id = ?').run(id)
-
-    let sortOrder = 0
-    for (const todo of notionContent.todos) {
-      workspaceService.createTask(id, {
-        title: todo.title,
-        isAcceptanceCriterion: false,
-        sortOrder: sortOrder++,
-      })
-    }
-    for (const feature of notionContent.gherkinFeatures) {
-      workspaceService.createTask(id, {
-        title: feature,
-        isAcceptanceCriterion: true,
-        sortOrder: sortOrder++,
-      })
-    }
-
-    // Update name if it was the default
-    if (notionContent.title && workspace.name === 'workspace') {
-      workspaceService.updateWorkspaceName(id, notionContent.title)
-    }
-
-    const updated = workspaceService.getWorkspaceWithTasks(id)
     return c.json(updated)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

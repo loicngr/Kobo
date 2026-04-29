@@ -33,14 +33,30 @@ const GHERKIN_PATTERN =
 // so they stay attached to the first scenario rather than triggering a split.
 const SCENARIO_START_PATTERN = /^(Scénario|Scenario)/i
 
+function formatAsUuid(raw32Hex: string): string {
+  return `${raw32Hex.slice(0, 8)}-${raw32Hex.slice(8, 12)}-${raw32Hex.slice(12, 16)}-${raw32Hex.slice(16, 20)}-${raw32Hex.slice(20)}`
+}
+
 /**
  * Parse a Notion URL and extract the page_id in UUID format (with dashes).
  * Handles:
  *   https://www.notion.so/workspace/Title-<32hexChars>
  *   https://www.notion.so/workspace/<32hexChars>
  *   https://www.notion.so/<32hexChars>
+ *   https://www.notion.so/workspace/<parentId>?p=<32hexChars>&pm=s   (side-peek)
+ *   https://www.notion.so/workspace/<dbId>?v=<viewId>&p=<32hexChars>  (database peek)
+ *
+ * When the URL embeds `?p=<32hex>` the path component is the parent / database
+ * ID and the actual page being viewed is in the query parameter — that takes
+ * precedence over the path.
  */
 export function parseNotionUrl(url: string): string {
+  // Side-peek / database pages embed the real page ID in `?p=<32hex>`.
+  const pParamMatch = url.match(/[?&]p=([0-9a-f]{32})(?:[&#]|$)/i)
+  if (pParamMatch) {
+    return formatAsUuid(pParamMatch[1])
+  }
+
   // Strip query string and fragment
   const cleanUrl = url.split('?')[0].split('#')[0]
 
@@ -55,9 +71,7 @@ export function parseNotionUrl(url: string): string {
     throw new Error(`Could not extract page ID from Notion URL: ${url}`)
   }
 
-  const raw = match[1]
-  // Convert 32 hex chars to UUID format: 8-4-4-4-12
-  return `${raw.slice(0, 8)}-${raw.slice(8, 12)}-${raw.slice(12, 16)}-${raw.slice(16, 20)}-${raw.slice(20)}`
+  return formatAsUuid(match[1])
 }
 
 /**

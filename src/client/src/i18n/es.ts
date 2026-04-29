@@ -139,6 +139,8 @@ export default {
   'chatInput.attachImage': 'Adjuntar imagen',
   'chatInput.queueBanner': 'Mensaje en cola — se enviará cuando el agente termine',
   'chatInput.cancelQueue': 'Cancelar cola',
+  'chatInput.autoLoopBanner': 'Auto-loop activo — deténlo para enviar un mensaje',
+  'chatInput.autoLoopStop': 'Detener',
   'koboCommand.checkProgressDesc': 'Verificar el progreso de las tareas y criterios de aceptación',
   'chatInput.uploading': 'Subiendo...',
 
@@ -150,6 +152,11 @@ export default {
   'createPage.notionPlaceholder': 'https://www.notion.so/workspace/Page-title-abc123...',
   'createPage.notionValidation': 'La URL debe empezar por https://www.notion.so/',
   'createPage.notionAutoExtract': 'Las subtareas y criterios de aceptación se extraerán automáticamente.',
+  'createPage.notionPanelChoiceLabel': 'Esta URL apunta a una subpágina (?p=). ¿Sobre cuál quieres trabajar?',
+  'createPage.notionPanelOption': 'Subpágina (panel)',
+  'createPage.notionPanelOptionDesc': 'La página que estabas viendo — recomendado',
+  'createPage.notionParentOption': 'Página principal',
+  'createPage.notionParentOptionDesc': 'La épica / base de datos a la que pertenece',
   'createPage.importSentry': 'Importar Sentry',
   'createPage.sentryEnabled': 'Sentry activado',
   'createPage.sentryPlaceholder': 'https://tu-org.sentry.io/issues/123456',
@@ -400,7 +407,6 @@ export default {
   'notion.title': 'Notion',
   'tasks.title': 'Tareas',
   'notion.addTask': 'Añadir tarea',
-  'notion.openInNotion': 'Abrir en Notion',
   'notion.noUrl': 'Sin URL de Notion',
   'notion.subtasks': '{done}/{total} subtareas',
   'notion.noTasks': 'Sin tareas',
@@ -494,6 +500,8 @@ export default {
   'tools.noSetupScript': 'Ningún script de setup configurado —',
   'tools.setupScriptSuccess': 'Script de setup completado con éxito.',
   'tools.setupScriptFailed': 'Falló el script de setup.',
+  'tools.openNotion': 'Abrir en Notion',
+  'tools.openSentry': 'Abrir en Sentry',
 
   // Diff Viewer
   'diff.title': 'Diff',
@@ -514,6 +522,8 @@ export default {
   'contextMenu.copyPath': 'Copiar ruta del worktree',
   'contextMenu.openEditor': 'Abrir en editor',
   'contextMenu.runSetup': 'Ejecutar script de setup',
+  'contextMenu.openNotion': 'Abrir en Notion',
+  'contextMenu.openSentry': 'Abrir en Sentry',
 
   // Workspace
   'workspace.favorite': 'Marcar como favorito',

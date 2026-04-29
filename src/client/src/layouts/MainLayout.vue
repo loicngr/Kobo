@@ -3,9 +3,9 @@ import AcceptancePanel from 'src/components/AcceptancePanel.vue'
 import AgentTodosPanel from 'src/components/AgentTodosPanel.vue'
 import DocumentsPanel from 'src/components/DocumentsPanel.vue'
 import GitPanel from 'src/components/GitPanel.vue'
-import NotionPanel from 'src/components/NotionPanel.vue'
 import StatsPanel from 'src/components/StatsPanel.vue'
 import SubagentsPanel from 'src/components/SubagentsPanel.vue'
+import TasksPanel from 'src/components/TasksPanel.vue'
 import TerminalPanel from 'src/components/TerminalPanel.vue'
 import ToolsPanel from 'src/components/ToolsPanel.vue'
 import WorkspaceList from 'src/components/WorkspaceList.vue'
@@ -209,7 +209,7 @@ function startVerticalResize(event: MouseEvent) {
               </q-tab-panel>
 
               <q-tab-panel name="tasks" class="q-pa-none">
-                <NotionPanel :workspace="store.selectedWorkspace" :tasks="store.tasks" />
+                <TasksPanel :workspace="store.selectedWorkspace" :tasks="store.tasks" />
                 <q-separator dark />
                 <AcceptancePanel :tasks="store.acceptanceCriteria" />
                 <q-separator dark />

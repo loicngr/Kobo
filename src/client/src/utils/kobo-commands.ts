@@ -44,13 +44,20 @@ export function sendCheckProgress(
   })
 }
 
-/** Send the prep-autoloop prompt — dispatched by the "Prepare for auto-loop" button in ToolsPanel. */
-export function sendPrepAutoloop(
+/** Send the prep-autoloop grooming prompt. Forces auto-accept (persisted + per-message override)
+ * because plan mode blocks the MCP tools the grooming session needs (kobo__list_tasks,
+ * kobo__create_task, kobo__mark_auto_loop_ready). */
+export async function sendPrepAutoloop(
   workspaceId: string,
   wsStore: ReturnType<typeof useWebSocketStore>,
   workspaceStore: ReturnType<typeof useWorkspaceStore>,
-): void {
-  wsStore.sendChatMessage(workspaceId, PREP_AUTOLOOP_PROMPT)
+): Promise<void> {
+  try {
+    await workspaceStore.updatePermissionMode(workspaceId, 'auto-accept')
+  } catch {
+    // best-effort — the per-message override below is the safety net
+  }
+  wsStore.sendChatMessage(workspaceId, PREP_AUTOLOOP_PROMPT, undefined, 'auto-accept')
   workspaceStore.markRead(workspaceId)
   workspaceStore.addActivityItem(workspaceId, {
     id: `user-${Date.now()}`,

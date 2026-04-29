@@ -39,8 +39,6 @@ describe('settings store', () => {
           prPromptTemplate: '',
           gitConventions: '',
           setupScript: '',
-          notionStatusProperty: '',
-          notionInProgressStatus: '',
           devServer: { startCommand: '', stopCommand: '' },
         },
       ]
@@ -60,8 +58,6 @@ describe('settings store', () => {
           prPromptTemplate: '',
           gitConventions: '',
           setupScript: '',
-          notionStatusProperty: '',
-          notionInProgressStatus: '',
           devServer: { startCommand: '', stopCommand: '' },
         },
         {
@@ -73,8 +69,6 @@ describe('settings store', () => {
           prPromptTemplate: '',
           gitConventions: '',
           setupScript: '',
-          notionStatusProperty: '',
-          notionInProgressStatus: '',
           devServer: { startCommand: '', stopCommand: '' },
         },
       ]

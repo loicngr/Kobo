@@ -11,6 +11,7 @@ export interface Workspace {
   workingBranch: string
   status: string
   notionUrl: string | null
+  sentryUrl: string | null
   notionPageId: string | null
   model: string
   reasoningEffort: string
@@ -1032,6 +1033,18 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async enableAutoLoop(id: string): Promise<void> {
+      // Auto-loop iterations are spawned in auto-accept (plan mode blocks the
+      // MCP tools the loop relies on). Persist that to keep the UI dropdown
+      // truthful — otherwise it lies about what's actually running.
+      const ws = this.workspaces.find((w) => w.id === id)
+      if (ws && ws.permissionMode !== 'auto-accept') {
+        try {
+          await this.updatePermissionMode(id, 'auto-accept')
+        } catch {
+          // best-effort — the loop forces auto-accept regardless
+        }
+      }
+
       const res = await fetch(`/api/workspaces/${id}/auto-loop`, { method: 'POST' })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))

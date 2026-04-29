@@ -372,9 +372,27 @@ function selectDropdownItem(item: SlashDropdownItem | undefined) {
   closeDropdown()
 }
 
-const isDisabled = computed(() => {
-  return !props.workspaceId
+// autoLoopStates is the live source (refreshed on every autoloop:* WS event);
+// selectedWorkspace.autoLoop is only updated on full workspace refetch.
+const isAutoLoopRunning = computed(() => {
+  const id = props.workspaceId
+  return id ? store.autoLoopStates[id]?.auto_loop === true : false
 })
+
+const isDisabled = computed(() => {
+  return !props.workspaceId || isAutoLoopRunning.value
+})
+
+const stoppingAutoLoop = ref(false)
+async function stopAutoLoopFromChat() {
+  if (!props.workspaceId || stoppingAutoLoop.value) return
+  stoppingAutoLoop.value = true
+  try {
+    await store.disableAutoLoop(props.workspaceId)
+  } finally {
+    stoppingAutoLoop.value = false
+  }
+}
 
 // Message history (arrow up/down to cycle through previous messages)
 const messageHistory = ref<string[]>(JSON.parse(localStorage.getItem('kobo:chatHistory') ?? '[]'))
@@ -624,6 +642,28 @@ function onKeydown(event: KeyboardEvent) {
       <span>{{ $t('chatInput.queueBanner') }}</span>
     </div>
 
+    <!-- Auto-loop banner: input is locked while auto-loop is running.
+         Prevents racy queued messages between iterations. -->
+    <div
+      v-if="isAutoLoopRunning"
+      class="autoloop-banner row items-center no-wrap q-pa-xs q-px-sm text-caption text-indigo-3"
+    >
+      <q-icon name="all_inclusive" size="14px" color="indigo-4" class="q-mr-sm" />
+      <span class="col">{{ $t('chatInput.autoLoopBanner') }}</span>
+      <q-btn
+        flat
+        dense
+        no-caps
+        size="sm"
+        icon="stop_circle"
+        color="orange-4"
+        :label="$t('chatInput.autoLoopStop')"
+        :loading="stoppingAutoLoop"
+        :disable="stoppingAutoLoop"
+        @click="stopAutoLoopFromChat"
+      />
+    </div>
+
     <div class="row items-center q-gutter-sm">
       <q-input
         ref="chatInputRef"
@@ -795,6 +835,12 @@ function onKeydown(event: KeyboardEvent) {
 .queue-banner {
   background-color: #2a2a1a;
   border-bottom: 1px solid #4a4a2a;
+}
+
+.autoloop-banner {
+  background-color: #1e1e36;
+  border-bottom: 1px solid rgba(108, 99, 255, 0.4);
+  border-top: 1px solid rgba(108, 99, 255, 0.4);
 }
 
 .image-tag-close {

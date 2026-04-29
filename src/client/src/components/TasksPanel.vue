@@ -14,14 +14,13 @@ const props = defineProps<{
 const { t } = useI18n()
 const store = useWorkspaceStore()
 const wsStore = useWebSocketStore()
-const refreshing = ref(false)
 
 function askAgentProgress() {
   if (!props.workspace?.id) return
   sendCheckProgress(props.workspace.id, wsStore, store)
 }
 
-// Filter non-criterion tasks for NotionPanel
+// Filter non-criterion tasks for TasksPanel
 const displayTasks = computed(() => props.tasks.filter((t) => !t.isAcceptanceCriterion))
 
 const doneTasks = computed(() => displayTasks.value.filter((t) => t.status === 'done').length)
@@ -41,21 +40,6 @@ function setEditRef(taskId: string, el: unknown) {
     editInputRefs.value[taskId] = nativeEl
   } else {
     delete editInputRefs.value[taskId]
-  }
-}
-
-async function refreshFromNotion() {
-  if (!props.workspace?.id || !props.workspace.notionUrl) return
-  refreshing.value = true
-  try {
-    const res = await fetch(`/api/workspaces/${props.workspace.id}/refresh-notion`, { method: 'POST' })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    // Reload workspace details to get updated tasks
-    store.fetchWorkspaceDetails(props.workspace.id)
-  } catch (err) {
-    console.error('Failed to refresh from Notion:', err)
-  } finally {
-    refreshing.value = false
   }
 }
 
@@ -200,36 +184,6 @@ function statusColor(status: string): string {
     </div>
 
     <template v-if="workspace">
-      <!-- Link back to the source Notion page, when this workspace was
-           created from one. Absent when tasks were added manually or came
-           from another source. -->
-      <div v-if="workspace.notionUrl" class="q-mb-sm">
-        <a
-          :href="workspace.notionUrl"
-          target="_blank"
-          rel="noopener noreferrer"
-          class="notion-link text-caption items-center text-blue-4"
-        >
-          <q-icon name="open_in_new" size="12px" class="q-mr-xs" />
-          {{ $t('notion.openInNotion') }}
-        </a>
-      </div>
-
-      <!-- Refresh button -->
-      <q-btn
-        v-if="workspace.notionUrl"
-        flat
-        dense
-        no-caps
-        size="xs"
-        icon="refresh"
-        :label="$t('common.refresh')"
-        color="grey-6"
-        class="q-mb-sm"
-        :loading="refreshing"
-        @click="refreshFromNotion"
-      />
-
       <!-- Progress -->
       <div v-if="totalTasks > 0" class="q-mb-sm">
         <q-linear-progress
@@ -325,15 +279,6 @@ function statusColor(status: string): string {
 </template>
 
 <style lang="scss" scoped>
-.notion-link {
-  text-decoration: none;
-  display: inline-flex;
-
-  &:hover {
-    text-decoration: underline;
-  }
-}
-
 .task-item {
   padding: 2px 0;
 

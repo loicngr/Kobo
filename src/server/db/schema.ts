@@ -12,6 +12,7 @@ export function initSchema(db: Database.Database): void {
       status TEXT NOT NULL DEFAULT 'created',
       notion_url TEXT,
       notion_page_id TEXT,
+      sentry_url TEXT,
       model TEXT NOT NULL DEFAULT 'claude-opus-4-7',
       reasoning_effort TEXT NOT NULL DEFAULT 'auto',
       permission_mode TEXT NOT NULL DEFAULT 'auto-accept',

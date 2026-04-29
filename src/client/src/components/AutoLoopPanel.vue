@@ -47,7 +47,7 @@ async function onStop() {
 
 function onPrepare() {
   if (!ws.value) return
-  sendPrepAutoloop(ws.value.id, wsStore, store)
+  void sendPrepAutoloop(ws.value.id, wsStore, store)
 }
 
 function onForceReady() {

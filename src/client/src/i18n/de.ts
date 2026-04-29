@@ -139,6 +139,8 @@ export default {
   'chatInput.attachImage': 'Bild anhängen',
   'chatInput.queueBanner': 'Nachricht in Warteschlange — wird gesendet, wenn der Agent fertig ist',
   'chatInput.cancelQueue': 'Warteschlange abbrechen',
+  'chatInput.autoLoopBanner': 'Auto-Loop läuft — beende ihn, um eine Nachricht zu senden',
+  'chatInput.autoLoopStop': 'Beenden',
   'koboCommand.checkProgressDesc': 'Fortschritt bei Aufgaben und Akzeptanzkriterien prüfen',
   'chatInput.uploading': 'Wird hochgeladen...',
 
@@ -150,6 +152,11 @@ export default {
   'createPage.notionPlaceholder': 'https://www.notion.so/workspace/Page-title-abc123...',
   'createPage.notionValidation': 'Die URL muss mit https://www.notion.so/ beginnen',
   'createPage.notionAutoExtract': 'Unteraufgaben und Akzeptanzkriterien werden automatisch extrahiert.',
+  'createPage.notionPanelChoiceLabel': 'Diese URL verweist auf eine Unterseite (?p=). An welcher möchtest du arbeiten?',
+  'createPage.notionPanelOption': 'Unterseite (Panel)',
+  'createPage.notionPanelOptionDesc': 'Die Seite, die du angesehen hast — empfohlen',
+  'createPage.notionParentOption': 'Übergeordnete Seite',
+  'createPage.notionParentOptionDesc': 'Das Epic / die Datenbank dazu',
   'createPage.importSentry': 'Sentry importieren',
   'createPage.sentryEnabled': 'Sentry aktiviert',
   'createPage.sentryPlaceholder': 'https://ihre-org.sentry.io/issues/123456',
@@ -400,7 +407,6 @@ export default {
   'notion.title': 'Notion',
   'tasks.title': 'Aufgaben',
   'notion.addTask': 'Aufgabe hinzufügen',
-  'notion.openInNotion': 'In Notion öffnen',
   'notion.noUrl': 'Keine Notion-URL',
   'notion.subtasks': '{done}/{total} Unteraufgaben',
   'notion.noTasks': 'Keine Aufgaben',
@@ -494,6 +500,8 @@ export default {
   'tools.noSetupScript': 'Kein Setup-Skript konfiguriert —',
   'tools.setupScriptSuccess': 'Setup-Skript erfolgreich abgeschlossen.',
   'tools.setupScriptFailed': 'Setup-Skript fehlgeschlagen.',
+  'tools.openNotion': 'In Notion öffnen',
+  'tools.openSentry': 'In Sentry öffnen',
 
   // Diff Viewer
   'diff.title': 'Diff',
@@ -514,6 +522,8 @@ export default {
   'contextMenu.copyPath': 'Worktree-Pfad kopieren',
   'contextMenu.openEditor': 'Im Editor öffnen',
   'contextMenu.runSetup': 'Setup-Skript ausführen',
+  'contextMenu.openNotion': 'In Notion öffnen',
+  'contextMenu.openSentry': 'In Sentry öffnen',
 
   // Workspace
   'workspace.favorite': 'Als Favorit markieren',

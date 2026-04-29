@@ -35,8 +35,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 13', () => {
-    expect(SCHEMA_VERSION).toBe(13)
+  it('exporte SCHEMA_VERSION = 14', () => {
+    expect(SCHEMA_VERSION).toBe(14)
   })
 
   it('migre depuis la legacy schema_version table', () => {
@@ -596,6 +596,50 @@ describe('runMigrations(db)', () => {
 
     freshDb.close()
     upgradedDb.close()
+  })
+
+  it("ajoute la colonne sentry_url lors d'un upgrade v13 -> v14", () => {
+    const db = new Database(':memory:')
+    // Simulate a real v13 schema: run all migrations, then unwind the v14
+    // history row + drop the column. SQLite's DROP COLUMN (3.35+) lets us
+    // do this without rebuilding the table by hand.
+    runMigrations(db)
+    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(14)
+    db.prepare('ALTER TABLE workspaces DROP COLUMN sentry_url').run()
+
+    const now = new Date().toISOString()
+    db.prepare(
+      "INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, notion_url, created_at, updated_at) VALUES ('w1', 'preexisting', '/tmp', 'main', 'feat', 'https://www.notion.so/abc-1234567890abcdef1234567890abcd', ?, ?)",
+    ).run(now, now)
+
+    runMigrations(db)
+
+    const row = db.prepare('SELECT sentry_url, notion_url FROM workspaces WHERE id = ?').get('w1') as {
+      sentry_url: string | null
+      notion_url: string | null
+    }
+    expect(row.sentry_url).toBeNull()
+    expect(row.notion_url).toBe('https://www.notion.so/abc-1234567890abcdef1234567890abcd')
+
+    const history = getMigrationHistory(db)
+    expect(history.some((h) => h.version === 14 && h.name === 'add-workspace-sentry-url')).toBe(true)
+    db.close()
+  })
+
+  it('expose la colonne sentry_url sur un fresh install', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    const cols = db.prepare("PRAGMA table_info('workspaces')").all() as Array<{
+      name: string
+      type: string
+      notnull: number
+      dflt_value: string | null
+    }>
+    const sentryCol = cols.find((c) => c.name === 'sentry_url')
+    expect(sentryCol).toBeDefined()
+    expect(sentryCol?.type).toBe('TEXT')
+    expect(sentryCol?.notnull).toBe(0)
+    db.close()
   })
 })
 
