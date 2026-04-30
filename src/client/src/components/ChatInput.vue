@@ -372,11 +372,14 @@ function selectDropdownItem(item: SlashDropdownItem | undefined) {
   closeDropdown()
 }
 
-// autoLoopStates is the live source (refreshed on every autoloop:* WS event);
-// selectedWorkspace.autoLoop is only updated on full workspace refetch.
+// "Running" means iterations are actively spawning — auto_loop AND auto_loop_ready
+// must both be set. During grooming (ready=0) the user must stay free to answer
+// the agent's clarifying questions.
 const isAutoLoopRunning = computed(() => {
   const id = props.workspaceId
-  return id ? store.autoLoopStates[id]?.auto_loop === true : false
+  if (!id) return false
+  const state = store.autoLoopStates[id]
+  return state?.auto_loop === true && state?.auto_loop_ready === true
 })
 
 const isDisabled = computed(() => {

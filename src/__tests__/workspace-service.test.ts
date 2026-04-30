@@ -124,6 +124,32 @@ describe('createWorkspace()', () => {
     })
     expect(ws.sentryUrl).toBeNull()
   })
+
+  it('computes worktreePath from convention when not provided, owned=true', async () => {
+    const { createWorkspace } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'Default WT',
+      projectPath: '/tmp/proj',
+      sourceBranch: 'main',
+      workingBranch: 'feature/x',
+    })
+    expect(ws.worktreePath).toBe('/tmp/proj/.worktrees/feature/x')
+    expect(ws.worktreeOwned).toBe(true)
+  })
+
+  it('keeps an explicit worktreePath verbatim with owned=false', async () => {
+    const { createWorkspace } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'Reused WT',
+      projectPath: '/tmp/proj',
+      sourceBranch: 'main',
+      workingBranch: 'feature/y',
+      worktreePath: '/elsewhere/foo',
+      worktreeOwned: false,
+    })
+    expect(ws.worktreePath).toBe('/elsewhere/foo')
+    expect(ws.worktreeOwned).toBe(false)
+  })
 })
 
 describe('getWorkspace(id)', () => {
@@ -185,6 +211,32 @@ describe('updateWorkspaceStatus(id, status)', () => {
     updateWorkspaceStatus(ws.id, 'extracting')
     const updated = updateWorkspaceStatus(ws.id, 'extracting')
     expect(updated.status).toBe('extracting')
+  })
+
+  it('autorise la self-transition error → error (no-op, ne throw pas)', async () => {
+    const { createWorkspace, updateWorkspaceStatus } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'Error self-transition',
+      projectPath: '/p',
+      sourceBranch: 'main',
+      workingBranch: 'b',
+    })
+    updateWorkspaceStatus(ws.id, 'idle')
+    updateWorkspaceStatus(ws.id, 'error')
+    expect(() => updateWorkspaceStatus(ws.id, 'error')).not.toThrow()
+  })
+
+  it('autorise la self-transition completed → completed (no-op)', async () => {
+    const { createWorkspace, updateWorkspaceStatus } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'Completed self-transition',
+      projectPath: '/p',
+      sourceBranch: 'main',
+      workingBranch: 'b',
+    })
+    updateWorkspaceStatus(ws.id, 'brainstorming')
+    updateWorkspaceStatus(ws.id, 'completed')
+    expect(() => updateWorkspaceStatus(ws.id, 'completed')).not.toThrow()
   })
 
   it('lève une erreur sur une transition invalide', async () => {
@@ -1040,5 +1092,24 @@ describe('setPermissionProfile(id, profile)', () => {
   it('throws on unknown workspace id', async () => {
     const { setPermissionProfile } = await import('../server/services/workspace-service.js')
     expect(() => setPermissionProfile('nope', 'strict')).toThrow("Workspace 'nope' not found")
+  })
+})
+
+describe('updateWorktreePath(id, newPath)', () => {
+  it('updates worktree_path and updated_at', async () => {
+    const { createWorkspace, updateWorktreePath, getWorkspace } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const ws = createWorkspace({ name: 'Move me', projectPath: '/p', sourceBranch: 'main', workingBranch: 'b' })
+    await new Promise((r) => setTimeout(r, 10))
+    const updated = updateWorktreePath(ws.id, '/p/.worktrees/renamed')
+    expect(updated.worktreePath).toBe('/p/.worktrees/renamed')
+    expect(updated.updatedAt > ws.updatedAt).toBe(true)
+    expect(getWorkspace(ws.id)?.worktreePath).toBe('/p/.worktrees/renamed')
+  })
+
+  it("throws when the workspace doesn't exist", async () => {
+    const { updateWorktreePath } = await import('../server/services/workspace-service.js')
+    expect(() => updateWorktreePath('ghost', '/x')).toThrow(/not found/)
   })
 })

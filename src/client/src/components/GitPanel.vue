@@ -494,6 +494,7 @@ async function handleOpenPr() {
           {{ workspace.workingBranch }}
         </span>
         <q-btn
+          v-if="workspace?.worktreeOwned !== false"
           flat
           round
           dense
@@ -506,6 +507,15 @@ async function handleOpenPr() {
         >
           <q-tooltip>{{ $t('git.renameBranch') }}</q-tooltip>
         </q-btn>
+        <q-icon
+          v-if="workspace?.worktreeOwned === false"
+          name="info"
+          size="14px"
+          color="grey-6"
+          class="q-ml-xs"
+        >
+          <q-tooltip>{{ $t('git.renameDisabledForExternal') }}</q-tooltip>
+        </q-icon>
       </div>
 
       <!-- Source branch info -->

@@ -162,13 +162,14 @@ function fire(workspaceId: string): void {
 
     const wsRow = db
       .prepare(
-        `SELECT project_path, working_branch, model, permission_mode, reasoning_effort
+        `SELECT project_path, working_branch, worktree_path, model, permission_mode, reasoning_effort
            FROM workspaces WHERE id = ?`,
       )
       .get(workspaceId) as
       | {
           project_path: string
           working_branch: string
+          worktree_path: string | null
           model: string
           permission_mode: string
           reasoning_effort: string
@@ -180,7 +181,7 @@ function fire(workspaceId: string): void {
       return
     }
 
-    const worktreePath = path.join(wsRow.project_path, '.worktrees', wsRow.working_branch)
+    const worktreePath = wsRow.worktree_path ?? path.join(wsRow.project_path, '.worktrees', wsRow.working_branch)
     // Defensive: narrow `permission_mode` against the two known values rather
     // than trusting the DB column shape. Any unexpected value falls back to
     // the safer 'auto-accept'.

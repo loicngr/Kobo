@@ -62,6 +62,13 @@ export interface DevServerConfig {
   stopCommand: string
 }
 
+/** E2E testing configuration for a project. */
+export interface E2eSettings {
+  framework: 'cypress' | 'playwright' | 'jest' | 'vitest' | 'other' | ''
+  skill: string
+  prompt: string
+}
+
 /** Per-project settings, stored in settings.json. */
 export interface ProjectSettings {
   path: string
@@ -73,6 +80,7 @@ export interface ProjectSettings {
   gitConventions: string
   setupScript: string
   devServer: DevServerConfig
+  e2e: E2eSettings
 }
 
 /** Global settings that apply as defaults when no project override is set. */
@@ -289,6 +297,11 @@ function defaultProjectSettings(projectPath: string): ProjectSettings {
     devServer: {
       startCommand: '',
       stopCommand: '',
+    },
+    e2e: {
+      framework: '',
+      skill: '',
+      prompt: '',
     },
   }
 }
@@ -536,7 +549,7 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
   return settings.global
 }
 
-/** Create or update project-specific settings. Merges devServer fields on update. */
+/** Create or update project-specific settings. Merges devServer and e2e fields on update. */
 export function upsertProject(projectPath: string, data: Partial<Omit<ProjectSettings, 'path'>>): ProjectSettings {
   const allowedProjectKeys = [
     'displayName',
@@ -547,8 +560,10 @@ export function upsertProject(projectPath: string, data: Partial<Omit<ProjectSet
     'gitConventions',
     'setupScript',
     'devServer',
+    'e2e',
   ]
   const allowedDevServerKeys = ['startCommand', 'stopCommand']
+  const allowedE2eKeys: Array<keyof E2eSettings> = ['framework', 'skill', 'prompt']
   const filtered = pickKnownKeys<Omit<ProjectSettings, 'path'>>(data as Record<string, unknown>, allowedProjectKeys)
   if (filtered.devServer) {
     filtered.devServer = pickKnownKeys<DevServerConfig>(
@@ -556,19 +571,28 @@ export function upsertProject(projectPath: string, data: Partial<Omit<ProjectSet
       allowedDevServerKeys,
     ) as DevServerConfig
   }
+  if (filtered.e2e) {
+    filtered.e2e = pickKnownKeys<E2eSettings>(
+      filtered.e2e as unknown as Record<string, unknown>,
+      allowedE2eKeys as string[],
+    ) as E2eSettings
+  }
 
   const settings = readSettings()
   const idx = settings.projects.findIndex((p) => p.path === projectPath)
 
   if (idx >= 0) {
-    // Update existing project — merge devServer separately to allow partial updates
+    // Update existing project — merge devServer and e2e separately to allow partial updates
     const existing = settings.projects[idx]
     const updatedDevServer = filtered.devServer ? { ...existing.devServer, ...filtered.devServer } : existing.devServer
+    const existingE2e = existing.e2e ?? defaultProjectSettings(projectPath).e2e
+    const updatedE2e = filtered.e2e ? { ...existingE2e, ...filtered.e2e } : existingE2e
     settings.projects[idx] = {
       ...existing,
       ...filtered,
       path: projectPath,
       devServer: updatedDevServer,
+      e2e: updatedE2e,
     }
   } else {
     // Add new project
@@ -579,6 +603,9 @@ export function upsertProject(projectPath: string, data: Partial<Omit<ProjectSet
     }
     if (filtered.devServer) {
       newProject.devServer = { ...defaultProjectSettings(projectPath).devServer, ...filtered.devServer }
+    }
+    if (filtered.e2e) {
+      newProject.e2e = { ...defaultProjectSettings(projectPath).e2e, ...filtered.e2e }
     }
     settings.projects.push(newProject)
   }

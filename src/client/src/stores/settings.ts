@@ -5,6 +5,12 @@ interface DevServerConfig {
   stopCommand: string
 }
 
+interface E2eSettings {
+  framework: 'cypress' | 'playwright' | 'jest' | 'vitest' | 'other' | ''
+  skill: string
+  prompt: string
+}
+
 interface ProjectSettings {
   path: string
   displayName: string
@@ -15,6 +21,7 @@ interface ProjectSettings {
   gitConventions: string
   setupScript: string
   devServer: DevServerConfig
+  e2e: E2eSettings
 }
 
 interface GlobalSettings {
@@ -43,7 +50,7 @@ function toBase64Url(str: string): string {
   return btoa(str).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
 }
 
-export type { DevServerConfig, GlobalSettings, ProjectSettings }
+export type { DevServerConfig, E2eSettings, GlobalSettings, ProjectSettings }
 
 export const useSettingsStore = defineStore('settings', {
   state: () => ({

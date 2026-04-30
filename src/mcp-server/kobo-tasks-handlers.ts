@@ -251,6 +251,7 @@ interface WorkspaceRow {
   project_path: string
   source_branch: string
   working_branch: string
+  worktree_path: string | null
   status: string
   notion_url: string | null
   notion_page_id: string | null
@@ -267,7 +268,7 @@ interface WorkspaceRow {
 export function getWorkspaceInfoHandler(db: Database.Database, workspaceId: string): WorkspaceInfoDto {
   const row = db
     .prepare(
-      'SELECT id, name, project_path, source_branch, working_branch, status, notion_url, notion_page_id, model, dev_server_status, has_unread, auto_loop, auto_loop_ready, created_at, updated_at FROM workspaces WHERE id = ?',
+      'SELECT id, name, project_path, source_branch, working_branch, worktree_path, status, notion_url, notion_page_id, model, dev_server_status, has_unread, auto_loop, auto_loop_ready, created_at, updated_at FROM workspaces WHERE id = ?',
     )
     .get(workspaceId) as WorkspaceRow | undefined
 
@@ -281,7 +282,7 @@ export function getWorkspaceInfoHandler(db: Database.Database, workspaceId: stri
     projectPath: row.project_path,
     sourceBranch: row.source_branch,
     workingBranch: row.working_branch,
-    worktreePath: path.join(row.project_path, '.worktrees', row.working_branch),
+    worktreePath: row.worktree_path ?? path.join(row.project_path, '.worktrees', row.working_branch),
     status: row.status,
     model: row.model,
     notionUrl: row.notion_url,

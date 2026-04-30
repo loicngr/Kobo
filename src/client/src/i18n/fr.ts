@@ -180,6 +180,11 @@ export default {
   'createPage.enterPath': 'Entrez le chemin du projet',
   'createPage.create': 'Créer',
   'createPage.skipSetupScript': 'Ignorer le script de setup',
+  'createPage.attachWorktreeToggle': 'Réutiliser un worktree existant',
+  'createPage.attachWorktreeEnabled': 'Worktree existant sélectionné',
+  'createPage.worktreePickerLabel': 'Worktree existant',
+  'createPage.noOrphanWorktrees': 'Aucun worktree orphelin pour ce projet',
+  'createPage.pickWorktreeRequired': 'Sélectionne un worktree à réutiliser',
   'createPage.notionExtractHint': "Les sous-tâches et critères d'acceptation seront extraits de la page Notion.",
   'createPage.notionImportHint':
     "Cliquez sur « Importer depuis Notion » pour extraire automatiquement les sous-tâches d'un ticket.",
@@ -232,6 +237,16 @@ export default {
   'settings.setupScriptPlaceholder': 'npm install',
   'settings.setupScriptHint':
     "Exécuté avec bash dans le worktree après sa création, avant le démarrage de l'agent. Pas besoin de shebang. En cas d'échec, le workspace passe en erreur. Timeout : 5 minutes.",
+  'settings.e2e.title': 'Tests E2E',
+  'settings.e2e.framework': 'Framework',
+  'settings.e2e.frameworkNone': 'Aucun',
+  'settings.e2e.frameworkOther': 'Autre',
+  'settings.e2e.skill': 'Skill (optionnel)',
+  'settings.e2e.skillPlaceholder': 'ex : cypress-tester',
+  'settings.e2e.prompt': 'Guidance personnalisée (optionnel)',
+  'settings.e2e.promptPlaceholder': 'ex : utiliser le page-object, cibler les data-testid',
+  'settings.e2e.helpText':
+    "Quand configuré, l'agent de grooming auto-loop insère des sous-tâches E2E pour les fonctionnalités UI.",
   'settings.editorCommand': 'Commande éditeur',
   'settings.editorCommandPlaceholder': 'code, phpstorm, subl, vim...',
   'settings.editorCommandHint':
@@ -352,6 +367,7 @@ export default {
   'git.renameBranchSuccess': 'Branche renommée en `{branch}`',
   'git.renameBranchFailed': 'Échec du renommage',
   'git.renameBranchExists': 'La branche `{branch}` existe déjà (locale ou sur origin)',
+  'git.renameDisabledForExternal': 'Le renommage est désactivé pour les worktrees externes attachés.',
   'git.diff': 'Diff',
   'git.rebase': 'Rebase',
   'git.rebaseConfirmTitle': 'Rebase la branche ?',

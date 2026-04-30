@@ -46,7 +46,10 @@ export function sendCheckProgress(
 
 /** Send the prep-autoloop grooming prompt. Forces auto-accept (persisted + per-message override)
  * because plan mode blocks the MCP tools the grooming session needs (kobo__list_tasks,
- * kobo__create_task, kobo__mark_auto_loop_ready). */
+ * kobo__create_task, kobo__mark_auto_loop_ready).
+ *
+ * Fetches the project-aware grooming prompt from the server (which composes E2E review
+ * step when configured). Falls back to the local PREP_AUTOLOOP_PROMPT constant on error. */
 export async function sendPrepAutoloop(
   workspaceId: string,
   wsStore: ReturnType<typeof useWebSocketStore>,
@@ -57,12 +60,24 @@ export async function sendPrepAutoloop(
   } catch {
     // best-effort — the per-message override below is the safety net
   }
-  wsStore.sendChatMessage(workspaceId, PREP_AUTOLOOP_PROMPT, undefined, 'auto-accept')
+
+  let prompt = PREP_AUTOLOOP_PROMPT
+  try {
+    const res = await fetch(`/api/workspaces/${workspaceId}/prep-autoloop-prompt`, { cache: 'no-store' })
+    if (res.ok) {
+      const data = (await res.json()) as { prompt?: string }
+      if (data.prompt) prompt = data.prompt
+    }
+  } catch {
+    // best-effort — the local PREP_AUTOLOOP_PROMPT default still applies
+  }
+
+  wsStore.sendChatMessage(workspaceId, prompt, undefined, 'auto-accept')
   workspaceStore.markRead(workspaceId)
   workspaceStore.addActivityItem(workspaceId, {
     id: `user-${Date.now()}`,
     type: 'text',
-    content: PREP_AUTOLOOP_PROMPT,
+    content: prompt,
     timestamp: new Date().toISOString(),
     meta: { sender: 'user', pending: true },
   })

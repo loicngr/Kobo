@@ -1,4 +1,4 @@
-import { execFile as execFileCb, spawn } from 'node:child_process'
+import { execFile as execFileCb, execFileSync, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFileCb)
@@ -6,7 +6,11 @@ const execFileAsync = promisify(execFileCb)
 import fs from 'node:fs'
 import path from 'node:path'
 import { Hono } from 'hono'
-import { AUTO_LOOP_GROOMING_STEPS, AUTO_LOOP_HARD_RULES } from '../../shared/auto-loop-prompts.js'
+import {
+  AUTO_LOOP_HARD_RULES,
+  buildAutoLoopGroomingSteps,
+  PREP_AUTOLOOP_INTRO,
+} from '../../shared/auto-loop-prompts.js'
 import { getDb } from '../db/index.js'
 import { migrationGuard } from '../middleware/migration-guard.js'
 import { listEngines } from '../services/agent/engines/registry.js'
@@ -63,10 +67,16 @@ app.post('/', migrationGuard, async (c) => {
       permissionMode?: string
       engine?: string
       autoLoop?: boolean
+      worktreePath?: string
     }>()
 
-    if (!body.name || !body.projectPath || !body.sourceBranch || !body.workingBranch) {
-      return c.json({ error: 'Missing required fields: name, projectPath, sourceBranch, workingBranch' }, 400)
+    // workingBranch is derived from git when worktreePath is provided, so
+    // it's not required in that flow. The other 3 fields stay mandatory.
+    if (!body.name || !body.projectPath || !body.sourceBranch) {
+      return c.json({ error: 'Missing required fields: name, projectPath, sourceBranch' }, 400)
+    }
+    if (!body.worktreePath && !body.workingBranch) {
+      return c.json({ error: 'Missing required field: workingBranch' }, 400)
     }
 
     // Validate the engine id (if provided) against the registry. An unknown
@@ -86,6 +96,45 @@ app.post('/', migrationGuard, async (c) => {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       return c.json({ error: message }, 422)
+    }
+
+    // Reuse-existing-worktree path. When the caller passes `worktreePath`,
+    // Kobo "attaches" to a pre-existing worktree on disk instead of creating
+    // a new one. We validate four invariants up-front (path exists, belongs
+    // to this repo, is on a real branch, isn't already attached) and derive
+    // the working branch from git itself — the body.workingBranch is ignored.
+    let useReusedWorktree = false
+    let reusedDerivedBranch: string | null = null
+    if (body.worktreePath) {
+      if (!fs.existsSync(body.worktreePath)) {
+        return c.json({ error: `Worktree path does not exist: ${body.worktreePath}` }, 422)
+      }
+      try {
+        const commonDir = execFileSync('git', ['-C', body.worktreePath, 'rev-parse', '--git-common-dir'], {
+          encoding: 'utf-8',
+        }).trim()
+        const expectedCommonDir = path.join(body.projectPath, '.git')
+        if (path.resolve(commonDir) !== path.resolve(expectedCommonDir)) {
+          return c.json({ error: `Worktree '${body.worktreePath}' belongs to a different repository` }, 422)
+        }
+        const branch = execFileSync('git', ['-C', body.worktreePath, 'rev-parse', '--abbrev-ref', 'HEAD'], {
+          encoding: 'utf-8',
+        }).trim()
+        if (!branch || branch === 'HEAD') {
+          return c.json({ error: 'Worktree is in detached HEAD state and cannot be attached' }, 422)
+        }
+        reusedDerivedBranch = branch
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        return c.json({ error: `Failed to inspect worktree: ${message}` }, 422)
+      }
+      // Validate the worktree isn't already attached to another workspace.
+      const dbForCheck = getDb()
+      const existing = dbForCheck.prepare('SELECT id FROM workspaces WHERE worktree_path = ?').get(body.worktreePath)
+      if (existing) {
+        return c.json({ error: 'This worktree is already attached to another Kōbō workspace' }, 422)
+      }
+      useReusedWorktree = true
     }
 
     // Pre-flight: extract Notion / Sentry before any DB write. A throw here
@@ -113,8 +162,38 @@ app.post('/', migrationGuard, async (c) => {
 
     // Create workspace record
     const globalSettings = settingsService.getGlobalSettings()
-    // workingBranch may be updated after Notion extraction to inject the ticket ID
-    let workingBranch = body.workingBranch
+    // workingBranch may be updated after Notion extraction to inject the ticket ID,
+    // OR overridden by the branch derived from the existing worktree (reuse mode).
+    let workingBranch = useReusedWorktree && reusedDerivedBranch ? reusedDerivedBranch : body.workingBranch
+
+    // Inject ticket ID into the working branch BEFORE creating the workspace,
+    // so the worktree_path recorded in the DB reflects the FINAL branch name.
+    // Works with or without Notion: ticket ID comes from Notion extraction first,
+    // then Sentry, then falls back to a TK-XXXX pattern anywhere in the body.name.
+    // Skip when reusing an existing worktree — its branch is already real on disk
+    // and we MUST NOT rename it.
+    if (!useReusedWorktree) {
+      // Sentry's canonical identifier is the issue short-ID (e.g. "ACME-API-3"),
+      // which is what Sentry auto-close recognises in commit messages.
+      const detectedTicketId = notionContent?.ticketId || sentryContent?.issueId || body.name.match(/[A-Z]+-\d+/i)?.[0]
+      if (detectedTicketId && !workingBranch.toLowerCase().includes(detectedTicketId.toLowerCase())) {
+        const ticketPrefix = detectedTicketId.toUpperCase()
+        const slashIdx = workingBranch.indexOf('/')
+        const typePrefix = slashIdx >= 0 ? workingBranch.slice(0, slashIdx + 1) : 'feature/'
+        // Use Notion/Sentry title or body name for the slug — all have proper accented
+        // characters that NFD normalization can transliterate (é→e, ç→c, etc.)
+        const titleSource = notionContent?.title || sentryContent?.title || body.name
+        const titleSlug = titleSource
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, '-')
+          .replace(/^-|-$/g, '')
+          .substring(0, 50)
+        workingBranch = `${typePrefix}${ticketPrefix}--${titleSlug}`
+      }
+    }
+
     let workspace = workspaceService.createWorkspace({
       name: body.name,
       projectPath: body.projectPath,
@@ -123,6 +202,7 @@ app.post('/', migrationGuard, async (c) => {
       notionUrl: body.notionUrl,
       notionPageId: body.notionPageId,
       sentryUrl: body.sentryUrl,
+      ...(useReusedWorktree ? { worktreePath: body.worktreePath, worktreeOwned: false } : {}),
       model: body.model,
       reasoningEffort: body.reasoningEffort,
       permissionMode: body.permissionMode || globalSettings.defaultPermissionMode || 'plan',
@@ -206,42 +286,19 @@ app.post('/', migrationGuard, async (c) => {
       }
     }
 
-    // Inject ticket ID into the working branch.
-    // Works with or without Notion: ticket ID comes from Notion extraction first,
-    // then falls back to a TK-XXXX pattern anywhere in the workspace name.
-    // The worktree has not been created yet, so a DB update is sufficient.
-    {
-      // Sentry's canonical identifier is the issue short-ID (e.g. "ACME-API-3"),
-      // which is what Sentry auto-close recognises in commit messages.
-      const detectedTicketId =
-        notionContent?.ticketId || sentryContent?.issueId || workspace.name.match(/[A-Z]+-\d+/i)?.[0]
-      if (detectedTicketId && !workingBranch.toLowerCase().includes(detectedTicketId.toLowerCase())) {
-        const ticketPrefix = detectedTicketId.toUpperCase()
-        const slashIdx = workingBranch.indexOf('/')
-        const typePrefix = slashIdx >= 0 ? workingBranch.slice(0, slashIdx + 1) : 'feature/'
-        // Use Notion/Sentry title or workspace name for the slug — all have proper accented
-        // characters that NFD normalization can transliterate (é→e, ç→c, etc.)
-        const titleSource = notionContent?.title || sentryContent?.title || workspace.name
-        const titleSlug = titleSource
-          .normalize('NFD')
-          .replace(/[\u0300-\u036f]/g, '')
-          .toLowerCase()
-          .replace(/[^a-z0-9]+/g, '-')
-          .replace(/^-|-$/g, '')
-          .substring(0, 50)
-        workingBranch = `${typePrefix}${ticketPrefix}--${titleSlug}`
-        workspace = workspaceService.updateWorkingBranch(workspace.id, workingBranch)
-      }
-    }
-
-    // Create git worktree for the working branch
+    // Create git worktree for the working branch — unless we're reusing an
+    // existing one, in which case the path is taken straight from the body.
     let worktreePath: string
-    try {
-      worktreePath = worktreeService.createWorktree(body.projectPath, workingBranch, body.sourceBranch)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      workspaceService.updateWorkspaceStatus(workspace.id, 'error')
-      return c.json({ error: `Failed to create worktree: ${message}` }, 500)
+    if (useReusedWorktree) {
+      worktreePath = body.worktreePath as string
+    } else {
+      try {
+        worktreePath = worktreeService.createWorktree(body.projectPath, workingBranch, body.sourceBranch)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        workspaceService.updateWorkspaceStatus(workspace.id, 'error')
+        return c.json({ error: `Failed to create worktree: ${message}` }, 500)
+      }
     }
 
     // Ensure Kobo-generated files are gitignored. Check both the root
@@ -294,7 +351,10 @@ app.post('/', migrationGuard, async (c) => {
 
     // Run setup script if configured and not skipped
     let setupScriptFailed = false
-    if (effectiveSettings.setupScript && !body.skipSetupScript) {
+    // Skip the setup script when reusing an existing worktree — the user
+    // already has the environment set up there and rerunning it could be
+    // destructive (drop a node_modules they curated, etc.).
+    if (effectiveSettings.setupScript && !body.skipSetupScript && !useReusedWorktree) {
       workspaceService.updateWorkspaceStatus(workspace.id, 'extracting')
       wsService.emit(workspace.id, 'setup:output', { text: '[kobo] Running setup script...' })
       try {
@@ -526,12 +586,20 @@ app.post('/', migrationGuard, async (c) => {
         // NOT with implementation. The auto-loop will drive implementation after.
         // The grooming steps + hard rules are shared with the PREP_AUTOLOOP_PROMPT
         // sent by the "Prepare for auto-loop" button (src/shared/auto-loop-prompts.ts).
+        // Read per-project E2E settings so the grooming steps can include the
+        // E2E review pass when configured. We deliberately use
+        // `getProjectSettings` (NOT `getEffectiveSettings`) here because only
+        // project-level settings carry the `e2e` shape; if the project hasn't
+        // been registered yet, the empty default below is correct.
+        const projectSettingsForE2e = settingsService.getProjectSettings(body.projectPath)
+        const e2eSettings = projectSettingsForE2e?.e2e ?? { framework: '', skill: '', prompt: '' }
         brainstormPrompt += `\n\nThen brainstorm the implementation approach. Explore the codebase to understand the existing structure. Ask clarifying questions if needed. When you have a clear plan, create a plan file.
 
 Auto-loop mode is active for this workspace. After the plan is ready, DO NOT implement anything. Instead:
 
-${AUTO_LOOP_GROOMING_STEPS}
-5. Output [BRAINSTORM_COMPLETE] on its own line and end your turn cleanly.
+${buildAutoLoopGroomingSteps(e2eSettings)}
+
+When the steps above are complete, output [BRAINSTORM_COMPLETE] on its own line and end your turn cleanly.
 
 ${AUTO_LOOP_HARD_RULES}`
       } else {
@@ -1028,6 +1096,31 @@ app.get('/archived', (c) => {
   }
 })
 
+// GET /:id/prep-autoloop-prompt — compose the project-aware grooming
+// prompt. Used by the "Prepare for auto-loop" button. Place BEFORE
+// `app.get('/:id', ...)` so the more-specific path wins.
+app.get('/:id/prep-autoloop-prompt', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const projectSettings = settingsService.getProjectSettings(workspace.projectPath)
+    const e2eSettings = projectSettings?.e2e ?? { framework: '', skill: '', prompt: '' }
+
+    const prompt = `${PREP_AUTOLOOP_INTRO}
+
+${buildAutoLoopGroomingSteps(e2eSettings)}
+
+${AUTO_LOOP_HARD_RULES}`
+
+    return c.json({ prompt })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
 // GET /api/workspaces/:id — get workspace details with tasks
 app.get('/:id', (c) => {
   try {
@@ -1178,7 +1271,7 @@ app.post('/:id/open-editor', (c) => {
       return c.json({ error: 'No editor command configured' }, 400)
     }
 
-    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    const worktreePath = workspace.worktreePath
     if (!fs.existsSync(worktreePath)) {
       return c.json({ error: `Worktree path does not exist: ${worktreePath}` }, 400)
     }
@@ -1186,6 +1279,15 @@ app.post('/:id/open-editor', (c) => {
     const child = spawn(globalSettings.editorCommand, [worktreePath], {
       detached: true,
       stdio: 'ignore',
+    })
+    // spawn errors fire async on the ChildProcess (ENOENT etc.) — without a
+    // handler the unhandled 'error' event crashes the whole Node process.
+    child.on('error', (err) => {
+      console.error(`[open-editor] spawn '${globalSettings.editorCommand}' failed:`, err.message)
+      wsService.emitEphemeral(workspace.id, 'editor:open-failed', {
+        command: globalSettings.editorCommand,
+        message: err.message,
+      })
     })
     child.unref()
 
@@ -1221,7 +1323,7 @@ app.post('/:id/run-setup-script', async (c) => {
       return c.json({ error: 'No setup script configured' }, 400)
     }
 
-    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    const worktreePath = workspace.worktreePath
     if (!fs.existsSync(worktreePath)) {
       return c.json({ error: `Worktree path does not exist: ${worktreePath}` }, 400)
     }
@@ -1351,21 +1453,25 @@ app.delete('/:id', migrationGuard, async (c) => {
     // remove fails with EACCES.
     const warnings: string[] = []
 
-    // Remove worktree
-    const worktreesDir = `${workspace.projectPath}/.worktrees`
-    const worktreePath = `${worktreesDir}/${workspace.workingBranch}`
-    try {
-      worktreeService.removeWorktree(workspace.projectPath, worktreePath)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      console.error(`[workspaces] Failed to remove worktree: ${message}`)
-      warnings.push(
-        `Failed to remove worktree directory '${worktreePath}'. The git entry may still reference it. ` +
-          `Fix manually:\n` +
-          `  sudo rm -rf '${worktreePath}'\n` +
-          `  cd '${workspace.projectPath}' && git worktree prune\n` +
-          `Reason: ${message}`,
-      )
+    // Remove worktree (only if owned — for attached external worktrees we
+    // never created the dir, so we must not delete it on the user's behalf).
+    const worktreePath = workspace.worktreePath
+    if (workspace.worktreeOwned) {
+      try {
+        worktreeService.removeWorktree(workspace.projectPath, worktreePath)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        console.error(`[workspaces] Failed to remove worktree: ${message}`)
+        warnings.push(
+          `Failed to remove worktree directory '${worktreePath}'. The git entry may still reference it. ` +
+            `Fix manually:\n` +
+            `  sudo rm -rf '${worktreePath}'\n` +
+            `  cd '${workspace.projectPath}' && git worktree prune\n` +
+            `Reason: ${message}`,
+        )
+      }
+    } else {
+      console.log(`[workspaces] keeping reused worktree on delete: ${worktreePath}`)
     }
 
     // Delete local branch if requested
@@ -1454,7 +1560,7 @@ app.post('/:id/start', migrationGuard, async (c) => {
       // Agent may not be running — ignore
     }
 
-    const worktreePath = `${workspace.projectPath}/.worktrees/${workspace.workingBranch}`
+    const worktreePath = workspace.worktreePath
 
     const agent = agentManager.startAgent(
       id,
@@ -1491,7 +1597,7 @@ app.get('/:id/git-stats', async (c) => {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
     }
 
-    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    const worktreePath = workspace.worktreePath
 
     const commitCount = gitOps.getCommitCount(worktreePath, workspace.sourceBranch, workspace.workingBranch)
     const diffStats = gitOps.getStructuredDiffStatsBetween(
@@ -1533,7 +1639,7 @@ app.get('/:id/diff', (c) => {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
     }
 
-    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    const worktreePath = workspace.worktreePath
     const files =
       mode === 'unpushed'
         ? gitOps.getUnpushedChangedFiles(worktreePath, workspace.workingBranch)
@@ -1571,7 +1677,7 @@ app.get('/:id/diff-file', (c) => {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
     }
 
-    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    const worktreePath = workspace.worktreePath
     const baseRef = mode === 'unpushed' ? `origin/${workspace.workingBranch}` : workspace.sourceBranch
     const original = gitOps.getFileAtRef(worktreePath, baseRef, filePath)
     const modified = gitOps.getFileContent(worktreePath, filePath)
@@ -1595,7 +1701,7 @@ app.get('/:id/commits', (c) => {
     }
     const limitRaw = c.req.query('limit')
     const limit = Math.min(Math.max(1, parseInt(limitRaw ?? '50', 10) || 50), 200)
-    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    const worktreePath = workspace.worktreePath
     const commits = gitOps.listBranchCommits(worktreePath, workspace.sourceBranch, workspace.workingBranch, limit)
     c.header('Cache-Control', 'no-store')
     return c.json({ commits, sourceBranch: workspace.sourceBranch, workingBranch: workspace.workingBranch })
@@ -1625,12 +1731,27 @@ app.post('/:id/rename-branch', async (c) => {
     if (!workspace) {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
     }
+    if (!workspace.worktreeOwned) {
+      return c.json(
+        {
+          error: 'Rename is not available for attached external worktrees. Manage the branch name with git directly.',
+        },
+        400,
+      )
+    }
     if (newName === workspace.workingBranch) {
       return c.json(workspace) // no-op
     }
 
-    const oldWorktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
-    const newWorktreePath = path.join(workspace.projectPath, '.worktrees', newName)
+    const oldWorktreePath = workspace.worktreePath
+    // Sibling rename: keep the same worktrees-root, swap the branch leaf.
+    // Cannot use `path.dirname` directly because branches with slashes
+    // (e.g. `feature/x`) make the dirname end one level too deep.
+    const oldSuffix = `/${workspace.workingBranch}`
+    const worktreesRoot = oldWorktreePath.endsWith(oldSuffix)
+      ? oldWorktreePath.slice(0, -oldSuffix.length)
+      : path.join(workspace.projectPath, '.worktrees')
+    const newWorktreePath = path.join(worktreesRoot, newName)
 
     // Reject early if the target name is already in use — either as a local
     // branch or on origin. Avoids git's generic "already exists" error and
@@ -1652,8 +1773,10 @@ app.post('/:id/rename-branch', async (c) => {
     // not the dir, for git operations.
     try {
       gitOps.moveWorktree(workspace.projectPath, oldWorktreePath, newWorktreePath)
+      workspaceService.updateWorktreePath(id, newWorktreePath)
     } catch (err) {
       console.error('[workspaces] Failed to move worktree dir (branch renamed anyway):', err)
+      // worktree_path stays at oldWorktreePath, which still exists on disk
     }
 
     const updated = workspaceService.updateWorkingBranch(id, newName)
@@ -1675,7 +1798,15 @@ app.post('/:id/resync-branch', (c) => {
     if (!workspace) {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
     }
-    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    if (!workspace.worktreeOwned) {
+      return c.json(
+        {
+          error: 'Resync-branch is not available for attached external worktrees.',
+        },
+        400,
+      )
+    }
+    const worktreePath = workspace.worktreePath
     let actual: string
     try {
       actual = gitOps.getCurrentBranch(worktreePath).trim()
@@ -1689,17 +1820,23 @@ app.post('/:id/resync-branch', (c) => {
     }
 
     // Branch was renamed in-place by the agent (`git branch -m ...`). The
-    // worktree directory is still at .worktrees/<old-name>; move it so it
-    // matches the new ref, otherwise Kōbō's path resolver (projectPath +
-    // .worktrees + workingBranch) breaks and subsequent session spawns fail
-    // with ENOENT on .mcp.json. Best-effort: if the move fails (dir already
-    // moved, lockfile, dirty tree), we still update the DB so git ops stay
-    // aligned with the current ref name — the user can repair the dir manually.
-    const newWorktreePath = path.join(workspace.projectPath, '.worktrees', actual)
+    // worktree directory is still at <worktrees-root>/<old-name>; move it so it
+    // matches the new ref, otherwise Kōbō's path resolver breaks and
+    // subsequent session spawns fail with ENOENT on .mcp.json. Best-effort:
+    // if the move fails (dir already moved, lockfile, dirty tree), we still
+    // update the DB so git ops stay aligned with the current ref name — the
+    // user can repair the dir manually.
+    const oldSuffix = `/${workspace.workingBranch}`
+    const worktreesRoot = worktreePath.endsWith(oldSuffix)
+      ? worktreePath.slice(0, -oldSuffix.length)
+      : path.join(workspace.projectPath, '.worktrees')
+    const newWorktreePath = path.join(worktreesRoot, actual)
     try {
       gitOps.moveWorktree(workspace.projectPath, worktreePath, newWorktreePath)
+      workspaceService.updateWorktreePath(id, newWorktreePath)
     } catch (err) {
       console.error('[workspaces] resync-branch: moveWorktree failed (DB update proceeds):', err)
+      // worktree_path stays at the old path; DB update for working branch still proceeds
     }
 
     const updated = workspaceService.updateWorkingBranch(id, actual)
@@ -1722,7 +1859,7 @@ app.post('/:id/push', async (c) => {
     const body = await c.req.json<{ force?: boolean }>().catch(() => ({}) as { force?: boolean })
     const force = body?.force === true
 
-    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    const worktreePath = workspace.worktreePath
 
     try {
       // Only pass an options arg when force is requested — keeps the
@@ -1763,7 +1900,7 @@ app.post('/:id/pull', (c) => {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
     }
 
-    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    const worktreePath = workspace.worktreePath
 
     try {
       gitOps.pullBranch(worktreePath, workspace.workingBranch)
@@ -1795,7 +1932,7 @@ app.post('/:id/rebase', (c) => {
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
 
-    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    const worktreePath = workspace.worktreePath
     gitOps.rebaseBranch(worktreePath, workspace.sourceBranch)
 
     return c.json({ success: true })
@@ -1815,7 +1952,7 @@ app.post('/:id/merge', (c) => {
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
 
-    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    const worktreePath = workspace.worktreePath
     gitOps.mergeBranch(worktreePath, workspace.sourceBranch)
 
     return c.json({ success: true })
@@ -1835,7 +1972,7 @@ app.post('/:id/git/abort', (c) => {
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
 
-    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    const worktreePath = workspace.worktreePath
     const aborted = gitOps.abortOngoingGitOperation(worktreePath)
     return c.json({ success: true, aborted })
   } catch (err) {
@@ -1855,7 +1992,7 @@ app.post('/:id/git/resolve-with-agent', migrationGuard, async (c) => {
       operation?: 'merge' | 'rebase'
       files?: string[]
     }
-    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    const worktreePath = workspace.worktreePath
     const operation = body.operation ?? gitOps.getOngoingGitOperation(worktreePath) ?? 'merge'
     const files = body.files && body.files.length > 0 ? body.files : gitOps.getConflictedFiles(worktreePath)
 
@@ -1939,7 +2076,7 @@ app.post('/:id/change-pr-base', async (c) => {
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
 
-    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    const worktreePath = workspace.worktreePath
 
     await execFileAsync('gh', ['pr', 'edit', '--base', body.base], { cwd: worktreePath })
 
@@ -1959,7 +2096,7 @@ app.post('/:id/open-pr', async (c) => {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
     }
 
-    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    const worktreePath = workspace.worktreePath
 
     // Verify branch exists on remote
     let lsRemoteOut = ''
@@ -2065,7 +2202,7 @@ app.post('/:id/open-pr', async (c) => {
     } catch {
       // Agent not running — resume it with the PR prompt
       try {
-        const worktreePathForResume = `${workspace.projectPath}/.worktrees/${workspace.workingBranch}`
+        const worktreePathForResume = workspace.worktreePath
         agentManager.startAgent(
           workspace.id,
           worktreePathForResume,

@@ -46,6 +46,8 @@ export interface Workspace {
   noProgressStreak: number
   /** 'bypass' (default) → --dangerously-skip-permissions; 'strict' → --permission-mode acceptEdits (respects settings.json allow/deny). */
   permissionProfile: 'bypass' | 'strict'
+  worktreePath: string
+  worktreeOwned: boolean
   createdAt: string
   updatedAt: string
 }
@@ -80,6 +82,8 @@ export interface CreateWorkspaceInput {
   reasoningEffort?: string
   permissionMode?: string
   engine?: string
+  worktreePath?: string
+  worktreeOwned?: boolean
 }
 
 /** Input payload for creating a new task. */
@@ -124,6 +128,8 @@ interface WorkspaceRow {
   auto_loop_ready: number | null
   no_progress_streak: number | null
   permission_profile: string | null
+  worktree_path: string | null
+  worktree_owned: number
   created_at: string
   updated_at: string
 }
@@ -168,6 +174,8 @@ function mapWorkspace(row: WorkspaceRow): Workspace {
     autoLoopReady: row.auto_loop_ready === 1,
     noProgressStreak: row.no_progress_streak ?? 0,
     permissionProfile: (row.permission_profile ?? 'bypass') as 'bypass' | 'strict',
+    worktreePath: row.worktree_path ?? '',
+    worktreeOwned: row.worktree_owned === 1,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -204,9 +212,15 @@ export function createWorkspace(data: CreateWorkspaceInput): Workspace {
   const now = new Date().toISOString()
   const id = nanoid()
 
+  const computedWorktreePath = data.worktreePath ?? `${data.projectPath}/.worktrees/${data.workingBranch}`
+  const owned = data.worktreeOwned ?? true
+
   db.prepare(`
-    INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, status, notion_url, notion_page_id, sentry_url, model, reasoning_effort, permission_mode, engine, created_at, updated_at)
-    VALUES (?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO workspaces (
+      id, name, project_path, source_branch, working_branch, status,
+      notion_url, notion_page_id, sentry_url, worktree_path, worktree_owned,
+      model, reasoning_effort, permission_mode, engine, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     data.name,
@@ -216,6 +230,8 @@ export function createWorkspace(data: CreateWorkspaceInput): Workspace {
     data.notionUrl ?? null,
     data.notionPageId ?? null,
     data.sentryUrl ?? null,
+    computedWorktreePath,
+    owned ? 1 : 0,
     data.model ?? 'claude-opus-4-7',
     data.reasoningEffort ?? 'auto',
     data.permissionMode ?? 'auto-accept',
@@ -260,6 +276,13 @@ export function updateWorkspaceStatus(id: string, status: WorkspaceStatus): Work
 
   if (!workspace) {
     throw new Error(`Workspace '${id}' not found`)
+  }
+
+  // Self-transition is a no-op. Some failure paths fan out (e.g. engine emits
+  // an error event AND the process exits non-zero), and both try to mark the
+  // workspace 'error' — the second call shouldn't throw.
+  if (workspace.status === status) {
+    return workspace
   }
 
   const allowedTransitions = VALID_TRANSITIONS[workspace.status]
@@ -339,6 +362,19 @@ export function updateWorkingBranch(id: string, workingBranch: string): Workspac
   const result = db
     .prepare('UPDATE workspaces SET working_branch = ?, updated_at = ? WHERE id = ?')
     .run(sanitized, now, id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+  return getWorkspace(id) as Workspace
+}
+
+/** Update the on-disk worktree path. Used by rename / resync-branch on owned worktrees. */
+export function updateWorktreePath(id: string, newPath: string): Workspace {
+  const db = getDb()
+  const now = new Date().toISOString()
+  const result = db
+    .prepare('UPDATE workspaces SET worktree_path = ?, updated_at = ? WHERE id = ?')
+    .run(newPath, now, id)
   if (result.changes === 0) {
     throw new Error(`Workspace '${id}' not found`)
   }

@@ -11,6 +11,7 @@ vi.mock('../server/services/workspace-service.js', () => ({
   updateWorkspaceStatus: vi.fn(),
   updateWorkspaceName: vi.fn(),
   updateWorkingBranch: vi.fn(),
+  updateWorktreePath: vi.fn(),
   updateWorkspaceModel: vi.fn(),
   updateWorkspaceReasoningEffort: vi.fn(),
   updateWorkspacePermissionMode: vi.fn(),
@@ -152,6 +153,7 @@ vi.mock('../server/db/index.js', () => ({
 vi.mock('../server/services/settings-service.js', () => ({
   getEffectiveSettings: vi.fn(),
   getGlobalSettings: vi.fn(),
+  getProjectSettings: vi.fn(),
 }))
 
 vi.mock('../server/services/setup-script-service.js', () => ({
@@ -176,7 +178,9 @@ vi.mock('node:fs', async () => {
 
 // ── Imports (after mocks) ────────────────────────────────────────────────────
 
+import { execFileSync } from 'node:child_process'
 import * as fs from 'node:fs'
+import { getDb } from '../server/db/index.js'
 import router from '../server/routes/workspaces.js'
 import * as agentManager from '../server/services/agent/orchestrator.js'
 import * as devServerService from '../server/services/dev-server-service.js'
@@ -202,6 +206,8 @@ const fakeWorkspace = {
   projectPath: '/tmp/project',
   sourceBranch: 'main',
   workingBranch: 'feature/test',
+  worktreePath: '/tmp/project/.worktrees/feature/test',
+  worktreeOwned: true,
   status: 'idle' as const,
   notionUrl: null,
   notionPageId: null,
@@ -377,7 +383,12 @@ describe('POST /api/workspaces', () => {
     expect(notionService.extractNotionPage).toHaveBeenCalledWith('https://notion.so/page-123')
     expect(workspaceService.createTask).toHaveBeenCalled()
     expect(workspaceService.updateWorkspaceName).toHaveBeenCalledWith('ws-1', 'Notion Page Title')
-    expect(workspaceService.updateWorkingBranch).toHaveBeenCalledWith('ws-1', 'feature/TK-123--notion-page-title')
+    // Ticket-ID injection now happens BEFORE createWorkspace, so the final
+    // working branch is passed in directly — no follow-up updateWorkingBranch call.
+    expect(workspaceService.createWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({ workingBranch: 'feature/TK-123--notion-page-title' }),
+    )
+    expect(workspaceService.updateWorkingBranch).not.toHaveBeenCalled()
   })
 
   it('calls fetchSourceBranch before createWorkspace on workspace creation', async () => {
@@ -1111,6 +1122,22 @@ describe('DELETE /api/workspaces/:id', () => {
 
     const res = await app.request('/api/workspaces/nonexistent', { method: 'DELETE' })
     expect(res.status).toBe(404)
+  })
+
+  it('keeps the worktree on disk when the workspace is not owned', async () => {
+    // Reused/attached external worktrees: Kōbō did not create the dir, so it
+    // must not delete it on the user's behalf. The DB row is still removed.
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      worktreeOwned: false,
+      worktreePath: '/tmp/external/foo',
+    })
+
+    const res = await app.request('/api/workspaces/ws-1', { method: 'DELETE' })
+
+    expect(res.status).toBe(204)
+    expect(vi.mocked(worktreeService.removeWorktree)).not.toHaveBeenCalled()
+    expect(vi.mocked(workspaceService.deleteWorkspace)).toHaveBeenCalledWith('ws-1')
   })
 
   it('surfaces a warning with copy-pasteable sudo command when the worktree removal fails (permission denied)', async () => {
@@ -2222,6 +2249,8 @@ describe('GET /api/workspaces/:id/diff', () => {
       projectPath: '/p',
       sourceBranch: 'develop',
       workingBranch: 'feature/x',
+      worktreePath: '/p/.worktrees/feature/x',
+      worktreeOwned: true,
       status: 'idle',
       model: 'auto',
       engine: 'claude-code',
@@ -2283,6 +2312,8 @@ describe('GET /api/workspaces/:id/diff-file', () => {
       projectPath: '/p',
       sourceBranch: 'develop',
       workingBranch: 'feature/x',
+      worktreePath: '/p/.worktrees/feature/x',
+      worktreeOwned: true,
       status: 'idle',
       model: 'auto',
       engine: 'claude-code',
@@ -2335,6 +2366,8 @@ describe('GET /api/workspaces/:id/commits', () => {
       projectPath: '/p',
       sourceBranch: 'develop',
       workingBranch: 'feature/x',
+      worktreePath: '/p/.worktrees/feature/x',
+      worktreeOwned: true,
       status: 'idle',
       model: 'auto',
       engine: 'claude-code',
@@ -2454,6 +2487,8 @@ describe('POST /api/workspaces/:id/resync-branch', () => {
       autoLoopReady: false,
       noProgressStreak: 0,
       permissionProfile: 'bypass',
+      worktreePath: '/tmp/project/.worktrees/feature/old-name',
+      worktreeOwned: true,
       createdAt: 'x',
       updatedAt: 'x',
     } as never)
@@ -2477,7 +2512,29 @@ describe('POST /api/workspaces/:id/resync-branch', () => {
       '/tmp/project/.worktrees/feature/old-name',
       '/tmp/project/.worktrees/feature/new-name',
     )
+    expect(vi.mocked(workspaceService.updateWorktreePath)).toHaveBeenCalledWith(
+      'w1',
+      '/tmp/project/.worktrees/feature/new-name',
+    )
     expect(vi.mocked(workspaceService.updateWorkingBranch)).toHaveBeenCalledWith('w1', 'feature/new-name')
+  })
+
+  it('rejects with 400 when the workspace is not owned', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      worktreeOwned: false,
+      worktreePath: '/tmp/external/foo',
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/resync-branch', { method: 'POST' })
+
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toMatch(/external worktree/i)
+    expect(vi.mocked(gitOps.getCurrentBranch)).not.toHaveBeenCalled()
+    expect(vi.mocked(gitOps.moveWorktree)).not.toHaveBeenCalled()
+    expect(vi.mocked(workspaceService.updateWorkingBranch)).not.toHaveBeenCalled()
+    expect(vi.mocked(workspaceService.updateWorktreePath)).not.toHaveBeenCalled()
   })
 
   it('does NOT move the worktree when the branch name is unchanged', async () => {
@@ -2507,6 +2564,90 @@ describe('POST /api/workspaces/:id/resync-branch', () => {
 
     expect(res.status).toBe(200)
     expect(vi.mocked(workspaceService.updateWorkingBranch)).toHaveBeenCalledWith('w1', 'feature/new-name')
+    expect(vi.mocked(workspaceService.updateWorktreePath)).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/workspaces/:id/rename-branch', () => {
+  beforeEach(() => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    // Reset mocks whose implementations may have been overridden by earlier
+    // tests (clearAllMocks only resets call history, not implementations).
+    vi.mocked(gitOps.branchExists).mockReturnValue(false)
+    vi.mocked(gitOps.renameBranch).mockReset()
+    vi.mocked(gitOps.moveWorktree).mockReset()
+  })
+
+  it('rejects with 400 when the workspace is not owned', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      worktreeOwned: false,
+      worktreePath: '/tmp/external/foo',
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/rename-branch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ newName: 'feature/new' }),
+    })
+
+    expect(res.status).toBe(400)
+    const data = (await res.json()) as { error: string }
+    expect(data.error).toMatch(/external worktree/i)
+    expect(vi.mocked(gitOps.renameBranch)).not.toHaveBeenCalled()
+    expect(vi.mocked(gitOps.moveWorktree)).not.toHaveBeenCalled()
+    expect(vi.mocked(workspaceService.updateWorkingBranch)).not.toHaveBeenCalled()
+    expect(vi.mocked(workspaceService.updateWorktreePath)).not.toHaveBeenCalled()
+  })
+
+  it('updates worktreePath after moveWorktree succeeds for owned workspaces', async () => {
+    vi.mocked(workspaceService.updateWorkingBranch).mockReturnValue({
+      ...fakeWorkspace,
+      workingBranch: 'feature/new',
+    } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/rename-branch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ newName: 'feature/new' }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(vi.mocked(gitOps.renameBranch)).toHaveBeenCalledWith(
+      '/tmp/project/.worktrees/feature/test',
+      'feature/test',
+      'feature/new',
+    )
+    expect(vi.mocked(gitOps.moveWorktree)).toHaveBeenCalledWith(
+      '/tmp/project',
+      '/tmp/project/.worktrees/feature/test',
+      '/tmp/project/.worktrees/feature/new',
+    )
+    expect(vi.mocked(workspaceService.updateWorktreePath)).toHaveBeenCalledWith(
+      'ws-1',
+      '/tmp/project/.worktrees/feature/new',
+    )
+    expect(vi.mocked(workspaceService.updateWorkingBranch)).toHaveBeenCalledWith('ws-1', 'feature/new')
+  })
+
+  it('keeps worktreePath unchanged when moveWorktree fails for owned workspaces', async () => {
+    vi.mocked(gitOps.moveWorktree).mockImplementation(() => {
+      throw new Error('fatal: directory is not empty')
+    })
+    vi.mocked(workspaceService.updateWorkingBranch).mockReturnValue({
+      ...fakeWorkspace,
+      workingBranch: 'feature/new',
+    } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/rename-branch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ newName: 'feature/new' }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(vi.mocked(workspaceService.updateWorktreePath)).not.toHaveBeenCalled()
+    expect(vi.mocked(workspaceService.updateWorkingBranch)).toHaveBeenCalledWith('ws-1', 'feature/new')
   })
 })
 
@@ -2618,6 +2759,8 @@ describe('POST /api/workspaces — pre-flight URL validation', () => {
       autoLoopReady: false,
       noProgressStreak: 0,
       permissionProfile: 'bypass',
+      worktreePath: '/tmp/proj/.worktrees/feat/x',
+      worktreeOwned: true,
       createdAt: '2026-01-01',
       updatedAt: '2026-01-01',
     })
@@ -2644,5 +2787,243 @@ describe('POST /api/workspaces — pre-flight URL validation', () => {
     const createOrder = vi.mocked(wsService.createWorkspace).mock.invocationCallOrder[0]
     expect(notionOrder).toBeLessThan(createOrder)
     expect(sentryOrder).toBeLessThan(createOrder)
+  })
+})
+
+describe('POST /api/workspaces — reuse existing worktree', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(gitOps.fetchSourceBranch).mockReturnValue(undefined)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
+      model: 'auto',
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      gitConventions: '',
+      sourceBranch: 'main',
+      devServer: null,
+      setupScript: '',
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
+    })
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
+      defaultModel: 'auto',
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      gitConventions: '',
+      editorCommand: '',
+      browserNotifications: true,
+      audioNotifications: true,
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
+      defaultPermissionMode: 'plan',
+    })
+  })
+
+  it('returns 422 when worktreePath does not exist on disk', async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(false)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'reuse-test',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/placeholder',
+        worktreePath: '/tmp/orphan/.worktrees/feature/derived',
+      }),
+    })
+
+    expect(res.status).toBe(422)
+    const data = await res.json()
+    expect(data.error).toMatch(/does not exist/i)
+    expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('returns 422 when worktreePath is not a git worktree of this project', async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true)
+    // First call: rev-parse --git-common-dir returns a different repo path
+    vi.mocked(execFileSync).mockImplementationOnce(() => '/tmp/OTHER-PROJECT/.git\n' as never)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'reuse-test',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/placeholder',
+        worktreePath: '/tmp/elsewhere/.worktrees/feature/derived',
+      }),
+    })
+
+    expect(res.status).toBe(422)
+    const data = await res.json()
+    expect(data.error).toMatch(/different repository/i)
+    expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('returns 422 when the worktree branch is detached HEAD', async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true)
+    vi.mocked(execFileSync)
+      // rev-parse --git-common-dir → matches /tmp/project/.git
+      .mockImplementationOnce(() => '/tmp/project/.git\n' as never)
+      // rev-parse --abbrev-ref HEAD → 'HEAD' (detached)
+      .mockImplementationOnce(() => 'HEAD\n' as never)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'reuse-test',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/placeholder',
+        worktreePath: '/tmp/project/.worktrees/feature/detached',
+      }),
+    })
+
+    expect(res.status).toBe(422)
+    const data = await res.json()
+    expect(data.error).toMatch(/detached HEAD/i)
+    expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('returns 422 when the worktreePath is already attached', async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true)
+    vi.mocked(execFileSync)
+      .mockImplementationOnce(() => '/tmp/project/.git\n' as never)
+      .mockImplementationOnce(() => 'feature/derived\n' as never)
+    // DB query returns an existing row with that worktree_path
+    vi.mocked(getDb).mockReturnValue({
+      prepare: vi.fn().mockReturnValue({
+        run: vi.fn(),
+        get: vi.fn().mockReturnValue({ id: 'ws-existing' }),
+        all: vi.fn().mockReturnValue([]),
+      }),
+    } as never)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'reuse-test',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/placeholder',
+        worktreePath: '/tmp/project/.worktrees/feature/derived',
+      }),
+    })
+
+    expect(res.status).toBe(422)
+    const data = await res.json()
+    expect(data.error).toMatch(/already attached/i)
+    expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('happy path: derives branch from git, sets worktreeOwned=false, skips createWorktree + setupScript', async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true)
+    vi.mocked(execFileSync)
+      .mockImplementationOnce(() => '/tmp/project/.git\n' as never)
+      .mockImplementationOnce(() => 'feature/derived\n' as never)
+    // No existing row — happy path
+    vi.mocked(getDb).mockReturnValue({
+      prepare: vi.fn().mockReturnValue({
+        run: vi.fn(),
+        get: vi.fn().mockReturnValue(undefined),
+        all: vi.fn().mockReturnValue([]),
+      }),
+    } as never)
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+    // setup script configured — must still be skipped because of useReusedWorktree
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
+      model: 'claude-opus-4-6',
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      gitConventions: '',
+      sourceBranch: 'main',
+      devServer: null,
+      setupScript: '#!/bin/bash\necho "ok"',
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'reuse-test',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/placeholder',
+        worktreePath: '/tmp/project/.worktrees/feature/derived',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(workspaceService.createWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workingBranch: 'feature/derived',
+        worktreePath: '/tmp/project/.worktrees/feature/derived',
+        worktreeOwned: false,
+      }),
+    )
+    expect(worktreeService.createWorktree).not.toHaveBeenCalled()
+    expect(setupScriptService.runSetupScript).not.toHaveBeenCalled()
+  })
+})
+
+describe('GET /api/workspaces/:id/prep-autoloop-prompt', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('returns 404 when the workspace does not exist', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+    const res = await app.request('/api/workspaces/ghost/prep-autoloop-prompt')
+    expect(res.status).toBe(404)
+  })
+
+  it('returns a prompt without the E2E review step when E2E is not configured', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(settingsService.getProjectSettings).mockReturnValue({
+      path: '/tmp/proj',
+      displayName: 'P',
+      defaultSourceBranch: 'main',
+      defaultModel: '',
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      gitConventions: '',
+      setupScript: '',
+      devServer: { startCommand: '', stopCommand: '' },
+      e2e: { framework: '', skill: '', prompt: '' },
+    })
+    const res = await app.request('/api/workspaces/ws-1/prep-autoloop-prompt')
+    expect(res.status).toBe(200)
+    const data = (await res.json()) as { prompt: string }
+    expect(data.prompt).toContain('1. Call `kobo__list_tasks`')
+    expect(data.prompt).not.toContain('E2E review')
+  })
+
+  it('includes the E2E review step when configured', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(settingsService.getProjectSettings).mockReturnValue({
+      path: '/tmp/proj',
+      displayName: 'P',
+      defaultSourceBranch: 'main',
+      defaultModel: '',
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      gitConventions: '',
+      setupScript: '',
+      devServer: { startCommand: '', stopCommand: '' },
+      e2e: { framework: 'cypress', skill: 'cy', prompt: 'pop' },
+    })
+    const res = await app.request('/api/workspaces/ws-1/prep-autoloop-prompt')
+    expect(res.status).toBe(200)
+    const data = (await res.json()) as { prompt: string }
+    expect(data.prompt).toContain('**E2E review**')
+    expect(data.prompt).toContain('The project uses `cypress`.')
+    expect(data.prompt).toContain('Use the `cy` skill for this task.')
   })
 })

@@ -23,6 +23,8 @@ const fakeWorkspace = {
   projectPath: '',
   sourceBranch: 'main',
   workingBranch: 'feature/test',
+  worktreePath: '',
+  worktreeOwned: true,
   status: 'executing',
   model: 'claude-opus-4-6',
   permissionMode: 'auto-accept',
@@ -39,6 +41,7 @@ beforeEach(() => {
   worktreePath = path.join(tmpDir, '.worktrees', 'feature', 'test')
   fs.mkdirSync(worktreePath, { recursive: true })
   fakeWorkspace.projectPath = tmpDir
+  fakeWorkspace.worktreePath = worktreePath
   vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
 })
 

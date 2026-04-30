@@ -35,8 +35,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 14', () => {
-    expect(SCHEMA_VERSION).toBe(14)
+  it('exporte SCHEMA_VERSION = 15', () => {
+    expect(SCHEMA_VERSION).toBe(15)
   })
 
   it('migre depuis la legacy schema_version table', () => {
@@ -639,6 +639,52 @@ describe('runMigrations(db)', () => {
     expect(sentryCol).toBeDefined()
     expect(sentryCol?.type).toBe('TEXT')
     expect(sentryCol?.notnull).toBe(0)
+    db.close()
+  })
+
+  it("ajoute les colonnes worktree_path et worktree_owned lors d'un upgrade v14 -> v15", () => {
+    const db = new Database(':memory:')
+    // Simulate a v14 schema by running all migrations then unwinding v15.
+    runMigrations(db)
+    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(15)
+    db.prepare('ALTER TABLE workspaces DROP COLUMN worktree_path').run()
+    db.prepare('ALTER TABLE workspaces DROP COLUMN worktree_owned').run()
+
+    const now = new Date().toISOString()
+    db.prepare(
+      "INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at) VALUES ('w1', 'pre', '/tmp/proj', 'main', 'feature/foo', ?, ?)",
+    ).run(now, now)
+
+    runMigrations(db)
+
+    const row = db.prepare('SELECT worktree_path, worktree_owned FROM workspaces WHERE id = ?').get('w1') as {
+      worktree_path: string
+      worktree_owned: number
+    }
+    expect(row.worktree_path).toBe('/tmp/proj/.worktrees/feature/foo')
+    expect(row.worktree_owned).toBe(1)
+
+    const history = getMigrationHistory(db)
+    expect(history.some((h) => h.version === 15 && h.name === 'add-workspace-worktree-path')).toBe(true)
+    db.close()
+  })
+
+  it('expose les colonnes worktree_path et worktree_owned sur un fresh install', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    const cols = db.prepare("PRAGMA table_info('workspaces')").all() as Array<{
+      name: string
+      type: string
+      notnull: number
+      dflt_value: string | null
+    }>
+    const wtPath = cols.find((c) => c.name === 'worktree_path')
+    const wtOwned = cols.find((c) => c.name === 'worktree_owned')
+    expect(wtPath).toBeDefined()
+    expect(wtPath?.type).toBe('TEXT')
+    expect(wtOwned).toBeDefined()
+    expect(wtOwned?.type).toBe('INTEGER')
+    expect(wtOwned?.notnull).toBe(1)
     db.close()
   })
 })

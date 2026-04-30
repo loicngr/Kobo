@@ -26,6 +26,8 @@ export interface Workspace {
   noProgressStreak: number
   /** 'bypass' (default) → --dangerously-skip-permissions; 'strict' → --permission-mode acceptEdits. */
   permissionProfile: 'bypass' | 'strict'
+  worktreePath: string
+  worktreeOwned: boolean
   createdAt: string
   updatedAt: string
 }
@@ -322,6 +324,15 @@ export const useWorkspaceStore = defineStore('workspace', {
         this.workspaces = this.workspaces.map((w) => (w.id === id ? { ...w, tags: previous } : w))
         throw err
       }
+    },
+
+    async fetchOrphanWorktrees(
+      projectPath: string,
+    ): Promise<Array<{ path: string; branch: string; head: string; suggestedSourceBranch: string }>> {
+      const url = `/api/git/orphan-worktrees?projectPath=${encodeURIComponent(projectPath)}`
+      const res = await fetch(url, { cache: 'no-store' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      return res.json()
     },
 
     async fetchWorkspaces() {

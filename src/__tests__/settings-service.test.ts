@@ -194,6 +194,38 @@ describe('upsertProject()', () => {
     const projects = listProjects()
     expect(projects.length).toBe(1) // still one project
   })
+
+  it('round-trips e2e settings via upsertProject + getProjectSettings', () => {
+    getSettings()
+    upsertProject('/tmp/p1', {
+      e2e: { framework: 'playwright', skill: 'pw-tester', prompt: 'use page-object' },
+    })
+    const got = getProjectSettings('/tmp/p1')
+    expect(got?.e2e).toEqual({ framework: 'playwright', skill: 'pw-tester', prompt: 'use page-object' })
+  })
+
+  it('returns the default e2e shape when the field is absent', () => {
+    getSettings()
+    upsertProject('/tmp/p2', { displayName: 'No E2E' })
+    const got = getProjectSettings('/tmp/p2')
+    expect(got?.e2e).toEqual({ framework: '', skill: '', prompt: '' })
+  })
+
+  it('drops unknown sub-keys inside e2e', () => {
+    getSettings()
+    upsertProject('/tmp/p3', {
+      e2e: {
+        framework: 'cypress',
+        skill: 'cy',
+        prompt: 'go',
+        // @ts-expect-error - unknown sub-key
+        malicious: 'value',
+      },
+    })
+    const got = getProjectSettings('/tmp/p3')
+    expect(got?.e2e).toEqual({ framework: 'cypress', skill: 'cy', prompt: 'go' })
+    expect((got?.e2e as Record<string, unknown>).malicious).toBeUndefined()
+  })
 })
 
 describe('deleteProject()', () => {

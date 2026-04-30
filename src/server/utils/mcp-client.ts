@@ -87,6 +87,14 @@ export function spawnMcpProcess(command: string, args: string[], env: Record<str
     env,
   })
 
+  // Defensive default 'error' listener: a ChildProcess that emits 'error'
+  // without any listener crashes the whole Node process (Unhandled 'error').
+  // Callers may attach their own listener for typed handling — listeners are
+  // additive on EventEmitter so this default never blocks them.
+  mcpProcess.on('error', (err) => {
+    console.error(`[mcp] spawn '${command}' failed: ${err.message}`)
+  })
+
   mcpProcess.stderr?.on('data', (data: Buffer) => {
     if (process.env.DEBUG_MCP_STDERR) {
       console.error('[mcp stderr]', data.toString())

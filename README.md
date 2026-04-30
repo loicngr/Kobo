@@ -17,8 +17,8 @@ Think of it as an apprentice's hall: you hand out missions, each apprentice sets
 - **Task & acceptance criteria tracking** — the agent reports progress through a dedicated MCP server (`kobo-tasks`) that reads and updates tasks directly from the SQLite database
 - **Documents panel** — tree view in the right drawer that surfaces every AI-generated markdown file under `docs/plans/`, `docs/superpowers/`, and `.ai/thoughts/`. Paths mentioned in chat messages are auto-detected against the catalogue and become one-click deep-links into the panel
 - **Git panel with inline diff viewer** — Monaco-powered side-by-side / inline diff of the working branch against its source, with file tree (same q-tree as Documents), inline rebase/merge conflict resolution, and a clean action bar: `Sync` split-button (pull / rebase / merge), `Push`, `Diff`, `Create PR`
-- **Notion integration** — pull workspace missions straight from Notion pages, extract markdown, and use it as the source of truth for acceptance criteria
-- **Sentry integration** — paste a Sentry issue URL to spin up a dedicated "fix workspace" with the stacktrace, tags, and offending spans written to `.ai/thoughts/SENTRY-<id>.md`; the agent is primed with a TDD fix workflow and has access to the Sentry MCP tools for deeper digging
+- **Notion integration** — pull workspace missions straight from Notion pages, extract markdown, and use it as the source of truth for acceptance criteria. Right-click a Notion-sourced workspace to jump back to its source page in one click
+- **Sentry integration** — paste a Sentry issue URL to spin up a dedicated "fix workspace" with the stacktrace, tags, and offending spans written to `.ai/thoughts/SENTRY-<id>.md`; the agent is primed with a TDD fix workflow and has access to the Sentry MCP tools for deeper digging. Right-click reopens the Sentry issue in Sentry's UI
 - **Per-workspace dev servers** — start/stop Docker or Node dev servers scoped to each branch, with log streaming
 - **Conventional-commit enforcement** — project-level git conventions are written to `.ai/.git-conventions.md` inside every workspace so Claude follows them during commits
 - **Pull request automation** — one-click `push`, `pull`, `open-pr`, and "change PR base" endpoints integrate with the GitHub CLI, using a configurable prompt template
@@ -30,7 +30,8 @@ Think of it as an apprentice's hall: you hand out missions, each apprentice sets
 - **Resizable right drawer** — drag-to-resize horizontally and vertically, with tab state and split ratio persisted to localStorage
 - **Soft interrupt** — pause an agent mid-execution (SIGINT, like pressing Escape in Claude Code) without killing the process; the agent stops the current tool and waits for the next message
 - **Archive instead of delete** — soft-remove workspaces without losing the worktree, branches, or history; unarchive restores the exact pre-archive state
-- **Auto-loop mode** — opt-in, per-workspace: when enabled, Kōbō spawns a fresh Claude session for the next pending task after every `session:ended`, walking through the task list until all are `done`. Stops automatically on error, on stall (3 consecutive sessions with no task completed), or when the user clicks Stop. A grooming step (`/kobo-prep-autoloop`) ensures tasks are atomic before the loop runs; Notion-imported workspaces with both todos and acceptance criteria are auto-unlocked
+- **Auto-loop mode** — opt-in, per-workspace: when enabled, Kōbō spawns a fresh Claude session for the next pending task after every `session:ended`, walking through the task list until all are `done`. Stops automatically on error, on stall (3 consecutive sessions with no task completed), or when the user clicks Stop. A grooming step (`/kobo-prep-autoloop`) ensures tasks are atomic before the loop runs; Notion-imported workspaces with both todos and acceptance criteria are auto-unlocked. **E2E grooming** — when a project declares an E2E framework in Settings (Cypress, Playwright, Vitest, etc.), the grooming phase injects an `[E2E] ` test sub-task between every parent task; each iteration then runs the matching E2E suite as part of its acceptance check
+- **Attach existing worktrees** — Kōbō detects orphan worktrees under `.worktrees/` (created outside Kōbō, or left over from an earlier install) and lets you attach them to a new workspace from the creation form, picking up the existing branch and folder instead of cloning a new one
 - **Quota-aware retry backoff** — when a Claude rate limit is hit mid-session, Kōbō schedules the retry at the actual reset time reported by the API (via `rate_limit.info.buckets[].resetsAt`), falling back to a 15 → 30 → 60 → 180 → 300 min ladder only when the reset info is missing or implausible
 - **Scheduled wakeups** — the `ScheduleWakeup` tool is honoured server-side: Kōbō persists the wakeup in SQLite, rehydrates on restart, and respawns the agent with `--resume` at the target time
 
@@ -99,7 +100,7 @@ npm start           # runs the compiled server
 ### Test & lint
 
 ```bash
-npm test            # backend vitest suite (740+ tests)
+npm test            # backend vitest suite (950+ tests)
 npm run test:client # client vitest suite (Pinia stores + pure utils, 85+ tests)
 npm run test:all    # backend + client suites
 npm run lint        # biome check (lint + format verification)
@@ -271,6 +272,7 @@ Kōbō reads settings from `~/.config/kobo/settings.json` (or falls back to defa
 - `prPromptTemplate` — template rendered when opening a PR via the `/open-pr` endpoint; supports `{{pr_number}}`, `{{pr_url}}`, `{{branch_name}}`, `{{diff_stats}}`, `{{commits}}`, etc.
 - `gitConventions` — markdown-formatted git conventions written to `.ai/.git-conventions.md` in every workspace so the agent follows them when committing
 - `devServer` — per-project `startCommand` / `stopCommand` for launching workspace-scoped dev servers
+- `e2e` — per-project E2E test framework (`cypress`, `playwright`, `jest`, `vitest`, `other`, or none) plus an optional skill name and prompt; consumed by the auto-loop grooming step to inject `[E2E] ` test sub-tasks alongside parent tasks
 
 ## Contributing
 

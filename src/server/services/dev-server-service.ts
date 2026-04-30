@@ -7,10 +7,6 @@ import { getWorkspace, updateDevServerStatus } from './workspace-service.js'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
-function getWorktreePath(projectPath: string, workingBranch: string): string {
-  return path.join(projectPath, '.worktrees', workingBranch)
-}
-
 /** Build a clean env for child processes, stripping Kobo-specific variables. */
 function cleanEnv(): Record<string, string | undefined> {
   const { PORT, SERVER_PORT, ...rest } = process.env
@@ -217,7 +213,7 @@ export function startDevServer(workspaceId: string): DevServerStatus {
   const instanceName = sanitizeBranchName(workspace.workingBranch)
 
   // Execute as bash script (supports multi-line scripts)
-  const worktreePath = getWorktreePath(workspace.projectPath, workspace.workingBranch)
+  const worktreePath = workspace.worktreePath
   const cwd = existsSync(worktreePath) ? worktreePath : workspace.projectPath
   const proc = spawn('bash', ['-c', settings.devServer.startCommand], {
     cwd,
@@ -292,7 +288,7 @@ export function stopDevServer(workspaceId: string): DevServerStatus {
 
   const config = resolveInstance(workspace.projectPath, workspace.workingBranch)
   const instanceName = config?.instanceName ?? sanitizeBranchName(workspace.workingBranch)
-  const worktreePath = getWorktreePath(workspace.projectPath, workspace.workingBranch)
+  const worktreePath = workspace.worktreePath
   const cwd = existsSync(worktreePath) ? worktreePath : workspace.projectPath
 
   // Kill tracked process first (covers Node servers and any spawned process)

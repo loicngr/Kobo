@@ -180,6 +180,11 @@ export default {
   'createPage.enterPath': 'Introduce la ruta del proyecto',
   'createPage.create': 'Crear',
   'createPage.skipSetupScript': 'Omitir script de setup',
+  'createPage.attachWorktreeToggle': 'Adjuntar worktree existente',
+  'createPage.attachWorktreeEnabled': 'Reutilizando worktree existente',
+  'createPage.worktreePickerLabel': 'Worktree existente',
+  'createPage.noOrphanWorktrees': 'No hay worktrees huérfanos en este proyecto',
+  'createPage.pickWorktreeRequired': 'Selecciona un worktree para adjuntar',
   'createPage.notionExtractHint': 'Las subtareas y criterios de aceptación se extraerán de la página Notion.',
   'createPage.notionImportHint':
     'Haz clic en "Importar desde Notion" para extraer automáticamente las subtareas de un ticket.',
@@ -232,6 +237,16 @@ export default {
   'settings.setupScriptPlaceholder': 'npm install',
   'settings.setupScriptHint':
     'Se ejecuta con bash en el worktree después de su creación, antes de que el agente inicie. No necesita shebang. Si falla, el workspace se establece en error. Timeout: 5 minutos.',
+  'settings.e2e.title': 'Tests E2E',
+  'settings.e2e.framework': 'Framework',
+  'settings.e2e.frameworkNone': 'Ninguno',
+  'settings.e2e.frameworkOther': 'Otro',
+  'settings.e2e.skill': 'Skill (opcional)',
+  'settings.e2e.skillPlaceholder': 'p. ej. cypress-tester',
+  'settings.e2e.prompt': 'Guía personalizada (opcional)',
+  'settings.e2e.promptPlaceholder': 'p. ej. usar el patrón page-object, apuntar a data-testid',
+  'settings.e2e.helpText':
+    'Cuando está configurado, el agente de grooming auto-loop inserta subtareas E2E para funciones UI.',
   'settings.editorCommand': 'Comando del editor',
   'settings.editorCommandPlaceholder': 'code, phpstorm, subl, vim...',
   'settings.editorCommandHint':
@@ -352,6 +367,7 @@ export default {
   'git.renameBranchSuccess': 'Rama renombrada a `{branch}`',
   'git.renameBranchFailed': 'Error al renombrar la rama',
   'git.renameBranchExists': 'La rama `{branch}` ya existe localmente o en origin',
+  'git.renameDisabledForExternal': 'El renombrado está desactivado para worktrees externos.',
   'git.diff': 'Diff',
   'git.rebase': 'Rebase',
   'git.rebaseConfirmTitle': '¿Rebase de la rama?',

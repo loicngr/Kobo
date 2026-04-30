@@ -40,6 +40,7 @@ describe('settings store', () => {
           gitConventions: '',
           setupScript: '',
           devServer: { startCommand: '', stopCommand: '' },
+          e2e: { framework: '', skill: '', prompt: '' },
         },
       ]
       expect(store.getProjectByPath('/a')?.displayName).toBe('A')
@@ -59,6 +60,7 @@ describe('settings store', () => {
           gitConventions: '',
           setupScript: '',
           devServer: { startCommand: '', stopCommand: '' },
+          e2e: { framework: '', skill: '', prompt: '' },
         },
         {
           path: '/b',
@@ -70,6 +72,7 @@ describe('settings store', () => {
           gitConventions: '',
           setupScript: '',
           devServer: { startCommand: '', stopCommand: '' },
+          e2e: { framework: '', skill: '', prompt: '' },
         },
       ]
       expect(store.projectPaths).toEqual(['/a', '/b'])

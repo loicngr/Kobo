@@ -15,6 +15,10 @@ vi.mock('../server/services/agent/orchestrator.js', () => ({
   hasController: vi.fn(() => false),
 }))
 
+vi.mock('../server/services/settings-service.js', () => ({
+  getProjectSettings: vi.fn(),
+}))
+
 let tmpDir: string
 let dbPath: string
 
@@ -542,6 +546,110 @@ describe('auto-loop-service', () => {
       } finally {
         ;(orch.hasController as ReturnType<typeof vi.fn>).mockReturnValue(false)
       }
+    })
+  })
+
+  describe('spawnNextIteration — E2E iteration prompt', () => {
+    /** Helper: read the prompt arg passed to the most recent startAgent call. */
+    async function getLastIterationPrompt(): Promise<string> {
+      const orch = await import('../server/services/agent/orchestrator.js')
+      const calls = (orch.startAgent as ReturnType<typeof vi.fn>).mock.calls
+      const last = calls[calls.length - 1] as unknown[]
+      return last[2] as string
+    }
+
+    // Earlier tests in this file install `mockImplementation(() => { throw … })`
+    // on `orch.startAgent` to simulate failures. `vi.clearAllMocks()` clears
+    // call history but NOT the implementation, so we must restore the happy
+    // default here or every E2E test would inherit the throw.
+    beforeEach(async () => {
+      const orch = await import('../server/services/agent/orchestrator.js')
+      ;(orch.startAgent as ReturnType<typeof vi.fn>).mockImplementation(() => ({
+        agentSessionId: 'mock-agent-session-id',
+      }))
+    })
+
+    it('injects the E2E block when task title starts with `[E2E] ` and framework is set', async () => {
+      const svc = await import('../server/services/auto-loop-service.js')
+      const settings = await import('../server/services/settings-service.js')
+      const { createTask } = await import('../server/services/workspace-service.js')
+
+      vi.mocked(settings.getProjectSettings).mockReturnValueOnce({
+        e2e: { framework: 'cypress', skill: 'cy', prompt: 'pop' },
+      } as never)
+      createTask(wsId, { title: '[E2E] add login regression', isAcceptanceCriterion: false, sortOrder: 0 })
+      svc._test_setAutoLoopReady(wsId, true)
+      svc.enable(wsId)
+
+      const prompt = await getLastIterationPrompt()
+      expect(prompt).toContain('This is an **E2E regression test** task.')
+      expect(prompt).toContain('Project E2E framework: cypress')
+      expect(prompt).toContain('Use the `cy` skill for this task.')
+      expect(prompt).toContain('Additional guidance: pop')
+    })
+
+    it('does NOT inject the E2E block when task is `[E2E] …` but framework is empty', async () => {
+      const svc = await import('../server/services/auto-loop-service.js')
+      const settings = await import('../server/services/settings-service.js')
+      const { createTask } = await import('../server/services/workspace-service.js')
+
+      vi.mocked(settings.getProjectSettings).mockReturnValueOnce({
+        e2e: { framework: '', skill: '', prompt: '' },
+      } as never)
+      createTask(wsId, { title: '[E2E] add login regression', isAcceptanceCriterion: false, sortOrder: 0 })
+      svc._test_setAutoLoopReady(wsId, true)
+      svc.enable(wsId)
+
+      const prompt = await getLastIterationPrompt()
+      expect(prompt).not.toContain('This is an **E2E regression test** task.')
+    })
+
+    it('does NOT inject the E2E block for a regular non-E2E task even when framework is set', async () => {
+      const svc = await import('../server/services/auto-loop-service.js')
+      const settings = await import('../server/services/settings-service.js')
+      const { createTask } = await import('../server/services/workspace-service.js')
+
+      vi.mocked(settings.getProjectSettings).mockReturnValueOnce({
+        e2e: { framework: 'cypress', skill: 'cy', prompt: 'pop' },
+      } as never)
+      createTask(wsId, { title: 'implement login API', isAcceptanceCriterion: false, sortOrder: 0 })
+      svc._test_setAutoLoopReady(wsId, true)
+      svc.enable(wsId)
+
+      const prompt = await getLastIterationPrompt()
+      expect(prompt).not.toContain('This is an **E2E regression test** task.')
+    })
+
+    it('does NOT inject the E2E block for lowercase `[e2e] …` (prefix match is case-sensitive)', async () => {
+      const svc = await import('../server/services/auto-loop-service.js')
+      const settings = await import('../server/services/settings-service.js')
+      const { createTask } = await import('../server/services/workspace-service.js')
+
+      vi.mocked(settings.getProjectSettings).mockReturnValueOnce({
+        e2e: { framework: 'cypress', skill: 'cy', prompt: 'pop' },
+      } as never)
+      createTask(wsId, { title: '[e2e] add login regression', isAcceptanceCriterion: false, sortOrder: 0 })
+      svc._test_setAutoLoopReady(wsId, true)
+      svc.enable(wsId)
+
+      const prompt = await getLastIterationPrompt()
+      expect(prompt).not.toContain('This is an **E2E regression test** task.')
+    })
+
+    it('does NOT inject the E2E block for `[E2E]add` (missing trailing space)', async () => {
+      const svc = await import('../server/services/auto-loop-service.js')
+      const settings = await import('../server/services/settings-service.js')
+      const { createTask } = await import('../server/services/workspace-service.js')
+
+      vi.mocked(settings.getProjectSettings).mockReturnValueOnce({
+        e2e: { framework: 'cypress', skill: 'cy', prompt: 'pop' },
+      } as never)
+      createTask(wsId, { title: '[E2E]add login regression', isAcceptanceCriterion: false, sortOrder: 0 })
+      svc._test_setAutoLoopReady(wsId, true)
+      svc.enable(wsId)
+
+      const prompt = await getLastIterationPrompt()
+      expect(prompt).not.toContain('This is an **E2E regression test** task.')
     })
   })
 })

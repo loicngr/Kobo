@@ -304,6 +304,8 @@ describe('workspace store', () => {
       autoLoopReady: false,
       noProgressStreak: 0,
       permissionProfile: 'bypass',
+      worktreePath: '/tmp/test/.worktrees/feature/test',
+      worktreeOwned: true,
       createdAt: '2026-01-01T00:00:00Z',
       updatedAt: '2026-01-01T00:00:00Z',
     }

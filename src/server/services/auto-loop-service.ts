@@ -1,7 +1,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { buildE2eIterationBlock } from '../../shared/auto-loop-prompts.js'
 import { getDb } from '../db/index.js'
 import * as orchestrator from './agent/orchestrator.js'
+import * as settingsService from './settings-service.js'
 import { emit, emitEphemeral } from './websocket-service.js'
 import { listTasks, type Task } from './workspace-service.js'
 
@@ -19,6 +21,7 @@ interface WorkspaceRow {
   id: string
   project_path: string
   working_branch: string
+  worktree_path: string | null
   model: string
   permission_mode: string
   reasoning_effort: string
@@ -33,7 +36,7 @@ function getRow(workspaceId: string): WorkspaceRow | null {
   const db = getDb()
   const row = db
     .prepare(
-      `SELECT id, project_path, working_branch, model, permission_mode, reasoning_effort,
+      `SELECT id, project_path, working_branch, worktree_path, model, permission_mode, reasoning_effort,
               status, auto_loop, auto_loop_ready, no_progress_streak, archived_at
        FROM workspaces WHERE id = ?`,
     )
@@ -175,6 +178,12 @@ export function rehydrate(): void {
     for (const { id } of rows) {
       try {
         if (orchestrator.hasController(id)) continue
+        // Workspaces still in grooming (ready=0) have their session killed by
+        // the server reload. Don't disable — the user can re-trigger grooming
+        // manually. Auto-disable on missing pending tasks would also fire here
+        // if the agent hadn't yet seeded any task before the reload.
+        const row = getRow(id)
+        if (row?.auto_loop_ready !== 1) continue
         if (countPendingTasks(id) === 0) {
           disable(id, 'completed')
           continue
@@ -202,7 +211,7 @@ Current pending task (highest priority, non-acceptance-criterion first):
 - Task ID: {taskId}
 - Title: {taskTitle}
 - Is acceptance criterion: {isAcceptanceCriterion}
-
+{e2eBlock}
 Your job this iteration:
 1. Read \`kobo__list_tasks\` to see all tasks and the big picture.
 2. Implement the SINGLE task above and nothing else. Do not pick a different task.
@@ -257,12 +266,21 @@ function spawnNextIteration(workspaceId: string, opts: { throwOnStartAgentError?
   }
 
   const iterationNumber = computeIterationNumber(workspaceId)
+  // E2E iteration block: only injected for tasks whose title starts with the
+  // exact `[E2E] ` prefix (case-sensitive, trailing space required) AND when
+  // the project has an E2E framework configured. Empty string otherwise so
+  // the placeholder collapses cleanly in PROMPT_TEMPLATE.
+  const projectSettings = settingsService.getProjectSettings(row.project_path)
+  const e2eSettings = projectSettings?.e2e ?? { framework: '', skill: '', prompt: '' }
+  const isE2eTask = task.title.startsWith('[E2E] ')
+  const e2eBlock = isE2eTask && e2eSettings.framework ? buildE2eIterationBlock(e2eSettings) : ''
   const prompt = PROMPT_TEMPLATE.replaceAll('{n}', String(iterationNumber))
     .replaceAll('{taskId}', task.id)
     .replaceAll('{taskTitle}', task.title)
     .replaceAll('{isAcceptanceCriterion}', String(task.isAcceptanceCriterion))
+    .replaceAll('{e2eBlock}', e2eBlock)
 
-  const worktreePath = path.join(row.project_path, '.worktrees', row.working_branch)
+  const worktreePath = row.worktree_path ?? path.join(row.project_path, '.worktrees', row.working_branch)
   // Auto-loop iterations always run in auto-accept mode. Plan mode blocks MCP
   // tools (kobo__mark_task_done, etc.) and Edit/Write/Bash — everything the
   // iteration needs — so honoring a 'plan' setting here would deadlock the loop.

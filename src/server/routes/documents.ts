@@ -67,7 +67,7 @@ app.get('/:id/documents', (c) => {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
     }
 
-    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    const worktreePath = workspace.worktreePath
     const documents: DocumentFile[] = []
 
     for (const dir of DOCUMENT_DIRS) {
@@ -113,7 +113,7 @@ app.get('/:id/document', (c) => {
       return c.json({ error: 'Only .md files can be read' }, 400)
     }
 
-    const worktreePath = path.join(workspace.projectPath, '.worktrees', workspace.workingBranch)
+    const worktreePath = workspace.worktreePath
     const absPath = path.join(worktreePath, normalized)
 
     if (!existsSync(absPath)) {

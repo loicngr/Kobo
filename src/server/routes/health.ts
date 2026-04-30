@@ -85,19 +85,20 @@ app.get('/report', (c) => {
 
   // Workspaces + worktrees on-disk check
   const workspaces = db
-    .prepare('SELECT id, name, project_path, working_branch, archived_at FROM workspaces')
+    .prepare('SELECT id, name, project_path, working_branch, worktree_path, archived_at FROM workspaces')
     .all() as Array<{
     id: string
     name: string
     project_path: string
     working_branch: string
+    worktree_path: string | null
     archived_at: string | null
   }>
 
   const worktreesMissing: WorktreeCheck[] = []
   for (const ws of workspaces) {
     if (ws.archived_at) continue
-    const wtPath = path.join(ws.project_path, '.worktrees', ws.working_branch)
+    const wtPath = ws.worktree_path ?? path.join(ws.project_path, '.worktrees', ws.working_branch)
     if (!fs.existsSync(wtPath)) {
       worktreesMissing.push({ workspaceId: ws.id, name: ws.name, path: wtPath, exists: false })
     }

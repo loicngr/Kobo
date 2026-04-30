@@ -10,6 +10,14 @@ export interface WorktreeInfo {
   head: string
 }
 
+/** A worktree that's not yet attached to any Kōbō workspace, with a server-side suggestion for sourceBranch. */
+export interface OrphanWorktreeInfo {
+  path: string
+  branch: string
+  head: string
+  suggestedSourceBranch: string
+}
+
 function git(repoPath: string, args: string[]): string {
   return execFileSync('git', args, { cwd: repoPath, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim()
 }
@@ -140,4 +148,53 @@ export function worktreeExists(projectPath: string, branchName: string): boolean
   } catch {
     return false
   }
+}
+
+function canonicalize(p: string): string {
+  try {
+    return fs.realpathSync(p)
+  } catch {
+    return p
+  }
+}
+
+function detectSourceBranch(projectPath: string, worktreePath: string, branch: string): string {
+  // 1. Branch's tracked upstream (configured locally)
+  try {
+    const upstream = git(worktreePath, ['config', '--get', `branch.${branch}.merge`])
+    if (upstream) return upstream.replace(/^refs\/heads\//, '')
+  } catch {
+    /* no upstream configured */
+  }
+  // 2. Repo's default branch (origin/HEAD)
+  try {
+    const head = git(projectPath, ['symbolic-ref', 'refs/remotes/origin/HEAD'])
+    if (head) return head.replace(/^refs\/remotes\/origin\//, '')
+  } catch {
+    /* no origin/HEAD */
+  }
+  // 3. Final fallback
+  return 'main'
+}
+
+/**
+ * List worktrees of a project that are NOT yet attached to a Kōbō workspace.
+ * The main worktree is excluded. Detached HEAD worktrees are excluded (no
+ * branch to anchor a workspace to). Both sides of the path comparison are
+ * canonicalized to defeat symlinks / trailing-slash variants.
+ */
+export function listOrphanWorktrees(projectPath: string, attachedPaths: Set<string>): OrphanWorktreeInfo[] {
+  const canonAttached = new Set(Array.from(attachedPaths).map(canonicalize))
+  const canonProject = canonicalize(projectPath)
+
+  return listWorktrees(projectPath)
+    .filter((wt) => canonicalize(wt.path) !== canonProject)
+    .filter((wt) => !!wt.branch && wt.branch !== '(detached HEAD)')
+    .filter((wt) => !canonAttached.has(canonicalize(wt.path)))
+    .map((wt) => ({
+      path: wt.path,
+      branch: wt.branch,
+      head: wt.head,
+      suggestedSourceBranch: detectSourceBranch(projectPath, wt.path, wt.branch),
+    }))
 }

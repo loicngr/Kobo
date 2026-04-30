@@ -37,7 +37,7 @@ import { startDevServer, stopDevServer } from './services/dev-server-service.js'
 import { startPrWatcher, stopPrWatcher } from './services/pr-watcher-service.js'
 import { createTerminal, destroyAllTerminals, getTerminal } from './services/terminal-service.js'
 import * as wakeupService from './services/wakeup-service.js'
-import { emit, handleConnection, setMessageHandler } from './services/websocket-service.js'
+import { emit, emitEphemeral, handleConnection, setMessageHandler } from './services/websocket-service.js'
 import { getActiveSession, getWorkspace, updateWorkspaceStatus } from './services/workspace-service.js'
 import { getClientSpaPath, getDbPath, getKoboHome, getPackageVersion } from './utils/paths.js'
 import { initProcessCleanup, killAll as killAllTrackedProcesses } from './utils/process-tracker.js'
@@ -241,7 +241,7 @@ terminalWss.on('connection', (ws: WebSocket, workspaceId: string) => {
           ws.send(JSON.stringify({ type: 'error', message: 'Workspace is archived' }))
           return
         }
-        const cwd = `${workspace.projectPath}/.worktrees/${workspace.workingBranch}`
+        const cwd = workspace.worktreePath
         try {
           currentPty = createTerminal(workspaceId, cwd)
         } catch (err) {
@@ -282,6 +282,20 @@ setMessageHandler((type, payload) => {
   } | null
 
   if (type === 'chat:message' && p?.workspaceId && p?.content) {
+    // Auto-loop owns the agent's turns — a stray user message would land in
+    // the middle of an iteration (or in a freshly spawned next one) and break
+    // the deterministic loop contract. Reject server-side so direct WS clients
+    // can't bypass the frontend's input lock. Grooming phase (ready=0) is
+    // skipped — the user must stay free to answer the agent's questions.
+    const autoLoopStatus = autoLoopService.getStatus(p.workspaceId)
+    if (autoLoopStatus.auto_loop && autoLoopStatus.auto_loop_ready) {
+      emitEphemeral(p.workspaceId, 'chat:rejected', {
+        reason: 'auto-loop-active',
+        message: 'Auto-loop is running — disable it before sending a message',
+      })
+      return
+    }
+
     // Prefer the session explicitly selected by the client (sessionId hint),
     // falling back to the running/most-recent non-idle session so idle sessions
     // never steal the tagging.
@@ -306,7 +320,7 @@ setMessageHandler((type, payload) => {
       try {
         const workspace = getWorkspace(p.workspaceId)
         if (workspace) {
-          const worktreePath = `${workspace.projectPath}/.worktrees/${workspace.workingBranch}`
+          const worktreePath = workspace.worktreePath
           // Plan mode blocks MCP tools — when the caller knows the message
           // requires them (e.g. grooming), it sets the override to bypass the
           // workspace default for this spawn only.
@@ -336,7 +350,7 @@ setMessageHandler((type, payload) => {
         console.error(`[ws] workspace:start — workspace '${p.workspaceId}' not found`)
         return
       }
-      const worktreePath = `${workspace.projectPath}/.worktrees/${workspace.workingBranch}`
+      const worktreePath = workspace.worktreePath
       const prompt = p.prompt ?? 'Continue the previous task where you left off.'
       startAgent(
         p.workspaceId,

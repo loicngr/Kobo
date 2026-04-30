@@ -51,7 +51,7 @@ app.post('/:id/images', async (c) => {
       return c.json({ error: `File too large (${(buffer.length / 1024 / 1024).toFixed(1)} MB). Max: 10 MB` }, 400)
     }
 
-    const worktreePath = `${workspace.projectPath}/.worktrees/${workspace.workingBranch}`
+    const worktreePath = workspace.worktreePath
     const result = await imageService.saveImage(worktreePath, buffer, file.name)
 
     return c.json({ uid: result.uid, path: result.relativePath }, 201)
@@ -87,7 +87,7 @@ app.get('/:id/images/file', async (c) => {
       return c.json({ error: 'Invalid or disallowed image path' }, 400)
     }
 
-    const worktreePath = `${workspace.projectPath}/.worktrees/${workspace.workingBranch}`
+    const worktreePath = workspace.worktreePath
     const imagesRoot = path.resolve(worktreePath, '.ai/images')
     const fullPath = path.resolve(worktreePath, requested)
     // Containment check: fullPath must be a descendant of imagesRoot. `+ path.sep`
@@ -123,7 +123,7 @@ app.delete('/:id/images/:uid', async (c) => {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
     }
 
-    const worktreePath = `${workspace.projectPath}/.worktrees/${workspace.workingBranch}`
+    const worktreePath = workspace.worktreePath
     await imageService.deleteImage(worktreePath, uid)
 
     return c.body(null, 204)

@@ -255,6 +255,64 @@ function toggleSentry() {
   if (!useSentry.value) sentryUrl.value = ''
 }
 
+// Existing-worktree reuse: instead of creating a new worktree under
+// `<projectPath>/.worktrees/<workingBranch>`, the user can attach an existing
+// orphan worktree (no Kōbō workspace currently owns it). Backend forces
+// `worktreeOwned=false` + `skipSetupScript=true` when this is on.
+const useExistingWorktree = ref(false)
+const selectedWorktreePath = ref<string | null>(null)
+const orphanWorktrees = ref<Array<{ path: string; branch: string; head: string; suggestedSourceBranch: string }>>([])
+const loadingOrphanWorktrees = ref(false)
+
+async function fetchOrphans() {
+  if (!projectPath.value.trim()) {
+    orphanWorktrees.value = []
+    return
+  }
+  loadingOrphanWorktrees.value = true
+  try {
+    orphanWorktrees.value = await store.fetchOrphanWorktrees(projectPath.value.trim())
+  } catch {
+    orphanWorktrees.value = []
+  } finally {
+    loadingOrphanWorktrees.value = false
+  }
+}
+
+function toggleExistingWorktree() {
+  useExistingWorktree.value = !useExistingWorktree.value
+  if (useExistingWorktree.value) {
+    // Reuse mode is mutually exclusive with Notion / Sentry imports — wipe
+    // any in-flight state so the user can't submit a stale URL alongside.
+    useNotion.value = false
+    notionUrl.value = ''
+    useSentry.value = false
+    sentryUrl.value = ''
+    // Reused worktree is presumed already set up — re-running the setup
+    // script could destroy state. User can still un-check manually.
+    skipSetupScript.value = true
+    void fetchOrphans()
+  } else {
+    selectedWorktreePath.value = null
+  }
+}
+
+watch(projectPath, () => {
+  selectedWorktreePath.value = null
+  if (useExistingWorktree.value) {
+    void fetchOrphans()
+  }
+})
+
+watch(selectedWorktreePath, (newPath) => {
+  if (!newPath) return
+  const wt = orphanWorktrees.value.find((w) => w.path === newPath)
+  if (wt) branch.value = wt.suggestedSourceBranch
+  // A reused worktree is presumed already set up — re-running the setup
+  // script could destroy state (db reset, node_modules wipe, etc.).
+  skipSetupScript.value = true
+})
+
 // Fetch branches when project path changes
 async function fetchBranches(path: string) {
   if (!path.trim()) {
@@ -412,6 +470,11 @@ async function handleCreate() {
     return
   }
 
+  if (useExistingWorktree.value && !selectedWorktreePath.value) {
+    $q.notify({ type: 'negative', message: t('createPage.pickWorktreeRequired'), position: 'top' })
+    return
+  }
+
   submitting.value = true
   try {
     const name = getFinalName()
@@ -435,7 +498,12 @@ async function handleCreate() {
       name,
       projectPath: projectPath.value.trim(),
       sourceBranch: branch.value as string,
-      workingBranch,
+      // Reuse-an-existing-worktree branch: skip generating a workingBranch
+      // (backend ignores it when worktreePath is set) and force skipSetupScript.
+      // Standard branch: keep the generated workingBranch as before.
+      ...(useExistingWorktree.value && selectedWorktreePath.value
+        ? { worktreePath: selectedWorktreePath.value, skipSetupScript: true }
+        : { workingBranch }),
       engine: selectedEngineId.value,
       model: model.value,
       reasoningEffort: reasoningEffort.value,
@@ -445,7 +513,7 @@ async function handleCreate() {
       ...(showManualSections.value && manualCriteria.value.length > 0
         ? { acceptanceCriteria: manualCriteria.value }
         : {}),
-      ...(skipSetupScript.value ? { skipSetupScript: true } : {}),
+      ...(skipSetupScript.value && !useExistingWorktree.value ? { skipSetupScript: true } : {}),
       ...(description.value.trim() ? { description: description.value.trim() } : {}),
       ...(autoLoop.value ? { autoLoop: true } : {}),
       // Auto-loop needs MCP tools (kobo__list_tasks, kobo__create_task, etc.) for
@@ -498,6 +566,7 @@ async function handleCreate() {
             size="sm"
             :color="useNotion ? 'green-4' : 'grey-5'"
             class="notion-toggle-btn text-caption rounded-borders"
+            :disable="useExistingWorktree"
             @click="toggleNotion"
           >
             <q-icon name="description" size="14px" class="q-mr-xs" />
@@ -510,6 +579,7 @@ async function handleCreate() {
             size="sm"
             :color="useSentry ? 'red-4' : 'grey-5'"
             class="sentry-toggle-btn text-caption rounded-borders q-ml-sm"
+            :disable="useExistingWorktree"
             @click="toggleSentry"
           >
             <q-icon name="bug_report" size="14px" class="q-mr-xs" />
@@ -777,238 +847,327 @@ async function handleCreate() {
         <!-- Bottom bar: agent config (row 1) + git config (row 2) -->
         <div class="card-bottom-bar">
 
-        <!-- Row 1: agent configuration (engine, model, reasoning, permission, setup-toggle) -->
-        <div class="bottom-row bottom-row-agent row items-center q-gutter-xs q-px-sm q-py-xs">
-          <!-- Engine selector — dynamically populated from /api/engines -->
-          <q-select
-            v-if="engineSelectOptions.length > 0"
-            v-model="selectedEngineId"
-            :options="engineSelectOptions"
-            dense
-            borderless
-            class="bottom-select rounded-borders"
-            hide-dropdown-icon
-            emit-value
-            map-options
-            option-value="value"
-            option-label="label"
+        <!-- Row 1: agent configuration (engine, model, reasoning, permission) -->
+        <div class="row q-col-gutter-xs q-px-xs">
+          <div
+              v-if="engineSelectOptions.length > 0"
+              class="col-12 col-sm-6 col-md-3"
           >
-            <template #selected>
+            <!-- Engine selector — dynamically populated from /api/engines -->
+            <q-select
+                v-model="selectedEngineId"
+                :options="engineSelectOptions"
+                dense
+                borderless
+                class="bottom-select rounded-borders"
+                hide-dropdown-icon
+                emit-value
+                map-options
+                option-value="value"
+                option-label="label"
+            >
+              <template #selected>
               <span class="bottom-select-label row items-center no-wrap">
                 <q-icon name="hub" size="12px" color="grey-5" class="q-mr-xs" />
                 {{ engineSelectOptions.find((e) => e.value === selectedEngineId)?.label ?? selectedEngineId }}
                 <q-icon name="expand_more" size="12px" color="grey-5" />
               </span>
-            </template>
-            <q-tooltip>{{ $t('engine.select') }}</q-tooltip>
-          </q-select>
+              </template>
+              <q-tooltip>{{ $t('engine.select') }}</q-tooltip>
+            </q-select>
+          </div>
 
-          <!-- Model selector -->
-          <q-select
-            v-model="model"
-            :options="modelOptions"
-            dense
-            borderless
-            class="bottom-select rounded-borders model-select"
-            hide-dropdown-icon
-            emit-value
-            map-options
-            option-value="value"
-            option-label="label"
-          >
-            <template #selected>
+          <div class="col-12 col-sm-6 col-md-3">
+            <!-- Model selector -->
+            <q-select
+                v-model="model"
+                :options="modelOptions"
+                dense
+                borderless
+                class="bottom-select rounded-borders model-select"
+                hide-dropdown-icon
+                emit-value
+                map-options
+                option-value="value"
+                option-label="label"
+            >
+              <template #selected>
               <span class="bottom-select-label row items-center no-wrap">
                 {{ modelOptions.find(m => m.value === model)?.label ?? model }}
                 <q-icon name="expand_more" size="12px" color="grey-5" />
               </span>
-            </template>
-            <template #option="{ opt, itemProps }">
-              <q-item v-bind="itemProps" class="model-option">
-                <q-item-section>
-                  <q-item-label class="text-white">{{ opt.label }}</q-item-label>
-                  <q-item-label caption class="text-grey-5">{{ opt.description }}</q-item-label>
-                </q-item-section>
-              </q-item>
-            </template>
-          </q-select>
+              </template>
+              <template #option="{ opt, itemProps }">
+                <q-item v-bind="itemProps" class="model-option">
+                  <q-item-section>
+                    <q-item-label class="text-white">{{ opt.label }}</q-item-label>
+                    <q-item-label caption class="text-grey-5">{{ opt.description }}</q-item-label>
+                  </q-item-section>
+                </q-item>
+              </template>
+            </q-select>
+          </div>
 
-          <!-- Reasoning effort selector -->
-          <q-select
-            v-model="reasoningEffort"
-            :options="reasoningOptions"
-            dense
-            borderless
-            class="bottom-select rounded-borders"
-            hide-dropdown-icon
-            emit-value
-            map-options
-            option-value="value"
-            option-label="label"
-          >
-            <template #selected>
+          <div class="col-12 col-sm-6 col-md-3">
+            <!-- Reasoning effort selector -->
+            <q-select
+                v-model="reasoningEffort"
+                :options="reasoningOptions"
+                dense
+                borderless
+                class="bottom-select rounded-borders"
+                hide-dropdown-icon
+                emit-value
+                map-options
+                option-value="value"
+                option-label="label"
+            >
+              <template #selected>
               <span class="bottom-select-label row items-center no-wrap">
                 <q-icon name="psychology" size="12px" color="grey-5" class="q-mr-xs" />
                 {{ reasoningOptions.find(r => r.value === reasoningEffort)?.label ?? reasoningEffort }}
                 <q-icon name="expand_more" size="12px" color="grey-5" />
               </span>
-            </template>
-            <template #option="{ opt, itemProps }">
-              <q-item v-bind="itemProps">
-                <q-item-section>
-                  <q-item-label class="text-white">{{ opt.label }}</q-item-label>
-                  <q-item-label caption class="text-grey-5">{{ opt.description }}</q-item-label>
-                </q-item-section>
-              </q-item>
-            </template>
-          </q-select>
+              </template>
+              <template #option="{ opt, itemProps }">
+                <q-item v-bind="itemProps">
+                  <q-item-section>
+                    <q-item-label class="text-white">{{ opt.label }}</q-item-label>
+                    <q-item-label caption class="text-grey-5">{{ opt.description }}</q-item-label>
+                  </q-item-section>
+                </q-item>
+              </template>
+            </q-select>
+          </div>
 
-          <!-- Permission mode selector — options come from the selected
+          <div class="col-12 col-sm-6 col-md-3">
+            <!-- Permission mode selector — options come from the selected
                engine's capabilities; labels resolve to i18n keys.
                Disabled when auto-loop is on: auto-loop needs MCP + edits, which
                plan mode blocks, so the permission is locked to auto-accept. -->
-          <q-select
-            v-model="permissionMode"
-            :options="enginePermissionOptions"
-            :disable="autoLoop"
-            dense
-            borderless
-            class="bottom-select rounded-borders"
-            hide-dropdown-icon
-            emit-value
-            map-options
-            option-value="value"
-            option-label="label"
-          >
-            <template #selected>
+            <q-select
+                v-model="permissionMode"
+                :options="enginePermissionOptions"
+                :disable="autoLoop"
+                dense
+                borderless
+                class="bottom-select rounded-borders"
+                hide-dropdown-icon
+                emit-value
+                map-options
+                option-value="value"
+                option-label="label"
+            >
+              <template #selected>
               <span class="bottom-select-label row items-center no-wrap">
                 <q-icon :name="autoLoop ? 'flash_on' : permissionMode === 'plan' ? 'visibility' : 'flash_on'" size="12px" color="amber-6" class="q-mr-xs" />
                 {{ autoLoop ? (enginePermissionOptions.find((p) => p.value === 'auto-accept')?.label ?? 'auto-accept') : (enginePermissionOptions.find((p) => p.value === permissionMode)?.label ?? permissionMode) }}
                 <q-icon v-if="!autoLoop" name="expand_more" size="12px" color="grey-5" />
               </span>
-            </template>
-            <q-tooltip>{{ autoLoop ? $t('createPage.permissionLockedByAutoLoop') : $t('engine.permission') }}</q-tooltip>
-          </q-select>
+              </template>
+              <q-tooltip>{{ autoLoop ? $t('createPage.permissionLockedByAutoLoop') : $t('engine.permission') }}</q-tooltip>
+            </q-select>
+          </div>
+        </div>
 
-          <q-space />
-
-          <div class="row no-wrap items-center q-gutter-xs">
+        <!-- Row 1b: action toggles (auto-loop, skip-setup, attach-worktree) -->
+        <div class="row q-col-gutter-xs q-pa-xs col-12  items-center justify-center">
+          <div class="col-12 col-md-auto">
             <!-- Auto-loop toggle -->
             <q-btn
-              flat
-              dense
-              size="sm"
-              no-caps
-              :icon="autoLoop ? 'autorenew' : 'sync_disabled'"
-              :color="autoLoop ? 'amber-4' : 'grey-5'"
-              :label="$t('autoLoop.startInMode')"
-              class="skip-setup-btn"
-              @click="autoLoop = !autoLoop"
+                flat
+                dense
+                size="sm"
+                no-caps
+                :icon="autoLoop ? 'autorenew' : 'sync_disabled'"
+                :color="autoLoop ? 'amber-4' : 'grey-5'"
+                :label="$t('autoLoop.startInMode')"
+                class="skip-setup-btn"
+                @click="autoLoop = !autoLoop"
             >
               <q-tooltip>{{ $t('autoLoop.startInMode') }}</q-tooltip>
             </q-btn>
+          </div>
 
+          <div class="col-12 col-md-auto">
             <!-- Skip-setup toggle -->
             <q-btn
-              flat
-              dense
-              size="sm"
-              no-caps
-              :icon="skipSetupScript ? 'play_disabled' : 'play_circle'"
-              :color="skipSetupScript ? 'orange-4' : 'grey-5'"
-              :label="$t('createPage.skipSetupScript')"
-              class="skip-setup-btn"
-              @click="skipSetupScript = !skipSetupScript"
+                flat
+                dense
+                size="sm"
+                no-caps
+                :icon="skipSetupScript ? 'play_disabled' : 'play_circle'"
+                :color="skipSetupScript ? 'orange-4' : 'grey-5'"
+                :label="$t('createPage.skipSetupScript')"
+                class="skip-setup-btn"
+                @click="skipSetupScript = !skipSetupScript"
             >
               <q-tooltip>{{ $t('createPage.skipSetupScript') }}</q-tooltip>
             </q-btn>
           </div>
+
+          <div class="col-12 col-md-auto">
+            <!-- Attach existing worktree toggle -->
+            <q-btn
+                flat
+                dense
+                size="sm"
+                no-caps
+                icon="folder_open"
+                :color="useExistingWorktree ? 'cyan-4' : 'grey-5'"
+                :label="useExistingWorktree ? $t('createPage.attachWorktreeEnabled') : $t('createPage.attachWorktreeToggle')"
+                class="skip-setup-btn"
+                @click="toggleExistingWorktree"
+            />
+          </div>
         </div>
 
         <!-- Row 2: git configuration (repo path, branch type, source branch) -->
-        <div class="bottom-row bottom-row-git row items-center q-gutter-xs q-px-sm q-py-xs">
-          <!-- Repo path input with suggestions -->
-          <q-select
-            v-model="projectPath"
-            :options="pathFilterOptions"
-            dense
-            borderless
-            use-input
-            fill-input
-            hide-selected
-            input-debounce="0"
-            new-value-mode="add"
-            class="bottom-select rounded-borders repo-select"
-            hide-dropdown-icon
-            :input-class="!projectPath ? 'repo-input-empty' : ''"
-            :placeholder="$t('createPage.projectPath')"
-            :behavior="settingsStore.projectPaths.length > 0 ? 'menu' : 'dialog'"
-            @filter="filterProjectPaths"
-            @input-value="(val: string) => { projectPath = val }"
-          >
-            <template #prepend>
-              <q-icon name="folder" size="14px" color="grey-5" />
-            </template>
-            <template #no-option>
-              <q-item>
-                <q-item-section class="text-grey-6 text-caption">
-                  {{ $t('createPage.enterPath') }}
-                </q-item-section>
-              </q-item>
-            </template>
-          </q-select>
+        <div class="row q-col-gutter-xs q-px-xs bottom-row-git">
+          <div class="col-12 col-md-4">
+            <!-- Repo path input with suggestions -->
+            <q-select
+                v-model="projectPath"
+                :options="pathFilterOptions"
+                dense
+                borderless
+                use-input
+                fill-input
+                hide-selected
+                input-debounce="0"
+                new-value-mode="add"
+                class="bottom-select rounded-borders repo-select"
+                hide-dropdown-icon
+                :input-class="!projectPath ? 'repo-input-empty' : ''"
+                :placeholder="$t('createPage.projectPath')"
+                :behavior="settingsStore.projectPaths.length > 0 ? 'menu' : 'dialog'"
+                @filter="filterProjectPaths"
+                @input-value="(val: string) => { projectPath = val }"
+            >
+              <template #prepend>
+                <q-icon name="folder" size="14px" color="grey-5" />
+              </template>
+              <template #no-option>
+                <q-item>
+                  <q-item-section class="text-grey-6 text-caption">
+                    {{ $t('createPage.enterPath') }}
+                  </q-item-section>
+                </q-item>
+              </template>
+            </q-select>
+          </div>
 
-          <!-- Branch type selector (feature / fix / hotfix / …) -->
-          <q-select
-            v-model="branchType"
-            :options="branchTypeOptions"
-            emit-value
-            map-options
-            dense
-            borderless
-            class="bottom-select rounded-borders branch-type-select"
-            hide-dropdown-icon
+          <div
+              v-if="!useExistingWorktree"
+              class="col-12 col-md-4"
           >
-            <template #selected>
+            <!-- Branch type selector (feature / fix / hotfix / …) -->
+            <q-select
+                v-model="branchType"
+                :options="branchTypeOptions"
+                emit-value
+                map-options
+                dense
+                borderless
+                class="bottom-select rounded-borders branch-type-select"
+                hide-dropdown-icon
+            >
+              <template #selected>
               <span class="bottom-select-label row items-center no-wrap">
                 <q-icon name="account_tree" size="12px" color="grey-5" class="q-mr-xs" />
                 {{ branchType }}/
                 <q-icon name="expand_more" size="12px" color="grey-5" />
               </span>
-            </template>
-            <q-tooltip>{{ $t('createPage.branchType') }}</q-tooltip>
-          </q-select>
+              </template>
+              <q-tooltip>{{ $t('createPage.branchType') }}</q-tooltip>
+            </q-select>
+          </div>
 
-          <!-- Branch selector (source branch) -->
-          <q-select
-            v-model="branch"
-            :options="branchFilterOptions"
-            dense
-            borderless
-            class="bottom-select rounded-borders branch-select"
-            hide-dropdown-icon
-            use-input
-            input-debounce="0"
-            :loading="loadingBranches"
-            :disable="!projectPath.trim() || loadingBranches"
-            @filter="filterBranches"
+          <div
+              v-if="useExistingWorktree"
+              class="col-12 col-md-4"
           >
-            <template #selected>
+            <!-- Existing-worktree picker (only when reuse toggle is on).
+               Sits before the source-branch picker; selecting a worktree
+               auto-fills `branch` with its `suggestedSourceBranch`, but the
+               user can still override that via the branch picker below. -->
+            <q-select
+                v-model="selectedWorktreePath"
+                :options="orphanWorktrees"
+                option-label="branch"
+                option-value="path"
+                emit-value
+                map-options
+                use-input
+                dense
+                borderless
+                class="bottom-select rounded-borders worktree-select"
+                hide-dropdown-icon
+                :loading="loadingOrphanWorktrees"
+                :disable="!projectPath.trim() || loadingOrphanWorktrees"
+            >
+              <template #selected>
+              <span class="bottom-select-label row items-center no-wrap">
+                <q-icon name="folder_open" size="12px" color="cyan-5" class="q-mr-xs" />
+                {{
+                  selectedWorktreePath
+                      ? orphanWorktrees.find((w) => w.path === selectedWorktreePath)?.branch ?? selectedWorktreePath
+                      : $t('createPage.worktreePickerLabel')
+                }}
+                <q-icon name="expand_more" size="12px" color="grey-5" />
+              </span>
+              </template>
+              <template #option="scope">
+                <q-item v-bind="scope.itemProps">
+                  <q-item-section>
+                    <q-item-label>{{ scope.opt.branch }}</q-item-label>
+                    <q-item-label caption>{{ scope.opt.path }}</q-item-label>
+                  </q-item-section>
+                </q-item>
+              </template>
+              <template #no-option>
+                <q-item>
+                  <q-item-section class="text-grey-6 text-caption">
+                    {{ projectPath.trim() ? $t('createPage.noOrphanWorktrees') : $t('createPage.enterPath') }}
+                  </q-item-section>
+                </q-item>
+              </template>
+            </q-select>
+          </div>
+
+          <div class="col-12 col-md-4">
+            <!-- Branch selector (source branch) -->
+            <q-select
+                v-model="branch"
+                :options="branchFilterOptions"
+                dense
+                borderless
+                class="bottom-select rounded-borders branch-select"
+                hide-dropdown-icon
+                use-input
+                input-debounce="0"
+                :loading="loadingBranches"
+                :disable="!projectPath.trim() || loadingBranches"
+                @filter="filterBranches"
+            >
+              <template #selected>
               <span class="bottom-select-label row items-center no-wrap">
                 <q-icon name="call_split" size="12px" color="grey-5" class="q-mr-xs" />
                 {{ branch ?? $t('createPage.branch') }}
                 <q-icon name="expand_more" size="12px" color="grey-5" />
               </span>
-            </template>
-            <template #no-option>
-              <q-item>
-                <q-item-section class="text-grey-6 text-caption">
-                  {{ projectPath.trim() ? $t('createPage.noBranches') : $t('createPage.enterPath') }}
-                </q-item-section>
-              </q-item>
-            </template>
-          </q-select>
+              </template>
+              <template #no-option>
+                <q-item>
+                  <q-item-section class="text-grey-6 text-caption">
+                    {{ projectPath.trim() ? $t('createPage.noBranches') : $t('createPage.enterPath') }}
+                  </q-item-section>
+                </q-item>
+              </template>
+            </q-select>
+          </div>
         </div>
-        </div>
+      </div>
 
         <!-- Create button (centered, full-width row below the bottom bar) -->
         <div class="row justify-center q-px-sm q-py-sm">
@@ -1018,6 +1177,7 @@ async function handleCreate() {
             unelevated
             class="create-btn text-weight-bold rounded-borders"
             :loading="submitting"
+            :disable="submitting || (useExistingWorktree && !selectedWorktreePath)"
             @click="handleCreate"
           />
         </div>
@@ -1302,20 +1462,6 @@ async function handleCreate() {
   background: #1e1e3a;
 }
 
-.bottom-row {
-  min-height: 40px;
-  flex-wrap: wrap;
-}
-
-.bottom-row-agent {
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
-}
-
-.bottom-row-agent + .bottom-row-git {
-  /* Slight contrast so the two concerns read as separate groups */
-  background: rgba(0, 0, 0, 0.15);
-}
-
 .skip-setup-btn {
   font-size: 11px;
   padding: 2px 10px;
@@ -1328,10 +1474,16 @@ async function handleCreate() {
   font-size: 14px;
 }
 
-.bottom-row-git .bottom-select.repo-select {
-  flex: 1 1 280px;
-  min-width: 220px;
+// Width split is handled by Quasar's grid (col-12 / col-md-4 on each
+// selector). Just truncate long labels instead of wrapping them.
+.bottom-row-git {
+  .bottom-select-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 }
+
 .bottom-row-git .bottom-select.repo-select :deep(input) {
   font-size: 11px;
   color: #bbb;
@@ -1341,15 +1493,11 @@ async function handleCreate() {
   color: #666;
   font-style: italic;
 }
-.bottom-row-git .bottom-select.branch-type-select,
-.bottom-row-git .bottom-select.branch-select {
-  flex: 0 0 auto;
-}
 
 .bottom-select {
   background: #333;
   padding: 0 6px;
-  min-width: 60px;
+  //min-width: 60px;
   height: 28px;
 
   :deep(.q-field__control) {

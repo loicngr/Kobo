@@ -850,7 +850,7 @@ function handleQuota(workspaceId: string, _agentSessionId?: string): void {
         if (freshWs.autoLoop) {
           autoLoopService.onQuotaBackoffExpired(workspaceId)
         } else {
-          const freshWorkingDir = `${freshWs.projectPath}/.worktrees/${freshWs.workingBranch}`
+          const freshWorkingDir = freshWs.worktreePath
           startAgent(workspaceId, freshWorkingDir, 'Continue the previous task where you left off.', undefined, true)
         }
       } catch (err) {

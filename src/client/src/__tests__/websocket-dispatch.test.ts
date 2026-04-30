@@ -48,6 +48,8 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
         autoLoopReady: true,
         noProgressStreak: 0,
         permissionProfile: 'bypass',
+        worktreePath: '/tmp/project/.worktrees/feature/quota',
+        worktreeOwned: true,
         createdAt: '2026-01-01T00:00:00Z',
         updatedAt: '2026-01-01T00:00:00Z',
       },

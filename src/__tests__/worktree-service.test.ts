@@ -2,8 +2,14 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { createWorktree, listWorktrees, removeWorktree, worktreeExists } from '../server/services/worktree-service.js'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import {
+  createWorktree,
+  listOrphanWorktrees,
+  listWorktrees,
+  removeWorktree,
+  worktreeExists,
+} from '../server/services/worktree-service.js'
 
 let repoDir: string
 let bareDir: string
@@ -145,5 +151,78 @@ describe('removeWorktree(projectPath, worktreePath)', () => {
     const worktrees = listWorktrees(repoDir)
     const found = worktrees.some((wt) => wt.branch === branchName)
     expect(found).toBe(false)
+  })
+})
+
+describe('listOrphanWorktrees(projectPath, attachedPaths)', () => {
+  let tmpDir: string
+  let projectPath: string
+
+  function git(cwd: string, args: string[]): string {
+    return execFileSync('git', args, { cwd, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim()
+  }
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'wt-svc-orphan-'))
+    projectPath = path.join(tmpDir, 'repo')
+    fs.mkdirSync(projectPath, { recursive: true })
+    git(projectPath, ['init', '-b', 'main'])
+    git(projectPath, ['config', 'user.email', 'test@kobo.local'])
+    git(projectPath, ['config', 'user.name', 'Test'])
+    fs.writeFileSync(path.join(projectPath, 'README.md'), '# test\n')
+    git(projectPath, ['add', '.'])
+    git(projectPath, ['commit', '-m', 'init'])
+  })
+
+  afterEach(() => {
+    if (tmpDir && fs.existsSync(tmpDir)) {
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  it('returns the worktrees of a project minus the main worktree and the attached ones', () => {
+    const wt1 = path.join(tmpDir, 'wt1')
+    const wt2 = path.join(tmpDir, 'wt2')
+    git(projectPath, ['worktree', 'add', '-b', 'feature/foo', wt1])
+    git(projectPath, ['worktree', 'add', '-b', 'feature/bar', wt2])
+
+    const attached = new Set([wt1])
+    const orphans = listOrphanWorktrees(projectPath, attached)
+
+    expect(orphans).toHaveLength(1)
+    expect(orphans[0].path).toBe(wt2)
+    expect(orphans[0].branch).toBe('feature/bar')
+    expect(orphans[0].head).toBeTruthy()
+    expect(orphans[0].suggestedSourceBranch).toBe('main') // origin/HEAD fallback
+  })
+
+  it('excludes the main worktree even when no attached paths are given', () => {
+    const wt1 = path.join(tmpDir, 'wt1')
+    git(projectPath, ['worktree', 'add', '-b', 'feature/foo', wt1])
+
+    const orphans = listOrphanWorktrees(projectPath, new Set())
+    expect(orphans).toHaveLength(1)
+    expect(orphans[0].path).toBe(wt1)
+  })
+
+  it('excludes detached HEAD worktrees', () => {
+    const wt1 = path.join(tmpDir, 'wt1')
+    git(projectPath, ['worktree', 'add', '--detach', wt1])
+
+    const orphans = listOrphanWorktrees(projectPath, new Set())
+    expect(orphans).toHaveLength(0)
+  })
+
+  it('canonicalizes both sides of the attached comparison via realpathSync', () => {
+    const wt1 = path.join(tmpDir, 'wt1')
+    git(projectPath, ['worktree', 'add', '-b', 'feature/foo', wt1])
+
+    const symlink = path.join(tmpDir, 'wt1-symlink')
+    fs.symlinkSync(wt1, symlink)
+
+    // Asymmetric paths between attached set (symlink) and listWorktrees output
+    // (real path) — canonicalization on both sides must collapse them.
+    const orphans = listOrphanWorktrees(projectPath, new Set([symlink]))
+    expect(orphans).toHaveLength(0)
   })
 })

@@ -180,6 +180,11 @@ export default {
   'createPage.enterPath': 'Projektpfad eingeben',
   'createPage.create': 'Erstellen',
   'createPage.skipSetupScript': 'Setup-Skript überspringen',
+  'createPage.attachWorktreeToggle': 'Bestehenden Worktree anhängen',
+  'createPage.attachWorktreeEnabled': 'Bestehenden Worktree wiederverwenden',
+  'createPage.worktreePickerLabel': 'Bestehender Worktree',
+  'createPage.noOrphanWorktrees': 'Kein verwaister Worktree in diesem Projekt',
+  'createPage.pickWorktreeRequired': 'Bitte einen Worktree zum Anhängen auswählen',
   'createPage.notionExtractHint': 'Unteraufgaben und Akzeptanzkriterien werden aus der Notion-Seite extrahiert.',
   'createPage.notionImportHint':
     'Klicken Sie auf „Aus Notion importieren", um Unteraufgaben automatisch aus einem Ticket zu extrahieren.',
@@ -232,6 +237,16 @@ export default {
   'settings.setupScriptPlaceholder': 'npm install',
   'settings.setupScriptHint':
     'Wird mit bash im Worktree nach der Erstellung ausgeführt, bevor der Agent startet. Kein Shebang erforderlich. Bei Fehler wird der Workspace auf Fehler gesetzt. Timeout: 5 Minuten.',
+  'settings.e2e.title': 'E2E-Tests',
+  'settings.e2e.framework': 'Framework',
+  'settings.e2e.frameworkNone': 'Keiner',
+  'settings.e2e.frameworkOther': 'Anderer',
+  'settings.e2e.skill': 'Skill (optional)',
+  'settings.e2e.skillPlaceholder': 'z.B. cypress-tester',
+  'settings.e2e.prompt': 'Eigene Anleitung (optional)',
+  'settings.e2e.promptPlaceholder': 'z.B. Page-Object-Pattern, data-testid-Attribute verwenden',
+  'settings.e2e.helpText':
+    'Wenn konfiguriert, fügt der Auto-Loop-Grooming-Agent E2E-Unteraufgaben für UI-Funktionen ein.',
   'settings.editorCommand': 'Editor-Befehl',
   'settings.editorCommandPlaceholder': 'code, phpstorm, subl, vim...',
   'settings.editorCommandHint':
@@ -352,6 +367,7 @@ export default {
   'git.renameBranchSuccess': 'Branch umbenannt in `{branch}`',
   'git.renameBranchFailed': 'Branch umbenennen fehlgeschlagen',
   'git.renameBranchExists': 'Branch `{branch}` existiert bereits lokal oder auf origin',
+  'git.renameDisabledForExternal': 'Umbenennen ist für angehängte externe Worktrees deaktiviert.',
   'git.diff': 'Diff',
   'git.rebase': 'Rebase',
   'git.rebaseConfirmTitle': 'Branch rebasen?',

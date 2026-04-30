@@ -145,6 +145,19 @@ export const migrations: Migration[] = [
       db.prepare('ALTER TABLE workspaces ADD COLUMN sentry_url TEXT').run()
     },
   },
+  {
+    version: 15,
+    name: 'add-workspace-worktree-path',
+    migrate: (db) => {
+      db.transaction(() => {
+        db.prepare('ALTER TABLE workspaces ADD COLUMN worktree_path TEXT').run()
+        db.prepare('ALTER TABLE workspaces ADD COLUMN worktree_owned INTEGER NOT NULL DEFAULT 1').run()
+        db.prepare(
+          "UPDATE workspaces SET worktree_path = project_path || '/.worktrees/' || working_branch WHERE worktree_path IS NULL",
+        ).run()
+      })()
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

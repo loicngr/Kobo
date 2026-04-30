@@ -44,6 +44,7 @@ const projectForm = ref({
   gitConventions: '',
   setupScript: '',
   devServer: { startCommand: '', stopCommand: '' },
+  e2e: { framework: '' as 'cypress' | 'playwright' | 'jest' | 'vitest' | 'other' | '', skill: '', prompt: '' },
 })
 
 // Branch fetching for project form
@@ -240,6 +241,7 @@ function syncProjectForm(project: ProjectSettings | null) {
       gitConventions: '',
       setupScript: '',
       devServer: { startCommand: '', stopCommand: '' },
+      e2e: { framework: '', skill: '', prompt: '' },
     }
     projectBranches.value = []
     return
@@ -256,6 +258,11 @@ function syncProjectForm(project: ProjectSettings | null) {
     devServer: {
       startCommand: project.devServer?.startCommand ?? '',
       stopCommand: project.devServer?.stopCommand ?? '',
+    },
+    e2e: {
+      framework: project.e2e?.framework ?? '',
+      skill: project.e2e?.skill ?? '',
+      prompt: project.e2e?.prompt ?? '',
     },
   }
   if (project.path) {
@@ -404,6 +411,7 @@ async function saveProject() {
       gitConventions: projectForm.value.gitConventions,
       setupScript: projectForm.value.setupScript,
       devServer: projectForm.value.devServer,
+      e2e: projectForm.value.e2e,
     })
     isNewProject.value = false
     // Select the project we just saved
@@ -1033,6 +1041,54 @@ onUnmounted(() => {
                         class="settings-input mono-textarea"
                       />
                     </div>
+                  </div>
+
+                  <!-- E2E tests -->
+                  <div class="q-mb-lg">
+                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.e2e.title') }}</div>
+                    <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.e2e.helpText') }}</div>
+
+                    <q-select
+                      v-model="projectForm.e2e.framework"
+                      :options="[
+                        { label: $t('settings.e2e.frameworkNone'), value: '' },
+                        { label: 'Cypress', value: 'cypress' },
+                        { label: 'Playwright', value: 'playwright' },
+                        { label: 'Jest', value: 'jest' },
+                        { label: 'Vitest', value: 'vitest' },
+                        { label: $t('settings.e2e.frameworkOther'), value: 'other' },
+                      ]"
+                      emit-value
+                      map-options
+                      dense
+                      dark
+                      outlined
+                      class="settings-input q-mb-sm"
+                      :label="$t('settings.e2e.framework')"
+                    />
+
+                    <template v-if="projectForm.e2e.framework">
+                      <q-input
+                        v-model="projectForm.e2e.skill"
+                        dense
+                        dark
+                        outlined
+                        class="settings-input q-mb-sm"
+                        :label="$t('settings.e2e.skill')"
+                        :placeholder="$t('settings.e2e.skillPlaceholder')"
+                      />
+                      <q-input
+                        v-model="projectForm.e2e.prompt"
+                        type="textarea"
+                        autogrow
+                        dense
+                        dark
+                        outlined
+                        class="settings-input mono-textarea"
+                        :label="$t('settings.e2e.prompt')"
+                        :placeholder="$t('settings.e2e.promptPlaceholder')"
+                      />
+                    </template>
                   </div>
 
                   <!-- Actions -->

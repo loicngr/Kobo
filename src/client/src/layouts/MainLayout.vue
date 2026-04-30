@@ -113,6 +113,20 @@ watch(
   { immediate: true },
 )
 
+// Clear the workspace selection when the user navigates to a non-workspace
+// page (create, settings, search, health). The sidebar highlight stops
+// pointing to a workspace the user is no longer working on.
+watch(
+  () => route.name,
+  (name) => {
+    if (name !== 'workspace' && store.selectedWorkspaceId) {
+      store.selectedWorkspaceId = null
+      store.selectedSessionId = null
+    }
+  },
+  { immediate: true },
+)
+
 const showRightDrawer = computed(() => route.name === 'workspace')
 
 provide('openDrawerTab', (tab: string) => {
