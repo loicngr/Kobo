@@ -35,8 +35,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 15', () => {
-    expect(SCHEMA_VERSION).toBe(15)
+  it('exporte SCHEMA_VERSION = 16', () => {
+    expect(SCHEMA_VERSION).toBe(16)
   })
 
   it('migre depuis la legacy schema_version table', () => {
@@ -830,6 +830,34 @@ describe('migration v12: add-auto-loop-columns', () => {
       | undefined
 
     expect(ws).toEqual({ id: 'w2', permission_profile: 'bypass' })
+    db.close()
+  })
+})
+
+describe('usage_snapshots table', () => {
+  it('is created by runMigrations on a fresh install', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    const cols = db.prepare('PRAGMA table_info(usage_snapshots)').all() as Array<{ name: string }>
+    const names = cols.map((c) => c.name).sort()
+    expect(names).toEqual(['buckets_json', 'error_message', 'fetched_at', 'provider_id', 'status'])
+    db.close()
+  })
+
+  it('is created when applying migration v16 on a database that already has versions 1..15', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(16)
+    db.prepare('DROP TABLE usage_snapshots').run()
+
+    runMigrations(db)
+
+    const cols = db.prepare('PRAGMA table_info(usage_snapshots)').all() as Array<{ name: string }>
+    expect(cols.length).toBe(5)
+    const versions = (db.prepare('SELECT version FROM schema_migrations').all() as { version: number }[]).map(
+      (r) => r.version,
+    )
+    expect(versions).toContain(16)
     db.close()
   })
 })

@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { formatRateLimitBucketLabel, formatRateLimitLabel, formatRateLimitResetAt } from '../utils/rate-limit-labels'
+import {
+  formatRateLimitBucketLabel,
+  formatRateLimitLabel,
+  formatRateLimitResetAt,
+  usagePctColor,
+} from '../utils/rate-limit-labels'
 
 const fakeT = (key: string, params?: Record<string, unknown>): string => {
   const map: Record<string, string> = {
@@ -42,4 +47,17 @@ describe('formatRateLimitLabel', () => {
     )
     expect(label.startsWith('Reset ')).toBe(true)
   })
+})
+
+describe('usagePctColor', () => {
+  it('returns positive for 0%', () => expect(usagePctColor(0)).toBe('positive'))
+  it('returns positive for 49%', () => expect(usagePctColor(49)).toBe('positive'))
+  it('returns warning for exactly 50%', () => expect(usagePctColor(50)).toBe('warning'))
+  it('returns warning for 74%', () => expect(usagePctColor(74)).toBe('warning'))
+  it('returns orange for exactly 75%', () => expect(usagePctColor(75)).toBe('orange'))
+  it('returns orange for 89%', () => expect(usagePctColor(89)).toBe('orange'))
+  it('returns negative for exactly 90%', () => expect(usagePctColor(90)).toBe('negative'))
+  it('returns negative for 100%', () => expect(usagePctColor(100)).toBe('negative'))
+  it('clamps below-range to positive', () => expect(usagePctColor(-5)).toBe('positive'))
+  it('clamps above-range to negative', () => expect(usagePctColor(150)).toBe('negative'))
 })

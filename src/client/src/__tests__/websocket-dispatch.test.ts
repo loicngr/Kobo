@@ -37,6 +37,7 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
         sentryUrl: null,
         notionPageId: null,
         model: 'claude-opus-4-5',
+        engine: 'claude-code',
         reasoningEffort: 'normal',
         permissionMode: 'auto-accept',
         devServerStatus: 'stopped',
@@ -125,5 +126,31 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('routes usage:snapshot to workspaceStore.applyUsageSnapshot', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const store = useWorkspaceStore()
+    const spy = vi.spyOn(store, 'applyUsageSnapshot')
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const wsStore = useWebSocketStore()
+
+    ;(wsStore as unknown as { _routeMessage: (msg: Record<string, unknown>) => void })._routeMessage({
+      type: 'usage:snapshot',
+      payload: {
+        providerId: 'claude-code',
+        snapshot: {
+          providerId: 'claude-code',
+          status: 'ok',
+          buckets: [],
+          fetchedAt: '2026-04-29T14:30:00Z',
+        },
+      },
+    })
+
+    expect(spy).toHaveBeenCalledWith({
+      providerId: 'claude-code',
+      snapshot: expect.objectContaining({ status: 'ok' }),
+    })
   })
 })

@@ -38,6 +38,8 @@ export interface BuildClaudeArgsResult {
  */
 const KOBO_MCP_BRIEF = [
   '[Kōbō MCP] This workspace exposes a dedicated MCP server with tools prefixed `kobo__`.',
+  "Non-interactive mode: this session runs via `claude -p`. Tools requiring a synchronous human reply (e.g. `AskUserQuestion`) won't complete — never call them. If you need user input, end the turn with a plain-text question; the user replies asynchronously via the chat UI.",
+  'Plan mode: when running with `--permission-mode plan`, the read-only restriction applies to MCP tools too, not just built-ins. For Kōbō: `kobo__list_*`, `kobo__read_document`, `kobo__search_codebase`, `kobo__get_*` are fine; `kobo__mark_task_done`, `kobo__log_thought`, `kobo__set_workspace_status` are mutations and must wait until the plan is approved.',
   'Conventions — read these BEFORE starting work, not as a fallback:',
   '• `kobo__list_tasks` first on any non-trivial turn, then `kobo__mark_task_done` as each item completes.',
   '• `kobo__list_documents` / `kobo__read_document` to discover existing plans and specs under docs/ and .ai/thoughts/ before writing new ones.',

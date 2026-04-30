@@ -26,7 +26,7 @@ Think of it as an apprentice's hall: you hand out missions, each apprentice sets
 - **Prompt templates** — personal library of reusable prompts with variable substitution (`{working_branch}`, `{commit_count}`, etc.), insertable from the chat input via `/` autocomplete; editable in Settings > Templates
 - **Favorites and tags** — pin workspaces to the top via right-click favourite, organise with per-workspace tags filterable from the sidebar; a global tag catalogue keeps colours consistent across workspaces
 - **Health panel + config export/import** — inspect backend health (agent sessions, migration state, dev servers, DB size) and roundtrip your Kōbō config (settings, templates, skills) between machines via JSON
-- **Usage tracking** — rolling input/output token counts and cost estimates per workspace, aggregated across sessions and live-updated from `usage` events
+- **Account-level quota panel** — a colored mini-bar badge in the chat footer shows the current Claude Code 5-hour and 7-day usage, fed by a backend service that polls Anthropic's OAuth usage endpoint every 60 seconds. Click to open a popover with full bars, reset times, a "Refresh now" button, and a one-click jump to the Stats tab. Pluggable per-provider (Codex-ready), persisted in SQLite so the badge is populated on cold start, and account-level so it's the same across workspaces sharing the same engine
 - **Resizable right drawer** — drag-to-resize horizontally and vertically, with tab state and split ratio persisted to localStorage
 - **Soft interrupt** — pause an agent mid-execution (SIGINT, like pressing Escape in Claude Code) without killing the process; the agent stops the current tool and waits for the next message
 - **Archive instead of delete** — soft-remove workspaces without losing the worktree, branches, or history; unarchive restores the exact pre-archive state
@@ -227,8 +227,9 @@ src/
 │   │   │   ├── event-router.ts             # maps engine AgentEvent stream to WS emit + DB side-effects
 │   │   │   └── engines/claude-code/        # spawn + NDJSON stream-parser + args-builder + mcp-config + capabilities
 │   │   ├── content-migration-service.ts    # legacy ws_events → normalised AgentEvent rows, with DB backup
+│   │   ├── usage/                          # pluggable quota provider, 60s poller, persistence, WS broadcast
 │   │   └── …                               # workspace, dev-server, ws, notion, sentry, settings, pr-template
-│   ├── routes/                             # Hono handlers (workspaces, engines, migration, templates, …)
+│   ├── routes/                             # Hono handlers (workspaces, engines, migration, templates, usage, …)
 │   └── utils/                              # git-ops, process-tracker, paths
 ├── shared/                                 # modules shared by backend and frontend (e.g. model catalogue)
 ├── client/                                 # Vue 3 + Quasar SPA
@@ -254,6 +255,7 @@ See [`AGENTS.md`](./AGENTS.md) for a deeper dive into conventions, data model, W
 | `tasks` | workspace sub-items — tasks and acceptance criteria |
 | `agent_sessions` | agent runs — pid, `engine_session_id`, lifecycle |
 | `ws_events` | persisted WebSocket events (chat history, `agent:event` stream, user messages) for replay on reconnect |
+| `usage_snapshots` | latest quota snapshot per provider (one row per `provider_id`) — populated by the 60s polling loop, used for cold-start hydration of the chat-footer quota badge |
 
 ## MCP server
 

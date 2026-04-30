@@ -10,6 +10,7 @@ import TerminalPanel from 'src/components/TerminalPanel.vue'
 import ToolsPanel from 'src/components/ToolsPanel.vue'
 import WorkspaceList from 'src/components/WorkspaceList.vue'
 import { useDocumentsStore } from 'src/stores/documents'
+import { useStatsStore } from 'src/stores/stats'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { computed, provide, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
@@ -33,6 +34,15 @@ const documentsStore = useDocumentsStore()
 watch(
   () => documentsStore.requestOpen,
   () => setRightTab('documents'),
+)
+
+const statsStore = useStatsStore()
+watch(
+  () => statsStore.requestOpen,
+  () => {
+    setRightTab('stats')
+    rightDrawerOpen.value = true
+  },
 )
 
 // Keep the documents list populated for the selected workspace regardless

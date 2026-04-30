@@ -19,6 +19,7 @@ import AgentBusyBanner from 'src/components/AgentBusyBanner.vue'
 import AgentErrorBanner from 'src/components/AgentErrorBanner.vue'
 import AutoLoopChip from 'src/components/AutoLoopChip.vue'
 import ChatInput from 'src/components/ChatInput.vue'
+import StaleSessionBanner from 'src/components/StaleSessionBanner.vue'
 import WakeupBanner from 'src/components/WakeupBanner.vue'
 
 const $q = useQuasar()
@@ -173,23 +174,6 @@ const currentPermissionMode = computed({
   },
 })
 
-const currentUsage = computed(() => {
-  const wid = store.selectedWorkspaceId
-  if (!wid) return { inputTokens: 0, outputTokens: 0, costUsd: 0, totalTokens: 0 }
-  const usage = store.usageStats[wid] ?? { inputTokens: 0, outputTokens: 0, costUsd: 0 }
-  return {
-    inputTokens: usage.inputTokens,
-    outputTokens: usage.outputTokens,
-    costUsd: usage.costUsd,
-    totalTokens: usage.inputTokens + usage.outputTokens,
-  }
-})
-
-function formatTokenCount(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
-  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`
-  return String(n)
-}
 const route = useRoute()
 const router = useRouter()
 
@@ -313,32 +297,6 @@ watch(
           style="font-size: 10px;"
         />
         <AutoLoopChip />
-        <q-chip
-          v-if="currentUsage.totalTokens > 0"
-          dense
-          color="grey-9"
-          text-color="grey-3"
-          class="q-ml-sm"
-          style="font-size: 10px;"
-        >
-          <q-icon name="toll" size="12px" class="q-mr-xs" />
-          <span>{{ $t('stats.tokens') }}: {{ formatTokenCount(currentUsage.totalTokens) }}</span>
-          <q-tooltip>
-            {{ $t('stats.inputTokens') }}: {{ formatTokenCount(currentUsage.inputTokens) }}<br>
-            {{ $t('stats.outputTokens') }}: {{ formatTokenCount(currentUsage.outputTokens) }}
-          </q-tooltip>
-        </q-chip>
-        <q-chip
-          v-if="currentUsage.costUsd > 0"
-          dense
-          color="grey-9"
-          text-color="grey-3"
-          class="q-ml-xs"
-          style="font-size: 10px;"
-        >
-          <q-icon name="attach_money" size="12px" class="q-mr-xs" />
-          <span>{{ $t('stats.cost') }}: ${{ currentUsage.costUsd.toFixed(4) }}</span>
-        </q-chip>
         <q-select
           v-if="sessions.length > 0"
           v-model="selectedSessionId"
@@ -468,6 +426,7 @@ watch(
     <q-separator dark />
 
     <AgentErrorBanner v-if="selectedId" :workspace-id="selectedId" />
+    <StaleSessionBanner v-if="selectedId" :workspace-id="selectedId" />
 
     <!-- Activity Feed with Suspense -->
     <Suspense v-if="selectedId">

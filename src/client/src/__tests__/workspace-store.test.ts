@@ -2,6 +2,37 @@ import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { isSubagentTerminalEvent, useWorkspaceStore, type Workspace } from '../stores/workspace'
 
+/** Build a fully-typed Workspace fixture, overrides take precedence. */
+function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
+  return {
+    id: 'w1',
+    name: 'w1',
+    projectPath: '/',
+    sourceBranch: 'main',
+    workingBranch: 'b',
+    status: 'idle',
+    notionUrl: null,
+    sentryUrl: null,
+    notionPageId: null,
+    model: 'auto',
+    engine: 'claude-code',
+    reasoningEffort: 'medium',
+    permissionMode: 'auto-accept',
+    devServerStatus: 'idle',
+    hasUnread: false,
+    archivedAt: null,
+    favoritedAt: null,
+    tags: [],
+    autoLoop: false,
+    autoLoopReady: false,
+    noProgressStreak: 0,
+    permissionProfile: 'bypass',
+    createdAt: '',
+    updatedAt: '',
+    ...overrides,
+  }
+}
+
 describe('workspace store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -293,6 +324,7 @@ describe('workspace store', () => {
       sentryUrl: null,
       notionPageId: null,
       model: 'claude-opus-4-5',
+      engine: 'claude-code',
       reasoningEffort: 'normal',
       permissionMode: 'default',
       devServerStatus: 'stopped',
@@ -364,51 +396,50 @@ describe('workspace store', () => {
     })
   })
 
-  describe('globalRateLimitUsage', () => {
-    it('returns null when no workspace has received a rate_limit_event', () => {
-      const store = useWorkspaceStore()
-      expect(store.globalRateLimitUsage).toBeNull()
+  describe('usage snapshot integration', () => {
+    beforeEach(() => {
+      setActivePinia(createPinia())
     })
 
-    it('returns the single snapshot when only one workspace has data', () => {
+    it('applyUsageSnapshot stores the snapshot under the provider key', () => {
       const store = useWorkspaceStore()
-      store.setRateLimitUsage('ws-1', {
-        updatedAt: '2026-04-17T10:00:00Z',
-        buckets: [{ id: 'five_hour', label: 'Session 5h', usedPct: 42 }],
+      store.applyUsageSnapshot({
+        providerId: 'claude-code',
+        snapshot: {
+          providerId: 'claude-code',
+          status: 'ok',
+          buckets: [{ id: 'five_hour', label: 'five_hour', usedPct: 12, resetsAt: '2026-04-29T18:00:00Z' }],
+          fetchedAt: '2026-04-29T14:30:00Z',
+        },
       })
-      expect(store.globalRateLimitUsage).toEqual({
-        updatedAt: '2026-04-17T10:00:00Z',
-        buckets: [{ id: 'five_hour', label: 'Session 5h', usedPct: 42 }],
-      })
+      expect(store.providerUsage['claude-code']?.status).toBe('ok')
     })
 
-    it('returns the snapshot with the most recent updatedAt across workspaces', () => {
+    it('currentProviderUsage resolves via selectedWorkspace.engine', () => {
       const store = useWorkspaceStore()
-      store.setRateLimitUsage('ws-older', {
-        updatedAt: '2026-04-17T09:00:00Z',
-        buckets: [{ id: 'five_hour', usedPct: 10 }],
+      store.workspaces = [makeWorkspace({ id: 'w1', engine: 'claude-code' })]
+      store.selectedWorkspaceId = 'w1'
+      store.applyUsageSnapshot({
+        providerId: 'claude-code',
+        snapshot: {
+          providerId: 'claude-code',
+          status: 'ok',
+          buckets: [],
+          fetchedAt: '2026-04-29T14:30:00Z',
+        },
       })
-      store.setRateLimitUsage('ws-newer', {
-        updatedAt: '2026-04-17T11:00:00Z',
-        buckets: [{ id: 'five_hour', usedPct: 93 }],
-      })
-      store.setRateLimitUsage('ws-middle', {
-        updatedAt: '2026-04-17T10:00:00Z',
-        buckets: [{ id: 'five_hour', usedPct: 50 }],
-      })
-      expect(store.globalRateLimitUsage?.updatedAt).toBe('2026-04-17T11:00:00Z')
-      expect(store.globalRateLimitUsage?.buckets[0].usedPct).toBe(93)
+      expect(store.currentProviderUsage?.providerId).toBe('claude-code')
     })
 
-    it('ignores undefined entries (e.g. after workspace deletion)', () => {
+    it('currentProviderUsage returns null when workspace.engine has no provider mapping', () => {
       const store = useWorkspaceStore()
-      store.setRateLimitUsage('ws-1', {
-        updatedAt: '2026-04-17T10:00:00Z',
-        buckets: [{ id: 'five_hour', usedPct: 42 }],
+      store.workspaces = [makeWorkspace({ id: 'w1', engine: 'unknown-engine' })]
+      store.selectedWorkspaceId = 'w1'
+      store.applyUsageSnapshot({
+        providerId: 'claude-code',
+        snapshot: { providerId: 'claude-code', status: 'ok', buckets: [], fetchedAt: 'now' },
       })
-      // Simulate the cleanup path (removeWorkspace sets the entry to undefined via delete)
-      store.rateLimitUsage['ws-ghost'] = undefined
-      expect(store.globalRateLimitUsage?.updatedAt).toBe('2026-04-17T10:00:00Z')
+      expect(store.currentProviderUsage).toBeNull()
     })
   })
 })

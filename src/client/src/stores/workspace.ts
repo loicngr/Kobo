@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import type { RateLimitInfo } from '../types/agent-event'
+import type { ProviderId, UsageSnapshot } from '../types/usage'
 import { isBusyStatus } from '../utils/workspace-status'
 import { useWebSocketStore } from './websocket'
 
@@ -14,6 +15,7 @@ export interface Workspace {
   sentryUrl: string | null
   notionPageId: string | null
   model: string
+  engine: string
   reasoningEffort: string
   permissionMode: string
   devServerStatus: string
@@ -180,6 +182,11 @@ const MAX_FEED_ITEMS = 5000
 const PR_STATES_DEBOUNCE_MS = 500
 let _prStatesDebounceTimer: ReturnType<typeof setTimeout> | null = null
 
+function engineToProviderId(engine: string | undefined): ProviderId | null {
+  if (engine === 'claude-code') return 'claude-code'
+  return null
+}
+
 export const useWorkspaceStore = defineStore('workspace', {
   state: () => ({
     workspaces: [] as Workspace[],
@@ -205,6 +212,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       { inputTokens: number; outputTokens: number; costUsd: number; sessionCount: number }
     >,
     rateLimitUsage: {} as Record<string, RateLimitUsageSnapshot | undefined>,
+    providerUsage: {} as Record<ProviderId, UsageSnapshot | undefined>,
     chatDraft: '',
     queuedMessages: {} as Record<string, { content: string; sessionId?: string }>,
     gitRefreshTrigger: 0,
@@ -263,20 +271,12 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     archived: (state) => state.archivedWorkspaces,
 
-    /**
-     * Most recent rate-limit snapshot across all workspaces, or `null` if none
-     * received yet. The Claude Code account-level quota is shared globally, so
-     * any workspace's latest `rate_limit_event` is representative of the account.
-     */
-    globalRateLimitUsage: (state): RateLimitUsageSnapshot | null => {
-      let latest: RateLimitUsageSnapshot | null = null
-      for (const snapshot of Object.values(state.rateLimitUsage)) {
-        if (!snapshot) continue
-        if (!latest || snapshot.updatedAt > latest.updatedAt) {
-          latest = snapshot
-        }
-      }
-      return latest
+    currentProviderUsage(state): UsageSnapshot | null {
+      const ws = state.workspaces.find((w) => w.id === state.selectedWorkspaceId)
+      if (!ws) return null
+      const providerId = engineToProviderId(ws.engine)
+      if (!providerId) return null
+      return state.providerUsage[providerId] ?? null
     },
   },
 
@@ -998,6 +998,19 @@ export const useWorkspaceStore = defineStore('workspace', {
           resetAt: b.resetsAt,
           details: b.details,
         })),
+      }
+    },
+
+    applyUsageSnapshot(payload: { providerId: ProviderId; snapshot: UsageSnapshot }) {
+      this.providerUsage[payload.providerId] = payload.snapshot
+    },
+
+    async requestUsageRefresh(providerId: ProviderId): Promise<void> {
+      try {
+        await fetch(`/api/usage/${providerId}/refresh`, { method: 'POST' })
+        // Server broadcasts the result via WS — nothing else to do.
+      } catch (err) {
+        console.error('[workspace store] requestUsageRefresh failed:', err)
       }
     },
 

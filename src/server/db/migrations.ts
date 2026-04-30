@@ -158,6 +158,21 @@ export const migrations: Migration[] = [
       })()
     },
   },
+  {
+    version: 16,
+    name: 'add-usage-snapshots-table',
+    migrate: (db) => {
+      db.prepare(
+        `CREATE TABLE IF NOT EXISTS usage_snapshots (
+          provider_id   TEXT PRIMARY KEY,
+          status        TEXT NOT NULL,
+          error_message TEXT,
+          buckets_json  TEXT NOT NULL,
+          fetched_at    TEXT NOT NULL
+        )`,
+      ).run()
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import i18n from 'src/i18n'
 import { useAgentStreamStore } from 'src/stores/agent-stream'
 import type { AgentEvent } from 'src/types/agent-event'
+import type { ProviderId, UsageSnapshot } from 'src/types/usage'
 import { notify } from 'src/utils/notifications'
 import type { DevServerStatus } from './dev-server'
 import { useDevServerStore } from './dev-server'
@@ -538,6 +539,14 @@ export const useWebSocketStore = defineStore('websocket', {
           } finally {
             this._replaying = false
             _setReplayingForDispatch(false)
+          }
+          break
+        }
+
+        case 'usage:snapshot': {
+          const p = payload as { providerId?: ProviderId; snapshot?: UsageSnapshot }
+          if (p.providerId && p.snapshot) {
+            workspaceStore.applyUsageSnapshot({ providerId: p.providerId, snapshot: p.snapshot })
           }
           break
         }

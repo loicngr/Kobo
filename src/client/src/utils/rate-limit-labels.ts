@@ -51,3 +51,16 @@ export function formatRateLimitBucketLabel(
   if (!bucket.label || bucket.label.trim().length === 0) return t('stats.usageBucket', { n: idx + 1 })
   return formatRateLimitLabel(bucket.label, t)
 }
+
+export type QuasarUsageColor = 'positive' | 'warning' | 'orange' | 'negative'
+
+/**
+ * Map a usage percentage (0–100) to a Quasar color name.
+ * Out-of-range values are clamped — keeps callers free from defensive bounds checks.
+ */
+export function usagePctColor(pct: number): QuasarUsageColor {
+  if (pct < 50) return 'positive'
+  if (pct < 75) return 'warning'
+  if (pct < 90) return 'orange'
+  return 'negative'
+}

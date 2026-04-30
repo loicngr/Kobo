@@ -19,6 +19,7 @@ import searchRouter from './routes/search.js'
 import sentryRouter from './routes/sentry.js'
 import settingsRouter from './routes/settings.js'
 import templatesRouter from './routes/templates.js'
+import usageRoutes from './routes/usage.js'
 import workspacesRouter from './routes/workspaces.js'
 import {
   getAvailableSkills,
@@ -36,6 +37,7 @@ import { createDailyDbBackupIfNeeded } from './services/db-backup-service.js'
 import { startDevServer, stopDevServer } from './services/dev-server-service.js'
 import { startPrWatcher, stopPrWatcher } from './services/pr-watcher-service.js'
 import { createTerminal, destroyAllTerminals, getTerminal } from './services/terminal-service.js'
+import { startUsagePoller, stopUsagePoller } from './services/usage/index.js'
 import * as wakeupService from './services/wakeup-service.js'
 import { emit, emitEphemeral, handleConnection, setMessageHandler } from './services/websocket-service.js'
 import { getActiveSession, getWorkspace, updateWorkspaceStatus } from './services/workspace-service.js'
@@ -78,6 +80,7 @@ startWatchdog()
 wakeupService.rehydrate()
 autoLoopService.rehydrate()
 startPrWatcher()
+startUsagePoller()
 
 // Create Hono app
 const app = new Hono()
@@ -94,6 +97,7 @@ app.route('/api/git', gitRouter)
 app.route('/api/settings', settingsRouter)
 app.route('/api/dev-server', devServerRouter)
 app.route('/api/templates', templatesRouter)
+app.route('/api/usage', usageRoutes)
 app.route('/api/workspaces', documentsRouter)
 app.route('/api/search', searchRouter)
 app.route('/api/health', healthRouter)
@@ -449,6 +453,12 @@ function gracefulShutdown(signal: string): void {
 
   try {
     stopPrWatcher()
+  } catch {
+    // Best-effort
+  }
+
+  try {
+    stopUsagePoller()
   } catch {
     // Best-effort
   }

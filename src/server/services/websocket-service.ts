@@ -1,6 +1,7 @@
 import { nanoid } from 'nanoid'
 import type WebSocket from 'ws'
 import { getDb } from '../db/index.js'
+import { getAllPersistedSnapshots } from './usage/db.js'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -42,6 +43,21 @@ export function setMessageHandler(handler: MessageHandler): void {
 export function handleConnection(ws: WebSocket): void {
   // Register client with empty subscription set
   clients.set(ws, new Set())
+
+  // Push the latest persisted snapshot per provider so the client renders
+  // immediately instead of waiting up to POLL_INTERVAL_MS for the next tick.
+  try {
+    for (const snap of getAllPersistedSnapshots()) {
+      ws.send(
+        JSON.stringify({
+          type: 'usage:snapshot',
+          payload: { providerId: snap.providerId, snapshot: snap },
+        }),
+      )
+    }
+  } catch (err) {
+    console.error('[ws] usage hydration failed:', err)
+  }
 
   ws.on('message', (data: WebSocket.RawData) => {
     let msg: WsMessage
