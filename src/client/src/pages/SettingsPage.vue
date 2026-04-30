@@ -1,0 +1,1423 @@
+<template>
+  <q-page class="settings-page">
+    <div class="settings-inner">
+      <!-- Header -->
+      <div class="settings-header row items-center q-mb-lg">
+        <q-icon name="settings" size="24px" color="indigo-4" class="q-mr-sm" />
+        <span class="text-h5 text-weight-medium text-grey-3">{{ $t('settings.title') }}</span>
+      </div>
+
+      <!-- Tabs -->
+      <q-tabs
+        v-model="activeTab"
+        dense
+        active-color="indigo-4"
+        indicator-color="indigo-4"
+        class="settings-tabs q-mb-lg"
+        align="left"
+        narrow-indicator
+      >
+        <q-tab name="global" :label="$t('settings.global')" />
+        <q-tab name="projects" :label="$t('settings.projects')" />
+        <q-tab name="templates" :label="$t('templates.title')" />
+      </q-tabs>
+
+      <!-- Tab panels -->
+      <q-tab-panels v-model="activeTab" animated class="settings-panels">
+        <!-- Global tab -->
+        <q-tab-panel name="global" class="q-pa-none">
+          <div class="settings-card rounded-borders q-pa-lg">
+            <div class="text-subtitle1 text-weight-medium q-mb-md text-grey-3">
+              {{ $t('settings.globalSettings') }}
+            </div>
+
+            <q-separator dark class="q-mb-md" />
+
+            <!-- Language selector -->
+            <div class="q-mb-lg">
+              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.language') }}</div>
+              <q-select
+                :model-value="locale"
+                :options="languageOptions"
+                emit-value
+                map-options
+                option-value="value"
+                option-label="label"
+                dense
+                dark
+                outlined
+                class="settings-input"
+                @update:model-value="onLanguageChange"
+              />
+            </div>
+
+            <!-- Model selector -->
+            <div class="q-mb-lg">
+              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.defaultModel') }}</div>
+              <q-select
+                v-model="globalModel"
+                :options="modelOptions"
+                emit-value
+                map-options
+                option-value="value"
+                option-label="label"
+                dense
+                dark
+                outlined
+                class="settings-input"
+              />
+            </div>
+
+            <!-- Skip permissions toggle -->
+            <div class="q-mb-lg">
+              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.agentPermissions') }}</div>
+              <q-toggle
+                v-model="globalSkipPermissions"
+                :label="$t('settings.skipPermissions')"
+                dark
+                dense
+                color="indigo-4"
+                class="text-grey-5 text-caption"
+              />
+              <div class="text-caption text-red-4 q-mt-xs">{{ $t('settings.skipPermissionsWarning') }}</div>
+            </div>
+
+            <!-- Default permission mode -->
+            <div class="q-mb-lg">
+              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.defaultPermissionMode') }}</div>
+              <q-select
+                v-model="globalDefaultPermissionMode"
+                :options="[
+                  { label: $t('permissionMode.plan'), value: 'plan' },
+                  { label: $t('permissionMode.autoAccept'), value: 'auto-accept' },
+                ]"
+                emit-value
+                map-options
+                dense
+                dark
+                outlined
+                class="settings-input"
+              />
+              <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.defaultPermissionModeHint') }}</div>
+            </div>
+
+            <!-- Verbose system messages toggle -->
+            <div class="q-mb-lg">
+              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.activityFeed') }}</div>
+              <q-toggle
+                :model-value="store.showVerboseSystemMessages"
+                :label="$t('settings.verboseMessages')"
+                dark
+                dense
+                color="indigo-4"
+                class="text-grey-5 text-caption"
+                @update:model-value="store.toggleVerboseSystemMessages()"
+              />
+            </div>
+
+            <!-- Notifications -->
+            <div class="q-mb-lg">
+              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.notifications') }}</div>
+              <q-toggle
+                v-model="globalBrowserNotifications"
+                :label="$t('settings.browserNotifications')"
+                dark
+                dense
+                color="indigo-4"
+                class="text-grey-5 text-caption"
+              />
+              <q-toggle
+                v-model="globalAudioNotifications"
+                :label="$t('settings.audioNotifications')"
+                dark
+                dense
+                color="indigo-4"
+                class="text-grey-5 text-caption"
+              />
+            </div>
+
+            <!-- Available variables reference -->
+            <div class="q-mb-md">
+              <q-expansion-item
+                dense
+                dark
+                icon="code"
+                :label="$t('settings.availableVariables')"
+                class="variables-panel rounded-borders"
+              >
+                <q-list dense dark class="q-pa-sm">
+                  <q-item v-for="v in availableVariables" :key="v.name" dense>
+                    <q-item-section>
+                      <q-item-label class="text-caption" style="font-family: monospace;">{{ v.name }}</q-item-label>
+                      <q-item-label caption class="text-grey-7">{{ v.description }}</q-item-label>
+                    </q-item-section>
+                  </q-item>
+                </q-list>
+              </q-expansion-item>
+            </div>
+
+            <!-- PR prompt template -->
+            <div class="q-mb-lg">
+              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.prPromptTemplate') }}</div>
+              <q-input
+                v-model="globalPrPrompt"
+                type="textarea"
+                dense
+                dark
+                outlined
+                :rows="8"
+                :placeholder="$t('settings.prPromptPlaceholder')"
+                class="settings-input mono-textarea"
+              />
+              <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.prPromptHint') }}</div>
+            </div>
+
+            <!-- Git conventions -->
+            <div class="q-mb-lg">
+              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.gitConventions') }}</div>
+              <q-input
+                v-model="globalGitConventions"
+                type="textarea"
+                dense
+                dark
+                outlined
+                :rows="8"
+                :placeholder="$t('settings.gitConventionsPlaceholder')"
+                class="settings-input mono-textarea"
+              />
+              <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.gitConventionsHint') }}</div>
+            </div>
+
+            <div class="q-mb-lg">
+              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.editorCommand') }}</div>
+              <q-input
+                v-model="globalEditorCommand"
+                dense
+                dark
+                outlined
+                :placeholder="$t('settings.editorCommandPlaceholder')"
+                class="settings-input"
+              />
+              <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.editorCommandHint') }}</div>
+            </div>
+
+            <div class="q-mb-lg">
+              <div class="field-label text-body2 text-weight-medium q-mb-sm text-grey-6">{{ $t('settings.mcpSelection') }}</div>
+              <div class="q-mb-sm">
+                <div class="field-label-sub text-caption q-mb-xs text-grey-7">{{ $t('settings.notionMcp') }}</div>
+                <q-select
+                  v-model="globalNotionMcpKey"
+                  :options="mcpServerOptions"
+                  emit-value
+                  map-options
+                  dense
+                  dark
+                  outlined
+                  class="settings-input"
+                />
+              </div>
+              <div class="q-mb-sm">
+                <div class="field-label-sub text-caption q-mb-xs text-grey-7">{{ $t('settings.sentryMcp') }}</div>
+                <q-select
+                  v-model="globalSentryMcpKey"
+                  :options="mcpServerOptions"
+                  emit-value
+                  map-options
+                  dense
+                  dark
+                  outlined
+                  class="settings-input"
+                />
+              </div>
+              <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.mcpSelectionHint') }}</div>
+            </div>
+
+            <div class="q-mb-lg">
+              <div class="field-label text-body2 text-weight-medium q-mb-sm text-grey-6">{{ $t('settings.notionStatus') }}</div>
+              <div class="q-mb-sm">
+                <div class="field-label-sub text-caption q-mb-xs text-grey-7">{{ $t('settings.notionStatusProperty') }}</div>
+                <q-input
+                  v-model="globalNotionStatusProperty"
+                  dense
+                  dark
+                  outlined
+                  :placeholder="$t('settings.notionStatusPropertyPlaceholder')"
+                  class="settings-input"
+                />
+              </div>
+              <div class="q-mb-sm">
+                <div class="field-label-sub text-caption q-mb-xs text-grey-7">{{ $t('settings.notionInProgressStatus') }}</div>
+                <q-input
+                  v-model="globalNotionStatus"
+                  dense
+                  dark
+                  outlined
+                  :placeholder="$t('settings.notionInProgressStatusPlaceholder')"
+                  class="settings-input"
+                />
+              </div>
+              <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.notionStatusHint') }}</div>
+            </div>
+
+            <!-- Workspace tags -->
+            <div class="settings-card q-pa-md rounded-borders">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.tagsTitle') }}</div>
+              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.tagsHint') }}</div>
+              <q-select
+                v-model="globalTags"
+                :label="$t('settings.tagsLabel')"
+                dark
+                outlined
+                multiple
+                use-input
+                use-chips
+                new-value-mode="add-unique"
+                hide-dropdown-icon
+                input-debounce="0"
+                class="settings-input"
+              />
+            </div>
+
+            <!-- Import / Export config -->
+            <div class="settings-card q-pa-md rounded-borders">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.shareTitle') }}</div>
+              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.shareHint') }}</div>
+              <div class="row q-gutter-sm">
+                <q-btn
+                  :label="$t('settings.exportConfig')"
+                  icon="download"
+                  no-caps
+                  outline
+                  color="grey-4"
+                  @click="exportConfig"
+                />
+                <q-btn
+                  :label="$t('settings.importConfig')"
+                  icon="upload"
+                  no-caps
+                  outline
+                  color="grey-4"
+                  @click="triggerImport"
+                />
+                <input
+                  ref="importFileInput"
+                  type="file"
+                  accept="application/json,.json"
+                  style="display: none;"
+                  @change="onImportFile"
+                />
+              </div>
+            </div>
+
+            <!-- Save button -->
+            <div class="row justify-end">
+              <q-btn
+                :label="$t('common.save')"
+                no-caps
+                unelevated
+                color="primary"
+                :loading="savingGlobal"
+                @click="saveGlobal"
+              />
+            </div>
+          </div>
+        </q-tab-panel>
+
+        <!-- Projects tab -->
+        <q-tab-panel name="projects" class="q-pa-none">
+          <div class="row q-gutter-md" style="min-height: 500px;">
+            <!-- Left column: project list (30%) -->
+            <div class="project-list-col">
+              <div class="settings-card rounded-borders" style="height: 100%;">
+                <div class="q-pa-sm">
+                  <div class="text-caption text-uppercase text-weight-bold q-px-sm q-py-xs text-grey-6" style="letter-spacing: 0.05em;">
+                    {{ $t('settings.configuredProjects') }}
+                  </div>
+                </div>
+
+                <q-separator dark />
+
+                <q-list dark dense class="q-py-xs">
+                  <q-item
+                    v-for="(project, index) in store.projects"
+                    :key="project.path"
+                    clickable
+                    :active="selectedProjectIndex === index && !isNewProject"
+                    active-class="project-item--active"
+                    class="project-item q-mx-xs rounded-borders"
+                    style="min-height: 40px;"
+                    @click="selectProject(index)"
+                  >
+                    <q-item-section>
+                      <q-item-label class="text-body2 text-grey-3">
+                        {{ projectDisplayName(project) }}
+                      </q-item-label>
+                      <q-item-label caption class="text-grey-7 ellipsis" style="font-size: 11px; font-family: monospace;">
+                        {{ project.path }}
+                      </q-item-label>
+                    </q-item-section>
+                  </q-item>
+                </q-list>
+
+                <!-- Empty state -->
+                <div
+                  v-if="store.projects.length === 0 && !store.loading"
+                  class="q-pa-md text-center text-caption text-grey-8"
+                >
+                  {{ $t('settings.noProjects') }}
+                </div>
+
+                <q-separator dark />
+
+                <div class="q-pa-sm">
+                  <q-btn
+                    :label="$t('settings.addProject')"
+                    icon="add"
+                    no-caps
+                    flat
+                    dense
+                    class="full-width"
+                    color="indigo-4"
+                    @click="addNewProject"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <!-- Right column: edit form (70%) -->
+            <div class="project-form-col">
+              <div class="settings-card rounded-borders q-pa-lg" style="height: 100%;">
+                <template v-if="selectedProject || isNewProject">
+                  <div class="text-subtitle1 text-weight-medium q-mb-md text-grey-3">
+                    {{ isNewProject ? $t('settings.newProject') : $t('settings.editProject') }}
+                  </div>
+
+                  <q-separator dark class="q-mb-md" />
+
+                  <!-- Path -->
+                  <div class="q-mb-md">
+                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.projectPath') }}</div>
+                    <q-input
+                      v-model="projectForm.path"
+                      dense
+                      dark
+                      outlined
+                      :readonly="!isNewProject"
+                      :placeholder="$t('settings.projectPathPlaceholder')"
+                      class="settings-input"
+                      :class="{ 'readonly-input': !isNewProject }"
+                    />
+                  </div>
+
+                  <!-- Display name -->
+                  <div class="q-mb-md">
+                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.displayName') }}</div>
+                    <q-input
+                      v-model="projectForm.displayName"
+                      dense
+                      dark
+                      outlined
+                      :placeholder="$t('settings.displayNamePlaceholder')"
+                      class="settings-input"
+                    />
+                  </div>
+
+                  <!-- Default source branch -->
+                  <div class="q-mb-md">
+                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.defaultSourceBranch') }}</div>
+                    <q-select
+                      v-model="projectForm.defaultSourceBranch"
+                      :options="branchFilterOptions"
+                      dense
+                      dark
+                      outlined
+                      use-input
+                      emit-value
+                      :loading="loadingBranches"
+                      class="settings-input"
+                      placeholder="main"
+                      @filter="filterBranches"
+                    >
+                      <template #no-option>
+                        <q-item>
+                          <q-item-section class="text-grey-6 text-caption">
+                            {{ projectForm.path.trim() ? $t('createPage.noBranches') : $t('createPage.enterPath') }}
+                          </q-item-section>
+                        </q-item>
+                      </template>
+                    </q-select>
+                  </div>
+
+                  <!-- Default model -->
+                  <div class="q-mb-md">
+                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.defaultModel.project') }}</div>
+                    <q-select
+                      v-model="projectForm.defaultModel"
+                      :options="projectModelOptions"
+                      emit-value
+                      map-options
+                      option-value="value"
+                      option-label="label"
+                      dense
+                      dark
+                      outlined
+                      class="settings-input"
+                    />
+                  </div>
+
+                  <!-- Skip permissions toggle (project override) -->
+                  <div class="q-mb-md">
+                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.agentPermissions') }}</div>
+                    <q-toggle
+                      v-model="projectForm.dangerouslySkipPermissions"
+                      :label="$t('settings.skipPermissions.project')"
+                      dark
+                      dense
+                      color="indigo-4"
+                      class="text-grey-5 text-caption"
+                    />
+                  </div>
+
+                  <!-- PR prompt template -->
+                  <div class="q-mb-md">
+                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.prPromptTemplate.project') }}</div>
+                    <q-input
+                      v-model="projectForm.prPromptTemplate"
+                      type="textarea"
+                      dense
+                      dark
+                      outlined
+                      :rows="4"
+                      :placeholder="$t('settings.prPromptPlaceholder.project')"
+                      class="settings-input mono-textarea"
+                    />
+                  </div>
+
+                  <!-- Git conventions (project override) -->
+                  <div class="q-mb-md">
+                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.gitConventions.project') }}</div>
+                    <q-input
+                      v-model="projectForm.gitConventions"
+                      type="textarea"
+                      dense
+                      dark
+                      outlined
+                      :rows="6"
+                      :placeholder="$t('settings.gitConventionsEmpty')"
+                      class="settings-input mono-textarea"
+                    />
+                    <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.gitConventionsEmpty') }}</div>
+                  </div>
+
+                  <!-- Setup Script -->
+                  <div class="q-mb-lg">
+                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.setupScript') }}</div>
+                    <q-input
+                      v-model="projectForm.setupScript"
+                      type="textarea"
+                      dense
+                      dark
+                      outlined
+                      :rows="5"
+                      :placeholder="$t('settings.setupScriptPlaceholder')"
+                      class="settings-input mono-textarea"
+                    />
+                    <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.setupScriptHint') }}</div>
+                  </div>
+
+                  <!-- Dev Server -->
+                  <div class="q-mb-lg">
+                    <div class="field-label text-body2 text-weight-medium q-mb-sm text-grey-6">{{ $t('settings.devServer') }}</div>
+                    <div class="q-mb-md">
+                      <div class="field-label-sub text-caption q-mb-xs text-grey-7">{{ $t('settings.devServerStart') }}</div>
+                      <q-input
+                        v-model="projectForm.devServer.startCommand"
+                        type="textarea"
+                        dense
+                        dark
+                        outlined
+                        :rows="3"
+                        :placeholder="$t('settings.devServerStartPlaceholder')"
+                        class="settings-input mono-textarea"
+                      />
+                    </div>
+                    <div>
+                      <div class="field-label-sub text-caption q-mb-xs text-grey-7">{{ $t('settings.devServerStop') }}</div>
+                      <q-input
+                        v-model="projectForm.devServer.stopCommand"
+                        type="textarea"
+                        dense
+                        dark
+                        outlined
+                        :rows="3"
+                        :placeholder="$t('settings.devServerStopPlaceholder')"
+                        class="settings-input mono-textarea"
+                      />
+                    </div>
+                  </div>
+
+                  <!-- E2E tests -->
+                  <div class="q-mb-lg">
+                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.e2e.title') }}</div>
+                    <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.e2e.helpText') }}</div>
+
+                    <q-select
+                      v-model="projectForm.e2e.framework"
+                      :options="[
+                        { label: $t('settings.e2e.frameworkNone'), value: '' },
+                        { label: 'Cypress', value: 'cypress' },
+                        { label: 'Playwright', value: 'playwright' },
+                        { label: 'Jest', value: 'jest' },
+                        { label: 'Vitest', value: 'vitest' },
+                        { label: $t('settings.e2e.frameworkOther'), value: 'other' },
+                      ]"
+                      emit-value
+                      map-options
+                      dense
+                      dark
+                      outlined
+                      class="settings-input q-mb-sm"
+                      :label="$t('settings.e2e.framework')"
+                    />
+
+                    <template v-if="projectForm.e2e.framework">
+                      <q-select
+                        v-model="projectForm.e2e.skill"
+                        :options="filteredSkills"
+                        use-input
+                        fill-input
+                        hide-selected
+                        hide-dropdown-icon
+                        input-debounce="200"
+                        new-value-mode="add-unique"
+                        dense
+                        dark
+                        outlined
+                        class="settings-input q-mb-sm"
+                        :label="$t('settings.e2e.skill')"
+                        :placeholder="$t('settings.e2e.skillPlaceholder')"
+                        @filter="filterSkills"
+                      />
+                      <q-input
+                        v-model="projectForm.e2e.prompt"
+                        type="textarea"
+                        autogrow
+                        dense
+                        dark
+                        outlined
+                        class="settings-input mono-textarea"
+                        :label="$t('settings.e2e.prompt')"
+                        :placeholder="$t('settings.e2e.promptPlaceholder')"
+                      />
+                    </template>
+                  </div>
+
+                  <!-- Auto-loop finalization -->
+                  <div class="q-mb-lg">
+                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">
+                      {{ $t('settings.finalization.title') }}
+                    </div>
+                    <div class="text-caption text-grey-7 q-mb-sm">
+                      {{ $t('settings.finalization.helpText') }}
+                    </div>
+                    <q-input
+                      v-model="projectForm.finalization.prompt"
+                      type="textarea"
+                      autogrow
+                      rows="4"
+                      dense
+                      dark
+                      outlined
+                      class="settings-input mono-textarea q-mb-sm"
+                      :label="$t('settings.finalization.prompt')"
+                      :placeholder="$t('settings.finalization.promptPlaceholder')"
+                    />
+                  </div>
+
+                  <!-- Actions -->
+                  <div class="row items-center q-gutter-sm">
+                    <q-btn
+                      v-if="!isNewProject"
+                      :label="$t('common.delete')"
+                      no-caps
+                      flat
+                      color="red-5"
+                      :loading="deletingProject"
+                      @click="deleteProject"
+                    />
+                    <q-space />
+                    <q-btn
+                      :label="$t('common.save')"
+                      no-caps
+                      unelevated
+                      color="primary"
+                      :loading="savingProject"
+                      @click="saveProject"
+                    />
+                  </div>
+                </template>
+
+                <!-- No selection state -->
+                <template v-else>
+                  <div class="column items-center justify-center" style="height: 100%; min-height: 300px;">
+                    <q-icon name="folder_open" size="48px" color="grey-7" class="q-mb-md" />
+                    <div class="text-body2 text-grey-8">
+                      {{ $t('settings.selectProject') }}
+                    </div>
+                  </div>
+                </template>
+              </div>
+            </div>
+          </div>
+        </q-tab-panel>
+        <!-- Templates tab -->
+        <q-tab-panel name="templates" class="q-pa-none">
+          <div class="settings-card rounded-borders q-pa-lg">
+            <div class="row items-center justify-between q-mb-md">
+              <div class="text-subtitle1 text-weight-medium text-grey-3">
+                {{ $t('templates.title') }}
+              </div>
+              <q-btn
+                color="primary"
+                icon="add"
+                :label="$t('templates.newTemplate')"
+                dense
+                no-caps
+                @click="openCreateDialog"
+              />
+            </div>
+
+            <q-separator dark class="q-mb-md" />
+
+            <div v-if="sortedTemplates.length === 0" class="text-grey-6 q-py-lg text-center">
+              {{ $t('templates.empty') }}
+            </div>
+
+            <div v-else class="column q-gutter-sm">
+              <q-card
+                v-for="template in sortedTemplates"
+                :key="template.slug"
+                dark
+                flat
+                bordered
+                class="q-pa-md template-card"
+              >
+                <div class="row items-start justify-between no-wrap">
+                  <div class="col">
+                    <div class="text-body1 text-weight-medium" style="font-family: 'Roboto Mono', monospace;">
+                      /{{ template.slug }}
+                    </div>
+                    <div class="text-caption text-grey-5 q-mt-xs">{{ template.description }}</div>
+                  </div>
+                  <div class="row no-wrap q-gutter-xs">
+                    <q-btn flat dense round size="sm" icon="edit" color="grey-5" @click="openEditDialog(template)">
+                      <q-tooltip>{{ $t('templates.editTemplate') }}</q-tooltip>
+                    </q-btn>
+                    <q-btn flat dense round size="sm" icon="delete" color="red-4" @click="confirmDeleteTemplate(template)">
+                      <q-tooltip>{{ $t('templates.deleteTemplate') }}</q-tooltip>
+                    </q-btn>
+                  </div>
+                </div>
+              </q-card>
+            </div>
+
+            <div class="text-caption text-grey-7 q-mt-lg" style="font-family: 'Roboto Mono', monospace;">
+              {{ $t('templates.filePath', { path: '~/.config/kobo/templates.json' }) }}
+            </div>
+          </div>
+        </q-tab-panel>
+      </q-tab-panels>
+    </div>
+
+    <!-- Templates create/edit dialog -->
+    <q-dialog v-model="showTemplateDialog" persistent>
+      <q-card dark style="min-width: 560px; max-width: 800px; width: 80vw;">
+        <q-card-section>
+          <div class="text-subtitle1">
+            {{ editingSlug === null ? $t('templates.newTemplate') : $t('templates.editTemplate') }}
+          </div>
+        </q-card-section>
+
+        <q-card-section class="q-gutter-md">
+          <q-input
+            v-model="formSlug"
+            :label="$t('templates.slug')"
+            :hint="$t('templates.slugHint')"
+            dark
+            dense
+            prefix="/"
+            :disable="editingSlug !== null"
+            :rules="[(v) => /^[a-z0-9][a-z0-9-]{0,63}$/.test(v) || $t('templates.slugInvalid')]"
+            lazy-rules
+          />
+          <q-input
+            v-model="formDescription"
+            :label="$t('templates.description')"
+            :hint="$t('templates.descriptionHint')"
+            dark
+            dense
+            counter
+            maxlength="120"
+            :rules="[(v) => (v && v.trim().length > 0) || '']"
+          />
+          <q-input
+            v-model="formContent"
+            :label="$t('templates.content')"
+            :hint="$t('templates.contentHint')"
+            dark
+            dense
+            type="textarea"
+            autogrow
+            counter
+            maxlength="4096"
+            :rules="[(v) => (v && v.trim().length > 0) || '']"
+          />
+          <q-expansion-item
+            dense
+            dense-toggle
+            :label="$t('templates.availableVars')"
+            header-class="text-grey-6 text-caption q-pa-none"
+            style="font-size: 11px;"
+          >
+            <div class="q-pl-md q-pt-xs" style="font-size: 11px; font-family: 'Roboto Mono', monospace; columns: 2; column-gap: 24px;">
+              <div v-for="v in availableVarsDisplay" :key="v" class="text-grey-5 q-mb-xs">
+                {{ v }}
+              </div>
+            </div>
+          </q-expansion-item>
+          <div v-if="formError" class="text-negative text-caption">{{ formError }}</div>
+        </q-card-section>
+
+        <q-card-actions align="right">
+          <q-btn flat :label="$t('common.cancel')" v-close-popup />
+          <q-btn
+            flat
+            color="primary"
+            :label="editingSlug === null ? $t('templates.create') : $t('templates.save')"
+            :loading="saving"
+            @click="saveTemplate"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+  </q-page>
+</template>
+
+<script setup lang="ts">
+import { useQuasar } from 'quasar'
+import { MODEL_OPTION_DEFS } from 'src/constants/models'
+import type { ProjectSettings } from 'src/stores/settings'
+import { useSettingsStore } from 'src/stores/settings'
+import { type Template, useTemplatesStore } from 'src/stores/templates'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const $q = useQuasar()
+const store = useSettingsStore()
+const templatesStore = useTemplatesStore()
+const { t, locale } = useI18n()
+
+// Tab state
+const activeTab = ref('global')
+
+// Global form
+const globalModel = ref('auto')
+const globalSkipPermissions = ref(true)
+const globalPrPrompt = ref('')
+const globalGitConventions = ref('')
+const globalEditorCommand = ref('')
+const globalBrowserNotifications = ref(true)
+const globalAudioNotifications = ref(true)
+const globalNotionStatusProperty = ref('')
+const globalNotionStatus = ref('')
+const globalDefaultPermissionMode = ref('plan')
+const globalNotionMcpKey = ref('')
+const globalSentryMcpKey = ref('')
+const globalTags = ref<string[]>([])
+const savingGlobal = ref(false)
+
+// Project form
+const selectedProjectIndex = ref(-1)
+const isNewProject = ref(false)
+const projectForm = ref({
+  path: '',
+  displayName: '',
+  defaultSourceBranch: '',
+  defaultModel: '',
+  dangerouslySkipPermissions: true,
+  prPromptTemplate: '',
+  gitConventions: '',
+  setupScript: '',
+  devServer: { startCommand: '', stopCommand: '' },
+  e2e: { framework: '' as 'cypress' | 'playwright' | 'jest' | 'vitest' | 'other' | '', skill: '', prompt: '' },
+  finalization: { prompt: '' },
+})
+
+// Skills catalogue (fetched once, used for E2E skill autocomplete)
+const availableSkills = ref<string[]>([])
+const filteredSkills = ref<string[]>([])
+async function fetchAvailableSkills() {
+  try {
+    const res = await fetch('/api/skills')
+    if (res.ok) availableSkills.value = await res.json()
+  } catch {
+    /* non-fatal — autocomplete just stays empty */
+  }
+}
+function filterSkills(input: string, update: (cb: () => void) => void) {
+  update(() => {
+    const needle = input.trim().toLowerCase()
+    filteredSkills.value = needle
+      ? availableSkills.value.filter((s) => s.toLowerCase().includes(needle))
+      : availableSkills.value.slice()
+  })
+}
+
+// Branch fetching for project form
+const projectBranches = ref<string[]>([])
+const loadingBranches = ref(false)
+const savingProject = ref(false)
+const deletingProject = ref(false)
+
+// Templates dialog state
+const showTemplateDialog = ref(false)
+const editingSlug = ref<string | null>(null) // null = create mode
+const formSlug = ref('')
+const formDescription = ref('')
+const formContent = ref('')
+const formError = ref('')
+const saving = ref(false)
+
+const sortedTemplates = computed(() => [...templatesStore.templates].sort((a, b) => a.slug.localeCompare(b.slug)))
+
+const availableVarsDisplay = [
+  '{workspace_name}',
+  '{working_branch}',
+  '{source_branch}',
+  '{project_path}',
+  '{worktree_path}',
+  '{commit_count}',
+  '{unpushed_count}',
+  '{files_changed}',
+  '{insertions}',
+  '{deletions}',
+  '{pr_number}',
+  '{pr_url}',
+  '{pr_state}',
+  '{session_name}',
+]
+
+function openCreateDialog() {
+  editingSlug.value = null
+  formSlug.value = ''
+  formDescription.value = ''
+  formContent.value = ''
+  formError.value = ''
+  showTemplateDialog.value = true
+}
+
+function openEditDialog(template: Template) {
+  editingSlug.value = template.slug
+  formSlug.value = template.slug
+  formDescription.value = template.description
+  formContent.value = template.content
+  formError.value = ''
+  showTemplateDialog.value = true
+}
+
+async function saveTemplate() {
+  formError.value = ''
+  const trimmedSlug = formSlug.value.trim()
+  const trimmedDesc = formDescription.value.trim()
+  // Explicit guard for create mode: slug field is free-form and q-input `:rules`
+  // run on blur not on the save button, so an empty slug would sneak through.
+  if (editingSlug.value === null && !/^[a-z0-9][a-z0-9-]{0,63}$/.test(trimmedSlug)) {
+    formError.value = t('templates.slugInvalid')
+    return
+  }
+  if (!trimmedDesc) {
+    formError.value = t('templates.descriptionRequired')
+    return
+  }
+  if (!formContent.value.trim()) {
+    formError.value = t('templates.contentRequired')
+    return
+  }
+  saving.value = true
+  try {
+    if (editingSlug.value === null) {
+      await templatesStore.createTemplate({
+        slug: trimmedSlug,
+        description: trimmedDesc,
+        content: formContent.value, // keep user's whitespace for multiline prompts
+      })
+    } else {
+      await templatesStore.updateTemplate(editingSlug.value, {
+        description: trimmedDesc,
+        content: formContent.value,
+      })
+    }
+    showTemplateDialog.value = false
+  } catch (err) {
+    formError.value = err instanceof Error ? err.message : t('templates.createFailed')
+  } finally {
+    saving.value = false
+  }
+}
+
+async function confirmDeleteTemplate(template: Template) {
+  $q.dialog({
+    title: t('templates.deleteTemplate'),
+    message: `${t('templates.deleteConfirm', { slug: template.slug })}\n\n${t('templates.deleteConfirmMessage')}`,
+    dark: true,
+    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    ok: { flat: true, label: t('templates.deleteTemplate'), color: 'red-5' },
+  }).onOk(async () => {
+    try {
+      await templatesStore.deleteTemplate(template.slug)
+    } catch (err) {
+      $q.notify({
+        type: 'negative',
+        message: err instanceof Error ? err.message : t('templates.deleteFailed'),
+        position: 'top',
+      })
+    }
+  })
+}
+
+// Language options
+const languageOptions = [
+  { label: 'English', value: 'en' },
+  { label: 'Français', value: 'fr' },
+  { label: 'Deutsch', value: 'de' },
+  { label: 'Español', value: 'es' },
+  { label: 'Italiano', value: 'it' },
+]
+
+function onLanguageChange(val: string) {
+  locale.value = val
+  localStorage.setItem('kobo:locale', val)
+}
+
+// Model options
+const modelOptions = computed(() => [
+  ...MODEL_OPTION_DEFS.map((option) => ({ label: t(option.i18nLabelKey), value: option.value })),
+])
+
+const projectModelOptions = computed(() => [{ label: t('settings.useGlobal'), value: '' }, ...modelOptions.value])
+
+// Available template variables reference (displayed in the Global tab)
+const availableVariables = computed(() => [
+  { name: '{{pr_number}}', description: t('settings.var.prNumber') },
+  { name: '{{pr_url}}', description: t('settings.var.prUrl') },
+  { name: '{{branch_name}}', description: t('settings.var.branchName') },
+  { name: '{{source_branch}}', description: t('settings.var.sourceBranch') },
+  { name: '{{workspace_name}}', description: t('settings.var.workspaceName') },
+  { name: '{{project_name}}', description: t('settings.var.projectName') },
+  { name: '{{notion_url}}', description: t('settings.var.notionUrl') },
+  { name: '{{commits}}', description: t('settings.var.commits') },
+  { name: '{{diff_stats}}', description: t('settings.var.diffStats') },
+  { name: '{{tasks}}', description: t('settings.var.tasks') },
+  { name: '{{acceptance_criteria}}', description: t('settings.var.acceptanceCriteria') },
+])
+
+const mcpServerOptions = computed(() => [
+  { label: t('settings.mcpAutoSelect'), value: '' },
+  ...store.activeMcpServers.map((server) => ({
+    label: server.key,
+    value: server.key,
+  })),
+])
+
+// Selected project
+const selectedProject = computed<ProjectSettings | null>(() => {
+  if (selectedProjectIndex.value < 0 || selectedProjectIndex.value >= store.projects.length) {
+    return null
+  }
+  return store.projects[selectedProjectIndex.value] ?? null
+})
+
+// Init global form from store
+function syncGlobalForm() {
+  globalModel.value = store.global.defaultModel
+  globalSkipPermissions.value = store.global.dangerouslySkipPermissions ?? true
+  globalPrPrompt.value = store.global.prPromptTemplate
+  globalGitConventions.value = store.global.gitConventions
+  globalEditorCommand.value = store.global.editorCommand ?? ''
+  globalBrowserNotifications.value = store.global.browserNotifications ?? true
+  globalAudioNotifications.value = store.global.audioNotifications ?? true
+  globalNotionStatusProperty.value = store.global.notionStatusProperty ?? ''
+  globalNotionStatus.value = store.global.notionInProgressStatus ?? ''
+  globalDefaultPermissionMode.value = store.global.defaultPermissionMode || 'plan'
+  globalNotionMcpKey.value = store.global.notionMcpKey ?? ''
+  globalSentryMcpKey.value = store.global.sentryMcpKey ?? ''
+  globalTags.value = Array.isArray(store.global.tags) ? [...store.global.tags] : []
+}
+
+// Init project form from selected project
+function syncProjectForm(project: ProjectSettings | null) {
+  if (!project) {
+    projectForm.value = {
+      path: '',
+      displayName: '',
+      defaultSourceBranch: '',
+      defaultModel: '',
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      gitConventions: '',
+      setupScript: '',
+      devServer: { startCommand: '', stopCommand: '' },
+      e2e: { framework: '', skill: '', prompt: '' },
+      finalization: { prompt: '' },
+    }
+    projectBranches.value = []
+    return
+  }
+  projectForm.value = {
+    path: project.path,
+    displayName: project.displayName,
+    defaultSourceBranch: project.defaultSourceBranch,
+    defaultModel: project.defaultModel,
+    dangerouslySkipPermissions: project.dangerouslySkipPermissions ?? true,
+    prPromptTemplate: project.prPromptTemplate,
+    gitConventions: project.gitConventions ?? '',
+    setupScript: project.setupScript ?? '',
+    devServer: {
+      startCommand: project.devServer?.startCommand ?? '',
+      stopCommand: project.devServer?.stopCommand ?? '',
+    },
+    e2e: {
+      framework: project.e2e?.framework ?? '',
+      skill: project.e2e?.skill ?? '',
+      prompt: project.e2e?.prompt ?? '',
+    },
+    finalization: {
+      prompt: project.finalization?.prompt ?? '',
+    },
+  }
+  if (project.path) {
+    void fetchProjectBranches(project.path)
+  }
+}
+
+// Fetch branches for project path
+async function fetchProjectBranches(path: string) {
+  if (!path.trim()) {
+    projectBranches.value = []
+    return
+  }
+  loadingBranches.value = true
+  try {
+    const res = await fetch(`/api/git/branches?path=${encodeURIComponent(path.trim())}`)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const data = await res.json()
+    projectBranches.value = data.local ?? data.branches ?? []
+  } catch {
+    projectBranches.value = []
+  } finally {
+    loadingBranches.value = false
+  }
+}
+
+// Debounce path changes for branch fetching
+let pathDebounce: ReturnType<typeof setTimeout> | null = null
+watch(
+  () => projectForm.value.path,
+  (val) => {
+    if (pathDebounce) clearTimeout(pathDebounce)
+    pathDebounce = setTimeout(() => {
+      void fetchProjectBranches(val)
+    }, 500)
+  },
+)
+
+// Watch selected project changes
+watch(selectedProjectIndex, () => {
+  isNewProject.value = false
+  syncProjectForm(selectedProject.value)
+})
+
+// Save global settings
+const importFileInput = ref<HTMLInputElement | null>(null)
+
+async function exportConfig() {
+  try {
+    const res = await fetch('/api/settings/export')
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const data = await res.json()
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `kobo-config-${new Date().toISOString().replace(/[:.]/g, '-')}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    $q.notify({ type: 'positive', message: t('settings.exportSuccess'), position: 'top', timeout: 3000 })
+  } catch (err) {
+    $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 4000 })
+  }
+}
+
+function triggerImport() {
+  importFileInput.value?.click()
+}
+
+async function onImportFile(event: Event) {
+  const input = event.target as HTMLInputElement
+  const file = input.files?.[0]
+  if (!file) return
+  try {
+    $q.dialog({
+      title: t('settings.importConfirmTitle'),
+      message: t('settings.importConfirmMessage'),
+      cancel: true,
+      persistent: true,
+      dark: true,
+    }).onOk(async () => {
+      try {
+        const text = await file.text()
+        const bundle = JSON.parse(text)
+        const res = await fetch('/api/settings/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(bundle),
+        })
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}))
+          throw new Error(body.error ?? `HTTP ${res.status}`)
+        }
+        await store.fetchSettings()
+        syncGlobalForm()
+        $q.notify({ type: 'positive', message: t('settings.importSuccess'), position: 'top', timeout: 3000 })
+      } catch (err) {
+        $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 5000 })
+      }
+    })
+  } finally {
+    input.value = ''
+  }
+}
+
+async function saveGlobal() {
+  savingGlobal.value = true
+  try {
+    await store.updateGlobal({
+      defaultModel: globalModel.value,
+      dangerouslySkipPermissions: globalSkipPermissions.value,
+      prPromptTemplate: globalPrPrompt.value,
+      gitConventions: globalGitConventions.value,
+      editorCommand: globalEditorCommand.value,
+      browserNotifications: globalBrowserNotifications.value,
+      audioNotifications: globalAudioNotifications.value,
+      notionStatusProperty: globalNotionStatusProperty.value,
+      notionInProgressStatus: globalNotionStatus.value,
+      defaultPermissionMode: globalDefaultPermissionMode.value,
+      notionMcpKey: globalNotionMcpKey.value,
+      sentryMcpKey: globalSentryMcpKey.value,
+      tags: globalTags.value,
+    })
+    $q.notify({ type: 'positive', message: t('settings.saved'), position: 'top' })
+  } catch {
+    $q.notify({ type: 'negative', message: t('settings.saveError'), position: 'top' })
+  } finally {
+    savingGlobal.value = false
+  }
+}
+
+// Save project
+async function saveProject() {
+  if (!projectForm.value.path.trim()) {
+    $q.notify({ type: 'negative', message: t('settings.projectPathRequired'), position: 'top' })
+    return
+  }
+  savingProject.value = true
+  try {
+    await store.upsertProject(projectForm.value.path.trim(), {
+      displayName: projectForm.value.displayName,
+      defaultSourceBranch: projectForm.value.defaultSourceBranch,
+      defaultModel: projectForm.value.defaultModel,
+      dangerouslySkipPermissions: projectForm.value.dangerouslySkipPermissions,
+      prPromptTemplate: projectForm.value.prPromptTemplate,
+      gitConventions: projectForm.value.gitConventions,
+      setupScript: projectForm.value.setupScript,
+      devServer: projectForm.value.devServer,
+      e2e: projectForm.value.e2e,
+      finalization: projectForm.value.finalization,
+    })
+    isNewProject.value = false
+    // Select the project we just saved
+    const idx = store.projects.findIndex((p) => p.path === projectForm.value.path.trim())
+    if (idx >= 0) selectedProjectIndex.value = idx
+    $q.notify({ type: 'positive', message: t('settings.projectSaved'), position: 'top' })
+  } catch {
+    $q.notify({ type: 'negative', message: t('settings.projectSaveError'), position: 'top' })
+  } finally {
+    savingProject.value = false
+  }
+}
+
+// Delete project
+async function deleteProject() {
+  if (!selectedProject.value) return
+  deletingProject.value = true
+  try {
+    await store.deleteProject(selectedProject.value.path)
+    selectedProjectIndex.value = -1
+    isNewProject.value = false
+    syncProjectForm(null)
+    $q.notify({ type: 'positive', message: t('settings.projectDeleted'), position: 'top' })
+  } catch {
+    $q.notify({ type: 'negative', message: t('settings.projectDeleteError'), position: 'top' })
+  } finally {
+    deletingProject.value = false
+  }
+}
+
+// Add new project
+function addNewProject() {
+  selectedProjectIndex.value = -1
+  isNewProject.value = true
+  syncProjectForm(null)
+}
+
+// Select a project from the list
+function selectProject(index: number) {
+  isNewProject.value = false
+  selectedProjectIndex.value = index
+}
+
+// Display name for project list
+function projectDisplayName(project: ProjectSettings): string {
+  if (project.displayName) return project.displayName
+  const parts = project.path.split('/')
+  return parts[parts.length - 1] ?? project.path
+}
+
+// Branch filter options for q-select
+const branchFilterOptions = ref<string[]>([])
+
+function filterBranches(val: string, update: (fn: () => void) => void) {
+  update(() => {
+    branchFilterOptions.value = val
+      ? projectBranches.value.filter((b) => b.toLowerCase().includes(val.toLowerCase()))
+      : projectBranches.value
+  })
+}
+
+// Init
+onMounted(async () => {
+  await Promise.all([store.fetchSettings(), store.fetchActiveMcpServers(), fetchAvailableSkills()])
+  syncGlobalForm()
+})
+
+// Cleanup debounce timer on unmount
+onUnmounted(() => {
+  if (pathDebounce) clearTimeout(pathDebounce)
+})
+</script>
+
+<style lang="scss" scoped>
+.settings-page {
+  background-color: #1a1a2e;
+  min-height: 100%;
+  padding: 32px 24px;
+}
+
+.settings-inner {
+  width: 100%;
+  max-width: 900px;
+  margin: 0 auto;
+}
+
+.settings-header {
+  min-height: 48px;
+}
+
+.settings-tabs {
+  :deep(.q-tab) {
+    color: #888;
+    text-transform: none;
+    font-weight: 500;
+  }
+
+  :deep(.q-tab--active) {
+    color: #6c63ff;
+  }
+}
+
+.settings-panels {
+  background: transparent;
+}
+
+.settings-card {
+  background: #222244;
+  border: 1px solid #2a2a4a;
+}
+
+.template-card {
+  background: #1a1a2e;
+  border: 1px solid #2a2a4a;
+}
+
+// field-label: font-size and font-weight moved to template (text-body2 text-weight-medium)
+
+// field-label-sub: font-size moved to template (text-caption)
+
+.settings-input {
+  :deep(.q-field__control) {
+    background: #1a1a2e;
+    border-color: #2a2a4a;
+  }
+
+  :deep(.q-field__native),
+  :deep(input),
+  :deep(textarea) {
+    color: #e0e0e0;
+  }
+
+  :deep(.q-field__label) {
+    color: #888;
+  }
+}
+
+.mono-textarea {
+  :deep(textarea) {
+    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-size: 13px;
+  }
+}
+
+.readonly-input {
+  :deep(.q-field__control) {
+    background: #16162a;
+  }
+
+  :deep(input) {
+    color: #888;
+  }
+}
+
+.project-list-col {
+  width: 30%;
+  min-width: 200px;
+  max-width: 280px;
+  flex-shrink: 0;
+  overflow: hidden;
+}
+
+.project-form-col {
+  flex: 1;
+  min-width: 0;
+}
+
+.project-item {
+  &:hover {
+    background-color: rgba(255, 255, 255, 0.03);
+  }
+}
+
+.project-item--active {
+  background-color: #2a2a4a !important;
+  border-left: 3px solid #6c63ff;
+}
+</style>

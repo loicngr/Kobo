@@ -1,0 +1,124 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version_type:
+        description: Version bump type
+        required: true
+        default: patch
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  id-token: write
+
+jobs:
+  release:
+    name: Bump, build, publish, release
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify tag commit is on develop
+        run: |
+          git fetch origin develop
+          if ! git merge-base --is-ancestor HEAD origin/develop; then
+            echo "::error::This workflow must be run from a commit that is an ancestor of origin/develop"
+            exit 1
+          fi
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            src/client/package-lock.json
+          registry-url: https://registry.npmjs.org
+
+      - name: Install root dependencies
+        run: npm ci
+
+      - name: Install client dependencies
+        working-directory: src/client
+        run: npm ci
+
+      - name: Audit root dependencies
+        run: npm audit --audit-level=high
+
+      - name: Audit client dependencies
+        working-directory: src/client
+        run: npm audit --audit-level=high
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Run backend tests
+        run: npm test
+
+      - name: Run frontend tests
+        working-directory: src/client
+        run: npm test
+
+      - name: Configure git
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Bump version and tag
+        id: bump
+        env:
+          VERSION_TYPE: ${{ inputs.version_type }}
+        run: |
+          new_version=$(npm version "$VERSION_TYPE" --no-git-tag-version)
+          new_tag="$new_version"
+          echo "new_version=$new_version" >> "$GITHUB_OUTPUT"
+          echo "new_tag=$new_tag" >> "$GITHUB_OUTPUT"
+
+          git add package.json package-lock.json
+          git commit -m "chore(release): $new_version"
+          git tag "$new_tag"
+
+      - name: Build client and server
+        run: npm run build
+
+      - name: Publish to npm
+        run: npm publish --provenance
+
+      - name: Push commit and tag
+        env:
+          NEW_TAG: ${{ steps.bump.outputs.new_tag }}
+        run: |
+          git push origin HEAD:develop
+          git push origin "$NEW_TAG"
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.bump.outputs.new_tag }}
+          name: ${{ steps.bump.outputs.new_tag }}
+          generate_release_notes: true
+          body: |
+            Published to npm as [`@loicngr/kobo@${{ steps.bump.outputs.new_version }}`](https://www.npmjs.com/package/@loicngr/kobo/v/${{ steps.bump.outputs.new_version }}).
+
+            Install:
+            ```bash
+            PORT=9999 npx @loicngr/kobo@${{ steps.bump.outputs.new_version }}
+            ```

@@ -1,0 +1,2 @@
+{"type":"assistant","session_id":"abc-123-def","message":{"id":"msg_2","role":"assistant","content":[{"type":"tool_use","id":"toolu_01","name":"Read","input":{"file_path":"/tmp/foo.ts"}}]}}
+{"type":"user","session_id":"abc-123-def","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"file contents here","is_error":false}]}}

@@ -1,0 +1,24 @@
+// App global styles
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#q-app {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+}
+
+.bg-dark-sidebar {
+  background-color: #16162a;
+}
+
+.bg-dark-main {
+  background-color: #1a1a2e;
+}
+
+.bg-dark-card {
+  background-color: #222244;
+}

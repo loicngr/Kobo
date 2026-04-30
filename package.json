@@ -1,0 +1,88 @@
+{
+  "name": "@loicngr/kobo",
+  "version": "1.6.15",
+  "description": "Kōbō — multi-workspace agent manager for Claude Code. Orchestrates isolated git worktrees with dev servers, Notion integration, and MCP tools.",
+  "type": "module",
+  "license": "GPL-3.0-or-later",
+  "bin": {
+    "kobo": "./dist/server/index.js"
+  },
+  "files": [
+    "dist/",
+    "src/client/dist/spa/",
+    "src/mcp-server/",
+    "AGENTS.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "author": {
+    "name": "loicngr",
+    "email": "loicnogier@ik.me",
+    "url": "https://github.com/loicngr"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/loicngr/kobo.git"
+  },
+  "bugs": {
+    "url": "https://github.com/loicngr/kobo/issues"
+  },
+  "homepage": "https://github.com/loicngr/kobo#readme",
+  "keywords": [
+    "claude",
+    "claude-code",
+    "agent",
+    "mcp",
+    "workspace",
+    "worktree",
+    "hono",
+    "vue",
+    "quasar"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "KOBO_ENFORCE_LOCAL_HOME=1 KOBO_HOME=./data PORT=3300 tsx watch src/server/index.ts",
+    "dev:client": "cd src/client && KOBO_BACKEND_PORT=3300 npx quasar dev",
+    "dev:all": "concurrently \"npm run dev\" \"npm run dev:client\"",
+    "build:client": "cd src/client && npx quasar build",
+    "build:server": "npx tsc && chmod +x dist/server/index.js",
+    "build": "npm run build:client && npm run build:server",
+    "install-all": "npm install && cd src/client && npm install",
+    "start": "node dist/server/index.js",
+    "test": "vitest run --config vitest.config.ts --root .",
+    "test:watch": "vitest --config vitest.config.ts --root .",
+    "test:client": "cd src/client && npm test",
+    "test:all": "npm test && npm run test:client",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write .",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.13",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "better-sqlite3": "^12.8.0",
+    "hono": "^4.12.12",
+    "nanoid": "^5.1.7",
+    "node-pty": "^1.1.0",
+    "ws": "^8.20.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.4.10",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.5.2",
+    "@types/ws": "^8.18.1",
+    "@vitest/runner": "^4.1.2",
+    "concurrently": "^9.2.1",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2",
+    "vitest": "^3.2.4"
+  }
+}

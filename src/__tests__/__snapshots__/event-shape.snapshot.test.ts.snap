@@ -1,0 +1,99 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`AgentEvent shape snapshot > matches the snapshot > agent-event-shape 1`] = `
+"{
+  "session:started": {
+    "kind": "session:started",
+    "engineSessionId": "s1",
+    "model": "claude-sonnet-4-6"
+  },
+  "session:ended": {
+    "kind": "session:ended",
+    "reason": "completed",
+    "exitCode": 0
+  },
+  "session:compacted": {
+    "kind": "session:compacted"
+  },
+  "session:brainstorm-complete": {
+    "kind": "session:brainstorm-complete"
+  },
+  "message:text": {
+    "kind": "message:text",
+    "messageId": "m1",
+    "text": "hi",
+    "streaming": false
+  },
+  "message:thinking": {
+    "kind": "message:thinking",
+    "messageId": "m1",
+    "text": "thinking…"
+  },
+  "message:end": {
+    "kind": "message:end",
+    "messageId": "m1"
+  },
+  "message:raw": {
+    "kind": "message:raw",
+    "content": "raw line"
+  },
+  "tool:call": {
+    "kind": "tool:call",
+    "messageId": "m1",
+    "toolCallId": "t1",
+    "name": "Read",
+    "input": {
+      "path": "/x"
+    }
+  },
+  "tool:result": {
+    "kind": "tool:result",
+    "toolCallId": "t1",
+    "output": "ok",
+    "isError": false
+  },
+  "subagent:progress": {
+    "kind": "subagent:progress",
+    "toolCallId": "t2",
+    "status": "running",
+    "description": "sub",
+    "taskType": "explore",
+    "lastToolName": "Grep",
+    "totalTokens": 100,
+    "toolUses": 2,
+    "durationMs": 1500
+  },
+  "skills:discovered": {
+    "kind": "skills:discovered",
+    "skills": [
+      "a",
+      "b"
+    ]
+  },
+  "usage": {
+    "kind": "usage",
+    "inputTokens": 10,
+    "outputTokens": 20,
+    "cacheRead": 5,
+    "cacheWrite": 1,
+    "costUsd": 0.01
+  },
+  "rate_limit": {
+    "kind": "rate_limit",
+    "info": {
+      "buckets": [
+        {
+          "id": "five_hour",
+          "usedPct": 42,
+          "resetsAt": "2026-04-18T12:00:00Z"
+        }
+      ]
+    }
+  },
+  "error": {
+    "kind": "error",
+    "category": "quota",
+    "message": "rate limit"
+  }
+}"
+`;
