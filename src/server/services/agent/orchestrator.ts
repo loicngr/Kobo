@@ -253,21 +253,42 @@ export function reconcileOrphanSessions(): void {
       id: string
       pid: number | null
     }>
-    if (rows.length === 0) return
-
-    const now = new Date().toISOString()
-    const update = db.prepare("UPDATE agent_sessions SET status = 'error', ended_at = ? WHERE id = ?")
-    let fixed = 0
-    for (const row of rows) {
-      if (row.pid && isProcessAlive(row.pid)) continue // genuine leftover from a graceful restart — skip
-      update.run(now, row.id)
-      fixed++
-    }
-    if (fixed > 0) {
-      console.log(`[orchestrator] Reconciled ${fixed} orphan agent_sessions row(s) at boot.`)
+    if (rows.length > 0) {
+      const now = new Date().toISOString()
+      const update = db.prepare("UPDATE agent_sessions SET status = 'error', ended_at = ? WHERE id = ?")
+      let fixed = 0
+      for (const row of rows) {
+        if (row.pid && isProcessAlive(row.pid)) continue // genuine leftover from a graceful restart — skip
+        update.run(now, row.id)
+        fixed++
+      }
+      if (fixed > 0) {
+        console.log(`[orchestrator] Reconciled ${fixed} orphan agent_sessions row(s) at boot.`)
+      }
     }
   } catch (err) {
     console.error('[orchestrator] Failed to reconcile orphan agent_sessions at boot:', err)
+  }
+
+  // Workspaces stuck in `awaiting-user` after a server kill have no live
+  // controller to resolve canUseTool, so the chat input is disabled forever.
+  // Drop them back to `idle` so the user can interact (start fresh, etc).
+  // We bypass `updateWorkspaceStatus` here because the orchestrator/workspace
+  // module pair is circular and the reference may not be initialised at boot
+  // time when this runs; a raw SQL update is safe — the awaiting-user → idle
+  // transition is allowed by VALID_TRANSITIONS.
+  try {
+    const db = getDb()
+    const result = db
+      .prepare(
+        "UPDATE workspaces SET status = 'idle', updated_at = ? WHERE status = 'awaiting-user' AND archived_at IS NULL",
+      )
+      .run(new Date().toISOString())
+    if (result.changes > 0) {
+      console.log(`[orchestrator] Reconciled ${result.changes} awaiting-user workspace(s) at boot.`)
+    }
+  } catch (err) {
+    console.error('[orchestrator] Failed to reconcile awaiting-user workspaces at boot:', err)
   }
 }
 
@@ -468,6 +489,21 @@ export function forgetTasksDoneSnapshot(workspaceId: string): void {
 /** Drop the resume-failed flag for a workspace (called on delete). */
 export function forgetResumeFailed(workspaceId: string): void {
   resumeFailedSet.delete(workspaceId)
+}
+
+/** Drop the pending question/permission queue for a workspace (called on delete). */
+export function forgetPendingQueue(workspaceId: string): void {
+  pendingQueue.delete(workspaceId)
+}
+
+/** Drop the pre-await status snapshot for a workspace (called on delete). */
+export function forgetPreAwaitStatus(workspaceId: string): void {
+  preAwaitStatus.delete(workspaceId)
+}
+
+/** Drop the cached engine session id for a workspace (called on delete). */
+export function forgetSessionId(workspaceId: string): void {
+  sessionIds.delete(workspaceId)
 }
 
 function handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent): void {
@@ -697,6 +733,23 @@ export function startAgent(
         `[orchestrator] Evicting zombie controller for workspace '${workspaceId}' (status=${status}) before starting fresh session`,
       )
       void existingCtrl.stop().catch(() => {})
+      // Drop any queued pending items + persisted user-input-requested events
+      // tied to the zombie's agentSessionId so the new session doesn't inherit
+      // a stale queue and so a future sync replay doesn't resurrect them.
+      try {
+        clearPendingForSession(workspaceId, existingCtrl.agentSessionId)
+        preAwaitStatus.delete(workspaceId)
+        const db = getDb()
+        db.prepare(
+          `DELETE FROM ws_events
+           WHERE workspace_id = ?
+             AND session_id = ?
+             AND type = 'agent:event'
+             AND json_extract(payload, '$.kind') = 'session:user-input-requested'`,
+        ).run(workspaceId, existingCtrl.agentSessionId)
+      } catch (err) {
+        console.warn('[orchestrator] Failed to purge zombie pending state:', err)
+      }
       controllers.delete(workspaceId)
     } else {
       throw new Error(`Agent already running for workspace '${workspaceId}'`)

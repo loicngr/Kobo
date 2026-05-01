@@ -199,7 +199,7 @@ export const migrations: Migration[] = [
              WHEN permission_profile IN ('bypass', 'strict', 'interactive') THEN permission_profile
              ELSE 'bypass'
            END
-           WHERE permission_mode != 'plan' OR permission_mode IS NULL`,
+           WHERE permission_mode != 'plan'`,
         ).run()
       })()
     },

@@ -4,6 +4,7 @@ import {
   type Options,
   type PermissionResult,
   query,
+  type SDKMessage,
 } from '@anthropic-ai/claude-agent-sdk'
 import { nanoid } from 'nanoid'
 import type { AgentEngine, AgentEvent, EngineProcess, StartOptions } from '../types.js'
@@ -158,17 +159,21 @@ export function createClaudeCodeEngine(): AgentEngine {
       const iteratorPromise = (async () => {
         iteratorRunning = true
         try {
-          for await (const msg of q as AsyncIterable<unknown>) {
-            const events = mapSdkMessage(msg as never, mapperState)
+          for await (const msg of q as AsyncIterable<SDKMessage>) {
+            const events = mapSdkMessage(msg, mapperState)
             for (const ev of events) {
               if (ev.kind === 'session:started') discoveredSessionId = ev.engineSessionId
               safeEmit(ev)
             }
           }
+          // If the SDK ended with a `result.subtype === 'error_*'`, the
+          // event-mapper already surfaced an `error` event but the iterator
+          // still terminated naturally. Reflect that in the session:ended
+          // reason so the orchestrator transitions the workspace to `error`.
           safeEmit({
             kind: 'session:ended',
-            reason: 'completed',
-            exitCode: 0,
+            reason: mapperState.sawErrorResult ? 'error' : 'completed',
+            exitCode: mapperState.sawErrorResult ? null : 0,
           })
         } catch (err) {
           // Treat any abort we triggered (stop() → abortController.abort()) as

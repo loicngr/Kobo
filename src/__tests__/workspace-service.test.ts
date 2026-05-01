@@ -299,6 +299,30 @@ describe('deleteWorkspace(id)', () => {
     const { deleteWorkspace } = await import('../server/services/workspace-service.js')
     expect(() => deleteWorkspace('non-existent')).not.toThrow()
   })
+
+  it('purges in-memory orchestrator state on delete', async () => {
+    const { createWorkspace, deleteWorkspace } = await import('../server/services/workspace-service.js')
+    const orchestrator = await import('../server/services/agent/orchestrator.js')
+    const ws = createWorkspace({
+      name: 'Cleanup',
+      projectPath: '/p',
+      sourceBranch: 'main',
+      workingBranch: 'b-cleanup',
+    })
+
+    // Seed pending state directly into the orchestrator's internal Maps.
+    orchestrator
+      ._getPendingQueue()
+      .set(ws.id, [
+        { kind: 'question', agentSessionId: 's-zombie', toolCallId: 'tu-1', toolName: 'AskUserQuestion', input: {} },
+      ])
+    orchestrator._getSessionIds().set(ws.id, 'engine-sess-id')
+
+    deleteWorkspace(ws.id)
+
+    expect(orchestrator._getPendingQueue().has(ws.id)).toBe(false)
+    expect(orchestrator._getSessionIds().has(ws.id)).toBe(false)
+  })
 })
 
 describe('createTask(workspaceId, data)', () => {

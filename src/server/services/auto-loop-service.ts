@@ -300,6 +300,12 @@ function spawnNextIteration(workspaceId: string, opts: { throwOnStartAgentError?
   // Other modes (bypass/strict/interactive) are honored.
   const stored = (row.agent_permission_mode ?? 'bypass') as 'plan' | 'bypass' | 'strict' | 'interactive'
   const agentPermissionMode: 'bypass' | 'strict' | 'interactive' = stored === 'plan' ? 'bypass' : stored
+  if (stored === 'plan') {
+    console.warn(
+      `[auto-loop-service] Promoting plan → bypass for workspace ${workspaceId} — auto-loop cannot run in plan mode`,
+    )
+    emitEphemeral(workspaceId, 'autoloop:permission-overridden', { from: 'plan', to: 'bypass' })
+  }
 
   // Pre-check: if the worktree directory is gone (user `rm -rf`-ed it),
   // fail loudly rather than letting startAgent throw a deep engine error.

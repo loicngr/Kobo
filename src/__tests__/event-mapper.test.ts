@@ -339,5 +339,55 @@ describe('event-mapper', () => {
       // pauses. The result message just closes any open messages.
       expect(events.find((e) => e.kind.startsWith('session:user-input-requested'))).toBeUndefined()
     })
+
+    it('surfaces an error event and sets sawErrorResult for error_max_turns', () => {
+      const state = createMapperState()
+      const events = mapSdkMessage(
+        asMsg({
+          type: 'result',
+          subtype: 'error_max_turns',
+          session_id: 's',
+          usage: { input_tokens: 1, output_tokens: 2 },
+          error: 'reached max turns',
+        }),
+        state,
+      )
+      const error = events.find((e) => e.kind === 'error')
+      expect(error).toBeDefined()
+      expect(error).toMatchObject({ kind: 'error', category: 'other' })
+      expect((error as { message: string }).message).toContain('error_max_turns')
+      expect((error as { message: string }).message).toContain('reached max turns')
+      // usage event must still be emitted afterwards
+      expect(events.find((e) => e.kind === 'usage')).toBeDefined()
+      expect(state.sawErrorResult).toBe(true)
+    })
+
+    it('treats unknown error_* subtypes as errors (forward-compat)', () => {
+      const state = createMapperState()
+      const events = mapSdkMessage(
+        asMsg({
+          type: 'result',
+          subtype: 'error_brand_new_failure_mode',
+          session_id: 's',
+        }),
+        state,
+      )
+      expect(events.find((e) => e.kind === 'error')).toBeDefined()
+      expect(state.sawErrorResult).toBe(true)
+    })
+
+    it('does not flag sawErrorResult on success subtype', () => {
+      const state = createMapperState()
+      mapSdkMessage(
+        asMsg({
+          type: 'result',
+          subtype: 'success',
+          session_id: 's',
+          usage: { input_tokens: 1, output_tokens: 2 },
+        }),
+        state,
+      )
+      expect(state.sawErrorResult).toBe(false)
+    })
   })
 })

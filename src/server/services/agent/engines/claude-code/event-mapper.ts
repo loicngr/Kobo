@@ -63,10 +63,25 @@ export interface MapperState {
   sessionStartedEmitted: boolean
   /** Track streaming text messages: messageId → seenTextOnce (for `streaming` flag). */
   openMessages: Map<string, { sawText: boolean }>
+  /**
+   * Set when a `result` message with an error subtype was observed. Read by
+   * the engine after the iterator drains so the natural-completion
+   * `session:ended` carries `reason: 'error'` instead of `'completed'`.
+   */
+  sawErrorResult: boolean
 }
 
 export function createMapperState(): MapperState {
-  return { sessionStartedEmitted: false, openMessages: new Map() }
+  return { sessionStartedEmitted: false, openMessages: new Map(), sawErrorResult: false }
+}
+
+/** Known SDK `result` subtypes that indicate the run failed. */
+const KNOWN_ERROR_RESULT_SUBTYPES = new Set(['error_max_turns', 'error_during_execution'])
+
+function isErrorResultSubtype(subtype: string | undefined): boolean {
+  if (!subtype) return false
+  if (KNOWN_ERROR_RESULT_SUBTYPES.has(subtype)) return true
+  return subtype.startsWith('error')
 }
 
 /**
@@ -217,6 +232,18 @@ export function mapSdkMessage(msg: SDKMessage, state: MapperState): AgentEvent[]
     for (const openId of Array.from(state.openMessages.keys())) {
       events.push({ kind: 'message:end', messageId: openId })
       state.openMessages.delete(openId)
+    }
+    // Detect error variants of `result` (e.g. `error_max_turns`,
+    // `error_during_execution`) and surface them as a proper `error` event so
+    // the orchestrator can transition the workspace to `error` instead of
+    // `completed`. The flag on `state` lets the engine override the
+    // post-loop session:ended reason.
+    if (isErrorResultSubtype(subtype)) {
+      state.sawErrorResult = true
+      const detail =
+        (typeof parsed.error === 'string' && parsed.error) || (typeof parsed.result === 'string' && parsed.result) || ''
+      const message = detail ? `Agent run failed (${subtype}): ${detail}` : `Agent run failed (${subtype})`
+      events.push({ kind: 'error', category: 'other', message })
     }
     const usage = parsed.usage as Record<string, unknown> | undefined
     if (usage) {

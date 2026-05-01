@@ -556,6 +556,7 @@ export default {
   'notification.autoLoopCompleted': '{name} — Auto-loop terminé',
   'notification.autoLoopStalled': '{name} — Auto-loop bloqué (aucun progrès)',
   'notification.autoLoopError': '{name} — Auto-loop arrêté sur erreur',
+  'notification.autoLoopPermissionOverridden': '{name} — Auto-loop a forcé le mode plan en bypass',
   'notification.agentError': '{name} — Erreur agent',
 
   // Context menu

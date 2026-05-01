@@ -465,6 +465,9 @@ export function deleteWorkspace(id: string): void {
   orchestrator.forgetRateLimitInfo(id)
   orchestrator.forgetTasksDoneSnapshot(id)
   orchestrator.forgetResumeFailed(id)
+  orchestrator.forgetPendingQueue(id)
+  orchestrator.forgetPreAwaitStatus(id)
+  orchestrator.forgetSessionId(id)
   autoLoopService.forgetAutoLoopState(id)
 
   const db = getDb()

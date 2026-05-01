@@ -707,6 +707,13 @@ export const useWebSocketStore = defineStore('websocket', {
           void workspaceStore.fetchAutoLoopStates()
           break
         }
+        case 'autoloop:permission-overridden': {
+          if (wid) {
+            const wsName = workspaceStore.workspaces.find((w) => w.id === wid)?.name ?? ''
+            notify(t('notification.autoLoopPermissionOverridden', { name: wsName }), undefined, wid)
+          }
+          break
+        }
         case 'autoloop:disabled': {
           // Refresh state, then fire ONE notification for the whole mission
           // (per-iteration session:ended events are silent during auto-loop).
