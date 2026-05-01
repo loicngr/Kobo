@@ -24,6 +24,7 @@ interface WorkspaceRow {
   worktree_path: string | null
   model: string
   permission_mode: string
+  agent_permission_mode: string | null
   reasoning_effort: string
   status: string
   auto_loop: number
@@ -36,7 +37,7 @@ function getRow(workspaceId: string): WorkspaceRow | null {
   const db = getDb()
   const row = db
     .prepare(
-      `SELECT id, project_path, working_branch, worktree_path, model, permission_mode, reasoning_effort,
+      `SELECT id, project_path, working_branch, worktree_path, model, permission_mode, agent_permission_mode, reasoning_effort,
               status, auto_loop, auto_loop_ready, no_progress_streak, archived_at
        FROM workspaces WHERE id = ?`,
     )
@@ -129,6 +130,10 @@ export function onSessionEnded(
   // When a quota backoff is in flight (orchestrator.handleQuota scheduled a
   // timer), let that timer own the next spawn so the backoff delay is respected.
   if (row.status === 'quota') return
+
+  // Don't spawn a competing session while paused on canUseTool — the user
+  // will resume the deferred turn explicitly.
+  if (row.status === 'awaiting-user') return
 
   if (reason === 'error' || reason === 'killed') {
     disable(workspaceId, 'error')
@@ -259,6 +264,8 @@ function computeIterationNumber(workspaceId: string): number {
 function spawnNextIteration(workspaceId: string, opts: { throwOnStartAgentError?: boolean } = {}): void {
   const row = getRow(workspaceId)
   if (!row) return
+  // Same guard as onSessionEnded — never race a deferred-resume start.
+  if (row.status === 'awaiting-user') return
   const task = pickNextTask(workspaceId)
   if (!task) {
     disable(workspaceId, 'completed')
@@ -289,10 +296,16 @@ function spawnNextIteration(workspaceId: string, opts: { throwOnStartAgentError?
     .replaceAll('{overrideBlock}', overrideBlock)
 
   const worktreePath = row.worktree_path ?? path.join(row.project_path, '.worktrees', row.working_branch)
-  // Auto-loop iterations always run in auto-accept mode. Plan mode blocks MCP
-  // tools (kobo__mark_task_done, etc.) and Edit/Write/Bash — everything the
-  // iteration needs — so honoring a 'plan' setting here would deadlock the loop.
-  const permissionMode: 'auto-accept' | 'plan' = 'auto-accept'
+  // Plan mode would deadlock the loop (blocks MCP + edits) — promote to bypass.
+  // Other modes (bypass/strict/interactive) are honored.
+  const stored = (row.agent_permission_mode ?? 'bypass') as 'plan' | 'bypass' | 'strict' | 'interactive'
+  const agentPermissionMode: 'bypass' | 'strict' | 'interactive' = stored === 'plan' ? 'bypass' : stored
+  if (stored === 'plan') {
+    console.warn(
+      `[auto-loop-service] Promoting plan → bypass for workspace ${workspaceId} — auto-loop cannot run in plan mode`,
+    )
+    emitEphemeral(workspaceId, 'autoloop:permission-overridden', { from: 'plan', to: 'bypass' })
+  }
 
   // Pre-check: if the worktree directory is gone (user `rm -rf`-ed it),
   // fail loudly rather than letting startAgent throw a deep engine error.
@@ -312,7 +325,7 @@ function spawnNextIteration(workspaceId: string, opts: { throwOnStartAgentError?
       prompt,
       row.model,
       false, // resume=false — fresh context for each iteration
-      permissionMode,
+      agentPermissionMode,
       undefined,
       row.reasoning_effort,
     )

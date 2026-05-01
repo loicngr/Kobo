@@ -14,7 +14,7 @@ vi.mock('../server/services/workspace-service.js', () => ({
   updateWorktreePath: vi.fn(),
   updateWorkspaceModel: vi.fn(),
   updateWorkspaceReasoningEffort: vi.fn(),
-  updateWorkspacePermissionMode: vi.fn(),
+  updateAgentPermissionMode: vi.fn(),
   deleteWorkspace: vi.fn(),
   createTask: vi.fn(),
   getTask: vi.fn(),
@@ -47,6 +47,7 @@ vi.mock('../server/services/agent/orchestrator.js', () => ({
   stopAgent: vi.fn(),
   sendMessage: vi.fn(),
   getAgentStatus: vi.fn().mockReturnValue(null),
+  getActiveSessionId: vi.fn().mockReturnValue('active-session-id'),
 }))
 
 vi.mock('../server/services/agent/engines/registry.js', () => ({
@@ -213,7 +214,7 @@ const fakeWorkspace = {
   notionPageId: null,
   model: 'claude-opus-4-6',
   reasoningEffort: 'auto',
-  permissionMode: 'auto-accept' as const,
+  agentPermissionMode: 'bypass' as const,
   devServerStatus: 'stopped',
   hasUnread: false,
   archivedAt: null,
@@ -961,7 +962,7 @@ describe('PATCH /api/workspaces/:id', () => {
 
     expect(res.status).toBe(400)
     const data = await res.json()
-    expect(data.error).toContain('Missing field: status, model, reasoningEffort, permissionMode,')
+    expect(data.error).toContain('Missing field: status, model, reasoningEffort, agentPermissionMode,')
   })
 
   it('returns 404 for unknown workspace', async () => {
@@ -1000,7 +1001,7 @@ describe('POST /api/workspaces/:id/start', () => {
       'Do something',
       'claude-opus-4-6',
       false,
-      'auto-accept',
+      'bypass',
       undefined,
       'auto',
     )
@@ -1023,7 +1024,7 @@ describe('POST /api/workspaces/:id/start', () => {
       'Continue the previous task where you left off.',
       'claude-opus-4-6',
       false,
-      'auto-accept',
+      'bypass',
       undefined,
       'auto',
     )
@@ -2082,7 +2083,7 @@ describe('POST /api/workspaces/:id/start avec agentSessionId', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('passe agentSessionId à startAgent quand fourni', async () => {
-    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace, permissionMode: 'auto-accept' } as any)
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace, agentPermissionMode: 'bypass' } as any)
     vi.mocked(workspaceService.updateWorkspaceStatus).mockReturnValue(undefined as any)
 
     await app.request('/api/workspaces/ws-1/start', {
@@ -2097,14 +2098,14 @@ describe('POST /api/workspaces/:id/start avec agentSessionId', () => {
       'hello',
       fakeWorkspace.model,
       false,
-      'auto-accept',
+      'bypass',
       'sess-idle-1',
       'auto',
     )
   })
 
   it('passe undefined si agentSessionId absent', async () => {
-    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace, permissionMode: 'auto-accept' } as any)
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace, agentPermissionMode: 'bypass' } as any)
     vi.mocked(workspaceService.updateWorkspaceStatus).mockReturnValue(undefined as any)
 
     await app.request('/api/workspaces/ws-1/start', {
@@ -2119,7 +2120,7 @@ describe('POST /api/workspaces/:id/start avec agentSessionId', () => {
       'hello',
       fakeWorkspace.model,
       false,
-      'auto-accept',
+      'bypass',
       undefined,
       'auto',
     )
@@ -2257,7 +2258,7 @@ describe('GET /api/workspaces/:id/diff', () => {
       model: 'auto',
       engine: 'claude-code',
       reasoningEffort: 'auto',
-      permissionMode: 'auto-accept',
+      agentPermissionMode: 'bypass',
       devServerStatus: 'stopped',
       hasUnread: false,
       archivedAt: null,
@@ -2327,7 +2328,7 @@ describe('GET /api/workspaces/:id/diff-file', () => {
       model: 'auto',
       engine: 'claude-code',
       reasoningEffort: 'auto',
-      permissionMode: 'auto-accept',
+      agentPermissionMode: 'bypass',
       devServerStatus: 'stopped',
       hasUnread: false,
       archivedAt: null,
@@ -2381,7 +2382,7 @@ describe('GET /api/workspaces/:id/commits', () => {
       model: 'auto',
       engine: 'claude-code',
       reasoningEffort: 'auto',
-      permissionMode: 'auto-accept',
+      agentPermissionMode: 'bypass',
       devServerStatus: 'stopped',
       hasUnread: false,
       archivedAt: null,
@@ -2472,6 +2473,54 @@ describe('DELETE /api/workspaces/:id/pending-wakeup', () => {
   })
 })
 
+describe('POST /api/workspaces/:id/pending-wakeup', () => {
+  it('pins the wakeup to the active session and returns the resulting pending entry', async () => {
+    vi.mocked(agentManager.getActiveSessionId).mockReturnValue('sess-42')
+    vi.mocked(wakeupService.getPending).mockReturnValue({ targetAt: '2026-04-22T10:00:00Z', reason: 'CI' })
+    const res = await app.request('/api/workspaces/w1/pending-wakeup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ delaySeconds: 120, prompt: 'check the build', reason: 'CI' }),
+    })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true, pending: { targetAt: '2026-04-22T10:00:00Z', reason: 'CI' } })
+    expect(wakeupService.schedule).toHaveBeenCalledWith('w1', 120, 'check the build', 'CI', 'sess-42')
+  })
+
+  it('rejects with 409 when no active session exists for the workspace', async () => {
+    vi.mocked(agentManager.getActiveSessionId).mockReturnValue(undefined)
+    const res = await app.request('/api/workspaces/w1/pending-wakeup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ delaySeconds: 60, prompt: 'check' }),
+    })
+    expect(res.status).toBe(409)
+    expect(wakeupService.schedule).not.toHaveBeenCalled()
+  })
+
+  it('rejects a missing/invalid delaySeconds with 400', async () => {
+    vi.mocked(agentManager.getActiveSessionId).mockReturnValue('sess-42')
+    const res = await app.request('/api/workspaces/w1/pending-wakeup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: 'check' }),
+    })
+    expect(res.status).toBe(400)
+    expect(wakeupService.schedule).not.toHaveBeenCalled()
+  })
+
+  it('rejects a missing prompt with 400', async () => {
+    vi.mocked(agentManager.getActiveSessionId).mockReturnValue('sess-42')
+    const res = await app.request('/api/workspaces/w1/pending-wakeup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ delaySeconds: 60, prompt: '   ' }),
+    })
+    expect(res.status).toBe(400)
+    expect(wakeupService.schedule).not.toHaveBeenCalled()
+  })
+})
+
 describe('POST /api/workspaces/:id/resync-branch', () => {
   beforeEach(() => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue({
@@ -2485,7 +2534,7 @@ describe('POST /api/workspaces/:id/resync-branch', () => {
       notionPageId: null,
       model: 'sonnet',
       reasoningEffort: 'auto',
-      permissionMode: 'auto-accept',
+      agentPermissionMode: 'bypass',
       devServerStatus: 'stopped',
       hasUnread: false,
       archivedAt: null,
@@ -2495,7 +2544,7 @@ describe('POST /api/workspaces/:id/resync-branch', () => {
       autoLoop: false,
       autoLoopReady: false,
       noProgressStreak: 0,
-      permissionProfile: 'bypass',
+      // legacy field removed
       worktreePath: '/tmp/project/.worktrees/feature/old-name',
       worktreeOwned: true,
       createdAt: 'x',
@@ -2757,7 +2806,7 @@ describe('POST /api/workspaces — pre-flight URL validation', () => {
       sentryUrl: 'https://my-org.sentry.io/issues/42/',
       model: 'claude-opus-4-7',
       reasoningEffort: 'auto',
-      permissionMode: 'auto-accept',
+      agentPermissionMode: 'bypass',
       devServerStatus: 'stopped',
       hasUnread: false,
       archivedAt: null,
@@ -2767,7 +2816,7 @@ describe('POST /api/workspaces — pre-flight URL validation', () => {
       autoLoop: false,
       autoLoopReady: false,
       noProgressStreak: 0,
-      permissionProfile: 'bypass',
+      // legacy field removed
       worktreePath: '/tmp/proj/.worktrees/feat/x',
       worktreeOwned: true,
       createdAt: '2026-01-01',

@@ -17,12 +17,31 @@ export interface AgentEngine {
   start(options: StartOptions, onEvent: (ev: AgentEvent) => void): Promise<EngineProcess>
 }
 
+export type PendingUserInputResponse =
+  | { kind: 'question'; answers: Record<string, string> }
+  | { kind: 'question-cancel'; reason?: string }
+  | { kind: 'permission-allow' }
+  | { kind: 'permission-deny'; reason?: string }
+
 export interface EngineProcess {
   readonly pid: number | undefined
   readonly engineSessionId: string | undefined
   sendMessage(text: string): void
   interrupt(): void
   stop(): Promise<void>
+  /**
+   * Resolve a pending `canUseTool` callback by `toolCallId`. Returns true if
+   * a pending entry was found and resolved, false if no entry exists for the
+   * given id (already resolved, never registered, or different session).
+   */
+  resolvePendingUserInput(toolCallId: string, response: PendingUserInputResponse): boolean
+  /**
+   * Optional liveness probe used by the orchestrator watchdog. Engines that
+   * don't expose a `pid` (e.g. SDK in-process engines) can implement this so
+   * the watchdog has a signal beyond `isProcessAlive(pid)`. When omitted, the
+   * watchdog falls back to the pid-based check.
+   */
+  isAlive?(): boolean
 }
 
 export interface StartOptions {
@@ -31,9 +50,14 @@ export interface StartOptions {
   prompt: string
   model?: string
   effort?: string
-  permissionMode?: 'auto-accept' | 'plan'
-  /** Only relevant in auto-accept permissionMode. 'bypass' (default) or 'strict'. */
-  permissionProfile?: 'bypass' | 'strict'
+  /**
+   * Unified SDK-aligned permission mode. Maps 1:1 to the SDK:
+   *   - 'plan'        → SDK 'plan' (read-only).
+   *   - 'bypass'      → SDK 'bypassPermissions' (+ allowDangerouslySkipPermissions).
+   *   - 'strict'      → SDK 'acceptEdits' (auto-accept edits, allow-list rest).
+   *   - 'interactive' → SDK 'default' + Kōbō PreToolUse defer hook.
+   */
+  agentPermissionMode?: 'plan' | 'bypass' | 'strict' | 'interactive'
   resumeFromEngineSessionId?: string
   backendUrl: string
   koboHome: string
@@ -51,7 +75,7 @@ export interface McpServerSpec {
 export interface EngineCapabilities {
   models: Array<{ id: string; label: string }>
   effortLevels?: Array<{ id: string; label: string }>
-  permissionModes: Array<'auto-accept' | 'plan'>
+  permissionModes: Array<'plan' | 'bypass' | 'strict' | 'interactive'>
   supportsResume: boolean
   supportsMcp: boolean
   supportsSkills: boolean
@@ -74,7 +98,18 @@ export interface RateLimitInfo {
 export type AgentEvent =
   // Lifecycle
   | { kind: 'session:started'; engineSessionId: string; model?: string }
-  | { kind: 'session:ended'; reason: 'completed' | 'error' | 'killed'; exitCode: number | null }
+  | {
+      kind: 'session:ended'
+      reason: 'completed' | 'error' | 'killed'
+      exitCode: number | null
+    }
+  | {
+      kind: 'session:user-input-requested'
+      requestKind: 'question' | 'permission'
+      toolCallId: string
+      toolName: string
+      payload: unknown
+    }
   | { kind: 'session:compacted' }
   | { kind: 'session:brainstorm-complete' }
   // Conversation
@@ -118,6 +153,7 @@ export type AgentEvent =
 export const ALL_AGENT_EVENT_KINDS = [
   'session:started',
   'session:ended',
+  'session:user-input-requested',
   'session:compacted',
   'session:brainstorm-complete',
   'message:text',

@@ -17,7 +17,7 @@ function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
     model: 'auto',
     engine: 'claude-code',
     reasoningEffort: 'medium',
-    permissionMode: 'auto-accept',
+    agentPermissionMode: 'bypass',
     devServerStatus: 'idle',
     hasUnread: false,
     archivedAt: null,
@@ -26,7 +26,8 @@ function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
     autoLoop: false,
     autoLoopReady: false,
     noProgressStreak: 0,
-    permissionProfile: 'bypass',
+    worktreePath: '/tmp/wt',
+    worktreeOwned: true,
     createdAt: '',
     updatedAt: '',
     ...overrides,
@@ -391,7 +392,7 @@ describe('workspace store', () => {
       model: 'claude-opus-4-5',
       engine: 'claude-code',
       reasoningEffort: 'normal',
-      permissionMode: 'default',
+      agentPermissionMode: 'bypass',
       devServerStatus: 'stopped',
       hasUnread: false,
       archivedAt: null,
@@ -400,7 +401,6 @@ describe('workspace store', () => {
       autoLoop: false,
       autoLoopReady: false,
       noProgressStreak: 0,
-      permissionProfile: 'bypass',
       worktreePath: '/tmp/test/.worktrees/feature/test',
       worktreeOwned: true,
       createdAt: '2026-01-01T00:00:00Z',
@@ -505,6 +505,151 @@ describe('workspace store', () => {
         snapshot: { providerId: 'claude-code', status: 'ok', buckets: [], fetchedAt: 'now' },
       })
       expect(store.currentProviderUsage).toBeNull()
+    })
+  })
+
+  describe('pending deferred tool-use (AskUserQuestion)', () => {
+    it('round-trips set/get for a pending deferred entry', () => {
+      const store = useWorkspaceStore()
+      const payload = {
+        toolCallId: 'tc-1',
+        toolName: 'AskUserQuestion',
+        input: { questions: [{ question: 'Q?', options: [{ label: 'A' }] }] },
+        agentSessionId: 'agent-sess-A',
+      }
+      store.setPendingDeferred('w1', payload)
+      expect(store.getPendingDeferred('w1')).toEqual(payload)
+      expect(store.pendingDeferred.w1).toEqual(payload)
+    })
+
+    it('clearPendingDeferred (unconditional) removes the entry', () => {
+      const store = useWorkspaceStore()
+      store.setPendingDeferred('w1', {
+        toolCallId: 'tc-1',
+        toolName: 'AskUserQuestion',
+        input: {},
+        agentSessionId: 'agent-sess-A',
+      })
+      store.clearPendingDeferred('w1')
+      expect(store.getPendingDeferred('w1')).toBeUndefined()
+      expect(store.pendingDeferred.w1).toBeUndefined()
+    })
+
+    it('clearPendingDeferred(workspaceId, sessionId) only clears when the session matches', () => {
+      const store = useWorkspaceStore()
+      store.setPendingDeferred('w1', {
+        toolCallId: 'tc-1',
+        toolName: 'AskUserQuestion',
+        input: {},
+        agentSessionId: 'agent-sess-A',
+      })
+      // A different session ending must NOT clear the entry.
+      store.clearPendingDeferred('w1', 'agent-sess-B')
+      expect(store.getPendingDeferred('w1')?.toolCallId).toBe('tc-1')
+      // The owning session ending DOES clear it.
+      store.clearPendingDeferred('w1', 'agent-sess-A')
+      expect(store.getPendingDeferred('w1')).toBeUndefined()
+    })
+
+    it('queue: enqueue 2 items, peek returns first, dequeue returns first then second', () => {
+      const store = useWorkspaceStore()
+      store.enqueuePending('w1', {
+        kind: 'question',
+        agentSessionId: 'sA',
+        toolCallId: 'q1',
+        toolName: 'AskUserQuestion',
+        input: {},
+      })
+      store.enqueuePending('w1', {
+        kind: 'permission',
+        agentSessionId: 'sA',
+        toolCallId: 'p1',
+        toolName: 'Bash',
+        toolInput: {},
+      })
+      expect(store.peekPending('w1')?.toolCallId).toBe('q1')
+      expect(store.dequeuePending('w1')?.toolCallId).toBe('q1')
+      expect(store.peekPending('w1')?.toolCallId).toBe('p1')
+      expect(store.dequeuePending('w1')?.toolCallId).toBe('p1')
+      expect(store.peekPending('w1')).toBeUndefined()
+    })
+
+    it('enqueuePending dedups on toolCallId — a second insert is a no-op', () => {
+      const store = useWorkspaceStore()
+      store.enqueuePending('w1', {
+        kind: 'question',
+        agentSessionId: 'sA',
+        toolCallId: 'q1',
+        toolName: 'AskUserQuestion',
+        input: { questions: [] },
+      })
+      // Same toolCallId, different shape (e.g. live event arriving while a
+      // replay is still in flight) — must NOT add a duplicate to the queue.
+      store.enqueuePending('w1', {
+        kind: 'question',
+        agentSessionId: 'sA',
+        toolCallId: 'q1',
+        toolName: 'AskUserQuestion',
+        input: { questions: [{ question: 'Q?' }] },
+      })
+      expect(store.pendingQueue.w1?.length).toBe(1)
+    })
+
+    it('clearPendingForSession drops items of one session, leaves the other', () => {
+      const store = useWorkspaceStore()
+      store.enqueuePending('w1', {
+        kind: 'question',
+        agentSessionId: 'sA',
+        toolCallId: 'q1',
+        toolName: 'AskUserQuestion',
+        input: {},
+      })
+      store.enqueuePending('w1', {
+        kind: 'permission',
+        agentSessionId: 'sB',
+        toolCallId: 'p1',
+        toolName: 'Bash',
+        toolInput: {},
+      })
+      store.clearPendingForSession('w1', 'sA')
+      expect(store.peekPending('w1')?.agentSessionId).toBe('sB')
+    })
+
+    it('submitDeferredPermission posts to the right endpoint', async () => {
+      const store = useWorkspaceStore()
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: () => Promise.resolve({}) } as Response)
+      vi.stubGlobal('fetch', fetchMock)
+      try {
+        await store.submitDeferredPermission('w1', 'tc-1', 'allow', 'why not')
+        expect(fetchMock).toHaveBeenCalledWith(
+          '/api/workspaces/w1/deferred-permission/decision',
+          expect.objectContaining({
+            method: 'POST',
+            body: JSON.stringify({ toolCallId: 'tc-1', decision: 'allow', reason: 'why not' }),
+          }),
+        )
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    })
+
+    it('isolates pending entries per-workspace', () => {
+      const store = useWorkspaceStore()
+      store.setPendingDeferred('w1', {
+        toolCallId: 'a',
+        toolName: 'AskUserQuestion',
+        input: {},
+        agentSessionId: 'agent-sess-A',
+      })
+      store.setPendingDeferred('w2', {
+        toolCallId: 'b',
+        toolName: 'AskUserQuestion',
+        input: {},
+        agentSessionId: 'agent-sess-B',
+      })
+      store.clearPendingDeferred('w1')
+      expect(store.getPendingDeferred('w1')).toBeUndefined()
+      expect(store.getPendingDeferred('w2')?.toolCallId).toBe('b')
     })
   })
 })

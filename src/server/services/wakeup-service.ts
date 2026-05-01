@@ -14,6 +14,7 @@ interface PendingWakeupRow {
   prompt: string
   reason: string | null
   created_at: string
+  agent_session_id: string | null
 }
 
 const MIN_DELAY_SECONDS = 60
@@ -35,7 +36,13 @@ function rowToPending(row: PendingWakeupRow | undefined): PendingWakeup | null {
 }
 
 /** Schedule a wakeup for the given workspace. Replaces any existing pending wakeup. */
-export function schedule(workspaceId: string, delaySeconds: number, prompt: string, reason: string | undefined): void {
+export function schedule(
+  workspaceId: string,
+  delaySeconds: number,
+  prompt: string,
+  reason: string | undefined,
+  agentSessionId?: string,
+): void {
   try {
     const clampedSeconds = clamp(Math.floor(delaySeconds), MIN_DELAY_SECONDS, MAX_DELAY_SECONDS)
     const effectivePrompt = prompt === AUTONOMOUS_LOOP_SENTINEL ? AUTONOMOUS_LOOP_FALLBACK_PROMPT : prompt
@@ -47,9 +54,9 @@ export function schedule(workspaceId: string, delaySeconds: number, prompt: stri
     const db = getDb()
     db.prepare(
       `INSERT OR REPLACE INTO pending_wakeups
-         (workspace_id, target_at, prompt, reason, created_at)
-       VALUES (?, ?, ?, ?, ?)`,
-    ).run(workspaceId, targetAtIso, effectivePrompt, reason ?? null, new Date().toISOString())
+         (workspace_id, target_at, prompt, reason, created_at, agent_session_id)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(workspaceId, targetAtIso, effectivePrompt, reason ?? null, new Date().toISOString(), agentSessionId ?? null)
 
     const timeout = setTimeout(() => fire(workspaceId), clampedSeconds * 1000)
     timeout.unref?.()
@@ -162,7 +169,7 @@ function fire(workspaceId: string): void {
 
     const wsRow = db
       .prepare(
-        `SELECT project_path, working_branch, worktree_path, model, permission_mode, reasoning_effort
+        `SELECT project_path, working_branch, worktree_path, model, agent_permission_mode, reasoning_effort
            FROM workspaces WHERE id = ?`,
       )
       .get(workspaceId) as
@@ -171,7 +178,7 @@ function fire(workspaceId: string): void {
           working_branch: string
           worktree_path: string | null
           model: string
-          permission_mode: string
+          agent_permission_mode: string | null
           reasoning_effort: string
         }
       | undefined
@@ -182,10 +189,10 @@ function fire(workspaceId: string): void {
     }
 
     const worktreePath = wsRow.worktree_path ?? path.join(wsRow.project_path, '.worktrees', wsRow.working_branch)
-    // Defensive: narrow `permission_mode` against the two known values rather
-    // than trusting the DB column shape. Any unexpected value falls back to
-    // the safer 'auto-accept'.
-    const permissionMode: 'auto-accept' | 'plan' = wsRow.permission_mode === 'plan' ? 'plan' : 'auto-accept'
+    // Narrow against the four known values; unknowns → 'bypass'.
+    const stored = wsRow.agent_permission_mode
+    const agentPermissionMode: 'plan' | 'bypass' | 'strict' | 'interactive' =
+      stored === 'plan' || stored === 'strict' || stored === 'interactive' ? stored : 'bypass'
 
     try {
       orchestrator.startAgent(
@@ -194,8 +201,8 @@ function fire(workspaceId: string): void {
         row.prompt,
         wsRow.model,
         true,
-        permissionMode,
-        undefined,
+        agentPermissionMode,
+        row.agent_session_id ?? undefined,
         wsRow.reasoning_effort,
       )
       emitEphemeral(workspaceId, 'wakeup:fired', {})

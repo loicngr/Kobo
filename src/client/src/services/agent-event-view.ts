@@ -112,6 +112,7 @@ export function foldEvents(events: AgentEvent[], timestamps?: string[], sessionA
         break
       // Ignored categories — consumed by dedicated panels
       case 'session:brainstorm-complete':
+      case 'session:user-input-requested':
       case 'message:raw':
       case 'skills:discovered':
       case 'usage':

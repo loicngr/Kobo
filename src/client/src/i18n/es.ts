@@ -55,12 +55,18 @@ export default {
   'reasoning.xhighDescription': 'Profundidad extendida, tareas largas (Opus 4.7)',
   'reasoning.maxDescription': 'Profundidad máxima',
 
-  // Permission modes
-  'permissionMode.autoAccept': 'Aceptación automática',
-  'permissionMode.plan': 'Plan',
-  'permissionProfile.strict': 'Permisos estrictos',
-  'permissionProfile.strictTooltip':
-    'Activado: Claude respeta las listas allow/deny de .claude/settings.json del proyecto (permite escrituras bajo .claude/** o .github/workflows/** si las has allow-listado). Contrapartida: Bash o MCP fuera de la lista solicitarán confirmación y pueden parar el auto-loop. Desactivado (defecto): Kōbō pasa --dangerously-skip-permissions — máximo permisivo pero el CLI deniega .claude/** y .github/workflows/** pase lo que pase. Se aplica en la próxima sesión.',
+  // Modo de permiso unificado del agente (un único selector alineado con el SDK)
+  'agentPermissionMode.label': 'Modo de permisos',
+  'agentPermissionMode.plan': 'Plan',
+  'agentPermissionMode.bypass': 'Bypass',
+  'agentPermissionMode.strict': 'Aceptar ediciones',
+  'agentPermissionMode.interactive': 'Interactivo',
+  'agentPermissionMode.tooltip':
+    'Cómo gestiona el agente los permisos de las herramientas. Plan: solo lectura, sin escrituras. Bypass: omitir todas las preguntas. Estricto: auto-aceptar ediciones de archivos, respetar allow/deny para el resto. Interactivo: preguntar al usuario antes de cada herramienta mediante el panel de permisos.',
+  'agentPermissionMode.autoLoopOverride':
+    'El auto-loop fuerza un modo distinto a Plan — Plan bloquea las herramientas MCP y las ediciones que el bucle necesita. Elige Bypass, Estricto o Interactivo.',
+  'agentPermissionMode.autoLoopLocked':
+    'Bloqueado en Bypass mientras el auto-loop está activo — cualquier otro modo detendría el bucle en las preguntas de permiso. AskUserQuestion sigue funcionando.',
 
   // Workspace List
   'workspaceList.title': 'Workspaces',
@@ -140,6 +146,7 @@ export default {
   'chatInput.queueBanner': 'Mensaje en cola — se enviará cuando el agente termine',
   'chatInput.cancelQueue': 'Cancelar cola',
   'chatInput.autoLoopBanner': 'Auto-loop activo — deténlo para enviar un mensaje',
+  'chatInput.awaitingUserBanner': 'El agente espera tu respuesta arriba — responde mediante el panel de la pregunta',
   'chatInput.autoLoopStop': 'Detener',
   'koboCommand.checkProgressDesc': 'Verificar el progreso de las tareas y criterios de aceptación',
   'chatInput.uploading': 'Subiendo...',
@@ -211,7 +218,7 @@ export default {
   'settings.audioNotifications': 'Notificación sonora cuando el agente termina',
   'settings.defaultPermissionMode': 'Modo de permisos por defecto',
   'settings.defaultPermissionModeHint':
-    'Modo aplicado al crear un workspace. Plan = brainstorming de solo lectura primero, Auto-accept = ejecución completa inmediatamente.',
+    'Modo aplicado al crear un workspace. Plan = solo lectura, Bypass = sin avisos, Estricto = auto-aceptar ediciones con allow-list, Interactivo = preguntar antes de cada herramienta.',
   'settings.activityFeed': 'Feed de actividad',
   'settings.verboseMessages': 'Mostrar mensajes detallados del sistema (task_progress, task_started)',
   'settings.availableVariables': 'Variables disponibles en la plantilla de prompt PR',
@@ -453,39 +460,13 @@ export default {
   'subagents.tools': '{count} herramientas',
   'subagents.running': 'En ejecución: ',
 
-  // Stats Panel
-  'stats.title': 'Estadísticas',
-  'stats.info': 'Info',
-  'stats.status': 'Estado',
-  'stats.model': 'Modelo',
-  'stats.branch': 'Rama',
-  'stats.sessions': 'Sesiones',
-  'stats.duration': 'Duración',
-  'stats.timeline': 'Cronología',
-  'stats.created': 'Creado',
-  'stats.firstSession': 'Primera sesión',
-  'stats.lastPrompt': 'Último prompt',
-  'stats.lastResponse': 'Última respuesta',
-  'stats.updated': 'Actualizado',
-  'stats.activity': 'Actividad',
-  'stats.agentMessages': 'Mensajes del agente',
-  'stats.userMessages': 'Mensajes del usuario',
-  'stats.toolCalls': 'Llamadas a herramientas',
-  'stats.errors': 'Errores',
-  'stats.usage': 'Consumo',
-  'stats.inputTokens': 'Tokens de entrada',
-  'stats.outputTokens': 'Tokens de salida',
-  'stats.totalTokens': 'Tokens totales',
-  'stats.cost': 'Coste',
-  'stats.usageLimits': 'Límites de uso',
-  'stats.used': 'usado',
+  // Rate-limit usage labels (shared by QuotaFooter)
   'stats.resetsAt': 'Reset {value}',
   'stats.usageBucket': 'Bucket de uso {n}',
   'quotaFooter.lastUpdated': 'Última actualización: {time}',
   'quotaFooter.empty': 'Cargando…',
   'quotaFooter.popover.title': 'Uso de Claude Code',
   'quotaFooter.popover.refreshNow': 'Actualizar',
-  'quotaFooter.popover.openStatsPanel': 'Abrir panel Stats',
   'quotaFooter.popover.resetsIn': 'Se reinicia a las {value}',
   'quotaFooter.popover.unauthenticated': 'Auth requerida',
   'quotaFooter.popover.unauthenticatedHint': 'Ejecuta "claude" una vez para autenticarte.',
@@ -499,12 +480,6 @@ export default {
   'agent.error.other': 'Error del agente',
   'rateLimitType.fiveHour': 'Sesión 5h',
   'rateLimitType.sevenDay': 'Semanal',
-  'stats.subagents': 'Sub-agentes',
-  'stats.completed': 'Completados',
-  'stats.tokens': 'Tokens',
-  'stats.progress': 'Progreso',
-  'stats.tasks': 'Tareas',
-  'stats.acceptanceCriteria': 'Criterios de aceptación',
 
   // Tooltips
   'tooltip.addTask': 'Añadir tarea',
@@ -519,7 +494,6 @@ export default {
   'tooltip.refreshGitStats': 'Actualizar estadísticas Git',
   'tooltip.removeImage': 'Eliminar imagen',
   'tooltip.sendMessage': 'Enviar mensaje',
-  'tooltip.refreshStats': 'Actualizar estadísticas',
 
   // Tools Panel
   'tools.title': 'Herramientas',
@@ -578,6 +552,12 @@ export default {
 
   // Notifications
   'notification.agentFinished': '{name} — Agente terminado',
+  'notification.agentQuestion': '{name} — El agente hace una pregunta',
+  'notification.agentPermissionRequest': '{name} — El agente solicita un permiso',
+  'notification.autoLoopCompleted': '{name} — Auto-loop completado',
+  'notification.autoLoopStalled': '{name} — Auto-loop bloqueado (sin progreso)',
+  'notification.autoLoopError': '{name} — Auto-loop detenido por error',
+  'notification.autoLoopPermissionOverridden': '{name} — Auto-loop forzó el modo plan a bypass',
   'notification.agentError': '{name} — Error del agente',
 
   // Context menu
@@ -657,11 +637,6 @@ export default {
   'engine.select': 'Motor',
   'engine.model': 'Modelo',
   'engine.effort': 'Esfuerzo de razonamiento',
-  'engine.permission': 'Modo de permisos',
-  'createPage.permissionLockedByAutoLoop':
-    'El auto-loop requiere Auto-accept (MCP + ediciones). Desactiva el auto-loop para elegir el modo Plan.',
-  'engine.permission.auto-accept': 'Aceptar automáticamente',
-  'engine.permission.plan': 'Plan (solo lectura)',
 
   // Scheduled wakeup banner
   'wakeup.scheduledIn': 'Próximo despertar en {n}s',
@@ -670,6 +645,26 @@ export default {
   'wakeup.reason': 'Razón: {reason}',
   'wakeup.cancel': 'Cancelar este despertar',
   'wakeup.pendingIndicator': 'Despertar programado',
+
+  // AskUserQuestion deferred tool-use panel
+  'askUserQuestion.title': 'El agente hace una pregunta',
+  'askUserQuestion.submit': 'Enviar respuesta',
+  'askUserQuestion.multiSelectHint': 'Selecciona una o más opciones',
+  'askUserQuestion.noPending': 'Ninguna pregunta pendiente',
+  'askUserQuestion.next': 'Siguiente',
+  'askUserQuestion.previous': 'Anterior',
+  'askUserQuestion.cancel': 'Cancelar',
+  'askUserQuestion.cancelTooltip': 'Saltar esta pregunta — el agente continuará sin respuesta',
+
+  // Interactive permission request panel
+  'permissionRequest.title': 'El agente quiere usar una herramienta',
+  'permissionRequest.allow': 'Permitir',
+  'permissionRequest.deny': 'Denegar',
+  'permissionRequest.tool': 'Herramienta',
+  'permissionRequest.input': 'Entrada',
+  'permissionRequest.denied': 'denegado por el usuario',
+
+  'workspaceStatus.awaitingUser': 'esperando tu respuesta',
 
   // Workspace list drawer indicators
   'workspaceList.prOpen': 'Pull request abierta',

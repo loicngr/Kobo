@@ -12,7 +12,8 @@ Think of it as an apprentice's hall: you hand out missions, each apprentice sets
 ## Features
 
 - **Isolated git worktrees** — every workspace runs on its own branch in its own directory, so concurrent Claude sessions never step on each other
-- **Pluggable agent engine** — Kōbō talks to agents through an `AgentEngine` contract with a normalised `AgentEvent` stream (`src/server/services/agent/engines/`). Claude Code is the first engine; dropping in another runtime (e.g. the Claude Agent SDK) only requires a new adapter, not a rewrite of the UI or orchestration layer. Migration to the official Claude Agent SDK is tracked in [#9](https://github.com/loicngr/Kobo/issues/9)
+- **Pluggable agent engine** — Kōbō talks to agents through an `AgentEngine` contract with a normalised `AgentEvent` stream (`src/server/services/agent/engines/`). The `claude-code` engine runs on the official [`@anthropic-ai/claude-agent-sdk`](https://github.com/anthropics/claude-agent-sdk-typescript); adding a second runtime (e.g. Codex) only requires a new adapter, not a rewrite of the UI or orchestration layer
+- **Interactive `AskUserQuestion`** — when the agent invokes `AskUserQuestion`, Kōbō pauses the session via the SDK's `defer` pattern, surfaces a question panel in the UI, and resumes the agent once the user answers. The session does not occupy any resources while it waits
 - **Rich chat feed** — live streaming text, thinking blocks, inline tool calls with expandable diffs for Edit/Write, per-turn session cards, markdown rendering, jump-to-previous-user-message button, and infinite scroll-up over persisted history
 - **Task & acceptance criteria tracking** — the agent reports progress through a dedicated MCP server (`kobo-tasks`) that reads and updates tasks directly from the SQLite database
 - **Documents panel** — tree view in the right drawer that surfaces every AI-generated markdown file under `docs/plans/`, `docs/superpowers/`, and `.ai/thoughts/`. Paths mentioned in chat messages are auto-detected against the catalogue and become one-click deep-links into the panel
@@ -47,7 +48,7 @@ Think of it as an apprentice's hall: you hand out missions, each apprentice sets
 ### Prerequisites
 
 - Node.js ≥ 20
-- [Claude Code CLI](https://claude.com/claude-code) installed and authenticated (`claude` on your `PATH`)
+- [Claude Code](https://claude.com/claude-code) authenticated via `claude /login` once. The `claude` CLI is **no longer required at runtime** — Kōbō embeds the official [`@anthropic-ai/claude-agent-sdk`](https://github.com/anthropics/claude-agent-sdk-typescript), which reuses the same login.
 - Git
 - Optional: Docker (if you configure per-workspace dev servers)
 - Optional: `gh` CLI (if you use the PR automation)
@@ -62,7 +63,7 @@ SERVER_PORT=9998 PORT=9999 npx @loicngr/kobo@latest
 
 That's it. npm downloads the package, installs dependencies, starts the Kōbō server on the port you specified, and serves the web UI at `http://localhost:9999`. Data is persisted to `~/.config/kobo/` (overridable via `KOBO_HOME`).
 
-On first launch Kōbō creates `~/.config/kobo/` if it doesn't exist. If the `claude` CLI is missing from your `PATH` you will see a warning in the terminal — install Claude Code before creating your first workspace.
+On first launch Kōbō creates `~/.config/kobo/` if it doesn't exist. If you have not yet logged in to Claude Code (`claude /login`), the SDK will prompt for an `ANTHROPIC_API_KEY` instead — log in once to share the same authentication across Claude Code, the embedded SDK, and the quota poller.
 
 ### Run from source (contributors)
 

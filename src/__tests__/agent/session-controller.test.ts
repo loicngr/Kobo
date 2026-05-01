@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import type { AgentEngine, AgentEvent, EngineProcess, StartOptions } from '../../server/services/agent/engines/types.js'
 
 function fakeEngine(opts: { pid?: number; engineSessionId?: string } = {}): {
@@ -27,7 +27,7 @@ function fakeEngine(opts: { pid?: number; engineSessionId?: string } = {}): {
     displayName: 'Claude Code',
     capabilities: {
       models: [],
-      permissionModes: ['auto-accept'],
+      permissionModes: ['bypass'],
       supportsResume: true,
       supportsMcp: true,
       supportsSkills: true,
@@ -52,7 +52,7 @@ const BASE_OPTS: StartOptions = {
   workspaceId: 'w1',
   workingDir: '/tmp',
   prompt: 'hi',
-  permissionMode: 'auto-accept',
+  agentPermissionMode: 'bypass',
   backendUrl: 'http://127.0.0.1:3000',
   koboHome: '/tmp/kobo',
   settings: {
@@ -104,31 +104,5 @@ describe('SessionController', () => {
     const ctrl = new SessionController('w1', 'sess-1', engine, () => {})
     await ctrl.start(BASE_OPTS)
     await expect(ctrl.start(BASE_OPTS)).rejects.toThrow(/already started/i)
-  })
-})
-
-describe('SessionController — post-compact reminder', () => {
-  it('injects a task/criteria reminder into the engine stdin on session:compacted', async () => {
-    vi.resetModules()
-    vi.doMock('../../server/services/workspace-service.js', () => ({
-      getWorkspace: () => ({ id: 'w1', name: 'Sample', archivedAt: null }),
-      listTasks: () => [
-        { id: 't1', title: 'Write X', status: 'todo', isAcceptanceCriterion: false },
-        { id: 't2', title: 'Y passes', status: 'todo', isAcceptanceCriterion: true },
-      ],
-    }))
-    const { SessionController } = await import('../../server/services/agent/session-controller.js')
-    const { engine, emit, sentMessages } = fakeEngine()
-    const received: AgentEvent[] = []
-    const ctrl = new SessionController('w1', 'sess-1', engine, (ev) => received.push(ev))
-    await ctrl.start(BASE_OPTS)
-    emit({ kind: 'session:compacted' })
-
-    expect(sentMessages.length).toBe(1)
-    const reminder = sentMessages[0]
-    expect(reminder).toContain('Sample')
-    expect(reminder).toContain('Write X')
-    expect(reminder).toContain('Y passes')
-    expect(received).toContainEqual({ kind: 'session:compacted' })
   })
 })

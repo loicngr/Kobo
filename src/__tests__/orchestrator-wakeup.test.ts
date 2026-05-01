@@ -73,7 +73,7 @@ describe('orchestrator — ScheduleWakeup detection in handleEvent', () => {
       input: { delaySeconds: 60, prompt: 'resume', reason: 'CI' },
     })
 
-    expect(scheduleSpy).toHaveBeenCalledWith(wsId, 60, 'resume', 'CI')
+    expect(scheduleSpy).toHaveBeenCalledWith(wsId, 60, 'resume', 'CI', 'session-1')
   })
 
   it('ignores ScheduleWakeup with missing delaySeconds or prompt', async () => {

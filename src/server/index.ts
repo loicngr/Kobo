@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { serve } from '@hono/node-server'
@@ -43,17 +42,6 @@ import { emit, emitEphemeral, handleConnection, setMessageHandler } from './serv
 import { getActiveSession, getWorkspace, updateWorkspaceStatus } from './services/workspace-service.js'
 import { getClientSpaPath, getDbPath, getKoboHome, getPackageVersion } from './utils/paths.js'
 import { initProcessCleanup, killAll as killAllTrackedProcesses } from './utils/process-tracker.js'
-
-// Runtime prerequisite check — warn if the claude CLI is missing. Don't block
-// startup: the user may still want to configure settings or browse workspaces.
-{
-  const check = spawnSync('claude', ['--version'], { stdio: 'ignore' })
-  if (check.error && (check.error as NodeJS.ErrnoException).code === 'ENOENT') {
-    console.warn(
-      "[kobo] WARNING: 'claude' CLI not found on PATH. Kōbō will fail to spawn agents until Claude Code is installed. See https://claude.com/claude-code",
-    )
-  }
-}
 
 console.log(`[kobo] Kōbō home: ${getKoboHome()}`)
 
@@ -282,7 +270,7 @@ setMessageHandler((type, payload) => {
     content?: string
     prompt?: string
     sessionId?: string
-    permissionModeOverride?: 'auto-accept' | 'plan'
+    agentPermissionModeOverride?: 'plan' | 'bypass' | 'strict' | 'interactive'
   } | null
 
   if (type === 'chat:message' && p?.workspaceId && p?.content) {
@@ -296,6 +284,17 @@ setMessageHandler((type, payload) => {
       emitEphemeral(p.workspaceId, 'chat:rejected', {
         reason: 'auto-loop-active',
         message: 'Auto-loop is running — disable it before sending a message',
+      })
+      return
+    }
+
+    // Reject chat input while paused on canUseTool — sending here would spawn
+    // a parallel session and orphan the pending callback.
+    const wsRow = getWorkspace(p.workspaceId)
+    if (wsRow?.status === 'awaiting-user') {
+      emitEphemeral(p.workspaceId, 'chat:rejected', {
+        reason: 'awaiting-user',
+        message: 'Answer via the question panel — typing in chat would orphan the pending callback',
       })
       return
     }
@@ -328,7 +327,7 @@ setMessageHandler((type, payload) => {
           // Plan mode blocks MCP tools — when the caller knows the message
           // requires them (e.g. grooming), it sets the override to bypass the
           // workspace default for this spawn only.
-          const effectiveMode = p.permissionModeOverride ?? workspace.permissionMode
+          const effectiveMode = p.agentPermissionModeOverride ?? workspace.agentPermissionMode
           startAgent(
             p.workspaceId,
             worktreePath,
@@ -362,7 +361,7 @@ setMessageHandler((type, payload) => {
         prompt,
         workspace.model,
         false,
-        workspace.permissionMode,
+        workspace.agentPermissionMode,
         undefined,
         workspace.reasoningEffort,
       )

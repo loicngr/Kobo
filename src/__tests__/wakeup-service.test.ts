@@ -161,6 +161,19 @@ describe('wakeup-service', () => {
       expect(wakeupService.getPending(wsId)).toBeNull()
     })
 
+    it('resumes the session that scheduled the wakeup, not the latest one', async () => {
+      const wakeupService = await import('../server/services/wakeup-service.js')
+      const orch = await import('../server/services/agent/orchestrator.js')
+      ;(orch.hasController as ReturnType<typeof vi.fn>).mockReturnValue(false)
+
+      wakeupService.schedule(wsId, 60, 'continue', 'soak', 'sess-original')
+      await vi.advanceTimersByTimeAsync(60_000)
+
+      const callArgs = (orch.startAgent as ReturnType<typeof vi.fn>).mock.calls[0] as unknown[]
+      // startAgent(workspaceId, workingDir, prompt, model, resume, mode, existingSessionId, effort)
+      expect(callArgs[6]).toBe('sess-original')
+    })
+
     it('skips fire and emits wakeup:skipped when a controller is already active', async () => {
       const wakeupService = await import('../server/services/wakeup-service.js')
       const orch = await import('../server/services/agent/orchestrator.js')

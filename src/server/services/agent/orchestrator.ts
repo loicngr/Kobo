@@ -14,8 +14,13 @@ import { unregisterProcess } from '../../utils/process-tracker.js'
 import * as autoLoopService from '../auto-loop-service.js'
 import { getEffectiveSettings } from '../settings-service.js'
 import * as wakeupService from '../wakeup-service.js'
-import { emitEphemeral } from '../websocket-service.js'
-import { getWorkspace as getWs, markWorkspaceUnread, updateWorkspaceStatus } from '../workspace-service.js'
+import { emit, emitEphemeral } from '../websocket-service.js'
+import {
+  getWorkspace as getWs,
+  markWorkspaceUnread,
+  updateWorkspaceStatus,
+  type WorkspaceStatus,
+} from '../workspace-service.js'
 import { resolveEngine } from './engines/registry.js'
 import type { AgentEvent, McpServerSpec, RateLimitInfo, StartOptions } from './engines/types.js'
 import { routeEvent } from './event-router.js'
@@ -45,6 +50,121 @@ const controllers = new Map<string, SessionController>()
 
 /** workspaceId -> last engine session ID (for resume) */
 const sessionIds = new Map<string, string>()
+
+/**
+ * A pending item is either an AskUserQuestion (kind: 'question') or an
+ * interactive permission request (kind: 'permission'). Items are queued
+ * FIFO per workspace; the head is what the UI surfaces.
+ */
+export type PendingItem =
+  | { kind: 'question'; agentSessionId: string; toolCallId: string; toolName: string; input: unknown }
+  | { kind: 'permission'; agentSessionId: string; toolCallId: string; toolName: string; toolInput: unknown }
+
+/** workspaceId -> FIFO queue of pending items */
+const pendingQueue = new Map<string, PendingItem[]>()
+
+/**
+ * workspaceId -> the workspace status held BEFORE we transitioned to
+ * `awaiting-user` because the SDK is awaiting an answer via canUseTool.
+ * Restored when the user answers so an agent paused mid-`brainstorming`
+ * returns to that status instead of being yanked to `executing`.
+ */
+const preAwaitStatus = new Map<string, WorkspaceStatus>()
+
+function enqueuePending(workspaceId: string, item: PendingItem): void {
+  const arr = pendingQueue.get(workspaceId) ?? []
+  arr.push(item)
+  pendingQueue.set(workspaceId, arr)
+}
+
+function peekPending(workspaceId: string): PendingItem | undefined {
+  return pendingQueue.get(workspaceId)?.[0]
+}
+
+function dequeuePending(workspaceId: string): PendingItem | undefined {
+  const arr = pendingQueue.get(workspaceId)
+  if (!arr || arr.length === 0) return undefined
+  const head = arr.shift()
+  if (arr.length === 0) pendingQueue.delete(workspaceId)
+  return head
+}
+
+/**
+ * Remove persisted `session:user-input-requested` events for a given
+ * toolCallId from `ws_events`, so a future F5 / WS reconnect doesn't
+ * resurrect a question the user has already answered or cancelled.
+ */
+function purgePersistedUserInputRequest(workspaceId: string, toolCallId: string): void {
+  try {
+    const db = getDb()
+    db.prepare(
+      `DELETE FROM ws_events
+       WHERE workspace_id = ?
+         AND type = 'agent:event'
+         AND json_extract(payload, '$.kind') = 'session:user-input-requested'
+         AND json_extract(payload, '$.toolCallId') = ?`,
+    ).run(workspaceId, toolCallId)
+  } catch (err) {
+    console.error('[orchestrator] Failed to purge persisted user-input-requested:', err)
+  }
+}
+
+/**
+ * Remove every persisted `session:user-input-requested` event tied to a
+ * specific session — used when the session is killed (stopAgent / archive /
+ * delete) so a future F5 doesn't resurrect panels that no longer have a live
+ * canUseTool callback to resolve.
+ */
+function purgeAllPersistedUserInputRequests(workspaceId: string, agentSessionId: string): void {
+  try {
+    const db = getDb()
+    db.prepare(
+      `DELETE FROM ws_events
+       WHERE workspace_id = ?
+         AND session_id = ?
+         AND type = 'agent:event'
+         AND json_extract(payload, '$.kind') = 'session:user-input-requested'`,
+    ).run(workspaceId, agentSessionId)
+  } catch (err) {
+    console.error('[orchestrator] Failed to purge persisted user-input-requested (session-wide):', err)
+  }
+}
+
+/**
+ * Snapshot the workspace's current status so that on resolve we can restore
+ * it. Idempotent: when called while already in `awaiting-user` we keep the
+ * FIRST pre-await status (defensive against multiple requests before reply).
+ */
+function rememberPreAwaitStatus(workspaceId: string): void {
+  if (preAwaitStatus.has(workspaceId)) return
+  const ws = getWs(workspaceId)
+  if (!ws) return
+  if (ws.status === 'awaiting-user') return
+  preAwaitStatus.set(workspaceId, ws.status)
+}
+
+/**
+ * Pop the snapshotted status from the pre-await map. Returns `'executing'`
+ * if no snapshot exists — that's the safe default for a session that started
+ * in `executing` and asked the user immediately.
+ */
+function consumePreAwaitStatus(workspaceId: string): WorkspaceStatus {
+  const remembered = preAwaitStatus.get(workspaceId)
+  preAwaitStatus.delete(workspaceId)
+  return remembered ?? 'executing'
+}
+
+function clearPendingForSession(workspaceId: string, agentSessionId: string): void {
+  const arr = pendingQueue.get(workspaceId)
+  if (arr) {
+    const filtered = arr.filter((item) => item.agentSessionId !== agentSessionId)
+    if (filtered.length === 0) pendingQueue.delete(workspaceId)
+    else pendingQueue.set(workspaceId, filtered)
+  }
+  if (!pendingQueue.has(workspaceId)) {
+    preAwaitStatus.delete(workspaceId)
+  }
+}
 
 /** Cached list of available slash commands — persisted to <KOBO_HOME>/skills.json */
 let availableSkills: string[] = (() => {
@@ -83,7 +203,12 @@ function isProcessAlive(pid: number): boolean {
 function runWatchdog(): void {
   for (const [workspaceId, ctrl] of controllers) {
     const pid = ctrl.pid
-    if (pid === undefined || isProcessAlive(pid)) continue
+    // SDK-backed engines have no pid — query the engine's optional `isAlive`
+    // probe instead so the watchdog isn't blind on those engines. Legacy
+    // engines without `isAlive` fall back to the pid-based check.
+    const ep = ctrl.engineProcess
+    const alive = ep && typeof ep.isAlive === 'function' ? ep.isAlive() : pid !== undefined && isProcessAlive(pid)
+    if (alive) continue
 
     console.error(`[watchdog] Agent process for workspace '${workspaceId}' (PID ${pid}) is dead — cleaning up`)
 
@@ -149,21 +274,42 @@ export function reconcileOrphanSessions(): void {
       id: string
       pid: number | null
     }>
-    if (rows.length === 0) return
-
-    const now = new Date().toISOString()
-    const update = db.prepare("UPDATE agent_sessions SET status = 'error', ended_at = ? WHERE id = ?")
-    let fixed = 0
-    for (const row of rows) {
-      if (row.pid && isProcessAlive(row.pid)) continue // genuine leftover from a graceful restart — skip
-      update.run(now, row.id)
-      fixed++
-    }
-    if (fixed > 0) {
-      console.log(`[orchestrator] Reconciled ${fixed} orphan agent_sessions row(s) at boot.`)
+    if (rows.length > 0) {
+      const now = new Date().toISOString()
+      const update = db.prepare("UPDATE agent_sessions SET status = 'error', ended_at = ? WHERE id = ?")
+      let fixed = 0
+      for (const row of rows) {
+        if (row.pid && isProcessAlive(row.pid)) continue // genuine leftover from a graceful restart — skip
+        update.run(now, row.id)
+        fixed++
+      }
+      if (fixed > 0) {
+        console.log(`[orchestrator] Reconciled ${fixed} orphan agent_sessions row(s) at boot.`)
+      }
     }
   } catch (err) {
     console.error('[orchestrator] Failed to reconcile orphan agent_sessions at boot:', err)
+  }
+
+  // Workspaces stuck in `awaiting-user` after a server kill have no live
+  // controller to resolve canUseTool, so the chat input is disabled forever.
+  // Drop them back to `idle` so the user can interact (start fresh, etc).
+  // We bypass `updateWorkspaceStatus` here because the orchestrator/workspace
+  // module pair is circular and the reference may not be initialised at boot
+  // time when this runs; a raw SQL update is safe — the awaiting-user → idle
+  // transition is allowed by VALID_TRANSITIONS.
+  try {
+    const db = getDb()
+    const result = db
+      .prepare(
+        "UPDATE workspaces SET status = 'idle', updated_at = ? WHERE status = 'awaiting-user' AND archived_at IS NULL",
+      )
+      .run(new Date().toISOString())
+    if (result.changes > 0) {
+      console.log(`[orchestrator] Reconciled ${result.changes} awaiting-user workspace(s) at boot.`)
+    }
+  } catch (err) {
+    console.error('[orchestrator] Failed to reconcile awaiting-user workspaces at boot:', err)
   }
 }
 
@@ -342,16 +488,43 @@ function reuseOrCreateFreshSession(workspaceId: string, existingSessionId: strin
 const tasksDoneSnapshot = new Map<string, number>()
 
 function getDoneTaskCount(workspaceId: string): number {
-  const db = getDb()
-  const row = db
-    .prepare('SELECT COUNT(*) AS c FROM tasks WHERE workspace_id = ? AND status = ?')
-    .get(workspaceId, 'done') as { c: number }
-  return row.c
+  try {
+    const db = getDb()
+    const row = db
+      .prepare('SELECT COUNT(*) AS c FROM tasks WHERE workspace_id = ? AND status = ?')
+      .get(workspaceId, 'done') as { c: number }
+    return row.c
+  } catch (err) {
+    // Best-effort: DB closed during async teardown, or missing schema. Fall back
+    // to 0 so auto-loop's done-delta stays correct (no progress).
+    console.warn('[orchestrator] getDoneTaskCount failed, returning 0:', err)
+    return 0
+  }
 }
 
 /** Clear the in-memory done-count snapshot for a workspace (called on delete). */
 export function forgetTasksDoneSnapshot(workspaceId: string): void {
   tasksDoneSnapshot.delete(workspaceId)
+}
+
+/** Drop the resume-failed flag for a workspace (called on delete). */
+export function forgetResumeFailed(workspaceId: string): void {
+  resumeFailedSet.delete(workspaceId)
+}
+
+/** Drop the pending question/permission queue for a workspace (called on delete). */
+export function forgetPendingQueue(workspaceId: string): void {
+  pendingQueue.delete(workspaceId)
+}
+
+/** Drop the pre-await status snapshot for a workspace (called on delete). */
+export function forgetPreAwaitStatus(workspaceId: string): void {
+  preAwaitStatus.delete(workspaceId)
+}
+
+/** Drop the cached engine session id for a workspace (called on delete). */
+export function forgetSessionId(workspaceId: string): void {
+  sessionIds.delete(workspaceId)
 }
 
 function handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent): void {
@@ -367,13 +540,20 @@ function handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent
     tasksDoneSnapshot.set(workspaceId, getDoneTaskCount(workspaceId))
   }
 
+  // Legacy fallback: the built-in `ScheduleWakeup` tool (CLI tradition) isn't
+  // declared by the SDK, so we intercept the tool:call event and apply the
+  // side-effect ourselves. Agents should prefer `kobo__schedule_wakeup` —
+  // logged here so we can monitor remaining usage.
   if (ev.kind === 'tool:call' && ev.name === 'ScheduleWakeup') {
     const input = ev.input as Record<string, unknown> | undefined
     const delay = typeof input?.delaySeconds === 'number' ? input.delaySeconds : 0
     const prompt = typeof input?.prompt === 'string' ? input.prompt : ''
     const reason = typeof input?.reason === 'string' ? input.reason : undefined
     if (delay > 0 && prompt) {
-      wakeupService.schedule(workspaceId, delay, prompt, reason)
+      console.warn(
+        `[orchestrator] Legacy ScheduleWakeup intercepted for workspace '${workspaceId}' — agent should use kobo__schedule_wakeup instead.`,
+      )
+      wakeupService.schedule(workspaceId, delay, prompt, reason, agentSessionId)
     }
   }
 
@@ -404,29 +584,51 @@ function handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent
     clearStaleEngineSessionId(workspaceId)
   }
   if (ev.kind === 'session:ended') {
-    // Pop the resume_failed flag before any cleanup so both onSessionEnded paths see it.
     const isResumeFailed = resumeFailedSet.delete(workspaceId)
 
-    // Compute the auto-loop done-delta BEFORE the internal cleanup because
-    // onSessionEnded(internal) may throw / trigger follow-ups; also read the
-    // snapshot FIRST so a later re-entry can't overwrite it.
     const before = tasksDoneSnapshot.get(workspaceId) ?? getDoneTaskCount(workspaceId)
     const after = getDoneTaskCount(workspaceId)
     const delta = Math.max(0, after - before)
     tasksDoneSnapshot.delete(workspaceId)
 
-    // Internal cleanup REMOVES the controller from the map. This must run
-    // BEFORE autoLoopService.onSessionEnded → spawnNextIteration → startAgent,
-    // otherwise startAgent throws "Agent already running" because the
-    // just-ended controller is still in the map.
-    onSessionEnded(workspaceId, agentSessionId, ev.exitCode, isResumeFailed)
+    clearPendingForSession(workspaceId, agentSessionId)
 
-    // When a resume failed the session exited with an error but there's
-    // nothing wrong with the workspace — the stale session ID has been cleared
-    // and the next iteration will start fresh. Treat it as 'completed' so
-    // auto-loop continues without disabling.
+    // Must run BEFORE autoLoopService.onSessionEnded → spawnNextIteration →
+    // startAgent, otherwise startAgent throws "Agent already running" because
+    // the just-ended controller is still in the map.
+    onSessionEnded(workspaceId, agentSessionId, ev.exitCode, ev.reason, isResumeFailed)
+
+    // resume_failed exits with an error but the workspace is fine (stale id
+    // cleared, next iteration will start fresh) — report 'completed' to
+    // auto-loop so it continues.
     const effectiveReason = isResumeFailed ? 'completed' : ev.reason
     autoLoopService.onSessionEnded(workspaceId, effectiveReason, delta)
+  }
+
+  if (ev.kind === 'session:user-input-requested') {
+    if (ev.requestKind === 'question') {
+      enqueuePending(workspaceId, {
+        kind: 'question',
+        agentSessionId,
+        toolCallId: ev.toolCallId,
+        toolName: ev.toolName,
+        input: ev.payload,
+      })
+    } else {
+      enqueuePending(workspaceId, {
+        kind: 'permission',
+        agentSessionId,
+        toolCallId: ev.toolCallId,
+        toolName: ev.toolName,
+        toolInput: ev.payload,
+      })
+    }
+    rememberPreAwaitStatus(workspaceId)
+    try {
+      updateWorkspaceStatus(workspaceId, 'awaiting-user')
+    } catch (err) {
+      console.warn('[orchestrator] Failed to transition to awaiting-user:', err)
+    }
   }
   if (ev.kind === 'session:started' && ev.engineSessionId) {
     sessionIds.set(workspaceId, ev.engineSessionId)
@@ -436,11 +638,9 @@ function handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent
     } catch (err) {
       console.error('[orchestrator] Failed to persist engine session id:', err)
     }
-    // The workspace must be in an active status while the agent is
-    // running — otherwise the frontend's `sessionActive` check stays
-    // false and streaming messages render without the "typing" spinner.
-    // Transition from a terminal state (completed/idle/error/quota) to
-    // executing so the UI reflects that a new turn is happening.
+    // Transition terminal states (completed/idle/error/quota) → executing so
+    // the frontend's `sessionActive` flips and streaming messages get the
+    // typing spinner.
     try {
       const ws = getWs(workspaceId)
       if (ws && (ws.status === 'completed' || ws.status === 'idle' || ws.status === 'error' || ws.status === 'quota')) {
@@ -457,6 +657,7 @@ function onSessionEnded(
   workspaceId: string,
   agentSessionId: string,
   exitCode: number | null,
+  reason: 'completed' | 'error' | 'killed',
   resumeFailed = false,
 ): void {
   const currentWorkspace = getWs(workspaceId)
@@ -488,11 +689,7 @@ function onSessionEnded(
     console.error('[orchestrator] Failed to update agent_sessions on exit:', err)
   }
 
-  if (wasStopping) {
-    // session:ended with reason='killed' already emitted by the engine covers
-    // the "stopped" status. No legacy emit needed.
-    return
-  }
+  if (wasStopping) return
 
   // When the session hit quota, handleQuota() already transitioned the
   // workspace to `quota` and armed the retry timer. Keep that timer alive
@@ -515,30 +712,21 @@ function onSessionEnded(
     return
   }
 
-  if (exitCode !== null && exitCode !== 0 && !resumeFailed) {
-    try {
-      updateWorkspaceStatus(workspaceId, 'error')
-    } catch (err) {
-      console.error('[orchestrator] Failed to update workspace status on exit:', err)
-    }
-    try {
-      markWorkspaceUnread(workspaceId)
-      emitEphemeral(workspaceId, 'workspace:unread', { hasUnread: true })
-    } catch {
-      // best-effort
-    }
-  } else {
-    try {
-      updateWorkspaceStatus(workspaceId, 'completed')
-    } catch (err) {
-      console.error('[orchestrator] Failed to update workspace status on exit:', err)
-    }
-    try {
-      markWorkspaceUnread(workspaceId)
-      emitEphemeral(workspaceId, 'workspace:unread', { hasUnread: true })
-    } catch {
-      // best-effort
-    }
+  // `reason` is authoritative (with the SDK engine `exitCode` is often null,
+  // so reason='error'+exitCode=null would otherwise map wrongly to 'completed').
+  // `resumeFailed` is benign: stale id cleared, next iteration starts fresh.
+  const isErrorOutcome = !resumeFailed && (reason === 'error' || (exitCode !== null && exitCode !== 0))
+  const targetStatus: WorkspaceStatus = isErrorOutcome ? 'error' : 'completed'
+  try {
+    updateWorkspaceStatus(workspaceId, targetStatus)
+  } catch (err) {
+    console.error('[orchestrator] Failed to update workspace status on exit:', err)
+  }
+  try {
+    markWorkspaceUnread(workspaceId)
+    emitEphemeral(workspaceId, 'workspace:unread', { hasUnread: true })
+  } catch {
+    // best-effort
   }
 }
 
@@ -556,12 +744,44 @@ export function startAgent(
   prompt: string,
   model?: string,
   resume = false,
-  permissionMode: 'auto-accept' | 'plan' = 'auto-accept',
+  agentPermissionMode?: 'plan' | 'bypass' | 'strict' | 'interactive',
   existingSessionId?: string,
   reasoningEffort?: string,
 ): StartAgentResult {
-  if (controllers.has(workspaceId)) {
-    throw new Error(`Agent already running for workspace '${workspaceId}'`)
+  // Zombie detection: an SDK iterator hung on a never-resolved canUseTool
+  // callback can leave its controller in the map after the workspace is
+  // logically idle. Evict it instead of refusing the new session.
+  const existingCtrl = controllers.get(workspaceId)
+  if (existingCtrl) {
+    const wsForCheck = getWs(workspaceId)
+    const status = wsForCheck?.status
+    const isLogicallyDone = status === 'idle' || status === 'completed' || status === 'error' || status === 'quota'
+    if (isLogicallyDone) {
+      console.warn(
+        `[orchestrator] Evicting zombie controller for workspace '${workspaceId}' (status=${status}) before starting fresh session`,
+      )
+      void existingCtrl.stop().catch(() => {})
+      // Drop any queued pending items + persisted user-input-requested events
+      // tied to the zombie's agentSessionId so the new session doesn't inherit
+      // a stale queue and so a future sync replay doesn't resurrect them.
+      try {
+        clearPendingForSession(workspaceId, existingCtrl.agentSessionId)
+        preAwaitStatus.delete(workspaceId)
+        const db = getDb()
+        db.prepare(
+          `DELETE FROM ws_events
+           WHERE workspace_id = ?
+             AND session_id = ?
+             AND type = 'agent:event'
+             AND json_extract(payload, '$.kind') = 'session:user-input-requested'`,
+        ).run(workspaceId, existingCtrl.agentSessionId)
+      } catch (err) {
+        console.warn('[orchestrator] Failed to purge zombie pending state:', err)
+      }
+      controllers.delete(workspaceId)
+    } else {
+      throw new Error(`Agent already running for workspace '${workspaceId}'`)
+    }
   }
 
   const ws = getWs(workspaceId)
@@ -570,9 +790,6 @@ export function startAgent(
 
   let agentSessionId: string
   let resumeFromEngineSessionId: string | undefined
-  // Note: plan-mode prompt prefixing is an engine-specific concern handled by
-  // the Claude Code engine's args-builder. Do NOT prepend it here — that would
-  // double-prepend the marker when the engine applies its own prefix.
 
   if (resume) {
     const r = resolveSessionForResume(workspaceId, existingSessionId)
@@ -590,11 +807,8 @@ export function startAgent(
     prompt,
     model,
     effort: reasoningEffort,
-    permissionMode,
-    // Propagate the workspace's permission_profile to the engine (bypass vs
-    // strict). Defaults to 'bypass' — the pre-existing behavior — when the
-    // column is missing (fresh boot before migration landed) or unknown.
-    permissionProfile: ws?.permissionProfile === 'strict' ? 'strict' : 'bypass',
+    // Cascade: explicit caller override → workspace setting → 'bypass'.
+    agentPermissionMode: agentPermissionMode ?? ws?.agentPermissionMode ?? 'bypass',
     resumeFromEngineSessionId,
     backendUrl: `http://127.0.0.1:${backendPort}`,
     koboHome: (() => {
@@ -612,9 +826,6 @@ export function startAgent(
     handleEvent(workspaceId, agentSessionId, ev),
   )
   controllers.set(workspaceId, controller)
-
-  // "Agent running" is signalled via the engine's session:started event.
-  // The legacy `agent:status { status: 'executing' }` emit is gone.
 
   // Kick off engine.start asynchronously. Errors surface as error events.
   void controller
@@ -675,9 +886,29 @@ export function stopAgent(workspaceId: string): void {
 
   wakeupService.cancel(workspaceId, 'stopped')
 
-  // Remove from the map immediately so startAgent can proceed right away.
-  // The session:ended handler checks identity before removing, so a new
-  // controller started in the meantime is preserved.
+  // If the session was waiting on a question/permission, normalize the state
+  // synchronously so callers (archive, delete, manual stop) see a clean
+  // workspace immediately — without waiting for the async controller.stop()
+  // → session:ended round-trip. We:
+  //   1. drop queued pending items for this session,
+  //   2. purge persisted `session:user-input-requested` events so a F5 can't
+  //      resurrect zombie panels,
+  //   3. transition the workspace out of `awaiting-user` (→ idle) so badges
+  //      and unarchive don't leave a stuck status.
+  const wsBefore = getWs(workspaceId)
+  if (wsBefore?.status === 'awaiting-user') {
+    clearPendingForSession(workspaceId, ctrl.agentSessionId)
+    purgeAllPersistedUserInputRequests(workspaceId, ctrl.agentSessionId)
+    try {
+      updateWorkspaceStatus(workspaceId, 'idle')
+    } catch (err) {
+      console.warn('[orchestrator] Failed to normalize awaiting-user → idle on stop:', err)
+    }
+  }
+
+  // Remove from the map immediately so a fresh startAgent can proceed. The
+  // session:ended handler checks identity before removing, so a new controller
+  // started in the meantime is preserved.
   controllers.delete(workspaceId)
 
   const timer = backoffTimers.get(workspaceId)
@@ -702,6 +933,275 @@ export function sendMessage(workspaceId: string, content: string): void {
   ctrl.sendMessage(content)
 }
 
+/**
+ * Render the user's answer to an AskUserQuestion as a markdown chat
+ * message. Each question becomes a bullet line `**<question>** → <answer>`.
+ * Empty answers are skipped — questions the user didn't fill won't appear.
+ */
+function formatDeferredAnswerForChat(questions: unknown, answers: Record<string, string>): string {
+  if (!Array.isArray(questions)) return ''
+  const lines: string[] = []
+  for (const q of questions) {
+    if (!q || typeof q !== 'object') continue
+    const questionText =
+      typeof (q as { question?: unknown }).question === 'string' ? (q as { question: string }).question : null
+    if (!questionText) continue
+    const answer = answers[questionText]
+    if (!answer) continue
+    lines.push(`- **${questionText}** → ${answer}`)
+  }
+  return lines.length > 0 ? lines.join('\n') : ''
+}
+
+/**
+ * Answer a pending AskUserQuestion by resolving the engine's `canUseTool`
+ * callback with the user's answers. The SDK iterator continues on its own
+ * once the callback resolves — no resume / re-spawn needed.
+ */
+export async function answerPendingQuestion(
+  workspaceId: string,
+  answers: Record<string, string>,
+  expectedToolCallId?: string,
+): Promise<void> {
+  const head = peekPending(workspaceId)
+  if (!head) {
+    // Self-heal an orphan `awaiting-user` (queue empty but status not restored,
+    // typically after a server restart). Default to `idle` rather than
+    // `executing` since there's no live agent here.
+    try {
+      const ws = getWs(workspaceId)
+      if (ws?.status === 'awaiting-user') {
+        const remembered = preAwaitStatus.get(workspaceId)
+        preAwaitStatus.delete(workspaceId)
+        const restoreTo: WorkspaceStatus = remembered ?? 'idle'
+        updateWorkspaceStatus(workspaceId, restoreTo)
+      }
+    } catch (err) {
+      console.warn('[orchestrator] Self-heal awaiting-user → idle failed:', err)
+    }
+    throw new Error(`No deferred tool use pending for workspace '${workspaceId}'`)
+  }
+  if (head.kind !== 'question') {
+    throw new Error(`Expected a deferred question at the head of the queue, got '${head.kind}'`)
+  }
+  // Race protection: head may have rotated between the panel opening and
+  // submit (previous defer cancelled, new one queued).
+  if (expectedToolCallId && head.toolCallId !== expectedToolCallId) {
+    throw new Error(
+      `Pending question changed: expected toolCallId '${expectedToolCallId}', current head is '${head.toolCallId}'`,
+    )
+  }
+  const ws = getWs(workspaceId)
+  if (!ws) {
+    throw new Error(`Workspace '${workspaceId}' not found`)
+  }
+  const ctrl = controllers.get(workspaceId)
+  if (!ctrl) {
+    throw new Error(`No agent running for workspace '${workspaceId}'`)
+  }
+  const engineProcess = ctrl.engineProcess
+  if (!engineProcess) {
+    throw new Error(`Agent for workspace '${workspaceId}' has no active engine process`)
+  }
+
+  const resolved = engineProcess.resolvePendingUserInput(head.toolCallId, { kind: 'question', answers })
+  if (!resolved) {
+    throw new Error(`No pending callback for toolCallId '${head.toolCallId}'`)
+  }
+
+  dequeuePending(workspaceId)
+  purgePersistedUserInputRequest(workspaceId, head.toolCallId)
+  const restoreTo = peekPending(workspaceId) ? 'awaiting-user' : consumePreAwaitStatus(workspaceId)
+  try {
+    updateWorkspaceStatus(workspaceId, restoreTo)
+  } catch (err) {
+    console.warn(`[orchestrator] Failed to transition awaiting-user → ${restoreTo}:`, err)
+  }
+
+  const questions = (head.input as { questions?: unknown } | null)?.questions
+  try {
+    const formatted = formatDeferredAnswerForChat(questions, answers)
+    if (formatted) {
+      emit(workspaceId, 'user:message', { content: formatted, sender: 'user' }, head.agentSessionId)
+    }
+  } catch (err) {
+    console.error('[orchestrator] Failed to emit user:message for question answer:', err)
+  }
+}
+
+/**
+ * Answer a pending interactive permission request by resolving the engine's
+ * `canUseTool` callback with allow/deny.
+ */
+export async function answerPendingPermission(
+  workspaceId: string,
+  decision: { toolCallId: string; decision: 'allow' | 'deny'; reason?: string },
+): Promise<void> {
+  const head = peekPending(workspaceId)
+  if (!head) {
+    // Self-heal an orphan `awaiting-user` (see answerPendingQuestion).
+    try {
+      const ws = getWs(workspaceId)
+      if (ws?.status === 'awaiting-user') {
+        const remembered = preAwaitStatus.get(workspaceId)
+        preAwaitStatus.delete(workspaceId)
+        updateWorkspaceStatus(workspaceId, remembered ?? 'idle')
+      }
+    } catch (err) {
+      console.warn('[orchestrator] Self-heal awaiting-user → idle failed:', err)
+    }
+    throw new Error(`No deferred tool use pending for workspace '${workspaceId}'`)
+  }
+  if (head.kind !== 'permission') {
+    throw new Error(`Expected a deferred permission at the head of the queue, got '${head.kind}'`)
+  }
+  if (head.toolCallId !== decision.toolCallId) {
+    throw new Error(`Decision toolCallId '${decision.toolCallId}' does not match head toolCallId '${head.toolCallId}'`)
+  }
+  const ws = getWs(workspaceId)
+  if (!ws) {
+    throw new Error(`Workspace '${workspaceId}' not found`)
+  }
+  const ctrl = controllers.get(workspaceId)
+  if (!ctrl) {
+    throw new Error(`No agent running for workspace '${workspaceId}'`)
+  }
+  const engineProcess = ctrl.engineProcess
+  if (!engineProcess) {
+    throw new Error(`Agent for workspace '${workspaceId}' has no active engine process`)
+  }
+
+  const response =
+    decision.decision === 'allow'
+      ? ({ kind: 'permission-allow' } as const)
+      : ({ kind: 'permission-deny', reason: decision.reason } as const)
+  const resolved = engineProcess.resolvePendingUserInput(decision.toolCallId, response)
+  if (!resolved) {
+    throw new Error(`No pending callback for toolCallId '${decision.toolCallId}'`)
+  }
+
+  dequeuePending(workspaceId)
+  purgePersistedUserInputRequest(workspaceId, head.toolCallId)
+  const restoreTo = peekPending(workspaceId) ? 'awaiting-user' : consumePreAwaitStatus(workspaceId)
+  try {
+    updateWorkspaceStatus(workspaceId, restoreTo)
+  } catch (err) {
+    console.warn(`[orchestrator] Failed to transition awaiting-user → ${restoreTo}:`, err)
+  }
+}
+
+/**
+ * Cancel a pending question without answering: resolves the SDK callback
+ * with `behavior: 'deny'` so the agent receives an error tool_result and
+ * can adapt (proceed with defaults, re-ask, or abandon). The session
+ * keeps running — Cancel ≠ Stop.
+ */
+export async function cancelPendingQuestion(
+  workspaceId: string,
+  reason?: string,
+  expectedToolCallId?: string,
+): Promise<void> {
+  const head = peekPending(workspaceId)
+  if (!head) {
+    // Self-heal an orphan `awaiting-user` (see answerPendingQuestion).
+    try {
+      const ws = getWs(workspaceId)
+      if (ws?.status === 'awaiting-user') {
+        const remembered = preAwaitStatus.get(workspaceId)
+        preAwaitStatus.delete(workspaceId)
+        updateWorkspaceStatus(workspaceId, remembered ?? 'idle')
+      }
+    } catch (err) {
+      console.warn('[orchestrator] Self-heal awaiting-user → idle failed:', err)
+    }
+    throw new Error(`No deferred tool use pending for workspace '${workspaceId}'`)
+  }
+  if (head.kind !== 'question') {
+    throw new Error(`Expected a deferred question at the head of the queue, got '${head.kind}'`)
+  }
+  // toolCallId mismatch on cancel is logged but NOT fatal: the user clicked
+  // Cancel on whatever was visible. Worst case is a benign deny on a question
+  // the agent was about to ask anyway. (Mismatch on submit IS fatal — wrong
+  // answers would be applied to the wrong question.)
+  if (expectedToolCallId && head.toolCallId !== expectedToolCallId) {
+    console.warn(
+      `[orchestrator] cancel toolCallId mismatch — expected '${expectedToolCallId}', head is '${head.toolCallId}'. Cancelling head anyway.`,
+    )
+  }
+  const ctrl = controllers.get(workspaceId)
+  if (!ctrl) {
+    throw new Error(`No agent running for workspace '${workspaceId}'`)
+  }
+  const engineProcess = ctrl.engineProcess
+  if (!engineProcess) {
+    throw new Error(`Agent for workspace '${workspaceId}' has no active engine process`)
+  }
+
+  const resolved = engineProcess.resolvePendingUserInput(head.toolCallId, {
+    kind: 'question-cancel',
+    reason,
+  })
+  if (!resolved) {
+    throw new Error(`No pending callback for toolCallId '${head.toolCallId}'`)
+  }
+
+  dequeuePending(workspaceId)
+  purgePersistedUserInputRequest(workspaceId, head.toolCallId)
+  const restoreTo = peekPending(workspaceId) ? 'awaiting-user' : consumePreAwaitStatus(workspaceId)
+  try {
+    updateWorkspaceStatus(workspaceId, restoreTo)
+  } catch (err) {
+    console.warn(`[orchestrator] Failed to transition awaiting-user → ${restoreTo}:`, err)
+  }
+}
+
+/** @deprecated use `answerPendingQuestion` instead. Kept for legacy callers/tests. */
+export async function resumeDeferredQuestion(workspaceId: string, answers: Record<string, string>): Promise<void> {
+  return answerPendingQuestion(workspaceId, answers)
+}
+
+/** @deprecated use `answerPendingPermission` instead. Kept for legacy callers/tests. */
+export async function resumeDeferredPermission(
+  workspaceId: string,
+  decision: { toolCallId: string; decision: 'allow' | 'deny'; reason?: string },
+): Promise<void> {
+  return answerPendingPermission(workspaceId, decision)
+}
+
+/** @deprecated alias kept for older tests. */
+export async function resumeDeferredToolUse(workspaceId: string, answers: Record<string, string>): Promise<void> {
+  return answerPendingQuestion(workspaceId, answers)
+}
+
+/** @internal test-only */
+export function _getPendingQueue(): Map<string, PendingItem[]> {
+  return pendingQueue
+}
+
+/**
+ * @internal test-only — legacy shim. Returns a Map<workspaceId, PendingItem>
+ * containing only the head of each queue (question kind only) flattened to the
+ * pre-queue shape so older tests keep passing without rewriting. New tests
+ * should use `_getPendingQueue` instead.
+ */
+export function _getPendingDeferred(): Map<
+  string,
+  { toolCallId: string; toolName: string; input: unknown; agentSessionId: string }
+> {
+  const out = new Map<string, { toolCallId: string; toolName: string; input: unknown; agentSessionId: string }>()
+  for (const [wid, arr] of pendingQueue) {
+    const head = arr[0]
+    if (!head || head.kind !== 'question') continue
+    out.set(wid, {
+      toolCallId: head.toolCallId,
+      toolName: head.toolName,
+      input: head.input,
+      agentSessionId: head.agentSessionId,
+    })
+  }
+  return out
+}
+
 /** In-memory status of the agent for a workspace, or null if not running. */
 export function getAgentStatus(workspaceId: string): 'running' | 'stopping' | null {
   return controllers.get(workspaceId)?.status ?? null
@@ -710,6 +1210,11 @@ export function getAgentStatus(workspaceId: string): 'running' | 'stopping' | nu
 /** True when an agent controller is currently running for the workspace. */
 export function hasController(workspaceId: string): boolean {
   return controllers.has(workspaceId)
+}
+
+/** The agent_session_id of the active controller for the workspace, if any. */
+export function getActiveSessionId(workspaceId: string): string | undefined {
+  return controllers.get(workspaceId)?.agentSessionId
 }
 
 /** Number of currently running controllers. */
@@ -817,12 +1322,6 @@ function handleQuota(workspaceId: string, _agentSessionId?: string): void {
     // May fail if transition is not valid
   }
 
-  // The quota state is already signalled by the `error { category: 'quota' }`
-  // AgentEvent that triggered this handler. No legacy `agent:status { quota }`
-  // emit needed.
-
-  // Prefer the actual resetsAt from the last rate_limit event; fall back to
-  // the 15/30/60min exponential schedule when that info isn't usable.
   const retryCount = retryCounts.get(workspaceId) ?? 0
   const { delayMs, resetsAt, source } = computeQuotaBackoffMs(workspaceId, retryCount)
   const backoffMs = delayMs

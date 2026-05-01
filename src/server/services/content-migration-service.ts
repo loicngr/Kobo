@@ -1,9 +1,5 @@
 import type Database from 'better-sqlite3'
-import { nanoid } from 'nanoid'
-import { createParserState, parseClaudeLine } from './agent/engines/claude-code/stream-parser.js'
 import type { AgentEvent } from './agent/engines/types.js'
-import { createPreMigrationBackup } from './db-backup-service.js'
-import { broadcastAll } from './websocket-service.js'
 
 /**
  * Discriminated union. Consumers (frontend store, overlay, tests) narrow on
@@ -86,121 +82,38 @@ export function getContentMigrationStatus(): ContentMigrationStatus {
   return snapshot()
 }
 
-export async function runContentMigrationIfNeeded(db: Database.Database, dbPath: string): Promise<void> {
+/**
+ * Legacy ws_events content migration.
+ *
+ * Historical context: earlier versions of Kōbō persisted Claude Code stdout as
+ * `agent:output` / `agent:stderr` / `agent:status` rows. The migration to the
+ * unified `agent:event` shape was completed in v10. As of the Claude Agent SDK
+ * cutover, the stream-parser used to reconstruct AgentEvents from those legacy
+ * rows has been removed.
+ *
+ * All production databases have been migrated. This function is now a no-op
+ * kept for API compatibility — it always reports `idle`. Should any rare,
+ * unmigrated row remain, it is left untouched in `ws_events` (and ignored by
+ * the new replay path which only reads `agent:event`).
+ */
+export async function runContentMigrationIfNeeded(_db: Database.Database, _dbPath: string): Promise<void> {
   if (isRunning) return
   isRunning = true
   try {
-    const row = db
-      .prepare("SELECT COUNT(*) AS c FROM ws_events WHERE type IN ('agent:output', 'agent:stderr', 'agent:status')")
-      .get() as { c: number }
-    if (row.c === 0) {
-      internal.state = 'idle'
-      isRunning = false
-      return
-    }
-    internal.state = 'backing-up'
-    internal.startedAt = new Date().toISOString()
-    broadcastStatus()
-    const backup = await createPreMigrationBackup(db, dbPath, 'v10')
-    internal.backupPath = backup.created ?? undefined
-
-    internal.state = 'running'
-    internal.total = row.c
-    internal.processed = 0
-    broadcastStatus()
-
-    await processLoop(db)
-
-    internal.state = 'done'
-    internal.finishedAt = new Date().toISOString()
-    broadcastStatus()
-  } catch (err) {
-    internal.state = 'error'
-    internal.errorMessage = err instanceof Error ? err.message : String(err)
-    broadcastStatus()
-    throw err
+    internal.state = 'idle'
   } finally {
     isRunning = false
   }
 }
 
-function broadcastStatus(): void {
-  // Content-migration events are global (no workspace context) — use broadcastAll so every
-  // connected WS client receives them regardless of their workspace subscriptions.
-  broadcastAll(internal.state === 'error' ? 'migration:error' : 'migration:progress', getContentMigrationStatus())
-}
-
-async function processLoop(db: Database.Database): Promise<void> {
-  const batchSize = 500
-  const selectStmt = db.prepare(
-    "SELECT id, workspace_id, type, payload, session_id, created_at FROM ws_events WHERE type IN ('agent:output', 'agent:stderr', 'agent:status') ORDER BY created_at ASC LIMIT ?",
-  )
-  const insertStmt = db.prepare(
-    'INSERT INTO ws_events (id, workspace_id, type, payload, session_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-  )
-  const deleteStmt = db.prepare('DELETE FROM ws_events WHERE id = ?')
-
-  while (true) {
-    const rows = selectStmt.all(batchSize) as Array<{
-      id: string
-      workspace_id: string
-      type: string
-      payload: string
-      session_id: string | null
-      created_at: string
-    }>
-    if (rows.length === 0) break
-
-    db.transaction(() => {
-      for (const r of rows) {
-        const events = convertRow(r.type, r.payload, { workspaceId: r.workspace_id })
-        for (const ev of events) {
-          insertStmt.run(nanoid(), r.workspace_id, 'agent:event', JSON.stringify(ev), r.session_id, r.created_at)
-        }
-        deleteStmt.run(r.id)
-      }
-    })()
-
-    internal.processed += rows.length
-    broadcastStatus()
-    // Yield to the event loop
-    await new Promise((resolve) => setImmediate(resolve))
-  }
-}
-
-export function convertRow(type: string, payload: string, context?: { workspaceId: string }): AgentEvent[] {
-  if (type === 'agent:status') return [] // redundant — re-derivable from session events
-  if (type === 'agent:stderr') {
-    // Drop: the new engine only logs non-quota stderr via console.warn and
-    // does not persist it. Converting legacy stderr rows to error events
-    // would surface every historical Claude CLI warning ("no stdin data in
-    // 3s…", debug lines) as a UI-blocking banner. Quota-bearing stderr is
-    // handled live by the engine's backoff path, not via replay.
-    return []
-  }
-  if (type === 'agent:output') {
-    try {
-      const parsed = JSON.parse(payload)
-      // The legacy payload may be either the raw Claude NDJSON already-parsed object,
-      // or a wrapper { type: 'raw', content: '...' } for non-JSON output. Handle both.
-      if (parsed && typeof parsed === 'object' && (parsed as { type?: string }).type === 'raw') {
-        return [{ kind: 'message:raw', content: String((parsed as { content?: string }).content ?? '') }]
-      }
-      const state = createParserState()
-      const { events } = parseClaudeLine(JSON.stringify(parsed), state)
-      return events
-    } catch {
-      // Log enough to debug (first 200 chars of the bad payload + the owning
-      // workspace id when the caller passed one). We intentionally do not log
-      // the full payload to keep the console readable on noisy migrations.
-      const preview = payload.length > 200 ? `${payload.slice(0, 200)}…` : payload
-      const ctx = context?.workspaceId ? ` (workspace=${context.workspaceId})` : ''
-      console.warn(
-        `[content-migration] Could not parse agent:output payload${ctx}, falling back to message:raw. Preview: ${preview}`,
-      )
-      return [{ kind: 'message:raw', content: payload }]
-    }
-  }
+/**
+ * Convert a legacy ws_events row into AgentEvents.
+ *
+ * The stream-parser has been removed; this function now skips every legacy
+ * type and returns an empty array. It is preserved as an export for API
+ * compatibility with old call sites and tests.
+ */
+export function convertRow(_type: string, _payload: string, _context?: { workspaceId: string }): AgentEvent[] {
   return []
 }
 

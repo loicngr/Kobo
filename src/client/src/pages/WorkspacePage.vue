@@ -8,9 +8,10 @@
           <q-tooltip>{{ selectedWs.name }}</q-tooltip>
         </span>
         <q-badge
-          :label="selectedWs.status"
+          :label="statusLabel(selectedWs.status)"
           :color="
             ['error', 'quota'].includes(selectedWs.status) ? 'red-9' :
+            selectedWs.status === 'awaiting-user' ? 'amber-9' :
             isBusyStatus(selectedWs.status) ? 'green-9' :
             'grey-8'
           "
@@ -71,9 +72,9 @@
         >
           <template #selected>
             <span class="row items-center no-wrap text-caption text-grey-5">
-              <q-icon :name="currentPermissionMode === 'plan' ? 'visibility' : 'flash_on'" size="12px" color="amber-6" class="q-mr-xs" />
+              <q-icon :name="currentPermissionMode === 'plan' ? 'visibility' : currentPermissionMode === 'strict' ? 'lock' : currentPermissionMode === 'interactive' ? 'security' : 'flash_on'" size="12px" color="amber-6" class="q-mr-xs" />
               {{ permissionModeOptions.find(m => m.value === currentPermissionMode)?.label ?? currentPermissionMode }}
-              <q-icon v-if="pendingSpawnChanges.has('permissionMode')" name="schedule" size="11px" color="orange-6" class="q-ml-xs">
+              <q-icon v-if="pendingSpawnChanges.has('agentPermissionMode')" name="schedule" size="11px" color="orange-6" class="q-ml-xs">
                 <q-tooltip>{{ $t('workspacePage.pendingNextRun') }}</q-tooltip>
               </q-icon>
             </span>
@@ -162,6 +163,8 @@
 
     <AgentBusyBanner />
     <WakeupBanner />
+    <AskUserQuestionPanel v-if="selectedId" :workspace-id="selectedId" />
+    <PermissionRequestPanel v-if="selectedId" :workspace-id="selectedId" />
 
     <!-- Chat Input — pinned at bottom -->
     <ChatInput
@@ -217,8 +220,10 @@ const ActivityFeed = defineAsyncComponent(() =>
 
 import AgentBusyBanner from 'src/components/AgentBusyBanner.vue'
 import AgentErrorBanner from 'src/components/AgentErrorBanner.vue'
+import AskUserQuestionPanel from 'src/components/AskUserQuestionPanel.vue'
 import AutoLoopChip from 'src/components/AutoLoopChip.vue'
 import ChatInput from 'src/components/ChatInput.vue'
+import PermissionRequestPanel from 'src/components/PermissionRequestPanel.vue'
 import StaleSessionBanner from 'src/components/StaleSessionBanner.vue'
 import WakeupBanner from 'src/components/WakeupBanner.vue'
 
@@ -226,6 +231,11 @@ const $q = useQuasar()
 const store = useWorkspaceStore()
 const { t } = useI18n()
 const { timeAgo } = useTimeAgo()
+
+function statusLabel(status: string): string {
+  if (status === 'awaiting-user') return t('workspaceStatus.awaitingUser')
+  return status
+}
 
 const starting = ref(false)
 const stopping = ref(false)
@@ -236,7 +246,7 @@ const pendingWorkspaceUpdates = new Set<Promise<unknown>>()
 // doesn't affect the current turn — it's only picked up on the next spawn.
 // We surface a small "pending" indicator until the workspace leaves its running
 // state, at which point any new start will naturally consume the fresh values.
-type SpawnField = 'model' | 'reasoningEffort' | 'permissionMode'
+type SpawnField = 'model' | 'reasoningEffort' | 'agentPermissionMode'
 const pendingSpawnChanges = ref<Set<SpawnField>>(new Set())
 
 const isAgentRunning = computed(() => isBusyStatus(store.selectedWorkspace?.status))
@@ -329,10 +339,16 @@ const reasoningOptions = computed(() => [
   { label: formatReasoningLabel(t('reasoning.max')), value: 'max' },
 ])
 
-const permissionModeOptions = computed(() => [
-  { label: t('permissionMode.autoAccept'), value: 'auto-accept' },
-  { label: t('permissionMode.plan'), value: 'plan' },
-])
+const permissionModeOptions = computed(() => {
+  const ws = store.selectedWorkspace
+  const autoLoopOn = ws ? (store.autoLoopStates[ws.id]?.auto_loop ?? ws.autoLoop) : false
+  return [
+    { label: t('agentPermissionMode.plan'), value: 'plan' as const, disable: autoLoopOn },
+    { label: t('agentPermissionMode.bypass'), value: 'bypass' as const, disable: false },
+    { label: t('agentPermissionMode.strict'), value: 'strict' as const, disable: false },
+    { label: t('agentPermissionMode.interactive'), value: 'interactive' as const, disable: false },
+  ]
+})
 
 const currentModel = computed({
   get: () => store.selectedWorkspace?.model ?? 'auto',
@@ -364,12 +380,14 @@ function formatReasoningSelectedLabel(value: string): string {
   return reasoningOptions.value.find((r) => r.value === value)?.label ?? value
 }
 
-const currentPermissionMode = computed({
-  get: () => store.selectedWorkspace?.permissionMode ?? 'auto-accept',
-  set: (val: string) => {
+type AgentPermissionModeValue = 'plan' | 'bypass' | 'strict' | 'interactive'
+
+const currentPermissionMode = computed<AgentPermissionModeValue>({
+  get: () => store.selectedWorkspace?.agentPermissionMode ?? 'bypass',
+  set: (val: AgentPermissionModeValue) => {
     if (store.selectedWorkspaceId) {
-      markSpawnFieldPending('permissionMode')
-      trackWorkspaceUpdate(store.updatePermissionMode(store.selectedWorkspaceId, val))
+      markSpawnFieldPending('agentPermissionMode')
+      trackWorkspaceUpdate(store.updateAgentPermissionMode(store.selectedWorkspaceId, val))
     }
   },
 })

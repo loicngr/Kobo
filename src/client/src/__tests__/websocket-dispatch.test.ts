@@ -4,24 +4,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 describe('websocket dispatch — AgentEvent side-effects to workspace store', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
-  it('routes usage events to workspaceStore.addUsageStats', async () => {
-    const { useWorkspaceStore } = await import('../stores/workspace.js')
-    const ws = useWorkspaceStore()
-    const spy = vi.spyOn(ws, 'addUsageStats')
-    const { dispatchAgentEvent } = await import('../stores/websocket.js')
-    dispatchAgentEvent('w1', { kind: 'usage', inputTokens: 1, outputTokens: 2, costUsd: 0.01 })
-    expect(spy).toHaveBeenCalledWith('w1', expect.objectContaining({ inputTokens: 1, outputTokens: 2 }))
-  })
-
-  it('routes rate_limit events to workspaceStore.setRateLimitUsage', async () => {
-    const { useWorkspaceStore } = await import('../stores/workspace.js')
-    const ws = useWorkspaceStore()
-    const spy = vi.spyOn(ws, 'setRateLimitUsage')
-    const { dispatchAgentEvent } = await import('../stores/websocket.js')
-    dispatchAgentEvent('w1', { kind: 'rate_limit', info: { buckets: [{ id: 'five_hour', usedPct: 42 }] } })
-    expect(spy).toHaveBeenCalled()
-  })
-
   it('does not regress local status from quota to error when session:ended follows a quota hit', async () => {
     const { useWorkspaceStore } = await import('../stores/workspace.js')
     const ws = useWorkspaceStore()
@@ -39,7 +21,7 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
         model: 'claude-opus-4-5',
         engine: 'claude-code',
         reasoningEffort: 'normal',
-        permissionMode: 'auto-accept',
+        agentPermissionMode: 'bypass',
         devServerStatus: 'stopped',
         hasUnread: false,
         archivedAt: null,
@@ -48,7 +30,6 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
         autoLoop: true,
         autoLoopReady: true,
         noProgressStreak: 0,
-        permissionProfile: 'bypass',
         worktreePath: '/tmp/project/.worktrees/feature/quota',
         worktreeOwned: true,
         createdAt: '2026-01-01T00:00:00Z',
@@ -152,5 +133,135 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
       providerId: 'claude-code',
       snapshot: expect.objectContaining({ status: 'ok' }),
     })
+  })
+
+  it('routes session:user-input-requested(question) to enqueuePending as a question item', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const ws = useWorkspaceStore()
+    const spy = vi.spyOn(ws, 'enqueuePending')
+    const { dispatchAgentEvent } = await import('../stores/websocket.js')
+    const input = { questions: [{ question: 'Q?', options: [{ label: 'A' }] }] }
+    dispatchAgentEvent(
+      'w1',
+      {
+        kind: 'session:user-input-requested',
+        requestKind: 'question',
+        toolCallId: 'tc-1',
+        toolName: 'AskUserQuestion',
+        payload: input,
+      },
+      undefined,
+      undefined,
+      'agent-sess-A',
+    )
+    expect(spy).toHaveBeenCalledWith('w1', {
+      kind: 'question',
+      toolCallId: 'tc-1',
+      toolName: 'AskUserQuestion',
+      input,
+      agentSessionId: 'agent-sess-A',
+    })
+    const head = ws.peekPending('w1')
+    expect(head?.kind).toBe('question')
+    expect(head?.toolCallId).toBe('tc-1')
+  })
+
+  it('routes session:user-input-requested(permission) to enqueuePending as a permission item', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const ws = useWorkspaceStore()
+    const spy = vi.spyOn(ws, 'enqueuePending')
+    const { dispatchAgentEvent } = await import('../stores/websocket.js')
+    const toolInput = { command: 'rm -rf /' }
+    dispatchAgentEvent(
+      'w1',
+      {
+        kind: 'session:user-input-requested',
+        requestKind: 'permission',
+        toolCallId: 'tc-2',
+        toolName: 'Bash',
+        payload: toolInput,
+      },
+      undefined,
+      undefined,
+      'agent-sess-B',
+    )
+    expect(spy).toHaveBeenCalledWith('w1', {
+      kind: 'permission',
+      toolCallId: 'tc-2',
+      toolName: 'Bash',
+      toolInput,
+      agentSessionId: 'agent-sess-B',
+    })
+    const head = ws.peekPending('w1')
+    expect(head?.kind).toBe('permission')
+  })
+
+  it('clearPendingForSession on session:ended drops items of that session', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const ws = useWorkspaceStore()
+    ws.enqueuePending('w1', {
+      kind: 'question',
+      toolCallId: 'tc-A',
+      toolName: 'AskUserQuestion',
+      input: {},
+      agentSessionId: 'sess-A',
+    })
+    ws.enqueuePending('w1', {
+      kind: 'permission',
+      toolCallId: 'tc-B',
+      toolName: 'Bash',
+      toolInput: {},
+      agentSessionId: 'sess-B',
+    })
+    const { dispatchAgentEvent } = await import('../stores/websocket.js')
+    dispatchAgentEvent(
+      'w1',
+      { kind: 'session:ended', reason: 'completed', exitCode: 0 },
+      undefined,
+      undefined,
+      'sess-A',
+    )
+    const head = ws.peekPending('w1')
+    expect(head?.toolCallId).toBe('tc-B')
+  })
+
+  it('clears pending deferred on session:started for THE SAME session', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const ws = useWorkspaceStore()
+    ws.setPendingDeferred('w1', {
+      toolCallId: 'tc-1',
+      toolName: 'AskUserQuestion',
+      input: {},
+      agentSessionId: 'agent-sess-A',
+    })
+    const { dispatchAgentEvent } = await import('../stores/websocket.js')
+    dispatchAgentEvent(
+      'w1',
+      { kind: 'session:started', engineSessionId: 'sess-1' },
+      undefined,
+      undefined,
+      'agent-sess-A',
+    )
+    expect(ws.getPendingDeferred('w1')).toBeUndefined()
+  })
+
+  it('does NOT clear pending deferred when a different session starts', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const ws = useWorkspaceStore()
+    ws.setPendingDeferred('w1', {
+      toolCallId: 'tc-1',
+      toolName: 'AskUserQuestion',
+      input: {},
+      agentSessionId: 'agent-sess-A',
+    })
+    const { dispatchAgentEvent } = await import('../stores/websocket.js')
+    dispatchAgentEvent(
+      'w1',
+      { kind: 'session:started', engineSessionId: 'sess-2' },
+      undefined,
+      undefined,
+      'agent-sess-B',
+    )
+    expect(ws.getPendingDeferred('w1')?.toolCallId).toBe('tc-1')
   })
 })

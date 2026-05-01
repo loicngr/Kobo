@@ -93,15 +93,6 @@
             :disable="refreshing"
             @click="refresh"
           />
-          <q-btn
-            flat
-            dense
-            no-caps
-            size="sm"
-            icon="bar_chart"
-            :label="$t('quotaFooter.popover.openStatsPanel')"
-            @click="openStatsPanel"
-          />
         </div>
       </q-menu>
     </template>
@@ -109,14 +100,12 @@
 </template>
 
 <script setup lang="ts">
-import { useStatsStore } from 'src/stores/stats'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { formatRateLimitBucketLabel, formatRateLimitResetAt, usagePctColor } from 'src/utils/rate-limit-labels'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 const store = useWorkspaceStore()
-const statsStore = useStatsStore()
 const { t } = useI18n()
 
 const snapshot = computed(() => store.currentProviderUsage)
@@ -151,10 +140,6 @@ async function refresh(): Promise<void> {
   } finally {
     refreshing.value = false
   }
-}
-
-function openStatsPanel(): void {
-  statsStore.requestOpenStats()
 }
 </script>
 

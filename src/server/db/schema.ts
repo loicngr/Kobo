@@ -28,6 +28,7 @@ export function initSchema(db: Database.Database): void {
       auto_loop_ready INTEGER NOT NULL DEFAULT 0,
       no_progress_streak INTEGER NOT NULL DEFAULT 0,
       permission_profile TEXT NOT NULL DEFAULT 'bypass',
+      agent_permission_mode TEXT NOT NULL DEFAULT 'bypass',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -64,11 +65,12 @@ export function initSchema(db: Database.Database): void {
     );
 
     CREATE TABLE IF NOT EXISTS pending_wakeups (
-      workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
-      target_at    TEXT NOT NULL,
-      prompt       TEXT NOT NULL,
-      reason       TEXT,
-      created_at   TEXT NOT NULL
+      workspace_id     TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+      target_at        TEXT NOT NULL,
+      prompt           TEXT NOT NULL,
+      reason           TEXT,
+      created_at       TEXT NOT NULL,
+      agent_session_id TEXT
     );
 
     CREATE TABLE IF NOT EXISTS usage_snapshots (

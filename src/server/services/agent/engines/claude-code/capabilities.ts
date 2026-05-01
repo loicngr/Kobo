@@ -12,7 +12,7 @@ export const CLAUDE_CODE_CAPABILITIES: EngineCapabilities = {
     { id: 'medium', label: 'Medium' },
     { id: 'high', label: 'High' },
   ],
-  permissionModes: ['auto-accept', 'plan'],
+  permissionModes: ['plan', 'bypass', 'strict', 'interactive'],
   supportsResume: true,
   supportsMcp: true,
   supportsSkills: true,

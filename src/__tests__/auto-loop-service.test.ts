@@ -144,6 +144,29 @@ describe('auto-loop-service', () => {
   })
 
   describe('onSessionEnded', () => {
+    it('no-ops when workspace is in awaiting-user', async () => {
+      const svc = await import('../server/services/auto-loop-service.js')
+      const { createTask, updateWorkspaceStatus } = await import('../server/services/workspace-service.js')
+      createTask(wsId, { title: 't1', isAcceptanceCriterion: false, sortOrder: 0 })
+      svc._test_setAutoLoopReady(wsId, true)
+      svc.enable(wsId)
+      const db = (await import('../server/db/index.js')).getDb()
+      // Force the workspace into awaiting-user (simulates a deferred turn).
+      // Use raw SQL to bypass the VALID_TRANSITIONS guard — the test only
+      // cares about the row state, not the transition graph here.
+      void updateWorkspaceStatus
+      db.prepare("UPDATE workspaces SET status = 'awaiting-user' WHERE id = ?").run(wsId)
+
+      // Should NOT spawn next iteration nor disable.
+      svc.onSessionEnded(wsId, 'completed', 0)
+      // Auto-loop must still be on (the user reply will resume the deferred turn).
+      expect(svc.getStatus(wsId).auto_loop).toBe(true)
+      // The no-progress streak must NOT increment while paused on canUseTool —
+      // a deferred turn isn't a stalled iteration. The guard runs BEFORE the
+      // streak bump, so the counter stays at 0.
+      expect(svc.getStatus(wsId).no_progress_streak).toBe(0)
+    })
+
     it('stops on reason=error regardless of delta', async () => {
       const svc = await import('../server/services/auto-loop-service.js')
       const { createTask } = await import('../server/services/workspace-service.js')

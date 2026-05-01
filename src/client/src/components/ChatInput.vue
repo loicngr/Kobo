@@ -81,6 +81,15 @@
       />
     </div>
 
+    <!-- SDK paused on canUseTool — force the user through the panel above. -->
+    <div
+      v-if="isAwaitingUser && !isAutoLoopRunning"
+      class="awaiting-user-banner row items-center q-pa-xs q-px-sm text-caption text-amber-5"
+    >
+      <q-icon name="question_answer" size="14px" color="amber-5" class="q-mr-sm" />
+      <span>{{ $t('chatInput.awaitingUserBanner') }}</span>
+    </div>
+
     <div class="row items-center q-gutter-sm">
       <q-input
         ref="chatInputRef"
@@ -550,8 +559,10 @@ const isAutoLoopRunning = computed(() => {
   return state?.auto_loop === true && state?.auto_loop_ready === true
 })
 
+const isAwaitingUser = computed(() => store.selectedWorkspace?.status === 'awaiting-user')
+
 const isDisabled = computed(() => {
-  return !props.workspaceId || isAutoLoopRunning.value
+  return !props.workspaceId || isAutoLoopRunning.value || isAwaitingUser.value
 })
 
 const stoppingAutoLoop = ref(false)

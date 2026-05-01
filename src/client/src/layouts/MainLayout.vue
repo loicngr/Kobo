@@ -38,7 +38,6 @@
             <q-tab name="tasks" icon="checklist" />
             <q-tab name="subagents" icon="smart_toy" />
             <q-tab name="documents" icon="description" />
-            <q-tab name="stats" icon="bar_chart" />
           </q-tabs>
 
           <q-separator dark />
@@ -63,10 +62,6 @@
 
               <q-tab-panel name="documents" class="q-pa-none">
                 <DocumentsPanel :workspace="store.selectedWorkspace" />
-              </q-tab-panel>
-
-              <q-tab-panel name="stats" class="q-pa-none">
-                <StatsPanel :workspace="store.selectedWorkspace" />
               </q-tab-panel>
             </q-tab-panels>
           </div>
@@ -115,20 +110,18 @@ import AcceptancePanel from 'src/components/AcceptancePanel.vue'
 import AgentTodosPanel from 'src/components/AgentTodosPanel.vue'
 import DocumentsPanel from 'src/components/DocumentsPanel.vue'
 import GitPanel from 'src/components/GitPanel.vue'
-import StatsPanel from 'src/components/StatsPanel.vue'
 import SubagentsPanel from 'src/components/SubagentsPanel.vue'
 import TasksPanel from 'src/components/TasksPanel.vue'
 import TerminalPanel from 'src/components/TerminalPanel.vue'
 import ToolsPanel from 'src/components/ToolsPanel.vue'
 import WorkspaceList from 'src/components/WorkspaceList.vue'
 import { useDocumentsStore } from 'src/stores/documents'
-import { useStatsStore } from 'src/stores/stats'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { computed, provide, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
 const DRAWER_TAB_KEY = 'kobo:rightTab'
-const VALID_RIGHT_TABS = ['git', 'tasks', 'subagents', 'documents', 'stats'] as const
+const VALID_RIGHT_TABS = ['git', 'tasks', 'subagents', 'documents'] as const
 const storedRightTab = localStorage.getItem(DRAWER_TAB_KEY)
 const rightTab = ref(
   storedRightTab && (VALID_RIGHT_TABS as readonly string[]).includes(storedRightTab) ? storedRightTab : 'git',
@@ -146,15 +139,6 @@ const documentsStore = useDocumentsStore()
 watch(
   () => documentsStore.requestOpen,
   () => setRightTab('documents'),
-)
-
-const statsStore = useStatsStore()
-watch(
-  () => statsStore.requestOpen,
-  () => {
-    setRightTab('stats')
-    rightDrawerOpen.value = true
-  },
 )
 
 // Keep the documents list populated for the selected workspace regardless

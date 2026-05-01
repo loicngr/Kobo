@@ -35,8 +35,93 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 16', () => {
-    expect(SCHEMA_VERSION).toBe(16)
+  it('exporte SCHEMA_VERSION = 18', () => {
+    expect(SCHEMA_VERSION).toBe(18)
+  })
+
+  it('migration v17 unifies legacy permission_mode + permission_profile into agent_permission_mode', () => {
+    // Build a v16 database with the old schema and seed rows covering each
+    // legacy combination so we can assert the unified column comes out right.
+    const db = new Database(':memory:')
+    db.exec(`
+      CREATE TABLE workspaces (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        project_path TEXT NOT NULL,
+        source_branch TEXT NOT NULL,
+        working_branch TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'created',
+        notion_url TEXT,
+        notion_page_id TEXT,
+        sentry_url TEXT,
+        worktree_path TEXT,
+        worktree_owned INTEGER NOT NULL DEFAULT 1,
+        model TEXT NOT NULL,
+        reasoning_effort TEXT NOT NULL DEFAULT 'auto',
+        permission_mode TEXT NOT NULL DEFAULT 'auto-accept',
+        dev_server_status TEXT NOT NULL DEFAULT 'stopped',
+        has_unread INTEGER NOT NULL DEFAULT 0,
+        archived_at TEXT,
+        favorited_at TEXT,
+        tags TEXT NOT NULL DEFAULT '[]',
+        engine TEXT NOT NULL DEFAULT 'claude-code',
+        auto_loop INTEGER NOT NULL DEFAULT 0,
+        auto_loop_ready INTEGER NOT NULL DEFAULT 0,
+        no_progress_streak INTEGER NOT NULL DEFAULT 0,
+        permission_profile TEXT NOT NULL DEFAULT 'bypass',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+      CREATE TABLE pending_wakeups (
+        workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+        target_at    TEXT NOT NULL,
+        prompt       TEXT NOT NULL,
+        reason       TEXT,
+        created_at   TEXT NOT NULL
+      );
+    `)
+    // Mark all migrations up to v16 as already applied.
+    const now = '2025-01-01'
+    db.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(1, 'init-schema', now)
+    for (const m of migrations) {
+      if (m.version <= 16) {
+        db.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(m.version, m.name, now)
+      }
+    }
+    // Seed rows covering every (permission_mode, permission_profile) combination.
+    const insert = db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, model, permission_mode, permission_profile, created_at, updated_at)
+       VALUES (?, 'w', '/p', 'main', 'feat', 'claude-opus-4-7', ?, ?, ?, ?)`,
+    )
+    insert.run('plan-bypass', 'plan', 'bypass', now, now)
+    insert.run('plan-strict', 'plan', 'strict', now, now)
+    insert.run('auto-bypass', 'auto-accept', 'bypass', now, now)
+    insert.run('auto-strict', 'auto-accept', 'strict', now, now)
+    insert.run('auto-interactive', 'auto-accept', 'interactive', now, now)
+
+    runMigrations(db)
+
+    const rows = db.prepare('SELECT id, agent_permission_mode FROM workspaces ORDER BY id').all() as Array<{
+      id: string
+      agent_permission_mode: string
+    }>
+    const map = Object.fromEntries(rows.map((r) => [r.id, r.agent_permission_mode]))
+    // 'plan' wins regardless of the profile.
+    expect(map['plan-bypass']).toBe('plan')
+    expect(map['plan-strict']).toBe('plan')
+    // 'auto-accept' rows promote the profile.
+    expect(map['auto-bypass']).toBe('bypass')
+    expect(map['auto-strict']).toBe('strict')
+    expect(map['auto-interactive']).toBe('interactive')
+
+    // Idempotent: a second run preserves the data and stays at the latest version.
+    runMigrations(db)
+    const second = db.prepare('SELECT agent_permission_mode FROM workspaces WHERE id = ?').get('plan-bypass') as {
+      agent_permission_mode: string
+    }
+    expect(second.agent_permission_mode).toBe('plan')
+    db.close()
   })
 
   it('migre depuis la legacy schema_version table', () => {
@@ -702,7 +787,7 @@ describe('migration v11: add-pending-wakeups-table', () => {
       pk: number
     }>
     expect(cols.map((c) => c.name).sort()).toEqual(
-      ['created_at', 'prompt', 'reason', 'target_at', 'workspace_id'].sort(),
+      ['agent_session_id', 'created_at', 'prompt', 'reason', 'target_at', 'workspace_id'].sort(),
     )
     const pk = cols.find((c) => c.pk === 1)
     expect(pk?.name).toBe('workspace_id')
@@ -858,6 +943,68 @@ describe('usage_snapshots table', () => {
       (r) => r.version,
     )
     expect(versions).toContain(16)
+    db.close()
+  })
+})
+
+describe('migration v18: add-pending-wakeup-agent-session-id', () => {
+  it('adds the agent_session_id column to pending_wakeups (nullable)', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+
+    const cols = db.prepare('PRAGMA table_info(pending_wakeups)').all() as Array<{
+      name: string
+      notnull: number
+    }>
+    const sessionCol = cols.find((c) => c.name === 'agent_session_id')
+    expect(sessionCol).toBeDefined()
+    expect(sessionCol?.notnull).toBe(0)
+    db.close()
+  })
+
+  it('preserves existing pending_wakeups rows when upgrading from v17', () => {
+    const db = new Database(':memory:')
+    db.exec(`
+      CREATE TABLE workspaces (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        project_path TEXT NOT NULL,
+        source_branch TEXT NOT NULL,
+        working_branch TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'created',
+        model TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE pending_wakeups (
+        workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+        target_at    TEXT NOT NULL,
+        prompt       TEXT NOT NULL,
+        reason       TEXT,
+        created_at   TEXT NOT NULL
+      );
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+    `)
+    const now = '2025-01-01'
+    db.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(1, 'init-schema', now)
+    for (const m of migrations) {
+      if (m.version <= 17) {
+        db.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(m.version, m.name, now)
+      }
+    }
+    db.prepare("INSERT INTO workspaces VALUES ('w1', 'W', '/p', 'main', 'feat', 'idle', 'auto', ?, ?)").run(now, now)
+    db.prepare('INSERT INTO pending_wakeups VALUES (?, ?, ?, ?, ?)').run('w1', now, 'resume', null, now)
+
+    runMigrations(db)
+
+    const row = db.prepare('SELECT * FROM pending_wakeups WHERE workspace_id = ?').get('w1') as {
+      workspace_id: string
+      prompt: string
+      agent_session_id: string | null
+    }
+    expect(row.workspace_id).toBe('w1')
+    expect(row.prompt).toBe('resume')
+    expect(row.agent_session_id).toBeNull()
     db.close()
   })
 })
