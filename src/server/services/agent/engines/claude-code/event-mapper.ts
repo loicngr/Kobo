@@ -220,12 +220,7 @@ export function mapSdkMessage(msg: SDKMessage, state: MapperState): AgentEvent[]
     }
     const usage = parsed.usage as Record<string, unknown> | undefined
     if (usage) {
-      const costUsd =
-        typeof parsed.total_cost_usd === 'number'
-          ? (parsed.total_cost_usd as number)
-          : typeof parsed.cost_usd === 'number'
-            ? (parsed.cost_usd as number)
-            : undefined
+      const costUsd = typeof parsed.total_cost_usd === 'number' ? (parsed.total_cost_usd as number) : undefined
       events.push({
         kind: 'usage',
         inputTokens: Number((usage.input_tokens as number | undefined) ?? 0),

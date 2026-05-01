@@ -892,7 +892,11 @@ app.post('/:id/deferred-tool-use/answer', async (c) => {
     return c.json({ ok: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'unknown'
-    return c.json({ error: message }, 400)
+    // "No deferred tool use pending" is a benign race — the frontend
+    // self-heals on this string. Use 409 (Conflict) so dev tools don't
+    // surface it as a 400 validation failure.
+    const status = /no deferred tool use pending/i.test(message) ? 409 : 400
+    return c.json({ error: message }, status)
   }
 })
 
@@ -909,7 +913,8 @@ app.post('/:id/deferred-tool-use/cancel', async (c) => {
     return c.json({ ok: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'unknown'
-    return c.json({ error: message }, 400)
+    const status = /no deferred tool use pending/i.test(message) ? 409 : 400
+    return c.json({ error: message }, status)
   }
 })
 
@@ -935,7 +940,8 @@ app.post('/:id/deferred-permission/decision', async (c) => {
     return c.json({ ok: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'unknown'
-    return c.json({ error: message }, 400)
+    const status = /no deferred tool use pending/i.test(message) ? 409 : 400
+    return c.json({ error: message }, status)
   }
 })
 

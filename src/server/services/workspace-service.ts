@@ -464,6 +464,7 @@ export function deleteWorkspace(id: string): void {
   // churn. The Map has no FK to clean up for it automatically.
   orchestrator.forgetRateLimitInfo(id)
   orchestrator.forgetTasksDoneSnapshot(id)
+  orchestrator.forgetResumeFailed(id)
   autoLoopService.forgetAutoLoopState(id)
 
   const db = getDb()

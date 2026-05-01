@@ -182,7 +182,12 @@ function isProcessAlive(pid: number): boolean {
 function runWatchdog(): void {
   for (const [workspaceId, ctrl] of controllers) {
     const pid = ctrl.pid
-    if (pid === undefined || isProcessAlive(pid)) continue
+    // SDK-backed engines have no pid — query the engine's optional `isAlive`
+    // probe instead so the watchdog isn't blind on those engines. Legacy
+    // engines without `isAlive` fall back to the pid-based check.
+    const ep = ctrl.engineProcess
+    const alive = ep && typeof ep.isAlive === 'function' ? ep.isAlive() : pid !== undefined && isProcessAlive(pid)
+    if (alive) continue
 
     console.error(`[watchdog] Agent process for workspace '${workspaceId}' (PID ${pid}) is dead — cleaning up`)
 
@@ -458,6 +463,11 @@ function getDoneTaskCount(workspaceId: string): number {
 /** Clear the in-memory done-count snapshot for a workspace (called on delete). */
 export function forgetTasksDoneSnapshot(workspaceId: string): void {
   tasksDoneSnapshot.delete(workspaceId)
+}
+
+/** Drop the resume-failed flag for a workspace (called on delete). */
+export function forgetResumeFailed(workspaceId: string): void {
+  resumeFailedSet.delete(workspaceId)
 }
 
 function handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent): void {

@@ -229,7 +229,7 @@ describe('POST /api/workspaces/:id/deferred-tool-use/answer', () => {
     expect(agentManager.answerPendingQuestion).not.toHaveBeenCalled()
   })
 
-  it('returns 400 when the resume throws', async () => {
+  it('returns 409 when the resume throws "No deferred tool use pending"', async () => {
     vi.mocked(agentManager.answerPendingQuestion).mockRejectedValueOnce(
       new Error("No deferred tool use pending for workspace 'abc'"),
     )
@@ -238,7 +238,10 @@ describe('POST /api/workspaces/:id/deferred-tool-use/answer', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ answers: { q1: 'x' } }),
     })
-    expect(res.status).toBe(400)
+    // Conflict (not bad-request): the user's payload was valid, the backend
+    // simply has no pending callback to answer (race / replay). The frontend
+    // self-heals on this error string regardless of status code.
+    expect(res.status).toBe(409)
     const body = (await res.json()) as { error: string }
     expect(body.error).toMatch(/No deferred tool use pending/)
   })

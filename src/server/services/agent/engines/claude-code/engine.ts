@@ -66,7 +66,9 @@ export function createClaudeCodeEngine(): AgentEngine {
           const onAbort = (): void => {
             if (pendingResolvers.get(toolCallId) === resolver) {
               pendingResolvers.delete(toolCallId)
-              reject(new Error('Pending user input aborted'))
+              const abortError = new Error('Pending user input aborted')
+              abortError.name = 'AbortError'
+              reject(abortError)
             }
           }
           if (ctx.signal.aborted) {
@@ -115,7 +117,7 @@ export function createClaudeCodeEngine(): AgentEngine {
         agentPermissionMode: options.agentPermissionMode ?? 'bypass',
         resumeFromEngineSessionId: options.resumeFromEngineSessionId,
         workingDir: options.workingDir,
-        mcpServers: toMcpServersMap(options.mcpServers) as Record<string, unknown> | undefined,
+        mcpServers: toMcpServersMap(options.mcpServers),
         hooks,
         canUseTool,
         stderr: (data: string) => {
@@ -150,7 +152,11 @@ export function createClaudeCodeEngine(): AgentEngine {
         }
       }
 
+      let iteratorRunning = false
+      let userInterrupted = false
+
       const iteratorPromise = (async () => {
+        iteratorRunning = true
         try {
           for await (const msg of q as AsyncIterable<unknown>) {
             const events = mapSdkMessage(msg as never, mapperState)
@@ -170,9 +176,10 @@ export function createClaudeCodeEngine(): AgentEngine {
           // "Claude Code process aborted by user" instead of a typed AbortError.
           const error = err as Error
           const isAbort =
+            userInterrupted ||
             error.name === 'AbortError' ||
             abortController.signal.aborted ||
-            /aborted by user|process aborted|abortError/i.test(error.message ?? '')
+            /aborted by user|process aborted|abortError|ede_diagnostic/i.test(error.message ?? '')
           if (isAbort) {
             safeEmit({ kind: 'session:ended', reason: 'killed', exitCode: null })
           } else {
@@ -195,6 +202,7 @@ export function createClaudeCodeEngine(): AgentEngine {
             }
           }
           pendingResolvers.clear()
+          iteratorRunning = false
         }
       })()
 
@@ -205,10 +213,14 @@ export function createClaudeCodeEngine(): AgentEngine {
         get engineSessionId() {
           return discoveredSessionId
         },
+        isAlive(): boolean {
+          return iteratorRunning
+        },
         sendMessage() {
           throw new Error('sendMessage not supported in single-shot SDK mode')
         },
         interrupt() {
+          userInterrupted = true
           const qq = q as unknown as { interrupt?: () => unknown }
           if (typeof qq.interrupt === 'function') {
             try {

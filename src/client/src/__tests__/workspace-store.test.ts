@@ -574,6 +574,27 @@ describe('workspace store', () => {
       expect(store.peekPending('w1')).toBeUndefined()
     })
 
+    it('enqueuePending dedups on toolCallId — a second insert is a no-op', () => {
+      const store = useWorkspaceStore()
+      store.enqueuePending('w1', {
+        kind: 'question',
+        agentSessionId: 'sA',
+        toolCallId: 'q1',
+        toolName: 'AskUserQuestion',
+        input: { questions: [] },
+      })
+      // Same toolCallId, different shape (e.g. live event arriving while a
+      // replay is still in flight) — must NOT add a duplicate to the queue.
+      store.enqueuePending('w1', {
+        kind: 'question',
+        agentSessionId: 'sA',
+        toolCallId: 'q1',
+        toolName: 'AskUserQuestion',
+        input: { questions: [{ question: 'Q?' }] },
+      })
+      expect(store.pendingQueue.w1?.length).toBe(1)
+    })
+
     it('clearPendingForSession drops items of one session, leaves the other', () => {
       const store = useWorkspaceStore()
       store.enqueuePending('w1', {

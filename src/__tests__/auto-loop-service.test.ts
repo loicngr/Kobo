@@ -161,6 +161,10 @@ describe('auto-loop-service', () => {
       svc.onSessionEnded(wsId, 'completed', 0)
       // Auto-loop must still be on (the user reply will resume the deferred turn).
       expect(svc.getStatus(wsId).auto_loop).toBe(true)
+      // The no-progress streak must NOT increment while paused on canUseTool —
+      // a deferred turn isn't a stalled iteration. The guard runs BEFORE the
+      // streak bump, so the counter stays at 0.
+      expect(svc.getStatus(wsId).no_progress_streak).toBe(0)
     })
 
     it('stops on reason=error regardless of delta', async () => {

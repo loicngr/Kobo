@@ -35,6 +35,13 @@ export interface EngineProcess {
    * given id (already resolved, never registered, or different session).
    */
   resolvePendingUserInput(toolCallId: string, response: PendingUserInputResponse): boolean
+  /**
+   * Optional liveness probe used by the orchestrator watchdog. Engines that
+   * don't expose a `pid` (e.g. SDK in-process engines) can implement this so
+   * the watchdog has a signal beyond `isProcessAlive(pid)`. When omitted, the
+   * watchdog falls back to the pid-based check.
+   */
+  isAlive?(): boolean
 }
 
 export interface StartOptions {

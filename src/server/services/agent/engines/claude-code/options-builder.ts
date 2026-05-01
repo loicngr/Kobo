@@ -10,7 +10,7 @@ export interface BuildClaudeOptionsInput {
   agentPermissionMode: AgentPermissionMode
   resumeFromEngineSessionId?: string
   workingDir: string
-  mcpServers?: Record<string, unknown>
+  mcpServers?: Options['mcpServers']
   hooks?: Options['hooks']
   canUseTool?: CanUseTool
   stderr?: (data: string) => void
@@ -78,7 +78,7 @@ export function buildClaudeOptions(input: BuildClaudeOptionsInput): BuildClaudeO
   if (input.model && input.model !== 'auto') options.model = input.model
   if (input.effort && input.effort !== 'auto') options.extraArgs = { effort: input.effort }
   if (input.mcpServers && Object.keys(input.mcpServers).length > 0) {
-    options.mcpServers = input.mcpServers as Options['mcpServers']
+    options.mcpServers = input.mcpServers
   }
   if (input.resumeFromEngineSessionId) options.resume = input.resumeFromEngineSessionId
   if (input.hooks) options.hooks = input.hooks

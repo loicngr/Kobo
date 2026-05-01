@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { serve } from '@hono/node-server'
@@ -43,17 +42,6 @@ import { emit, emitEphemeral, handleConnection, setMessageHandler } from './serv
 import { getActiveSession, getWorkspace, updateWorkspaceStatus } from './services/workspace-service.js'
 import { getClientSpaPath, getDbPath, getKoboHome, getPackageVersion } from './utils/paths.js'
 import { initProcessCleanup, killAll as killAllTrackedProcesses } from './utils/process-tracker.js'
-
-// Runtime prerequisite check — warn if the claude CLI is missing. Don't block
-// startup: the user may still want to configure settings or browse workspaces.
-{
-  const check = spawnSync('claude', ['--version'], { stdio: 'ignore' })
-  if (check.error && (check.error as NodeJS.ErrnoException).code === 'ENOENT') {
-    console.warn(
-      "[kobo] WARNING: 'claude' CLI not found on PATH. Kōbō will fail to spawn agents until Claude Code is installed. See https://claude.com/claude-code",
-    )
-  }
-}
 
 console.log(`[kobo] Kōbō home: ${getKoboHome()}`)
 

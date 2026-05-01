@@ -122,6 +122,32 @@ describe('claude-code engine (SDK)', () => {
     expect(opts?.mcpServers?.['kobo-tasks']?.type).toBe('stdio')
   })
 
+  it('isAlive() flips false after the iterator completes (watchdog signal)', async () => {
+    const engine = createClaudeCodeEngine()
+    const events: AgentEvent[] = []
+    const proc = await engine.start(
+      {
+        workspaceId: 'w-alive',
+        workingDir: '/tmp',
+        prompt: 'go',
+        backendUrl: 'http://localhost:3000',
+        koboHome: '/tmp/kobo',
+        settings: { dangerouslySkipPermissions: true } as any,
+      },
+      (ev) => events.push(ev),
+    )
+    // The async iterator pumps via microtask scheduling; isAlive() is true
+    // synchronously after start() resolves and stays true until the for-await
+    // loop drains. We can't observe the "true" window deterministically (the
+    // iterator may already have finished by the time the test thread runs)
+    // but isAlive must be a function and must report false once session:ended
+    // has been emitted.
+    expect(typeof proc.isAlive).toBe('function')
+    await new Promise((r) => setTimeout(r, 30))
+    expect(events.find((e) => e.kind === 'session:ended')).toBeDefined()
+    expect(proc.isAlive!()).toBe(false)
+  })
+
   it('emits session:ended/killed when stop() is called', async () => {
     const engine = createClaudeCodeEngine()
     const events: AgentEvent[] = []
@@ -140,5 +166,85 @@ describe('claude-code engine (SDK)', () => {
     // The mock yields 3 messages then terminates cleanly, so reason is 'completed' here too.
     // Just verify session:ended was eventually emitted.
     expect(events.find((e) => e.kind === 'session:ended')).toBeDefined()
+  })
+})
+
+describe('claude-code engine — canUseTool abort tagging', () => {
+  it('aborting a pending canUseTool yields session:ended/killed (not spawn_failed/error)', async () => {
+    // Re-mock the SDK locally for this test: the query iterator emits a
+    // tool_use that drives canUseTool, then awaits the abort to propagate up.
+    vi.resetModules()
+    vi.doMock('@anthropic-ai/claude-agent-sdk', () => {
+      let abortSignal: AbortSignal | null = null
+      return {
+        query: vi.fn(
+          (args: {
+            options?: {
+              abortController?: AbortController
+              canUseTool?: (
+                name: string,
+                input: unknown,
+                ctx: { signal: AbortSignal; toolUseID: string },
+              ) => Promise<unknown>
+            }
+          }) => {
+            abortSignal = args.options?.abortController?.signal ?? null
+            const canUseTool = args.options?.canUseTool
+            const iter = {
+              async *[Symbol.asyncIterator]() {
+                yield { type: 'system', subtype: 'init', session_id: 's', model: 'm', slash_commands: [] }
+                // Trigger interactive permission via canUseTool — the engine's
+                // hook will register a pending resolver and await it.
+                if (canUseTool) {
+                  // Engine catches the AbortError that resolves this promise
+                  // when stop() fires → session:ended/killed.
+                  await canUseTool(
+                    'Bash',
+                    { command: 'ls' },
+                    { signal: abortSignal ?? new AbortController().signal, toolUseID: 'tu-1' },
+                  )
+                }
+              },
+              interrupt: vi.fn(),
+            }
+            return iter
+          },
+        ),
+      }
+    })
+
+    const engineMod = await import('../server/services/agent/engines/claude-code/engine.js')
+    const engine = engineMod.createClaudeCodeEngine()
+    const events: AgentEvent[] = []
+    const proc = await engine.start(
+      {
+        workspaceId: 'w-abort',
+        workingDir: '/tmp',
+        prompt: 'go',
+        backendUrl: 'http://localhost:3000',
+        koboHome: '/tmp/kobo',
+        settings: { dangerouslySkipPermissions: true } as any,
+        agentPermissionMode: 'interactive',
+      },
+      (ev) => events.push(ev),
+    )
+
+    // Wait for the canUseTool registration to land.
+    await new Promise((r) => setTimeout(r, 10))
+    expect(events.find((e) => e.kind === 'session:user-input-requested')).toBeDefined()
+
+    // Stop → aborts the controller → onAbort rejects with name=AbortError.
+    await proc.stop()
+
+    const ended = events.find((e) => e.kind === 'session:ended')
+    expect(ended).toBeDefined()
+    if (ended && ended.kind === 'session:ended') {
+      expect(ended.reason).toBe('killed')
+    }
+    // Must NOT have produced a spawn_failed error from the rejected promise.
+    expect(events.find((e) => e.kind === 'error' && e.category === 'spawn_failed')).toBeUndefined()
+
+    vi.doUnmock('@anthropic-ai/claude-agent-sdk')
+    vi.resetModules()
   })
 })

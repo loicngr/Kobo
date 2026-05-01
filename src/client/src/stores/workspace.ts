@@ -1,5 +1,4 @@
 import { defineStore } from 'pinia'
-import type { RateLimitInfo } from '../types/agent-event'
 import type { ProviderId, UsageSnapshot } from '../types/usage'
 import { isBusyStatus } from '../utils/workspace-status'
 import { useWebSocketStore } from './websocket'
@@ -115,19 +114,6 @@ export interface AgentTodo {
   activeForm?: string
 }
 
-export interface RateLimitUsageBucket {
-  id: string
-  label?: string
-  usedPct: number
-  resetAt?: string
-  details?: string
-}
-
-export interface RateLimitUsageSnapshot {
-  updatedAt: string
-  buckets: RateLimitUsageBucket[]
-}
-
 /**
  * Set of `task_notification` status values that mark a subagent as finished.
  * Any other value (present or future) keeps the subagent in `running` — we
@@ -228,11 +214,6 @@ export const useWorkspaceStore = defineStore('workspace', {
     loading: false,
     loadingOlderEvents: false,
     hasMoreEvents: {} as Record<string, boolean>,
-    usageStats: {} as Record<
-      string,
-      { inputTokens: number; outputTokens: number; costUsd: number; sessionCount: number }
-    >,
-    rateLimitUsage: {} as Record<string, RateLimitUsageSnapshot | undefined>,
     providerUsage: {} as Record<ProviderId, UsageSnapshot | undefined>,
     chatDraft: '',
     queuedMessages: {} as Record<string, { content: string; sessionId?: string }>,
@@ -525,8 +506,6 @@ export const useWorkspaceStore = defineStore('workspace', {
         delete this.activityCounts[id]
         delete this.subagents[id]
         delete this.agentTodos[id]
-        delete this.usageStats[id]
-        delete this.rateLimitUsage[id]
         if (this.selectedWorkspaceId === id) {
           this.selectedWorkspaceId = null
           this.tasks = []
@@ -974,47 +953,6 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
-    addUsageStats(workspaceId: string, data: { inputTokens?: number; outputTokens?: number; costUsd?: number }) {
-      if (!this.usageStats[workspaceId]) {
-        this.usageStats[workspaceId] = { inputTokens: 0, outputTokens: 0, costUsd: 0, sessionCount: 0 }
-      }
-      const s = this.usageStats[workspaceId]
-      s.inputTokens += data.inputTokens ?? 0
-      s.outputTokens += data.outputTokens ?? 0
-      s.costUsd += data.costUsd ?? 0
-      s.sessionCount++
-    },
-
-    /**
-     * Record a rate-limit snapshot for a workspace.
-     *
-     * Accepts either:
-     *  - a full `RateLimitUsageSnapshot` (legacy test helpers & callers that
-     *    already own an `updatedAt`), OR
-     *  - a `RateLimitInfo` as produced by the backend's normalised
-     *    `rate_limit` AgentEvent — in which case we stamp `updatedAt = now`
-     *    and map the bucket shape (server side uses `resetsAt`, the UI
-     *    historically uses `resetAt`; we keep both names aligned here).
-     */
-    setRateLimitUsage(workspaceId: string, input: RateLimitUsageSnapshot | RateLimitInfo) {
-      const hasUpdatedAt = typeof (input as RateLimitUsageSnapshot).updatedAt === 'string'
-      if (hasUpdatedAt) {
-        this.rateLimitUsage[workspaceId] = input as RateLimitUsageSnapshot
-        return
-      }
-      const info = input as RateLimitInfo
-      this.rateLimitUsage[workspaceId] = {
-        updatedAt: new Date().toISOString(),
-        buckets: info.buckets.map((b) => ({
-          id: b.id,
-          label: b.label,
-          usedPct: b.usedPct,
-          resetAt: b.resetsAt,
-          details: b.details,
-        })),
-      }
-    },
-
     applyUsageSnapshot(payload: { providerId: ProviderId; snapshot: UsageSnapshot }) {
       this.providerUsage[payload.providerId] = payload.snapshot
     },
@@ -1155,6 +1093,10 @@ export const useWorkspaceStore = defineStore('workspace', {
     /** Append an item to the pending queue for a workspace. */
     enqueuePending(workspaceId: string, item: PendingItem): void {
       const arr = this.pendingQueue[workspaceId] ?? []
+      // Dedup by toolCallId — a `session:user-input-requested` event can land
+      // twice (live arrival + replay before purge succeeded); without this
+      // guard the panel would surface back-to-back for the same callback.
+      if (arr.some((existing) => existing.toolCallId === item.toolCallId)) return
       arr.push(item)
       this.pendingQueue[workspaceId] = arr
       if (item.kind === 'question') {

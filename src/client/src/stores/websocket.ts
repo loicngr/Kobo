@@ -90,20 +90,6 @@ export function dispatchAgentEvent(
 
   const workspaceStore = useWorkspaceStore()
 
-  if (event.kind === 'usage') {
-    workspaceStore.addUsageStats(workspaceId, {
-      inputTokens: event.inputTokens,
-      outputTokens: event.outputTokens,
-      costUsd: event.costUsd ?? 0,
-    })
-    return
-  }
-
-  if (event.kind === 'rate_limit') {
-    workspaceStore.setRateLimitUsage(workspaceId, event.info)
-    return
-  }
-
   if (event.kind === 'session:user-input-requested') {
     if (event.requestKind === 'question') {
       workspaceStore.enqueuePending(workspaceId, {
@@ -598,38 +584,23 @@ export const useWebSocketStore = defineStore('websocket', {
                     }
                     continue
                   }
-                  if (ev.kind === 'usage' || ev.kind === 'rate_limit' || ev.kind === 'subagent:progress') {
-                    // reset() already pushed the event into the stream, so
-                    // only route the side-effect — but dispatchAgentEvent
-                    // also calls append(). To keep things simple we accept
-                    // the duplicate-in-stream cost of the replayed event on
-                    // the side-effect branches; the conversation view is
-                    // driven by foldEvents, and these kinds are filtered out
-                    // of the conversation anyway.
-                    //
-                    // Call the side-effect bits manually to avoid appending
-                    // twice to the stream.
+                  if (ev.kind === 'subagent:progress') {
+                    // reset() already pushed the event into the stream; only
+                    // route the side-effect (dispatchAgentEvent would also
+                    // append, doubling the stream entry). The conversation
+                    // view is driven by foldEvents which filters this kind
+                    // out anyway.
                     const workspaceStore = useWorkspaceStore()
-                    if (ev.kind === 'usage') {
-                      workspaceStore.addUsageStats(workspaceId, {
-                        inputTokens: ev.inputTokens,
-                        outputTokens: ev.outputTokens,
-                        costUsd: ev.costUsd ?? 0,
-                      })
-                    } else if (ev.kind === 'rate_limit') {
-                      workspaceStore.setRateLimitUsage(workspaceId, ev.info)
-                    } else if (ev.kind === 'subagent:progress') {
-                      workspaceStore.upsertSubagent(workspaceId, {
-                        toolUseId: ev.toolCallId,
-                        status: ev.status,
-                        description: ev.description,
-                        taskType: ev.taskType,
-                        lastToolName: ev.lastToolName,
-                        totalTokens: ev.totalTokens,
-                        toolUses: ev.toolUses,
-                        durationMs: ev.durationMs,
-                      })
-                    }
+                    workspaceStore.upsertSubagent(workspaceId, {
+                      toolUseId: ev.toolCallId,
+                      status: ev.status,
+                      description: ev.description,
+                      taskType: ev.taskType,
+                      lastToolName: ev.lastToolName,
+                      totalTokens: ev.totalTokens,
+                      toolUses: ev.toolUses,
+                      durationMs: ev.durationMs,
+                    })
                   }
                 }
               }
