@@ -21,7 +21,7 @@
     </div>
     <div class="turn-body">
       <template v-for="(item, i) in turn.items" :key="i">
-        <TextMessageItem v-if="item.type === 'text'" :item="item" :is-latest-turn="isLatestTurn" />
+        <TextMessageItem v-if="item.type === 'text'" :item="item" />
         <ThinkingItem v-else-if="item.type === 'thinking'" :item="item" />
         <ToolCallItem v-else-if="item.type === 'tool'" :item="item" />
         <UserMessageItem v-else-if="item.type === 'user'" :item="item" />
@@ -61,10 +61,6 @@ import UserMessageItem from './items/UserMessageItem.vue'
 
 const props = defineProps<{
   turn: Turn
-  /** True when this is the most recent turn in the feed. Forwarded to
-      TextMessageItem so multiple-choice quick-reply buttons stay active
-      only on the latest turn — once a newer turn arrives they go inert. */
-  isLatestTurn?: boolean
 }>()
 const emit = defineEmits<{
   /** Emitted by the "scroll to top of this message" button — detail carries

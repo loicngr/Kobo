@@ -14,7 +14,7 @@ vi.mock('../server/services/workspace-service.js', () => ({
   updateWorktreePath: vi.fn(),
   updateWorkspaceModel: vi.fn(),
   updateWorkspaceReasoningEffort: vi.fn(),
-  updateWorkspacePermissionMode: vi.fn(),
+  updateAgentPermissionMode: vi.fn(),
   deleteWorkspace: vi.fn(),
   createTask: vi.fn(),
   getTask: vi.fn(),
@@ -213,7 +213,7 @@ const fakeWorkspace = {
   notionPageId: null,
   model: 'claude-opus-4-6',
   reasoningEffort: 'auto',
-  permissionMode: 'auto-accept' as const,
+  agentPermissionMode: 'bypass' as const,
   devServerStatus: 'stopped',
   hasUnread: false,
   archivedAt: null,
@@ -961,7 +961,7 @@ describe('PATCH /api/workspaces/:id', () => {
 
     expect(res.status).toBe(400)
     const data = await res.json()
-    expect(data.error).toContain('Missing field: status, model, reasoningEffort, permissionMode,')
+    expect(data.error).toContain('Missing field: status, model, reasoningEffort, agentPermissionMode,')
   })
 
   it('returns 404 for unknown workspace', async () => {
@@ -1000,7 +1000,7 @@ describe('POST /api/workspaces/:id/start', () => {
       'Do something',
       'claude-opus-4-6',
       false,
-      'auto-accept',
+      'bypass',
       undefined,
       'auto',
     )
@@ -1023,7 +1023,7 @@ describe('POST /api/workspaces/:id/start', () => {
       'Continue the previous task where you left off.',
       'claude-opus-4-6',
       false,
-      'auto-accept',
+      'bypass',
       undefined,
       'auto',
     )
@@ -2082,7 +2082,7 @@ describe('POST /api/workspaces/:id/start avec agentSessionId', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('passe agentSessionId à startAgent quand fourni', async () => {
-    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace, permissionMode: 'auto-accept' } as any)
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace, agentPermissionMode: 'bypass' } as any)
     vi.mocked(workspaceService.updateWorkspaceStatus).mockReturnValue(undefined as any)
 
     await app.request('/api/workspaces/ws-1/start', {
@@ -2097,14 +2097,14 @@ describe('POST /api/workspaces/:id/start avec agentSessionId', () => {
       'hello',
       fakeWorkspace.model,
       false,
-      'auto-accept',
+      'bypass',
       'sess-idle-1',
       'auto',
     )
   })
 
   it('passe undefined si agentSessionId absent', async () => {
-    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace, permissionMode: 'auto-accept' } as any)
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace, agentPermissionMode: 'bypass' } as any)
     vi.mocked(workspaceService.updateWorkspaceStatus).mockReturnValue(undefined as any)
 
     await app.request('/api/workspaces/ws-1/start', {
@@ -2119,7 +2119,7 @@ describe('POST /api/workspaces/:id/start avec agentSessionId', () => {
       'hello',
       fakeWorkspace.model,
       false,
-      'auto-accept',
+      'bypass',
       undefined,
       'auto',
     )
@@ -2257,7 +2257,7 @@ describe('GET /api/workspaces/:id/diff', () => {
       model: 'auto',
       engine: 'claude-code',
       reasoningEffort: 'auto',
-      permissionMode: 'auto-accept',
+      agentPermissionMode: 'bypass',
       devServerStatus: 'stopped',
       hasUnread: false,
       archivedAt: null,
@@ -2327,7 +2327,7 @@ describe('GET /api/workspaces/:id/diff-file', () => {
       model: 'auto',
       engine: 'claude-code',
       reasoningEffort: 'auto',
-      permissionMode: 'auto-accept',
+      agentPermissionMode: 'bypass',
       devServerStatus: 'stopped',
       hasUnread: false,
       archivedAt: null,
@@ -2381,7 +2381,7 @@ describe('GET /api/workspaces/:id/commits', () => {
       model: 'auto',
       engine: 'claude-code',
       reasoningEffort: 'auto',
-      permissionMode: 'auto-accept',
+      agentPermissionMode: 'bypass',
       devServerStatus: 'stopped',
       hasUnread: false,
       archivedAt: null,
@@ -2485,7 +2485,7 @@ describe('POST /api/workspaces/:id/resync-branch', () => {
       notionPageId: null,
       model: 'sonnet',
       reasoningEffort: 'auto',
-      permissionMode: 'auto-accept',
+      agentPermissionMode: 'bypass',
       devServerStatus: 'stopped',
       hasUnread: false,
       archivedAt: null,
@@ -2495,7 +2495,7 @@ describe('POST /api/workspaces/:id/resync-branch', () => {
       autoLoop: false,
       autoLoopReady: false,
       noProgressStreak: 0,
-      permissionProfile: 'bypass',
+      // legacy field removed
       worktreePath: '/tmp/project/.worktrees/feature/old-name',
       worktreeOwned: true,
       createdAt: 'x',
@@ -2757,7 +2757,7 @@ describe('POST /api/workspaces — pre-flight URL validation', () => {
       sentryUrl: 'https://my-org.sentry.io/issues/42/',
       model: 'claude-opus-4-7',
       reasoningEffort: 'auto',
-      permissionMode: 'auto-accept',
+      agentPermissionMode: 'bypass',
       devServerStatus: 'stopped',
       hasUnread: false,
       archivedAt: null,
@@ -2767,7 +2767,7 @@ describe('POST /api/workspaces — pre-flight URL validation', () => {
       autoLoop: false,
       autoLoopReady: false,
       noProgressStreak: 0,
-      permissionProfile: 'bypass',
+      // legacy field removed
       worktreePath: '/tmp/proj/.worktrees/feat/x',
       worktreeOwned: true,
       createdAt: '2026-01-01',

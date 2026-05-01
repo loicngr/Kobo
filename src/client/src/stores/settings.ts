@@ -20,7 +20,10 @@ interface ProjectSettings {
   displayName: string
   defaultSourceBranch: string
   defaultModel: string
+  /** @deprecated Read-only legacy field. Use `agentPermissionMode` instead. */
   dangerouslySkipPermissions: boolean
+  /** Per-project override of the global `defaultAgentPermissionMode`. */
+  agentPermissionMode?: 'plan' | 'bypass' | 'strict' | 'interactive'
   prPromptTemplate: string
   gitConventions: string
   setupScript: string
@@ -31,6 +34,7 @@ interface ProjectSettings {
 
 interface GlobalSettings {
   defaultModel: string
+  /** @deprecated Read-only legacy field. Use `defaultAgentPermissionMode`. */
   dangerouslySkipPermissions: boolean
   prPromptTemplate: string
   gitConventions: string
@@ -39,6 +43,11 @@ interface GlobalSettings {
   audioNotifications: boolean
   notionStatusProperty: string
   notionInProgressStatus: string
+  /**
+   * Unified default permission mode for new workspaces. May still hold legacy
+   * values like 'plan' or 'auto-accept' on first read after the migration —
+   * callers should treat anything unrecognised as a fallback to 'bypass'.
+   */
   defaultPermissionMode: string
   notionMcpKey: string
   sentryMcpKey: string

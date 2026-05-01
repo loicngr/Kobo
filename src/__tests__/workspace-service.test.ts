@@ -250,6 +250,41 @@ describe('updateWorkspaceStatus(id, status)', () => {
     const { updateWorkspaceStatus } = await import('../server/services/workspace-service.js')
     expect(() => updateWorkspaceStatus('ghost-id', 'idle')).toThrow(/not found/)
   })
+
+  it('autorise executing → awaiting-user', async () => {
+    const { createWorkspace, updateWorkspaceStatus } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'Defer 1', projectPath: '/p', sourceBranch: 'main', workingBranch: 'b' })
+    updateWorkspaceStatus(ws.id, 'brainstorming')
+    updateWorkspaceStatus(ws.id, 'executing')
+    const updated = updateWorkspaceStatus(ws.id, 'awaiting-user')
+    expect(updated.status).toBe('awaiting-user')
+  })
+
+  it('autorise awaiting-user → executing (resume path)', async () => {
+    const { createWorkspace, updateWorkspaceStatus } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'Defer 2', projectPath: '/p', sourceBranch: 'main', workingBranch: 'b' })
+    updateWorkspaceStatus(ws.id, 'brainstorming')
+    updateWorkspaceStatus(ws.id, 'executing')
+    updateWorkspaceStatus(ws.id, 'awaiting-user')
+    const updated = updateWorkspaceStatus(ws.id, 'executing')
+    expect(updated.status).toBe('executing')
+  })
+
+  it('autorise awaiting-user → idle', async () => {
+    const { createWorkspace, updateWorkspaceStatus } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'Defer 3', projectPath: '/p', sourceBranch: 'main', workingBranch: 'b' })
+    updateWorkspaceStatus(ws.id, 'brainstorming')
+    updateWorkspaceStatus(ws.id, 'executing')
+    updateWorkspaceStatus(ws.id, 'awaiting-user')
+    const updated = updateWorkspaceStatus(ws.id, 'idle')
+    expect(updated.status).toBe('idle')
+  })
+
+  it('rejette created → awaiting-user (seul executing peut handover)', async () => {
+    const { createWorkspace, updateWorkspaceStatus } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'Defer 4', projectPath: '/p', sourceBranch: 'main', workingBranch: 'b' })
+    expect(() => updateWorkspaceStatus(ws.id, 'awaiting-user')).toThrow(/Invalid status transition/)
+  })
 })
 
 describe('deleteWorkspace(id)', () => {
@@ -561,10 +596,10 @@ describe('updateWorkspaceReasoningEffort()', () => {
   })
 })
 
-describe('updateWorkspacePermissionMode() throws when workspace not found', () => {
+describe('updateAgentPermissionMode() throws when workspace not found', () => {
   it("lève une erreur si le workspace n'existe pas", async () => {
-    const { updateWorkspacePermissionMode } = await import('../server/services/workspace-service.js')
-    expect(() => updateWorkspacePermissionMode('nonexistent', 'plan')).toThrow(/not found/)
+    const { updateAgentPermissionMode } = await import('../server/services/workspace-service.js')
+    expect(() => updateAgentPermissionMode('nonexistent', 'plan')).toThrow(/not found/)
   })
 })
 
@@ -1063,35 +1098,48 @@ describe('setWorkspaceTags(id, tags)', () => {
   })
 })
 
-describe('setPermissionProfile(id, profile)', () => {
+describe('updateAgentPermissionMode(id, mode)', () => {
   it('defaults to bypass on a freshly created workspace', async () => {
     const { createWorkspace } = await import('../server/services/workspace-service.js')
     const ws = createWorkspace({ name: 'p', projectPath: '/p', sourceBranch: 'main', workingBranch: 'f' })
-    expect(ws.permissionProfile).toBe('bypass')
+    expect(ws.agentPermissionMode).toBe('bypass')
   })
 
-  it('flips the profile to strict and reads it back', async () => {
-    const { createWorkspace, setPermissionProfile, getWorkspace } = await import(
+  it('honors an explicit agentPermissionMode at creation time', async () => {
+    const { createWorkspace } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'p',
+      projectPath: '/p',
+      sourceBranch: 'main',
+      workingBranch: 'f',
+      agentPermissionMode: 'plan',
+    })
+    expect(ws.agentPermissionMode).toBe('plan')
+  })
+
+  it('flips the mode to strict and reads it back', async () => {
+    const { createWorkspace, updateAgentPermissionMode, getWorkspace } = await import(
       '../server/services/workspace-service.js'
     )
     const ws = createWorkspace({ name: 'p', projectPath: '/p', sourceBranch: 'main', workingBranch: 'f' })
-    setPermissionProfile(ws.id, 'strict')
-    expect(getWorkspace(ws.id)?.permissionProfile).toBe('strict')
+    updateAgentPermissionMode(ws.id, 'strict')
+    expect(getWorkspace(ws.id)?.agentPermissionMode).toBe('strict')
   })
 
-  it('flips back from strict to bypass', async () => {
-    const { createWorkspace, setPermissionProfile, getWorkspace } = await import(
+  it('flips through interactive then back to bypass', async () => {
+    const { createWorkspace, updateAgentPermissionMode, getWorkspace } = await import(
       '../server/services/workspace-service.js'
     )
     const ws = createWorkspace({ name: 'p', projectPath: '/p', sourceBranch: 'main', workingBranch: 'f' })
-    setPermissionProfile(ws.id, 'strict')
-    setPermissionProfile(ws.id, 'bypass')
-    expect(getWorkspace(ws.id)?.permissionProfile).toBe('bypass')
+    updateAgentPermissionMode(ws.id, 'interactive')
+    expect(getWorkspace(ws.id)?.agentPermissionMode).toBe('interactive')
+    updateAgentPermissionMode(ws.id, 'bypass')
+    expect(getWorkspace(ws.id)?.agentPermissionMode).toBe('bypass')
   })
 
   it('throws on unknown workspace id', async () => {
-    const { setPermissionProfile } = await import('../server/services/workspace-service.js')
-    expect(() => setPermissionProfile('nope', 'strict')).toThrow("Workspace 'nope' not found")
+    const { updateAgentPermissionMode } = await import('../server/services/workspace-service.js')
+    expect(() => updateAgentPermissionMode('nope', 'strict')).toThrow("Workspace 'nope' not found")
   })
 })
 

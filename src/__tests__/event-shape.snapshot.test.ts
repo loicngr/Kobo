@@ -6,6 +6,13 @@ import { ALL_AGENT_EVENT_KINDS } from '../server/services/agent/engines/types.js
 const EXAMPLES: Record<string, AgentEvent> = {
   'session:started': { kind: 'session:started', engineSessionId: 's1', model: 'claude-sonnet-4-6' },
   'session:ended': { kind: 'session:ended', reason: 'completed', exitCode: 0 },
+  'session:user-input-requested': {
+    kind: 'session:user-input-requested',
+    requestKind: 'question',
+    toolCallId: 'toolu_01abc',
+    toolName: 'AskUserQuestion',
+    payload: { questions: [] },
+  },
   'session:compacted': { kind: 'session:compacted' },
   'session:brainstorm-complete': { kind: 'session:brainstorm-complete' },
   'message:text': { kind: 'message:text', messageId: 'm1', text: 'hi', streaming: false },

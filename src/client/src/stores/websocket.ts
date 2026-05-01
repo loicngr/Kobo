@@ -39,6 +39,15 @@ function _handleSessionStarted(workspaceId: string, event: AgentEvent, sessionId
   if (event.kind !== 'session:started') return
   const workspaceStore = useWorkspaceStore()
 
+  // Drop the head if it belongs to THIS session (resume reuses the original
+  // agentSessionId). Siblings owned by other sessions are kept.
+  if (sessionId) {
+    const head = workspaceStore.peekPending(workspaceId)
+    if (head && head.agentSessionId === sessionId) {
+      workspaceStore.dequeuePending(workspaceId)
+    }
+  }
+
   const cur = workspaceStore.workspaces.find((w) => w.id === workspaceId)
   if (
     cur &&
@@ -92,6 +101,38 @@ export function dispatchAgentEvent(
 
   if (event.kind === 'rate_limit') {
     workspaceStore.setRateLimitUsage(workspaceId, event.info)
+    return
+  }
+
+  if (event.kind === 'session:user-input-requested') {
+    if (event.requestKind === 'question') {
+      workspaceStore.enqueuePending(workspaceId, {
+        kind: 'question',
+        agentSessionId: sessionId ?? null,
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        input: event.payload,
+      })
+    } else {
+      workspaceStore.enqueuePending(workspaceId, {
+        kind: 'permission',
+        agentSessionId: sessionId ?? null,
+        toolCallId: event.toolCallId,
+        toolName: event.toolName,
+        toolInput: event.payload,
+      })
+    }
+    // Backend transitions to `awaiting-user` but doesn't broadcast it; mirror
+    // locally so the sidebar/header badges flip immediately.
+    workspaceStore.updateWorkspaceFromEvent(workspaceId, { status: 'awaiting-user' })
+    if (!_replayingNotifications) {
+      const wsName = workspaceStore.workspaces.find((w) => w.id === workspaceId)?.name ?? ''
+      const title =
+        event.requestKind === 'question'
+          ? t('notification.agentQuestion', { name: wsName })
+          : t('notification.agentPermissionRequest', { name: wsName })
+      notify(title, undefined, workspaceId)
+    }
     return
   }
 
@@ -166,19 +207,19 @@ export function dispatchAgentEvent(
     // Don't return — tool:call may need other side-effects in the future.
   }
 
-  // `ExitPlanMode` is the native Claude CLI tool that signals the agent is
+  // `ExitPlanMode` is the native Claude CLI tool signalling the agent is
   // leaving plan-read-only mode to start implementation. Kōbō mirrors that
-  // transition into `workspace.permissionMode` so the next turn no longer
-  // spawns the CLI with `--permission-mode plan` (and the UI badge updates
-  // from "Plan" to "Auto-accept" in real time).
+  // transition into `workspace.agentPermissionMode` so the next turn no longer
+  // spawns the SDK with `permissionMode: plan` (and the UI badge flips from
+  // "Plan" to "Bypass" in real time).
   if (event.kind === 'tool:call' && event.name === 'ExitPlanMode') {
     const cur = workspaceStore.workspaces.find((w) => w.id === workspaceId)
-    if (cur?.permissionMode === 'plan') {
+    if (cur?.agentPermissionMode === 'plan') {
       // Optimistic local update so the badge flips immediately.
-      workspaceStore.updateWorkspaceFromEvent(workspaceId, { permissionMode: 'auto-accept' })
+      workspaceStore.updateWorkspaceFromEvent(workspaceId, { agentPermissionMode: 'bypass' })
       // Persist to DB — best-effort. If it fails the local state will be
       // corrected on the next fetchWorkspaces / workspace refresh.
-      void workspaceStore.updatePermissionMode(workspaceId, 'auto-accept').catch((err) => {
+      void workspaceStore.updateAgentPermissionMode(workspaceId, 'bypass').catch((err) => {
         console.error('[websocket] failed to persist ExitPlanMode flip:', err)
       })
     }
@@ -193,6 +234,11 @@ export function dispatchAgentEvent(
   // the workspace list so the new DB status shows up, and surface a
   // notification if not replaying.
   if (event.kind === 'session:ended') {
+    // Drop any pending entries owned by THIS session (sibling sessions are
+    // preserved).
+    if (sessionId) {
+      workspaceStore.clearPendingForSession(workspaceId, sessionId)
+    }
     const currentStatus = workspaceStore.workspaces.find((w) => w.id === workspaceId)?.status
     const derivedStatus =
       currentStatus === 'quota'
@@ -209,12 +255,17 @@ export function dispatchAgentEvent(
     workspaceStore.finalizeRunningSubagents(workspaceId)
     workspaceStore.fetchWorkspaces()
     if (!_replayingNotifications && event.reason !== 'killed') {
-      const wsName = workspaceStore.workspaces.find((w) => w.id === workspaceId)?.name ?? ''
-      const title =
-        event.reason === 'error'
-          ? t('notification.agentError', { name: wsName })
-          : t('notification.agentFinished', { name: wsName })
-      notify(title, undefined, workspaceId)
+      // During auto-loop, defer the notification to the autoloop:disabled
+      // handler — otherwise every iteration end fires a notification.
+      const autoLoopActive = workspaceStore.autoLoopStates[workspaceId]?.auto_loop === true
+      if (!autoLoopActive) {
+        const wsName = workspaceStore.workspaces.find((w) => w.id === workspaceId)?.name ?? ''
+        const title =
+          event.reason === 'error'
+            ? t('notification.agentError', { name: wsName })
+            : t('notification.agentFinished', { name: wsName })
+        notify(title, undefined, workspaceId)
+      }
     }
     return
   }
@@ -319,11 +370,11 @@ export const useWebSocketStore = defineStore('websocket', {
       workspaceId: string,
       content: string,
       sessionId?: string,
-      permissionModeOverride?: 'auto-accept' | 'plan',
+      agentPermissionModeOverride?: 'plan' | 'bypass' | 'strict' | 'interactive',
     ) {
       this._send({
         type: 'chat:message',
-        payload: { workspaceId, content, sessionId, permissionModeOverride },
+        payload: { workspaceId, content, sessionId, agentPermissionModeOverride },
       })
 
       // Optimistic status update — flip to `executing` instantly if the
@@ -504,9 +555,49 @@ export const useWebSocketStore = defineStore('websocket', {
                   sessionIds: sList,
                   eventIds: eList,
                 })
-                // Replay side-effects (usage/rate_limit/subagent) without
-                // re-appending — append was already replaced by reset().
-                for (const ev of list) {
+                // Replay side-effects (usage/rate_limit/subagent/pending) in
+                // order, mirroring live-event semantics. Append was already
+                // handled by reset().
+                for (let i = 0; i < list.length; i++) {
+                  const ev = list[i]
+                  if (!ev) continue
+                  const evSessionId = sList[i] ?? null
+                  if (ev.kind === 'session:user-input-requested') {
+                    if (ev.requestKind === 'question') {
+                      useWorkspaceStore().enqueuePending(workspaceId, {
+                        kind: 'question',
+                        agentSessionId: evSessionId,
+                        toolCallId: ev.toolCallId,
+                        toolName: ev.toolName,
+                        input: ev.payload,
+                      })
+                    } else {
+                      useWorkspaceStore().enqueuePending(workspaceId, {
+                        kind: 'permission',
+                        agentSessionId: evSessionId,
+                        toolCallId: ev.toolCallId,
+                        toolName: ev.toolName,
+                        toolInput: ev.payload,
+                      })
+                    }
+                    continue
+                  }
+                  if (ev.kind === 'session:started') {
+                    if (evSessionId) {
+                      const store = useWorkspaceStore()
+                      const head = store.peekPending(workspaceId)
+                      if (head && head.agentSessionId === evSessionId) {
+                        store.dequeuePending(workspaceId)
+                      }
+                    }
+                    continue
+                  }
+                  if (ev.kind === 'session:ended') {
+                    if (evSessionId) {
+                      useWorkspaceStore().clearPendingForSession(workspaceId, evSessionId)
+                    }
+                    continue
+                  }
                   if (ev.kind === 'usage' || ev.kind === 'rate_limit' || ev.kind === 'subagent:progress') {
                     // reset() already pushed the event into the stream, so
                     // only route the side-effect — but dispatchAgentEvent
@@ -639,11 +730,29 @@ export const useWebSocketStore = defineStore('websocket', {
         }
 
         case 'autoloop:enabled':
-        case 'autoloop:disabled':
         case 'autoloop:iteration-started':
         case 'autoloop:ready-flipped': {
           // Refresh the full state map — small payload, keeps code simple.
           void workspaceStore.fetchAutoLoopStates()
+          break
+        }
+        case 'autoloop:disabled': {
+          // Refresh state, then fire ONE notification for the whole mission
+          // (per-iteration session:ended events are silent during auto-loop).
+          void workspaceStore.fetchAutoLoopStates()
+          if (wid) {
+            const reason = (payload as { reason?: string } | null)?.reason
+            const wsName = workspaceStore.workspaces.find((w) => w.id === wid)?.name ?? ''
+            const titleKey =
+              reason === 'error'
+                ? 'notification.autoLoopError'
+                : reason === 'stall'
+                  ? 'notification.autoLoopStalled'
+                  : reason === 'completed'
+                    ? 'notification.autoLoopCompleted'
+                    : null // 'manual' → user disabled it themselves, don't notify
+            if (titleKey) notify(t(titleKey, { name: wsName }), undefined, wid)
+          }
           break
         }
 

@@ -173,6 +173,37 @@ export const migrations: Migration[] = [
       ).run()
     },
   },
+  {
+    version: 17,
+    name: 'add-agent-permission-mode',
+    migrate: (db) => {
+      // Unifies the legacy `permission_mode` (auto-accept | plan) and
+      // `permission_profile` (bypass | strict | interactive) into a single
+      // SDK-aligned column with four values: plan | bypass | strict | interactive.
+      //
+      // Migration rule (preserves user-visible behaviour):
+      //   permission_mode='plan'                                  → 'plan'
+      //   permission_mode='auto-accept' + permission_profile=*    → permission_profile (default 'bypass')
+      //
+      // The two legacy columns are kept for backward compatibility — they are
+      // no longer the source of truth but stay readable so older code paths
+      // (or in-flight requests during deploy) don't crash.
+      db.transaction(() => {
+        db.prepare("ALTER TABLE workspaces ADD COLUMN agent_permission_mode TEXT NOT NULL DEFAULT 'bypass'").run()
+        // Plan mode is preserved verbatim.
+        db.prepare("UPDATE workspaces SET agent_permission_mode = 'plan' WHERE permission_mode = 'plan'").run()
+        // For 'auto-accept' rows, promote the profile (or fall back to bypass).
+        db.prepare(
+          `UPDATE workspaces
+           SET agent_permission_mode = CASE
+             WHEN permission_profile IN ('bypass', 'strict', 'interactive') THEN permission_profile
+             ELSE 'bypass'
+           END
+           WHERE permission_mode != 'plan' OR permission_mode IS NULL`,
+        ).run()
+      })()
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

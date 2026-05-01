@@ -17,7 +17,8 @@ export interface Workspace {
   model: string
   engine: string
   reasoningEffort: string
-  permissionMode: string
+  /** Unified SDK-aligned permission mode (plan | bypass | strict | interactive). */
+  agentPermissionMode: 'plan' | 'bypass' | 'strict' | 'interactive'
   devServerStatus: string
   hasUnread: boolean
   archivedAt: string | null
@@ -26,8 +27,6 @@ export interface Workspace {
   autoLoop: boolean
   autoLoopReady: boolean
   noProgressStreak: number
-  /** 'bypass' (default) → --dangerously-skip-permissions; 'strict' → --permission-mode acceptEdits. */
-  permissionProfile: 'bypass' | 'strict'
   worktreePath: string
   worktreeOwned: boolean
   createdAt: string
@@ -74,6 +73,7 @@ export interface CreateWorkspaceInput {
   notionUrl?: string
   model?: string
   reasoningEffort?: string
+  agentPermissionMode?: 'plan' | 'bypass' | 'strict' | 'interactive'
   tasks?: string[]
   acceptanceCriteria?: string[]
   autoLoop?: boolean
@@ -167,6 +167,27 @@ export interface PendingWakeup {
   reason?: string
 }
 
+export interface PendingDeferredToolUse {
+  toolCallId: string
+  toolName: string
+  input: unknown
+  /**
+   * Kōbō agent_sessions row id of the session that emitted the deferred
+   * tool call. Used to scope clear-on-session-end so a sibling session
+   * finishing does not erase a still-valid pending entry.
+   */
+  agentSessionId: string | null
+}
+
+/**
+ * Unified pending item: either an AskUserQuestion or an interactive
+ * permission request. Items are queued FIFO per workspace; the head is
+ * what the UI surfaces.
+ */
+export type PendingItem =
+  | { kind: 'question'; agentSessionId: string | null; toolCallId: string; toolName: string; input: unknown }
+  | { kind: 'permission'; agentSessionId: string | null; toolCallId: string; toolName: string; toolInput: unknown }
+
 export interface AutoLoopStatus {
   auto_loop: boolean
   auto_loop_ready: boolean
@@ -218,6 +239,8 @@ export const useWorkspaceStore = defineStore('workspace', {
     gitRefreshTrigger: 0,
     gitStatsCache: {} as Record<string, GitStats>,
     pendingWakeups: {} as Record<string, PendingWakeup>,
+    pendingDeferred: {} as Record<string, PendingDeferredToolUse>,
+    pendingQueue: {} as Record<string, PendingItem[]>,
     prStates: {} as Record<string, string>,
     autoLoopStates: {} as Record<string, AutoLoopStatus>,
   }),
@@ -225,7 +248,7 @@ export const useWorkspaceStore = defineStore('workspace', {
   getters: {
     selectedWorkspace: (state) => state.workspaces.find((w) => w.id === state.selectedWorkspaceId) ?? null,
 
-    needsAttention: (state) => state.workspaces.filter((w) => ['error', 'quota'].includes(w.status)),
+    needsAttention: (state) => state.workspaces.filter((w) => ['error', 'quota', 'awaiting-user'].includes(w.status)),
 
     running: (state) => state.workspaces.filter((w) => isBusyStatus(w.status)),
 
@@ -588,36 +611,19 @@ export const useWorkspaceStore = defineStore('workspace', {
       return body
     },
 
-    async updatePermissionMode(id: string, permissionMode: string) {
+    async updateAgentPermissionMode(id: string, agentPermissionMode: 'plan' | 'bypass' | 'strict' | 'interactive') {
       try {
         const res = await fetch(`/api/workspaces/${id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ permissionMode }),
+          body: JSON.stringify({ agentPermissionMode }),
         })
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const updated = (await res.json()) as Workspace
         const idx = this.workspaces.findIndex((w) => w.id === id)
         if (idx >= 0) this.workspaces[idx] = updated
       } catch (err) {
-        console.error('[workspace store] updatePermissionMode failed:', err)
-        throw err
-      }
-    },
-
-    async updatePermissionProfile(id: string, permissionProfile: 'bypass' | 'strict') {
-      try {
-        const res = await fetch(`/api/workspaces/${id}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ permissionProfile }),
-        })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const updated = (await res.json()) as Workspace
-        const idx = this.workspaces.findIndex((w) => w.id === id)
-        if (idx >= 0) this.workspaces[idx] = updated
-      } catch (err) {
-        console.error('[workspace store] updatePermissionProfile failed:', err)
+        console.error('[workspace store] updateAgentPermissionMode failed:', err)
         throw err
       }
     },
@@ -1065,15 +1071,13 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async enableAutoLoop(id: string): Promise<void> {
-      // Auto-loop iterations are spawned in auto-accept (plan mode blocks the
-      // MCP tools the loop relies on). Persist that to keep the UI dropdown
-      // truthful — otherwise it lies about what's actually running.
+      // Plan mode would deadlock the loop (blocks MCP + edits) — promote to bypass.
       const ws = this.workspaces.find((w) => w.id === id)
-      if (ws && ws.permissionMode !== 'auto-accept') {
+      if (ws && ws.agentPermissionMode === 'plan') {
         try {
-          await this.updatePermissionMode(id, 'auto-accept')
+          await this.updateAgentPermissionMode(id, 'bypass')
         } catch {
-          // best-effort — the loop forces auto-accept regardless
+          // best-effort — the loop forces a non-plan mode regardless
         }
       }
 
@@ -1146,6 +1150,180 @@ export const useWorkspaceStore = defineStore('workspace', {
           await this.fetchPendingWakeup(workspaceId)
         }
       }
+    },
+
+    /** Append an item to the pending queue for a workspace. */
+    enqueuePending(workspaceId: string, item: PendingItem): void {
+      const arr = this.pendingQueue[workspaceId] ?? []
+      arr.push(item)
+      this.pendingQueue[workspaceId] = arr
+      if (item.kind === 'question') {
+        this.pendingDeferred[workspaceId] = {
+          toolCallId: item.toolCallId,
+          toolName: item.toolName,
+          input: item.input,
+          agentSessionId: item.agentSessionId,
+        }
+      }
+    },
+
+    /** Peek the head of the queue without removing it. */
+    peekPending(workspaceId: string): PendingItem | undefined {
+      return this.pendingQueue[workspaceId]?.[0]
+    },
+
+    /** Remove and return the head of the queue. */
+    dequeuePending(workspaceId: string): PendingItem | undefined {
+      const arr = this.pendingQueue[workspaceId]
+      if (!arr || arr.length === 0) return undefined
+      const head = arr.shift()
+      if (arr.length === 0) delete this.pendingQueue[workspaceId]
+      // Mirror the legacy single-entry map for any caller still reading it.
+      const newHead = this.pendingQueue[workspaceId]?.[0]
+      if (newHead && newHead.kind === 'question') {
+        this.pendingDeferred[workspaceId] = {
+          toolCallId: newHead.toolCallId,
+          toolName: newHead.toolName,
+          input: newHead.input,
+          agentSessionId: newHead.agentSessionId,
+        }
+      } else {
+        delete this.pendingDeferred[workspaceId]
+      }
+      return head
+    },
+
+    /**
+     * Drop every pending item owned by `agentSessionId`. Pass `null` to
+     * leave the queue untouched (mirrors the original safety behaviour
+     * where unscoped clears were opt-in).
+     */
+    clearPendingForSession(workspaceId: string, agentSessionId: string | null): void {
+      if (agentSessionId === null) return
+      const arr = this.pendingQueue[workspaceId]
+      if (!arr) return
+      const filtered = arr.filter((it) => it.agentSessionId !== agentSessionId)
+      if (filtered.length === 0) delete this.pendingQueue[workspaceId]
+      else this.pendingQueue[workspaceId] = filtered
+      // Sync legacy map.
+      const cur = this.pendingDeferred[workspaceId]
+      if (cur && cur.agentSessionId === agentSessionId) {
+        delete this.pendingDeferred[workspaceId]
+      }
+    },
+
+    /** Wipe the whole queue for a workspace (e.g. user explicit stop). */
+    clearAllPending(workspaceId: string): void {
+      delete this.pendingQueue[workspaceId]
+      delete this.pendingDeferred[workspaceId]
+    },
+
+    /** @deprecated use `enqueuePending` with `kind: 'question'`. */
+    setPendingDeferred(workspaceId: string, payload: PendingDeferredToolUse): void {
+      this.enqueuePending(workspaceId, {
+        kind: 'question',
+        agentSessionId: payload.agentSessionId,
+        toolCallId: payload.toolCallId,
+        toolName: payload.toolName,
+        input: payload.input,
+      })
+    },
+
+    /** @deprecated use `clearPendingForSession` / `clearAllPending` instead. */
+    clearPendingDeferred(workspaceId: string, onlyIfSession: string | null = null): void {
+      if (onlyIfSession === null) {
+        this.clearAllPending(workspaceId)
+        return
+      }
+      this.clearPendingForSession(workspaceId, onlyIfSession)
+    },
+
+    /** @deprecated use `peekPending` instead — returns the head only if it is a question. */
+    getPendingDeferred(workspaceId: string): PendingDeferredToolUse | undefined {
+      const head = this.peekPending(workspaceId)
+      if (!head || head.kind !== 'question') return undefined
+      return {
+        toolCallId: head.toolCallId,
+        toolName: head.toolName,
+        input: head.input,
+        agentSessionId: head.agentSessionId,
+      }
+    },
+
+    /** Submit answers for a deferred AskUserQuestion. Dequeues optimistically on success. */
+    async submitDeferredAnswer(
+      workspaceId: string,
+      answers: Record<string, string>,
+      toolCallId?: string,
+    ): Promise<void> {
+      const res = await fetch(`/api/workspaces/${workspaceId}/deferred-tool-use/answer`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ answers, toolCallId }),
+      })
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string }
+        const message = body.error ?? `HTTP ${res.status}`
+        // Self-heal a zombie panel left by a stale ws_events replay.
+        if (/no deferred tool use pending/i.test(message)) {
+          console.warn('[workspace] submitDeferredAnswer: backend has no pending — clearing zombie panel locally')
+          this.dequeuePending(workspaceId)
+          void this.fetchWorkspaces()
+          return
+        }
+        throw new Error(message)
+      }
+      // Optimistic dequeue + status refresh: the backend resolved the SDK
+      // callback synchronously but `session:started` lags the SDK warm-up.
+      this.dequeuePending(workspaceId)
+      void this.fetchWorkspaces()
+    },
+
+    /**
+     * Cancel a pending question without answering. The agent receives a
+     * `behavior: 'deny'` tool_result and decides what to do — usually
+     * proceeds with sensible defaults or skips the question altogether.
+     * Does NOT stop the agent.
+     */
+    async cancelDeferredAnswer(workspaceId: string, reason?: string, toolCallId?: string): Promise<void> {
+      const res = await fetch(`/api/workspaces/${workspaceId}/deferred-tool-use/cancel`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ reason, toolCallId }),
+      })
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string }
+        const message = body.error ?? `HTTP ${res.status}`
+        if (/no deferred tool use pending/i.test(message)) {
+          console.warn('[workspace] cancelDeferredAnswer: backend has no pending — clearing zombie panel locally')
+          this.dequeuePending(workspaceId)
+          void this.fetchWorkspaces()
+          return
+        }
+        throw new Error(message)
+      }
+      this.dequeuePending(workspaceId)
+      void this.fetchWorkspaces()
+    },
+
+    /** Submit allow/deny for a deferred permission request. Dequeues optimistically on success. */
+    async submitDeferredPermission(
+      workspaceId: string,
+      toolCallId: string,
+      decision: 'allow' | 'deny',
+      reason?: string,
+    ): Promise<void> {
+      const res = await fetch(`/api/workspaces/${workspaceId}/deferred-permission/decision`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ toolCallId, decision, reason }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error((body as { error?: string }).error ?? `HTTP ${res.status}`)
+      }
+      this.dequeuePending(workspaceId)
+      void this.fetchWorkspaces()
     },
 
     updateAgentTodos(workspaceId: string, todos: AgentTodo[]) {

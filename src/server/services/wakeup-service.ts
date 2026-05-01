@@ -162,7 +162,7 @@ function fire(workspaceId: string): void {
 
     const wsRow = db
       .prepare(
-        `SELECT project_path, working_branch, worktree_path, model, permission_mode, reasoning_effort
+        `SELECT project_path, working_branch, worktree_path, model, agent_permission_mode, reasoning_effort
            FROM workspaces WHERE id = ?`,
       )
       .get(workspaceId) as
@@ -171,7 +171,7 @@ function fire(workspaceId: string): void {
           working_branch: string
           worktree_path: string | null
           model: string
-          permission_mode: string
+          agent_permission_mode: string | null
           reasoning_effort: string
         }
       | undefined
@@ -182,10 +182,10 @@ function fire(workspaceId: string): void {
     }
 
     const worktreePath = wsRow.worktree_path ?? path.join(wsRow.project_path, '.worktrees', wsRow.working_branch)
-    // Defensive: narrow `permission_mode` against the two known values rather
-    // than trusting the DB column shape. Any unexpected value falls back to
-    // the safer 'auto-accept'.
-    const permissionMode: 'auto-accept' | 'plan' = wsRow.permission_mode === 'plan' ? 'plan' : 'auto-accept'
+    // Narrow against the four known values; unknowns → 'bypass'.
+    const stored = wsRow.agent_permission_mode
+    const agentPermissionMode: 'plan' | 'bypass' | 'strict' | 'interactive' =
+      stored === 'plan' || stored === 'strict' || stored === 'interactive' ? stored : 'bypass'
 
     try {
       orchestrator.startAgent(
@@ -194,7 +194,7 @@ function fire(workspaceId: string): void {
         row.prompt,
         wsRow.model,
         true,
-        permissionMode,
+        agentPermissionMode,
         undefined,
         wsRow.reasoning_effort,
       )

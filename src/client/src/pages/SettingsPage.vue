@@ -33,9 +33,9 @@
 
             <q-separator dark class="q-mb-md" />
 
-            <!-- Language selector -->
-            <div class="q-mb-lg">
-              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.language') }}</div>
+            <!-- Localization -->
+            <div class="settings-card q-pa-md rounded-borders q-pb-sm q-mb-sm">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.language') }}</div>
               <q-select
                 :model-value="locale"
                 :options="languageOptions"
@@ -51,9 +51,9 @@
               />
             </div>
 
-            <!-- Model selector -->
-            <div class="q-mb-lg">
-              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.defaultModel') }}</div>
+            <!-- Default agent configuration -->
+            <div class="settings-card q-pa-md rounded-borders q-pb-sm q-mb-sm">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.defaultModel') }}</div>
               <q-select
                 v-model="globalModel"
                 :options="modelOptions"
@@ -64,32 +64,18 @@
                 dense
                 dark
                 outlined
-                class="settings-input"
+                class="settings-input q-mb-md"
               />
-            </div>
 
-            <!-- Skip permissions toggle -->
-            <div class="q-mb-lg">
-              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.agentPermissions') }}</div>
-              <q-toggle
-                v-model="globalSkipPermissions"
-                :label="$t('settings.skipPermissions')"
-                dark
-                dense
-                color="indigo-4"
-                class="text-grey-5 text-caption"
-              />
-              <div class="text-caption text-red-4 q-mt-xs">{{ $t('settings.skipPermissionsWarning') }}</div>
-            </div>
-
-            <!-- Default permission mode -->
-            <div class="q-mb-lg">
-              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.defaultPermissionMode') }}</div>
+              <div class="text-subtitle2 q-mb-sm q-mt-md">{{ $t('settings.defaultPermissionMode') }}</div>
+              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.defaultPermissionModeHint') }}</div>
               <q-select
                 v-model="globalDefaultPermissionMode"
                 :options="[
-                  { label: $t('permissionMode.plan'), value: 'plan' },
-                  { label: $t('permissionMode.autoAccept'), value: 'auto-accept' },
+                  { label: $t('agentPermissionMode.plan'), value: 'plan' },
+                  { label: $t('agentPermissionMode.bypass'), value: 'bypass' },
+                  { label: $t('agentPermissionMode.strict'), value: 'strict' },
+                  { label: $t('agentPermissionMode.interactive'), value: 'interactive' },
                 ]"
                 emit-value
                 map-options
@@ -98,12 +84,11 @@
                 outlined
                 class="settings-input"
               />
-              <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.defaultPermissionModeHint') }}</div>
             </div>
 
-            <!-- Verbose system messages toggle -->
-            <div class="q-mb-lg">
-              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.activityFeed') }}</div>
+            <!-- Activity feed display -->
+            <div class="settings-card q-pa-md rounded-borders q-pb-sm q-mb-sm">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.activityFeed') }}</div>
               <q-toggle
                 :model-value="store.showVerboseSystemMessages"
                 :label="$t('settings.verboseMessages')"
@@ -116,15 +101,15 @@
             </div>
 
             <!-- Notifications -->
-            <div class="q-mb-lg">
-              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.notifications') }}</div>
+            <div class="settings-card q-pa-md rounded-borders q-pb-sm q-mb-sm">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.notifications') }}</div>
               <q-toggle
                 v-model="globalBrowserNotifications"
                 :label="$t('settings.browserNotifications')"
                 dark
                 dense
                 color="indigo-4"
-                class="text-grey-5 text-caption"
+                class="text-grey-5 text-caption q-mb-xs"
               />
               <q-toggle
                 v-model="globalAudioNotifications"
@@ -136,29 +121,10 @@
               />
             </div>
 
-            <!-- Available variables reference -->
-            <div class="q-mb-md">
-              <q-expansion-item
-                dense
-                dark
-                icon="code"
-                :label="$t('settings.availableVariables')"
-                class="variables-panel rounded-borders"
-              >
-                <q-list dense dark class="q-pa-sm">
-                  <q-item v-for="v in availableVariables" :key="v.name" dense>
-                    <q-item-section>
-                      <q-item-label class="text-caption" style="font-family: monospace;">{{ v.name }}</q-item-label>
-                      <q-item-label caption class="text-grey-7">{{ v.description }}</q-item-label>
-                    </q-item-section>
-                  </q-item>
-                </q-list>
-              </q-expansion-item>
-            </div>
-
-            <!-- PR prompt template -->
-            <div class="q-mb-lg">
-              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.prPromptTemplate') }}</div>
+            <!-- PR template + Git conventions -->
+            <div class="settings-card q-pa-md rounded-borders q-pb-sm q-mb-sm">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.prPromptTemplate') }}</div>
+              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.prPromptHint') }}</div>
               <q-input
                 v-model="globalPrPrompt"
                 type="textarea"
@@ -167,14 +133,30 @@
                 outlined
                 :rows="8"
                 :placeholder="$t('settings.prPromptPlaceholder')"
-                class="settings-input mono-textarea"
+                class="settings-input mono-textarea q-mb-md"
               />
-              <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.prPromptHint') }}</div>
-            </div>
 
-            <!-- Git conventions -->
-            <div class="q-mb-lg">
-              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.gitConventions') }}</div>
+              <div class="q-mb-sm">
+                <q-expansion-item
+                  dense
+                  dark
+                  icon="code"
+                  :label="$t('settings.availableVariables')"
+                  class="variables-panel rounded-borders"
+                >
+                  <q-list dense dark class="q-pa-sm">
+                    <q-item v-for="v in availableVariables" :key="v.name" dense>
+                      <q-item-section>
+                        <q-item-label class="text-caption" style="font-family: monospace;">{{ v.name }}</q-item-label>
+                        <q-item-label caption class="text-grey-7">{{ v.description }}</q-item-label>
+                      </q-item-section>
+                    </q-item>
+                  </q-list>
+                </q-expansion-item>
+              </div>
+
+              <div class="text-subtitle2 q-mb-sm q-mt-md">{{ $t('settings.gitConventions') }}</div>
+              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.gitConventionsHint') }}</div>
               <q-input
                 v-model="globalGitConventions"
                 type="textarea"
@@ -185,11 +167,12 @@
                 :placeholder="$t('settings.gitConventionsPlaceholder')"
                 class="settings-input mono-textarea"
               />
-              <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.gitConventionsHint') }}</div>
             </div>
 
-            <div class="q-mb-lg">
-              <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.editorCommand') }}</div>
+            <!-- Editor -->
+            <div class="settings-card q-pa-md rounded-borders q-pb-sm q-mb-sm">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.editorCommand') }}</div>
+              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.editorCommandHint') }}</div>
               <q-input
                 v-model="globalEditorCommand"
                 dense
@@ -198,11 +181,12 @@
                 :placeholder="$t('settings.editorCommandPlaceholder')"
                 class="settings-input"
               />
-              <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.editorCommandHint') }}</div>
             </div>
 
-            <div class="q-mb-lg">
-              <div class="field-label text-body2 text-weight-medium q-mb-sm text-grey-6">{{ $t('settings.mcpSelection') }}</div>
+            <!-- MCP server selection -->
+            <div class="settings-card q-pa-md rounded-borders q-pb-sm q-mb-sm">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.mcpSelection') }}</div>
+              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.mcpSelectionHint') }}</div>
               <div class="q-mb-sm">
                 <div class="field-label-sub text-caption q-mb-xs text-grey-7">{{ $t('settings.notionMcp') }}</div>
                 <q-select
@@ -229,11 +213,12 @@
                   class="settings-input"
                 />
               </div>
-              <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.mcpSelectionHint') }}</div>
             </div>
 
-            <div class="q-mb-lg">
-              <div class="field-label text-body2 text-weight-medium q-mb-sm text-grey-6">{{ $t('settings.notionStatus') }}</div>
+            <!-- Notion integration status -->
+            <div class="settings-card q-pa-md rounded-borders q-pb-sm q-mb-sm">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.notionStatus') }}</div>
+              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.notionStatusHint') }}</div>
               <div class="q-mb-sm">
                 <div class="field-label-sub text-caption q-mb-xs text-grey-7">{{ $t('settings.notionStatusProperty') }}</div>
                 <q-input
@@ -256,11 +241,10 @@
                   class="settings-input"
                 />
               </div>
-              <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.notionStatusHint') }}</div>
             </div>
 
             <!-- Workspace tags -->
-            <div class="settings-card q-pa-md rounded-borders">
+            <div class="settings-card q-pa-md rounded-borders q-pb-sm q-mb-sm">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.tagsTitle') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.tagsHint') }}</div>
               <q-select
@@ -279,7 +263,7 @@
             </div>
 
             <!-- Import / Export config -->
-            <div class="settings-card q-pa-md rounded-borders">
+            <div class="settings-card q-pa-md rounded-borders q-pb-sm q-mb-sm">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.shareTitle') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.shareHint') }}</div>
               <div class="row q-gutter-sm">
@@ -462,19 +446,6 @@
                       dark
                       outlined
                       class="settings-input"
-                    />
-                  </div>
-
-                  <!-- Skip permissions toggle (project override) -->
-                  <div class="q-mb-md">
-                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.agentPermissions') }}</div>
-                    <q-toggle
-                      v-model="projectForm.dangerouslySkipPermissions"
-                      :label="$t('settings.skipPermissions.project')"
-                      dark
-                      dense
-                      color="indigo-4"
-                      class="text-grey-5 text-caption"
                     />
                   </div>
 
@@ -822,7 +793,6 @@ const activeTab = ref('global')
 
 // Global form
 const globalModel = ref('auto')
-const globalSkipPermissions = ref(true)
 const globalPrPrompt = ref('')
 const globalGitConventions = ref('')
 const globalEditorCommand = ref('')
@@ -830,7 +800,7 @@ const globalBrowserNotifications = ref(true)
 const globalAudioNotifications = ref(true)
 const globalNotionStatusProperty = ref('')
 const globalNotionStatus = ref('')
-const globalDefaultPermissionMode = ref('plan')
+const globalDefaultPermissionMode = ref<'plan' | 'bypass' | 'strict' | 'interactive'>('bypass')
 const globalNotionMcpKey = ref('')
 const globalSentryMcpKey = ref('')
 const globalTags = ref<string[]>([])
@@ -844,7 +814,6 @@ const projectForm = ref({
   displayName: '',
   defaultSourceBranch: '',
   defaultModel: '',
-  dangerouslySkipPermissions: true,
   prPromptTemplate: '',
   gitConventions: '',
   setupScript: '',
@@ -1040,7 +1009,6 @@ const selectedProject = computed<ProjectSettings | null>(() => {
 // Init global form from store
 function syncGlobalForm() {
   globalModel.value = store.global.defaultModel
-  globalSkipPermissions.value = store.global.dangerouslySkipPermissions ?? true
   globalPrPrompt.value = store.global.prPromptTemplate
   globalGitConventions.value = store.global.gitConventions
   globalEditorCommand.value = store.global.editorCommand ?? ''
@@ -1048,7 +1016,13 @@ function syncGlobalForm() {
   globalAudioNotifications.value = store.global.audioNotifications ?? true
   globalNotionStatusProperty.value = store.global.notionStatusProperty ?? ''
   globalNotionStatus.value = store.global.notionInProgressStatus ?? ''
-  globalDefaultPermissionMode.value = store.global.defaultPermissionMode || 'plan'
+  // Migrate legacy values ('auto-accept' or anything unrecognised) to 'bypass'
+  // — the safest non-plan default. 'plan' is preserved verbatim.
+  {
+    const stored = store.global.defaultPermissionMode
+    globalDefaultPermissionMode.value =
+      stored === 'plan' || stored === 'bypass' || stored === 'strict' || stored === 'interactive' ? stored : 'bypass'
+  }
   globalNotionMcpKey.value = store.global.notionMcpKey ?? ''
   globalSentryMcpKey.value = store.global.sentryMcpKey ?? ''
   globalTags.value = Array.isArray(store.global.tags) ? [...store.global.tags] : []
@@ -1062,7 +1036,6 @@ function syncProjectForm(project: ProjectSettings | null) {
       displayName: '',
       defaultSourceBranch: '',
       defaultModel: '',
-      dangerouslySkipPermissions: true,
       prPromptTemplate: '',
       gitConventions: '',
       setupScript: '',
@@ -1078,7 +1051,6 @@ function syncProjectForm(project: ProjectSettings | null) {
     displayName: project.displayName,
     defaultSourceBranch: project.defaultSourceBranch,
     defaultModel: project.defaultModel,
-    dangerouslySkipPermissions: project.dangerouslySkipPermissions ?? true,
     prPromptTemplate: project.prPromptTemplate,
     gitConventions: project.gitConventions ?? '',
     setupScript: project.setupScript ?? '',
@@ -1203,7 +1175,6 @@ async function saveGlobal() {
   try {
     await store.updateGlobal({
       defaultModel: globalModel.value,
-      dangerouslySkipPermissions: globalSkipPermissions.value,
       prPromptTemplate: globalPrPrompt.value,
       gitConventions: globalGitConventions.value,
       editorCommand: globalEditorCommand.value,
@@ -1236,7 +1207,6 @@ async function saveProject() {
       displayName: projectForm.value.displayName,
       defaultSourceBranch: projectForm.value.defaultSourceBranch,
       defaultModel: projectForm.value.defaultModel,
-      dangerouslySkipPermissions: projectForm.value.dangerouslySkipPermissions,
       prPromptTemplate: projectForm.value.prPromptTemplate,
       gitConventions: projectForm.value.gitConventions,
       setupScript: projectForm.value.setupScript,

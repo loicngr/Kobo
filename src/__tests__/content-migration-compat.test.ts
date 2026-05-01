@@ -2,12 +2,12 @@ import { describe, expect, it } from 'vitest'
 import { convertRow } from '../server/services/content-migration-service.js'
 
 /**
- * For every known legacy payload shape, assert the produced AgentEvent matches
- * the current union. This test fails if a future change to AgentEvent leaves
- * already-migrated rows in an incompatible state.
+ * The stream-parser was removed during the Claude Agent SDK cutover. All
+ * production databases were already migrated, so `convertRow` is now a no-op
+ * that returns no events for any legacy type. These tests lock that contract.
  */
-describe('content-migration compat — legacy payload → AgentEvent', () => {
-  it('assistant/text → message:text', () => {
+describe('content-migration compat — legacy payload → AgentEvent (post-parser-removal)', () => {
+  it('returns no events for legacy assistant/text', () => {
     const events = convertRow(
       'agent:output',
       JSON.stringify({
@@ -16,10 +16,10 @@ describe('content-migration compat — legacy payload → AgentEvent', () => {
         message: { id: 'm1', role: 'assistant', content: [{ type: 'text', text: 'hi' }] },
       }),
     )
-    expect(events[0]).toMatchObject({ kind: 'message:text', text: 'hi' })
+    expect(events).toEqual([])
   })
 
-  it('assistant/tool_use → tool:call', () => {
+  it('returns no events for legacy assistant/tool_use', () => {
     const events = convertRow(
       'agent:output',
       JSON.stringify({
@@ -28,10 +28,10 @@ describe('content-migration compat — legacy payload → AgentEvent', () => {
         message: { id: 'm1', role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Read', input: {} }] },
       }),
     )
-    expect(events.find((e) => e.kind === 'tool:call')).toBeDefined()
+    expect(events).toEqual([])
   })
 
-  it('user/tool_result → tool:result', () => {
+  it('returns no events for legacy user/tool_result', () => {
     const events = convertRow(
       'agent:output',
       JSON.stringify({
@@ -43,10 +43,10 @@ describe('content-migration compat — legacy payload → AgentEvent', () => {
         },
       }),
     )
-    expect(events.find((e) => e.kind === 'tool:result')).toBeDefined()
+    expect(events).toEqual([])
   })
 
-  it('system/rate_limit_event → rate_limit', () => {
+  it('returns no events for legacy system/rate_limit_event', () => {
     const events = convertRow(
       'agent:output',
       JSON.stringify({
@@ -56,16 +56,16 @@ describe('content-migration compat — legacy payload → AgentEvent', () => {
         rate_limit_info: { rateLimitType: 'five_hour', utilization: 0.5 },
       }),
     )
-    expect(events.find((e) => e.kind === 'rate_limit')).toBeDefined()
+    expect(events).toEqual([])
   })
 
-  it('raw wrapper {type:"raw", content:"…"} → message:raw', () => {
+  it('returns no events for legacy raw wrapper', () => {
     const events = convertRow('agent:output', JSON.stringify({ type: 'raw', content: 'legacy raw' }))
-    expect(events).toEqual([{ kind: 'message:raw', content: 'legacy raw' }])
+    expect(events).toEqual([])
   })
 
-  it('non-JSON payload string → message:raw', () => {
+  it('returns no events for non-JSON payloads', () => {
     const events = convertRow('agent:output', 'this is not json')
-    expect(events[0].kind).toBe('message:raw')
+    expect(events).toEqual([])
   })
 })

@@ -17,7 +17,18 @@ export interface RateLimitInfo {
 export type AgentEvent =
   // Lifecycle
   | { kind: 'session:started'; engineSessionId: string; model?: string }
-  | { kind: 'session:ended'; reason: 'completed' | 'error' | 'killed'; exitCode: number | null }
+  | {
+      kind: 'session:ended'
+      reason: 'completed' | 'error' | 'killed'
+      exitCode: number | null
+    }
+  | {
+      kind: 'session:user-input-requested'
+      requestKind: 'question' | 'permission'
+      toolCallId: string
+      toolName: string
+      payload: unknown
+    }
   | { kind: 'session:compacted' }
   | { kind: 'session:brainstorm-complete' }
   // Conversation
@@ -61,6 +72,7 @@ export type AgentEvent =
 export const ALL_AGENT_EVENT_KINDS = [
   'session:started',
   'session:ended',
+  'session:user-input-requested',
   'session:compacted',
   'session:brainstorm-complete',
   'message:text',

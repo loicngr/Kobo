@@ -55,8 +55,13 @@ export async function sendPrepAutoloop(
   wsStore: ReturnType<typeof useWebSocketStore>,
   workspaceStore: ReturnType<typeof useWorkspaceStore>,
 ): Promise<void> {
+  // Promote 'plan' → 'bypass' so the prep-autoloop turn can run MCP tools
+  // and edits (plan blocks them). Any other unified mode is honoured.
   try {
-    await workspaceStore.updatePermissionMode(workspaceId, 'auto-accept')
+    const ws = workspaceStore.workspaces.find((w) => w.id === workspaceId)
+    if (ws && ws.agentPermissionMode === 'plan') {
+      await workspaceStore.updateAgentPermissionMode(workspaceId, 'bypass')
+    }
   } catch {
     // best-effort — the per-message override below is the safety net
   }
@@ -72,7 +77,7 @@ export async function sendPrepAutoloop(
     // best-effort — the local PREP_AUTOLOOP_PROMPT default still applies
   }
 
-  wsStore.sendChatMessage(workspaceId, prompt, undefined, 'auto-accept')
+  wsStore.sendChatMessage(workspaceId, prompt, undefined, 'bypass')
   workspaceStore.markRead(workspaceId)
   workspaceStore.addActivityItem(workspaceId, {
     id: `user-${Date.now()}`,

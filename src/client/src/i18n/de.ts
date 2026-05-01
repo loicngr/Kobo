@@ -55,12 +55,18 @@ export default {
   'reasoning.xhighDescription': 'Erweiterte Tiefe, langfristige Aufgaben (Opus 4.7)',
   'reasoning.maxDescription': 'Maximale Tiefe',
 
-  // Permission modes
-  'permissionMode.autoAccept': 'Auto-accept',
-  'permissionMode.plan': 'Plan',
-  'permissionProfile.strict': 'Strenge Berechtigungen',
-  'permissionProfile.strictTooltip':
-    'Aktiviert: Claude respektiert die allow/deny-Listen aus .claude/settings.json (Schreibvorgänge unter .claude/** oder .github/workflows/** sind erlaubt, wenn du sie auf allow gesetzt hast). Nachteil: Bash/MCP außerhalb der Liste führen zu einem Prompt und können den Auto-Loop blockieren. Deaktiviert (Standard): Kōbō verwendet --dangerously-skip-permissions — maximal permissiv, aber die CLI blockiert .claude/** und .github/workflows/** hart. Wirksam ab der nächsten Session.',
+  // Vereinheitlichter Berechtigungsmodus (ein einziger SDK-konformer Selektor)
+  'agentPermissionMode.label': 'Berechtigungsmodus',
+  'agentPermissionMode.plan': 'Plan',
+  'agentPermissionMode.bypass': 'Bypass',
+  'agentPermissionMode.strict': 'Edits akzeptieren',
+  'agentPermissionMode.interactive': 'Interaktiv',
+  'agentPermissionMode.tooltip':
+    'Wie der Agent Tool-Berechtigungen handhabt. Plan: schreibgeschützt, keine Schreibvorgänge. Bypass: alle Nachfragen überspringen. Strict: Datei-Edits automatisch akzeptieren, allow/deny für den Rest beachten. Interaktiv: vor jedem Tool den Benutzer per Berechtigungs-Panel fragen.',
+  'agentPermissionMode.autoLoopOverride':
+    'Auto-Loop erzwingt einen Modus außer Plan — Plan blockiert MCP-Tools und Edits, die der Loop benötigt. Wähle stattdessen Bypass, Strict oder Interaktiv.',
+  'agentPermissionMode.autoLoopLocked':
+    'Auf Bypass gesperrt, solange Auto-Loop aktiv ist — jeder andere Modus würde den Loop bei Berechtigungsabfragen anhalten. AskUserQuestion funktioniert weiterhin.',
 
   // Workspace List
   'workspaceList.title': 'Arbeitsbereiche',
@@ -140,6 +146,7 @@ export default {
   'chatInput.queueBanner': 'Nachricht in Warteschlange — wird gesendet, wenn der Agent fertig ist',
   'chatInput.cancelQueue': 'Warteschlange abbrechen',
   'chatInput.autoLoopBanner': 'Auto-Loop läuft — beende ihn, um eine Nachricht zu senden',
+  'chatInput.awaitingUserBanner': 'Der Agent wartet auf deine Antwort oben — antworte über das Fragefenster',
   'chatInput.autoLoopStop': 'Beenden',
   'koboCommand.checkProgressDesc': 'Fortschritt bei Aufgaben und Akzeptanzkriterien prüfen',
   'chatInput.uploading': 'Wird hochgeladen...',
@@ -211,7 +218,7 @@ export default {
   'settings.audioNotifications': 'Ton-Benachrichtigung wenn Agent fertig ist',
   'settings.defaultPermissionMode': 'Standard-Berechtigungsmodus',
   'settings.defaultPermissionModeHint':
-    'Modus bei der Erstellung eines neuen Workspaces. Plan = Nur-Lesen-Brainstorming zuerst, Auto-accept = sofortige vollständige Ausführung.',
+    'Modus bei der Erstellung eines neuen Workspaces. Plan = nur lesen, Bypass = keine Nachfragen, Strict = Edits automatisch akzeptieren mit allow-list, Interaktiv = vor jedem Tool fragen.',
   'settings.activityFeed': 'Aktivitätsfeed',
   'settings.verboseMessages': 'Ausführliche Systemnachrichten anzeigen (task_progress, task_started)',
   'settings.availableVariables': 'Verfügbare Variablen in der PR-Prompt-Vorlage',
@@ -578,6 +585,11 @@ export default {
 
   // Notifications
   'notification.agentFinished': '{name} — Agent fertig',
+  'notification.agentQuestion': '{name} — Agent stellt eine Frage',
+  'notification.agentPermissionRequest': '{name} — Agent fragt nach einer Berechtigung',
+  'notification.autoLoopCompleted': '{name} — Auto-Loop abgeschlossen',
+  'notification.autoLoopStalled': '{name} — Auto-Loop blockiert (kein Fortschritt)',
+  'notification.autoLoopError': '{name} — Auto-Loop wegen Fehler gestoppt',
   'notification.agentError': '{name} — Agent-Fehler',
 
   // Context menu
@@ -657,11 +669,6 @@ export default {
   'engine.select': 'Engine',
   'engine.model': 'Modell',
   'engine.effort': 'Reasoning-Aufwand',
-  'engine.permission': 'Berechtigungsmodus',
-  'createPage.permissionLockedByAutoLoop':
-    'Auto-Schleife benötigt Auto-Accept (MCP + Änderungen). Deaktiviere die Auto-Schleife, um den Plan-Modus zu wählen.',
-  'engine.permission.auto-accept': 'Automatisch akzeptieren',
-  'engine.permission.plan': 'Plan (schreibgeschützt)',
 
   // Scheduled wakeup banner
   'wakeup.scheduledIn': 'Nächste Weckung in {n}s',
@@ -670,6 +677,26 @@ export default {
   'wakeup.reason': 'Grund: {reason}',
   'wakeup.cancel': 'Diese Weckung abbrechen',
   'wakeup.pendingIndicator': 'Weckung geplant',
+
+  // AskUserQuestion deferred tool-use panel
+  'askUserQuestion.title': 'Der Agent stellt eine Frage',
+  'askUserQuestion.submit': 'Antwort senden',
+  'askUserQuestion.multiSelectHint': 'Eine oder mehrere Optionen auswählen',
+  'askUserQuestion.noPending': 'Keine offene Frage',
+  'askUserQuestion.next': 'Weiter',
+  'askUserQuestion.previous': 'Zurück',
+  'askUserQuestion.cancel': 'Abbrechen',
+  'askUserQuestion.cancelTooltip': 'Diese Frage überspringen — der Agent macht ohne Antwort weiter',
+
+  // Interactive permission request panel
+  'permissionRequest.title': 'Der Agent möchte ein Tool verwenden',
+  'permissionRequest.allow': 'Erlauben',
+  'permissionRequest.deny': 'Ablehnen',
+  'permissionRequest.tool': 'Tool',
+  'permissionRequest.input': 'Eingabe',
+  'permissionRequest.denied': 'vom Nutzer abgelehnt',
+
+  'workspaceStatus.awaitingUser': 'wartet auf deine Antwort',
 
   // Workspace list drawer indicators
   'workspaceList.prOpen': 'Pull Request offen',

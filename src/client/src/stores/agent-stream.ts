@@ -132,6 +132,27 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
     version.value++
   }
 
+  /**
+   * Remove a single event from the stream by its persisted ws_events row id.
+   * No-op if the id is null/undefined or not found. Used by features that
+   * server-side delete an event (e.g. dismissing the agent error banner)
+   * to keep the local view in sync without waiting for a refresh.
+   */
+  function removeByEventId(workspaceId: string, eventId: string): void {
+    const list = events.value.get(workspaceId)
+    const idList = eventIds.value.get(workspaceId)
+    if (!list || !idList) return
+    const idx = idList.indexOf(eventId)
+    if (idx === -1) return
+    const tsList = timestamps.value.get(workspaceId)
+    const sList = sessionIds.value.get(workspaceId)
+    list.splice(idx, 1)
+    idList.splice(idx, 1)
+    if (tsList) tsList.splice(idx, 1)
+    if (sList) sList.splice(idx, 1)
+    version.value++
+  }
+
   function clear(workspaceId: string): void {
     events.value.delete(workspaceId)
     timestamps.value.delete(workspaceId)
@@ -157,6 +178,7 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
     append,
     reset,
     prepend,
+    removeByEventId,
     clear,
   }
 })

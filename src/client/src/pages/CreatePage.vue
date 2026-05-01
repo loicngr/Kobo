@@ -398,14 +398,12 @@
             </q-select>
           </div>
 
-          <div class="col-12 col-sm-6 col-md-3">
-            <!-- Permission mode selector — options come from the selected
-               engine's capabilities; labels resolve to i18n keys.
-               Disabled when auto-loop is on: auto-loop needs MCP + edits, which
-               plan mode blocks, so the permission is locked to auto-accept. -->
+          <div class="col-12 col-md-3">
+            <!-- Locked to `bypass` when auto-loop is on (loop needs MCP +
+                 edits with no permission gates). -->
             <q-select
-                v-model="permissionMode"
-                :options="enginePermissionOptions"
+                v-model="agentPermissionMode"
+                :options="agentPermissionModeOptions"
                 :disable="autoLoop"
                 dense
                 borderless
@@ -415,15 +413,21 @@
                 map-options
                 option-value="value"
                 option-label="label"
+                :option-disable="(opt: { disabled?: boolean }) => opt.disabled === true"
             >
               <template #selected>
               <span class="bottom-select-label row items-center no-wrap">
-                <q-icon :name="autoLoop ? 'flash_on' : permissionMode === 'plan' ? 'visibility' : 'flash_on'" size="12px" color="amber-6" class="q-mr-xs" />
-                {{ autoLoop ? (enginePermissionOptions.find((p) => p.value === 'auto-accept')?.label ?? 'auto-accept') : (enginePermissionOptions.find((p) => p.value === permissionMode)?.label ?? permissionMode) }}
+                <q-icon
+                    :name="agentPermissionModeIcon"
+                    size="12px"
+                    color="amber-6"
+                    class="q-mr-xs"
+                />
+                {{ agentPermissionModeOptions.find((p) => p.value === agentPermissionMode)?.label ?? agentPermissionMode }}
                 <q-icon v-if="!autoLoop" name="expand_more" size="12px" color="grey-5" />
               </span>
               </template>
-              <q-tooltip>{{ autoLoop ? $t('createPage.permissionLockedByAutoLoop') : $t('engine.permission') }}</q-tooltip>
+              <q-tooltip>{{ autoLoop ? $t('agentPermissionMode.autoLoopLocked') : $t('agentPermissionMode.tooltip') }}</q-tooltip>
             </q-select>
           </div>
         </div>
@@ -673,7 +677,7 @@ interface EngineDto {
   capabilities: {
     models: Array<{ id: string; label: string }>
     effortLevels?: Array<{ id: string; label: string }>
-    permissionModes: Array<'auto-accept' | 'plan'>
+    permissionModes: Array<'plan' | 'bypass' | 'strict' | 'interactive'>
     supportsResume: boolean
     supportsMcp: boolean
     supportsSkills: boolean
@@ -706,15 +710,6 @@ const engines = ref<EngineDto[]>([])
 const selectedEngineId = ref<string>('claude-code')
 const selectedEngine = computed<EngineDto | undefined>(() => engines.value.find((e) => e.id === selectedEngineId.value))
 const engineSelectOptions = computed(() => engines.value.map((e) => ({ value: e.id, label: e.displayName })))
-// Permission options: only the ones the selected engine declares it
-// supports, labelled via i18n keys.
-const enginePermissionOptions = computed(() =>
-  (selectedEngine.value?.capabilities.permissionModes ?? ['auto-accept', 'plan']).map((p) => ({
-    value: p,
-    label: t(`engine.permission.${p}`),
-  })),
-)
-
 const branchTypeOptions = [
   { label: 'feature/', value: 'feature' },
   { label: 'fix/', value: 'fix' },
@@ -724,7 +719,61 @@ const branchTypeOptions = [
   { label: 'docs/', value: 'docs' },
   { label: 'test/', value: 'test' },
 ]
-const permissionMode = ref(settingsStore.global.defaultPermissionMode || 'plan')
+
+type AgentPermissionMode = 'plan' | 'bypass' | 'strict' | 'interactive'
+
+const ALL_AGENT_PERMISSION_MODES: AgentPermissionMode[] = ['plan', 'bypass', 'strict', 'interactive']
+
+/**
+ * Derive the default unified permission mode for a workspace being created.
+ *
+ * Cascade:
+ *   1. Per-project `agentPermissionMode` setting (if defined for this path).
+ *   2. Global `defaultAgentPermissionMode` / `defaultPermissionMode` setting.
+ *   3. Legacy fallback: `dangerouslySkipPermissions` → 'bypass' / 'interactive'.
+ *   4. Hard fallback: 'bypass'.
+ */
+function deriveDefaultAgentPermissionMode(projectPath: string): AgentPermissionMode {
+  const project = projectPath ? settingsStore.getProjectByPath(projectPath) : undefined
+  const projectMode = (project as { agentPermissionMode?: unknown } | null)?.agentPermissionMode
+  if (typeof projectMode === 'string' && (ALL_AGENT_PERMISSION_MODES as string[]).includes(projectMode)) {
+    return projectMode as AgentPermissionMode
+  }
+  const global = settingsStore.global.defaultPermissionMode
+  if ((ALL_AGENT_PERMISSION_MODES as string[]).includes(global)) return global as AgentPermissionMode
+  if (global === 'plan') return 'plan'
+  // Legacy fallback for installs that only ever saw the boolean toggle.
+  const skip =
+    (project as { dangerouslySkipPermissions?: boolean } | null)?.dangerouslySkipPermissions ??
+    settingsStore.global.dangerouslySkipPermissions ??
+    true
+  return skip ? 'bypass' : 'interactive'
+}
+
+const agentPermissionMode = ref<AgentPermissionMode>(deriveDefaultAgentPermissionMode(''))
+
+const agentPermissionModeIcon = computed<string>(() => {
+  switch (agentPermissionMode.value) {
+    case 'plan':
+      return 'visibility'
+    case 'bypass':
+      return 'flash_on'
+    case 'strict':
+      return 'lock'
+    case 'interactive':
+      return 'security'
+  }
+})
+
+// 'plan' is disabled when auto-loop is on — picking it would deadlock the loop.
+const agentPermissionModeOptions = computed(() => {
+  const supported = selectedEngine.value?.capabilities.permissionModes ?? ALL_AGENT_PERMISSION_MODES
+  return supported.map((value) => ({
+    value,
+    label: t(`agentPermissionMode.${value}`),
+    disabled: value === 'plan' && autoLoop.value,
+  }))
+})
 
 // State
 const branches = ref<string[]>([])
@@ -901,6 +950,20 @@ function toggleNotion() {
 
 const useSentry = ref(false)
 const autoLoop = ref(false)
+// Auto-loop ON forces 'bypass' (plan would deadlock the loop).
+watch(
+  () => autoLoop.value,
+  (enabled) => {
+    if (enabled && agentPermissionMode.value !== 'bypass') {
+      agentPermissionMode.value = 'bypass'
+      $q.notify({
+        type: 'info',
+        message: t('agentPermissionMode.autoLoopLocked'),
+        timeout: 4000,
+      })
+    }
+  },
+)
 const sentryUrl = ref('')
 const isValidSentryUrl = computed(() => /\/issues\/\d+/.test(sentryUrl.value.trim()))
 
@@ -1004,6 +1067,7 @@ function applyProjectDefaults(path: string) {
       model.value = settingsStore.global.defaultModel
     }
   }
+  agentPermissionMode.value = deriveDefaultAgentPermissionMode(path)
 }
 
 // Debounce for project path input
@@ -1027,7 +1091,10 @@ function filterProjectPaths(val: string, update: (fn: () => void) => void) {
 // Fetch settings + available engines on mount. The engine list powers the
 // engine selector and drives the model / effort / permission options.
 onMounted(async () => {
-  settingsStore.fetchSettings()
+  // Await settings before engines so permission-mode derivation sees the
+  // project list. Re-derive after to fix a possible race with applyProjectDefaults.
+  await settingsStore.fetchSettings()
+  agentPermissionMode.value = deriveDefaultAgentPermissionMode(projectPath.value)
   try {
     const res = await fetch('/api/engines')
     if (res.ok) {
@@ -1170,10 +1237,9 @@ async function handleCreate() {
       ...(skipSetupScript.value && !useExistingWorktree.value ? { skipSetupScript: true } : {}),
       ...(description.value.trim() ? { description: description.value.trim() } : {}),
       ...(autoLoop.value ? { autoLoop: true } : {}),
-      // Auto-loop needs MCP tools (kobo__list_tasks, kobo__create_task, etc.) for
-      // grooming. Plan mode blocks all MCP tools, so force auto-accept when
-      // autoLoop is on — otherwise the first session errors on "permission not granted".
-      permissionMode: autoLoop.value ? 'auto-accept' : permissionMode.value,
+      // Auto-loop cannot run in 'plan' (blocks MCP + edits) — promote to bypass.
+      agentPermissionMode:
+        autoLoop.value && agentPermissionMode.value === 'plan' ? 'bypass' : agentPermissionMode.value,
     }
 
     const workspace = await store.createWorkspace(payload)

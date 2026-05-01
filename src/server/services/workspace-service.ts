@@ -10,6 +10,7 @@ export type WorkspaceStatus =
   | 'extracting'
   | 'brainstorming'
   | 'executing'
+  | 'awaiting-user'
   | 'completed'
   | 'idle'
   | 'error'
@@ -18,8 +19,18 @@ export type WorkspaceStatus =
 /** Lifecycle states for a task within a workspace. */
 export type TaskStatus = 'pending' | 'in_progress' | 'done'
 
-/** Controls how the agent handles permission requests. */
-export type PermissionMode = 'auto-accept' | 'plan'
+/**
+ * Unified agent permission mode — one value maps 1:1 to the Claude Agent SDK
+ * `permissionMode` field:
+ *   - `plan`        → SDK `plan` (read-only, AskUserQuestion still works).
+ *   - `bypass`      → SDK `bypassPermissions` (+ allowDangerouslySkipPermissions).
+ *   - `strict`      → SDK `acceptEdits` (auto-accept edits, allow/deny list for the rest).
+ *   - `interactive` → SDK `default` + Kōbō's PreToolUse defer hook (asks the user).
+ */
+export type AgentPermissionMode = 'plan' | 'bypass' | 'strict' | 'interactive'
+
+/** @deprecated Pre-unification mode value, kept only for legacy DB rows. */
+export type LegacyPermissionMode = 'auto-accept' | 'plan'
 
 /** A workspace — the primary unit of work in Kobo. */
 export interface Workspace {
@@ -34,7 +45,8 @@ export interface Workspace {
   sentryUrl: string | null
   model: string
   reasoningEffort: string
-  permissionMode: PermissionMode
+  /** Unified SDK-aligned permission mode (plan | bypass | strict | interactive). */
+  agentPermissionMode: AgentPermissionMode
   devServerStatus: string
   hasUnread: boolean
   archivedAt: string | null
@@ -44,8 +56,6 @@ export interface Workspace {
   autoLoop: boolean
   autoLoopReady: boolean
   noProgressStreak: number
-  /** 'bypass' (default) → --dangerously-skip-permissions; 'strict' → --permission-mode acceptEdits (respects settings.json allow/deny). */
-  permissionProfile: 'bypass' | 'strict'
   worktreePath: string
   worktreeOwned: boolean
   createdAt: string
@@ -80,7 +90,7 @@ export interface CreateWorkspaceInput {
   sentryUrl?: string
   model?: string
   reasoningEffort?: string
-  permissionMode?: string
+  agentPermissionMode?: AgentPermissionMode
   engine?: string
   worktreePath?: string
   worktreeOwned?: boolean
@@ -96,9 +106,10 @@ export interface CreateTaskInput {
 /** Allowed status transitions per current status. Enforced by updateWorkspaceStatus. */
 const VALID_TRANSITIONS: Record<WorkspaceStatus, WorkspaceStatus[]> = {
   created: ['extracting', 'brainstorming', 'idle', 'error'],
-  extracting: ['extracting', 'brainstorming', 'idle', 'error'],
-  brainstorming: ['executing', 'completed', 'idle', 'error'],
-  executing: ['completed', 'idle', 'error', 'quota'],
+  extracting: ['extracting', 'brainstorming', 'idle', 'error', 'awaiting-user'],
+  brainstorming: ['executing', 'completed', 'idle', 'error', 'awaiting-user'],
+  executing: ['completed', 'idle', 'error', 'quota', 'awaiting-user'],
+  'awaiting-user': ['executing', 'brainstorming', 'extracting', 'idle', 'error', 'completed', 'quota'],
   completed: ['idle', 'executing'],
   idle: ['executing', 'brainstorming', 'extracting', 'error'],
   error: ['idle', 'executing', 'brainstorming', 'extracting'],
@@ -118,6 +129,7 @@ interface WorkspaceRow {
   model: string
   reasoning_effort: string
   permission_mode: string
+  agent_permission_mode: string | null
   dev_server_status: string
   has_unread: number
   archived_at: string | null
@@ -150,6 +162,18 @@ interface TaskRow {
 // is untyped, so we intentionally do not narrow here — validation against
 // `listEngines()` is expected to happen at workspace creation (see the
 // routes/engines handler) and when resolving an engine at agent-start time.
+/**
+ * Coerce a raw `agent_permission_mode` cell into the typed union.
+ * Falls back to `bypass` for unknown / null values — guarantees callers
+ * always get a valid SDK-mappable mode regardless of legacy or corrupted rows.
+ */
+function coerceAgentPermissionMode(raw: string | null): AgentPermissionMode {
+  if (raw === 'plan' || raw === 'bypass' || raw === 'strict' || raw === 'interactive') {
+    return raw
+  }
+  return 'bypass'
+}
+
 function mapWorkspace(row: WorkspaceRow): Workspace {
   return {
     id: row.id,
@@ -163,7 +187,7 @@ function mapWorkspace(row: WorkspaceRow): Workspace {
     sentryUrl: row.sentry_url,
     model: row.model,
     reasoningEffort: row.reasoning_effort ?? 'auto',
-    permissionMode: (row.permission_mode ?? 'auto-accept') as PermissionMode,
+    agentPermissionMode: coerceAgentPermissionMode(row.agent_permission_mode),
     devServerStatus: row.dev_server_status,
     hasUnread: row.has_unread === 1,
     archivedAt: row.archived_at,
@@ -173,7 +197,6 @@ function mapWorkspace(row: WorkspaceRow): Workspace {
     autoLoop: row.auto_loop === 1,
     autoLoopReady: row.auto_loop_ready === 1,
     noProgressStreak: row.no_progress_streak ?? 0,
-    permissionProfile: (row.permission_profile ?? 'bypass') as 'bypass' | 'strict',
     worktreePath: row.worktree_path ?? '',
     worktreeOwned: row.worktree_owned === 1,
     createdAt: row.created_at,
@@ -215,12 +238,18 @@ export function createWorkspace(data: CreateWorkspaceInput): Workspace {
   const computedWorktreePath = data.worktreePath ?? `${data.projectPath}/.worktrees/${data.workingBranch}`
   const owned = data.worktreeOwned ?? true
 
+  // Mirror the unified mode into the legacy columns so older readers (in-flight
+  // requests during deploy, external scripts) still see a sane value.
+  const unifiedMode: AgentPermissionMode = data.agentPermissionMode ?? 'bypass'
+  const legacyMode = unifiedMode === 'plan' ? 'plan' : 'auto-accept'
+  const legacyProfile = unifiedMode === 'plan' ? 'bypass' : unifiedMode
+
   db.prepare(`
     INSERT INTO workspaces (
       id, name, project_path, source_branch, working_branch, status,
       notion_url, notion_page_id, sentry_url, worktree_path, worktree_owned,
-      model, reasoning_effort, permission_mode, engine, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      model, reasoning_effort, permission_mode, permission_profile, agent_permission_mode, engine, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     data.name,
@@ -234,7 +263,9 @@ export function createWorkspace(data: CreateWorkspaceInput): Workspace {
     owned ? 1 : 0,
     data.model ?? 'claude-opus-4-7',
     data.reasoningEffort ?? 'auto',
-    data.permissionMode ?? 'auto-accept',
+    legacyMode,
+    legacyProfile,
+    unifiedMode,
     data.engine ?? 'claude-code',
     now,
     now,
@@ -381,13 +412,23 @@ export function updateWorktreePath(id: string, newPath: string): Workspace {
   return getWorkspace(id) as Workspace
 }
 
-/** Update the agent's permission mode (auto-accept vs plan/read-only). */
-export function updateWorkspacePermissionMode(id: string, permissionMode: PermissionMode): Workspace {
+/**
+ * Update the agent's unified permission mode (plan | bypass | strict | interactive).
+ *
+ * Also writes the legacy `permission_mode` and `permission_profile` columns to
+ * keep them coherent with the new value — they remain readable by legacy code
+ * paths during deploy. The unified column is the source of truth.
+ */
+export function updateAgentPermissionMode(id: string, mode: AgentPermissionMode): Workspace {
   const db = getDb()
   const now = new Date().toISOString()
+  const legacyMode = mode === 'plan' ? 'plan' : 'auto-accept'
+  const legacyProfile = mode === 'plan' ? 'bypass' : mode
   const result = db
-    .prepare('UPDATE workspaces SET permission_mode = ?, updated_at = ? WHERE id = ?')
-    .run(permissionMode, now, id)
+    .prepare(
+      'UPDATE workspaces SET agent_permission_mode = ?, permission_mode = ?, permission_profile = ?, updated_at = ? WHERE id = ?',
+    )
+    .run(mode, legacyMode, legacyProfile, now, id)
   if (result.changes === 0) {
     throw new Error(`Workspace '${id}' not found`)
   }
@@ -565,30 +606,6 @@ export function setAutoLoopReady(id: string, ready: boolean): Workspace {
   if (!workspace) throw new Error(`Workspace '${id}' not found`)
   const db = getDb()
   db.prepare('UPDATE workspaces SET auto_loop_ready = ? WHERE id = ?').run(ready ? 1 : 0, id)
-  return getWorkspace(id) as Workspace
-}
-
-/**
- * Set the permission profile for a workspace.
- *
- * - `bypass` (default): Kōbō passes `--dangerously-skip-permissions` — no
- *   prompts, but the CLI hard-denies writes under `.claude/**` and
- *   `.github/workflows/**` regardless of the project's settings.json.
- * - `strict`: Kōbō passes `--permission-mode acceptEdits` — the CLI respects
- *   the project's `.claude/settings.json` allow/deny lists. Enables writes
- *   under `.claude/**` / `.github/workflows/**` when the user has explicitly
- *   allowed them, at the cost of potential prompts on un-allow-listed Bash
- *   or MCP calls.
- *
- * Takes effect on the next session spawn — running sessions keep whichever
- * flag they were started with.
- */
-export function setPermissionProfile(id: string, profile: 'bypass' | 'strict'): Workspace {
-  const workspace = getWorkspace(id)
-  if (!workspace) throw new Error(`Workspace '${id}' not found`)
-  const db = getDb()
-  const now = new Date().toISOString()
-  db.prepare('UPDATE workspaces SET permission_profile = ?, updated_at = ? WHERE id = ?').run(profile, now, id)
   return getWorkspace(id) as Workspace
 }
 

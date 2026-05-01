@@ -36,7 +36,7 @@ describe('Orchestrator — startAgent', () => {
       displayName: 'Claude Code',
       capabilities: {
         models: [{ id: 'auto', label: 'Auto' }],
-        permissionModes: ['auto-accept'],
+        permissionModes: ['bypass'],
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
@@ -91,7 +91,7 @@ describe('Orchestrator — stop / interrupt / sendMessage', () => {
       displayName: 'Claude Code',
       capabilities: {
         models: [{ id: 'auto', label: 'Auto' }],
-        permissionModes: ['auto-accept'],
+        permissionModes: ['bypass'],
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
@@ -155,7 +155,7 @@ describe('Orchestrator — event dispatch', () => {
       displayName: 'Claude Code',
       capabilities: {
         models: [],
-        permissionModes: ['auto-accept'],
+        permissionModes: ['bypass'],
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
@@ -195,7 +195,7 @@ describe('Orchestrator — event dispatch', () => {
         displayName: 'Claude Code',
         capabilities: {
           models: [],
-          permissionModes: ['auto-accept'],
+          permissionModes: ['bypass'],
           supportsResume: true,
           supportsMcp: true,
           supportsSkills: true,
@@ -242,7 +242,7 @@ describe('Orchestrator — event dispatch', () => {
       displayName: 'Claude Code',
       capabilities: {
         models: [],
-        permissionModes: ['auto-accept'],
+        permissionModes: ['bypass'],
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
@@ -273,7 +273,7 @@ describe('Orchestrator — event dispatch', () => {
       displayName: 'Claude Code',
       capabilities: {
         models: [],
-        permissionModes: ['auto-accept'],
+        permissionModes: ['bypass'],
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
@@ -306,7 +306,7 @@ describe('Orchestrator — event dispatch', () => {
       displayName: 'Claude Code',
       capabilities: {
         models: [],
-        permissionModes: ['auto-accept'],
+        permissionModes: ['bypass'],
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
@@ -335,7 +335,7 @@ describe('Orchestrator — resume behaviour', () => {
       displayName: 'Claude Code',
       capabilities: {
         models: [],
-        permissionModes: ['auto-accept'],
+        permissionModes: ['bypass'],
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
@@ -388,7 +388,7 @@ describe('Orchestrator — watchdog', () => {
       displayName: 'Claude Code',
       capabilities: {
         models: [],
-        permissionModes: ['auto-accept'],
+        permissionModes: ['bypass'],
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
@@ -511,7 +511,7 @@ describe('Orchestrator — interruptAgent', () => {
       displayName: 'Claude Code',
       capabilities: {
         models: [],
-        permissionModes: ['auto-accept'],
+        permissionModes: ['bypass'],
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,

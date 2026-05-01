@@ -1,10 +1,36 @@
-import { type ChildProcess, spawn } from 'node:child_process'
-import readline from 'node:readline'
-import type { AgentEngine, EngineProcess, StartOptions } from '../types.js'
-import { buildClaudeArgs } from './args-builder.js'
+import {
+  type CanUseTool,
+  type McpStdioServerConfig,
+  type Options,
+  type PermissionResult,
+  query,
+} from '@anthropic-ai/claude-agent-sdk'
+import { nanoid } from 'nanoid'
+import type { AgentEngine, AgentEvent, EngineProcess, StartOptions } from '../types.js'
 import { CLAUDE_CODE_CAPABILITIES } from './capabilities.js'
-import { cleanupMcpConfig, writeMcpConfig } from './mcp-config.js'
-import { createParserState, parseClaudeLine } from './stream-parser.js'
+import { createMapperState, mapSdkMessage } from './event-mapper.js'
+import { buildClaudeOptions } from './options-builder.js'
+import { buildPreCompactCustomInstructions } from './precompact-hook.js'
+
+function toMcpServersMap(specs: StartOptions['mcpServers']): Options['mcpServers'] | undefined {
+  if (!specs || specs.length === 0) return undefined
+  const map: Record<string, McpStdioServerConfig> = {}
+  for (const s of specs) {
+    // `alwaysLoad: true` is required: without it, MCP tools sit behind the
+    // SDK's ToolSearch indirection that — even under bypassPermissions —
+    // surfaces a "haven't granted it yet" gate. With it, MCP tools behave
+    // like built-ins, matching pre-SDK CLI behaviour.
+    map[s.name] = { type: 'stdio', command: s.command, args: s.args, env: s.env, alwaysLoad: true }
+  }
+  return map
+}
+
+interface PendingResolver {
+  resolve: (result: PermissionResult) => void
+  /** The original input the SDK passed to canUseTool — used to echo back questions on resolve. */
+  input: Record<string, unknown>
+  requestKind: 'question' | 'permission'
+}
 
 export function createClaudeCodeEngine(): AgentEngine {
   return {
@@ -12,157 +38,240 @@ export function createClaudeCodeEngine(): AgentEngine {
     displayName: 'Claude Code',
     capabilities: CLAUDE_CODE_CAPABILITIES,
     async start(options: StartOptions, onEvent): Promise<EngineProcess> {
-      // Write MCP config if any servers requested + engine supports MCP
-      let mcpConfigPath: string | undefined
-      if (options.mcpServers && options.mcpServers.length > 0) {
-        mcpConfigPath = writeMcpConfig(options.workingDir, options.mcpServers)
+      const abortController = new AbortController()
+      const mapperState = createMapperState()
+
+      // Pending canUseTool callbacks, keyed by SDK ctx.toolUseID.
+      const pendingResolvers = new Map<string, PendingResolver>()
+
+      const isInteractive = options.agentPermissionMode === 'interactive'
+
+      const canUseTool: CanUseTool = (toolName, input, ctx) => {
+        const toolCallId =
+          typeof ctx.toolUseID === 'string' && ctx.toolUseID.length > 0 ? ctx.toolUseID : `tu_${nanoid()}`
+
+        // Non-interactive modes: the SDK has already applied its permissionMode
+        // rules before reaching us, so allow through unchanged. AskUserQuestion
+        // is the exception — it always defers to the user.
+        if (toolName !== 'AskUserQuestion' && !isInteractive) {
+          return Promise.resolve<PermissionResult>({ behavior: 'allow', updatedInput: input })
+        }
+
+        const requestKind: 'question' | 'permission' = toolName === 'AskUserQuestion' ? 'question' : 'permission'
+
+        return new Promise<PermissionResult>((resolve, reject) => {
+          const resolver: PendingResolver = { resolve, input, requestKind }
+          pendingResolvers.set(toolCallId, resolver)
+
+          const onAbort = (): void => {
+            if (pendingResolvers.get(toolCallId) === resolver) {
+              pendingResolvers.delete(toolCallId)
+              reject(new Error('Pending user input aborted'))
+            }
+          }
+          if (ctx.signal.aborted) {
+            onAbort()
+            return
+          }
+          ctx.signal.addEventListener('abort', onAbort, { once: true })
+
+          onEvent({
+            kind: 'session:user-input-requested',
+            requestKind,
+            toolCallId,
+            toolName,
+            payload: input,
+          })
+        })
       }
 
-      const { args } = buildClaudeArgs({
+      // PreCompact's hookSpecificOutput is missing from the SDK type union
+      // (SyncHookJSONOutput omits it), but the runtime accepts
+      // `additionalContext` as custom compaction instructions. Cast through
+      // `unknown` to satisfy the strict union.
+      const hooks: Options['hooks'] = {
+        PreCompact: [
+          {
+            hooks: [
+              async () => {
+                const reminder = buildPreCompactCustomInstructions(options.workspaceId)
+                if (!reminder) return {}
+                return {
+                  hookSpecificOutput: {
+                    hookEventName: 'PreCompact',
+                    additionalContext: reminder,
+                  },
+                } as unknown as Record<string, never>
+              },
+            ],
+          },
+        ],
+      }
+
+      const { options: sdkOptions, effectivePrompt } = buildClaudeOptions({
         prompt: options.prompt,
         model: options.model,
         effort: options.effort,
-        permissionMode: options.permissionMode ?? 'auto-accept',
-        skipPermissions: options.settings.dangerouslySkipPermissions ?? true,
-        permissionProfile: options.permissionProfile,
+        agentPermissionMode: options.agentPermissionMode ?? 'bypass',
         resumeFromEngineSessionId: options.resumeFromEngineSessionId,
-        mcpConfigPath,
+        workingDir: options.workingDir,
+        mcpServers: toMcpServersMap(options.mcpServers) as Record<string, unknown> | undefined,
+        hooks,
+        canUseTool,
+        stderr: (data: string) => {
+          const lower = data.toLowerCase()
+          if (
+            lower.includes('rate limit exceeded') ||
+            lower.includes('rate_limit_exceeded') ||
+            (lower.includes('429') && lower.includes('rate')) ||
+            lower.includes('quota exceeded')
+          ) {
+            onEvent({ kind: 'error', category: 'quota', message: data })
+          } else if (lower.includes('no conversation found with session id')) {
+            onEvent({ kind: 'error', category: 'resume_failed', message: data })
+          } else if (data.trim().length > 0) {
+            console.warn(`[claude-engine stderr] ${data}`)
+          }
+        },
       })
+      sdkOptions.abortController = abortController
 
-      const proc: ChildProcess = spawn('claude', args, {
-        cwd: options.workingDir,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      })
-
-      const parserState = createParserState()
-
-      if (!proc.stdout) throw new Error('Claude process has no stdout')
-      const rl = readline.createInterface({
-        input: proc.stdout,
-        crlfDelay: Number.POSITIVE_INFINITY,
-      })
+      const q = query({ prompt: effectivePrompt, options: sdkOptions })
 
       let discoveredSessionId: string | undefined
 
-      rl.on('line', (line: string) => {
-        const { events } = parseClaudeLine(line, parserState)
-        for (const ev of events) {
-          if (ev.kind === 'session:started') discoveredSessionId = ev.engineSessionId
+      // A throwing onEvent handler (e.g. DB query against a closed connection
+      // during async test teardown) must not escape as an unhandled rejection.
+      const safeEmit = (ev: AgentEvent): void => {
+        try {
           onEvent(ev)
+        } catch (err) {
+          console.error('[claude-engine] onEvent handler threw:', err)
         }
-      })
-
-      // Line-buffer stderr so we see one event per log line instead of
-      // arbitrary byte chunks, and restrict quota detection to clear rate-
-      // limit signals (not every occurrence of the word "rate" or "quota").
-      // Non-quota stderr lines are logged to the console but do NOT emit
-      // an error event — this avoids false positives flooding the UI.
-      const stderrRl = proc.stderr
-        ? readline.createInterface({
-            input: proc.stderr,
-            crlfDelay: Number.POSITIVE_INFINITY,
-          })
-        : undefined
-
-      // Known benign stderr lines from the Claude CLI that should NOT be
-      // logged — they flood the dev console and carry no actionable info.
-      // Strip ANSI color codes before matching.
-      // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI escapes by design
-      const stripAnsi = (s: string) => s.replace(/\u001b\[\d+m/g, '')
-      function isBenignStderr(line: string): boolean {
-        const cleaned = stripAnsi(line).trim()
-        return /^warning: no stdin data received in \d+s/i.test(cleaned)
       }
 
-      stderrRl?.on('line', (line: string) => {
-        const lower = line.toLowerCase()
-        const isQuota =
-          lower.includes('rate limit exceeded') ||
-          lower.includes('rate_limit_exceeded') ||
-          (lower.includes('429') && lower.includes('rate')) ||
-          lower.includes('quota exceeded')
-        const isResumeFailed = lower.includes('no conversation found with session id')
-        if (isQuota) {
-          onEvent({ kind: 'error', category: 'quota', message: line })
-        } else if (isResumeFailed) {
-          onEvent({ kind: 'error', category: 'resume_failed', message: line })
-          console.warn(`[claude-engine stderr] ${line}`)
-        } else if (line.trim().length > 0 && !isBenignStderr(line)) {
-          console.warn(`[claude-engine stderr] ${line}`)
+      const iteratorPromise = (async () => {
+        try {
+          for await (const msg of q as AsyncIterable<unknown>) {
+            const events = mapSdkMessage(msg as never, mapperState)
+            for (const ev of events) {
+              if (ev.kind === 'session:started') discoveredSessionId = ev.engineSessionId
+              safeEmit(ev)
+            }
+          }
+          safeEmit({
+            kind: 'session:ended',
+            reason: 'completed',
+            exitCode: 0,
+          })
+        } catch (err) {
+          // Treat any abort we triggered (stop() → abortController.abort()) as
+          // a clean kill. The SDK sometimes throws a generic Error with message
+          // "Claude Code process aborted by user" instead of a typed AbortError.
+          const error = err as Error
+          const isAbort =
+            error.name === 'AbortError' ||
+            abortController.signal.aborted ||
+            /aborted by user|process aborted|abortError/i.test(error.message ?? '')
+          if (isAbort) {
+            safeEmit({ kind: 'session:ended', reason: 'killed', exitCode: null })
+          } else {
+            safeEmit({
+              kind: 'error',
+              category: 'spawn_failed',
+              message: error.message,
+            })
+            safeEmit({ kind: 'session:ended', reason: 'error', exitCode: null })
+          }
+        } finally {
+          // Drain any callback still pending (SDK terminated while awaiting an
+          // answer). canUseTool's abort path covers signalled stops; this
+          // covers natural iterator completion.
+          for (const resolver of pendingResolvers.values()) {
+            try {
+              resolver.resolve({ behavior: 'deny', message: 'session ended', interrupt: false })
+            } catch {
+              // best-effort
+            }
+          }
+          pendingResolvers.clear()
         }
-      })
-
-      // 'error' fires when spawn itself fails (e.g. ENOENT if the `claude`
-      // binary is missing from PATH). In that case 'exit' never fires, so we
-      // emit the lifecycle pair here and clean the MCP config ourselves.
-      proc.on('error', (err: Error) => {
-        onEvent({ kind: 'error', category: 'spawn_failed', message: err.message })
-        onEvent({ kind: 'session:ended', reason: 'error', exitCode: null })
-        cleanupMcpConfig(options.workingDir)
-        rl.close()
-        stderrRl?.close()
-      })
-
-      proc.on('exit', (code: number | null) => {
-        cleanupMcpConfig(options.workingDir)
-        rl.close()
-        stderrRl?.close()
-        onEvent({
-          kind: 'session:ended',
-          reason: code === 0 ? 'completed' : code === null ? 'killed' : 'error',
-          exitCode: code,
-        })
-      })
+      })()
 
       const engineProcess: EngineProcess = {
         get pid() {
-          return proc.pid
+          return undefined
         },
         get engineSessionId() {
           return discoveredSessionId
         },
-        sendMessage(text: string) {
-          if (!proc.stdin?.writable) throw new Error('Agent stdin not writable')
-          proc.stdin.write(`${text}\n`)
+        sendMessage() {
+          throw new Error('sendMessage not supported in single-shot SDK mode')
         },
         interrupt() {
-          if (proc.pid !== undefined) process.kill(proc.pid, 'SIGINT')
-        },
-        stop() {
-          return new Promise<void>((resolve) => {
-            if (proc.killed || proc.exitCode !== null) return resolve()
-            let resolved = false
-            let killTimer: ReturnType<typeof setTimeout> | undefined
-            let hardTimeout: ReturnType<typeof setTimeout> | undefined
-            const doResolve = () => {
-              if (resolved) return
-              resolved = true
-              if (killTimer) clearTimeout(killTimer)
-              if (hardTimeout) clearTimeout(hardTimeout)
-              resolve()
-            }
-            proc.once('exit', doResolve)
+          const qq = q as unknown as { interrupt?: () => unknown }
+          if (typeof qq.interrupt === 'function') {
             try {
-              proc.kill('SIGTERM')
-            } catch {
-              // Already dead
-            }
-            killTimer = setTimeout(() => {
-              try {
-                if (!proc.killed) proc.kill('SIGKILL')
-              } catch {
-                // Ignore
+              const r = qq.interrupt()
+              if (r && typeof (r as Promise<unknown>).catch === 'function') {
+                ;(r as Promise<unknown>).catch(() => {
+                  /* ignore */
+                })
               }
-            }, 5000)
-            killTimer.unref?.()
-            // Hard-timeout safety net: if the process hasn't exited within 10s
-            // (5s after SIGKILL), resolve anyway so callers never hang forever.
-            hardTimeout = setTimeout(() => {
-              console.warn('[claude-engine] stop() hard-timeout reached, resolving anyway')
-              doResolve()
-            }, 10000)
-            hardTimeout.unref?.()
+            } catch {
+              abortController.abort()
+            }
+          } else {
+            abortController.abort()
+          }
+        },
+        async stop() {
+          abortController.abort()
+          try {
+            await iteratorPromise
+          } catch {
+            // swallow — best effort
+          }
+        },
+        resolvePendingUserInput(toolCallId, response): boolean {
+          const resolver = pendingResolvers.get(toolCallId)
+          if (!resolver) return false
+          pendingResolvers.delete(toolCallId)
+
+          if (response.kind === 'question') {
+            // Echo the original questions array + answers so the SDK
+            // reconstructs the AskUserQuestion tool input.
+            const original = resolver.input
+            const questions = (original as { questions?: unknown }).questions
+            resolver.resolve({
+              behavior: 'allow',
+              updatedInput: {
+                ...(typeof questions !== 'undefined' ? { questions } : {}),
+                answers: response.answers,
+              },
+            })
+            return true
+          }
+          if (response.kind === 'question-cancel') {
+            // Deny so the agent gets an error tool_result and can adapt.
+            resolver.resolve({
+              behavior: 'deny',
+              message: response.reason ?? 'User cancelled the question',
+              interrupt: false,
+            })
+            return true
+          }
+          if (response.kind === 'permission-allow') {
+            resolver.resolve({ behavior: 'allow', updatedInput: resolver.input })
+            return true
+          }
+          // permission-deny
+          resolver.resolve({
+            behavior: 'deny',
+            message: response.reason ?? 'denied by user',
+            interrupt: false,
           })
+          return true
         },
       }
       return engineProcess

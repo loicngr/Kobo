@@ -129,7 +129,7 @@
               class="wl-item cursor-pointer q-pa-sm q-mx-xs rounded-borders"
               :class="{ 'wl-item--selected': ws.id === store.selectedWorkspaceId }"
               :style="[
-                { borderLeft: '3px solid #ef4444' },
+                { borderLeft: `3px solid ${ws.status === 'awaiting-user' ? '#f59e0b' : '#ef4444'}` },
                 ws.favoritedAt ? { borderBottom: '2px solid #f59e0b' } : {},
               ]"
               @click="selectWorkspace(ws.id)"
@@ -155,8 +155,13 @@
                   </div>
                 </div>
                 <div class="text-caption q-mt-xs">
-                  <q-icon name="warning" size="xs" color="red-5" class="q-mr-xs" />
-                  <span class="text-red-5">{{ ws.status }}</span>
+                  <q-icon
+                    :name="ws.status === 'awaiting-user' ? 'help' : 'warning'"
+                    size="xs"
+                    :color="ws.status === 'awaiting-user' ? 'amber-5' : 'red-5'"
+                    class="q-mr-xs"
+                  />
+                  <span :class="ws.status === 'awaiting-user' ? 'text-amber-5' : 'text-red-5'">{{ statusLabel(ws.status) }}</span>
                   <span class="q-ml-xs text-grey-8">&middot; {{ timeAgo(ws.updatedAt) }}</span>
                 </div>
                 <div v-if="ws.tags.length > 0" class="row q-gutter-xs q-mt-xs">
@@ -478,6 +483,11 @@ const wsStore = useWebSocketStore()
 const devServerStore = useDevServerStore()
 const settingsStore = useSettingsStore()
 const router = useRouter()
+
+function statusLabel(status: string): string {
+  if (status === 'awaiting-user') return t('workspaceStatus.awaitingUser')
+  return status
+}
 
 const searchQuery = ref('')
 const favoritesOnly = ref<boolean>(localStorage.getItem('kobo:favorites-filter') === '1')

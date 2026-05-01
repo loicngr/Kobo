@@ -12,6 +12,15 @@ exports[`AgentEvent shape snapshot > matches the snapshot > agent-event-shape 1`
     "reason": "completed",
     "exitCode": 0
   },
+  "session:user-input-requested": {
+    "kind": "session:user-input-requested",
+    "requestKind": "question",
+    "toolCallId": "toolu_01abc",
+    "toolName": "AskUserQuestion",
+    "payload": {
+      "questions": []
+    }
+  },
   "session:compacted": {
     "kind": "session:compacted"
   },

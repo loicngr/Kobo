@@ -27,7 +27,7 @@ const fakeWorkspace = {
   worktreeOwned: true,
   status: 'executing',
   model: 'claude-opus-4-6',
-  permissionMode: 'auto-accept',
+  agentPermissionMode: 'bypass',
   devServerStatus: 'stopped',
   hasUnread: false,
   archivedAt: null,

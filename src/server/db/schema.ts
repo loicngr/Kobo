@@ -28,6 +28,7 @@ export function initSchema(db: Database.Database): void {
       auto_loop_ready INTEGER NOT NULL DEFAULT 0,
       no_progress_streak INTEGER NOT NULL DEFAULT 0,
       permission_profile TEXT NOT NULL DEFAULT 'bypass',
+      agent_permission_mode TEXT NOT NULL DEFAULT 'bypass',
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );

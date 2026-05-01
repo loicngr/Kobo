@@ -26,7 +26,7 @@ import { runSetupScript } from '../services/setup-script-service.js'
 import * as terminalService from '../services/terminal-service.js'
 import * as wakeupService from '../services/wakeup-service.js'
 import * as wsService from '../services/websocket-service.js'
-import type { PermissionMode, WorkspaceStatus } from '../services/workspace-service.js'
+import type { AgentPermissionMode, WorkspaceStatus } from '../services/workspace-service.js'
 import * as workspaceService from '../services/workspace-service.js'
 import * as worktreeService from '../services/worktree-service.js'
 import * as gitOps from '../utils/git-ops.js'
@@ -36,6 +36,33 @@ const app = new Hono()
 
 /** Tracks workspaces currently running a setup script to prevent concurrent executions. */
 const setupScriptRunning = new Set<string>()
+
+const VALID_AGENT_PERMISSION_MODES: AgentPermissionMode[] = ['plan', 'bypass', 'strict', 'interactive']
+
+function isAgentPermissionMode(value: unknown): value is AgentPermissionMode {
+  return typeof value === 'string' && (VALID_AGENT_PERMISSION_MODES as string[]).includes(value)
+}
+
+/**
+ * Resolve the unified permission mode for a new workspace.
+ *
+ * Cascade: explicit body field → global default (validated) → 'bypass'.
+ *
+ * Legacy `defaultPermissionMode` values ('plan' / 'auto-accept') are honored:
+ * 'plan' stays 'plan'; 'auto-accept' falls through to 'bypass' (the safest
+ * non-plan default — matches the pre-refactor "skip prompts" behaviour).
+ */
+function resolveCreateAgentPermissionMode(
+  bodyValue: unknown,
+  _projectPath: string,
+  globalSettings: { defaultPermissionMode?: string },
+): AgentPermissionMode {
+  if (isAgentPermissionMode(bodyValue)) return bodyValue
+  const global = globalSettings.defaultPermissionMode
+  if (isAgentPermissionMode(global)) return global
+  if (global === 'plan') return 'plan'
+  return 'bypass'
+}
 
 app.get('/', (c) => {
   try {
@@ -64,7 +91,7 @@ app.post('/', migrationGuard, async (c) => {
       acceptanceCriteria?: string[]
       skipSetupScript?: boolean
       description?: string
-      permissionMode?: string
+      agentPermissionMode?: 'plan' | 'bypass' | 'strict' | 'interactive'
       engine?: string
       autoLoop?: boolean
       worktreePath?: string
@@ -205,7 +232,7 @@ app.post('/', migrationGuard, async (c) => {
       ...(useReusedWorktree ? { worktreePath: body.worktreePath, worktreeOwned: false } : {}),
       model: body.model,
       reasoningEffort: body.reasoningEffort,
-      permissionMode: body.permissionMode || globalSettings.defaultPermissionMode || 'plan',
+      agentPermissionMode: resolveCreateAgentPermissionMode(body.agentPermissionMode, body.projectPath, globalSettings),
       engine: body.engine,
     })
 
@@ -621,7 +648,7 @@ ${AUTO_LOOP_HARD_RULES}`
           brainstormPrompt,
           workspace.model,
           false,
-          workspace.permissionMode,
+          workspace.agentPermissionMode,
           undefined,
           workspace.reasoningEffort,
         )
@@ -846,6 +873,88 @@ app.patch('/:id/sessions/:sessionId', async (c) => {
     return c.json(updated)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// POST /api/workspaces/:id/deferred-tool-use/answer — resume a deferred
+// AskUserQuestion call by feeding the user's answers back to the SDK.
+app.post('/:id/deferred-tool-use/answer', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const body = await c.req
+      .json<{ answers?: Record<string, string>; toolCallId?: string }>()
+      .catch(() => ({}) as { answers?: Record<string, string>; toolCallId?: string })
+    if (!body?.answers || typeof body.answers !== 'object') {
+      return c.json({ error: 'answers payload required' }, 400)
+    }
+    await agentManager.answerPendingQuestion(id, body.answers, body.toolCallId)
+    return c.json({ ok: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'unknown'
+    return c.json({ error: message }, 400)
+  }
+})
+
+// POST /api/workspaces/:id/deferred-tool-use/cancel — cancel a deferred
+// AskUserQuestion. The SDK callback resolves with deny + a message; the
+// agent sees an error tool_result and adapts. Does NOT abort the session.
+app.post('/:id/deferred-tool-use/cancel', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const body = await c.req
+      .json<{ reason?: string; toolCallId?: string }>()
+      .catch(() => ({}) as { reason?: string; toolCallId?: string })
+    await agentManager.cancelPendingQuestion(id, body.reason, body.toolCallId)
+    return c.json({ ok: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'unknown'
+    return c.json({ error: message }, 400)
+  }
+})
+
+// POST /api/workspaces/:id/deferred-permission/decision — resume a deferred
+// interactive permission request with the user's allow/deny decision.
+app.post('/:id/deferred-permission/decision', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const body = await c.req
+      .json<{ toolCallId?: string; decision?: 'allow' | 'deny'; reason?: string }>()
+      .catch(() => ({}) as { toolCallId?: string; decision?: 'allow' | 'deny'; reason?: string })
+    if (!body?.toolCallId || typeof body.toolCallId !== 'string') {
+      return c.json({ error: 'toolCallId required' }, 400)
+    }
+    if (body.decision !== 'allow' && body.decision !== 'deny') {
+      return c.json({ error: "decision must be 'allow' or 'deny'" }, 400)
+    }
+    await agentManager.answerPendingPermission(id, {
+      toolCallId: body.toolCallId,
+      decision: body.decision,
+      reason: typeof body.reason === 'string' ? body.reason : undefined,
+    })
+    return c.json({ ok: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'unknown'
+    return c.json({ error: message }, 400)
+  }
+})
+
+// DELETE /api/workspaces/:id/events/:eventId — permanently dismiss a single
+// persisted ws_events row (used today by the agent error banner so a closed
+// error doesn't replay on F5 / reconnect). Defensive: only deletes if the row
+// exists in this workspace; idempotent on missing row (returns 200).
+app.delete('/:id/events/:eventId', (c) => {
+  try {
+    const workspaceId = c.req.param('id')
+    const eventId = c.req.param('eventId')
+    if (!workspaceService.getWorkspace(workspaceId)) {
+      return c.json({ error: `Workspace '${workspaceId}' not found` }, 404)
+    }
+    const db = getDb()
+    db.prepare('DELETE FROM ws_events WHERE id = ? AND workspace_id = ?').run(eventId, workspaceId)
+    return c.json({ ok: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'unknown'
     return c.json({ error: message }, 500)
   }
 })
@@ -1193,7 +1302,7 @@ app.put('/:id/tags', async (c) => {
   }
 })
 
-// PATCH /api/workspaces/:id — update workspace fields (status, model, permissionMode, name)
+// PATCH /api/workspaces/:id — update workspace fields (status, model, agentPermissionMode, name)
 app.patch('/:id', migrationGuard, async (c) => {
   try {
     const id = c.req.param('id')
@@ -1201,8 +1310,7 @@ app.patch('/:id', migrationGuard, async (c) => {
       status?: WorkspaceStatus
       model?: string
       reasoningEffort?: string
-      permissionMode?: PermissionMode
-      permissionProfile?: 'bypass' | 'strict'
+      agentPermissionMode?: AgentPermissionMode
       name?: string
     }>()
 
@@ -1218,18 +1326,14 @@ app.patch('/:id', migrationGuard, async (c) => {
     if (body.reasoningEffort !== undefined) {
       updated = workspaceService.updateWorkspaceReasoningEffort(id, body.reasoningEffort)
     }
-    if (body.permissionMode !== undefined) {
-      const validModes: PermissionMode[] = ['auto-accept', 'plan']
-      if (!validModes.includes(body.permissionMode)) {
-        return c.json({ error: `Invalid permission mode. Must be one of: ${validModes.join(', ')}` }, 400)
+    if (body.agentPermissionMode !== undefined) {
+      if (!isAgentPermissionMode(body.agentPermissionMode)) {
+        return c.json(
+          { error: `Invalid agentPermissionMode. Must be one of: ${VALID_AGENT_PERMISSION_MODES.join(', ')}` },
+          400,
+        )
       }
-      updated = workspaceService.updateWorkspacePermissionMode(id, body.permissionMode)
-    }
-    if (body.permissionProfile !== undefined) {
-      if (body.permissionProfile !== 'bypass' && body.permissionProfile !== 'strict') {
-        return c.json({ error: "Invalid permission profile. Must be 'bypass' or 'strict'." }, 400)
-      }
-      updated = workspaceService.setPermissionProfile(id, body.permissionProfile)
+      updated = workspaceService.updateAgentPermissionMode(id, body.agentPermissionMode)
     }
     if (body.status) {
       updated = workspaceService.updateWorkspaceStatus(id, body.status)
@@ -1241,14 +1345,10 @@ app.patch('/:id', migrationGuard, async (c) => {
       !body.status &&
       body.model === undefined &&
       body.reasoningEffort === undefined &&
-      body.permissionMode === undefined &&
-      body.permissionProfile === undefined &&
+      body.agentPermissionMode === undefined &&
       body.name === undefined
     ) {
-      return c.json(
-        { error: 'Missing field: status, model, reasoningEffort, permissionMode, permissionProfile, or name' },
-        400,
-      )
+      return c.json({ error: 'Missing field: status, model, reasoningEffort, agentPermissionMode, or name' }, 400)
     }
 
     return c.json(updated)
@@ -1577,7 +1677,7 @@ app.post('/:id/start', migrationGuard, async (c) => {
       prompt,
       workspace.model,
       resume,
-      workspace.permissionMode,
+      workspace.agentPermissionMode,
       agentSessionId,
       workspace.reasoningEffort,
     )
@@ -2093,7 +2193,7 @@ Start now.`
           prompt,
           workspace.model,
           true,
-          workspace.permissionMode,
+          workspace.agentPermissionMode,
           undefined,
           workspace.reasoningEffort,
         )
@@ -2255,7 +2355,7 @@ app.post('/:id/open-pr', async (c) => {
           rendered,
           workspace.model,
           true,
-          workspace.permissionMode,
+          workspace.agentPermissionMode,
           undefined,
           workspace.reasoningEffort,
         )
