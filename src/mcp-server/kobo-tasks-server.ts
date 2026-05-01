@@ -88,7 +88,11 @@ async function notifyAutoLoopReady(): Promise<void> {
 }
 
 /** Generic HTTP request to the Kobo backend, returning parsed JSON or null. */
-async function backendRequest(method: 'GET' | 'POST' | 'PATCH', pathname: string, body?: unknown): Promise<unknown> {
+async function backendRequest(
+  method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
+  pathname: string,
+  body?: unknown,
+): Promise<unknown> {
   const url = `${backendUrl}${pathname}`
   const init: RequestInit = { method }
   if (body !== undefined) {
@@ -334,6 +338,35 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         'CALL when you need to self-regulate on long missions — returns token/cost totals for the workspace lifetime and for the currently running agent_session. Useful before spawning heavy subagents or deep reasoning on already-expensive sessions.',
       inputSchema: { type: 'object', properties: {}, required: [] },
     },
+    {
+      name: 'schedule_wakeup',
+      description:
+        'CALL to schedule a follow-up turn on THIS workspace after a delay. End the current turn normally; once it finishes and the workspace is idle, Kōbō waits `delaySeconds`, then resumes the same conversation by injecting `prompt` as the next user message. The wakeup is scoped to the current workspace and resumes its latest session — you cannot target another workspace or another session. If a turn is still active when the timer fires, the wakeup is skipped (status: `session-active`). Replaces any previously pending wakeup on this workspace. Delay is clamped to [60, 3600] seconds. Prefer this over the built-in `ScheduleWakeup` tool — it is the SDK-supported entry point.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          delaySeconds: {
+            type: 'number',
+            description: 'Seconds from now until the wakeup fires. Clamped to [60, 3600].',
+          },
+          prompt: {
+            type: 'string',
+            description: 'Prompt sent to the agent when the wakeup fires.',
+          },
+          reason: {
+            type: 'string',
+            description: 'Short label shown to the user explaining the wakeup (optional).',
+          },
+        },
+        required: ['delaySeconds', 'prompt'],
+      },
+    },
+    {
+      name: 'cancel_wakeup',
+      description:
+        'CALL to cancel any pending wakeup on this workspace (e.g. the condition you were waiting on resolved early, or you decided not to continue). Idempotent — safe to call when nothing is pending.',
+      inputSchema: { type: 'object', properties: {}, required: [] },
+    },
   ],
 }))
 
@@ -498,6 +531,32 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === 'get_session_usage') {
       return ok(getSessionUsageHandler(db, workspaceId!))
+    }
+
+    if (name === 'schedule_wakeup') {
+      const delaySeconds = a.delaySeconds
+      const prompt = a.prompt
+      if (typeof delaySeconds !== 'number' || !Number.isFinite(delaySeconds) || delaySeconds <= 0) {
+        return fail('delaySeconds must be a positive number')
+      }
+      if (typeof prompt !== 'string' || prompt.trim().length === 0) {
+        return fail('prompt is required')
+      }
+      const reason = a.reason
+      if (reason !== undefined && typeof reason !== 'string') {
+        return fail('reason must be a string when provided')
+      }
+      const result = await backendRequest('POST', `/api/workspaces/${workspaceId}/pending-wakeup`, {
+        delaySeconds,
+        prompt,
+        reason,
+      })
+      return ok(result)
+    }
+
+    if (name === 'cancel_wakeup') {
+      const result = await backendRequest('DELETE', `/api/workspaces/${workspaceId}/pending-wakeup`)
+      return ok(result)
     }
 
     if (name === 'search_codebase') {

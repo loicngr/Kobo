@@ -110,6 +110,27 @@ function purgePersistedUserInputRequest(workspaceId: string, toolCallId: string)
 }
 
 /**
+ * Remove every persisted `session:user-input-requested` event tied to a
+ * specific session — used when the session is killed (stopAgent / archive /
+ * delete) so a future F5 doesn't resurrect panels that no longer have a live
+ * canUseTool callback to resolve.
+ */
+function purgeAllPersistedUserInputRequests(workspaceId: string, agentSessionId: string): void {
+  try {
+    const db = getDb()
+    db.prepare(
+      `DELETE FROM ws_events
+       WHERE workspace_id = ?
+         AND session_id = ?
+         AND type = 'agent:event'
+         AND json_extract(payload, '$.kind') = 'session:user-input-requested'`,
+    ).run(workspaceId, agentSessionId)
+  } catch (err) {
+    console.error('[orchestrator] Failed to purge persisted user-input-requested (session-wide):', err)
+  }
+}
+
+/**
  * Snapshot the workspace's current status so that on resolve we can restore
  * it. Idempotent: when called while already in `awaiting-user` we keep the
  * FIRST pre-await status (defensive against multiple requests before reply).
@@ -519,13 +540,20 @@ function handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent
     tasksDoneSnapshot.set(workspaceId, getDoneTaskCount(workspaceId))
   }
 
+  // Legacy fallback: the built-in `ScheduleWakeup` tool (CLI tradition) isn't
+  // declared by the SDK, so we intercept the tool:call event and apply the
+  // side-effect ourselves. Agents should prefer `kobo__schedule_wakeup` —
+  // logged here so we can monitor remaining usage.
   if (ev.kind === 'tool:call' && ev.name === 'ScheduleWakeup') {
     const input = ev.input as Record<string, unknown> | undefined
     const delay = typeof input?.delaySeconds === 'number' ? input.delaySeconds : 0
     const prompt = typeof input?.prompt === 'string' ? input.prompt : ''
     const reason = typeof input?.reason === 'string' ? input.reason : undefined
     if (delay > 0 && prompt) {
-      wakeupService.schedule(workspaceId, delay, prompt, reason)
+      console.warn(
+        `[orchestrator] Legacy ScheduleWakeup intercepted for workspace '${workspaceId}' — agent should use kobo__schedule_wakeup instead.`,
+      )
+      wakeupService.schedule(workspaceId, delay, prompt, reason, agentSessionId)
     }
   }
 
@@ -858,6 +886,26 @@ export function stopAgent(workspaceId: string): void {
 
   wakeupService.cancel(workspaceId, 'stopped')
 
+  // If the session was waiting on a question/permission, normalize the state
+  // synchronously so callers (archive, delete, manual stop) see a clean
+  // workspace immediately — without waiting for the async controller.stop()
+  // → session:ended round-trip. We:
+  //   1. drop queued pending items for this session,
+  //   2. purge persisted `session:user-input-requested` events so a F5 can't
+  //      resurrect zombie panels,
+  //   3. transition the workspace out of `awaiting-user` (→ idle) so badges
+  //      and unarchive don't leave a stuck status.
+  const wsBefore = getWs(workspaceId)
+  if (wsBefore?.status === 'awaiting-user') {
+    clearPendingForSession(workspaceId, ctrl.agentSessionId)
+    purgeAllPersistedUserInputRequests(workspaceId, ctrl.agentSessionId)
+    try {
+      updateWorkspaceStatus(workspaceId, 'idle')
+    } catch (err) {
+      console.warn('[orchestrator] Failed to normalize awaiting-user → idle on stop:', err)
+    }
+  }
+
   // Remove from the map immediately so a fresh startAgent can proceed. The
   // session:ended handler checks identity before removing, so a new controller
   // started in the meantime is preserved.
@@ -1162,6 +1210,11 @@ export function getAgentStatus(workspaceId: string): 'running' | 'stopping' | nu
 /** True when an agent controller is currently running for the workspace. */
 export function hasController(workspaceId: string): boolean {
   return controllers.has(workspaceId)
+}
+
+/** The agent_session_id of the active controller for the workspace, if any. */
+export function getActiveSessionId(workspaceId: string): string | undefined {
+  return controllers.get(workspaceId)?.agentSessionId
 }
 
 /** Number of currently running controllers. */

@@ -14,6 +14,7 @@ interface PendingWakeupRow {
   prompt: string
   reason: string | null
   created_at: string
+  agent_session_id: string | null
 }
 
 const MIN_DELAY_SECONDS = 60
@@ -35,7 +36,13 @@ function rowToPending(row: PendingWakeupRow | undefined): PendingWakeup | null {
 }
 
 /** Schedule a wakeup for the given workspace. Replaces any existing pending wakeup. */
-export function schedule(workspaceId: string, delaySeconds: number, prompt: string, reason: string | undefined): void {
+export function schedule(
+  workspaceId: string,
+  delaySeconds: number,
+  prompt: string,
+  reason: string | undefined,
+  agentSessionId?: string,
+): void {
   try {
     const clampedSeconds = clamp(Math.floor(delaySeconds), MIN_DELAY_SECONDS, MAX_DELAY_SECONDS)
     const effectivePrompt = prompt === AUTONOMOUS_LOOP_SENTINEL ? AUTONOMOUS_LOOP_FALLBACK_PROMPT : prompt
@@ -47,9 +54,9 @@ export function schedule(workspaceId: string, delaySeconds: number, prompt: stri
     const db = getDb()
     db.prepare(
       `INSERT OR REPLACE INTO pending_wakeups
-         (workspace_id, target_at, prompt, reason, created_at)
-       VALUES (?, ?, ?, ?, ?)`,
-    ).run(workspaceId, targetAtIso, effectivePrompt, reason ?? null, new Date().toISOString())
+         (workspace_id, target_at, prompt, reason, created_at, agent_session_id)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    ).run(workspaceId, targetAtIso, effectivePrompt, reason ?? null, new Date().toISOString(), agentSessionId ?? null)
 
     const timeout = setTimeout(() => fire(workspaceId), clampedSeconds * 1000)
     timeout.unref?.()
@@ -195,7 +202,7 @@ function fire(workspaceId: string): void {
         wsRow.model,
         true,
         agentPermissionMode,
-        undefined,
+        row.agent_session_id ?? undefined,
         wsRow.reasoning_effort,
       )
       emitEphemeral(workspaceId, 'wakeup:fired', {})

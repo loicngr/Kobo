@@ -33,6 +33,7 @@ const KOBO_MCP_BRIEF = [
   '• `kobo__search_codebase` to recall prior chat history (conversations, not source — use Grep for source).',
   '• `kobo__get_workspace_info` / `kobo__get_git_info` / `kobo__get_notion_ticket` for context.',
   '• `kobo__set_workspace_status` when the mission is done / blocked / idle.',
+  '• `kobo__schedule_wakeup` / `kobo__cancel_wakeup` to schedule (or cancel) a follow-up session — prefer these over the built-in `ScheduleWakeup` tool.',
   'Each tool carries its own "WHEN to use" guidance in its description — follow it.',
 ].join('\n')
 

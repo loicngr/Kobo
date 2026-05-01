@@ -186,4 +186,42 @@ describe('Orchestrator — pending question (canUseTool)', () => {
 
     await expect(answerPendingQuestion(ws.id, { x: 'y' })).rejects.toThrow()
   })
+
+  it('stopAgent normalizes awaiting-user → idle and purges queue + persisted requests', async () => {
+    const { createWorkspace, updateWorkspaceStatus, getWorkspace } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const ws = createWorkspace({
+      name: 'W5',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/w5',
+    })
+    updateWorkspaceStatus(ws.id, 'brainstorming')
+    updateWorkspaceStatus(ws.id, 'executing')
+
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const { startAgent, stopAgent, _getPendingDeferred } = orch
+    startAgent(ws.id, '/tmp', 'hi')
+    await Promise.resolve()
+    await Promise.resolve()
+    const cap = captured[0]
+    if (!cap) throw new Error('no capture')
+    cap.onEvent({ kind: 'session:started', engineSessionId: 'engine-sess-1' })
+    cap.onEvent({
+      kind: 'session:user-input-requested',
+      requestKind: 'question',
+      toolCallId: 'toolu_kill',
+      toolName: 'AskUserQuestion',
+      payload: { questions: [] },
+    })
+
+    expect(getWorkspace(ws.id)?.status).toBe('awaiting-user')
+    expect(_getPendingDeferred().get(ws.id)).toBeDefined()
+
+    stopAgent(ws.id)
+
+    expect(getWorkspace(ws.id)?.status).toBe('idle')
+    expect(_getPendingDeferred().get(ws.id)).toBeUndefined()
+  })
 })

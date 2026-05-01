@@ -204,6 +204,17 @@ export const migrations: Migration[] = [
       })()
     },
   },
+  {
+    version: 18,
+    name: 'add-pending-wakeup-agent-session-id',
+    migrate: (db) => {
+      // Pin a wakeup to the session that scheduled it, so the wakeup resumes
+      // that conversation instead of whichever session happens to be the
+      // latest at fire time. Nullable: pre-migration rows fall back to the
+      // legacy "last session" behaviour.
+      db.prepare('ALTER TABLE pending_wakeups ADD COLUMN agent_session_id TEXT').run()
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

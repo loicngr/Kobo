@@ -837,12 +837,48 @@ app.get('/:id/pending-wakeup', (c) => {
   }
 })
 
-// DELETE /api/workspaces/:id/pending-wakeup — user-initiated cancel ("×" button).
+// DELETE /api/workspaces/:id/pending-wakeup — user-initiated cancel ("×" button)
+// or agent-initiated cancel via the `kobo__cancel_wakeup` MCP tool.
 app.delete('/:id/pending-wakeup', (c) => {
   try {
     const id = c.req.param('id')
     wakeupService.cancel(id, 'manual')
     return c.json({ ok: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// POST /api/workspaces/:id/pending-wakeup — agent-initiated schedule via the
+// `kobo__schedule_wakeup` MCP tool. Replaces any existing pending wakeup.
+app.post('/:id/pending-wakeup', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>
+    const delaySeconds = body.delaySeconds
+    const prompt = body.prompt
+    const reason = body.reason
+    if (typeof delaySeconds !== 'number' || !Number.isFinite(delaySeconds) || delaySeconds <= 0) {
+      return c.json({ error: 'delaySeconds must be a positive number' }, 400)
+    }
+    if (typeof prompt !== 'string' || prompt.trim().length === 0) {
+      return c.json({ error: 'prompt is required' }, 400)
+    }
+    if (reason !== undefined && typeof reason !== 'string') {
+      return c.json({ error: 'reason must be a string when provided' }, 400)
+    }
+    // Pin the wakeup to the session that scheduled it, so the resume targets
+    // that conversation instead of whichever session happens to be the latest
+    // at fire time. The MCP tool is invoked from inside an active session, so
+    // a missing controller signals misuse — reject explicitly.
+    const agentSessionId = agentManager.getActiveSessionId(id)
+    if (!agentSessionId) {
+      return c.json({ error: 'no active agent session for this workspace' }, 409)
+    }
+    wakeupService.schedule(id, delaySeconds, prompt, reason, agentSessionId)
+    const pending = wakeupService.getPending(id)
+    return c.json({ ok: true, pending })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)

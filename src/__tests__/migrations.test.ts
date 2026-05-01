@@ -35,8 +35,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 17', () => {
-    expect(SCHEMA_VERSION).toBe(17)
+  it('exporte SCHEMA_VERSION = 18', () => {
+    expect(SCHEMA_VERSION).toBe(18)
   })
 
   it('migration v17 unifies legacy permission_mode + permission_profile into agent_permission_mode', () => {
@@ -73,6 +73,13 @@ describe('runMigrations(db)', () => {
         updated_at TEXT NOT NULL
       );
       CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+      CREATE TABLE pending_wakeups (
+        workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+        target_at    TEXT NOT NULL,
+        prompt       TEXT NOT NULL,
+        reason       TEXT,
+        created_at   TEXT NOT NULL
+      );
     `)
     // Mark all migrations up to v16 as already applied.
     const now = '2025-01-01'
@@ -108,7 +115,7 @@ describe('runMigrations(db)', () => {
     expect(map['auto-strict']).toBe('strict')
     expect(map['auto-interactive']).toBe('interactive')
 
-    // Idempotent: a second run preserves the data and stays at v17.
+    // Idempotent: a second run preserves the data and stays at the latest version.
     runMigrations(db)
     const second = db.prepare('SELECT agent_permission_mode FROM workspaces WHERE id = ?').get('plan-bypass') as {
       agent_permission_mode: string
@@ -780,7 +787,7 @@ describe('migration v11: add-pending-wakeups-table', () => {
       pk: number
     }>
     expect(cols.map((c) => c.name).sort()).toEqual(
-      ['created_at', 'prompt', 'reason', 'target_at', 'workspace_id'].sort(),
+      ['agent_session_id', 'created_at', 'prompt', 'reason', 'target_at', 'workspace_id'].sort(),
     )
     const pk = cols.find((c) => c.pk === 1)
     expect(pk?.name).toBe('workspace_id')
@@ -936,6 +943,68 @@ describe('usage_snapshots table', () => {
       (r) => r.version,
     )
     expect(versions).toContain(16)
+    db.close()
+  })
+})
+
+describe('migration v18: add-pending-wakeup-agent-session-id', () => {
+  it('adds the agent_session_id column to pending_wakeups (nullable)', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+
+    const cols = db.prepare('PRAGMA table_info(pending_wakeups)').all() as Array<{
+      name: string
+      notnull: number
+    }>
+    const sessionCol = cols.find((c) => c.name === 'agent_session_id')
+    expect(sessionCol).toBeDefined()
+    expect(sessionCol?.notnull).toBe(0)
+    db.close()
+  })
+
+  it('preserves existing pending_wakeups rows when upgrading from v17', () => {
+    const db = new Database(':memory:')
+    db.exec(`
+      CREATE TABLE workspaces (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        project_path TEXT NOT NULL,
+        source_branch TEXT NOT NULL,
+        working_branch TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'created',
+        model TEXT NOT NULL,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE pending_wakeups (
+        workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+        target_at    TEXT NOT NULL,
+        prompt       TEXT NOT NULL,
+        reason       TEXT,
+        created_at   TEXT NOT NULL
+      );
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+    `)
+    const now = '2025-01-01'
+    db.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(1, 'init-schema', now)
+    for (const m of migrations) {
+      if (m.version <= 17) {
+        db.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(m.version, m.name, now)
+      }
+    }
+    db.prepare("INSERT INTO workspaces VALUES ('w1', 'W', '/p', 'main', 'feat', 'idle', 'auto', ?, ?)").run(now, now)
+    db.prepare('INSERT INTO pending_wakeups VALUES (?, ?, ?, ?, ?)').run('w1', now, 'resume', null, now)
+
+    runMigrations(db)
+
+    const row = db.prepare('SELECT * FROM pending_wakeups WHERE workspace_id = ?').get('w1') as {
+      workspace_id: string
+      prompt: string
+      agent_session_id: string | null
+    }
+    expect(row.workspace_id).toBe('w1')
+    expect(row.prompt).toBe('resume')
+    expect(row.agent_session_id).toBeNull()
     db.close()
   })
 })

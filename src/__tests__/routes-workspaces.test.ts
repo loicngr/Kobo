@@ -47,6 +47,7 @@ vi.mock('../server/services/agent/orchestrator.js', () => ({
   stopAgent: vi.fn(),
   sendMessage: vi.fn(),
   getAgentStatus: vi.fn().mockReturnValue(null),
+  getActiveSessionId: vi.fn().mockReturnValue('active-session-id'),
 }))
 
 vi.mock('../server/services/agent/engines/registry.js', () => ({
@@ -2469,6 +2470,54 @@ describe('DELETE /api/workspaces/:id/pending-wakeup', () => {
     const res = await app.request('/api/workspaces/w1/pending-wakeup', { method: 'DELETE' })
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ ok: true })
+  })
+})
+
+describe('POST /api/workspaces/:id/pending-wakeup', () => {
+  it('pins the wakeup to the active session and returns the resulting pending entry', async () => {
+    vi.mocked(agentManager.getActiveSessionId).mockReturnValue('sess-42')
+    vi.mocked(wakeupService.getPending).mockReturnValue({ targetAt: '2026-04-22T10:00:00Z', reason: 'CI' })
+    const res = await app.request('/api/workspaces/w1/pending-wakeup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ delaySeconds: 120, prompt: 'check the build', reason: 'CI' }),
+    })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true, pending: { targetAt: '2026-04-22T10:00:00Z', reason: 'CI' } })
+    expect(wakeupService.schedule).toHaveBeenCalledWith('w1', 120, 'check the build', 'CI', 'sess-42')
+  })
+
+  it('rejects with 409 when no active session exists for the workspace', async () => {
+    vi.mocked(agentManager.getActiveSessionId).mockReturnValue(undefined)
+    const res = await app.request('/api/workspaces/w1/pending-wakeup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ delaySeconds: 60, prompt: 'check' }),
+    })
+    expect(res.status).toBe(409)
+    expect(wakeupService.schedule).not.toHaveBeenCalled()
+  })
+
+  it('rejects a missing/invalid delaySeconds with 400', async () => {
+    vi.mocked(agentManager.getActiveSessionId).mockReturnValue('sess-42')
+    const res = await app.request('/api/workspaces/w1/pending-wakeup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: 'check' }),
+    })
+    expect(res.status).toBe(400)
+    expect(wakeupService.schedule).not.toHaveBeenCalled()
+  })
+
+  it('rejects a missing prompt with 400', async () => {
+    vi.mocked(agentManager.getActiveSessionId).mockReturnValue('sess-42')
+    const res = await app.request('/api/workspaces/w1/pending-wakeup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ delaySeconds: 60, prompt: '   ' }),
+    })
+    expect(res.status).toBe(400)
+    expect(wakeupService.schedule).not.toHaveBeenCalled()
   })
 })
 
