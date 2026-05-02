@@ -1,7 +1,7 @@
 import fs from 'node:fs'
-import path from 'node:path'
 import { buildE2eIterationBlock, buildFinalizationIterationBlock } from '../../shared/auto-loop-prompts.js'
 import { getDb } from '../db/index.js'
+import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 import * as orchestrator from './agent/orchestrator.js'
 import * as settingsService from './settings-service.js'
 import { emit, emitEphemeral } from './websocket-service.js'
@@ -295,7 +295,7 @@ function spawnNextIteration(workspaceId: string, opts: { throwOnStartAgentError?
     .replaceAll('{isAcceptanceCriterion}', String(task.isAcceptanceCriterion))
     .replaceAll('{overrideBlock}', overrideBlock)
 
-  const worktreePath = row.worktree_path ?? path.join(row.project_path, '.worktrees', row.working_branch)
+  const worktreePath = row.worktree_path ?? resolveWorkspaceWorktreePath(row.project_path, row.working_branch)
   // Plan mode would deadlock the loop (blocks MCP + edits) — promote to bypass.
   // Other modes (bypass/strict/interactive) are honored.
   const stored = (row.agent_permission_mode ?? 'bypass') as 'plan' | 'bypass' | 'strict' | 'interactive'

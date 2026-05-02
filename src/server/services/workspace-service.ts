@@ -1,5 +1,6 @@
 import { nanoid } from 'nanoid'
 import { getDb } from '../db/index.js'
+import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 import * as orchestrator from './agent/orchestrator.js'
 import * as autoLoopService from './auto-loop-service.js'
 import * as wakeupService from './wakeup-service.js'
@@ -94,6 +95,7 @@ export interface CreateWorkspaceInput {
   engine?: string
   worktreePath?: string
   worktreeOwned?: boolean
+  worktreesPath?: string
 }
 
 /** Input payload for creating a new task. */
@@ -235,7 +237,8 @@ export function createWorkspace(data: CreateWorkspaceInput): Workspace {
   const now = new Date().toISOString()
   const id = nanoid()
 
-  const computedWorktreePath = data.worktreePath ?? `${data.projectPath}/.worktrees/${data.workingBranch}`
+  const computedWorktreePath =
+    data.worktreePath ?? resolveWorkspaceWorktreePath(data.projectPath, data.workingBranch, data.worktreesPath)
   const owned = data.worktreeOwned ?? true
 
   // Mirror the unified mode into the legacy columns so older readers (in-flight

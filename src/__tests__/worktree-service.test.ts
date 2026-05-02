@@ -64,6 +64,14 @@ describe('createWorktree(projectPath, branchName, sourceBranch)', () => {
     expect(fs.existsSync(worktreePath)).toBe(true)
   })
 
+  it('accepte une racine de worktrees relative personnalisée', () => {
+    const branchName = 'feature/custom-root'
+    const worktreePath = createWorktree(repoDir, branchName, 'main', 'kobo-worktrees')
+    const expected = path.join(repoDir, 'kobo-worktrees', branchName)
+    expect(worktreePath).toBe(expected)
+    expect(fs.existsSync(worktreePath)).toBe(true)
+  })
+
   it('ajoute le worktree à .git/info/exclude', () => {
     const branchName = 'feature/exclude-test'
     const worktreePath = createWorktree(repoDir, branchName, 'main')
@@ -71,6 +79,28 @@ describe('createWorktree(projectPath, branchName, sourceBranch)', () => {
     const content = fs.readFileSync(excludeFile, 'utf-8')
     const relativePath = path.relative(repoDir, worktreePath)
     expect(content).toContain(`/${relativePath}`)
+  })
+
+  it("n'ajoute pas les worktrees absolus hors projet à .git/info/exclude", () => {
+    const branchName = 'feature/external-root'
+    const externalRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'at-wt-external-'))
+    let worktreePath = ''
+
+    try {
+      worktreePath = createWorktree(repoDir, branchName, 'main', externalRoot)
+      expect(worktreePath).toBe(path.join(externalRoot, branchName))
+      expect(fs.existsSync(worktreePath)).toBe(true)
+
+      const excludeFile = path.join(repoDir, '.git', 'info', 'exclude')
+      const content = fs.existsSync(excludeFile) ? fs.readFileSync(excludeFile, 'utf-8') : ''
+      const relativePath = path.relative(repoDir, worktreePath)
+      expect(content).not.toContain(`/${relativePath}`)
+    } finally {
+      if (worktreePath && fs.existsSync(worktreePath)) {
+        removeWorktree(repoDir, worktreePath)
+      }
+      fs.rmSync(externalRoot, { recursive: true, force: true })
+    }
   })
 
   it('fonctionne si la branche existe déjà (add sans -b)', () => {

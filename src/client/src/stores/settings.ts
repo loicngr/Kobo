@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { WORKTREES_PATH } from '../../../shared/consts'
 
 interface DevServerConfig {
   startCommand: string
@@ -52,6 +53,7 @@ interface GlobalSettings {
   notionMcpKey: string
   sentryMcpKey: string
   tags: string[]
+  worktreesPath: string
 }
 
 interface ActiveMcpServer {
@@ -82,6 +84,7 @@ export const useSettingsStore = defineStore('settings', {
       notionMcpKey: '',
       sentryMcpKey: '',
       tags: [],
+      worktreesPath: WORKTREES_PATH,
     } as GlobalSettings,
     activeMcpServers: [] as ActiveMcpServer[],
     projects: [] as ProjectSettings[],

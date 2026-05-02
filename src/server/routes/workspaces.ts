@@ -30,6 +30,7 @@ import type { AgentPermissionMode, WorkspaceStatus } from '../services/workspace
 import * as workspaceService from '../services/workspace-service.js'
 import * as worktreeService from '../services/worktree-service.js'
 import * as gitOps from '../utils/git-ops.js'
+import { resolveSiblingWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 
 /** Hono sub-router for workspace CRUD, tasks, agent lifecycle, git operations, and PR creation. */
 const app = new Hono()
@@ -234,6 +235,7 @@ app.post('/', migrationGuard, async (c) => {
       reasoningEffort: body.reasoningEffort,
       agentPermissionMode: resolveCreateAgentPermissionMode(body.agentPermissionMode, body.projectPath, globalSettings),
       engine: body.engine,
+      ...(useReusedWorktree ? {} : { worktreesPath: globalSettings.worktreesPath }),
     })
 
     // Auto-tag the workspace based on its creation source — `notion` when
@@ -327,7 +329,12 @@ app.post('/', migrationGuard, async (c) => {
       worktreePath = body.worktreePath as string
     } else {
       try {
-        worktreePath = worktreeService.createWorktree(body.projectPath, workingBranch, body.sourceBranch)
+        worktreePath = worktreeService.createWorktree(
+          body.projectPath,
+          workingBranch,
+          body.sourceBranch,
+          globalSettings.worktreesPath,
+        )
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         workspaceService.updateWorkspaceStatus(workspace.id, 'error')
@@ -1935,11 +1942,12 @@ app.post('/:id/rename-branch', async (c) => {
     // Sibling rename: keep the same worktrees-root, swap the branch leaf.
     // Cannot use `path.dirname` directly because branches with slashes
     // (e.g. `feature/x`) make the dirname end one level too deep.
-    const oldSuffix = `/${workspace.workingBranch}`
-    const worktreesRoot = oldWorktreePath.endsWith(oldSuffix)
-      ? oldWorktreePath.slice(0, -oldSuffix.length)
-      : path.join(workspace.projectPath, '.worktrees')
-    const newWorktreePath = path.join(worktreesRoot, newName)
+    const newWorktreePath = resolveSiblingWorkspaceWorktreePath(
+      workspace.projectPath,
+      oldWorktreePath,
+      workspace.workingBranch,
+      newName,
+    )
 
     // Reject early if the target name is already in use — either as a local
     // branch or on origin. Avoids git's generic "already exists" error and
@@ -2014,11 +2022,12 @@ app.post('/:id/resync-branch', (c) => {
     // if the move fails (dir already moved, lockfile, dirty tree), we still
     // update the DB so git ops stay aligned with the current ref name — the
     // user can repair the dir manually.
-    const oldSuffix = `/${workspace.workingBranch}`
-    const worktreesRoot = worktreePath.endsWith(oldSuffix)
-      ? worktreePath.slice(0, -oldSuffix.length)
-      : path.join(workspace.projectPath, '.worktrees')
-    const newWorktreePath = path.join(worktreesRoot, actual)
+    const newWorktreePath = resolveSiblingWorkspaceWorktreePath(
+      workspace.projectPath,
+      worktreePath,
+      workspace.workingBranch,
+      actual,
+    )
     try {
       gitOps.moveWorktree(workspace.projectPath, worktreePath, newWorktreePath)
       workspaceService.updateWorktreePath(id, newWorktreePath)

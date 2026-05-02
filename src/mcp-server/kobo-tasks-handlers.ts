@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type Database from 'better-sqlite3'
 import { nanoid } from 'nanoid'
+import { resolveWorkspaceWorktreePath } from '../server/utils/worktree-paths.js'
 
 /** Allowed task status values. */
 export const VALID_TASK_STATUSES = ['pending', 'in_progress', 'done'] as const
@@ -282,7 +283,7 @@ export function getWorkspaceInfoHandler(db: Database.Database, workspaceId: stri
     projectPath: row.project_path,
     sourceBranch: row.source_branch,
     workingBranch: row.working_branch,
-    worktreePath: row.worktree_path ?? path.join(row.project_path, '.worktrees', row.working_branch),
+    worktreePath: row.worktree_path ?? resolveWorkspaceWorktreePath(row.project_path, row.working_branch),
     status: row.status,
     model: row.model,
     notionUrl: row.notion_url,

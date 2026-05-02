@@ -1,7 +1,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { WORKTREES_PATH } from '../../shared/consts.js'
 import { listClaudeMcpEntries } from '../utils/mcp-client.js'
 import { getSettingsPath } from '../utils/paths.js'
+import { sanitizeWorktreesPath, validateWorktreesPath } from '../utils/worktree-paths.js'
 
 const DEFAULT_GIT_CONVENTIONS = `# Git conventions
 
@@ -111,6 +113,7 @@ export interface GlobalSettings {
   notionMcpKey: string
   sentryMcpKey: string
   tags: string[]
+  worktreesPath: string
 }
 
 /** Default workspace tags seeded on fresh install and on settings upgrade. */
@@ -244,6 +247,13 @@ const settingsMigrations: SettingsMigration[] = [
       }
     },
   },
+  {
+    version: 11,
+    name: 'add-global-worktrees-path',
+    migrate({ global }) {
+      global.worktreesPath = sanitizeWorktreesPath(global.worktreesPath)
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -305,6 +315,7 @@ function defaultSettings(): Settings {
       notionMcpKey: '',
       sentryMcpKey: '',
       tags: [...DEFAULT_WORKSPACE_TAGS],
+      worktreesPath: WORKTREES_PATH,
     },
     projects: [],
   }
@@ -362,6 +373,8 @@ export function runSettingsMigrations(raw: Record<string, unknown>): Settings {
     }
   }
 
+  current.global.worktreesPath = sanitizeWorktreesPath(current.global.worktreesPath)
+
   current.schemaVersion = version
   return current as unknown as Settings
 }
@@ -397,10 +410,12 @@ function readSettings(): Settings {
   // Restore any global fields that may have been removed by external edits.
   // Defaults act as fallback for missing keys; existing values are preserved.
   const globalDefaults = defaultSettings().global
+  const globalBeforeDefaults = JSON.stringify(migrated.global)
   migrated.global = { ...globalDefaults, ...migrated.global } as GlobalSettings
+  const restoredGlobalFields = JSON.stringify(migrated.global) !== globalBeforeDefaults
 
   // Persist if migrations bumped the version, or if global fields were restored.
-  if (migrated.schemaVersion !== originalVersion) {
+  if (migrated.schemaVersion !== originalVersion || restoredGlobalFields) {
     writeSettings(migrated)
   }
 
@@ -560,6 +575,7 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'notionMcpKey',
     'sentryMcpKey',
     'tags',
+    'worktreesPath',
   ]
   const filtered = pickKnownKeys<GlobalSettings>(data as Record<string, unknown>, allowedGlobalKeys)
   if (filtered.tags !== undefined) {
@@ -572,6 +588,9 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
           ),
         )
       : settings.global.tags
+  }
+  if (filtered.worktreesPath !== undefined) {
+    filtered.worktreesPath = validateWorktreesPath(filtered.worktreesPath)
   }
   settings.global = { ...settings.global, ...filtered }
   writeSettings(settings, { backup: true })

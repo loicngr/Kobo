@@ -1,3 +1,5 @@
+import { WORKTREES_PATH } from '../../../shared/consts'
+
 /** Variables that can be substituted into a prompt template at expansion time. */
 export interface TemplateVars {
   // Workspace
@@ -46,6 +48,7 @@ export function buildTemplateVars(opts: {
     workingBranch: string
     sourceBranch: string
     projectPath: string
+    worktreePath?: string | null
   } | null
   gitStats: {
     commitCount: number
@@ -65,7 +68,8 @@ export function buildTemplateVars(opts: {
     vars.working_branch = opts.workspace.workingBranch
     vars.source_branch = opts.workspace.sourceBranch
     vars.project_path = opts.workspace.projectPath
-    vars.worktree_path = `${opts.workspace.projectPath}/.worktrees/${opts.workspace.workingBranch}`
+    vars.worktree_path =
+      opts.workspace.worktreePath ?? `${opts.workspace.projectPath}/${WORKTREES_PATH}/${opts.workspace.workingBranch}`
   }
   if (opts.gitStats) {
     vars.commit_count = opts.gitStats.commitCount

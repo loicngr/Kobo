@@ -580,6 +580,10 @@ export default {
   'settings.tagsHint':
     'Define las etiquetas asignables a los workspaces. Escribe para añadir, clic en la cruz para quitar.',
   'settings.tagsLabel': 'Etiquetas disponibles',
+  'settings.worktreesTitle': 'Worktrees Git',
+  'settings.worktreesHint':
+    'Elige dónde se crean los worktrees de nuevos workspaces. Las rutas relativas se resuelven desde el proyecto; se admiten rutas absolutas Linux/macOS y Windows, $HOME, ~ y %USERPROFILE%.',
+  'settings.worktreesPathLabel': 'Ruta de worktrees',
   'settings.shareTitle': 'Compartir configuración',
   'settings.shareHint':
     'Exporta tus ajustes, plantillas y etiquetas en un bundle JSON. Las claves MCP no se incluyen por seguridad.',

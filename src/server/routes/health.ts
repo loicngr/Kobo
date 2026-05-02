@@ -1,11 +1,11 @@
 import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
-import path from 'node:path'
 import { Hono } from 'hono'
 import { getDb } from '../db/index.js'
 import { SCHEMA_VERSION } from '../db/migrations.js'
 import { getGlobalSettings, SETTINGS_SCHEMA_VERSION } from '../services/settings-service.js'
 import { getDbPath, getKoboHome } from '../utils/paths.js'
+import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 
 const app = new Hono()
 
@@ -98,7 +98,7 @@ app.get('/report', (c) => {
   const worktreesMissing: WorktreeCheck[] = []
   for (const ws of workspaces) {
     if (ws.archived_at) continue
-    const wtPath = ws.worktree_path ?? path.join(ws.project_path, '.worktrees', ws.working_branch)
+    const wtPath = ws.worktree_path ?? resolveWorkspaceWorktreePath(ws.project_path, ws.working_branch)
     if (!fs.existsSync(wtPath)) {
       worktreesMissing.push({ workspaceId: ws.id, name: ws.name, path: wtPath, exists: false })
     }

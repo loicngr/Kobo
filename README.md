@@ -11,7 +11,7 @@ Think of it as an apprentice's hall: you hand out missions, each apprentice sets
 
 ## Features
 
-- **Isolated git worktrees** — every workspace runs on its own branch in its own directory, so concurrent Claude sessions never step on each other
+- **Isolated git worktrees** — every workspace runs on its own branch in its own directory, with a configurable global worktrees root for new workspaces, so concurrent Claude sessions never step on each other
 - **Pluggable agent engine** — Kōbō talks to agents through an `AgentEngine` contract with a normalised `AgentEvent` stream (`src/server/services/agent/engines/`). The `claude-code` engine runs on the official [`@anthropic-ai/claude-agent-sdk`](https://github.com/anthropics/claude-agent-sdk-typescript); adding a second runtime (e.g. Codex) only requires a new adapter, not a rewrite of the UI or orchestration layer
 - **Interactive `AskUserQuestion`** — when the agent invokes `AskUserQuestion`, Kōbō pauses the session via the SDK's `defer` pattern, surfaces a question panel in the UI, and resumes the agent once the user answers. The session does not occupy any resources while it waits
 - **Rich chat feed** — live streaming text, thinking blocks, inline tool calls with expandable diffs for Edit/Write, per-turn session cards, markdown rendering, jump-to-previous-user-message button, and infinite scroll-up over persisted history
@@ -32,7 +32,7 @@ Think of it as an apprentice's hall: you hand out missions, each apprentice sets
 - **Soft interrupt** — pause an agent mid-execution (SIGINT, like pressing Escape in Claude Code) without killing the process; the agent stops the current tool and waits for the next message
 - **Archive instead of delete** — soft-remove workspaces without losing the worktree, branches, or history; unarchive restores the exact pre-archive state
 - **Auto-loop mode** — opt-in, per-workspace: when enabled, Kōbō spawns a fresh Claude session for the next pending task after every `session:ended`, walking through the task list until all are `done`. Stops automatically on error, on stall (3 consecutive sessions with no task completed), or when the user clicks Stop. A grooming step (`/kobo-prep-autoloop`) ensures tasks are atomic before the loop runs; Notion-imported workspaces with both todos and acceptance criteria are auto-unlocked. **E2E grooming** — when a project declares an E2E framework in Settings (Cypress, Playwright, Vitest, etc.), the grooming phase injects an `[E2E] ` test sub-task between every parent task; each iteration then runs the matching E2E suite as part of its acceptance check
-- **Attach existing worktrees** — Kōbō detects orphan worktrees under `.worktrees/` (created outside Kōbō, or left over from an earlier install) and lets you attach them to a new workspace from the creation form, picking up the existing branch and folder instead of cloning a new one
+- **Attach existing worktrees** — Kōbō detects orphan git worktrees for the selected project (created outside Kōbō, or left over from an earlier install) and lets you attach them to a new workspace from the creation form, picking up the existing branch and folder instead of cloning a new one
 - **Quota-aware retry backoff** — when a Claude rate limit is hit mid-session, Kōbō schedules the retry at the actual reset time reported by the API (via `rate_limit.info.buckets[].resetsAt`), falling back to a 15 → 30 → 60 → 180 → 300 min ladder only when the reset info is missing or implausible
 - **Scheduled wakeups** — the `ScheduleWakeup` tool is honoured server-side: Kōbō persists the wakeup in SQLite, rehydrates on restart, and respawns the agent with `--resume` at the target time
 
@@ -252,7 +252,7 @@ See [`AGENTS.md`](./AGENTS.md) for a deeper dive into conventions, data model, W
 
 | Table | Purpose |
 |---|---|
-| `workspaces` | the unit of work — branch, status, model, engine, `archived_at`, `favorited_at`, `tags`, Notion link, … |
+| `workspaces` | the unit of work — branch, `worktree_path`, status, model, engine, `archived_at`, `favorited_at`, `tags`, Notion link, … |
 | `tasks` | workspace sub-items — tasks and acceptance criteria |
 | `agent_sessions` | agent runs — pid, `engine_session_id`, lifecycle |
 | `ws_events` | persisted WebSocket events (chat history, `agent:event` stream, user messages) for replay on reconnect |
@@ -269,9 +269,10 @@ The MCP server reads and writes the same SQLite database as the main backend. Is
 
 ## Configuration
 
-Kōbō reads settings from `~/.config/kobo/settings.json` (or falls back to defaults). Global settings cascade into per-project overrides:
+Kōbō reads settings from `~/.config/kobo/settings.json` (or falls back to defaults). Global settings define defaults, with per-project overrides for project-scoped fields:
 
 - `defaultModel` — Claude model to use (e.g. `claude-opus-4-6`)
+- `worktreesPath` — where new workspace worktrees are created. Defaults to `.worktrees`, resolved relative to the project. Absolute Linux/macOS paths, Windows paths (`C:\kobo\worktrees`, UNC shares), `$HOME/...`, `${HOME}/...`, `~/...`, and `%USERPROFILE%\...` are accepted. Paths containing parent-directory traversal (`..`) or drive-relative Windows syntax (`C:foo`) are rejected.
 - `prPromptTemplate` — template rendered when opening a PR via the `/open-pr` endpoint; supports `{{pr_number}}`, `{{pr_url}}`, `{{branch_name}}`, `{{diff_stats}}`, `{{commits}}`, etc.
 - `gitConventions` — markdown-formatted git conventions written to `.ai/.git-conventions.md` in every workspace so the agent follows them when committing
 - `devServer` — per-project `startCommand` / `stopCommand` for launching workspace-scoped dev servers

@@ -578,6 +578,10 @@ export default {
   'settings.tagsTitle': 'Tags des workspaces',
   'settings.tagsHint': 'Définis les tags assignables aux workspaces. Tape pour ajouter, clique la croix pour retirer.',
   'settings.tagsLabel': 'Tags disponibles',
+  'settings.worktreesTitle': 'Worktrees Git',
+  'settings.worktreesHint':
+    'Choisis où créer les worktrees des nouveaux workspaces. Les chemins relatifs sont résolus depuis le projet ; les chemins absolus Linux/macOS et Windows, $HOME, ~ et %USERPROFILE% sont supportés.',
+  'settings.worktreesPathLabel': 'Chemin des worktrees',
   'settings.shareTitle': 'Partager la configuration',
   'settings.shareHint':
     'Exporte tes paramètres, templates et tags en bundle JSON. Les clés MCP sont retirées à l’export pour la sécurité.',

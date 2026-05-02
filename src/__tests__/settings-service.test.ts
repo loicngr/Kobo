@@ -40,6 +40,7 @@ describe('getSettings()', () => {
     const settings = getSettings()
     expect(fs.existsSync(settingsPath)).toBe(true)
     expect(settings.global.defaultModel).toBe('claude-opus-4-7')
+    expect(settings.global.worktreesPath).toBe('.worktrees')
     expect(typeof settings.global.prPromptTemplate).toBe('string')
     expect(settings.projects).toEqual([])
   })
@@ -149,6 +150,30 @@ describe('updateGlobalSettings()', () => {
     expect(updated.prPromptTemplate).toBe('tmpl')
     expect(updated.notionMcpKey).toBe('notion')
     expect(updated.sentryMcpKey).toBe('sentry')
+  })
+
+  it('persists the global worktrees path verbatim after trimming', () => {
+    getSettings()
+    updateGlobalSettings({ worktreesPath: '  $HOME/kobo/worktress  ' })
+
+    const global = getGlobalSettings()
+    expect(global.worktreesPath).toBe('$HOME/kobo/worktress')
+  })
+
+  it('falls back to the default worktrees path when saved blank', () => {
+    getSettings()
+    updateGlobalSettings({ worktreesPath: '   ' })
+
+    const global = getGlobalSettings()
+    expect(global.worktreesPath).toBe('.worktrees')
+  })
+
+  it('rejects unsafe worktrees paths and keeps the previous value', () => {
+    getSettings()
+    updateGlobalSettings({ worktreesPath: '$HOME/kobo/worktrees' })
+
+    expect(() => updateGlobalSettings({ worktreesPath: '../outside' })).toThrow(/parent directory traversal/)
+    expect(getGlobalSettings().worktreesPath).toBe('$HOME/kobo/worktrees')
   })
 })
 
@@ -582,6 +607,18 @@ describe('runSettingsMigrations()', () => {
     expect(migrated.projects[0]?.finalization?.prompt).toBeTruthy()
     expect(migrated.projects[0]?.finalization?.prompt).toContain('quality checks')
   })
+
+  it('migration v11 seeds the default global worktrees path', () => {
+    const legacy = {
+      schemaVersion: 10,
+      global: {},
+      projects: [],
+    }
+
+    const migrated = runSettingsMigrations(legacy as unknown as Record<string, unknown>)
+    expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+    expect(migrated.global.worktreesPath).toBe('.worktrees')
+  })
 })
 
 describe('settings file persistence with migrations', () => {
@@ -683,6 +720,7 @@ describe('importConfigBundle()', () => {
         notionMcpKey: '', // stripped on export
         sentryMcpKey: '', // stripped on export
         tags: ['imported-tag'],
+        worktreesPath: '$HOME/kobo/worktress',
       },
       projects: [],
     }
@@ -692,5 +730,6 @@ describe('importConfigBundle()', () => {
     expect(after.sentryMcpKey).toBe('local-sentry')
     expect(after.prPromptTemplate).toBe('imported')
     expect(after.tags).toEqual(['imported-tag'])
+    expect(after.worktreesPath).toBe('$HOME/kobo/worktress')
   })
 })

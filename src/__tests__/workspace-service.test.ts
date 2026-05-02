@@ -137,6 +137,19 @@ describe('createWorkspace()', () => {
     expect(ws.worktreeOwned).toBe(true)
   })
 
+  it('computes worktreePath from a custom worktreesPath when provided', async () => {
+    const { createWorkspace } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'Custom WT',
+      projectPath: '/tmp/proj',
+      sourceBranch: 'main',
+      workingBranch: 'feature/x',
+      worktreesPath: '$HOME/kobo/worktress',
+    })
+    expect(ws.worktreePath).toBe(`${process.env.HOME}/kobo/worktress/feature/x`)
+    expect(ws.worktreeOwned).toBe(true)
+  })
+
   it('keeps an explicit worktreePath verbatim with owned=false', async () => {
     const { createWorkspace } = await import('../server/services/workspace-service.js')
     const ws = createWorkspace({
