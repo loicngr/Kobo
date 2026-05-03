@@ -8,6 +8,10 @@ const HOME_ALIASES = ['~', '$HOME', BRACED_HOME, USERPROFILE] as const
 
 type HomeAlias = (typeof HOME_ALIASES)[number]
 
+interface ValidateWorktreesPathOptions {
+  allowEmpty?: boolean
+}
+
 export class InvalidWorktreesPathError extends Error {
   constructor(message: string) {
     super(message)
@@ -72,8 +76,12 @@ function hasControlCharacters(value: string): boolean {
 }
 
 /** Validate a user-supplied worktrees path and return its normalized persisted value. */
-export function validateWorktreesPath(value: unknown): string {
-  const normalized = normalizeWorktreesPath(value)
+export function validateWorktreesPath(value: unknown, options: ValidateWorktreesPathOptions = {}): string {
+  const trimmed = typeof value === 'string' ? value.trim() : ''
+  if (!trimmed && options.allowEmpty === false) {
+    throw new InvalidWorktreesPathError('Worktrees path is required')
+  }
+  const normalized = trimmed || WORKTREES_PATH
 
   if (hasControlCharacters(normalized)) {
     throw new InvalidWorktreesPathError('Worktrees path cannot contain control characters')
@@ -118,6 +126,12 @@ export function resolveWorktreesRoot(projectPath: string, configuredPath?: strin
   const expanded = expandHomePath(validateWorktreesPath(configuredPath))
   const flavor = pathFlavor(projectPath, expanded)
   return flavor.isAbsolute(expanded) ? flavor.normalize(expanded) : flavor.resolve(projectPath, expanded)
+}
+
+export function resolveGlobalWorktreesRoot(configuredPath: string): string | null {
+  const expanded = expandHomePath(validateWorktreesPath(configuredPath, { allowEmpty: false }))
+  const flavor = pathFlavor(expanded)
+  return flavor.isAbsolute(expanded) ? flavor.normalize(expanded) : null
 }
 
 /** Resolve the full on-disk path for a workspace worktree. */

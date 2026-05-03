@@ -584,6 +584,7 @@ export default {
   'settings.worktreesHint':
     'Elige dónde se crean los worktrees de nuevos workspaces. Las rutas relativas se resuelven desde el proyecto; se admiten rutas absolutas Linux/macOS y Windows, $HOME, ~ y %USERPROFILE%.',
   'settings.worktreesPathLabel': 'Ruta de worktrees',
+  'settings.worktreesPathRequired': 'La ruta de worktrees es obligatoria.',
   'settings.shareTitle': 'Compartir configuración',
   'settings.shareHint':
     'Exporta tus ajustes, plantillas y etiquetas en un bundle JSON. Las claves MCP no se incluyen por seguridad.',

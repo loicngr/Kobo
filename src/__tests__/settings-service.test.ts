@@ -160,12 +160,22 @@ describe('updateGlobalSettings()', () => {
     expect(global.worktreesPath).toBe('$HOME/kobo/worktress')
   })
 
-  it('falls back to the default worktrees path when saved blank', () => {
+  it('rejects a blank worktrees path and keeps the previous value', () => {
     getSettings()
-    updateGlobalSettings({ worktreesPath: '   ' })
+    updateGlobalSettings({ worktreesPath: '$HOME/kobo/worktrees' })
 
-    const global = getGlobalSettings()
-    expect(global.worktreesPath).toBe('.worktrees')
+    expect(() => updateGlobalSettings({ worktreesPath: '   ' })).toThrow(/required/)
+    expect(getGlobalSettings().worktreesPath).toBe('$HOME/kobo/worktrees')
+  })
+
+  it('creates the global worktrees directory when an absolute path is saved', () => {
+    getSettings()
+    const worktreesRoot = path.join(tmpDir, 'missing', 'worktrees')
+
+    updateGlobalSettings({ worktreesPath: worktreesRoot })
+
+    expect(fs.statSync(worktreesRoot).isDirectory()).toBe(true)
+    expect(getGlobalSettings().worktreesPath).toBe(worktreesRoot)
   })
 
   it('rejects unsafe worktrees paths and keeps the previous value', () => {

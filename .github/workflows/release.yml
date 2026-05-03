@@ -1,17 +1,9 @@
 name: Release
 
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
-    inputs:
-      version_type:
-        description: Version bump type
-        required: true
-        default: patch
-        type: choice
-        options:
-          - patch
-          - minor
-          - major
 
 concurrency:
   group: release
@@ -23,20 +15,18 @@ permissions:
 
 jobs:
   release:
-    name: Bump, build, publish, release
+    name: Build, publish and release
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Verify tag commit is on develop
+      - name: Ensure release branch
         run: |
-          git fetch origin develop
-          if ! git merge-base --is-ancestor HEAD origin/develop; then
-            echo "::error::This workflow must be run from a commit that is an ancestor of origin/develop"
+          if [ "$GITHUB_REF_NAME" != "main" ]; then
+            echo "::error::Releases must run from main. Merge develop into main, then push main."
             exit 1
           fi
 
@@ -77,48 +67,53 @@ jobs:
         working-directory: src/client
         run: npm test
 
-      - name: Configure git
-        run: |
-          git config user.name 'github-actions[bot]'
-          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-
-      - name: Bump version and tag
-        id: bump
-        env:
-          VERSION_TYPE: ${{ inputs.version_type }}
-        run: |
-          new_version=$(npm version "$VERSION_TYPE" --no-git-tag-version)
-          new_tag="$new_version"
-          echo "new_version=$new_version" >> "$GITHUB_OUTPUT"
-          echo "new_tag=$new_tag" >> "$GITHUB_OUTPUT"
-
-          git add package.json package-lock.json
-          git commit -m "chore(release): $new_version"
-          git tag "$new_tag"
-
       - name: Build client and server
         run: npm run build
+
+      - name: Read release version
+        id: version
+        run: |
+          version=$(node -p "require('./package.json').version")
+          tag="v$version"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Ensure version was not already released
+        env:
+          PACKAGE_NAME: '@loicngr/kobo'
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/$TAG" >/dev/null 2>&1; then
+            echo "::error::Tag $TAG already exists. Bump package.json before merging to main."
+            exit 1
+          fi
+
+          if npm view "$PACKAGE_NAME@$VERSION" version >/dev/null 2>&1; then
+            echo "::error::$PACKAGE_NAME@$VERSION is already published on npm. Bump package.json before merging to main."
+            exit 1
+          fi
 
       - name: Publish to npm
         run: npm publish --provenance
 
-      - name: Push commit and tag
+      - name: Push release tag
         env:
-          NEW_TAG: ${{ steps.bump.outputs.new_tag }}
+          TAG: ${{ steps.version.outputs.tag }}
         run: |
-          git push origin HEAD:develop
-          git push origin "$NEW_TAG"
+          git tag "$TAG"
+          git push origin "$TAG"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ steps.bump.outputs.new_tag }}
-          name: ${{ steps.bump.outputs.new_tag }}
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
           generate_release_notes: true
           body: |
-            Published to npm as [`@loicngr/kobo@${{ steps.bump.outputs.new_version }}`](https://www.npmjs.com/package/@loicngr/kobo/v/${{ steps.bump.outputs.new_version }}).
+            Published to npm as [`@loicngr/kobo@${{ steps.version.outputs.version }}`](https://www.npmjs.com/package/@loicngr/kobo/v/${{ steps.version.outputs.version }}).
 
             Install:
             ```bash
-            PORT=9999 npx @loicngr/kobo@${{ steps.bump.outputs.new_version }}
+            PORT=9999 npx @loicngr/kobo@${{ steps.version.outputs.version }}
             ```

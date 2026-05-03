@@ -3,7 +3,12 @@ import path from 'node:path'
 import { WORKTREES_PATH } from '../../shared/consts.js'
 import { listClaudeMcpEntries } from '../utils/mcp-client.js'
 import { getSettingsPath } from '../utils/paths.js'
-import { sanitizeWorktreesPath, validateWorktreesPath } from '../utils/worktree-paths.js'
+import {
+  InvalidWorktreesPathError,
+  resolveGlobalWorktreesRoot,
+  sanitizeWorktreesPath,
+  validateWorktreesPath,
+} from '../utils/worktree-paths.js'
 
 const DEFAULT_GIT_CONVENTIONS = `# Git conventions
 
@@ -590,11 +595,31 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
       : settings.global.tags
   }
   if (filtered.worktreesPath !== undefined) {
-    filtered.worktreesPath = validateWorktreesPath(filtered.worktreesPath)
+    filtered.worktreesPath = validateWorktreesPath(filtered.worktreesPath, { allowEmpty: false })
+    ensureGlobalWorktreesRootExists(filtered.worktreesPath)
   }
   settings.global = { ...settings.global, ...filtered }
   writeSettings(settings, { backup: true })
   return settings.global
+}
+
+function ensureGlobalWorktreesRootExists(worktreesPath: string): void {
+  const root = resolveGlobalWorktreesRoot(worktreesPath)
+  if (!root || isNonNativeWindowsPath(root)) return
+
+  try {
+    fs.mkdirSync(root, { recursive: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new InvalidWorktreesPathError(`Cannot create worktrees directory '${root}': ${message}`)
+  }
+}
+
+function isNonNativeWindowsPath(value: string): boolean {
+  return (
+    process.platform !== 'win32' &&
+    (/^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\\\') || value.startsWith('//'))
+  )
 }
 
 /** Create or update project-specific settings. Merges devServer, e2e, and finalization fields on update. */

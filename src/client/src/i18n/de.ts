@@ -584,6 +584,7 @@ export default {
   'settings.worktreesHint':
     'Wähle aus, wo neue Workspace-Worktrees erstellt werden. Relative Pfade sind projektrelativ; absolute Linux/macOS- und Windows-Pfade, $HOME, ~ und %USERPROFILE% werden unterstützt.',
   'settings.worktreesPathLabel': 'Worktrees-Pfad',
+  'settings.worktreesPathRequired': 'Worktrees-Pfad ist erforderlich.',
   'settings.shareTitle': 'Konfiguration teilen',
   'settings.shareHint':
     'Exportiere Einstellungen, Templates und Tags als JSON-Bundle. MCP-Keys werden aus Sicherheitsgründen nicht exportiert.',

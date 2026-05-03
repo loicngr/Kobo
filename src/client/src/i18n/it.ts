@@ -582,6 +582,7 @@ export default {
   'settings.worktreesHint':
     'Scegli dove creare i worktree dei nuovi workspace. I percorsi relativi sono risolti dal progetto; sono supportati percorsi assoluti Linux/macOS e Windows, $HOME, ~ e %USERPROFILE%.',
   'settings.worktreesPathLabel': 'Percorso worktree',
+  'settings.worktreesPathRequired': 'Il percorso worktree è obbligatorio.',
   'settings.shareTitle': 'Condividi configurazione',
   'settings.shareHint':
     'Esporta impostazioni, template e tag come bundle JSON. Le chiavi MCP sono escluse per sicurezza.',

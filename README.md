@@ -289,6 +289,10 @@ This is a personal tool, but PRs and issues are welcome. Before submitting:
 
 CI runs lint + type check + tests on every PR to `develop`.
 
+## Release
+
+Releases are cut from `main`. Bump `package.json` and `package-lock.json` on `develop`, merge `develop` into `main`, then push `main`. The release workflow builds, tests, publishes the current package version to npm, tags it as `v<version>`, and creates the GitHub Release. If the npm version or tag already exists, the workflow fails before publishing.
+
 ## License
 
 GNU General Public License v3.0 or later. See [`LICENSE`](./LICENSE) for the full text.

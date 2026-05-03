@@ -266,12 +266,15 @@
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.worktreesTitle') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.worktreesHint') }}</div>
               <q-input
+                ref="globalWorktreesPathInput"
                 v-model="globalWorktreesPath"
                 :label="$t('settings.worktreesPathLabel')"
                 dense
                 dark
                 outlined
                 :placeholder="WORKTREES_PATH"
+                :rules="worktreesPathRules"
+                lazy-rules
                 class="settings-input"
               />
             </div>
@@ -789,7 +792,7 @@
 </template>
 
 <script setup lang="ts">
-import { useQuasar } from 'quasar'
+import { type QInput, useQuasar } from 'quasar'
 import { MODEL_OPTION_DEFS } from 'src/constants/models'
 import type { ProjectSettings } from 'src/stores/settings'
 import { useSettingsStore } from 'src/stores/settings'
@@ -820,6 +823,8 @@ const globalNotionMcpKey = ref('')
 const globalSentryMcpKey = ref('')
 const globalTags = ref<string[]>([])
 const globalWorktreesPath = ref<string>(WORKTREES_PATH)
+const globalWorktreesPathInput = ref<QInput | null>(null)
+const worktreesPathRules = [(value: string) => value.trim().length > 0 || t('settings.worktreesPathRequired')]
 const savingGlobal = ref(false)
 
 // Project form
@@ -1188,6 +1193,9 @@ async function onImportFile(event: Event) {
 }
 
 async function saveGlobal() {
+  const worktreesPathValid = await globalWorktreesPathInput.value?.validate()
+  if (worktreesPathValid === false) return
+
   savingGlobal.value = true
   try {
     await store.updateGlobal({

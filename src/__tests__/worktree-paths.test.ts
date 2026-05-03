@@ -2,6 +2,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   normalizeWorktreesPath,
+  resolveGlobalWorktreesRoot,
   resolveSiblingWorkspaceWorktreePath,
   resolveWorkspaceWorktreePath,
   resolveWorktreesRoot,
@@ -36,6 +37,8 @@ describe('worktree path helpers', () => {
     expect(resolveWorkspaceWorktreePath('/repo', 'feature/x', '/var/kobo/worktrees')).toBe(
       path.join('/var/kobo/worktrees', 'feature/x'),
     )
+    expect(resolveGlobalWorktreesRoot('/var/kobo/worktrees')).toBe('/var/kobo/worktrees')
+    expect(resolveGlobalWorktreesRoot('relative/worktrees')).toBe(null)
   })
 
   it('expands HOME aliases in worktrees roots', () => {
@@ -96,6 +99,7 @@ describe('worktree path helpers', () => {
     expect(() => validateWorktreesPath('$HOME/../outside')).toThrow(/parent directory traversal/)
     expect(() => validateWorktreesPath('%USERPROFILE%\\..\\outside')).toThrow(/parent directory traversal/)
     expect(() => validateWorktreesPath('C:worktrees')).toThrow(/Windows drive paths/)
+    expect(() => validateWorktreesPath('   ', { allowEmpty: false })).toThrow(/required/)
     expect(() => validateWorktreesPath('foo\nbar')).toThrow(/control characters/)
   })
 
