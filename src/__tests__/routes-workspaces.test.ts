@@ -275,6 +275,10 @@ beforeEach(() => {
     notionStatusProperty: '',
     notionInProgressStatus: '',
     defaultPermissionMode: 'plan',
+    notionMcpKey: '',
+    sentryMcpKey: '',
+    tags: [],
+    worktreesPath: '.worktrees',
   })
 })
 
@@ -334,8 +338,53 @@ describe('POST /api/workspaces', () => {
     const data = await res.json()
     expect(data.id).toBe('ws-1')
     expect(workspaceService.createWorkspace).toHaveBeenCalledOnce()
-    expect(worktreeService.createWorktree).toHaveBeenCalledWith('/tmp/project', 'feature/test', 'main')
+    expect(worktreeService.createWorktree).toHaveBeenCalledWith('/tmp/project', 'feature/test', 'main', '.worktrees')
     expect(agentManager.startAgent).toHaveBeenCalledOnce()
+  })
+
+  it('creates new workspaces under the configured global worktrees path', async () => {
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
+      defaultModel: 'auto',
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      gitConventions: '',
+      editorCommand: '',
+      browserNotifications: true,
+      audioNotifications: true,
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
+      defaultPermissionMode: 'plan',
+      notionMcpKey: '',
+      sentryMcpKey: '',
+      tags: [],
+      worktreesPath: '$HOME/kobo/worktress',
+    })
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktree).mockReturnValue('/home/test/kobo/worktress/feature/test')
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(workspaceService.createWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({ worktreesPath: '$HOME/kobo/worktress' }),
+    )
+    expect(worktreeService.createWorktree).toHaveBeenCalledWith(
+      '/tmp/project',
+      'feature/test',
+      'main',
+      '$HOME/kobo/worktress',
+    )
   })
 
   it('creates workspace with Notion URL and extracts content', async () => {
@@ -2577,6 +2626,33 @@ describe('POST /api/workspaces/:id/resync-branch', () => {
     expect(vi.mocked(workspaceService.updateWorkingBranch)).toHaveBeenCalledWith('w1', 'feature/new-name')
   })
 
+  it('moves a Windows worktree directory when the branch has been renamed in git', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      id: 'w-win',
+      projectPath: 'C:\\repo',
+      workingBranch: 'feature/old-name',
+      worktreePath: 'D:\\kobo\\worktrees\\feature\\old-name',
+    })
+    vi.mocked(gitOps.getCurrentBranch).mockReturnValue('feature/new-name')
+    vi.mocked(workspaceService.updateWorkingBranch).mockReturnValue({
+      workingBranch: 'feature/new-name',
+    } as never)
+
+    const res = await app.request('/api/workspaces/w-win/resync-branch', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(vi.mocked(gitOps.moveWorktree)).toHaveBeenCalledWith(
+      'C:\\repo',
+      'D:\\kobo\\worktrees\\feature\\old-name',
+      'D:\\kobo\\worktrees\\feature\\new-name',
+    )
+    expect(vi.mocked(workspaceService.updateWorktreePath)).toHaveBeenCalledWith(
+      'w-win',
+      'D:\\kobo\\worktrees\\feature\\new-name',
+    )
+  })
+
   it('rejects with 400 when the workspace is not owned', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue({
       ...fakeWorkspace,
@@ -2917,6 +2993,10 @@ describe('POST /api/workspaces — reuse existing worktree', () => {
       notionStatusProperty: '',
       notionInProgressStatus: '',
       defaultPermissionMode: 'plan',
+      notionMcpKey: '',
+      sentryMcpKey: '',
+      tags: [],
+      worktreesPath: '.worktrees',
     })
   })
 

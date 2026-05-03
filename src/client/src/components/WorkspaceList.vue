@@ -657,8 +657,7 @@ function selectWorkspace(id: string) {
 }
 
 function copyWorktreePath(ws: Workspace) {
-  const path = `${ws.projectPath}/.worktrees/${ws.workingBranch}`
-  navigator.clipboard.writeText(path).catch(() => {})
+  navigator.clipboard.writeText(ws.worktreePath).catch(() => {})
 }
 
 function renameWorkspace(ws: Workspace) {

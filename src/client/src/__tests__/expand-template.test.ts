@@ -93,6 +93,22 @@ describe('buildTemplateVars()', () => {
     expect(vars.worktree_path).toBeUndefined()
   })
 
+  it('uses workspace.worktreePath when available', () => {
+    const vars = buildTemplateVars({
+      workspace: {
+        name: 'n',
+        workingBranch: 'feature/test',
+        sourceBranch: 'main',
+        projectPath: '/tmp/project',
+        worktreePath: '/home/me/kobo/worktrees/feature/test',
+      },
+      gitStats: null,
+      sessionName: null,
+    })
+
+    expect(vars.worktree_path).toBe('/home/me/kobo/worktrees/feature/test')
+  })
+
   it('omits all git vars when gitStats is null', () => {
     const vars = buildTemplateVars({
       workspace: { name: 'n', workingBranch: 'b', sourceBranch: 's', projectPath: '/p' },

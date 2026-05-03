@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { isGitBranchExistsError } from '../utils/git-ops.js'
+import { resolveWorkspaceWorktreePath, resolveWorktreesRoot } from '../utils/worktree-paths.js'
 
 /** Parsed information about a single git worktree. */
 export interface WorktreeInfo {
@@ -26,7 +27,16 @@ function getExcludeFilePath(projectPath: string): string {
   return path.join(projectPath, '.git', 'info', 'exclude')
 }
 
+function projectRelativeWorktreePath(projectPath: string, worktreePath: string): string | null {
+  const relativePath = path.relative(projectPath, worktreePath)
+  if (!relativePath || relativePath.startsWith('..') || path.isAbsolute(relativePath)) return null
+  return relativePath
+}
+
 function addToExclude(projectPath: string, worktreePath: string): void {
+  const relativePath = projectRelativeWorktreePath(projectPath, worktreePath)
+  if (!relativePath) return
+
   const excludeFile = getExcludeFilePath(projectPath)
   // Ensure the .git/info directory exists
   const infoDir = path.dirname(excludeFile)
@@ -34,8 +44,6 @@ function addToExclude(projectPath: string, worktreePath: string): void {
     fs.mkdirSync(infoDir, { recursive: true })
   }
 
-  // Make the path relative to projectPath for cleaner exclude entries
-  const relativePath = path.relative(projectPath, worktreePath)
   const entry = `/${relativePath}`
 
   let current = ''
@@ -50,10 +58,12 @@ function addToExclude(projectPath: string, worktreePath: string): void {
 }
 
 function removeFromExclude(projectPath: string, worktreePath: string): void {
+  const relativePath = projectRelativeWorktreePath(projectPath, worktreePath)
+  if (!relativePath) return
+
   const excludeFile = getExcludeFilePath(projectPath)
   if (!fs.existsSync(excludeFile)) return
 
-  const relativePath = path.relative(projectPath, worktreePath)
   const entry = `/${relativePath}`
 
   const lines = fs.readFileSync(excludeFile, 'utf-8').split('\n')
@@ -62,14 +72,19 @@ function removeFromExclude(projectPath: string, worktreePath: string): void {
   fs.writeFileSync(excludeFile, trimmed ? `${trimmed}\n` : '', 'utf-8')
 }
 
-/** Create a git worktree under `.worktrees/` for the given branch. Returns the worktree path. */
-export function createWorktree(projectPath: string, branchName: string, sourceBranch: string): string {
-  const worktreesDir = path.join(projectPath, '.worktrees')
+/** Create a git worktree for the given branch. Returns the worktree path. */
+export function createWorktree(
+  projectPath: string,
+  branchName: string,
+  sourceBranch: string,
+  worktreesPath?: string | null,
+): string {
+  const worktreesDir = resolveWorktreesRoot(projectPath, worktreesPath)
   if (!fs.existsSync(worktreesDir)) {
     fs.mkdirSync(worktreesDir, { recursive: true })
   }
 
-  const worktreePath = path.join(worktreesDir, branchName)
+  const worktreePath = resolveWorkspaceWorktreePath(projectPath, branchName, worktreesPath)
 
   try {
     // Use origin/<sourceBranch> as the base so the worktree starts from the

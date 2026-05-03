@@ -262,6 +262,23 @@
               />
             </div>
 
+            <div class="settings-card q-pa-md rounded-borders q-pb-sm q-mb-sm">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.worktreesTitle') }}</div>
+              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.worktreesHint') }}</div>
+              <q-input
+                ref="globalWorktreesPathInput"
+                v-model="globalWorktreesPath"
+                :label="$t('settings.worktreesPathLabel')"
+                dense
+                dark
+                outlined
+                :placeholder="WORKTREES_PATH"
+                :rules="worktreesPathRules"
+                lazy-rules
+                class="settings-input"
+              />
+            </div>
+
             <!-- Import / Export config -->
             <div class="settings-card q-pa-md rounded-borders q-pb-sm q-mb-sm">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.shareTitle') }}</div>
@@ -775,13 +792,14 @@
 </template>
 
 <script setup lang="ts">
-import { useQuasar } from 'quasar'
+import { type QInput, useQuasar } from 'quasar'
 import { MODEL_OPTION_DEFS } from 'src/constants/models'
 import type { ProjectSettings } from 'src/stores/settings'
 import { useSettingsStore } from 'src/stores/settings'
 import { type Template, useTemplatesStore } from 'src/stores/templates'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { WORKTREES_PATH } from '../../../shared/consts'
 
 const $q = useQuasar()
 const store = useSettingsStore()
@@ -804,6 +822,9 @@ const globalDefaultPermissionMode = ref<'plan' | 'bypass' | 'strict' | 'interact
 const globalNotionMcpKey = ref('')
 const globalSentryMcpKey = ref('')
 const globalTags = ref<string[]>([])
+const globalWorktreesPath = ref<string>(WORKTREES_PATH)
+const globalWorktreesPathInput = ref<QInput | null>(null)
+const worktreesPathRules = [(value: string) => value.trim().length > 0 || t('settings.worktreesPathRequired')]
 const savingGlobal = ref(false)
 
 // Project form
@@ -1026,6 +1047,7 @@ function syncGlobalForm() {
   globalNotionMcpKey.value = store.global.notionMcpKey ?? ''
   globalSentryMcpKey.value = store.global.sentryMcpKey ?? ''
   globalTags.value = Array.isArray(store.global.tags) ? [...store.global.tags] : []
+  globalWorktreesPath.value = store.global.worktreesPath ?? WORKTREES_PATH
 }
 
 // Init project form from selected project
@@ -1171,6 +1193,9 @@ async function onImportFile(event: Event) {
 }
 
 async function saveGlobal() {
+  const worktreesPathValid = await globalWorktreesPathInput.value?.validate()
+  if (worktreesPathValid === false) return
+
   savingGlobal.value = true
   try {
     await store.updateGlobal({
@@ -1186,6 +1211,7 @@ async function saveGlobal() {
       notionMcpKey: globalNotionMcpKey.value,
       sentryMcpKey: globalSentryMcpKey.value,
       tags: globalTags.value,
+      worktreesPath: globalWorktreesPath.value,
     })
     $q.notify({ type: 'positive', message: t('settings.saved'), position: 'top' })
   } catch {

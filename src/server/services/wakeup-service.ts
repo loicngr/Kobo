@@ -1,5 +1,5 @@
-import path from 'node:path'
 import { getDb } from '../db/index.js'
+import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 import * as orchestrator from './agent/orchestrator.js'
 import { emitEphemeral } from './websocket-service.js'
 
@@ -188,7 +188,7 @@ function fire(workspaceId: string): void {
       return
     }
 
-    const worktreePath = wsRow.worktree_path ?? path.join(wsRow.project_path, '.worktrees', wsRow.working_branch)
+    const worktreePath = wsRow.worktree_path ?? resolveWorkspaceWorktreePath(wsRow.project_path, wsRow.working_branch)
     // Narrow against the four known values; unknowns → 'bypass'.
     const stored = wsRow.agent_permission_mode
     const agentPermissionMode: 'plan' | 'bypass' | 'strict' | 'interactive' =

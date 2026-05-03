@@ -47,7 +47,8 @@ app.put('/global', async (c) => {
     return c.json(updated)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    const status = err instanceof Error && err.name === 'InvalidWorktreesPathError' ? 400 : 500
+    return c.json({ error: message }, status)
   }
 })
 

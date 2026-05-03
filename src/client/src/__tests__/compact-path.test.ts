@@ -26,6 +26,36 @@ describe('compactPath()', () => {
     expect(compactPath(`${WS.projectPath}/README.md`, WS)).toBe('README.md')
   })
 
+  it('strips workspace.worktreePath when it is outside the project path', () => {
+    const ws = {
+      ...WS,
+      worktreePath: '/home/loicngr/kobo/worktrees/feature/r-viser-le-socle',
+    }
+
+    expect(compactPath(`${ws.worktreePath}/src/App.tsx`, ws)).toBe('src/App.tsx')
+  })
+
+  it('strips Windows worktree paths with backslash separators', () => {
+    const ws = {
+      projectPath: 'C:\\Users\\loic\\Projects\\sekur',
+      workingBranch: 'feature/r-viser-le-socle',
+      worktreePath: 'C:\\Users\\loic\\kobo\\worktrees\\feature\\r-viser-le-socle',
+    }
+
+    expect(compactPath(`type ${ws.worktreePath}\\src\\App.tsx`, ws)).toBe('type src\\App.tsx')
+  })
+
+  it('strips legacy Windows worktree paths when worktreePath is absent', () => {
+    const ws = {
+      projectPath: 'C:\\Users\\loic\\Projects\\sekur',
+      workingBranch: 'feature/r-viser-le-socle',
+    }
+
+    expect(compactPath(`type C:\\Users\\loic\\Projects\\sekur\\.worktrees\\feature\\r-viser-le-socle\\a.ts`, ws)).toBe(
+      'type a.ts',
+    )
+  })
+
   it('prefers the worktree prefix over the project root when both could match', () => {
     // Edge: the worktree is a sub-path of projectPath. Make sure the longer
     // (more specific) prefix is matched and stripped fully.

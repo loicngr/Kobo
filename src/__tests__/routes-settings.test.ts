@@ -155,6 +155,24 @@ describe('PUT /api/settings/global', () => {
     const data = await res.json()
     expect(data.error).toBe('Write failed')
   })
+
+  it('returns 400 when the worktrees path is invalid', async () => {
+    vi.mocked(settingsService.updateGlobalSettings).mockImplementation(() => {
+      const err = new Error('Worktrees path cannot contain parent directory traversal (`..`)')
+      err.name = 'InvalidWorktreesPathError'
+      throw err
+    })
+
+    const res = await app.request('/api/settings/global', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ worktreesPath: '../outside' }),
+    })
+
+    expect(res.status).toBe(400)
+    const data = await res.json()
+    expect(data.error).toContain('parent directory traversal')
+  })
 })
 
 describe('GET /api/settings/projects', () => {
