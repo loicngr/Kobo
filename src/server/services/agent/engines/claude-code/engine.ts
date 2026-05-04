@@ -12,6 +12,7 @@ import { CLAUDE_CODE_CAPABILITIES } from './capabilities.js'
 import { createMapperState, mapSdkMessage } from './event-mapper.js'
 import { buildClaudeOptions } from './options-builder.js'
 import { buildPreCompactCustomInstructions } from './precompact-hook.js'
+import { resolveClaudeBinaryPath } from './resolve-binary.js'
 
 function toMcpServersMap(specs: StartOptions['mcpServers']): Options['mcpServers'] | undefined {
   if (!specs || specs.length === 0) return undefined
@@ -138,6 +139,11 @@ export function createClaudeCodeEngine(): AgentEngine {
         },
       })
       sdkOptions.abortController = abortController
+
+      // Override the SDK's libc-blind binary resolution on Linux glibc — see
+      // resolve-binary.ts for the full rationale. No-op on macOS/Windows/musl.
+      const explicitBinary = resolveClaudeBinaryPath()
+      if (explicitBinary) sdkOptions.pathToClaudeCodeExecutable = explicitBinary
 
       const q = query({ prompt: effectivePrompt, options: sdkOptions })
 
