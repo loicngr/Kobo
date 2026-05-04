@@ -42,6 +42,8 @@ interface GlobalSettings {
   editorCommand: string
   browserNotifications: boolean
   audioNotifications: boolean
+  audioNotificationSound: string
+  audioNotificationVolume: number
   notionStatusProperty: string
   notionInProgressStatus: string
   /**
@@ -78,6 +80,8 @@ export const useSettingsStore = defineStore('settings', {
       editorCommand: '',
       browserNotifications: true,
       audioNotifications: true,
+      audioNotificationSound: 'hey.mp3',
+      audioNotificationVolume: 1,
       notionStatusProperty: '',
       notionInProgressStatus: '',
       defaultPermissionMode: 'plan',

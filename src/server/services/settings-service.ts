@@ -112,6 +112,8 @@ export interface GlobalSettings {
   editorCommand: string
   browserNotifications: boolean
   audioNotifications: boolean
+  audioNotificationSound: string
+  audioNotificationVolume: number
   notionStatusProperty: string
   notionInProgressStatus: string
   defaultPermissionMode: string
@@ -259,6 +261,25 @@ const settingsMigrations: SettingsMigration[] = [
       global.worktreesPath = sanitizeWorktreesPath(global.worktreesPath)
     },
   },
+  {
+    version: 12,
+    name: 'add-audio-notification-sound',
+    migrate({ global }) {
+      if (typeof global.audioNotificationSound !== 'string' || global.audioNotificationSound.length === 0) {
+        global.audioNotificationSound = 'hey.mp3'
+      }
+    },
+  },
+  {
+    version: 13,
+    name: 'add-audio-notification-volume',
+    migrate({ global }) {
+      const v = global.audioNotificationVolume
+      if (typeof v !== 'number' || Number.isNaN(v) || v < 0 || v > 1) {
+        global.audioNotificationVolume = 1
+      }
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -314,6 +335,8 @@ function defaultSettings(): Settings {
       editorCommand: '',
       browserNotifications: true,
       audioNotifications: true,
+      audioNotificationSound: 'hey.mp3',
+      audioNotificationVolume: 1,
       notionStatusProperty: '',
       notionInProgressStatus: '',
       defaultPermissionMode: 'plan',
@@ -574,6 +597,8 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'editorCommand',
     'browserNotifications',
     'audioNotifications',
+    'audioNotificationSound',
+    'audioNotificationVolume',
     'notionStatusProperty',
     'notionInProgressStatus',
     'defaultPermissionMode',
@@ -593,6 +618,10 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
           ),
         )
       : settings.global.tags
+  }
+  if (filtered.audioNotificationVolume !== undefined) {
+    const v = Number(filtered.audioNotificationVolume)
+    filtered.audioNotificationVolume = Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 1
   }
   if (filtered.worktreesPath !== undefined) {
     filtered.worktreesPath = validateWorktreesPath(filtered.worktreesPath, { allowEmpty: false })

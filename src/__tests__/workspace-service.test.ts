@@ -617,6 +617,39 @@ describe('updateWorkspaceModel() throws when workspace not found', () => {
   })
 })
 
+describe('updateWorkspaceSourceBranch()', () => {
+  it('updates the source branch and returns the updated row', async () => {
+    const { createWorkspace, updateWorkspaceSourceBranch, getWorkspace } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const ws = createWorkspace({
+      name: 'rebase target',
+      projectPath: '/tmp/proj',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/test',
+    })
+    const updated = updateWorkspaceSourceBranch(ws.id, 'main')
+    expect(updated.sourceBranch).toBe('main')
+    expect(getWorkspace(ws.id)?.sourceBranch).toBe('main')
+  })
+
+  it('throws when the workspace does not exist', async () => {
+    const { updateWorkspaceSourceBranch } = await import('../server/services/workspace-service.js')
+    expect(() => updateWorkspaceSourceBranch('nonexistent', 'main')).toThrow(/not found/)
+  })
+
+  it('rejects an empty source branch', async () => {
+    const { createWorkspace, updateWorkspaceSourceBranch } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'empty branch test',
+      projectPath: '/tmp/proj-empty',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/test',
+    })
+    expect(() => updateWorkspaceSourceBranch(ws.id, '   ')).toThrow(/empty/i)
+  })
+})
+
 describe('updateWorkspaceReasoningEffort() throws when workspace not found', () => {
   it("lève une erreur si le workspace n'existe pas", async () => {
     const { updateWorkspaceReasoningEffort } = await import('../server/services/workspace-service.js')

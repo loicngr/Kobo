@@ -402,6 +402,28 @@ export function updateWorkingBranch(id: string, workingBranch: string): Workspac
   return getWorkspace(id) as Workspace
 }
 
+/**
+ * Update the source branch in the database. Called by the PR watcher when
+ * GitHub reports a different `baseRefName` for the workspace's PR.
+ * Does NOT touch the worktree — the user (or the agent) decides when to
+ * rebase the local branch onto the new base.
+ */
+export function updateWorkspaceSourceBranch(id: string, sourceBranch: string): Workspace {
+  const sanitized = sourceBranch.trim()
+  if (!sanitized) {
+    throw new Error('Source branch cannot be empty')
+  }
+  const db = getDb()
+  const now = new Date().toISOString()
+  const result = db
+    .prepare('UPDATE workspaces SET source_branch = ?, updated_at = ? WHERE id = ?')
+    .run(sanitized, now, id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+  return getWorkspace(id) as Workspace
+}
+
 /** Update the on-disk worktree path. Used by rename / resync-branch on owned worktrees. */
 export function updateWorktreePath(id: string, newPath: string): Workspace {
   const db = getDb()

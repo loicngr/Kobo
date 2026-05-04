@@ -214,7 +214,7 @@ export function startDevServer(workspaceId: string): DevServerStatus {
 
   // Execute as bash script (supports multi-line scripts)
   const worktreePath = workspace.worktreePath
-  const cwd = existsSync(worktreePath) ? worktreePath : workspace.projectPath
+  const cwd = worktreePath && existsSync(worktreePath) ? worktreePath : workspace.projectPath
   const proc = spawn('bash', ['-c', settings.devServer.startCommand], {
     cwd,
     env: {
@@ -289,7 +289,7 @@ export function stopDevServer(workspaceId: string): DevServerStatus {
   const config = resolveInstance(workspace.projectPath, workspace.workingBranch)
   const instanceName = config?.instanceName ?? sanitizeBranchName(workspace.workingBranch)
   const worktreePath = workspace.worktreePath
-  const cwd = existsSync(worktreePath) ? worktreePath : workspace.projectPath
+  const cwd = worktreePath && existsSync(worktreePath) ? worktreePath : workspace.projectPath
 
   // Kill tracked process first (covers Node servers and any spawned process)
   const tracked = trackedProcesses.get(workspaceId)

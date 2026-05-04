@@ -51,8 +51,7 @@
               :disable="submitting"
             >
               <template #default>
-                <span class="text-grey-3">{{ opt.label }}</span>
-                <span v-if="opt.description" class="text-grey-6 q-ml-xs">— {{ opt.description }}</span>
+                <AukqOptionLabel :label="opt.label" :description="opt.description" />
               </template>
             </q-checkbox>
           </template>
@@ -68,8 +67,7 @@
               :disable="submitting"
             >
               <template #default>
-                <span class="text-grey-3">{{ opt.label }}</span>
-                <span v-if="opt.description" class="text-grey-6 q-ml-xs">— {{ opt.description }}</span>
+                <AukqOptionLabel :label="opt.label" :description="opt.description" />
               </template>
             </q-radio>
           </template>
@@ -127,7 +125,9 @@
 </template>
 
 <script setup lang="ts">
+import AukqOptionLabel from 'src/components/AukqOptionLabel.vue'
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { expandOtherAnswer, OTHER_OPTION_VALUE } from 'src/utils/expand-other-answer'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -157,7 +157,11 @@ const pending = computed(() => {
 const questions = computed<Question[]>(() => {
   if (!pending.value) return []
   const input = pending.value.input as { questions?: Question[] } | undefined
-  return input?.questions ?? []
+  const raw = input?.questions ?? []
+  return raw.map((q) => ({
+    ...q,
+    options: [...q.options, { label: OTHER_OPTION_VALUE }],
+  }))
 })
 
 const currentQuestion = computed(() => questions.value[stepIndex.value])
@@ -222,9 +226,9 @@ async function submit(): Promise<void> {
     const payload: Record<string, string> = {}
     for (const q of questions.value) {
       if (q.multiSelect) {
-        payload[q.question] = (answers.value[q.question] ?? []).join(', ')
+        payload[q.question] = expandOtherAnswer(answers.value[q.question] ?? [], true)
       } else {
-        payload[q.question] = singleAnswers.value[q.question] ?? ''
+        payload[q.question] = expandOtherAnswer(singleAnswers.value[q.question] ?? '', false)
       }
     }
     await store.submitDeferredAnswer(props.workspaceId, payload, pending.value?.toolCallId)

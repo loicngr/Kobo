@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { Notify } from 'quasar'
 import i18n from 'src/i18n'
 import { useAgentStreamStore } from 'src/stores/agent-stream'
 import type { AgentEvent } from 'src/types/agent-event'
@@ -680,6 +681,40 @@ export const useWebSocketStore = defineStore('websocket', {
           if (workspaceStore.archivedLoaded) {
             workspaceStore.fetchArchivedWorkspaces()
           }
+          break
+        }
+
+        case 'pr:base-changed': {
+          if (!wid) break
+          const p = payload as { oldBase?: string; newBase?: string; prUrl?: string }
+          const oldBase = p.oldBase ?? ''
+          const newBase = p.newBase ?? ''
+          // Mirror the backend update locally so the GitPanel header and
+          // diff viewer pick up the new sourceBranch without a round-trip.
+          workspaceStore.updateWorkspaceFromEvent(wid, { sourceBranch: newBase })
+          // Persistent toast — the user dismisses it explicitly. Includes a
+          // shortcut to open the PR on GitHub.
+          const actions: Array<Record<string, unknown>> = []
+          if (p.prUrl) {
+            actions.push({
+              label: t('pr.openPr'),
+              color: 'white',
+              noDismiss: true,
+              handler: () => window.open(p.prUrl, '_blank'),
+            })
+          }
+          actions.push({ label: t('pr.dismiss'), color: 'white' })
+          Notify.create({
+            type: 'info',
+            position: 'top',
+            timeout: 0,
+            message: t('pr.baseChanged', { oldBase, newBase }),
+            actions,
+          })
+          // Also fire a system-level notification so the user sees the change
+          // when Kobo isn't the focused tab — consistent with other workspace
+          // events (agent ready, quota, etc.) that route through `notify()`.
+          notify(t('pr.baseChanged', { oldBase, newBase }), undefined, wid)
           break
         }
 

@@ -394,18 +394,26 @@ export function getPrUrl(repoPath: string, branchName: string): string | null {
 export interface PrStatus {
   state: 'OPEN' | 'CLOSED' | 'MERGED'
   url: string
+  /** Base branch of the PR (`baseRefName` from `gh pr view`). Optional so
+   *  callers that don't care about the base (drawer indicator, chat template)
+   *  keep working with partial mocks. */
+  base?: string
 }
 
 /** Get the state and URL of the PR for a branch. Returns null if no PR exists. */
 export function getPrStatus(repoPath: string, branchName: string): PrStatus | null {
   try {
-    const raw = execFileSync('gh', ['pr', 'view', branchName, '--json', 'state,url'], {
+    const raw = execFileSync('gh', ['pr', 'view', branchName, '--json', 'state,url,baseRefName'], {
       cwd: repoPath,
       encoding: 'utf-8',
     }).trim()
     if (!raw) return null
-    const parsed = JSON.parse(raw) as { state: string; url: string }
-    return { state: parsed.state as PrStatus['state'], url: parsed.url }
+    const parsed = JSON.parse(raw) as { state: string; url: string; baseRefName?: string }
+    return {
+      state: parsed.state as PrStatus['state'],
+      url: parsed.url,
+      base: parsed.baseRefName || undefined,
+    }
   } catch {
     return null
   }
@@ -713,14 +721,18 @@ export async function getPrUrlAsync(repoPath: string, branchName: string): Promi
 /** Async version of getPrStatus. Returns null if no PR exists. */
 export async function getPrStatusAsync(repoPath: string, branchName: string): Promise<PrStatus | null> {
   try {
-    const { stdout } = await execFileAsync('gh', ['pr', 'view', branchName, '--json', 'state,url'], {
+    const { stdout } = await execFileAsync('gh', ['pr', 'view', branchName, '--json', 'state,url,baseRefName'], {
       cwd: repoPath,
       encoding: 'utf-8',
     })
     const raw = stdout.trim()
     if (!raw) return null
-    const parsed = JSON.parse(raw) as { state: string; url: string }
-    return { state: parsed.state as PrStatus['state'], url: parsed.url }
+    const parsed = JSON.parse(raw) as { state: string; url: string; baseRefName?: string }
+    return {
+      state: parsed.state as PrStatus['state'],
+      url: parsed.url,
+      base: parsed.baseRefName || undefined,
+    }
   } catch {
     return null
   }

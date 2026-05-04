@@ -103,22 +103,67 @@
             <!-- Notifications -->
             <div class="settings-card q-pa-md rounded-borders q-pb-sm q-mb-sm">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.notifications') }}</div>
-              <q-toggle
-                v-model="globalBrowserNotifications"
-                :label="$t('settings.browserNotifications')"
-                dark
-                dense
-                color="indigo-4"
-                class="text-grey-5 text-caption q-mb-xs"
-              />
-              <q-toggle
-                v-model="globalAudioNotifications"
-                :label="$t('settings.audioNotifications')"
-                dark
-                dense
-                color="indigo-4"
-                class="text-grey-5 text-caption"
-              />
+              <div class="column q-gutter-xs">
+                <q-toggle
+                  v-model="globalBrowserNotifications"
+                  :label="$t('settings.browserNotifications')"
+                  dark
+                  dense
+                  color="indigo-4"
+                  class="text-grey-5 text-caption"
+                />
+                <q-toggle
+                  v-model="globalAudioNotifications"
+                  :label="$t('settings.audioNotifications')"
+                  dark
+                  dense
+                  color="indigo-4"
+                  class="text-grey-5 text-caption"
+                />
+              </div>
+              <div class="row items-center q-gutter-sm q-mt-sm">
+                <q-select
+                  v-model="globalAudioNotificationSound"
+                  :options="soundSelectOptions"
+                  :label="$t('settings.notificationSound')"
+                  :disable="!globalAudioNotifications"
+                  dark
+                  dense
+                  outlined
+                  emit-value
+                  map-options
+                  color="indigo-4"
+                  class="col"
+                />
+                <q-btn
+                  flat
+                  dense
+                  color="indigo-4"
+                  icon="play_arrow"
+                  :label="$t('settings.notificationSoundPreview')"
+                  :disable="!globalAudioNotifications"
+                  @click="previewNotificationSound"
+                />
+              </div>
+              <div class="row items-center q-gutter-sm q-mt-sm">
+                <div class="text-grey-5 text-caption" style="min-width: 80px;">
+                  {{ $t('settings.notificationVolume') }}
+                </div>
+                <q-slider
+                  v-model="globalAudioNotificationVolume"
+                  :min="0"
+                  :max="1"
+                  :step="0.05"
+                  :disable="!globalAudioNotifications"
+                  dark
+                  dense
+                  color="indigo-4"
+                  class="col"
+                />
+                <div class="text-grey-5 text-caption" style="min-width: 40px; text-align: right;">
+                  {{ Math.round(globalAudioNotificationVolume * 100) }}%
+                </div>
+              </div>
             </div>
 
             <!-- PR template + Git conventions -->
@@ -797,6 +842,8 @@ import { MODEL_OPTION_DEFS } from 'src/constants/models'
 import type { ProjectSettings } from 'src/stores/settings'
 import { useSettingsStore } from 'src/stores/settings'
 import { type Template, useTemplatesStore } from 'src/stores/templates'
+import { DEFAULT_NOTIFICATION_SOUND, NOTIFICATION_SOUNDS, resolveSoundId } from 'src/utils/notification-sounds'
+import { playNotificationSound } from 'src/utils/notifications'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { WORKTREES_PATH } from '../../../shared/consts'
@@ -816,6 +863,8 @@ const globalGitConventions = ref('')
 const globalEditorCommand = ref('')
 const globalBrowserNotifications = ref(true)
 const globalAudioNotifications = ref(true)
+const globalAudioNotificationSound = ref(DEFAULT_NOTIFICATION_SOUND)
+const globalAudioNotificationVolume = ref(1)
 const globalNotionStatusProperty = ref('')
 const globalNotionStatus = ref('')
 const globalDefaultPermissionMode = ref<'plan' | 'bypass' | 'strict' | 'interactive'>('bypass')
@@ -1019,6 +1068,12 @@ const mcpServerOptions = computed(() => [
   })),
 ])
 
+const soundSelectOptions = computed(() => NOTIFICATION_SOUNDS.map((s) => ({ label: t(s.labelKey), value: s.id })))
+
+function previewNotificationSound(): void {
+  playNotificationSound(globalAudioNotificationSound.value, globalAudioNotificationVolume.value)
+}
+
 // Selected project
 const selectedProject = computed<ProjectSettings | null>(() => {
   if (selectedProjectIndex.value < 0 || selectedProjectIndex.value >= store.projects.length) {
@@ -1035,6 +1090,9 @@ function syncGlobalForm() {
   globalEditorCommand.value = store.global.editorCommand ?? ''
   globalBrowserNotifications.value = store.global.browserNotifications ?? true
   globalAudioNotifications.value = store.global.audioNotifications ?? true
+  globalAudioNotificationSound.value = resolveSoundId(store.global.audioNotificationSound)
+  const v = store.global.audioNotificationVolume
+  globalAudioNotificationVolume.value = typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 1
   globalNotionStatusProperty.value = store.global.notionStatusProperty ?? ''
   globalNotionStatus.value = store.global.notionInProgressStatus ?? ''
   // Migrate legacy values ('auto-accept' or anything unrecognised) to 'bypass'
@@ -1205,6 +1263,8 @@ async function saveGlobal() {
       editorCommand: globalEditorCommand.value,
       browserNotifications: globalBrowserNotifications.value,
       audioNotifications: globalAudioNotifications.value,
+      audioNotificationSound: globalAudioNotificationSound.value,
+      audioNotificationVolume: globalAudioNotificationVolume.value,
       notionStatusProperty: globalNotionStatusProperty.value,
       notionInProgressStatus: globalNotionStatus.value,
       defaultPermissionMode: globalDefaultPermissionMode.value,

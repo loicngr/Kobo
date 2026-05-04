@@ -199,6 +199,8 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
   it('clearPendingForSession on session:ended drops items of that session', async () => {
     const { useWorkspaceStore } = await import('../stores/workspace.js')
     const ws = useWorkspaceStore()
+    vi.spyOn(ws, 'fetchWorkspaces').mockResolvedValue()
+    vi.spyOn(ws, 'finalizeRunningSubagents').mockImplementation(() => {})
     ws.enqueuePending('w1', {
       kind: 'question',
       toolCallId: 'tc-A',
