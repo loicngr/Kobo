@@ -39,7 +39,6 @@ describe('claude-code engine — pathToClaudeCodeExecutable wiring', () => {
         prompt: 'go',
         backendUrl: 'http://localhost:3000',
         koboHome: '/tmp/kobo',
-        // biome-ignore lint/suspicious/noExplicitAny: test fixture, not the public surface
         settings: { dangerouslySkipPermissions: true } as any,
       },
       () => {},

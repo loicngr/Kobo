@@ -3,9 +3,7 @@ import { resolveClaudeBinaryPath } from '../server/services/agent/engines/claude
 
 describe('resolveClaudeBinaryPath', () => {
   it('returns the glibc binary path on Linux glibc x64', () => {
-    const resolveFn = vi.fn(
-      (id: string) => `/fake/node_modules/${id.replace('@anthropic-ai/', '@anthropic-ai/')}`,
-    )
+    const resolveFn = vi.fn((id: string) => `/fake/node_modules/${id.replace('@anthropic-ai/', '@anthropic-ai/')}`)
     const path = resolveClaudeBinaryPath({ platform: 'linux', arch: 'x64', isGlibc: true }, resolveFn)
     expect(path).toBe('/fake/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude')
     expect(resolveFn).toHaveBeenCalledWith('@anthropic-ai/claude-agent-sdk-linux-x64/claude')

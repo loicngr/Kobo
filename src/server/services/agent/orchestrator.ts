@@ -724,10 +724,7 @@ function onSessionEnded(
   // `idle → completed` and log a benign error on every such manual stop.
   const currentStatus = currentWorkspace?.status
   const alreadyTerminal =
-    currentStatus === 'idle' ||
-    currentStatus === 'completed' ||
-    currentStatus === 'error' ||
-    currentStatus === 'quota'
+    currentStatus === 'idle' || currentStatus === 'completed' || currentStatus === 'error' || currentStatus === 'quota'
   if (!alreadyTerminal) {
     try {
       updateWorkspaceStatus(workspaceId, targetStatus)
