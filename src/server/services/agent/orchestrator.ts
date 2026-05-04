@@ -717,10 +717,23 @@ function onSessionEnded(
   // `resumeFailed` is benign: stale id cleared, next iteration starts fresh.
   const isErrorOutcome = !resumeFailed && (reason === 'error' || (exitCode !== null && exitCode !== 0))
   const targetStatus: WorkspaceStatus = isErrorOutcome ? 'error' : 'completed'
-  try {
-    updateWorkspaceStatus(workspaceId, targetStatus)
-  } catch (err) {
-    console.error('[orchestrator] Failed to update workspace status on exit:', err)
+  // Skip the transition when the workspace is already in a terminal state.
+  // This happens when stopAgent (or an equivalent caller) synchronously
+  // normalised the status before the engine's async stop emitted session:ended
+  // — typically `awaiting-user → idle`. Without this guard we'd attempt e.g.
+  // `idle → completed` and log a benign error on every such manual stop.
+  const currentStatus = currentWorkspace?.status
+  const alreadyTerminal =
+    currentStatus === 'idle' ||
+    currentStatus === 'completed' ||
+    currentStatus === 'error' ||
+    currentStatus === 'quota'
+  if (!alreadyTerminal) {
+    try {
+      updateWorkspaceStatus(workspaceId, targetStatus)
+    } catch (err) {
+      console.error('[orchestrator] Failed to update workspace status on exit:', err)
+    }
   }
   try {
     markWorkspaceUnread(workspaceId)

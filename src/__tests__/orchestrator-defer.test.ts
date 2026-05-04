@@ -224,4 +224,56 @@ describe('Orchestrator — pending question (canUseTool)', () => {
     expect(getWorkspace(ws.id)?.status).toBe('idle')
     expect(_getPendingDeferred().get(ws.id)).toBeUndefined()
   })
+
+  it('does not attempt invalid idle → completed transition when session:ended fires after stopAgent', async () => {
+    const { createWorkspace, updateWorkspaceStatus, getWorkspace } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const ws = createWorkspace({
+      name: 'W6',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/w6',
+    })
+    updateWorkspaceStatus(ws.id, 'brainstorming')
+    updateWorkspaceStatus(ws.id, 'executing')
+
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const { startAgent, stopAgent } = orch
+    startAgent(ws.id, '/tmp', 'hi')
+    await Promise.resolve()
+    await Promise.resolve()
+    const cap = captured[0]
+    if (!cap) throw new Error('no capture')
+    cap.onEvent({ kind: 'session:started', engineSessionId: 'engine-sess-1' })
+    cap.onEvent({
+      kind: 'session:user-input-requested',
+      requestKind: 'question',
+      toolCallId: 'toolu_race',
+      toolName: 'AskUserQuestion',
+      payload: { questions: [] },
+    })
+    expect(getWorkspace(ws.id)?.status).toBe('awaiting-user')
+
+    // stopAgent transitions awaiting-user → idle synchronously and removes the
+    // controller from the map. The engine's stop() then resolves async and
+    // emits session:ended — at which point onSessionEnded must NOT try to
+    // transition idle → completed (which is invalid).
+    stopAgent(ws.id)
+    expect(getWorkspace(ws.id)?.status).toBe('idle')
+
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      cap.onEvent({ kind: 'session:ended', reason: 'killed', exitCode: null })
+
+      const invalidTransitionLogged = errSpy.mock.calls.some((call) => {
+        const msg = String(call[0] ?? '')
+        return msg.includes('Failed to update workspace status on exit')
+      })
+      expect(invalidTransitionLogged).toBe(false)
+      expect(getWorkspace(ws.id)?.status).toBe('idle')
+    } finally {
+      errSpy.mockRestore()
+    }
+  })
 })
