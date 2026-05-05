@@ -16,9 +16,8 @@
 </template>
 
 <script setup lang="ts">
-import DOMPurify from 'dompurify'
-import { marked } from 'marked'
 import type { ConversationItem } from 'src/services/agent-event-view'
+import { renderChatMarkdown } from 'src/utils/render-chat-markdown'
 import { computed } from 'vue'
 
 const props = defineProps<{ item: Extract<ConversationItem, { type: 'thinking' }> }>()
@@ -28,8 +27,7 @@ const hasContent = computed(() => props.item.text.trim().length > 0)
 const needsExpand = computed(() => props.item.text.trim().length > 100)
 
 const html = computed(() => {
-  const raw = marked.parse(props.item.text, { async: false, breaks: true, gfm: true }) as string
-  return DOMPurify.sanitize(raw)
+  return renderChatMarkdown(props.item.text)
 })
 </script>
 

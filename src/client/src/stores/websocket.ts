@@ -676,6 +676,15 @@ export const useWebSocketStore = defineStore('websocket', {
 
         case 'workspace:archived':
         case 'workspace:unarchived': {
+          // If the workspace just archived is the one the user is viewing,
+          // clear the selection. WorkspacePage watches `selectedWorkspaceId`
+          // and redirects to the home (workspace list) when it goes null
+          // while a workspace id is still in the route — so all archive
+          // sources (manual click, PR merge auto-archive, other tab) end up
+          // on the home page consistently.
+          if (msg.type === 'workspace:archived' && wid && workspaceStore.selectedWorkspaceId === wid) {
+            workspaceStore.selectedWorkspaceId = null
+          }
           // Refresh active list; if the archived tab was ever opened, refresh that too.
           workspaceStore.fetchWorkspaces()
           if (workspaceStore.archivedLoaded) {

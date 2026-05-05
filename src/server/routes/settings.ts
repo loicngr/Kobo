@@ -1,6 +1,17 @@
 import { Hono } from 'hono'
-import type { ConfigBundle, GlobalSettings, ProjectSettings } from '../services/settings-service.js'
+import {
+  DEFAULT_NOTION_INITIAL_PROMPT,
+  DEFAULT_SENTRY_INITIAL_PROMPT,
+} from '../services/initial-prompt-template-service.js'
+import { DEFAULT_REVIEW_PROMPT_TEMPLATE } from '../services/review-template-service.js'
 import * as settingsService from '../services/settings-service.js'
+import {
+  type ConfigBundle,
+  DEFAULT_GIT_CONVENTIONS,
+  DEFAULT_PR_PROMPT_TEMPLATE,
+  type GlobalSettings,
+  type ProjectSettings,
+} from '../services/settings-service.js'
 import { listTemplates, replaceAllTemplates } from '../services/templates-service.js'
 
 /** Hono sub-router for global and per-project settings CRUD. */
@@ -26,6 +37,20 @@ app.get('/global', (c) => {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
   }
+})
+
+// GET /api/settings/defaults — expose the in-code DEFAULT_* constants for
+// global text-template settings (PR / review / git conventions / Notion /
+// Sentry initial prompts) so the UI can offer a "reset to default" button
+// without duplicating the strings on the frontend.
+app.get('/defaults', (c) => {
+  return c.json({
+    prPromptTemplate: DEFAULT_PR_PROMPT_TEMPLATE,
+    reviewPromptTemplate: DEFAULT_REVIEW_PROMPT_TEMPLATE,
+    gitConventions: DEFAULT_GIT_CONVENTIONS,
+    notionInitialPromptTemplate: DEFAULT_NOTION_INITIAL_PROMPT,
+    sentryInitialPromptTemplate: DEFAULT_SENTRY_INITIAL_PROMPT,
+  })
 })
 
 // GET /api/settings/mcp-servers — list active MCP servers from Claude config

@@ -1,6 +1,8 @@
 import { getDb } from '../db/index.js'
+import { slugifyProjectName } from '../utils/project-slug.js'
 import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 import * as orchestrator from './agent/orchestrator.js'
+import * as settingsService from './settings-service.js'
 import { emitEphemeral } from './websocket-service.js'
 
 export interface PendingWakeup {
@@ -188,7 +190,14 @@ function fire(workspaceId: string): void {
       return
     }
 
-    const worktreePath = wsRow.worktree_path ?? resolveWorkspaceWorktreePath(wsRow.project_path, wsRow.working_branch)
+    const globalSettings = settingsService.getGlobalSettings()
+    const projectSettings = settingsService.getProjectSettings(wsRow.project_path)
+    const projectSlug = globalSettings.worktreesPrefixByProject
+      ? slugifyProjectName(projectSettings?.displayName ?? '', wsRow.project_path)
+      : undefined
+    const worktreePath =
+      wsRow.worktree_path ??
+      resolveWorkspaceWorktreePath(wsRow.project_path, wsRow.working_branch, globalSettings.worktreesPath, projectSlug)
     // Narrow against the four known values; unknowns → 'bypass'.
     const stored = wsRow.agent_permission_mode
     const agentPermissionMode: 'plan' | 'bypass' | 'strict' | 'interactive' =

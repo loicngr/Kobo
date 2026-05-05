@@ -13,7 +13,7 @@
         icon="refresh"
         color="grey-6"
         :loading="loadingStats"
-        @click="loadGitStats"
+        @click="loadGitStats({ freshFetch: true })"
       >
         <q-tooltip>{{ $t('tooltip.refreshGitStats') }}</q-tooltip>
       </q-btn>
@@ -64,6 +64,27 @@
       <div class="text-caption q-mb-sm text-grey-8" style="font-size: 11px;">
         {{ $t('git.from') }} {{ workspace.sourceBranch }}
         <template v-if="gitStats">
+          <span v-if="gitStats.commitCount > 0 || gitStats.behindCount > 0" class="q-ml-xs">
+            <span
+              v-if="gitStats.commitCount > 0"
+              class="cursor-pointer arrow-clickable"
+              style="color: #4ade80;"
+              @click.stop="openDivergence('ahead')"
+            >
+              ↑{{ gitStats.commitCount }}
+            </span>
+            <span
+              v-if="gitStats.behindCount > 0"
+              class="cursor-pointer arrow-clickable q-ml-xs"
+              style="color: #f87171;"
+              @click.stop="openDivergence('behind')"
+            >
+              ↓{{ gitStats.behindCount }}
+            </span>
+            <q-tooltip>
+              {{ $t('git.aheadBehindTooltip', { ahead: gitStats.commitCount, behind: gitStats.behindCount, source: workspace.sourceBranch }) }}
+            </q-tooltip>
+          </span>
           &middot;
           <span v-if="gitStats.unpushedCount === -1">{{ $t('git.localOnly') }}</span>
           <span v-else-if="gitStats.unpushedCount === 0" style="color: #4ade80;">{{ $t('git.pushed') }}</span>
@@ -400,6 +421,18 @@
         @send-to-chat="onSendToChat"
       />
     </q-dialog>
+
+    <BranchDivergenceDialog
+      v-if="workspace && gitStats"
+      v-model="divergenceDialogOpen"
+      :workspace-id="workspace.id"
+      :initial-tab="divergenceInitialTab"
+      :ahead-count="gitStats.commitCount"
+      :behind-count="gitStats.behindCount"
+      :source-branch="workspace.sourceBranch"
+      :working-branch="workspace.workingBranch"
+      @append-sha="appendCommitToChat"
+    />
   </div>
 </template>
 
@@ -410,9 +443,10 @@ import { useI18n } from 'vue-i18n'
 
 const DiffViewer = defineAsyncComponent(() => import('./DiffViewer.vue'))
 
-import type { GitStats, Workspace } from 'src/stores/workspace'
+import BranchDivergenceDialog from 'src/components/BranchDivergenceDialog.vue'
+import type { BranchCommit, GitStats, Workspace } from 'src/stores/workspace'
 import { useWorkspaceStore, WorkspaceActionError } from 'src/stores/workspace'
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 
 const props = defineProps<{
   workspace: Workspace | null
@@ -439,14 +473,6 @@ function openDiff(asReview: boolean) {
 const renamingBranch = ref(false)
 
 // Commit list expand state + cache per workspace
-interface BranchCommit {
-  sha: string
-  shortSha: string
-  subject: string
-  author: string
-  date: string
-  isPushed: boolean
-}
 const showCommits = ref(false)
 const loadingCommits = ref(false)
 const commits = ref<BranchCommit[]>([])
@@ -528,29 +554,58 @@ const createPrDisabledReason = computed(() => {
   return ''
 })
 
-async function loadGitStats() {
+// Branch divergence dialog state
+const divergenceDialogOpen = ref(false)
+const divergenceInitialTab = ref<'ahead' | 'behind'>('ahead')
+
+function openDivergence(tab: 'ahead' | 'behind') {
+  divergenceInitialTab.value = tab
+  divergenceDialogOpen.value = true
+}
+
+let inflightController: AbortController | null = null
+let intervalId: ReturnType<typeof setInterval> | null = null
+
+async function loadGitStats(opts: { freshFetch?: boolean } = {}) {
   if (!props.workspace) {
     gitStats.value = null
     return
   }
+  inflightController?.abort()
+  const controller = new AbortController()
+  inflightController = controller
+  const wsIdAtStart = props.workspace.id
   loadingStats.value = true
   try {
-    gitStats.value = await store.fetchGitStats(props.workspace.id)
-  } catch {
+    const stats = await store.fetchGitStats(wsIdAtStart, { freshFetch: opts.freshFetch, signal: controller.signal })
+    if (controller.signal.aborted) return
+    if (props.workspace?.id !== wsIdAtStart) return
+    gitStats.value = stats
+  } catch (err) {
+    if ((err as Error)?.name === 'AbortError') return
     gitStats.value = null
   } finally {
+    if (inflightController === controller) inflightController = null
     loadingStats.value = false
   }
 }
 
+// Refresh when agent runs git commands (debounced)
+let gitRefreshTimeout: ReturnType<typeof setTimeout> | null = null
+
 watch(
   () => props.workspace?.id,
-  () => loadGitStats(),
+  () => {
+    inflightController?.abort()
+    if (gitRefreshTimeout) {
+      clearTimeout(gitRefreshTimeout)
+      gitRefreshTimeout = null
+    }
+    loadGitStats({ freshFetch: true })
+  },
   { immediate: true },
 )
 
-// Refresh when agent runs git commands (debounced)
-let gitRefreshTimeout: ReturnType<typeof setTimeout> | null = null
 watch(
   () => store.gitRefreshTrigger,
   () => {
@@ -559,8 +614,20 @@ watch(
   },
 )
 
-onUnmounted(() => {
-  if (gitRefreshTimeout) clearTimeout(gitRefreshTimeout)
+onMounted(() => {
+  intervalId = setInterval(() => loadGitStats(), 60_000)
+})
+
+onBeforeUnmount(() => {
+  if (intervalId) {
+    clearInterval(intervalId)
+    intervalId = null
+  }
+  if (gitRefreshTimeout) {
+    clearTimeout(gitRefreshTimeout)
+    gitRefreshTimeout = null
+  }
+  inflightController?.abort()
 })
 
 function openRenameBranchDialog() {
@@ -925,6 +992,13 @@ async function handleOpenPr() {
 .commit-subject {
   font-size: 11px;
   min-width: 0;
+}
+.arrow-clickable {
+  transition: opacity 0.15s;
+}
+.arrow-clickable:hover {
+  opacity: 0.75;
+  text-decoration: underline;
 }
 </style>
 

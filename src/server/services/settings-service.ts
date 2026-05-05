@@ -9,8 +9,10 @@ import {
   sanitizeWorktreesPath,
   validateWorktreesPath,
 } from '../utils/worktree-paths.js'
+import { DEFAULT_NOTION_INITIAL_PROMPT, DEFAULT_SENTRY_INITIAL_PROMPT } from './initial-prompt-template-service.js'
+import { DEFAULT_REVIEW_PROMPT_TEMPLATE } from './review-template-service.js'
 
-const DEFAULT_GIT_CONVENTIONS = `# Git conventions
+export const DEFAULT_GIT_CONVENTIONS = `# Git conventions
 
 ## Commits
 - Use Conventional Commits: \`type(scope): subject\`
@@ -36,7 +38,7 @@ const DEFAULT_GIT_CONVENTIONS = `# Git conventions
 - Always inspect \`git status\` and \`git diff\` before staging
 `
 
-const DEFAULT_PR_PROMPT_TEMPLATE = `A pull request has been opened: {{pr_url}} (#{{pr_number}})
+export const DEFAULT_PR_PROMPT_TEMPLATE = `A pull request has been opened: {{pr_url}} (#{{pr_number}})
 
 Context:
 - Workspace: {{workspace_name}}
@@ -96,6 +98,9 @@ export interface ProjectSettings {
   defaultModel: string
   dangerouslySkipPermissions: boolean
   prPromptTemplate: string
+  reviewPromptTemplate: string
+  notionInitialPromptTemplate: string
+  sentryInitialPromptTemplate: string
   gitConventions: string
   setupScript: string
   devServer: DevServerConfig
@@ -108,6 +113,9 @@ export interface GlobalSettings {
   defaultModel: string
   dangerouslySkipPermissions: boolean
   prPromptTemplate: string
+  reviewPromptTemplate: string
+  notionInitialPromptTemplate: string
+  sentryInitialPromptTemplate: string
   gitConventions: string
   editorCommand: string
   browserNotifications: boolean
@@ -121,6 +129,7 @@ export interface GlobalSettings {
   sentryMcpKey: string
   tags: string[]
   worktreesPath: string
+  worktreesPrefixByProject: boolean
 }
 
 /** Default workspace tags seeded on fresh install and on settings upgrade. */
@@ -280,6 +289,49 @@ const settingsMigrations: SettingsMigration[] = [
       }
     },
   },
+  {
+    version: 14,
+    name: 'add-worktrees-prefix-by-project',
+    migrate({ global }) {
+      if (typeof global.worktreesPrefixByProject !== 'boolean') {
+        global.worktreesPrefixByProject = false
+      }
+    },
+  },
+  {
+    version: 15,
+    name: 'add-review-prompt-template',
+    migrate({ global, projects }) {
+      if (typeof global.reviewPromptTemplate !== 'string') {
+        global.reviewPromptTemplate = DEFAULT_REVIEW_PROMPT_TEMPLATE
+      }
+      for (const p of projects) {
+        if (typeof p.reviewPromptTemplate !== 'string') {
+          p.reviewPromptTemplate = ''
+        }
+      }
+    },
+  },
+  {
+    version: 16,
+    name: 'add-notion-sentry-initial-prompts',
+    migrate({ global, projects }) {
+      if (typeof global.notionInitialPromptTemplate !== 'string') {
+        global.notionInitialPromptTemplate = DEFAULT_NOTION_INITIAL_PROMPT
+      }
+      if (typeof global.sentryInitialPromptTemplate !== 'string') {
+        global.sentryInitialPromptTemplate = DEFAULT_SENTRY_INITIAL_PROMPT
+      }
+      for (const p of projects) {
+        if (typeof p.notionInitialPromptTemplate !== 'string') {
+          p.notionInitialPromptTemplate = ''
+        }
+        if (typeof p.sentryInitialPromptTemplate !== 'string') {
+          p.sentryInitialPromptTemplate = ''
+        }
+      }
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -291,6 +343,9 @@ export interface EffectiveSettings {
   model: string
   dangerouslySkipPermissions: boolean
   prPromptTemplate: string
+  reviewPromptTemplate: string
+  notionInitialPromptTemplate: string
+  sentryInitialPromptTemplate: string
   gitConventions: string
   sourceBranch: string
   devServer: DevServerConfig | null
@@ -331,6 +386,9 @@ function defaultSettings(): Settings {
       defaultModel: 'claude-opus-4-7',
       dangerouslySkipPermissions: true,
       prPromptTemplate: DEFAULT_PR_PROMPT_TEMPLATE,
+      reviewPromptTemplate: DEFAULT_REVIEW_PROMPT_TEMPLATE,
+      notionInitialPromptTemplate: DEFAULT_NOTION_INITIAL_PROMPT,
+      sentryInitialPromptTemplate: DEFAULT_SENTRY_INITIAL_PROMPT,
       gitConventions: DEFAULT_GIT_CONVENTIONS,
       editorCommand: '',
       browserNotifications: true,
@@ -344,6 +402,7 @@ function defaultSettings(): Settings {
       sentryMcpKey: '',
       tags: [...DEFAULT_WORKSPACE_TAGS],
       worktreesPath: WORKTREES_PATH,
+      worktreesPrefixByProject: false,
     },
     projects: [],
   }
@@ -357,6 +416,9 @@ function defaultProjectSettings(projectPath: string): ProjectSettings {
     defaultModel: '',
     dangerouslySkipPermissions: true,
     prPromptTemplate: '',
+    reviewPromptTemplate: '',
+    notionInitialPromptTemplate: '',
+    sentryInitialPromptTemplate: '',
     gitConventions: '',
     setupScript: '',
     devServer: {
@@ -564,6 +626,9 @@ export function getEffectiveSettings(projectPath: string): EffectiveSettings {
       model: settings.global.defaultModel,
       dangerouslySkipPermissions: settings.global.dangerouslySkipPermissions,
       prPromptTemplate: settings.global.prPromptTemplate,
+      reviewPromptTemplate: settings.global.reviewPromptTemplate,
+      notionInitialPromptTemplate: settings.global.notionInitialPromptTemplate,
+      sentryInitialPromptTemplate: settings.global.sentryInitialPromptTemplate,
       gitConventions: settings.global.gitConventions,
       sourceBranch: '',
       devServer: null,
@@ -577,6 +642,9 @@ export function getEffectiveSettings(projectPath: string): EffectiveSettings {
     model: project.defaultModel || settings.global.defaultModel,
     dangerouslySkipPermissions: project.dangerouslySkipPermissions ?? settings.global.dangerouslySkipPermissions,
     prPromptTemplate: project.prPromptTemplate || settings.global.prPromptTemplate,
+    reviewPromptTemplate: project.reviewPromptTemplate || settings.global.reviewPromptTemplate,
+    notionInitialPromptTemplate: project.notionInitialPromptTemplate || settings.global.notionInitialPromptTemplate,
+    sentryInitialPromptTemplate: project.sentryInitialPromptTemplate || settings.global.sentryInitialPromptTemplate,
     gitConventions: project.gitConventions || settings.global.gitConventions,
     sourceBranch: project.defaultSourceBranch,
     devServer: project.devServer,
@@ -593,6 +661,9 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'defaultModel',
     'dangerouslySkipPermissions',
     'prPromptTemplate',
+    'reviewPromptTemplate',
+    'notionInitialPromptTemplate',
+    'sentryInitialPromptTemplate',
     'gitConventions',
     'editorCommand',
     'browserNotifications',
@@ -606,6 +677,7 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'sentryMcpKey',
     'tags',
     'worktreesPath',
+    'worktreesPrefixByProject',
   ]
   const filtered = pickKnownKeys<GlobalSettings>(data as Record<string, unknown>, allowedGlobalKeys)
   if (filtered.tags !== undefined) {
@@ -659,6 +731,9 @@ export function upsertProject(projectPath: string, data: Partial<Omit<ProjectSet
     'defaultModel',
     'dangerouslySkipPermissions',
     'prPromptTemplate',
+    'reviewPromptTemplate',
+    'notionInitialPromptTemplate',
+    'sentryInitialPromptTemplate',
     'gitConventions',
     'setupScript',
     'devServer',

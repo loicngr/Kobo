@@ -35,11 +35,10 @@
 </template>
 
 <script setup lang="ts">
-import DOMPurify from 'dompurify'
-import { marked } from 'marked'
 import type { ConversationItem } from 'src/services/agent-event-view'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { injectImagePreviews } from 'src/utils/inject-image-previews'
+import { renderChatMarkdown } from 'src/utils/render-chat-markdown'
 import { computed, ref } from 'vue'
 
 const props = defineProps<{ item: Extract<ConversationItem, { type: 'user' }> }>()
@@ -50,8 +49,7 @@ const isSystemPrompt = computed(() => props.item.sender === 'system-prompt')
 
 const html = computed(() => {
   const withImages = injectImagePreviews(props.item.content, workspaceStore.selectedWorkspaceId ?? '')
-  const raw = marked.parse(withImages, { async: false, breaks: true, gfm: true }) as string
-  return DOMPurify.sanitize(raw)
+  return renderChatMarkdown(withImages)
 })
 
 // Lightbox state: clicking a rendered image opens it at full size in a

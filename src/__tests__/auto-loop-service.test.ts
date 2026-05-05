@@ -17,6 +17,10 @@ vi.mock('../server/services/agent/orchestrator.js', () => ({
 
 vi.mock('../server/services/settings-service.js', () => ({
   getProjectSettings: vi.fn(),
+  getGlobalSettings: vi.fn(() => ({
+    worktreesPath: '',
+    worktreesPrefixByProject: false,
+  })),
 }))
 
 let tmpDir: string
@@ -725,6 +729,86 @@ describe('auto-loop-service', () => {
 
       const prompt = await getLastIterationPrompt()
       expect(prompt).not.toContain('finalization task')
+    })
+  })
+
+  describe('spawnNextIteration — project slug in worktree path', () => {
+    beforeEach(async () => {
+      const orch = await import('../server/services/agent/orchestrator.js')
+      ;(orch.startAgent as ReturnType<typeof vi.fn>).mockImplementation(() => ({
+        agentSessionId: 'mock-agent-session-id',
+      }))
+    })
+
+    it('forwards project slug to resolveWorkspaceWorktreePath when worktreesPrefixByProject=true and worktree_path is null', async () => {
+      const svc = await import('../server/services/auto-loop-service.js')
+      const settings = await import('../server/services/settings-service.js')
+      const orch = await import('../server/services/agent/orchestrator.js')
+      const { createTask } = await import('../server/services/workspace-service.js')
+      const db = (await import('../server/db/index.js')).getDb()
+
+      // Ensure worktree_path is NULL in DB (legacy row — no stored path)
+      db.prepare('UPDATE workspaces SET worktree_path = NULL WHERE id = ?').run(wsId)
+
+      // worktreesPath uses the tmpDir so the fs.existsSync pre-check can pass:
+      // we need to create <tmpDir>/sekur/feature/x on disk for the check.
+      const expectedWorktreeDir = path.join(tmpDir, 'sekur', 'feature', 'x')
+      fs.mkdirSync(expectedWorktreeDir, { recursive: true })
+
+      vi.mocked(settings.getGlobalSettings).mockReturnValue({
+        worktreesPath: tmpDir,
+        worktreesPrefixByProject: true,
+      } as never)
+      vi.mocked(settings.getProjectSettings).mockReturnValue({
+        displayName: 'Sekur',
+        e2e: { framework: '', skill: '', prompt: '' },
+        finalization: { prompt: '' },
+      } as never)
+
+      createTask(wsId, { title: 'implement feature', isAcceptanceCriterion: false, sortOrder: 0 })
+      svc._test_setAutoLoopReady(wsId, true)
+      svc.enable(wsId)
+
+      const calls = (orch.startAgent as ReturnType<typeof vi.fn>).mock.calls
+      expect(calls.length).toBeGreaterThan(0)
+      const worktreePathArg = (calls[calls.length - 1] as unknown[])[1] as string
+      // slug "sekur" must appear in the resolved path
+      expect(worktreePathArg).toContain('sekur')
+      expect(worktreePathArg).toBe(expectedWorktreeDir)
+    })
+
+    it('does NOT insert a slug when worktreesPrefixByProject=false', async () => {
+      const svc = await import('../server/services/auto-loop-service.js')
+      const settings = await import('../server/services/settings-service.js')
+      const orch = await import('../server/services/agent/orchestrator.js')
+      const { createTask } = await import('../server/services/workspace-service.js')
+      const db = (await import('../server/db/index.js')).getDb()
+
+      db.prepare('UPDATE workspaces SET worktree_path = NULL WHERE id = ?').run(wsId)
+
+      // Without slug the path is <tmpDir>/feature/x
+      const expectedWorktreeDir = path.join(tmpDir, 'feature', 'x')
+      fs.mkdirSync(expectedWorktreeDir, { recursive: true })
+
+      vi.mocked(settings.getGlobalSettings).mockReturnValue({
+        worktreesPath: tmpDir,
+        worktreesPrefixByProject: false,
+      } as never)
+      vi.mocked(settings.getProjectSettings).mockReturnValue({
+        displayName: 'Sekur',
+        e2e: { framework: '', skill: '', prompt: '' },
+        finalization: { prompt: '' },
+      } as never)
+
+      createTask(wsId, { title: 'implement feature', isAcceptanceCriterion: false, sortOrder: 0 })
+      svc._test_setAutoLoopReady(wsId, true)
+      svc.enable(wsId)
+
+      const calls = (orch.startAgent as ReturnType<typeof vi.fn>).mock.calls
+      expect(calls.length).toBeGreaterThan(0)
+      const worktreePathArg = (calls[calls.length - 1] as unknown[])[1] as string
+      expect(worktreePathArg).not.toContain('sekur')
+      expect(worktreePathArg).toBe(expectedWorktreeDir)
     })
   })
 })

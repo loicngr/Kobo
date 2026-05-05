@@ -37,6 +37,9 @@ describe('settings store', () => {
           defaultModel: '',
           dangerouslySkipPermissions: true,
           prPromptTemplate: '',
+          reviewPromptTemplate: '',
+          notionInitialPromptTemplate: '',
+          sentryInitialPromptTemplate: '',
           gitConventions: '',
           setupScript: '',
           devServer: { startCommand: '', stopCommand: '' },
@@ -58,6 +61,9 @@ describe('settings store', () => {
           defaultModel: '',
           dangerouslySkipPermissions: true,
           prPromptTemplate: '',
+          reviewPromptTemplate: '',
+          notionInitialPromptTemplate: '',
+          sentryInitialPromptTemplate: '',
           gitConventions: '',
           setupScript: '',
           devServer: { startCommand: '', stopCommand: '' },
@@ -71,6 +77,9 @@ describe('settings store', () => {
           defaultModel: '',
           dangerouslySkipPermissions: true,
           prPromptTemplate: '',
+          reviewPromptTemplate: '',
+          notionInitialPromptTemplate: '',
+          sentryInitialPromptTemplate: '',
           gitConventions: '',
           setupScript: '',
           devServer: { startCommand: '', stopCommand: '' },
@@ -80,5 +89,11 @@ describe('settings store', () => {
       ]
       expect(store.projectPaths).toEqual(['/a', '/b'])
     })
+  })
+
+  it('exposes notionInitialPromptTemplate and sentryInitialPromptTemplate on store types', () => {
+    const store = useSettingsStore()
+    expect(store.global.notionInitialPromptTemplate).toBeDefined()
+    expect(store.global.sentryInitialPromptTemplate).toBeDefined()
   })
 })

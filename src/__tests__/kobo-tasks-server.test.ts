@@ -2,7 +2,17 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import Database from 'better-sqlite3'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+
+// Mock settings-service to avoid filesystem access during tests.
+vi.mock('../server/services/settings-service.js', () => ({
+  getGlobalSettings: vi.fn(() => ({
+    worktreesPath: '',
+    worktreesPrefixByProject: false,
+  })),
+  getProjectSettings: vi.fn(),
+}))
+
 import {
   createTaskHandler,
   deleteTaskHandler,

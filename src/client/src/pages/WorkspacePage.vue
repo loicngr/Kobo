@@ -493,6 +493,19 @@ watch(
     }
   },
 )
+
+// Redirect to the home (workspace list) when the workspace we're viewing
+// disappears — happens on archive (manual click, PR-merge auto-archive,
+// archive from another tab) or delete. Both flows null `selectedWorkspaceId`
+// in the store; we watch that here so every archive source ends up on home.
+watch(
+  () => store.selectedWorkspaceId,
+  (id) => {
+    if (id === null && route.params.id) {
+      router.push({ name: 'workspace' })
+    }
+  },
+)
 </script>
 
 <style lang="scss" scoped>

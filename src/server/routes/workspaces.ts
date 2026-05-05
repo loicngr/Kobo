@@ -17,9 +17,16 @@ import { listEngines } from '../services/agent/engines/registry.js'
 import * as agentManager from '../services/agent/orchestrator.js'
 import * as autoLoopService from '../services/auto-loop-service.js'
 import * as devServerService from '../services/dev-server-service.js'
+import {
+  DEFAULT_NOTION_INITIAL_PROMPT,
+  DEFAULT_SENTRY_INITIAL_PROMPT,
+  renderNotionInitialPrompt,
+  renderSentryInitialPrompt,
+} from '../services/initial-prompt-template-service.js'
 import * as notionService from '../services/notion-service.js'
 import { renderPrTemplate } from '../services/pr-template-service.js'
 import { getAllPrStates } from '../services/pr-watcher-service.js'
+import { DEFAULT_REVIEW_PROMPT_TEMPLATE, renderReviewTemplate } from '../services/review-template-service.js'
 import * as sentryService from '../services/sentry-service.js'
 import * as settingsService from '../services/settings-service.js'
 import { runSetupScript } from '../services/setup-script-service.js'
@@ -30,7 +37,8 @@ import type { AgentPermissionMode, WorkspaceStatus } from '../services/workspace
 import * as workspaceService from '../services/workspace-service.js'
 import * as worktreeService from '../services/worktree-service.js'
 import * as gitOps from '../utils/git-ops.js'
-import { resolveSiblingWorkspaceWorktreePath } from '../utils/worktree-paths.js'
+import { slugifyProjectName } from '../utils/project-slug.js'
+import { resolveSiblingWorkspaceWorktreePath, resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 
 /** Hono sub-router for workspace CRUD, tasks, agent lifecycle, git operations, and PR creation. */
 const app = new Hono()
@@ -222,6 +230,32 @@ app.post('/', migrationGuard, async (c) => {
       }
     }
 
+    // Compute the project slug once and reuse it for both the prospective
+    // path check and the actual worktree creation below.
+    const projectSettings = settingsService.getProjectSettings(body.projectPath)
+    const projectSlug = globalSettings.worktreesPrefixByProject
+      ? slugifyProjectName(projectSettings?.displayName ?? '', body.projectPath)
+      : undefined
+
+    // Resolve the prospective worktree path unconditionally so that:
+    //   1. We can refuse the request before any DB write when the path exists.
+    //   2. createWorkspace always receives the correct slug-prefixed path and
+    //      never falls back to the no-slug resolver inside workspace-service.
+    let prospectiveWorktreePath: string
+    if (useReusedWorktree) {
+      prospectiveWorktreePath = body.worktreePath as string
+    } else {
+      prospectiveWorktreePath = resolveWorkspaceWorktreePath(
+        body.projectPath,
+        workingBranch,
+        globalSettings.worktreesPath,
+        projectSlug,
+      )
+      if (fs.existsSync(prospectiveWorktreePath)) {
+        return c.json({ error: `Worktree path already exists: ${prospectiveWorktreePath}` }, 409)
+      }
+    }
+
     let workspace = workspaceService.createWorkspace({
       name: body.name,
       projectPath: body.projectPath,
@@ -230,7 +264,8 @@ app.post('/', migrationGuard, async (c) => {
       notionUrl: body.notionUrl,
       notionPageId: body.notionPageId,
       sentryUrl: body.sentryUrl,
-      ...(useReusedWorktree ? { worktreePath: body.worktreePath, worktreeOwned: false } : {}),
+      worktreePath: prospectiveWorktreePath,
+      worktreeOwned: !useReusedWorktree,
       model: body.model,
       reasoningEffort: body.reasoningEffort,
       agentPermissionMode: resolveCreateAgentPermissionMode(body.agentPermissionMode, body.projectPath, globalSettings),
@@ -334,6 +369,7 @@ app.post('/', migrationGuard, async (c) => {
           workingBranch,
           body.sourceBranch,
           globalSettings.worktreesPath,
+          projectSlug,
         )
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
@@ -551,6 +587,13 @@ app.post('/', migrationGuard, async (c) => {
       // Transition to brainstorming and build the initial agent prompt
       workspaceService.updateWorkspaceStatus(workspace.id, 'brainstorming')
 
+      // Resolve the per-feature initial-prompt templates with single-fallback
+      // semantics: project || global is already handled inside getEffectiveSettings,
+      // and a whitespace-only string acts as a user escape hatch (skip injection).
+      // An empty string falls back to the hard-coded default below at injection time.
+      const notionTpl = effectiveSettings.notionInitialPromptTemplate || DEFAULT_NOTION_INITIAL_PROMPT
+      const sentryTpl = effectiveSettings.sentryInitialPromptTemplate || DEFAULT_SENTRY_INITIAL_PROMPT
+
       // Build prompt with tasks and acceptance criteria
       const allTasks = workspaceService.listTasks(workspace.id)
       const todos = allTasks.filter((t) => !t.isAcceptanceCriterion)
@@ -573,10 +616,19 @@ app.post('/', migrationGuard, async (c) => {
       }
 
       brainstormPrompt += `\nBranch: ${workingBranch}\nSource branch: ${body.sourceBranch}\nIMPORTANT: When creating a pull request, always use --base ${body.sourceBranch} to target the correct source branch.\n`
+      brainstormPrompt += `\nWorking directory: ${worktreePath}\n`
 
       if (notionFilePath) {
         brainstormPrompt += `\nNotion ticket: ${body.notionUrl}`
         brainstormPrompt += `\nLocal copy: ${notionFilePath}\n`
+        if (notionFilePath !== null && notionTpl.trim().length > 0) {
+          const renderedNotion = renderNotionInitialPrompt(notionTpl, {
+            ticketId: notionContent?.ticketId ?? '',
+            notionUrl: body.notionUrl ?? '',
+            notionFilePath,
+          })
+          brainstormPrompt += `\n${renderedNotion}\n`
+        }
       }
 
       if (sentryFilePath && sentryContent) {
@@ -596,6 +648,14 @@ app.post('/', migrationGuard, async (c) => {
           `- mcp__sentry__get_sentry_resource(url, resourceType) — fetch the issue, breadcrumbs, replay or trace\n` +
           `- mcp__sentry__search_issue_events(organizationSlug, issueId='${sentryContent.issueId}') — recent events\n` +
           `- mcp__sentry__get_issue_tag_values(organizationSlug, issueId='${sentryContent.issueId}', key) — filter by tag\n`
+        if (sentryTpl.trim().length > 0) {
+          const renderedSentry = renderSentryInitialPrompt(sentryTpl, {
+            issueId: sentryContent.issueId,
+            sentryUrl: body.sentryUrl ?? '',
+            sentryFilePath,
+          })
+          brainstormPrompt += `\n${renderedSentry}\n`
+        }
       }
 
       if (todos.length > 0) {
@@ -1756,8 +1816,18 @@ app.get('/:id/git-stats', async (c) => {
     }
 
     const worktreePath = workspace.worktreePath
+    const freshFetch = c.req.query('freshFetch') === '1'
+
+    if (freshFetch) {
+      await gitOps.fetchSourceBranchAsync(worktreePath, workspace.sourceBranch)
+    } else {
+      // Fire-and-forget: explicitly catch to avoid unhandled rejection if the
+      // helper ever changes contract and starts rejecting.
+      void gitOps.fetchSourceBranchAsync(worktreePath, workspace.sourceBranch).catch(() => {})
+    }
 
     const commitCount = gitOps.getCommitCount(worktreePath, workspace.sourceBranch, workspace.workingBranch)
+    const behindCount = gitOps.getCommitsBehind(worktreePath, workspace.sourceBranch, workspace.workingBranch)
     const diffStats = gitOps.getStructuredDiffStatsBetween(
       worktreePath,
       workspace.sourceBranch,
@@ -1769,6 +1839,7 @@ app.get('/:id/git-stats', async (c) => {
 
     return c.json({
       commitCount,
+      behindCount,
       filesChanged: diffStats.filesChanged,
       insertions: diffStats.insertions,
       deletions: diffStats.deletions,
@@ -1885,6 +1956,38 @@ app.post('/:id/rollback-file', async (c) => {
   }
 })
 
+// GET /api/workspaces/:id/branch-divergence?limit=50
+// Returns commits on the working branch ahead of source (`ahead`) and
+// commits on source not yet on the working branch (`behind`). One round-trip
+// for the BranchDivergenceDialog.
+app.get('/:id/branch-divergence', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+    const limitRaw = c.req.query('limit')
+    const parsed = parseInt(limitRaw ?? '50', 10)
+    const limit = Math.min(Math.max(1, Number.isNaN(parsed) ? 50 : parsed), 200)
+    const worktreePath = workspace.worktreePath
+
+    const ahead = gitOps.listBranchCommits(worktreePath, workspace.sourceBranch, workspace.workingBranch, limit)
+    const behind = gitOps.listCommitsBehind(worktreePath, workspace.sourceBranch, workspace.workingBranch, limit)
+
+    c.header('Cache-Control', 'no-store')
+    return c.json({
+      ahead,
+      behind,
+      sourceBranch: workspace.sourceBranch,
+      workingBranch: workspace.workingBranch,
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
 // GET /api/workspaces/:id/commits?limit=50 — list commits between sourceBranch
 // and HEAD, each tagged with whether it's already pushed to origin/<branch>.
 app.get('/:id/commits', (c) => {
@@ -1942,6 +2045,10 @@ app.post('/:id/rename-branch', async (c) => {
     // Sibling rename: keep the same worktrees-root, swap the branch leaf.
     // Cannot use `path.dirname` directly because branches with slashes
     // (e.g. `feature/x`) make the dirname end one level too deep.
+    // Note: we don't pass a `projectSlug` argument here on purpose — the
+    // sibling resolver auto-detects whether the existing path was prefixed
+    // by inspecting its suffix, so prefixed and legacy worktrees both keep
+    // their layout across rename without us having to know the slug here.
     const newWorktreePath = resolveSiblingWorkspaceWorktreePath(
       workspace.projectPath,
       oldWorktreePath,
@@ -2022,6 +2129,9 @@ app.post('/:id/resync-branch', (c) => {
     // if the move fails (dir already moved, lockfile, dirty tree), we still
     // update the DB so git ops stay aligned with the current ref name — the
     // user can repair the dir manually.
+    // Same auto-detection rationale as the rename path above: the resolver
+    // recovers the (possibly slug-prefixed) root from the existing path, so
+    // we don't pass `projectSlug` here either.
     const newWorktreePath = resolveSiblingWorkspaceWorktreePath(
       workspace.projectPath,
       worktreePath,
@@ -2419,6 +2529,137 @@ app.post('/:id/open-pr', async (c) => {
     }
 
     return c.json({ ok: true, prNumber, prUrl, messageSent })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// POST /api/workspaces/:id/start-review — ask the agent to review committed + uncommitted changes
+app.post('/:id/start-review', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+
+    const body = await c.req
+      .json<{ additionalInstructions?: string; newSession?: boolean }>()
+      .catch(() => ({}) as { additionalInstructions?: string; newSession?: boolean })
+    const additionalInstructions = (body.additionalInstructions ?? '').trim()
+    const newSession = body.newSession === true
+
+    const worktreePath = workspace.worktreePath
+
+    // Best-effort fetch so the base ref is fresh
+    try {
+      await execFileAsync('git', ['fetch', 'origin', workspace.sourceBranch], { cwd: worktreePath })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      console.warn(`[start-review] git fetch origin ${workspace.sourceBranch} failed: ${msg}`)
+    }
+
+    // Resolve base commit
+    let baseCommit: string
+    try {
+      const { stdout } = await execFileAsync('git', ['rev-parse', `origin/${workspace.sourceBranch}`], {
+        cwd: worktreePath,
+      })
+      baseCommit = stdout.trim()
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return c.json({ error: `Cannot resolve base commit for branch ${workspace.sourceBranch}: ${msg}` }, 500)
+    }
+
+    // Build context
+    const commits = gitOps.getCommitsBetween(worktreePath, workspace.sourceBranch, workspace.workingBranch)
+    const committedStats = gitOps.getDiffStatsBetween(worktreePath, workspace.sourceBranch, workspace.workingBranch)
+    const workingTreeStats = gitOps.getWorkingTreeDiffStats(worktreePath)
+    const diffStats =
+      workingTreeStats.trim().length > 0
+        ? `${committedStats}\n\n— Working tree (uncommitted) —\n${workingTreeStats}`
+        : committedStats
+
+    const effective = settingsService.getEffectiveSettings(workspace.projectPath)
+    const template = effective.reviewPromptTemplate || DEFAULT_REVIEW_PROMPT_TEMPLATE
+
+    const rendered = renderReviewTemplate(template, {
+      workspace,
+      commits,
+      diffStats,
+      baseCommit,
+      additionalInstructions,
+    })
+
+    try {
+      wakeupService.cancel(workspace.id, 'user-message')
+    } catch {
+      /* swallow */
+    }
+
+    let messageSent = false
+    let emitSessionId: string | undefined
+
+    if (newSession) {
+      // Stop current agent (best-effort) then start fresh.
+      try {
+        agentManager.stopAgent(workspace.id)
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        console.error(`[start-review] stopAgent failed (continuing): ${msg}`)
+      }
+      try {
+        const agent = agentManager.startAgent(
+          workspace.id,
+          worktreePath,
+          rendered,
+          workspace.model,
+          false /* resume */,
+          workspace.agentPermissionMode,
+          undefined,
+          workspace.reasoningEffort,
+        )
+        workspaceService.updateWorkspaceStatus(workspace.id, 'executing')
+        emitSessionId = agent?.agentSessionId
+        messageSent = true
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        return c.json({ error: `Failed to start review session: ${msg}` }, 500)
+      }
+    } else {
+      const session = workspaceService.getActiveSession(workspace.id)
+      emitSessionId = session?.id
+      try {
+        agentManager.sendMessage(workspace.id, rendered)
+        messageSent = true
+      } catch {
+        try {
+          const agent = agentManager.startAgent(
+            workspace.id,
+            worktreePath,
+            rendered,
+            workspace.model,
+            true /* resume */,
+            workspace.agentPermissionMode,
+            undefined,
+            workspace.reasoningEffort,
+          )
+          workspaceService.updateWorkspaceStatus(workspace.id, 'executing')
+          emitSessionId = agent?.agentSessionId ?? emitSessionId
+          messageSent = true
+        } catch (resumeErr) {
+          const msg = resumeErr instanceof Error ? resumeErr.message : String(resumeErr)
+          return c.json({ error: `Failed to dispatch review prompt: ${msg}` }, 500)
+        }
+      }
+    }
+
+    // Emit AFTER dispatch so the user:message lands in the correct session id —
+    // for newSession=true that's the freshly created session, not the previous one.
+    wsService.emit(workspace.id, 'user:message', { content: rendered, sender: 'user' }, emitSessionId)
+
+    return c.json({ ok: true, messageSent, newSession })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)

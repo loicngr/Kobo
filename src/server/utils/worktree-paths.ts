@@ -139,9 +139,12 @@ export function resolveWorkspaceWorktreePath(
   projectPath: string,
   workingBranch: string,
   configuredPath?: string | null,
+  projectSlug?: string,
 ): string {
   const root = resolveWorktreesRoot(projectPath, configuredPath)
-  return pathFlavor(projectPath, root).join(root, ...branchPathSegments(workingBranch))
+  const flavor = pathFlavor(projectPath, root)
+  const slugSegment = projectSlug && projectSlug.length > 0 ? [projectSlug] : []
+  return flavor.join(root, ...slugSegment, ...branchPathSegments(workingBranch))
 }
 
 /** Resolve a renamed worktree next to its current path when the current path still matches its branch. */
@@ -150,16 +153,16 @@ export function resolveSiblingWorkspaceWorktreePath(
   worktreePath: string,
   currentBranch: string,
   nextBranch: string,
+  projectSlug?: string,
 ): string {
   const flavor = pathFlavor(projectPath, worktreePath)
   const normalizedWorktreePath = flavor.normalize(worktreePath)
-  const currentBranchPath = flavor.join(...branchPathSegments(currentBranch))
-  const currentBranchSuffix = `${flavor.sep}${currentBranchPath}`
-  const comparableWorktreePath = flavor === path.win32 ? normalizedWorktreePath.toLowerCase() : normalizedWorktreePath
-  const comparableSuffix = flavor === path.win32 ? currentBranchSuffix.toLowerCase() : currentBranchSuffix
-  const root = comparableWorktreePath.endsWith(comparableSuffix)
-    ? normalizedWorktreePath.slice(0, -currentBranchSuffix.length)
+  const slugSegment = projectSlug && projectSlug.length > 0 ? [projectSlug] : []
+  const currentSuffix = `${flavor.sep}${flavor.join(...slugSegment, ...branchPathSegments(currentBranch))}`
+  const comparablePath = flavor === path.win32 ? normalizedWorktreePath.toLowerCase() : normalizedWorktreePath
+  const comparableSuffix = flavor === path.win32 ? currentSuffix.toLowerCase() : currentSuffix
+  const root = comparablePath.endsWith(comparableSuffix)
+    ? normalizedWorktreePath.slice(0, -currentSuffix.length)
     : resolveWorktreesRoot(projectPath)
-
-  return flavor.join(root, ...branchPathSegments(nextBranch))
+  return flavor.join(root, ...slugSegment, ...branchPathSegments(nextBranch))
 }

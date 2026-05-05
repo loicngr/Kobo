@@ -26,6 +26,9 @@ interface ProjectSettings {
   /** Per-project override of the global `defaultAgentPermissionMode`. */
   agentPermissionMode?: 'plan' | 'bypass' | 'strict' | 'interactive'
   prPromptTemplate: string
+  reviewPromptTemplate: string
+  notionInitialPromptTemplate: string
+  sentryInitialPromptTemplate: string
   gitConventions: string
   setupScript: string
   devServer: DevServerConfig
@@ -38,6 +41,9 @@ interface GlobalSettings {
   /** @deprecated Read-only legacy field. Use `defaultAgentPermissionMode`. */
   dangerouslySkipPermissions: boolean
   prPromptTemplate: string
+  reviewPromptTemplate: string
+  notionInitialPromptTemplate: string
+  sentryInitialPromptTemplate: string
   gitConventions: string
   editorCommand: string
   browserNotifications: boolean
@@ -56,6 +62,7 @@ interface GlobalSettings {
   sentryMcpKey: string
   tags: string[]
   worktreesPath: string
+  worktreesPrefixByProject: boolean
 }
 
 interface ActiveMcpServer {
@@ -76,6 +83,9 @@ export const useSettingsStore = defineStore('settings', {
       defaultModel: 'claude-opus-4-7',
       dangerouslySkipPermissions: true,
       prPromptTemplate: '',
+      reviewPromptTemplate: '',
+      notionInitialPromptTemplate: '',
+      sentryInitialPromptTemplate: '',
       gitConventions: '',
       editorCommand: '',
       browserNotifications: true,
@@ -89,6 +99,7 @@ export const useSettingsStore = defineStore('settings', {
       sentryMcpKey: '',
       tags: [],
       worktreesPath: WORKTREES_PATH,
+      worktreesPrefixByProject: false,
     } as GlobalSettings,
     activeMcpServers: [] as ActiveMcpServer[],
     projects: [] as ProjectSettings[],
@@ -127,6 +138,18 @@ export const useSettingsStore = defineStore('settings', {
         console.error('[settings store] fetchActiveMcpServers failed:', err)
         this.activeMcpServers = []
       }
+    },
+
+    async fetchGlobalDefaults(): Promise<{
+      prPromptTemplate: string
+      reviewPromptTemplate: string
+      gitConventions: string
+      notionInitialPromptTemplate: string
+      sentryInitialPromptTemplate: string
+    }> {
+      const res = await fetch('/api/settings/defaults')
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      return res.json()
     },
 
     async updateGlobal(data: Partial<GlobalSettings>) {

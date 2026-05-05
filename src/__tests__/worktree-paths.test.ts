@@ -136,3 +136,49 @@ describe('worktree path helpers', () => {
     expect(sanitizeWorktreesPath('safe/worktrees')).toBe('safe/worktrees')
   })
 })
+
+describe('resolveWorkspaceWorktreePath — projectSlug', () => {
+  it('inserts the slug between an absolute root and the branch', () => {
+    const path = resolveWorkspaceWorktreePath('/home/me/proj', 'feature/login', '/home/me/kobo/worktrees', 'sekur')
+    expect(path).toBe('/home/me/kobo/worktrees/sekur/feature/login')
+  })
+
+  it('inserts the slug for a relative root (resolved against projectPath)', () => {
+    const path = resolveWorkspaceWorktreePath('/home/me/proj', 'feature/login', '.worktrees', 'sekur')
+    expect(path).toBe('/home/me/proj/.worktrees/sekur/feature/login')
+  })
+
+  it('preserves the legacy layout when slug is undefined', () => {
+    const path = resolveWorkspaceWorktreePath('/home/me/proj', 'feature/login', '/home/me/kobo/worktrees')
+    expect(path).toBe('/home/me/kobo/worktrees/feature/login')
+  })
+
+  it('preserves the legacy layout when slug is empty string', () => {
+    const path = resolveWorkspaceWorktreePath('/home/me/proj', 'feature/login', '/home/me/kobo/worktrees', '')
+    expect(path).toBe('/home/me/kobo/worktrees/feature/login')
+  })
+})
+
+describe('resolveSiblingWorkspaceWorktreePath — projectSlug', () => {
+  it('keeps the slug across rename when the original path contained it', () => {
+    const next = resolveSiblingWorkspaceWorktreePath(
+      '/home/me/proj',
+      '/home/me/kobo/worktrees/sekur/feature/old',
+      'feature/old',
+      'feature/new',
+      'sekur',
+    )
+    expect(next).toBe('/home/me/kobo/worktrees/sekur/feature/new')
+  })
+
+  it('preserves legacy non-prefixed sibling rename when slug is undefined', () => {
+    const next = resolveSiblingWorkspaceWorktreePath(
+      '/home/me/proj',
+      '/home/me/kobo/worktrees/feature/old',
+      'feature/old',
+      'feature/new',
+      undefined,
+    )
+    expect(next).toBe('/home/me/kobo/worktrees/feature/new')
+  })
+})

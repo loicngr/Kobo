@@ -99,6 +99,7 @@ vi.mock('../server/utils/git-ops.js', () => ({
   getCommitsBetween: vi.fn().mockReturnValue(''),
   getDiffStatsBetween: vi.fn().mockReturnValue(''),
   getCommitCount: vi.fn().mockReturnValue(0),
+  getCommitsBehind: vi.fn().mockReturnValue(0),
   getStructuredDiffStatsBetween: vi.fn().mockReturnValue({ filesChanged: 0, insertions: 0, deletions: 0 }),
   getPrUrl: vi.fn().mockReturnValue(null),
   getPrStatus: vi.fn().mockReturnValue(null),
@@ -110,6 +111,8 @@ vi.mock('../server/utils/git-ops.js', () => ({
   getChangedFiles: vi.fn().mockReturnValue([]),
   getUnpushedChangedFiles: vi.fn().mockReturnValue([]),
   listBranchCommits: vi.fn().mockReturnValue([]),
+  listCommitsBehind: vi.fn().mockReturnValue([]),
+  fetchSourceBranchAsync: vi.fn().mockResolvedValue(undefined),
   getCurrentBranch: vi.fn(),
   moveWorktree: vi.fn(),
   renameBranch: vi.fn(),
@@ -279,6 +282,7 @@ beforeEach(() => {
     sentryMcpKey: '',
     tags: [],
     worktreesPath: '.worktrees',
+    worktreesPrefixByProject: false,
   })
 })
 
@@ -338,7 +342,13 @@ describe('POST /api/workspaces', () => {
     const data = await res.json()
     expect(data.id).toBe('ws-1')
     expect(workspaceService.createWorkspace).toHaveBeenCalledOnce()
-    expect(worktreeService.createWorktree).toHaveBeenCalledWith('/tmp/project', 'feature/test', 'main', '.worktrees')
+    expect(worktreeService.createWorktree).toHaveBeenCalledWith(
+      '/tmp/project',
+      'feature/test',
+      'main',
+      '.worktrees',
+      undefined,
+    )
     expect(agentManager.startAgent).toHaveBeenCalledOnce()
   })
 
@@ -358,6 +368,7 @@ describe('POST /api/workspaces', () => {
       sentryMcpKey: '',
       tags: [],
       worktreesPath: '$HOME/kobo/worktress',
+      worktreesPrefixByProject: false,
     })
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
     vi.mocked(worktreeService.createWorktree).mockReturnValue('/home/test/kobo/worktress/feature/test')
@@ -384,6 +395,7 @@ describe('POST /api/workspaces', () => {
       'feature/test',
       'main',
       '$HOME/kobo/worktress',
+      undefined,
     )
   })
 
@@ -664,6 +676,317 @@ describe('POST /api/workspaces', () => {
 
     expect(res.status).toBe(201)
     expect(vi.mocked(setupScriptService.runSetupScript)).not.toHaveBeenCalled()
+  })
+})
+
+// ── Initial-prompt template injection (Notion + Sentry) ──────────────────────
+// Eight tests covering the cascade `effective || DEFAULT` resolution in the
+// route. The project/global cascade itself is unit-tested in settings-service —
+// here we only exercise the route's single-fallback behaviour and the two
+// injection points (Notion after `Local copy:`, Sentry after `Fix workflow:`).
+describe('POST /api/workspaces — Notion/Sentry initial prompt injection', () => {
+  // Defaults used as a reference inside assertions when the user template is
+  // empty/whitespace and the route should fall back to the hard-coded prompt.
+  const DEFAULT_NOTION =
+    'For the Notion ticket {ticket_id}, systematically explore the linked sub-pages (sub-tickets, references, linked blocks) and enrich the local file {notion_file_path} with all relevant information you find before starting the work.'
+
+  function mockEffectiveSettings(overrides: Record<string, unknown>) {
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
+      model: 'auto',
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      reviewPromptTemplate: '',
+      gitConventions: '',
+      sourceBranch: 'main',
+      devServer: null,
+      setupScript: '',
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
+      notionInitialPromptTemplate: '',
+      sentryInitialPromptTemplate: '',
+      ...overrides,
+    } as never)
+  }
+
+  function mockNotionExtraction(opts: { ticketId: string }) {
+    vi.mocked(notionService.extractNotionPage).mockResolvedValue({
+      title: 'Some Page',
+      ticketId: opts.ticketId,
+      status: '',
+      goal: '',
+      todos: [],
+      gherkinFeatures: [],
+    })
+    vi.mocked(notionService.parseNotionUrl).mockReturnValue('page-1')
+  }
+
+  async function mockSentryExtraction(opts: { issueId: string }) {
+    const sentryService = await import('../server/services/sentry-service.js')
+    vi.mocked(sentryService.extractSentryIssue).mockResolvedValue({
+      title: 'crash',
+      issueId: opts.issueId,
+      issueNumericId: '42',
+      culprit: 'fn',
+      platform: 'js',
+      occurrences: 1,
+      firstSeen: '2026-01-01',
+      lastSeen: '2026-01-02',
+      tags: {},
+      offendingSpans: [],
+      extraContext: '',
+    })
+  }
+
+  function commonHappyPathMocks() {
+    // The body sends `name: 'workspace'` (the placeholder that triggers the
+    // Notion/Sentry rename branch in the route). createWorkspace returns the
+    // raw row with that placeholder; updateWorkspaceName + updateWorkingBranch
+    // both must return a complete workspace object since the route reassigns
+    // the local `workspace` variable from their return values.
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      name: 'workspace',
+    })
+    vi.mocked(workspaceService.updateWorkspaceName).mockReturnValue({
+      ...fakeWorkspace,
+      name: 'Renamed by Notion/Sentry',
+    } as never)
+    vi.mocked(workspaceService.updateWorkingBranch).mockReturnValue({
+      ...fakeWorkspace,
+      name: 'Renamed by Notion/Sentry',
+    } as never)
+    vi.mocked(worktreeService.createWorktree).mockReturnValue('/tmp/wt')
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+  }
+
+  function getCapturedPrompt(): string {
+    expect(agentManager.startAgent).toHaveBeenCalled()
+    const startCall = vi.mocked(agentManager.startAgent).mock.calls[0]
+    return startCall?.[2] as string
+  }
+
+  it('appends the rendered Notion initial prompt after the Local copy line when notionUrl is set', async () => {
+    commonHappyPathMocks()
+    mockNotionExtraction({ ticketId: 'TK-1' })
+    mockEffectiveSettings({ notionInitialPromptTemplate: 'CUSTOM_NOTION {ticket_id}' })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        notionUrl: 'https://notion.so/page-1',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    const prompt = getCapturedPrompt()
+    // The Notion render lands immediately after the Local copy line.
+    expect(prompt).toMatch(/Local copy: [^\n]+\n\nCUSTOM_NOTION TK-1\n/)
+  })
+
+  it('appends the rendered Sentry initial prompt after the Fix workflow paragraph when sentryUrl is set', async () => {
+    commonHappyPathMocks()
+    await mockSentryExtraction({ issueId: 'ACME-API-3' })
+    mockEffectiveSettings({ sentryInitialPromptTemplate: 'CUSTOM_SENTRY {issue_id}' })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        sentryUrl: 'https://my-org.sentry.io/issues/42/',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    const prompt = getCapturedPrompt()
+    // The render lands after the Sentry MCP tag-values bullet (last line of the
+    // Fix workflow block).
+    expect(prompt).toContain('filter by tag\n\nCUSTOM_SENTRY ACME-API-3\n')
+    // Notion absent → no notion render either.
+    expect(prompt).not.toContain('Notion ticket:')
+  })
+
+  it('appends both Notion and Sentry rendered prompts (Notion before Sentry) when both URLs are set', async () => {
+    commonHappyPathMocks()
+    mockNotionExtraction({ ticketId: 'TK-9' })
+    await mockSentryExtraction({ issueId: 'PROJ-1' })
+    mockEffectiveSettings({
+      notionInitialPromptTemplate: 'NTPL {ticket_id}',
+      sentryInitialPromptTemplate: 'STPL {issue_id}',
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        notionUrl: 'https://notion.so/page-1',
+        sentryUrl: 'https://my-org.sentry.io/issues/42/',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    const prompt = getCapturedPrompt()
+    expect(prompt).toContain('NTPL TK-9')
+    expect(prompt).toContain('STPL PROJ-1')
+    const notionIdx = prompt.indexOf('NTPL TK-9')
+    const sentryIdx = prompt.indexOf('STPL PROJ-1')
+    expect(notionIdx).toBeLessThan(sentryIdx)
+  })
+
+  it('renders the project Notion template (project override beats global)', async () => {
+    commonHappyPathMocks()
+    mockNotionExtraction({ ticketId: 'TK-2' })
+    // The project/global cascade is computed inside getEffectiveSettings —
+    // here we simulate the post-cascade outcome: the project override wins.
+    mockEffectiveSettings({ notionInitialPromptTemplate: 'PROJ' })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        notionUrl: 'https://notion.so/page-1',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    const prompt = getCapturedPrompt()
+    expect(prompt).toContain('PROJ')
+    expect(prompt).not.toContain('GLOBAL')
+  })
+
+  it('treats a whitespace-only Notion template as an escape hatch (project " ", global "GLOBAL")', async () => {
+    commonHappyPathMocks()
+    mockNotionExtraction({ ticketId: 'TK-3' })
+    // Whitespace-only effective value → no injection, even though the route
+    // fallback to DEFAULT only triggers on empty string.
+    mockEffectiveSettings({ notionInitialPromptTemplate: ' ' })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        notionUrl: 'https://notion.so/page-1',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    const prompt = getCapturedPrompt()
+    // No render: the Local copy line is followed by the next prompt section,
+    // not by a rendered template, and DEFAULT_NOTION must NOT appear.
+    expect(prompt).not.toContain('GLOBAL')
+    expect(prompt).not.toContain(DEFAULT_NOTION)
+    // Sanity check: Notion section was emitted (Local copy line present).
+    expect(prompt).toMatch(/Local copy: /)
+  })
+
+  it('treats a whitespace-only global Notion template as an escape hatch (project "", global " ")', async () => {
+    commonHappyPathMocks()
+    mockNotionExtraction({ ticketId: 'TK-4' })
+    // After the project/global cascade inside getEffectiveSettings, the
+    // resulting effective value is the whitespace-only global string.
+    mockEffectiveSettings({ notionInitialPromptTemplate: ' ' })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        notionUrl: 'https://notion.so/page-1',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    const prompt = getCapturedPrompt()
+    expect(prompt).not.toContain(DEFAULT_NOTION)
+  })
+
+  it('falls back to DEFAULT_NOTION_INITIAL_PROMPT when both project and global are empty strings', async () => {
+    commonHappyPathMocks()
+    mockNotionExtraction({ ticketId: 'TK-5' })
+    // Empty effective string → route falls back to the hard-coded default.
+    mockEffectiveSettings({ notionInitialPromptTemplate: '' })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        notionUrl: 'https://notion.so/page-1',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    const prompt = getCapturedPrompt()
+    // The default template substitutes {ticket_id} and {notion_file_path}; we
+    // assert on a stable substring that only appears in the rendered default.
+    expect(prompt).toContain('MANDATORY context-enrichment for Notion ticket TK-5')
+  })
+
+  it('does NOT inject the Notion template when notionFilePath ends up null (file-write failure)', async () => {
+    commonHappyPathMocks()
+    mockNotionExtraction({ ticketId: 'TK-6' })
+    mockEffectiveSettings({ notionInitialPromptTemplate: 'CUSTOM {ticket_id}' })
+    // Force notionFilePath to remain null by making the directory creation
+    // throw BEFORE the route assigns notionFilePath. The catch swallows the
+    // error so the workspace is still created — only the Notion section of
+    // the brainstorm prompt is skipped. Restore the default no-op impl after
+    // the assertion to avoid leaking the throw into sibling tests (vi.clearAllMocks
+    // resets call history, NOT mockImplementation).
+    const mkdirSpy = vi.mocked(fs.mkdirSync).mockImplementation((p) => {
+      if (typeof p === 'string' && p.includes('thoughts')) {
+        throw new Error('ENOSPC: no space left on device')
+      }
+      return undefined
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        notionUrl: 'https://notion.so/page-1',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    const prompt = getCapturedPrompt()
+    // Custom template is non-empty AND notion extraction succeeded, but the
+    // file-write failure means the Notion block (Local copy:) is absent and
+    // the rendered prompt MUST NOT appear.
+    expect(prompt).not.toContain('CUSTOM TK-6')
+    expect(prompt).not.toContain('Local copy:')
+    // Reset the throwing implementation so it doesn't leak into sibling tests.
+    mkdirSpy.mockImplementation(() => undefined)
   })
 })
 
@@ -1900,6 +2223,76 @@ describe('GET /api/workspaces/:id/git-stats', () => {
   })
 })
 
+describe('GET /:id/git-stats — extended', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('includes behindCount in the response payload', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(gitOps.getCommitsBehind).mockReturnValue(7)
+    const res = await app.request('/api/workspaces/ws-1/git-stats')
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data.behindCount).toBe(7)
+  })
+
+  it('with ?freshFetch=1 awaits fetchSourceBranchAsync before reading refs', async () => {
+    let fetchResolved = false
+    let fetchResolver!: () => void
+    vi.mocked(gitOps.fetchSourceBranchAsync).mockReturnValue(
+      new Promise<void>((resolve) => {
+        fetchResolver = () => {
+          fetchResolved = true
+          resolve()
+        }
+      }),
+    )
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+
+    const responsePromise = app.request('/api/workspaces/ws-1/git-stats?freshFetch=1')
+    await new Promise((r) => setImmediate(r))
+    const settled = await Promise.race([
+      responsePromise.then(() => 'response'),
+      new Promise((r) => setTimeout(() => r('timeout'), 50)),
+    ])
+    expect(settled).toBe('timeout')
+    expect(fetchResolved).toBe(false)
+
+    fetchResolver()
+    const res = await responsePromise
+    expect(res.status).toBe(200)
+  })
+
+  it('without freshFetch kicks fire-and-forget and responds immediately', async () => {
+    vi.mocked(gitOps.fetchSourceBranchAsync).mockReturnValue(
+      new Promise<void>(() => {
+        /* never resolves */
+      }),
+    )
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+
+    const res = (await Promise.race([
+      app.request('/api/workspaces/ws-1/git-stats'),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error('timeout')), 1000)),
+    ])) as Response
+    expect(res.status).toBe(200)
+  })
+
+  it('does not produce an unhandled rejection when fire-and-forget fetch fails', async () => {
+    const handler = vi.fn()
+    process.on('unhandledRejection', handler)
+    try {
+      vi.mocked(gitOps.fetchSourceBranchAsync).mockRejectedValue(new Error('boom'))
+      vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+      await app.request('/api/workspaces/ws-1/git-stats')
+      await new Promise((r) => setImmediate(r))
+      await new Promise((r) => setImmediate(r))
+      expect(handler).not.toHaveBeenCalled()
+    } finally {
+      process.off('unhandledRejection', handler)
+    }
+  })
+})
+
 describe('POST /api/workspaces/:id/run-setup-script', () => {
   beforeEach(() => vi.clearAllMocks())
 
@@ -2488,6 +2881,66 @@ describe('GET /api/workspaces/:id/commits', () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(undefined as never)
     const res = await app.request('/api/workspaces/w1/commits')
     expect(res.status).toBe(404)
+  })
+})
+
+describe('GET /:id/branch-divergence', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('returns 404 when workspace is missing', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
+    const res = await app.request('/api/workspaces/missing/branch-divergence')
+    expect(res.status).toBe(404)
+  })
+
+  it('returns ahead and behind lists with branch metadata', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(gitOps.listBranchCommits).mockReturnValue([
+      {
+        sha: 'a'.repeat(40),
+        shortSha: 'aaaaaaa',
+        subject: 'feat: a',
+        author: 'u',
+        date: '2026-01-01',
+        isPushed: true,
+      },
+    ] as never)
+    vi.mocked(gitOps.listCommitsBehind).mockReturnValue([
+      { sha: 'b'.repeat(40), shortSha: 'bbbbbbb', subject: 'fix: b', author: 'u', date: '2026-01-02' },
+    ])
+    const res = await app.request('/api/workspaces/ws-1/branch-divergence')
+    expect(res.status).toBe(200)
+    const data = await res.json()
+    expect(data.ahead).toHaveLength(1)
+    expect(data.behind).toHaveLength(1)
+    expect(data.sourceBranch).toBe(fakeWorkspace.sourceBranch)
+    expect(data.workingBranch).toBe(fakeWorkspace.workingBranch)
+  })
+
+  it('clamps limit to [1, 200]', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(gitOps.listBranchCommits).mockReturnValue([] as never)
+    vi.mocked(gitOps.listCommitsBehind).mockReturnValue([])
+
+    await app.request('/api/workspaces/ws-1/branch-divergence?limit=0')
+    expect(vi.mocked(gitOps.listBranchCommits).mock.calls[0][3]).toBe(1)
+    expect(vi.mocked(gitOps.listCommitsBehind).mock.calls[0][3]).toBe(1)
+
+    vi.mocked(gitOps.listBranchCommits).mockClear()
+    vi.mocked(gitOps.listCommitsBehind).mockClear()
+
+    await app.request('/api/workspaces/ws-1/branch-divergence?limit=999')
+    expect(vi.mocked(gitOps.listBranchCommits).mock.calls[0][3]).toBe(200)
+    expect(vi.mocked(gitOps.listCommitsBehind).mock.calls[0][3]).toBe(200)
+  })
+
+  it('returns 500 when git ops throw unexpectedly', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(gitOps.listBranchCommits).mockImplementation(() => {
+      throw new Error('boom')
+    })
+    const res = await app.request('/api/workspaces/ws-1/branch-divergence')
+    expect(res.status).toBe(500)
   })
 })
 
@@ -3206,5 +3659,105 @@ describe('GET /api/workspaces/:id/prep-autoloop-prompt', () => {
     expect(data.prompt).toContain('**E2E review**')
     expect(data.prompt).toContain('The project uses `cypress`.')
     expect(data.prompt).toContain('Use the `cy` skill for this task.')
+  })
+})
+
+describe('POST /api/workspaces — worktree path collision', () => {
+  it('returns 409 when the prospective worktree path already exists, no DB write', async () => {
+    // Make fs.existsSync return true for paths containing the working branch
+    // (simulating a pre-existing worktree directory on disk).
+    vi.mocked(fs.existsSync).mockImplementation((p) => {
+      return typeof p === 'string' && p.includes('feature/test')
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    expect(res.status).toBe(409)
+    const data = await res.json()
+    expect(data.error).toMatch(/already exists/i)
+    expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('passes slug-prefixed worktreePath to createWorkspace when worktreesPrefixByProject is true', async () => {
+    // Arrange: enable prefix-by-project and set a displayName that produces slug "sekur"
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
+      defaultModel: 'auto',
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      gitConventions: '',
+      editorCommand: '',
+      browserNotifications: true,
+      audioNotifications: true,
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
+      defaultPermissionMode: 'plan',
+      notionMcpKey: '',
+      sentryMcpKey: '',
+      tags: [],
+      worktreesPath: '.worktrees',
+      worktreesPrefixByProject: true,
+    })
+    vi.mocked(settingsService.getProjectSettings).mockReturnValue({
+      displayName: 'Sekur',
+    } as never)
+    vi.mocked(fs.existsSync).mockReturnValue(false)
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktree).mockReturnValue('/tmp/project/.worktrees/sekur/feature/test')
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    // The worktreePath passed to createWorkspace must include the "sekur" slug segment
+    expect(workspaceService.createWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({
+        worktreePath: expect.stringContaining('/sekur/'),
+      }),
+    )
+  })
+})
+
+describe('POST /api/workspaces — Working directory in brainstorm prompt', () => {
+  it('passes "Working directory: <path>" to agentManager.startAgent', async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(false)
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktree).mockReturnValue('/tmp/worktree')
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(agentManager.startAgent).toHaveBeenCalledOnce()
+    const promptArg = vi.mocked(agentManager.startAgent).mock.calls[0][2]
+    expect(promptArg).toContain('Working directory: ')
   })
 })

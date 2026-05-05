@@ -78,13 +78,14 @@ export function createWorktree(
   branchName: string,
   sourceBranch: string,
   worktreesPath?: string | null,
+  projectSlug?: string,
 ): string {
   const worktreesDir = resolveWorktreesRoot(projectPath, worktreesPath)
   if (!fs.existsSync(worktreesDir)) {
     fs.mkdirSync(worktreesDir, { recursive: true })
   }
 
-  const worktreePath = resolveWorkspaceWorktreePath(projectPath, branchName, worktreesPath)
+  const worktreePath = resolveWorkspaceWorktreePath(projectPath, branchName, worktreesPath, projectSlug)
 
   try {
     // Use origin/<sourceBranch> as the base so the worktree starts from the

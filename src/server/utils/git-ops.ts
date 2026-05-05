@@ -284,6 +284,22 @@ export function getCommitCount(repoPath: string, base: string, head: string): nu
   }
 }
 
+/**
+ * Count commits in `base` that are not in `head` — i.e. how far `head` lags
+ * behind `base`. Mirrors `getCommitCount` but in reverse direction.
+ * Returns 0 on failure.
+ */
+export function getCommitsBehind(repoPath: string, base: string, head: string): number {
+  try {
+    const ref = resolveBase(repoPath, base)
+    const output = git(repoPath, ['rev-list', '--count', `${head}..${ref}`])
+    const n = parseInt(output.trim(), 10)
+    return Number.isFinite(n) ? n : 0
+  } catch {
+    return 0
+  }
+}
+
 /** Return structured diff shortstat between two refs (three-dot merge base). */
 export function getStructuredDiffStatsBetween(
   repoPath: string,
@@ -317,6 +333,19 @@ export interface BranchCommit {
   author: string
   date: string
   isPushed: boolean
+}
+
+/**
+ * A bare commit row — same shape as `BranchCommit` minus the `isPushed`
+ * flag. Declared as a sibling type (not a parent of `BranchCommit`) to keep
+ * the blast radius small: existing callers of `BranchCommit` are unaffected.
+ */
+export interface Commit {
+  sha: string
+  shortSha: string
+  subject: string
+  author: string
+  date: string
 }
 
 /**
@@ -371,6 +400,39 @@ export function listBranchCommits(
       author: author ?? '',
       date: date ?? '',
       isPushed: pushedShas.has(sha),
+    })
+  }
+  return commits
+}
+
+/**
+ * List commits on `sourceBranch` that are NOT yet on `workingBranch` —
+ * i.e. commits the working branch is "behind" by. Mirror of `listBranchCommits`
+ * in the opposite direction. Up to `limit` commits, most recent first.
+ */
+export function listCommitsBehind(repoPath: string, sourceBranch: string, workingBranch: string, limit = 50): Commit[] {
+  const sourceRef = resolveBase(repoPath, sourceBranch)
+  const FORMAT = '--pretty=format:%H%x00%h%x00%s%x00%an%x00%aI'
+
+  let raw: string
+  try {
+    raw = git(repoPath, ['log', `${workingBranch}..${sourceRef}`, `--max-count=${limit}`, FORMAT])
+  } catch {
+    return []
+  }
+  if (!raw) return []
+
+  const commits: Commit[] = []
+  for (const line of raw.split('\n')) {
+    if (!line) continue
+    const [sha, shortSha, subject, author, date] = line.split('\x00')
+    if (!sha) continue
+    commits.push({
+      sha,
+      shortSha: shortSha ?? '',
+      subject: subject ?? '',
+      author: author ?? '',
+      date: date ?? '',
     })
   }
   return commits
@@ -702,6 +764,21 @@ export function getDiffStatsBetween(repoPath: string, base: string, head: string
   }
 }
 
+/**
+ * Return `git diff --stat HEAD` output (working tree vs HEAD) as a single string.
+ * Empty string if the working tree is clean or the command fails. Best-effort: never throws.
+ */
+export function getWorkingTreeDiffStats(repoPath: string): string {
+  try {
+    return execFileSync('git', ['diff', '--stat', 'HEAD'], {
+      cwd: repoPath,
+      encoding: 'utf-8',
+    })
+  } catch {
+    return ''
+  }
+}
+
 // ── Async versions ───────────────────────────────────────────────────────────
 // Non-blocking alternatives for hot paths (pr-watcher, route handlers).
 
@@ -748,5 +825,22 @@ export async function getUnpushedCountAsync(repoPath: string): Promise<number> {
     return parseInt(stdout.trim(), 10) || 0
   } catch {
     return -1 // no upstream
+  }
+}
+
+/**
+ * Best-effort async `git fetch <remote> <branch>`. Never throws — by contract,
+ * suitable for both fire-and-forget and `await` use without try/catch at the
+ * call site. Logs a warning on failure but resolves cleanly.
+ *
+ * Mirrors the sync `fetchSourceBranch` sibling, including the optional `remote`
+ * parameter (defaults to `'origin'`).
+ */
+export async function fetchSourceBranchAsync(repoPath: string, branch: string, remote = 'origin'): Promise<void> {
+  try {
+    await execFileAsync('git', ['fetch', remote, branch], { cwd: repoPath })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.warn(`[git-ops] fetchSourceBranchAsync(${remote}/${branch}) failed: ${msg}`)
   }
 }

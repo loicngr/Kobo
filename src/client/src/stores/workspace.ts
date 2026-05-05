@@ -139,6 +139,7 @@ export function isSubagentTerminalEvent(subtype: string | undefined, status?: st
 
 export interface GitStats {
   commitCount: number
+  behindCount: number
   filesChanged: number
   insertions: number
   deletions: number
@@ -146,6 +147,23 @@ export interface GitStats {
   prState: 'OPEN' | 'CLOSED' | 'MERGED' | null
   unpushedCount: number // -1 = no upstream
   workingTree: { staged: number; modified: number; untracked: number }
+}
+
+export interface BranchCommit {
+  sha: string
+  shortSha: string
+  subject: string
+  author: string
+  date: string
+  isPushed: boolean
+}
+
+export interface Commit {
+  sha: string
+  shortSha: string
+  subject: string
+  author: string
+  date: string
 }
 
 export interface PendingWakeup {
@@ -627,12 +645,29 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
-    async fetchGitStats(id: string): Promise<GitStats> {
-      const res = await fetch(`/api/workspaces/${id}/git-stats`)
+    async fetchGitStats(id: string, opts: { freshFetch?: boolean; signal?: AbortSignal } = {}): Promise<GitStats> {
+      const url = `/api/workspaces/${id}/git-stats${opts.freshFetch ? '?freshFetch=1' : ''}`
+      const res = await fetch(url, { signal: opts.signal })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const stats = (await res.json()) as GitStats
       this.gitStatsCache[id] = stats
       return stats
+    },
+
+    async fetchBranchDivergence(
+      id: string,
+      opts: { limit?: number; signal?: AbortSignal } = {},
+    ): Promise<{ ahead: BranchCommit[]; behind: Commit[]; sourceBranch: string; workingBranch: string }> {
+      const limit = opts.limit ?? 50
+      const url = `/api/workspaces/${id}/branch-divergence?limit=${limit}`
+      const res = await fetch(url, { signal: opts.signal })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      return (await res.json()) as {
+        ahead: BranchCommit[]
+        behind: Commit[]
+        sourceBranch: string
+        workingBranch: string
+      }
     },
 
     async openPullRequest(id: string): Promise<OpenPrResult> {

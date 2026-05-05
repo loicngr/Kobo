@@ -3,8 +3,9 @@ import fs from 'node:fs'
 import { Hono } from 'hono'
 import { getDb } from '../db/index.js'
 import { SCHEMA_VERSION } from '../db/migrations.js'
-import { getGlobalSettings, SETTINGS_SCHEMA_VERSION } from '../services/settings-service.js'
+import { getGlobalSettings, getProjectSettings, SETTINGS_SCHEMA_VERSION } from '../services/settings-service.js'
 import { getDbPath, getKoboHome } from '../utils/paths.js'
+import { slugifyProjectName } from '../utils/project-slug.js'
 import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 
 const app = new Hono()
@@ -95,10 +96,22 @@ app.get('/report', (c) => {
     archived_at: string | null
   }>
 
+  const healthGlobalSettings = getGlobalSettings()
   const worktreesMissing: WorktreeCheck[] = []
   for (const ws of workspaces) {
     if (ws.archived_at) continue
-    const wtPath = ws.worktree_path ?? resolveWorkspaceWorktreePath(ws.project_path, ws.working_branch)
+    const wsProjectSettings = getProjectSettings(ws.project_path)
+    const wsProjectSlug = healthGlobalSettings.worktreesPrefixByProject
+      ? slugifyProjectName(wsProjectSettings?.displayName ?? '', ws.project_path)
+      : undefined
+    const wtPath =
+      ws.worktree_path ??
+      resolveWorkspaceWorktreePath(
+        ws.project_path,
+        ws.working_branch,
+        healthGlobalSettings.worktreesPath,
+        wsProjectSlug,
+      )
     if (!fs.existsSync(wtPath)) {
       worktreesMissing.push({ workspaceId: ws.id, name: ws.name, path: wtPath, exists: false })
     }
@@ -113,7 +126,6 @@ app.get('/report', (c) => {
     if (s.pid && !isProcessAlive(s.pid)) orphaned++
   }
 
-  const globalSettings = getGlobalSettings()
   const settingsRow = db.prepare('SELECT COUNT(*) as n FROM workspaces').get() as { n: number }
   const archivedRow = db.prepare('SELECT COUNT(*) as n FROM workspaces WHERE archived_at IS NOT NULL').get() as {
     n: number
@@ -136,9 +148,9 @@ app.get('/report', (c) => {
     },
     agentSessions: { orphaned },
     integrations: {
-      notion: { configured: Boolean(globalSettings.notionMcpKey) },
-      sentry: { configured: Boolean(globalSettings.sentryMcpKey) },
-      editor: { configured: Boolean(globalSettings.editorCommand) },
+      notion: { configured: Boolean(healthGlobalSettings.notionMcpKey) },
+      sentry: { configured: Boolean(healthGlobalSettings.sentryMcpKey) },
+      editor: { configured: Boolean(healthGlobalSettings.editorCommand) },
     },
   }
 

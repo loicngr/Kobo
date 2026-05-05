@@ -2,6 +2,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type Database from 'better-sqlite3'
 import { nanoid } from 'nanoid'
+import * as settingsService from '../server/services/settings-service.js'
+import { slugifyProjectName } from '../server/utils/project-slug.js'
 import { resolveWorkspaceWorktreePath } from '../server/utils/worktree-paths.js'
 
 /** Allowed task status values. */
@@ -283,7 +285,14 @@ export function getWorkspaceInfoHandler(db: Database.Database, workspaceId: stri
     projectPath: row.project_path,
     sourceBranch: row.source_branch,
     workingBranch: row.working_branch,
-    worktreePath: row.worktree_path ?? resolveWorkspaceWorktreePath(row.project_path, row.working_branch),
+    worktreePath: (() => {
+      const gs = settingsService.getGlobalSettings()
+      const ps = settingsService.getProjectSettings(row.project_path)
+      const slug = gs.worktreesPrefixByProject ? slugifyProjectName(ps?.displayName ?? '', row.project_path) : undefined
+      return (
+        row.worktree_path ?? resolveWorkspaceWorktreePath(row.project_path, row.working_branch, gs.worktreesPath, slug)
+      )
+    })(),
     status: row.status,
     model: row.model,
     notionUrl: row.notion_url,

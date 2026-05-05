@@ -76,10 +76,9 @@
 </template>
 
 <script setup lang="ts">
-import DOMPurify from 'dompurify'
-import { marked } from 'marked'
 import { useQuasar } from 'quasar'
 import type { ReviewComment } from 'src/composables/use-review-draft'
+import { renderChatMarkdown } from 'src/utils/render-chat-markdown'
 import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -106,8 +105,7 @@ const addingNew = ref(props.startInAddMode === true)
 const newContent = ref('')
 
 function renderMarkdown(raw: string): string {
-  const html = marked.parse(raw, { async: false, breaks: true, gfm: true }) as string
-  return DOMPurify.sanitize(html)
+  return renderChatMarkdown(raw)
 }
 
 function relativeTime(iso: string): string {

@@ -666,6 +666,7 @@ import { useSettingsStore } from 'src/stores/settings'
 import { useTemplatesStore } from 'src/stores/templates'
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { loadCreatePagePrefs, saveCreatePagePrefs } from 'src/utils/create-page-prefs'
 import { buildTemplateVars, expandTemplate } from 'src/utils/expand-template'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -1094,6 +1095,18 @@ onMounted(async () => {
   // Await settings before engines so permission-mode derivation sees the
   // project list. Re-derive after to fix a possible race with applyProjectDefaults.
   await settingsStore.fetchSettings()
+
+  // Restore last-used inputs from localStorage. The projectPath is only
+  // restored when it's still a known project — a stale path silently falls
+  // back to empty rather than re-displaying a dead value.
+  const prefs = loadCreatePagePrefs()
+  if (prefs.autoLoop === true) {
+    autoLoop.value = true
+  }
+  if (prefs.projectPath && settingsStore.projectPaths.includes(prefs.projectPath)) {
+    projectPath.value = prefs.projectPath
+  }
+
   agentPermissionMode.value = deriveDefaultAgentPermissionMode(projectPath.value)
   try {
     const res = await fetch('/api/engines')
@@ -1243,6 +1256,15 @@ async function handleCreate() {
     }
 
     const workspace = await store.createWorkspace(payload)
+
+    // Persist last-used inputs so the next Create-workspace visit pre-fills
+    // them. Run only after a successful create — failures keep the previous
+    // saved values intact.
+    saveCreatePagePrefs({
+      projectPath: projectPath.value.trim(),
+      autoLoop: autoLoop.value,
+    })
+
     // Subscribe to receive WebSocket events for this workspace
     const wsStore = useWebSocketStore()
     wsStore.subscribe(workspace.id)

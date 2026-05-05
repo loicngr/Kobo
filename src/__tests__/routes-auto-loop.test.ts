@@ -40,12 +40,16 @@ vi.mock('../server/services/pr-watcher-service.js', () => ({
   stopPrWatcher: vi.fn(),
 }))
 
-// auto-loop-service now reads project settings to inject the [E2E] block.
+// auto-loop-service reads both project and global settings in spawnNextIteration.
 // The vitest guard in settings-service throws if `_setSettingsPath()` isn't
 // called, so we mock the surface used by spawnNextIteration. Returning
-// undefined makes the e2eSettings fall back to the empty default.
+// undefined / empty defaults makes the settings fall back to safe values.
 vi.mock('../server/services/settings-service.js', () => ({
   getProjectSettings: vi.fn(),
+  getGlobalSettings: vi.fn(() => ({
+    worktreesPath: '',
+    worktreesPrefixByProject: false,
+  })),
 }))
 
 let tmpDir: string

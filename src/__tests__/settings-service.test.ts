@@ -743,3 +743,390 @@ describe('importConfigBundle()', () => {
     expect(after.worktreesPath).toBe('$HOME/kobo/worktress')
   })
 })
+
+describe('worktreesPrefixByProject migration', () => {
+  it('seeds false on a fresh install via defaultSettings', () => {
+    // settingsPath points to a non-existent file in a fresh tmpDir (via beforeEach).
+    // getSettings() creates defaults → worktreesPrefixByProject must be present.
+    const settings = getGlobalSettings()
+    expect(settings.worktreesPrefixByProject).toBe(false)
+  })
+
+  it('migration 14 fills missing field on upgraded installs', () => {
+    // Simulate a v13 settings file that is missing the new field.
+    const v13Settings = {
+      schemaVersion: 13,
+      global: {
+        defaultModel: 'claude-opus-4-7',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        editorCommand: '',
+        browserNotifications: true,
+        audioNotifications: true,
+        audioNotificationSound: 'hey.mp3',
+        audioNotificationVolume: 1,
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+        defaultPermissionMode: 'plan',
+        notionMcpKey: '',
+        sentryMcpKey: '',
+        tags: [],
+        worktreesPath: '.worktrees',
+        // intentionally missing: worktreesPrefixByProject
+      },
+      projects: [],
+    }
+    fs.writeFileSync(settingsPath, JSON.stringify(v13Settings, null, 2), 'utf-8')
+    // getSettings() triggers migrations on read
+    const settings = getGlobalSettings()
+    expect(settings.worktreesPrefixByProject).toBe(false)
+  })
+
+  it('preserves an explicit false on upgrade — explicit choice is sticky', () => {
+    // A user who deliberately turned the toggle off must not have it flipped
+    // back on by a migration re-run. The guard `typeof === 'boolean'` keeps
+    // the existing value untouched.
+    const v13Settings = {
+      schemaVersion: 13,
+      global: {
+        defaultModel: 'claude-opus-4-7',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        editorCommand: '',
+        browserNotifications: true,
+        audioNotifications: true,
+        audioNotificationSound: 'hey.mp3',
+        audioNotificationVolume: 1,
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+        defaultPermissionMode: 'plan',
+        notionMcpKey: '',
+        sentryMcpKey: '',
+        tags: [],
+        worktreesPath: '.worktrees',
+        worktreesPrefixByProject: false,
+      },
+      projects: [],
+    }
+    fs.writeFileSync(settingsPath, JSON.stringify(v13Settings, null, 2), 'utf-8')
+    const settings = getGlobalSettings()
+    expect(settings.worktreesPrefixByProject).toBe(false)
+  })
+})
+
+describe('reviewPromptTemplate (migration v15)', () => {
+  it('seeds a non-empty default on a fresh install via defaultSettings', () => {
+    const global = getGlobalSettings()
+    expect(typeof global.reviewPromptTemplate).toBe('string')
+    expect(global.reviewPromptTemplate.length).toBeGreaterThan(0)
+  })
+
+  it('migration v15 fills missing global field on upgraded installs', () => {
+    const v14Settings = {
+      schemaVersion: 14,
+      global: {
+        defaultModel: 'claude-opus-4-7',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        editorCommand: '',
+        browserNotifications: true,
+        audioNotifications: true,
+        audioNotificationSound: 'hey.mp3',
+        audioNotificationVolume: 1,
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+        defaultPermissionMode: 'plan',
+        notionMcpKey: '',
+        sentryMcpKey: '',
+        tags: [],
+        worktreesPath: '.worktrees',
+        worktreesPrefixByProject: true,
+        // intentionally missing: reviewPromptTemplate
+      },
+      projects: [],
+    }
+    fs.writeFileSync(settingsPath, JSON.stringify(v14Settings, null, 2), 'utf-8')
+    const settings = getGlobalSettings()
+    expect(typeof settings.reviewPromptTemplate).toBe('string')
+    expect(settings.reviewPromptTemplate.length).toBeGreaterThan(0)
+  })
+
+  it('migration v15 backfills reviewPromptTemplate as empty string on existing projects', () => {
+    const v14Settings = {
+      schemaVersion: 14,
+      global: {
+        defaultModel: 'claude-opus-4-7',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        editorCommand: '',
+        browserNotifications: true,
+        audioNotifications: true,
+        audioNotificationSound: 'hey.mp3',
+        audioNotificationVolume: 1,
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+        defaultPermissionMode: 'plan',
+        notionMcpKey: '',
+        sentryMcpKey: '',
+        tags: [],
+        worktreesPath: '.worktrees',
+        worktreesPrefixByProject: true,
+      },
+      projects: [
+        {
+          path: '/legacy-project',
+          displayName: 'legacy',
+          defaultSourceBranch: '',
+          defaultModel: '',
+          dangerouslySkipPermissions: true,
+          prPromptTemplate: '',
+          gitConventions: '',
+          setupScript: '',
+          devServer: { startCommand: '', stopCommand: '' },
+          e2e: { framework: '', skill: '', prompt: '' },
+          finalization: { prompt: 'do quality checks' },
+          // intentionally missing: reviewPromptTemplate
+        },
+      ],
+    }
+    fs.writeFileSync(settingsPath, JSON.stringify(v14Settings, null, 2), 'utf-8')
+    getGlobalSettings() // triggers migration
+    const project = getProjectSettings('/legacy-project')
+    expect(project?.reviewPromptTemplate).toBe('')
+  })
+
+  it('schemaVersion bumps to 15 (or higher) after running migrations on legacy data', () => {
+    const v14Settings = {
+      schemaVersion: 14,
+      global: {},
+      projects: [],
+    }
+    const migrated = runSettingsMigrations(v14Settings as unknown as Record<string, unknown>)
+    expect(migrated.schemaVersion).toBeGreaterThanOrEqual(15)
+    expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+  })
+
+  it('preserves an existing custom global reviewPromptTemplate on re-migration', () => {
+    const customSettings = {
+      schemaVersion: 14,
+      global: {
+        reviewPromptTemplate: 'my custom review template',
+      },
+      projects: [],
+    }
+    const migrated = runSettingsMigrations(customSettings as unknown as Record<string, unknown>)
+    expect(migrated.global.reviewPromptTemplate).toBe('my custom review template')
+  })
+
+  it('getEffectiveSettings returns the project reviewPromptTemplate when non-empty', () => {
+    getSettings()
+    upsertProject('/tmp/proj-review-1', {
+      reviewPromptTemplate: 'project-review-template',
+    })
+    const effective = getEffectiveSettings('/tmp/proj-review-1')
+    expect(effective.reviewPromptTemplate).toBe('project-review-template')
+  })
+
+  it('getEffectiveSettings falls back to global reviewPromptTemplate when project field is empty', () => {
+    getSettings()
+    updateGlobalSettings({ reviewPromptTemplate: 'global-review-template' })
+    upsertProject('/tmp/proj-review-2', { reviewPromptTemplate: '' })
+    const effective = getEffectiveSettings('/tmp/proj-review-2')
+    expect(effective.reviewPromptTemplate).toBe('global-review-template')
+  })
+
+  it('getEffectiveSettings returns global reviewPromptTemplate when no project exists', () => {
+    getSettings()
+    updateGlobalSettings({ reviewPromptTemplate: 'global-only' })
+    const effective = getEffectiveSettings('/non/existent/proj-review')
+    expect(effective.reviewPromptTemplate).toBe('global-only')
+  })
+
+  it('persists reviewPromptTemplate via updateGlobalSettings', () => {
+    getSettings()
+    updateGlobalSettings({ reviewPromptTemplate: 'updated' })
+    const reloaded = getGlobalSettings()
+    expect(reloaded.reviewPromptTemplate).toBe('updated')
+  })
+
+  it('persists reviewPromptTemplate via upsertProject', () => {
+    getSettings()
+    upsertProject('/tmp/proj-review-3', { reviewPromptTemplate: 'project rules' })
+    const project = getProjectSettings('/tmp/proj-review-3')
+    expect(project?.reviewPromptTemplate).toBe('project rules')
+  })
+})
+
+describe('initial-prompt defaults', () => {
+  it('global defaults expose notionInitialPromptTemplate and sentryInitialPromptTemplate non-empty', () => {
+    const g = getGlobalSettings()
+    expect(typeof g.notionInitialPromptTemplate).toBe('string')
+    expect(g.notionInitialPromptTemplate.length).toBeGreaterThan(0)
+    expect(typeof g.sentryInitialPromptTemplate).toBe('string')
+    expect(g.sentryInitialPromptTemplate.length).toBeGreaterThan(0)
+  })
+
+  it('project defaults expose both keys as empty strings', () => {
+    getSettings()
+    upsertProject('/some/path', {})
+    const p = getProjectSettings('/some/path')
+    expect(p?.notionInitialPromptTemplate).toBe('')
+    expect(p?.sentryInitialPromptTemplate).toBe('')
+  })
+})
+
+describe('settings migration v16 — add Notion/Sentry initial prompts', () => {
+  it('seeds the two global defaults when missing on a v15 settings file', () => {
+    const v15Settings = {
+      schemaVersion: 15,
+      global: {
+        defaultModel: 'claude-opus-4-7',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        reviewPromptTemplate: 'existing review template',
+        gitConventions: '',
+        editorCommand: '',
+        browserNotifications: true,
+        audioNotifications: true,
+        audioNotificationSound: 'hey.mp3',
+        audioNotificationVolume: 1,
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+        defaultPermissionMode: 'plan',
+        notionMcpKey: '',
+        sentryMcpKey: '',
+        tags: [],
+        worktreesPath: '.worktrees',
+        worktreesPrefixByProject: true,
+        // intentionally missing: notionInitialPromptTemplate, sentryInitialPromptTemplate
+      },
+      projects: [
+        {
+          path: '/p',
+          displayName: '',
+          defaultSourceBranch: '',
+          defaultModel: '',
+          dangerouslySkipPermissions: true,
+          prPromptTemplate: '',
+          reviewPromptTemplate: '',
+          gitConventions: '',
+          setupScript: '',
+          devServer: { startCommand: '', stopCommand: '' },
+          e2e: { framework: '', skill: '', prompt: '' },
+          finalization: { prompt: '' },
+        },
+      ],
+    }
+    fs.writeFileSync(settingsPath, JSON.stringify(v15Settings, null, 2), 'utf-8')
+    const loaded = getGlobalSettings()
+    expect(typeof loaded.notionInitialPromptTemplate).toBe('string')
+    expect(loaded.notionInitialPromptTemplate.length).toBeGreaterThan(0)
+    expect(typeof loaded.sentryInitialPromptTemplate).toBe('string')
+    expect(loaded.sentryInitialPromptTemplate.length).toBeGreaterThan(0)
+  })
+
+  it('seeds an empty string on each project entry when the field is missing', () => {
+    const v15Settings = {
+      schemaVersion: 15,
+      global: {
+        defaultModel: 'claude-opus-4-7',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        reviewPromptTemplate: '',
+        gitConventions: '',
+        editorCommand: '',
+        browserNotifications: true,
+        audioNotifications: true,
+        audioNotificationSound: 'hey.mp3',
+        audioNotificationVolume: 1,
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+        defaultPermissionMode: 'plan',
+        notionMcpKey: '',
+        sentryMcpKey: '',
+        tags: [],
+        worktreesPath: '.worktrees',
+        worktreesPrefixByProject: true,
+      },
+      projects: [
+        {
+          path: '/p',
+          displayName: '',
+          defaultSourceBranch: '',
+          defaultModel: '',
+          dangerouslySkipPermissions: true,
+          prPromptTemplate: '',
+          reviewPromptTemplate: '',
+          gitConventions: '',
+          setupScript: '',
+          devServer: { startCommand: '', stopCommand: '' },
+          e2e: { framework: '', skill: '', prompt: '' },
+          finalization: { prompt: '' },
+          // intentionally missing: notionInitialPromptTemplate, sentryInitialPromptTemplate
+        },
+      ],
+    }
+    fs.writeFileSync(settingsPath, JSON.stringify(v15Settings, null, 2), 'utf-8')
+    getGlobalSettings() // triggers migration
+    const proj = getProjectSettings('/p')
+    expect(proj?.notionInitialPromptTemplate).toBe('')
+    expect(proj?.sentryInitialPromptTemplate).toBe('')
+  })
+
+  it('does not overwrite an already-set value on either field', () => {
+    const v15Settings = {
+      schemaVersion: 15,
+      global: {
+        defaultModel: 'claude-opus-4-7',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        reviewPromptTemplate: '',
+        notionInitialPromptTemplate: 'CUSTOM',
+        sentryInitialPromptTemplate: 'CUSTOM-SENTRY',
+        gitConventions: '',
+        editorCommand: '',
+        browserNotifications: true,
+        audioNotifications: true,
+        audioNotificationSound: 'hey.mp3',
+        audioNotificationVolume: 1,
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+        defaultPermissionMode: 'plan',
+        notionMcpKey: '',
+        sentryMcpKey: '',
+        tags: [],
+        worktreesPath: '.worktrees',
+        worktreesPrefixByProject: true,
+      },
+      projects: [
+        {
+          path: '/p',
+          displayName: '',
+          defaultSourceBranch: '',
+          defaultModel: '',
+          dangerouslySkipPermissions: true,
+          prPromptTemplate: '',
+          reviewPromptTemplate: '',
+          notionInitialPromptTemplate: 'CUSTOM-PROJ-NOTION',
+          sentryInitialPromptTemplate: 'CUSTOM-PROJ',
+          gitConventions: '',
+          setupScript: '',
+          devServer: { startCommand: '', stopCommand: '' },
+          e2e: { framework: '', skill: '', prompt: '' },
+          finalization: { prompt: '' },
+        },
+      ],
+    }
+    fs.writeFileSync(settingsPath, JSON.stringify(v15Settings, null, 2), 'utf-8')
+    const g = getGlobalSettings()
+    expect(g.notionInitialPromptTemplate).toBe('CUSTOM')
+    expect(g.sentryInitialPromptTemplate).toBe('CUSTOM-SENTRY')
+    const p = getProjectSettings('/p')
+    expect(p?.notionInitialPromptTemplate).toBe('CUSTOM-PROJ-NOTION')
+    expect(p?.sentryInitialPromptTemplate).toBe('CUSTOM-PROJ')
+  })
+})

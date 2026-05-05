@@ -9,15 +9,19 @@ import {
   deleteLocalBranch,
   deleteRemoteBranch,
   fetchSourceBranch,
+  fetchSourceBranchAsync,
   getChangedFiles,
   getCommitCount,
+  getCommitsBehind,
   getCommitsBetween,
   getCurrentBranch,
   getDiffStats,
   getDiffStatsBetween,
   getStructuredDiffStatsBetween,
+  getWorkingTreeDiffStats,
   listBranchCommits,
   listBranches,
+  listCommitsBehind,
   listRemoteBranches,
   pullBranch,
   pushBranch,
@@ -317,6 +321,48 @@ describe('getDiffStatsBetween', () => {
     expect(result).toBe('')
 
     rmSync(repo, { recursive: true, force: true })
+  })
+})
+
+describe('getWorkingTreeDiffStats', () => {
+  it('returns empty string when working tree is clean', () => {
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-git-wt-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+    writeFileSync(path.join(repo, 'README.md'), 'initial\n')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: repo })
+
+    const result = getWorkingTreeDiffStats(repo)
+    expect(result.trim()).toBe('')
+
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('returns stat lines mentioning modified files', () => {
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-git-wt-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+    writeFileSync(path.join(repo, 'README.md'), 'initial\n')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: repo })
+
+    writeFileSync(path.join(repo, 'README.md'), 'changed content\nwith more lines\n')
+
+    const result = getWorkingTreeDiffStats(repo)
+    expect(result).toContain('README.md')
+    expect(result).toMatch(/\d+ file.*changed/)
+
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('returns empty string when the path is not a git repository', () => {
+    const notARepo = mkdtempSync(path.join(tmpdir(), 'at-git-wt-norepo-'))
+    const result = getWorkingTreeDiffStats(notARepo)
+    expect(result).toBe('')
+    rmSync(notARepo, { recursive: true, force: true })
   })
 })
 
@@ -717,5 +763,236 @@ describe('rollbackFile(repoPath, branchName, filePath)', () => {
     const target = rollbackFile(repo, 'main', 'ghost.cjs')
     expect(target).toBe('deleted')
     rmSync(repo, { recursive: true, force: true })
+  })
+})
+
+describe('getCommitsBehind', () => {
+  it('returns 0 when working branch is up-to-date with source', () => {
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-behind-uptodate-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+    writeFileSync(path.join(repo, 'a.txt'), 'a')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: repo })
+    execFileSync('git', ['checkout', '-b', 'feature'], { cwd: repo })
+
+    const count = getCommitsBehind(repo, 'main', 'feature')
+    expect(count).toBe(0)
+
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('returns N when source branch has N commits ahead of working', () => {
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-behind-n-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+    writeFileSync(path.join(repo, 'a.txt'), 'a')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: repo })
+
+    // Branch off; feature stays at the initial commit.
+    execFileSync('git', ['checkout', '-b', 'feature'], { cwd: repo })
+
+    // Advance main by 3 commits.
+    execFileSync('git', ['checkout', 'main'], { cwd: repo })
+    writeFileSync(path.join(repo, 'b.txt'), 'b')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'main: b'], { cwd: repo })
+    writeFileSync(path.join(repo, 'c.txt'), 'c')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'main: c'], { cwd: repo })
+    writeFileSync(path.join(repo, 'd.txt'), 'd')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'main: d'], { cwd: repo })
+
+    const count = getCommitsBehind(repo, 'main', 'feature')
+    expect(count).toBe(3)
+
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('returns 0 when working branch == source branch', () => {
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-behind-same-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+    writeFileSync(path.join(repo, 'a.txt'), 'a')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: repo })
+
+    const count = getCommitsBehind(repo, 'main', 'main')
+    expect(count).toBe(0)
+
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('falls back to local source ref when origin/<source> is absent', () => {
+    // No remote configured at all — resolveBase falls back to the local ref.
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-behind-local-fallback-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+    writeFileSync(path.join(repo, 'a.txt'), 'a')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: repo })
+    execFileSync('git', ['checkout', '-b', 'feature'], { cwd: repo })
+
+    // Advance main by 2 commits while standing on feature.
+    execFileSync('git', ['checkout', 'main'], { cwd: repo })
+    writeFileSync(path.join(repo, 'b.txt'), 'b')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'main: b'], { cwd: repo })
+    writeFileSync(path.join(repo, 'c.txt'), 'c')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'main: c'], { cwd: repo })
+
+    // origin/main does NOT exist (no remote) — must fall back to local main.
+    const count = getCommitsBehind(repo, 'main', 'feature')
+    expect(count).toBe(2)
+
+    rmSync(repo, { recursive: true, force: true })
+  })
+})
+
+describe('listCommitsBehind', () => {
+  it('lists commits on source not present on working branch (most recent first)', () => {
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-list-behind-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+    writeFileSync(path.join(repo, 'a.txt'), 'a')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: repo })
+
+    execFileSync('git', ['checkout', '-b', 'feature'], { cwd: repo })
+
+    // Advance main by 3 commits while feature stays put.
+    execFileSync('git', ['checkout', 'main'], { cwd: repo })
+    writeFileSync(path.join(repo, 'b.txt'), 'b')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'main: first'], { cwd: repo })
+    writeFileSync(path.join(repo, 'c.txt'), 'c')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'main: second'], { cwd: repo })
+    writeFileSync(path.join(repo, 'd.txt'), 'd')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'main: third'], { cwd: repo })
+
+    const commits = listCommitsBehind(repo, 'main', 'feature')
+    expect(commits).toHaveLength(3)
+    // Most recent first: third, second, first.
+    expect(commits[0].subject).toBe('main: third')
+    expect(commits[1].subject).toBe('main: second')
+    expect(commits[2].subject).toBe('main: first')
+    // Sanity: each row carries the expected fields.
+    for (const c of commits) {
+      expect(c.sha).toMatch(/^[0-9a-f]{40}$/)
+      expect(c.shortSha.length).toBeGreaterThan(0)
+      expect(c.author).toBe('test')
+      expect(c.date).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+    }
+
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('returns empty list when working branch is up-to-date', () => {
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-list-behind-empty-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+    writeFileSync(path.join(repo, 'a.txt'), 'a')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: repo })
+    execFileSync('git', ['checkout', '-b', 'feature'], { cwd: repo })
+
+    const commits = listCommitsBehind(repo, 'main', 'feature')
+    expect(commits).toEqual([])
+
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('respects the limit param', () => {
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-list-behind-limit-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+    writeFileSync(path.join(repo, 'a.txt'), 'a')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: repo })
+
+    execFileSync('git', ['checkout', '-b', 'feature'], { cwd: repo })
+
+    // Advance main by 10 commits while feature stays put.
+    execFileSync('git', ['checkout', 'main'], { cwd: repo })
+    for (let i = 0; i < 10; i++) {
+      writeFileSync(path.join(repo, `f${i}.txt`), String(i))
+      execFileSync('git', ['add', '.'], { cwd: repo })
+      execFileSync('git', ['commit', '-m', `main: c${i}`], { cwd: repo })
+    }
+
+    const limited = listCommitsBehind(repo, 'main', 'feature', 5)
+    expect(limited).toHaveLength(5)
+
+    rmSync(repo, { recursive: true, force: true })
+  })
+})
+
+describe('fetchSourceBranchAsync', () => {
+  it('resolves silently on success', async () => {
+    const bare = mkdtempSync(path.join(tmpdir(), 'at-async-fetch-bare-'))
+    execFileSync('git', ['init', '--bare', '-b', 'main'], { cwd: bare })
+
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-async-fetch-repo-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+    writeFileSync(path.join(repo, 'f.txt'), 'hello')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: repo })
+    execFileSync('git', ['remote', 'add', 'origin', bare], { cwd: repo })
+    execFileSync('git', ['push', 'origin', 'main'], { cwd: repo })
+
+    await expect(fetchSourceBranchAsync(repo, 'main')).resolves.toBeUndefined()
+
+    rmSync(repo, { recursive: true, force: true })
+    rmSync(bare, { recursive: true, force: true })
+  })
+
+  it('does not throw when the remote is unreachable', async () => {
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-async-fetch-no-remote-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+    writeFileSync(path.join(repo, 'f.txt'), 'hello')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: repo })
+    // No remote configured — fetch must fail under the hood, but the helper
+    // must swallow it and resolve cleanly.
+
+    await expect(fetchSourceBranchAsync(repo, 'main')).resolves.toBeUndefined()
+
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('does not throw when the branch does not exist on origin', async () => {
+    const bare = mkdtempSync(path.join(tmpdir(), 'at-async-fetch-bare2-'))
+    execFileSync('git', ['init', '--bare', '-b', 'main'], { cwd: bare })
+
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-async-fetch-repo2-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+    writeFileSync(path.join(repo, 'f.txt'), 'hello')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: repo })
+    execFileSync('git', ['remote', 'add', 'origin', bare], { cwd: repo })
+    execFileSync('git', ['push', 'origin', 'main'], { cwd: repo })
+
+    await expect(fetchSourceBranchAsync(repo, 'feature/does-not-exist')).resolves.toBeUndefined()
+
+    rmSync(repo, { recursive: true, force: true })
+    rmSync(bare, { recursive: true, force: true })
   })
 })

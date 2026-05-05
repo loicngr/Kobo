@@ -50,6 +50,21 @@
       />
 
       <q-btn
+        no-caps
+        dense
+        outline
+        color="indigo-4"
+        icon="rate_review"
+        :label="$t('tools.review')"
+        :loading="startingReview"
+        :disable="!workspace || isAgentBusy"
+        class="full-width q-mb-xs"
+        @click="reviewDialogOpen = true"
+      >
+        <q-tooltip>{{ isAgentBusy ? $t('tools.reviewBusy') : $t('tools.reviewTooltip') }}</q-tooltip>
+      </q-btn>
+
+      <q-btn
         v-if="workspace?.notionUrl"
         no-caps
         dense
@@ -79,6 +94,12 @@
 
       </template>
     </div>
+
+    <StartReviewDialog
+      v-model="reviewDialogOpen"
+      :loading="startingReview"
+      @submit="startReview"
+    />
   </div>
 </template>
 
@@ -86,6 +107,7 @@
 import { useQuasar } from 'quasar'
 import AutoLoopPanel from 'src/components/AutoLoopPanel.vue'
 import DevServerPanel from 'src/components/DevServerPanel.vue'
+import StartReviewDialog from 'src/components/StartReviewDialog.vue'
 import { useSettingsStore } from 'src/stores/settings'
 import type { Workspace } from 'src/stores/workspace'
 import { isBusyStatus } from 'src/utils/workspace-status'
@@ -102,6 +124,8 @@ const settingsStore = useSettingsStore()
 
 const running = ref(false)
 const openingEditor = ref(false)
+const reviewDialogOpen = ref(false)
+const startingReview = ref(false)
 
 const workspaceId = computed(() => props.workspace?.id ?? '')
 
@@ -166,6 +190,35 @@ async function openEditor() {
 
 function openExternal(url: string) {
   window.open(url, '_blank', 'noopener,noreferrer')
+}
+
+async function startReview(payload: { additionalInstructions: string; newSession: boolean }) {
+  if (!workspaceId.value) return
+  startingReview.value = true
+  try {
+    const res = await fetch(`/api/workspaces/${workspaceId.value}/start-review`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    })
+    const data = await res.json()
+    if (!res.ok) {
+      $q.notify({
+        type: 'negative',
+        message: data.error ?? t('review.failed'),
+        position: 'top',
+        timeout: 6000,
+      })
+      return
+    }
+    $q.notify({ type: 'positive', message: t('review.launched'), position: 'top', timeout: 3000 })
+    reviewDialogOpen.value = false
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : t('review.failed')
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+  } finally {
+    startingReview.value = false
+  }
 }
 </script>
 

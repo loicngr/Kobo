@@ -7,12 +7,12 @@
 </template>
 
 <script setup lang="ts">
-import DOMPurify from 'dompurify'
 import { marked } from 'marked'
 import type { ConversationItem } from 'src/services/agent-event-view'
 import { useDocumentsStore } from 'src/stores/documents'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { injectDocumentLinks } from 'src/utils/inject-document-links'
+import { sanitizeChatHtml } from 'src/utils/render-chat-markdown'
 import { computed } from 'vue'
 
 const props = defineProps<{
@@ -32,7 +32,7 @@ const html = computed(() => {
   const raw = marked.parse(props.item.text, { async: false, breaks: true, gfm: true }) as string
   const withLinks = injectDocumentLinks(raw, knownDocumentPaths.value)
   // Allow the data-document-path attribute through the sanitizer.
-  return DOMPurify.sanitize(withLinks, { ADD_ATTR: ['data-document-path'] })
+  return sanitizeChatHtml(withLinks, { addAttr: ['data-document-path'] })
 })
 
 function onMessageClick(event: MouseEvent) {

@@ -17,6 +17,15 @@ vi.mock('../server/services/agent/orchestrator.js', () => ({
   hasController: vi.fn(() => false),
 }))
 
+// Mock settings-service to avoid filesystem access during tests.
+vi.mock('../server/services/settings-service.js', () => ({
+  getGlobalSettings: vi.fn(() => ({
+    worktreesPath: '',
+    worktreesPrefixByProject: false,
+  })),
+  getProjectSettings: vi.fn(),
+}))
+
 let tmpDir: string
 let dbPath: string
 

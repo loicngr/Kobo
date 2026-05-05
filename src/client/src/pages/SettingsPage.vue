@@ -168,7 +168,22 @@
 
             <!-- PR template + Git conventions -->
             <div class="settings-card q-pa-md rounded-borders q-pb-sm q-mb-sm">
-              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.prPromptTemplate') }}</div>
+              <div class="row items-center q-mb-sm">
+                <div class="text-subtitle2">{{ $t('settings.prPromptTemplate') }}</div>
+                <q-space />
+                <q-btn
+                  flat
+                  dense
+                  no-caps
+                  size="sm"
+                  color="grey-5"
+                  icon="restart_alt"
+                  :label="t('settings.resetToDefault')"
+                  :loading="resettingField === 'prPromptTemplate'"
+                  :disable="resettingField !== null && resettingField !== 'prPromptTemplate'"
+                  @click="resetFieldToDefault('prPromptTemplate')"
+                />
+              </div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.prPromptHint') }}</div>
               <q-input
                 v-model="globalPrPrompt"
@@ -200,7 +215,50 @@
                 </q-expansion-item>
               </div>
 
-              <div class="text-subtitle2 q-mb-sm q-mt-md">{{ $t('settings.gitConventions') }}</div>
+              <div class="row items-center q-mb-sm q-mt-md">
+                <div class="text-subtitle2">{{ $t('settings.reviewPromptTemplate') }}</div>
+                <q-space />
+                <q-btn
+                  flat
+                  dense
+                  no-caps
+                  size="sm"
+                  color="grey-5"
+                  icon="restart_alt"
+                  :label="t('settings.resetToDefault')"
+                  :loading="resettingField === 'reviewPromptTemplate'"
+                  :disable="resettingField !== null && resettingField !== 'reviewPromptTemplate'"
+                  @click="resetFieldToDefault('reviewPromptTemplate')"
+                />
+              </div>
+              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.prPromptHint') }}</div>
+              <q-input
+                v-model="globalReviewPrompt"
+                type="textarea"
+                dense
+                dark
+                outlined
+                :rows="8"
+                :placeholder="$t('settings.reviewPromptPlaceholder')"
+                class="settings-input mono-textarea q-mb-md"
+              />
+
+              <div class="row items-center q-mb-sm q-mt-md">
+                <div class="text-subtitle2">{{ $t('settings.gitConventions') }}</div>
+                <q-space />
+                <q-btn
+                  flat
+                  dense
+                  no-caps
+                  size="sm"
+                  color="grey-5"
+                  icon="restart_alt"
+                  :label="t('settings.resetToDefault')"
+                  :loading="resettingField === 'gitConventions'"
+                  :disable="resettingField !== null && resettingField !== 'gitConventions'"
+                  @click="resetFieldToDefault('gitConventions')"
+                />
+              </div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.gitConventionsHint') }}</div>
               <q-input
                 v-model="globalGitConventions"
@@ -286,6 +344,59 @@
                   class="settings-input"
                 />
               </div>
+              <div class="row items-center q-mb-sm">
+                <div class="text-subtitle2">{{ t('settings.notionInitialPrompt') }}</div>
+                <q-space />
+                <q-btn
+                  flat
+                  dense
+                  no-caps
+                  size="sm"
+                  color="grey-5"
+                  icon="restart_alt"
+                  :label="t('settings.resetToDefault')"
+                  :loading="resettingField === 'notionInitialPromptTemplate'"
+                  :disable="resettingField !== null && resettingField !== 'notionInitialPromptTemplate'"
+                  @click="resetFieldToDefault('notionInitialPromptTemplate')"
+                />
+              </div>
+              <div class="text-caption text-grey-7 q-mb-xs">{{ t('settings.notionInitialPrompt.help', { variables: '{ticket_id}, {notion_url}, {notion_file_path}' }) }}</div>
+              <q-input
+                v-model="globalNotionInitialPrompt"
+                type="textarea"
+                outlined
+                autogrow
+                class="settings-input mono-textarea"
+              />
+            </div>
+
+            <!-- Sentry integration -->
+            <div class="settings-card q-pa-md rounded-borders q-pb-sm q-mb-sm">
+              <div class="text-subtitle2 q-mb-sm">{{ t('settings.sentryIntegration') }}</div>
+              <div class="row items-center q-mb-sm">
+                <div class="text-subtitle2">{{ t('settings.sentryInitialPrompt') }}</div>
+                <q-space />
+                <q-btn
+                  flat
+                  dense
+                  no-caps
+                  size="sm"
+                  color="grey-5"
+                  icon="restart_alt"
+                  :label="t('settings.resetToDefault')"
+                  :loading="resettingField === 'sentryInitialPromptTemplate'"
+                  :disable="resettingField !== null && resettingField !== 'sentryInitialPromptTemplate'"
+                  @click="resetFieldToDefault('sentryInitialPromptTemplate')"
+                />
+              </div>
+              <div class="text-caption text-grey-7 q-mb-xs">{{ t('settings.sentryInitialPrompt.help', { variables: '{issue_id}, {sentry_url}, {sentry_file_path}' }) }}</div>
+              <q-input
+                v-model="globalSentryInitialPrompt"
+                type="textarea"
+                outlined
+                autogrow
+                class="settings-input mono-textarea"
+              />
             </div>
 
             <!-- Workspace tags -->
@@ -322,6 +433,15 @@
                 lazy-rules
                 class="settings-input"
               />
+              <q-toggle
+                v-model="globalWorktreesPrefixByProject"
+                :label="$t('settings.worktreesPrefixByProject')"
+                dark
+                dense
+                color="indigo-4"
+                class="text-grey-5 text-caption q-mt-sm"
+              />
+              <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.worktreesPrefixByProjectHint') }}</div>
             </div>
 
             <!-- Import / Export config -->
@@ -440,6 +560,31 @@
 
                   <q-separator dark class="q-mb-md" />
 
+                  <!-- Copy settings from existing project (new-project mode only) -->
+                  <div v-if="isNewProject && store.projects.length > 0" class="q-mb-md">
+                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">
+                      {{ $t('settings.copyFrom') }}
+                    </div>
+                    <q-select
+                      :model-value="copyFromPath"
+                      :options="copyFromOptions"
+                      option-value="value"
+                      option-label="label"
+                      emit-value
+                      map-options
+                      clearable
+                      dense
+                      dark
+                      outlined
+                      :placeholder="$t('settings.copyFromPlaceholder')"
+                      class="settings-input"
+                      @update:model-value="onCopyFromChange"
+                    />
+                    <div class="text-caption text-grey-7 q-mt-xs">
+                      {{ $t('settings.copyFromHint') }}
+                    </div>
+                  </div>
+
                   <!-- Path -->
                   <div class="q-mb-md">
                     <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.projectPath') }}</div>
@@ -522,6 +667,47 @@
                       outlined
                       :rows="4"
                       :placeholder="$t('settings.prPromptPlaceholder.project')"
+                      class="settings-input mono-textarea"
+                    />
+                  </div>
+
+                  <!-- Review prompt template -->
+                  <div class="q-mb-md">
+                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.reviewPromptTemplate.project') }}</div>
+                    <q-input
+                      v-model="projectForm.reviewPromptTemplate"
+                      type="textarea"
+                      dense
+                      dark
+                      outlined
+                      :rows="4"
+                      :placeholder="$t('settings.reviewPromptPlaceholder')"
+                      class="settings-input mono-textarea"
+                    />
+                  </div>
+
+                  <!-- Notion initial prompt template (project override) -->
+                  <div class="q-mb-md">
+                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ t('settings.notionInitialPrompt.project') }}</div>
+                    <div class="text-caption text-grey-7 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                    <q-input
+                      v-model="projectForm.notionInitialPromptTemplate"
+                      type="textarea"
+                      outlined
+                      autogrow
+                      class="settings-input mono-textarea"
+                    />
+                  </div>
+
+                  <!-- Sentry initial prompt template (project override) -->
+                  <div class="q-mb-md">
+                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ t('settings.sentryInitialPrompt.project') }}</div>
+                    <div class="text-caption text-grey-7 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                    <q-input
+                      v-model="projectForm.sentryInitialPromptTemplate"
+                      type="textarea"
+                      outlined
+                      autogrow
                       class="settings-input mono-textarea"
                     />
                   </div>
@@ -859,6 +1045,7 @@ const activeTab = ref('global')
 // Global form
 const globalModel = ref('auto')
 const globalPrPrompt = ref('')
+const globalReviewPrompt = ref('')
 const globalGitConventions = ref('')
 const globalEditorCommand = ref('')
 const globalBrowserNotifications = ref(true)
@@ -867,12 +1054,22 @@ const globalAudioNotificationSound = ref(DEFAULT_NOTIFICATION_SOUND)
 const globalAudioNotificationVolume = ref(1)
 const globalNotionStatusProperty = ref('')
 const globalNotionStatus = ref('')
+const globalNotionInitialPrompt = ref('')
+const globalSentryInitialPrompt = ref('')
+type ResettableField =
+  | 'prPromptTemplate'
+  | 'reviewPromptTemplate'
+  | 'gitConventions'
+  | 'notionInitialPromptTemplate'
+  | 'sentryInitialPromptTemplate'
+const resettingField = ref<ResettableField | null>(null)
 const globalDefaultPermissionMode = ref<'plan' | 'bypass' | 'strict' | 'interactive'>('bypass')
 const globalNotionMcpKey = ref('')
 const globalSentryMcpKey = ref('')
 const globalTags = ref<string[]>([])
 const globalWorktreesPath = ref<string>(WORKTREES_PATH)
 const globalWorktreesPathInput = ref<QInput | null>(null)
+const globalWorktreesPrefixByProject = ref(true)
 const worktreesPathRules = [(value: string) => value.trim().length > 0 || t('settings.worktreesPathRequired')]
 const savingGlobal = ref(false)
 
@@ -885,12 +1082,124 @@ const projectForm = ref({
   defaultSourceBranch: '',
   defaultModel: '',
   prPromptTemplate: '',
+  reviewPromptTemplate: '',
+  notionInitialPromptTemplate: '',
+  sentryInitialPromptTemplate: '',
   gitConventions: '',
   setupScript: '',
   devServer: { startCommand: '', stopCommand: '' },
   e2e: { framework: '' as 'cypress' | 'playwright' | 'jest' | 'vitest' | 'other' | '', skill: '', prompt: '' },
   finalization: { prompt: '' },
 })
+
+// ── Copy-from-existing-project (clone) ─────────────────────────────────────
+// Fields copied verbatim from the source project when "Copy from" is set.
+// Excludes path/displayName/defaultSourceBranch — those stay user-filled.
+const COPYABLE_FIELDS = [
+  'defaultModel',
+  'prPromptTemplate',
+  'reviewPromptTemplate',
+  'notionInitialPromptTemplate',
+  'sentryInitialPromptTemplate',
+  'gitConventions',
+  'setupScript',
+  'devServer',
+  'e2e',
+  'finalization',
+] as const
+
+const copyFromPath = ref<string | null>(null)
+const previousCopyFromPath = ref<string | null>(null)
+
+const copyFromOptions = computed(() =>
+  store.projects.map((p) => ({
+    value: p.path,
+    label: projectDisplayName(p) || p.path,
+  })),
+)
+
+function applyCopyFrom(sourcePath: string) {
+  const source = store.projects.find((p) => p.path === sourcePath)
+  if (!source) return
+  // Mirror the defensive pattern of `syncProjectForm`: legacy projects in
+  // settings.json may be missing nested objects (e.g. older e2e/finalization
+  // schema), so always coalesce to a defined default. New nested objects also
+  // ensure no reference is shared with the source project.
+  projectForm.value.defaultModel = source.defaultModel ?? ''
+  projectForm.value.prPromptTemplate = source.prPromptTemplate ?? ''
+  projectForm.value.reviewPromptTemplate = source.reviewPromptTemplate ?? ''
+  projectForm.value.notionInitialPromptTemplate = source.notionInitialPromptTemplate ?? ''
+  projectForm.value.sentryInitialPromptTemplate = source.sentryInitialPromptTemplate ?? ''
+  projectForm.value.gitConventions = source.gitConventions ?? ''
+  projectForm.value.setupScript = source.setupScript ?? ''
+  projectForm.value.devServer = {
+    startCommand: source.devServer?.startCommand ?? '',
+    stopCommand: source.devServer?.stopCommand ?? '',
+  }
+  projectForm.value.e2e = {
+    framework: source.e2e?.framework ?? '',
+    skill: source.e2e?.skill ?? '',
+    prompt: source.e2e?.prompt ?? '',
+  }
+  projectForm.value.finalization = {
+    prompt: source.finalization?.prompt ?? '',
+  }
+}
+
+function isFormPristine(): boolean {
+  // Pristine when every COPYABLE_FIELDS value matches the empty-form default.
+  // Defaults are inlined to match exactly what `syncProjectForm(null)` produces.
+  const defaults: Record<string, unknown> = {
+    defaultModel: '',
+    prPromptTemplate: '',
+    reviewPromptTemplate: '',
+    notionInitialPromptTemplate: '',
+    sentryInitialPromptTemplate: '',
+    gitConventions: '',
+    setupScript: '',
+    devServer: { startCommand: '', stopCommand: '' },
+    e2e: { framework: '', skill: '', prompt: '' },
+    finalization: { prompt: '' },
+  }
+  return COPYABLE_FIELDS.every((key) => JSON.stringify(projectForm.value[key]) === JSON.stringify(defaults[key]))
+}
+
+function onCopyFromChange(newPath: string | null) {
+  // Cas 1: clear → non-destructive, just remove the label
+  if (newPath === null) {
+    copyFromPath.value = null
+    previousCopyFromPath.value = null
+    return
+  }
+
+  // Cas 2: first selection on a pristine form → populate silently
+  if (previousCopyFromPath.value === null && isFormPristine()) {
+    applyCopyFrom(newPath)
+    copyFromPath.value = newPath
+    previousCopyFromPath.value = newPath
+    return
+  }
+
+  // Cas 3: change or re-select → confirm before overwrite
+  const target = store.projects.find((p) => p.path === newPath)
+  const targetLabel = target ? projectDisplayName(target) || newPath : newPath
+  $q.dialog({
+    title: t('settings.copyFromConfirmTitle'),
+    message: t('settings.copyFromConfirm', { project: targetLabel }),
+    cancel: true,
+    persistent: true,
+    dark: true,
+  })
+    .onOk(() => {
+      applyCopyFrom(newPath)
+      copyFromPath.value = newPath
+      previousCopyFromPath.value = newPath
+    })
+    .onCancel(() => {
+      // Revert: q-select v-model already moved, force it back to the previous value.
+      copyFromPath.value = previousCopyFromPath.value
+    })
+}
 
 // Skills catalogue (fetched once, used for E2E skill autocomplete)
 const availableSkills = ref<string[]>([])
@@ -1086,6 +1395,7 @@ const selectedProject = computed<ProjectSettings | null>(() => {
 function syncGlobalForm() {
   globalModel.value = store.global.defaultModel
   globalPrPrompt.value = store.global.prPromptTemplate
+  globalReviewPrompt.value = store.global.reviewPromptTemplate ?? ''
   globalGitConventions.value = store.global.gitConventions
   globalEditorCommand.value = store.global.editorCommand ?? ''
   globalBrowserNotifications.value = store.global.browserNotifications ?? true
@@ -1095,6 +1405,8 @@ function syncGlobalForm() {
   globalAudioNotificationVolume.value = typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 1
   globalNotionStatusProperty.value = store.global.notionStatusProperty ?? ''
   globalNotionStatus.value = store.global.notionInProgressStatus ?? ''
+  globalNotionInitialPrompt.value = store.global.notionInitialPromptTemplate ?? ''
+  globalSentryInitialPrompt.value = store.global.sentryInitialPromptTemplate ?? ''
   // Migrate legacy values ('auto-accept' or anything unrecognised) to 'bypass'
   // — the safest non-plan default. 'plan' is preserved verbatim.
   {
@@ -1106,6 +1418,7 @@ function syncGlobalForm() {
   globalSentryMcpKey.value = store.global.sentryMcpKey ?? ''
   globalTags.value = Array.isArray(store.global.tags) ? [...store.global.tags] : []
   globalWorktreesPath.value = store.global.worktreesPath ?? WORKTREES_PATH
+  globalWorktreesPrefixByProject.value = store.global.worktreesPrefixByProject ?? false
 }
 
 // Init project form from selected project
@@ -1117,6 +1430,9 @@ function syncProjectForm(project: ProjectSettings | null) {
       defaultSourceBranch: '',
       defaultModel: '',
       prPromptTemplate: '',
+      reviewPromptTemplate: '',
+      notionInitialPromptTemplate: '',
+      sentryInitialPromptTemplate: '',
       gitConventions: '',
       setupScript: '',
       devServer: { startCommand: '', stopCommand: '' },
@@ -1132,6 +1448,9 @@ function syncProjectForm(project: ProjectSettings | null) {
     defaultSourceBranch: project.defaultSourceBranch,
     defaultModel: project.defaultModel,
     prPromptTemplate: project.prPromptTemplate,
+    reviewPromptTemplate: project.reviewPromptTemplate ?? '',
+    notionInitialPromptTemplate: project.notionInitialPromptTemplate ?? '',
+    sentryInitialPromptTemplate: project.sentryInitialPromptTemplate ?? '',
     gitConventions: project.gitConventions ?? '',
     setupScript: project.setupScript ?? '',
     devServer: {
@@ -1250,6 +1569,27 @@ async function onImportFile(event: Event) {
   }
 }
 
+async function resetFieldToDefault(field: ResettableField) {
+  if (resettingField.value !== null) return
+  resettingField.value = field
+  try {
+    const defaults = await store.fetchGlobalDefaults()
+    const target: Record<ResettableField, typeof globalPrPrompt> = {
+      prPromptTemplate: globalPrPrompt,
+      reviewPromptTemplate: globalReviewPrompt,
+      gitConventions: globalGitConventions,
+      notionInitialPromptTemplate: globalNotionInitialPrompt,
+      sentryInitialPromptTemplate: globalSentryInitialPrompt,
+    }
+    target[field].value = defaults[field]
+  } catch (err) {
+    console.error('[SettingsPage] resetFieldToDefault failed:', err)
+    $q.notify({ type: 'negative', message: t('settings.resetFailed'), position: 'top' })
+  } finally {
+    resettingField.value = null
+  }
+}
+
 async function saveGlobal() {
   const worktreesPathValid = await globalWorktreesPathInput.value?.validate()
   if (worktreesPathValid === false) return
@@ -1259,6 +1599,7 @@ async function saveGlobal() {
     await store.updateGlobal({
       defaultModel: globalModel.value,
       prPromptTemplate: globalPrPrompt.value,
+      reviewPromptTemplate: globalReviewPrompt.value,
       gitConventions: globalGitConventions.value,
       editorCommand: globalEditorCommand.value,
       browserNotifications: globalBrowserNotifications.value,
@@ -1267,11 +1608,14 @@ async function saveGlobal() {
       audioNotificationVolume: globalAudioNotificationVolume.value,
       notionStatusProperty: globalNotionStatusProperty.value,
       notionInProgressStatus: globalNotionStatus.value,
+      notionInitialPromptTemplate: globalNotionInitialPrompt.value,
+      sentryInitialPromptTemplate: globalSentryInitialPrompt.value,
       defaultPermissionMode: globalDefaultPermissionMode.value,
       notionMcpKey: globalNotionMcpKey.value,
       sentryMcpKey: globalSentryMcpKey.value,
       tags: globalTags.value,
       worktreesPath: globalWorktreesPath.value,
+      worktreesPrefixByProject: globalWorktreesPrefixByProject.value,
     })
     $q.notify({ type: 'positive', message: t('settings.saved'), position: 'top' })
   } catch {
@@ -1294,6 +1638,9 @@ async function saveProject() {
       defaultSourceBranch: projectForm.value.defaultSourceBranch,
       defaultModel: projectForm.value.defaultModel,
       prPromptTemplate: projectForm.value.prPromptTemplate,
+      reviewPromptTemplate: projectForm.value.reviewPromptTemplate,
+      notionInitialPromptTemplate: projectForm.value.notionInitialPromptTemplate,
+      sentryInitialPromptTemplate: projectForm.value.sentryInitialPromptTemplate,
       gitConventions: projectForm.value.gitConventions,
       setupScript: projectForm.value.setupScript,
       devServer: projectForm.value.devServer,
@@ -1334,12 +1681,16 @@ function addNewProject() {
   selectedProjectIndex.value = -1
   isNewProject.value = true
   syncProjectForm(null)
+  copyFromPath.value = null
+  previousCopyFromPath.value = null
 }
 
 // Select a project from the list
 function selectProject(index: number) {
   isNewProject.value = false
   selectedProjectIndex.value = index
+  copyFromPath.value = null
+  previousCopyFromPath.value = null
 }
 
 // Display name for project list
