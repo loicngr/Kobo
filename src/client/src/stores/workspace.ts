@@ -434,7 +434,17 @@ export const useWorkspaceStore = defineStore('workspace', {
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const data = await res.json()
         const workspace = data.workspace ?? data
-        this.workspaces.push(workspace)
+        // Dedup against a concurrent fetchWorkspaces() that may have already
+        // inserted this workspace: events emitted by the create flow (setup
+        // output, autoloop:enabled, …) can race the POST response and trigger
+        // a list refresh that beats the push by a few ms. Without this guard
+        // the sidebar shows the same workspace twice until F5.
+        const idx = this.workspaces.findIndex((w) => w.id === workspace.id)
+        if (idx >= 0) {
+          this.workspaces[idx] = workspace
+        } else {
+          this.workspaces.push(workspace)
+        }
         // When created with autoLoop=true, the server flipped auto_loop=1 in DB
         // but the event broadcast lands before this client is subscribed.
         // Refresh states explicitly so the toggle reflects the new row.

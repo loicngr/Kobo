@@ -88,7 +88,9 @@ export const DEFAULT_FINALIZATION_PROMPT = `Run final quality checks before clos
 1. Verify all other tasks are marked \`done\`. If any remain \`pending\`, stop and report.
 2. Run the project's linters, type-checkers, and tests (see CLAUDE.md or package.json scripts).
 3. If any check fails, create a new regular task at the end of the list with a title like \`Fix lint failure in X\` (NO \`[FINAL]\` or \`[E2E]\` prefix — it must use the default iteration prompt) and mark this \`[FINAL]\` task as \`done\`. The auto-loop will pick up the fix on the next iteration. The finalization mechanism is single-shot per grooming pass; if you want quality checks to re-run after the fix, mark the fix task \`done\` and re-trigger grooming manually.
-4. If everything passes, mark this task as \`done\`.`
+4. If everything passes, mark this task as \`done\`.
+
+HARD RULE: Do NOT open a pull request, do NOT run \`gh pr create\` or any equivalent command. The finalization step never opens a PR — that is a separate, explicit user action via the "Open PR" button.`
 
 /** Per-project settings, stored in settings.json. */
 export interface ProjectSettings {

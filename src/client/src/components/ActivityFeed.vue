@@ -296,12 +296,24 @@ async function loadOlder(): Promise<void> {
     // fetch-more threshold so the next scroll event doesn't immediately
     // re-trigger loadOlder. This matters on small-batch fetches where the
     // newly-inserted content is shorter than the threshold.
+    //
+    // When NOTHING was actually prepended (server returned 0 events because
+    // `hasMore` was already false on this session), do NOT touch the scroll.
+    // The min-clamp `Math.max(prevPos, FETCH_MORE_THRESHOLD_PX + 50)` would
+    // otherwise hijack the scroll: on a short feed, `setScrollPosition(250)`
+    // gets clamped by q-scroll-area to `verticalSize - verticalContainerSize`,
+    // which can equal max-scroll (= bottom) — so the user trying to read the
+    // top of the feed gets yanked to the bottom on every loadOlder cycle.
+    // Skipping is safe: `currentHasMoreOlder()` returns false after this
+    // empty response, so onScroll won't re-trigger loadOlder on its own.
     await nextTick()
     if (area) {
       const newSize = area.getScroll().verticalSize
       const delta = newSize - prevSize
-      const desired = Math.max(prevPos + delta, FETCH_MORE_THRESHOLD_PX + 50)
-      area.setScrollPosition('vertical', desired, 0)
+      if (delta > 0) {
+        const desired = Math.max(prevPos + delta, FETCH_MORE_THRESHOLD_PX + 50)
+        area.setScrollPosition('vertical', desired, 0)
+      }
     }
   } catch (err) {
     console.error('[ActivityFeed] failed to load older events:', err)

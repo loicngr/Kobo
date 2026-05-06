@@ -1834,7 +1834,7 @@ app.get('/:id/git-stats', async (c) => {
       workspace.workingBranch,
     )
     const pr = await gitOps.getPrStatusAsync(workspace.projectPath, workspace.workingBranch)
-    const unpushedCount = await gitOps.getUnpushedCountAsync(worktreePath)
+    const unpushedCount = await gitOps.getUnpushedCountAsync(worktreePath, workspace.workingBranch)
     const workingTree = gitOps.getWorkingTreeStatus(worktreePath)
 
     return c.json({

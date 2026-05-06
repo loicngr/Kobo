@@ -6,7 +6,14 @@ import { promisify } from 'node:util'
 const execFileAsync = promisify(execFileCb)
 
 function git(repoPath: string, args: string[]): string {
-  return execFileSync('git', args, { cwd: repoPath, encoding: 'utf-8' }).trim()
+  // `trimEnd` (not `trim`): some git outputs are column-aligned and the LEADING
+  // space carries information. The classic case is `git status --porcelain`,
+  // where each line is `XY filename` and X is " " when the index has no
+  // change. Stripping that leading space silently shifts every column by one
+  // and makes `line.substring(3)` chop the first character of the filename
+  // (e.g. `front/foo` → `ront/foo`). Trailing whitespace (the final `\n` git
+  // always appends) still goes — that's what every caller expects.
+  return execFileSync('git', args, { cwd: repoPath, encoding: 'utf-8' }).trimEnd()
 }
 
 /** Return the name of the currently checked-out branch. */
@@ -742,16 +749,36 @@ export function getWorkingTreeStatus(repoPath: string): WorkingTreeStatus {
   }
 }
 
-/** Count commits ahead of upstream. Returns -1 if no upstream is set. */
-export function getUnpushedCount(repoPath: string): number {
+/**
+ * Count commits ahead of `origin/<workingBranch>`. Returns `-1` when the remote
+ * ref does not exist (i.e. the branch has never been pushed).
+ *
+ * We deliberately use `origin/<workingBranch>` instead of the local `@{u}`
+ * upstream pointer: Kōbō creates worktrees with `git worktree add -b <new>
+ * <path> origin/<sourceBranch>`, so `@{u}` points at `origin/<sourceBranch>`,
+ * NOT at the working branch's remote sibling. Comparing HEAD with that wrong
+ * upstream silently reported "0 unpushed" for never-pushed branches that
+ * happened to be aligned with their source — surfacing as a false "Pushé"
+ * label in the GitPanel.
+ */
+export function getUnpushedCount(repoPath: string, workingBranch: string): number {
+  const remoteRef = `origin/${workingBranch}`
   try {
-    const output = execFileSync('git', ['rev-list', '@{u}..HEAD', '--count'], {
+    execFileSync('git', ['rev-parse', '--verify', remoteRef], {
+      cwd: repoPath,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+  } catch {
+    return -1 // branch never pushed (no remote ref)
+  }
+  try {
+    const output = execFileSync('git', ['rev-list', `${remoteRef}..HEAD`, '--count'], {
       cwd: repoPath,
       encoding: 'utf-8',
     }).trim()
     return parseInt(output, 10) || 0
   } catch {
-    return -1 // no upstream
+    return -1
   }
 }
 
@@ -815,16 +842,26 @@ export async function getPrStatusAsync(repoPath: string, branchName: string): Pr
   }
 }
 
-/** Async version of getUnpushedCount. Returns -1 if no upstream is set. */
-export async function getUnpushedCountAsync(repoPath: string): Promise<number> {
+/**
+ * Async version of `getUnpushedCount`. Same `origin/<workingBranch>` semantic:
+ * returns `-1` when the remote ref does not exist (never pushed), `0` when
+ * pushed and aligned, `>0` when pushed but ahead.
+ */
+export async function getUnpushedCountAsync(repoPath: string, workingBranch: string): Promise<number> {
+  const remoteRef = `origin/${workingBranch}`
   try {
-    const { stdout } = await execFileAsync('git', ['rev-list', '@{u}..HEAD', '--count'], {
+    await execFileAsync('git', ['rev-parse', '--verify', remoteRef], { cwd: repoPath })
+  } catch {
+    return -1 // branch never pushed (no remote ref)
+  }
+  try {
+    const { stdout } = await execFileAsync('git', ['rev-list', `${remoteRef}..HEAD`, '--count'], {
       cwd: repoPath,
       encoding: 'utf-8',
     })
     return parseInt(stdout.trim(), 10) || 0
   } catch {
-    return -1 // no upstream
+    return -1
   }
 }
 
