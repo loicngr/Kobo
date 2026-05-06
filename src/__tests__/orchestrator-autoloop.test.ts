@@ -21,6 +21,10 @@ vi.mock('../server/services/auto-loop-service.js', () => ({
   onQuotaBackoffExpired: vi.fn(),
 }))
 
+vi.mock('../server/services/usage/poller.js', () => ({
+  refreshNow: vi.fn().mockResolvedValue(null),
+}))
+
 vi.mock('../server/services/settings-service.js', () => ({
   getEffectiveSettings: () => ({
     model: 'claude-opus-4-7',
@@ -214,7 +218,7 @@ describe('handleQuota auto-loop timer', () => {
     if (tmpDir && fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true, force: true })
   })
 
-  it('calls onQuotaBackoffExpired instead of startAgent when auto_loop is enabled', async () => {
+  it('calls onQuotaBackoffExpired when the backoff timer fires (auto_loop enabled)', async () => {
     const orch = await import('../server/services/agent/orchestrator.js')
     const autoLoop = await import('../server/services/auto-loop-service.js')
     const { getDb } = await import('../server/db/index.js')
@@ -223,28 +227,29 @@ describe('handleQuota auto-loop timer', () => {
     db.prepare("UPDATE workspaces SET auto_loop = 1, status = 'quota' WHERE id = ?").run(wsId)
     orch.forgetRateLimitInfo(wsId)
 
-    orch.__test__.handleQuota(wsId)
+    await orch.__test__.handleQuota(wsId)
     vi.advanceTimersByTime(15 * 60 * 1000 + 1000)
 
     expect(autoLoop.onQuotaBackoffExpired).toHaveBeenCalledWith(wsId)
   })
 
-  it('calls startAgent (not onQuotaBackoffExpired) when auto_loop is disabled', async () => {
+  it('calls onQuotaBackoffExpired when the backoff timer fires (auto_loop disabled — service no-ops)', async () => {
+    // Under the new design, orchestrator hands off uniformly to
+    // quotaBackoffService → auto-loop-service. The latter is responsible for
+    // checking `auto_loop=1` and no-op'ing for non-auto-loop workspaces. From
+    // the orchestrator's perspective the call always lands.
     const orch = await import('../server/services/agent/orchestrator.js')
     const autoLoop = await import('../server/services/auto-loop-service.js')
     const { getDb } = await import('../server/db/index.js')
     const db = getDb()
 
-    // auto_loop stays 0 (default), set status to quota manually
     db.prepare("UPDATE workspaces SET auto_loop = 0, status = 'quota' WHERE id = ?").run(wsId)
     orch.forgetRateLimitInfo(wsId)
 
-    orch.__test__.handleQuota(wsId)
+    await orch.__test__.handleQuota(wsId)
     vi.advanceTimersByTime(15 * 60 * 1000 + 1000)
 
-    expect(autoLoop.onQuotaBackoffExpired).not.toHaveBeenCalled()
-    // startAgent is NOT mocked in this file — the real one would throw, but
-    // the timer catches it. We just verify onQuotaBackoffExpired was skipped.
+    expect(autoLoop.onQuotaBackoffExpired).toHaveBeenCalledWith(wsId)
   })
 })
 

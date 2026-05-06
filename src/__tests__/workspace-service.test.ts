@@ -1231,3 +1231,184 @@ describe('updateWorktreePath(id, newPath)', () => {
     expect(() => updateWorktreePath('ghost', '/x')).toThrow(/not found/)
   })
 })
+
+describe('updateWorkspaceDescription()', () => {
+  it('updates the description and returns the updated workspace', async () => {
+    const { createWorkspace, updateWorkspaceDescription, getWorkspace } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const ws = createWorkspace({
+      name: 'W',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'feature/x',
+    })
+    const updated = updateWorkspaceDescription(ws.id, 'Investigating SERVICE-1600')
+    expect(updated.description).toBe('Investigating SERVICE-1600')
+    expect(getWorkspace(ws.id)?.description).toBe('Investigating SERVICE-1600')
+  })
+
+  it('trims input', async () => {
+    const { createWorkspace, updateWorkspaceDescription } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'W',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'feature/x',
+    })
+    const updated = updateWorkspaceDescription(ws.id, '  hello  ')
+    expect(updated.description).toBe('hello')
+  })
+
+  it('accepts exactly 200 chars after trim (whitespace padding does not count toward the limit)', async () => {
+    const { createWorkspace, updateWorkspaceDescription } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'W',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'feature/x',
+    })
+    const body = 'x'.repeat(200)
+    const padded = `   ${body}   `
+    const updated = updateWorkspaceDescription(ws.id, padded)
+    expect(updated.description).toBe(body)
+    expect(updated.description?.length).toBe(200)
+  })
+
+  it('clears the column when given empty string after trim', async () => {
+    const { createWorkspace, updateWorkspaceDescription, getWorkspace } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const ws = createWorkspace({
+      name: 'W',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'feature/x',
+    })
+    updateWorkspaceDescription(ws.id, 'first value')
+    const cleared = updateWorkspaceDescription(ws.id, '   ')
+    expect(cleared.description).toBeNull()
+    expect(getWorkspace(ws.id)?.description).toBeNull()
+  })
+
+  it('clears the column when given null', async () => {
+    const { createWorkspace, updateWorkspaceDescription } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'W',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'feature/x',
+    })
+    updateWorkspaceDescription(ws.id, 'first value')
+    const cleared = updateWorkspaceDescription(ws.id, null)
+    expect(cleared.description).toBeNull()
+  })
+
+  it('throws when description exceeds 200 chars after trim', async () => {
+    const { createWorkspace, updateWorkspaceDescription } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'W',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'feature/x',
+    })
+    const tooLong = 'x'.repeat(201)
+    expect(() => updateWorkspaceDescription(ws.id, tooLong)).toThrowError(/200/)
+  })
+
+  it('throws when workspace not found', async () => {
+    const { updateWorkspaceDescription } = await import('../server/services/workspace-service.js')
+    expect(() => updateWorkspaceDescription('does-not-exist', 'hi')).toThrowError(/not found/)
+  })
+})
+
+describe('updateWorkspaceAgentDescription()', () => {
+  it('updates the agent_description and returns the updated workspace', async () => {
+    const { createWorkspace, updateWorkspaceAgentDescription, getWorkspace } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const ws = createWorkspace({
+      name: 'W',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'feature/x',
+    })
+    const updated = updateWorkspaceAgentDescription(ws.id, 'Investigating SERVICE-1600')
+    expect(updated.agentDescription).toBe('Investigating SERVICE-1600')
+    expect(getWorkspace(ws.id)?.agentDescription).toBe('Investigating SERVICE-1600')
+  })
+
+  it('does NOT touch the user description', async () => {
+    const { createWorkspace, updateWorkspaceDescription, updateWorkspaceAgentDescription, getWorkspace } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const ws = createWorkspace({
+      name: 'W',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'feature/x',
+    })
+    updateWorkspaceDescription(ws.id, 'user value')
+    updateWorkspaceAgentDescription(ws.id, 'agent value')
+    const fresh = getWorkspace(ws.id)
+    expect(fresh?.description).toBe('user value')
+    expect(fresh?.agentDescription).toBe('agent value')
+  })
+
+  it('trims input', async () => {
+    const { createWorkspace, updateWorkspaceAgentDescription } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'W',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'feature/x',
+    })
+    const updated = updateWorkspaceAgentDescription(ws.id, '  hello  ')
+    expect(updated.agentDescription).toBe('hello')
+  })
+
+  it('clears the column when given empty string after trim', async () => {
+    const { createWorkspace, updateWorkspaceAgentDescription, getWorkspace } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const ws = createWorkspace({
+      name: 'W',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'feature/x',
+    })
+    updateWorkspaceAgentDescription(ws.id, 'first value')
+    const cleared = updateWorkspaceAgentDescription(ws.id, '   ')
+    expect(cleared.agentDescription).toBeNull()
+    expect(getWorkspace(ws.id)?.agentDescription).toBeNull()
+  })
+
+  it('clears the column when given null', async () => {
+    const { createWorkspace, updateWorkspaceAgentDescription } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'W',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'feature/x',
+    })
+    updateWorkspaceAgentDescription(ws.id, 'first value')
+    const cleared = updateWorkspaceAgentDescription(ws.id, null)
+    expect(cleared.agentDescription).toBeNull()
+  })
+
+  it('throws when description exceeds 200 chars after trim', async () => {
+    const { createWorkspace, updateWorkspaceAgentDescription } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'W',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'feature/x',
+    })
+    expect(() => updateWorkspaceAgentDescription(ws.id, 'x'.repeat(201))).toThrowError(/200/)
+  })
+
+  it('throws when workspace not found', async () => {
+    const { updateWorkspaceAgentDescription } = await import('../server/services/workspace-service.js')
+    expect(() => updateWorkspaceAgentDescription('does-not-exist', 'hi')).toThrowError(/not found/)
+  })
+})

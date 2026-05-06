@@ -56,4 +56,18 @@ const { t } = useI18n()
   from { transform: rotate(0deg); }
   to { transform: rotate(360deg); }
 }
+
+/* Dev-server "running" indicator — 6px green dot with a soft glow.
+   Defined here (not in WorkspaceList.vue) so the scoped CSS reaches
+   the actual DOM node rendered by THIS component. */
+.dd-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.dd-dot--running {
+  background-color: #22c55e;
+  box-shadow: 0 0 4px rgba(34, 197, 94, 0.5);
+}
 </style>

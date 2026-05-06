@@ -26,6 +26,7 @@ import {
   logThoughtHandler,
   markTaskDoneHandler,
   readDocumentHandler,
+  setWorkspaceAgentDescriptionHandler,
   updateTaskHandler,
 } from '../mcp-server/kobo-tasks-handlers.js'
 import { initSchema } from '../server/db/schema.js'
@@ -542,5 +543,79 @@ describe('MCP tasks server handlers', () => {
         costUsd: 0.02,
       })
     })
+  })
+
+  describe('setWorkspaceAgentDescriptionHandler', () => {
+    it('updates the workspace agent_description in the DB', () => {
+      const result = setWorkspaceAgentDescriptionHandler(db, workspaceId, { description: 'New summary' })
+      expect(result).toEqual({ ok: true, description: 'New summary' })
+      const row = db.prepare('SELECT agent_description FROM workspaces WHERE id = ?').get(workspaceId) as {
+        agent_description: string | null
+      }
+      expect(row.agent_description).toBe('New summary')
+    })
+
+    it('does NOT touch the user description column', () => {
+      db.prepare('UPDATE workspaces SET description = ? WHERE id = ?').run('user value', workspaceId)
+      setWorkspaceAgentDescriptionHandler(db, workspaceId, { description: 'agent value' })
+      const row = db.prepare('SELECT description, agent_description FROM workspaces WHERE id = ?').get(workspaceId) as {
+        description: string | null
+        agent_description: string | null
+      }
+      expect(row.description).toBe('user value')
+      expect(row.agent_description).toBe('agent value')
+    })
+
+    it('clears the field when description is empty after trim', () => {
+      setWorkspaceAgentDescriptionHandler(db, workspaceId, { description: 'Initial' })
+      const result = setWorkspaceAgentDescriptionHandler(db, workspaceId, { description: '   ' })
+      expect(result).toEqual({ ok: true, description: null })
+      const row = db.prepare('SELECT agent_description FROM workspaces WHERE id = ?').get(workspaceId) as {
+        agent_description: string | null
+      }
+      expect(row.agent_description).toBeNull()
+    })
+
+    it('returns ok=false with an error when description exceeds 200 chars', () => {
+      const result = setWorkspaceAgentDescriptionHandler(db, workspaceId, { description: 'x'.repeat(201) })
+      expect(result.ok).toBe(false)
+      expect((result as { error: string }).error).toMatch(/200/)
+    })
+
+    it('returns ok=false when workspace is unknown', () => {
+      const result = setWorkspaceAgentDescriptionHandler(db, 'does-not-exist', { description: 'hi' })
+      expect(result.ok).toBe(false)
+    })
+  })
+
+  describe('getWorkspaceInfoHandler — agent_description', () => {
+    it('includes agentDescription as null when unset', () => {
+      const info = getWorkspaceInfoHandler(db, workspaceId)
+      expect(info.agentDescription).toBeNull()
+    })
+
+    it('includes agentDescription as a string when set', () => {
+      setWorkspaceAgentDescriptionHandler(db, workspaceId, { description: 'Live status' })
+      const info = getWorkspaceInfoHandler(db, workspaceId)
+      expect(info.agentDescription).toBe('Live status')
+    })
+  })
+})
+
+describe('MCP server tool registration — set_workspace_agent_description', () => {
+  it('exposes the set_workspace_agent_description tool with the right schema', () => {
+    const serverSource = fs.readFileSync(path.join(__dirname, '..', 'mcp-server', 'kobo-tasks-server.ts'), 'utf-8')
+    expect(serverSource).toMatch(/name:\s*['"]set_workspace_agent_description['"]/)
+    expect(serverSource).not.toMatch(/['"]set_workspace_description['"]/)
+    expect(serverSource).toMatch(/properties:\s*\{[\s\S]*?description:\s*\{\s*type:\s*['"]string['"]/)
+    expect(serverSource).toMatch(/required:\s*\[['"]description['"]\]/)
+  })
+
+  it('dispatches set_workspace_agent_description to setWorkspaceAgentDescriptionHandler', () => {
+    const serverSource = fs.readFileSync(path.join(__dirname, '..', 'mcp-server', 'kobo-tasks-server.ts'), 'utf-8')
+    expect(serverSource).toMatch(/setWorkspaceAgentDescriptionHandler/)
+    expect(serverSource).toMatch(
+      /name === 'set_workspace_agent_description'[\s\S]*?setWorkspaceAgentDescriptionHandler\s*\(/,
+    )
   })
 })

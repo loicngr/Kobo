@@ -19,6 +19,7 @@ import {
   markAutoLoopReadyHandler,
   markTaskDoneHandler,
   readDocumentHandler,
+  setWorkspaceAgentDescriptionHandler,
   updateTaskHandler,
 } from './kobo-tasks-handlers.js'
 
@@ -84,6 +85,22 @@ async function notifyAutoLoopReady(): Promise<void> {
     await fetch(url, { method: 'POST' })
   } catch (err) {
     console.error('[kobo-tasks-server] notify-autoloop-ready failed:', err)
+  }
+}
+
+/**
+ * Fire-and-forget POST that lands on `/agent-description/notify-updated`,
+ * which emits the `workspace:agent-description-updated` WS event so the
+ * sidebar fallback display + the workspace header italic line refresh live
+ * across every connected client. The handler already wrote the column to DB;
+ * this call is ONLY for the event emission.
+ */
+async function notifyAgentDescriptionUpdated(): Promise<void> {
+  try {
+    const url = `${backendUrl}/api/workspaces/${workspaceId}/agent-description/notify-updated`
+    await fetch(url, { method: 'POST' })
+  } catch (err) {
+    console.error('[kobo-tasks-server] notify-agent-description-updated failed:', err)
   }
 }
 
@@ -191,6 +208,21 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       description:
         'CALL EARLY in a session to confirm project path, working/source branch, worktree path, model, and notion link. Cheap read — useful when the user refers to "this workspace" or when you need the worktree path to locate files.',
       inputSchema: { type: 'object', properties: {}, required: [] },
+    },
+    {
+      name: 'set_workspace_agent_description',
+      description:
+        "Set or clear the workspace's agent-side description (≤ 200 chars). Pass an empty string to clear. The user sees this string under the workspace title in the sidebar (it takes precedence over the user-controlled `description` field). Plain text only. The current value is available via get_workspace_info as agentDescription. NOTE: there is a separate user-controlled `description` field — do NOT try to write it; it has no MCP tool.",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          description: {
+            type: 'string',
+            description: 'Plain text, max 200 characters. Empty string clears the description.',
+          },
+        },
+        required: ['description'],
+      },
     },
     {
       name: 'get_git_info',
@@ -450,6 +482,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === 'get_workspace_info') {
       return ok(getWorkspaceInfoHandler(db, workspaceId!))
+    }
+
+    if (name === 'set_workspace_agent_description') {
+      const description = a.description as string | undefined
+      if (typeof description !== 'string') return fail('description parameter is required')
+      const result = setWorkspaceAgentDescriptionHandler(db, workspaceId!, { description })
+      if ('ok' in result && result.ok) {
+        void notifyAgentDescriptionUpdated()
+      }
+      return ok(result)
     }
 
     if (name === 'start_dev_server') {

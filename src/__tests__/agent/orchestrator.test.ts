@@ -21,6 +21,10 @@ vi.mock('../../server/services/settings-service.js', () => ({
   }),
 }))
 
+vi.mock('../../server/services/usage/poller.js', () => ({
+  refreshNow: vi.fn().mockResolvedValue(null),
+}))
+
 async function flushControllerStart(): Promise<void> {
   await Promise.resolve()
   await Promise.resolve()
@@ -165,17 +169,19 @@ describe('Orchestrator — event dispatch', () => {
         return { pid: 1, engineSessionId: 'sid', sendMessage() {}, interrupt() {}, async stop() {} }
       },
     })
-    const { startAgent, _getBackoffTimers, _getRetryCounts } = await import(
-      '../../server/services/agent/orchestrator.js'
-    )
+    const { startAgent, _getRetryCounts } = await import('../../server/services/agent/orchestrator.js')
+    const quotaBackoffService = await import('../../server/services/quota-backoff-service.js')
     startAgent(ws.id, '/tmp', 'hi')
     await flushControllerStart()
     emitEv({ kind: 'error', category: 'quota', message: 'rate limit' })
+    // handleQuota is async — let microtasks settle so the arm() call lands.
+    await Promise.resolve()
+    await Promise.resolve()
+    await Promise.resolve()
     expect(getWorkspace(ws.id)?.status).toBe('quota')
-    expect(_getBackoffTimers().has(ws.id)).toBe(true)
+    expect(quotaBackoffService.getPending(ws.id)).not.toBeNull()
     expect(_getRetryCounts().get(ws.id)).toBe(1)
-    for (const t of _getBackoffTimers().values()) clearTimeout(t)
-    _getBackoffTimers().clear()
+    quotaBackoffService.cancel(ws.id, 'user')
     _getRetryCounts().clear()
   })
 
@@ -205,24 +211,25 @@ describe('Orchestrator — event dispatch', () => {
           return { pid: 1, engineSessionId: 'sid', sendMessage() {}, interrupt() {}, async stop() {} }
         },
       })
-      const { startAgent, _getBackoffTimers, _getRetryCounts } = await import(
-        '../../server/services/agent/orchestrator.js'
-      )
+      const { startAgent, _getRetryCounts } = await import('../../server/services/agent/orchestrator.js')
+      const quotaBackoffService = await import('../../server/services/quota-backoff-service.js')
       startAgent(ws.id, '/tmp', 'hi')
       await flushControllerStart()
 
       emitEv({ kind: 'error', category: 'quota', message: 'rate limit' })
+      // handleQuota is async — settle microtasks so the arm() landed.
+      await vi.advanceTimersByTimeAsync(0)
       expect(getWorkspace(ws.id)?.status).toBe('quota')
-      expect(_getBackoffTimers().has(ws.id)).toBe(true)
+      expect(quotaBackoffService.getPending(ws.id)).not.toBeNull()
 
       emitEv({ kind: 'session:ended', reason: 'error', exitCode: 1 })
+      await vi.advanceTimersByTimeAsync(0)
 
       expect(getWorkspace(ws.id)?.status).toBe('quota')
-      expect(_getBackoffTimers().has(ws.id)).toBe(true)
+      expect(quotaBackoffService.getPending(ws.id)).not.toBeNull()
       expect(_getRetryCounts().get(ws.id)).toBe(1)
 
-      for (const t of _getBackoffTimers().values()) clearTimeout(t)
-      _getBackoffTimers().clear()
+      quotaBackoffService.cancel(ws.id, 'user')
       _getRetryCounts().clear()
     } finally {
       vi.useRealTimers()

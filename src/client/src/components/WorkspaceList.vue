@@ -138,6 +138,7 @@
               <WorkspaceContextMenu
                 :workspace="ws"
                 @rename="renameWorkspace"
+                @edit-description="editDescription"
                 @copy-path="copyWorktreePath"
                 @open-editor="openInEditor"
                 @run-setup="runSetupScript"
@@ -154,6 +155,15 @@
                     <q-tooltip>{{ ws.name }}</q-tooltip>
                   </div>
                 </div>
+                <div
+                  v-if="ws.agentDescription || ws.description"
+                  class="text-caption text-grey-7 ellipsis q-mt-xs"
+                  :title="ws.agentDescription || ws.description"
+                  style="max-width: 100%; font-size: 11px;"
+                >
+                  {{ ws.agentDescription || ws.description }}
+                </div>
+                <AutoLoopChip :workspace="ws" class="q-mt-xs" />
                 <div class="text-caption q-mt-xs">
                   <q-icon
                     :name="ws.status === 'awaiting-user' ? 'help' : 'warning'"
@@ -217,6 +227,7 @@
               <WorkspaceContextMenu
                 :workspace="ws"
                 @rename="renameWorkspace"
+                @edit-description="editDescription"
                 @copy-path="copyWorktreePath"
                 @open-editor="openInEditor"
                 @run-setup="runSetupScript"
@@ -233,6 +244,15 @@
                     <q-tooltip>{{ ws.name }}</q-tooltip>
                   </div>
                 </div>
+                <div
+                  v-if="ws.agentDescription || ws.description"
+                  class="text-caption text-grey-7 ellipsis q-mt-xs"
+                  :title="ws.agentDescription || ws.description"
+                  style="max-width: 100%; font-size: 11px;"
+                >
+                  {{ ws.agentDescription || ws.description }}
+                </div>
+                <AutoLoopChip :workspace="ws" class="q-mt-xs" />
                 <div class="text-caption q-mt-xs">
                   <span class="text-green-4">{{ ws.status }}</span>
                   <span class="q-ml-xs text-grey-8">&middot; {{ timeAgo(ws.updatedAt) }}</span>
@@ -290,6 +310,7 @@
               <WorkspaceContextMenu
                 :workspace="ws"
                 @rename="renameWorkspace"
+                @edit-description="editDescription"
                 @copy-path="copyWorktreePath"
                 @open-editor="openInEditor"
                 @run-setup="runSetupScript"
@@ -306,6 +327,15 @@
                     <q-tooltip>{{ ws.name }}</q-tooltip>
                   </div>
                 </div>
+                <div
+                  v-if="ws.agentDescription || ws.description"
+                  class="text-caption text-grey-7 ellipsis q-mt-xs"
+                  :title="ws.agentDescription || ws.description"
+                  style="max-width: 100%; font-size: 11px;"
+                >
+                  {{ ws.agentDescription || ws.description }}
+                </div>
+                <AutoLoopChip :workspace="ws" class="q-mt-xs" />
                 <div class="wl-item-meta text-caption text-grey-8">
                   {{ timeAgo(ws.updatedAt) }}
                 </div>
@@ -358,6 +388,7 @@
               :workspace="ws"
               archived
               @rename="renameWorkspace"
+              @edit-description="editDescription"
               @copy-path="copyWorktreePath"
               @open-editor="openInEditor"
               @run-setup="runSetupScript"
@@ -372,6 +403,15 @@
                 {{ ws.name }}
                 <q-tooltip>{{ ws.name }}</q-tooltip>
               </div>
+              <div
+                v-if="ws.agentDescription || ws.description"
+                class="text-caption text-grey-7 ellipsis q-mt-xs"
+                :title="ws.agentDescription || ws.description"
+                style="max-width: 100%; font-size: 11px;"
+              >
+                {{ ws.agentDescription || ws.description }}
+              </div>
+              <AutoLoopChip :workspace="ws" class="q-mt-xs" />
               <div class="wl-item-meta text-caption text-grey-8">
                 {{ $t('workspaceList.archived') }} {{ timeAgo(ws.archivedAt!) }}
               </div>
@@ -461,6 +501,7 @@
 
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
+import AutoLoopChip from 'src/components/AutoLoopChip.vue'
 import ManageTagsDialog from 'src/components/ManageTagsDialog.vue'
 import WorkspaceContextMenu from 'src/components/WorkspaceContextMenu.vue'
 import WorkspaceDrawerIndicators from 'src/components/WorkspaceDrawerIndicators.vue'
@@ -683,6 +724,31 @@ function renameWorkspace(ws: Workspace) {
   })
 }
 
+function editDescription(ws: Workspace) {
+  $q.dialog({
+    title: t('contextMenu.editDescription'),
+    message: t('workspace.descriptionDialogHint'),
+    dark: true,
+    prompt: {
+      model: ws.description ?? '',
+      isValid: (val: string) => val.length <= 200,
+      type: 'textarea',
+    },
+    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    ok: { unelevated: true, label: t('common.save'), color: 'indigo-6' },
+  }).onOk(async (description: string) => {
+    const trimmed = description.trim()
+    const next = trimmed.length > 0 ? trimmed : null
+    if (next === (ws.description ?? null)) return
+    try {
+      await store.updateWorkspaceDescription(ws.id, next)
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    }
+  })
+}
+
 async function openInEditor(ws: Workspace) {
   try {
     const res = await fetch(`/api/workspaces/${ws.id}/open-editor`, { method: 'POST' })
@@ -853,15 +919,4 @@ onMounted(async () => {
   &.wl-item--selected { opacity: 1; }
 }
 
-.dd-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex-shrink: 0;
-
-  &--running {
-    background-color: #22c55e;
-    box-shadow: 0 0 4px rgba(34, 197, 94, 0.5);
-  }
-}
 </style>

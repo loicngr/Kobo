@@ -23,6 +23,8 @@ export interface Workspace {
   archivedAt: string | null
   favoritedAt: string | null
   tags: string[]
+  description: string | null
+  agentDescription: string | null
   autoLoop: boolean
   autoLoopReady: boolean
   noProgressStreak: number
@@ -196,6 +198,8 @@ export interface AutoLoopStatus {
   auto_loop: boolean
   auto_loop_ready: boolean
   no_progress_streak: number
+  tasks_done: number
+  tasks_total: number
 }
 
 const MAX_FEED_ITEMS = 5000
@@ -238,6 +242,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     gitRefreshTrigger: 0,
     gitStatsCache: {} as Record<string, GitStats>,
     pendingWakeups: {} as Record<string, PendingWakeup>,
+    pendingQuotaBackoffs: {} as Record<string, { targetAt: string; resetsAt: string | null; source: string }>,
     pendingDeferred: {} as Record<string, PendingDeferredToolUse>,
     pendingQueue: {} as Record<string, PendingItem[]>,
     prStates: {} as Record<string, string>,
@@ -563,6 +568,32 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
+    async updateWorkspaceDescription(id: string, description: string | null) {
+      const idx = this.workspaces.findIndex((w) => w.id === id)
+      if (idx < 0) throw new Error(`Workspace '${id}' not found in store`)
+      const previous = this.workspaces[idx].description
+      // Optimistic update.
+      this.workspaces[idx] = { ...this.workspaces[idx], description }
+      try {
+        const res = await fetch(`/api/workspaces/${id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ description }),
+        })
+        if (!res.ok) {
+          const body = (await res.json().catch(() => ({}))) as { error?: string }
+          throw new Error(body.error ?? `HTTP ${res.status}`)
+        }
+        const updated = (await res.json()) as Workspace
+        this.workspaces[idx] = { ...this.workspaces[idx], ...updated }
+      } catch (err) {
+        // Revert optimistic update.
+        const cur = this.workspaces.findIndex((w) => w.id === id)
+        if (cur >= 0) this.workspaces[cur] = { ...this.workspaces[cur], description: previous }
+        throw err
+      }
+    },
+
     async updateReasoningEffort(id: string, reasoningEffort: string) {
       try {
         const res = await fetch(`/api/workspaces/${id}`, {
@@ -777,6 +808,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.markRead(id)
       this.fetchWorkspaceDetails(id)
       this.fetchSessions(id)
+      void this.fetchPendingQuotaBackoff(id)
       // Pre-fetch git stats so template expansion has them available immediately
       // when the user selects a template — without this, variables like
       // {commit_count}/{pr_url} would stay as literal placeholders until the
@@ -1132,6 +1164,41 @@ export const useWorkspaceStore = defineStore('workspace', {
           // still has the row, or confirm the clear if it was already gone.
           await this.fetchPendingWakeup(workspaceId)
         }
+      }
+    },
+
+    async fetchPendingQuotaBackoff(workspaceId: string): Promise<void> {
+      try {
+        const res = await fetch(`/api/workspaces/${workspaceId}/quota-backoff`, { cache: 'no-store' })
+        if (!res.ok) return
+        const data = (await res.json()) as { targetAt: string; resetsAt: string | null; source: string } | null
+        if (data) this.pendingQuotaBackoffs[workspaceId] = data
+        else delete this.pendingQuotaBackoffs[workspaceId]
+      } catch (err) {
+        console.error('[workspace-store] fetchPendingQuotaBackoff failed:', err)
+      }
+    },
+
+    setPendingQuotaBackoff(
+      workspaceId: string,
+      payload: { targetAt: string; resetsAt: string | null; source: string },
+    ): void {
+      this.pendingQuotaBackoffs[workspaceId] = payload
+    },
+
+    clearPendingQuotaBackoff(workspaceId: string): void {
+      delete this.pendingQuotaBackoffs[workspaceId]
+    },
+
+    async cancelQuotaBackoff(workspaceId: string): Promise<void> {
+      const had = this.pendingQuotaBackoffs[workspaceId] !== undefined
+      delete this.pendingQuotaBackoffs[workspaceId]
+      try {
+        const res = await fetch(`/api/workspaces/${workspaceId}/quota-backoff`, { method: 'DELETE' })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      } catch (err) {
+        console.error('[workspace-store] cancelQuotaBackoff failed:', err)
+        if (had) await this.fetchPendingQuotaBackoff(workspaceId)
       }
     },
 

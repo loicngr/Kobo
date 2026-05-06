@@ -3,7 +3,9 @@ import { getDb } from '../db/index.js'
 import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 import * as orchestrator from './agent/orchestrator.js'
 import * as autoLoopService from './auto-loop-service.js'
+import * as quotaBackoffService from './quota-backoff-service.js'
 import * as wakeupService from './wakeup-service.js'
+import { emitEphemeral } from './websocket-service.js'
 
 /** Lifecycle states for a workspace. Transitions are validated against VALID_TRANSITIONS. */
 export type WorkspaceStatus =
@@ -53,6 +55,8 @@ export interface Workspace {
   archivedAt: string | null
   favoritedAt: string | null
   tags: string[]
+  description: string | null
+  agentDescription: string | null
   engine: string
   autoLoop: boolean
   autoLoopReady: boolean
@@ -144,6 +148,8 @@ interface WorkspaceRow {
   permission_profile: string | null
   worktree_path: string | null
   worktree_owned: number
+  description: string | null
+  agent_description: string | null
   created_at: string
   updated_at: string
 }
@@ -195,6 +201,8 @@ function mapWorkspace(row: WorkspaceRow): Workspace {
     archivedAt: row.archived_at,
     favoritedAt: row.favorited_at,
     tags: parseTags(row.tags),
+    description: row.description,
+    agentDescription: row.agent_description,
     engine: row.engine ?? 'claude-code',
     autoLoop: row.auto_loop === 1,
     autoLoopReady: row.auto_loop_ready === 1,
@@ -460,6 +468,68 @@ export function updateAgentPermissionMode(id: string, mode: AgentPermissionMode)
   return getWorkspace(id) as Workspace
 }
 
+/**
+ * Update a workspace's short description (≤ 200 chars after trim).
+ * Empty string (after trim) or `null` clears the column.
+ *
+ * Emits an ephemeral `workspace:description-updated` WebSocket event so every
+ * subscribed client (sidebar + the workspace header) refreshes in real-time
+ * without a manual reload. The truth lives in the DB; sync replay on
+ * reconnect re-fetches via GET /api/workspaces.
+ *
+ * @throws when the description exceeds 200 chars after trim or the workspace
+ *   does not exist.
+ */
+export function updateWorkspaceDescription(id: string, description: string | null): Workspace {
+  const trimmed = description == null ? null : description.trim()
+  if (trimmed !== null && trimmed.length > 200) {
+    throw new Error(`Description must be 200 characters or fewer (got ${trimmed.length})`)
+  }
+  const stored = trimmed && trimmed.length > 0 ? trimmed : null
+  const db = getDb()
+  const result = db
+    .prepare('UPDATE workspaces SET description = ?, updated_at = ? WHERE id = ?')
+    .run(stored, new Date().toISOString(), id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+  emitEphemeral(id, 'workspace:description-updated', { description: stored })
+  return getWorkspace(id) as Workspace
+}
+
+/**
+ * Update a workspace's agent-side description (≤ 200 chars after trim).
+ * Empty string (after trim) or `null` clears the column.
+ *
+ * Mirror of `updateWorkspaceDescription` but writes the `agent_description`
+ * column, which is exclusively the agent's to set via the
+ * `set_workspace_agent_description` MCP tool. The user's `description`
+ * column is untouched.
+ *
+ * Emits an ephemeral `workspace:agent-description-updated` event so every
+ * subscribed client (sidebar fallback display + workspace header read-only
+ * line) refreshes in real-time.
+ *
+ * @throws when the description exceeds 200 chars after trim or the workspace
+ *   does not exist.
+ */
+export function updateWorkspaceAgentDescription(id: string, description: string | null): Workspace {
+  const trimmed = description == null ? null : description.trim()
+  if (trimmed !== null && trimmed.length > 200) {
+    throw new Error(`Description must be 200 characters or fewer (got ${trimmed.length})`)
+  }
+  const stored = trimmed && trimmed.length > 0 ? trimmed : null
+  const db = getDb()
+  const result = db
+    .prepare('UPDATE workspaces SET agent_description = ?, updated_at = ? WHERE id = ?')
+    .run(stored, new Date().toISOString(), id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+  emitEphemeral(id, 'workspace:agent-description-updated', { agentDescription: stored })
+  return getWorkspace(id) as Workspace
+}
+
 /** Update the dev-server status column for a workspace. */
 export function updateDevServerStatus(id: string, status: string): void {
   const db = getDb()
@@ -484,6 +554,14 @@ export function deleteWorkspace(id: string): void {
   // The DB row is removed via ON DELETE CASCADE, but the timer would
   // otherwise fire and hit an empty workspace.
   wakeupService.cancel(id, 'deleted')
+
+  // Same for any pending quota backoff. Best-effort: failure must not
+  // block delete. The DB row is also removed via ON DELETE CASCADE.
+  try {
+    quotaBackoffService.cancel(id, 'deleted')
+  } catch (err) {
+    console.error('[workspace-service] cancel quota backoff on delete failed:', err)
+  }
 
   // Drop the cached rate_limit.info so memory doesn't leak on workspace
   // churn. The Map has no FK to clean up for it automatically.
@@ -592,6 +670,14 @@ export function archiveWorkspace(id: string): Workspace {
 
   // Cancel any pending wakeup — archived workspaces should not wake up.
   wakeupService.cancel(id, 'archived')
+
+  // Cancel any pending quota backoff — archived workspaces should not auto-resume.
+  // Best-effort: failure here must not block archive.
+  try {
+    quotaBackoffService.cancel(id, 'archive')
+  } catch (err) {
+    console.error('[workspace-service] cancel quota backoff on archive failed:', err)
+  }
 
   // Disable auto-loop — archived workspaces should not keep looping.
   // Idempotent: no-op if auto_loop was already 0.

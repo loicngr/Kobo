@@ -17,6 +17,10 @@ vi.mock('../server/services/wakeup-service.js', () => ({
   getPending: vi.fn(() => null),
 }))
 
+vi.mock('../server/services/usage/poller.js', () => ({
+  refreshNow: vi.fn().mockResolvedValue(null),
+}))
+
 let tmpDir: string
 let dbPath: string
 
@@ -59,10 +63,10 @@ describe('deleteWorkspace clears rate_limit cache', () => {
     orch._test_setRateLimitInfo(ws.id, {
       buckets: [{ id: 'x', usedPct: 100, resetsAt }],
     })
-    expect(orch.computeQuotaBackoffMs(ws.id, 0).source).toBe('rate_limit_info')
+    expect((await orch.computeQuotaBackoffMs(ws.id, 0)).source).toBe('rate_limit_info')
 
     deleteWorkspace(ws.id)
 
-    expect(orch.computeQuotaBackoffMs(ws.id, 0).source).toBe('exponential_fallback')
+    expect((await orch.computeQuotaBackoffMs(ws.id, 0)).source).toBe('fallback_ladder')
   })
 })

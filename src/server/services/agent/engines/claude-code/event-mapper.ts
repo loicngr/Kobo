@@ -76,7 +76,7 @@ export function createMapperState(): MapperState {
 }
 
 /** Known SDK `result` subtypes that indicate the run failed. */
-const KNOWN_ERROR_RESULT_SUBTYPES = new Set(['error_max_turns', 'error_during_execution'])
+export const KNOWN_ERROR_RESULT_SUBTYPES = new Set(['error_max_turns', 'error_during_execution'])
 
 function isErrorResultSubtype(subtype: string | undefined): boolean {
   if (!subtype) return false
@@ -242,8 +242,12 @@ export function mapSdkMessage(msg: SDKMessage, state: MapperState): AgentEvent[]
       state.sawErrorResult = true
       const detail =
         (typeof parsed.error === 'string' && parsed.error) || (typeof parsed.result === 'string' && parsed.result) || ''
+      // "Claude AI usage limit reached" is Anthropic's 5h/4h cap surface — added
+      // to the regex so the orchestrator transitions the workspace to `quota`
+      // (not `error`) and the auto-loop backoff path engages.
+      const isQuota = /out of extra usage|rate limit|usage limit/i.test(detail)
       const message = detail ? `Agent run failed (${subtype}): ${detail}` : `Agent run failed (${subtype})`
-      events.push({ kind: 'error', category: 'other', message })
+      events.push({ kind: 'error', category: isQuota ? 'quota' : 'other', message })
     }
     const usage = parsed.usage as Record<string, unknown> | undefined
     if (usage) {

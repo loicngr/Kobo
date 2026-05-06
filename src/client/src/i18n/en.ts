@@ -520,6 +520,11 @@ export default {
   'agent.error.rate_limit': 'Rate limit hit',
   'agent.error.resume_failed': 'Session not found — starting fresh',
   'agent.error.other': 'Agent error',
+  'quotaBackoff.banner.title': 'Auto-resume at {time}',
+  'quotaBackoff.banner.tooltip':
+    'Claude quota exhausted. Auto-loop will resume automatically when the quota resets at {resets_at}.',
+  'quotaBackoff.banner.cancel': 'Cancel resume',
+  'quotaBackoff.cancelled': 'Auto-resume cancelled — you can re-engage manually anytime',
   'rateLimitType.fiveHour': '5h session',
   'rateLimitType.sevenDay': 'Weekly',
 
@@ -615,6 +620,7 @@ export default {
 
   // Context menu
   'contextMenu.rename': 'Rename',
+  'contextMenu.editDescription': 'Edit description',
   'contextMenu.copyPath': 'Copy worktree path',
   'contextMenu.openEditor': 'Open in editor',
   'contextMenu.runSetup': 'Run setup script',
@@ -625,6 +631,12 @@ export default {
   'workspace.favorite': 'Mark as favorite',
   'workspace.unfavorite': 'Remove from favorites',
   'workspace.showFavoritesOnly': 'Show favorites only',
+  'workspace.descriptionPlaceholder': 'Add a short description',
+  'workspace.descriptionDialogHint': 'Plain text, 200 characters max. Leave empty to clear.',
+  'workspace.descriptionTooLong': 'Description must be 200 characters or fewer.',
+  'workspace.descriptionSaveFailed': 'Failed to save description.',
+  'workspace.agentDescriptionTooltip': 'Live status maintained by the agent',
+  'mcp.tool.setWorkspaceDescription': 'Set the workspace short description (≤ 200 chars).',
   'tags.manage': 'Manage tags',
   'tags.manageTitle': 'Manage workspace tags',
   'tags.noTagsDefined': 'No tags defined. Add some in Settings > Global > Tags.',

@@ -31,18 +31,31 @@
 </template>
 
 <script setup lang="ts">
+import type { Workspace } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
+// Optional workspace prop — when omitted, falls back to the currently-selected
+// workspace (legacy WorkspacePage usage). When provided, drives the chip from
+// the cross-workspace `autoLoopStates` map (sidebar usage).
+const props = withDefaults(defineProps<{ workspace?: Workspace | null }>(), { workspace: null })
+
 const { t } = useI18n()
 const store = useWorkspaceStore()
 
-const ws = computed(() => store.selectedWorkspace)
-const status = computed(() => (ws.value ? (store.autoLoopStates[ws.value.id] ?? null) : null))
+const ws = computed(() => props.workspace ?? store.selectedWorkspace)
+const wsId = computed(() => ws.value?.id ?? null)
+const status = computed(() => (wsId.value ? (store.autoLoopStates[wsId.value] ?? null) : null))
 const isOn = computed(() => !!status.value?.auto_loop)
 const isReady = computed(() => !!status.value?.auto_loop_ready)
 
-const tasksDone = computed(() => store.tasks.filter((t) => t.status === 'done').length)
-const tasksTotal = computed(() => store.tasks.length)
+// For the SELECTED workspace, `store.tasks` is the live source of truth and
+// updates the moment a task is marked done. For other workspaces (sidebar
+// cards), only the periodic /auto-loop-states snapshot is available.
+const isSelected = computed(() => wsId.value !== null && store.selectedWorkspaceId === wsId.value)
+const tasksDone = computed(() =>
+  isSelected.value ? store.tasks.filter((t) => t.status === 'done').length : (status.value?.tasks_done ?? 0),
+)
+const tasksTotal = computed(() => (isSelected.value ? store.tasks.length : (status.value?.tasks_total ?? 0)))
 </script>

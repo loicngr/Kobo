@@ -1,5 +1,6 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useWebSocketStore } from '../stores/websocket'
 import { isSubagentTerminalEvent, useWorkspaceStore, type Workspace } from '../stores/workspace'
 
 /** Build a fully-typed Workspace fixture, overrides take precedence. */
@@ -23,6 +24,8 @@ function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
     archivedAt: null,
     favoritedAt: null,
     tags: [],
+    description: null,
+    agentDescription: null,
     autoLoop: false,
     autoLoopReady: false,
     noProgressStreak: 0,
@@ -398,6 +401,8 @@ describe('workspace store', () => {
       archivedAt: null,
       favoritedAt: null,
       tags: [],
+      description: null,
+      agentDescription: null,
       autoLoop: false,
       autoLoopReady: false,
       noProgressStreak: 0,
@@ -650,6 +655,126 @@ describe('workspace store', () => {
       store.clearPendingDeferred('w1')
       expect(store.getPendingDeferred('w1')).toBeUndefined()
       expect(store.getPendingDeferred('w2')?.toolCallId).toBe('b')
+    })
+  })
+
+  describe('updateWorkspaceDescription action', () => {
+    beforeEach(() => {
+      vi.unstubAllGlobals()
+    })
+
+    it('PATCHes /api/workspaces/:id with description and applies the response', async () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1', description: null })]
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ ...store.workspaces[0], description: 'Hello' }),
+      } as Response)
+      vi.stubGlobal('fetch', fetchMock)
+      try {
+        await store.updateWorkspaceDescription('w1', 'Hello')
+        expect(fetchMock).toHaveBeenCalledWith(
+          '/api/workspaces/w1',
+          expect.objectContaining({
+            method: 'PATCH',
+            body: JSON.stringify({ description: 'Hello' }),
+          }),
+        )
+        expect(store.workspaces[0].description).toBe('Hello')
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    })
+
+    it('reverts the optimistic update when the request fails', async () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1', description: 'before' })]
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+        json: async () => ({ error: 'too long' }),
+      } as Response)
+      vi.stubGlobal('fetch', fetchMock)
+      try {
+        await expect(store.updateWorkspaceDescription('w1', 'Hello')).rejects.toThrow()
+        expect(store.workspaces[0].description).toBe('before')
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    })
+  })
+
+  describe('workspace:description-updated WS handler', () => {
+    it('updates the matching workspace in state', () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1', description: 'old' })]
+      const ws = useWebSocketStore()
+      ws._routeMessage({
+        type: 'workspace:description-updated',
+        workspaceId: 'w1',
+        payload: { description: 'NEW' },
+      })
+      expect(store.workspaces[0].description).toBe('NEW')
+    })
+  })
+
+  describe('workspace:agent-description-updated WS handler', () => {
+    it('updates the matching workspace agentDescription in state', () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1', description: null, agentDescription: 'old' })]
+      const ws = useWebSocketStore()
+      ws._routeMessage({
+        type: 'workspace:agent-description-updated',
+        workspaceId: 'w1',
+        payload: { agentDescription: 'NEW LIVE STATUS' },
+      })
+      expect(store.workspaces[0].agentDescription).toBe('NEW LIVE STATUS')
+    })
+
+    it('does not touch the user description', () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1', description: 'user thing', agentDescription: null })]
+      const ws = useWebSocketStore()
+      ws._routeMessage({
+        type: 'workspace:agent-description-updated',
+        workspaceId: 'w1',
+        payload: { agentDescription: 'agent thing' },
+      })
+      expect(store.workspaces[0].description).toBe('user thing')
+      expect(store.workspaces[0].agentDescription).toBe('agent thing')
+    })
+  })
+
+  describe('quota backoff store', () => {
+    beforeEach(() => setActivePinia(createPinia()))
+
+    it('setPendingQuotaBackoff stores the payload by workspaceId', () => {
+      const store = useWorkspaceStore()
+      store.setPendingQuotaBackoff('w1', {
+        targetAt: '2026-05-06T13:30:00Z',
+        resetsAt: null,
+        source: 'fallback_ladder',
+      })
+      expect(store.pendingQuotaBackoffs.w1?.targetAt).toBe('2026-05-06T13:30:00Z')
+    })
+
+    it('clearPendingQuotaBackoff removes the entry', () => {
+      const store = useWorkspaceStore()
+      store.setPendingQuotaBackoff('w1', { targetAt: 't', resetsAt: null, source: 'fallback_ladder' })
+      store.clearPendingQuotaBackoff('w1')
+      expect(store.pendingQuotaBackoffs.w1).toBeUndefined()
+    })
+
+    it('cancelQuotaBackoff issues DELETE and clears state optimistically', async () => {
+      const store = useWorkspaceStore()
+      store.setPendingQuotaBackoff('w1', { targetAt: 't', resetsAt: null, source: 'fallback_ladder' })
+      const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }))
+      await store.cancelQuotaBackoff('w1')
+      expect(fetchSpy).toHaveBeenCalledWith(
+        '/api/workspaces/w1/quota-backoff',
+        expect.objectContaining({ method: 'DELETE' }),
+      )
+      expect(store.pendingQuotaBackoffs.w1).toBeUndefined()
     })
   })
 })

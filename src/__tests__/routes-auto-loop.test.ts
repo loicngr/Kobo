@@ -128,6 +128,8 @@ describe('GET /api/workspaces/auto-loop-states', () => {
       auto_loop: false,
       auto_loop_ready: false,
       no_progress_streak: 0,
+      tasks_done: 0,
+      tasks_total: 0,
     })
   })
 

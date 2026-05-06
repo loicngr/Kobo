@@ -128,7 +128,10 @@ export function createClaudeCodeEngine(): AgentEngine {
             lower.includes('rate limit exceeded') ||
             lower.includes('rate_limit_exceeded') ||
             (lower.includes('429') && lower.includes('rate')) ||
-            lower.includes('quota exceeded')
+            lower.includes('quota exceeded') ||
+            lower.includes('out of extra usage') ||
+            // "Claude AI usage limit reached" — Anthropic's 5h/4h cap message
+            lower.includes('usage limit')
           ) {
             onEvent({ kind: 'error', category: 'quota', message: data })
           } else if (lower.includes('no conversation found with session id')) {

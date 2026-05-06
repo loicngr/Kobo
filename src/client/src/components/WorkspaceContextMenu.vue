@@ -5,6 +5,10 @@
         <q-item-section side><q-icon name="edit" size="xs" /></q-item-section>
         <q-item-section>{{ $t('contextMenu.rename') }}</q-item-section>
       </q-item>
+      <q-item clickable v-close-popup @click="emit('editDescription', workspace)">
+        <q-item-section side><q-icon name="description" size="xs" /></q-item-section>
+        <q-item-section>{{ $t('contextMenu.editDescription') }}</q-item-section>
+      </q-item>
       <q-item clickable v-close-popup @click="emit('copyPath', workspace)">
         <q-item-section side><q-icon name="content_copy" size="xs" /></q-item-section>
         <q-item-section>{{ $t('contextMenu.copyPath') }}</q-item-section>
@@ -68,6 +72,7 @@ withDefaults(
 
 const emit = defineEmits<{
   rename: [ws: Workspace]
+  editDescription: [ws: Workspace]
   copyPath: [ws: Workspace]
   openEditor: [ws: Workspace]
   runSetup: [ws: Workspace]

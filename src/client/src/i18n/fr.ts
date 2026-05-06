@@ -522,6 +522,11 @@ export default {
   'agent.error.rate_limit': 'Limite de débit atteinte',
   'agent.error.resume_failed': 'Session introuvable — démarrage en session fraîche',
   'agent.error.other': "Erreur de l'agent",
+  'quotaBackoff.banner.title': 'Reprise auto à {time}',
+  'quotaBackoff.banner.tooltip':
+    "Quota Claude épuisé. L'auto-loop reprendra automatiquement quand le quota se libère à {resets_at}.",
+  'quotaBackoff.banner.cancel': 'Annuler la reprise',
+  'quotaBackoff.cancelled': 'Reprise auto annulée — tu peux relancer manuellement à tout moment',
   'rateLimitType.fiveHour': 'Session 5h',
   'rateLimitType.sevenDay': 'Hebdo',
 
@@ -620,6 +625,7 @@ export default {
 
   // Context menu
   'contextMenu.rename': 'Renommer',
+  'contextMenu.editDescription': 'Modifier la description',
   'contextMenu.copyPath': 'Copier le chemin du worktree',
   'contextMenu.openEditor': "Ouvrir dans l'éditeur",
   'contextMenu.runSetup': 'Lancer le script de setup',
@@ -630,6 +636,12 @@ export default {
   'workspace.favorite': 'Ajouter aux favoris',
   'workspace.unfavorite': 'Retirer des favoris',
   'workspace.showFavoritesOnly': 'Afficher uniquement les favoris',
+  'workspace.descriptionPlaceholder': 'Ajouter une courte description',
+  'workspace.descriptionDialogHint': 'Texte brut, 200 caractères maximum. Laisser vide pour effacer.',
+  'workspace.descriptionTooLong': 'La description doit faire 200 caractères ou moins.',
+  'workspace.descriptionSaveFailed': "Échec de l'enregistrement de la description.",
+  'workspace.agentDescriptionTooltip': "État en direct maintenu par l'agent",
+  'mcp.tool.setWorkspaceDescription': 'Définit la courte description du workspace (≤ 200 caractères).',
   'tags.manage': 'Gérer les tags',
   'tags.manageTitle': 'Gérer les tags du workspace',
   'tags.noTagsDefined': 'Aucun tag défini. Ajoutes-en dans Paramètres > Global > Tags.',

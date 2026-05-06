@@ -75,6 +75,34 @@ export function markAutoLoopReadyHandler(db: Database.Database, workspaceId: str
   return { ok: true }
 }
 
+/**
+ * Update the workspace's agent-side short description (≤ 200 chars). Empty /
+ * whitespace-only input clears the field (stored as NULL). This writes the
+ * `agent_description` column — a live status line owned by the agent — and
+ * leaves the user-side `description` column untouched. The handler does NOT
+ * emit a WS event; that's the route/service layer's responsibility. Live UI
+ * refresh on agent-driven updates is therefore deferred until next read.
+ */
+export function setWorkspaceAgentDescriptionHandler(
+  db: Database.Database,
+  workspaceId: string,
+  args: { description: string },
+): { ok: true; description: string | null } | { ok: false; error: string } {
+  const raw = typeof args?.description === 'string' ? args.description : ''
+  const trimmed = raw.trim()
+  if (trimmed.length > 200) {
+    return { ok: false, error: `Description must be 200 characters or fewer (got ${trimmed.length})` }
+  }
+  const stored = trimmed.length > 0 ? trimmed : null
+  const result = db
+    .prepare('UPDATE workspaces SET agent_description = ?, updated_at = ? WHERE id = ?')
+    .run(stored, new Date().toISOString(), workspaceId)
+  if (result.changes === 0) {
+    return { ok: false, error: `Workspace '${workspaceId}' not found` }
+  }
+  return { ok: true, description: stored }
+}
+
 /** Set a task's status to "done" and return the updated task. */
 export function markTaskDoneHandler(db: Database.Database, workspaceId: string, taskId: string): MarkDoneResult {
   const now = new Date().toISOString()
@@ -240,6 +268,8 @@ export interface WorkspaceInfoDto {
   model: string
   notionUrl: string | null
   notionPageId: string | null
+  description: string | null
+  agentDescription: string | null
   devServerStatus: string
   hasUnread: boolean
   autoLoop: boolean
@@ -258,6 +288,8 @@ interface WorkspaceRow {
   status: string
   notion_url: string | null
   notion_page_id: string | null
+  description: string | null
+  agent_description: string | null
   model: string
   dev_server_status: string
   has_unread: number
@@ -271,7 +303,7 @@ interface WorkspaceRow {
 export function getWorkspaceInfoHandler(db: Database.Database, workspaceId: string): WorkspaceInfoDto {
   const row = db
     .prepare(
-      'SELECT id, name, project_path, source_branch, working_branch, worktree_path, status, notion_url, notion_page_id, model, dev_server_status, has_unread, auto_loop, auto_loop_ready, created_at, updated_at FROM workspaces WHERE id = ?',
+      'SELECT id, name, project_path, source_branch, working_branch, worktree_path, status, notion_url, notion_page_id, description, agent_description, model, dev_server_status, has_unread, auto_loop, auto_loop_ready, created_at, updated_at FROM workspaces WHERE id = ?',
     )
     .get(workspaceId) as WorkspaceRow | undefined
 
@@ -297,6 +329,8 @@ export function getWorkspaceInfoHandler(db: Database.Database, workspaceId: stri
     model: row.model,
     notionUrl: row.notion_url,
     notionPageId: row.notion_page_id,
+    description: row.description ?? null,
+    agentDescription: row.agent_description ?? null,
     devServerStatus: row.dev_server_status,
     hasUnread: row.has_unread === 1,
     autoLoop: row.auto_loop === 1,

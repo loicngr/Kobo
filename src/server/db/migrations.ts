@@ -215,6 +215,55 @@ export const migrations: Migration[] = [
       db.prepare('ALTER TABLE pending_wakeups ADD COLUMN agent_session_id TEXT').run()
     },
   },
+  {
+    version: 19,
+    name: 'add-pending-quota-backoffs',
+    migrate: (db) => {
+      // Per-workspace quota-backoff scheduler: tracks the moment a workspace
+      // becomes eligible to retry after hitting a quota limit. Mirrors the
+      // shape of pending_wakeups (one row per workspace, FK CASCADE) but holds
+      // distinct fields (resets_at, source, retry_count) tied to the quota
+      // detection layer (rate-limit info, usage API, fallback ladder).
+      db.prepare(
+        `CREATE TABLE IF NOT EXISTS pending_quota_backoffs (
+          workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+          target_at    TEXT NOT NULL,
+          resets_at    TEXT,
+          source       TEXT NOT NULL CHECK (source IN ('rate_limit_info', 'usage_api', 'fallback_ladder')),
+          retry_count  INTEGER NOT NULL DEFAULT 0,
+          created_at   TEXT NOT NULL
+        )`,
+      ).run()
+    },
+  },
+  {
+    version: 20,
+    name: 'add-workspace-description',
+    migrate: (db) => {
+      // Free-form, optional summary of the mission shown in the sidebar and
+      // editable from the header. Nullable by design — pre-existing workspaces
+      // keep description = NULL until the user (or the brainstorm agent) sets
+      // one. Idempotent: skip the ALTER if the column is already present
+      // (covers re-runs and the case where a fresh-install ran initSchema first).
+      const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
+      if (cols.some((c) => c.name === 'description')) return
+      db.prepare('ALTER TABLE workspaces ADD COLUMN description TEXT').run()
+    },
+  },
+  {
+    version: 21,
+    name: 'add-workspace-agent-description',
+    migrate: (db) => {
+      // Agent-authored, optional summary of the mission written by the agent
+      // (typically at the end of brainstorm) via the renamed
+      // `set_workspace_agent_description` MCP tool. Distinct from the v20
+      // `description` column, which stays human-editable. Nullable, no default.
+      // Idempotent: skip the ALTER if the column already exists.
+      const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
+      if (cols.some((c) => c.name === 'agent_description')) return
+      db.prepare('ALTER TABLE workspaces ADD COLUMN agent_description TEXT').run()
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

@@ -12,7 +12,9 @@ import {
 } from '../../utils/paths.js'
 import { unregisterProcess } from '../../utils/process-tracker.js'
 import * as autoLoopService from '../auto-loop-service.js'
+import * as quotaBackoffService from '../quota-backoff-service.js'
 import { getEffectiveSettings } from '../settings-service.js'
+import { refreshNow } from '../usage/poller.js'
 import * as wakeupService from '../wakeup-service.js'
 import { emit, emitEphemeral } from '../websocket-service.js'
 import {
@@ -181,9 +183,6 @@ const retryCounts = new Map<string, number>()
 
 /** Tracks workspaces where the current session failed due to a stale --resume session ID. */
 const resumeFailedSet = new Set<string>()
-
-/** workspaceId -> backoff timer */
-const backoffTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 // ── Watchdog ──────────────────────────────────────────────────────────────────
 
@@ -580,7 +579,7 @@ function handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent
     }
   }
   if (ev.kind === 'error' && ev.category === 'quota') {
-    handleQuota(workspaceId, agentSessionId)
+    void handleQuota(workspaceId, agentSessionId)
   }
   if (ev.kind === 'error' && ev.category === 'resume_failed') {
     resumeFailedSet.add(workspaceId)
@@ -695,14 +694,11 @@ function onSessionEnded(
   if (wasStopping) return
 
   // When the session hit quota, handleQuota() already transitioned the
-  // workspace to `quota` and armed the retry timer. Keep that timer alive
-  // and preserve the `quota` status so auto-loop can resume after reset.
+  // workspace to `quota` and armed the retry via quotaBackoffService.
+  // Preserve that pending backoff in the quota path; otherwise clear any
+  // stale entry (defensive — shouldn't normally exist on a non-quota end).
   if (!preserveQuotaBackoff) {
-    const pendingBackoff = backoffTimers.get(workspaceId)
-    if (pendingBackoff) {
-      clearTimeout(pendingBackoff)
-      backoffTimers.delete(workspaceId)
-    }
+    quotaBackoffService.cancel(workspaceId, 'completed')
   }
 
   if (preserveQuotaBackoff) {
@@ -924,11 +920,8 @@ export function stopAgent(workspaceId: string): void {
   // started in the meantime is preserved.
   controllers.delete(workspaceId)
 
-  const timer = backoffTimers.get(workspaceId)
-  if (timer) {
-    clearTimeout(timer)
-    backoffTimers.delete(workspaceId)
-  }
+  // Manual stop should also drop any pending quota auto-resume.
+  quotaBackoffService.cancel(workspaceId, 'user')
 
   // Fire-and-forget: controller.stop is async but we don't block callers.
   void ctrl.stop().catch((err) => {
@@ -1278,7 +1271,7 @@ function clearStaleEngineSessionId(workspaceId: string): void {
 export interface QuotaBackoff {
   delayMs: number
   resetsAt?: string
-  source: 'rate_limit_info' | 'exponential_fallback'
+  source: 'rate_limit_info' | 'usage_api' | 'fallback_ladder'
 }
 
 const QUOTA_SAFETY_MARGIN_MS = 30_000
@@ -1296,12 +1289,14 @@ const QUOTA_FALLBACK_LADDER_MINUTES = [15, 30, 60, 180, 300] as const
 /**
  * Compute the delay before retrying a workspace hit by quota.
  *
- * Prefers the `resetsAt` of the saturated bucket with the furthest-future
- * reset (a tighter bucket will unlock by then anyway). Falls back to a
- * fixed ladder (15 → 30 → 60 → 180 → 300 min) whenever the rate_limit
- * info is missing, malformed, or implausible.
+ * Prefers (1) the `resetsAt` of the saturated bucket with the furthest-future
+ * reset reported by the agent's `rate_limit` event, then (1.5) the official
+ * Anthropic usage API (`five_hour` bucket) when it reports saturation, and
+ * finally (2) a fixed ladder (15 → 30 → 60 → 180 → 300 min) whenever neither
+ * source is usable.
  */
-export function computeQuotaBackoffMs(workspaceId: string, retryCount: number): QuotaBackoff {
+export async function computeQuotaBackoffMs(workspaceId: string, retryCount: number): Promise<QuotaBackoff> {
+  // 1. Prefer the rate_limit event from the agent stream — most recent + most precise.
   const info = latestRateLimitInfo.get(workspaceId)
   if (info?.buckets?.length) {
     const candidates = info.buckets
@@ -1318,17 +1313,44 @@ export function computeQuotaBackoffMs(workspaceId: string, retryCount: number): 
       }
     }
   }
+
+  // 1.5. Try the official usage API (Claude subscription). Best-effort; never throws.
+  try {
+    const snap = await refreshNow('claude-code')
+    if (snap) {
+      const fiveHour = snap.buckets.find((b) => b.id === 'five_hour')
+      if (
+        fiveHour &&
+        typeof fiveHour.usedPct === 'number' &&
+        fiveHour.usedPct >= QUOTA_SATURATION_THRESHOLD_PCT &&
+        typeof fiveHour.resetsAt === 'string'
+      ) {
+        const resetTs = Date.parse(fiveHour.resetsAt)
+        const delta = resetTs - Date.now() + QUOTA_SAFETY_MARGIN_MS
+        if (delta > 0 && delta <= QUOTA_MAX_BACKOFF_MS) {
+          return { delayMs: delta, resetsAt: fiveHour.resetsAt, source: 'usage_api' }
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[orchestrator] computeQuotaBackoffMs — usage API call failed:', err)
+  }
+
+  // 2. Hard-coded ladder.
   const idx = Math.min(Math.max(0, retryCount), QUOTA_FALLBACK_LADDER_MINUTES.length - 1)
   const backoffMinutes = QUOTA_FALLBACK_LADDER_MINUTES[idx]
-  return { delayMs: backoffMinutes * 60 * 1000, source: 'exponential_fallback' }
+  return { delayMs: backoffMinutes * 60 * 1000, source: 'fallback_ladder' }
 }
+
+/** @internal test-only — re-export of `computeQuotaBackoffMs` to anchor a stable seam. */
+export const _computeQuotaBackoffMs = computeQuotaBackoffMs
 
 /** @internal Test-only. */
 export function _test_setRateLimitInfo(workspaceId: string, info: RateLimitInfo): void {
   latestRateLimitInfo.set(workspaceId, info)
 }
 
-function handleQuota(workspaceId: string, _agentSessionId?: string): void {
+async function handleQuota(workspaceId: string, _agentSessionId?: string): Promise<void> {
   try {
     updateWorkspaceStatus(workspaceId, 'quota')
   } catch {
@@ -1336,55 +1358,43 @@ function handleQuota(workspaceId: string, _agentSessionId?: string): void {
   }
 
   const retryCount = retryCounts.get(workspaceId) ?? 0
-  const { delayMs, resetsAt, source } = computeQuotaBackoffMs(workspaceId, retryCount)
-  const backoffMs = delayMs
-
+  const { delayMs, resetsAt, source } = await computeQuotaBackoffMs(workspaceId, retryCount)
   retryCounts.set(workspaceId, retryCount + 1)
 
-  // Surface the backoff schedule as an ephemeral event so the UI can display
-  // retry count / wait time without polluting the persistent event log.
-  emitEphemeral(workspaceId, 'agent:quota-backoff', {
-    retryCount: retryCount + 1,
-    backoffMinutes: Math.round(delayMs / 60_000),
-    resetsAt,
-    source,
-  })
-
-  const timer = setTimeout(() => {
-    backoffTimers.delete(workspaceId)
-
-    if (!controllers.has(workspaceId)) {
-      const freshWs = getWs(workspaceId)
-      if (!freshWs || freshWs.archivedAt !== null || freshWs.status !== 'quota') {
-        return
-      }
-      try {
-        if (freshWs.autoLoop) {
-          autoLoopService.onQuotaBackoffExpired(workspaceId)
-        } else {
-          const freshWorkingDir = freshWs.worktreePath
-          startAgent(workspaceId, freshWorkingDir, 'Continue the previous task where you left off.', undefined, true)
-        }
-      } catch (err) {
-        console.error(`[orchestrator] Quota retry for workspace '${workspaceId}' failed:`, err)
-        const msg = err instanceof Error ? err.message : String(err)
-        try {
-          updateWorkspaceStatus(workspaceId, 'error')
-        } catch {
-          // transition may not be valid
-        }
-        routeEvent(workspaceId, '', {
-          kind: 'error',
-          category: 'other',
-          message: `Quota retry failed: ${msg}`,
-        })
-      }
-    }
-  }, backoffMs)
-
-  timer.unref?.()
-  backoffTimers.set(workspaceId, timer)
+  // The quotaBackoffService owns the timer + the persistent row + the
+  // 'agent:quota-backoff' WS emit. Hand off everything to it.
+  quotaBackoffService.arm(workspaceId, delayMs, { resetsAt: resetsAt ?? null, source })
 }
+
+/** @internal test-only — re-export of `handleQuota` for direct testing. */
+export const _handleQuota = handleQuota
+
+/**
+ * Rebuild the in-memory `retryCounts` map from the persisted `pending_quota_backoffs`
+ * rows. Called from `index.ts` at boot, before `quotaBackoffService.restoreOnBoot`.
+ * Without this, an arm() after restart would compute the next backoff from
+ * `retryCount=0`, undoing the ladder progression.
+ */
+export function restoreRetryCountsFromDb(): void {
+  for (const pending of quotaBackoffService.listPending()) {
+    retryCounts.set(pending.workspaceId, pending.retryCount)
+  }
+}
+
+// One-time wire: when the persisted backoff timer fires (or a row is
+// restored at boot), hand the workspace off to auto-loop. The auto-loop
+// service decides whether to spawn the next iteration or fall back to a
+// manual resume.
+//
+// IMPORTANT — behavioural contract: only auto-loop workspaces auto-resume
+// after a quota backoff. `onQuotaBackoffExpired` no-ops if `auto_loop !== 1`
+// (see auto-loop-service). Workspaces hit by quota WITHOUT auto-loop stay
+// in `quota` status and require manual user action (resume / new message)
+// to leave that state. This is intentional: without an auto-loop intent,
+// firing a fresh agent run in the user's absence would surprise them.
+quotaBackoffService.setOnFireCallback((workspaceId: string) => {
+  autoLoopService.onQuotaBackoffExpired(workspaceId)
+})
 
 // ── Testing utilities ─────────────────────────────────────────────────────────
 
@@ -1396,11 +1406,6 @@ export function _getControllers(): Map<string, SessionController> {
 /** @internal test-only */
 export function _getRetryCounts(): Map<string, number> {
   return retryCounts
-}
-
-/** @internal test-only */
-export function _getBackoffTimers(): Map<string, ReturnType<typeof setTimeout>> {
-  return backoffTimers
 }
 
 /** @internal test-only */

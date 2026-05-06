@@ -365,6 +365,14 @@ function spawnNextIteration(workspaceId: string, opts: { throwOnStartAgentError?
  * Called by orchestrator.handleQuota's backoff timer when auto-loop is enabled.
  * Spawns the next auto-loop iteration if the workspace is still in quota status
  * with auto_loop active; no-ops otherwise (race-safe).
+ *
+ * No-op cases — these all leave the workspace in `quota` status awaiting
+ * manual user action:
+ *   - workspace was deleted between arm and fire
+ *   - `auto_loop !== 1` (workspace was never an auto-loop target, OR the user
+ *     toggled the loop off during the backoff window)
+ *   - `status !== 'quota'` (user already manually resumed, or another path
+ *     transitioned the workspace)
  */
 export function onQuotaBackoffExpired(workspaceId: string): void {
   const row = getRow(workspaceId)

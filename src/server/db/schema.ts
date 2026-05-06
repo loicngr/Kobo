@@ -29,6 +29,8 @@ export function initSchema(db: Database.Database): void {
       no_progress_streak INTEGER NOT NULL DEFAULT 0,
       permission_profile TEXT NOT NULL DEFAULT 'bypass',
       agent_permission_mode TEXT NOT NULL DEFAULT 'bypass',
+      description TEXT,
+      agent_description TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -71,6 +73,15 @@ export function initSchema(db: Database.Database): void {
       reason           TEXT,
       created_at       TEXT NOT NULL,
       agent_session_id TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS pending_quota_backoffs (
+      workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+      target_at    TEXT NOT NULL,
+      resets_at    TEXT,
+      source       TEXT NOT NULL CHECK (source IN ('rate_limit_info', 'usage_api', 'fallback_ladder')),
+      retry_count  INTEGER NOT NULL DEFAULT 0,
+      created_at   TEXT NOT NULL
     );
 
     CREATE TABLE IF NOT EXISTS usage_snapshots (

@@ -26,6 +26,7 @@ import {
 import * as notionService from '../services/notion-service.js'
 import { renderPrTemplate } from '../services/pr-template-service.js'
 import { getAllPrStates } from '../services/pr-watcher-service.js'
+import * as quotaBackoffService from '../services/quota-backoff-service.js'
 import { DEFAULT_REVIEW_PROMPT_TEMPLATE, renderReviewTemplate } from '../services/review-template-service.js'
 import * as sentryService from '../services/sentry-service.js'
 import * as settingsService from '../services/settings-service.js'
@@ -675,6 +676,7 @@ app.post('/', migrationGuard, async (c) => {
       if (body.notionUrl) {
         brainstormPrompt += `- get_notion_ticket() — retrieve the Notion ticket info (URL, ticket ID, extracted content)\n`
       }
+      brainstormPrompt += `- kobo__set_workspace_agent_description(description) — keep the workspace's agent_description up to date as a short one-line summary of what you're currently doing or have just accomplished. The user sees this in the sidebar without opening the workspace. Update it whenever your focus shifts (e.g. "Investigating SERVICE-1600 → enriching local Notion file", then "Writing failing test for FacturX validator"). Plain text, max 200 chars. The current value is in kobo__get_workspace_info.\nThere is also a separate user-controlled \`description\` field on the workspace — DO NOT touch it. Only set_workspace_agent_description is yours to write; the user owns the other one.\n`
 
       if (effectiveSettings.gitConventions) {
         brainstormPrompt += `\n# Git conventions\nIMPORTANT: Before any git operation (commit, branch, rebase, merge, push), read and apply the conventions defined in \`.ai/.git-conventions.md\`. They are project-specific and override any default behavior. Re-read this file if you're unsure or if context was compacted.\n`
@@ -823,15 +825,43 @@ app.get('/pr-states', (c) => {
 app.get('/auto-loop-states', (c) => {
   try {
     const db = getDb()
+    // Task counts via LEFT JOIN so workspaces without tasks still appear with 0/0.
+    // Drives the sidebar AutoLoopChip badge (X / Y) for non-focused workspaces.
     const rows = db
-      .prepare('SELECT id, auto_loop, auto_loop_ready, no_progress_streak FROM workspaces WHERE archived_at IS NULL')
-      .all() as Array<{ id: string; auto_loop: number; auto_loop_ready: number; no_progress_streak: number }>
-    const out: Record<string, { auto_loop: boolean; auto_loop_ready: boolean; no_progress_streak: number }> = {}
+      .prepare(
+        `SELECT w.id, w.auto_loop, w.auto_loop_ready, w.no_progress_streak,
+                COUNT(t.id) AS tasks_total,
+                SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END) AS tasks_done
+         FROM workspaces w
+         LEFT JOIN tasks t ON t.workspace_id = w.id
+         WHERE w.archived_at IS NULL
+         GROUP BY w.id`,
+      )
+      .all() as Array<{
+      id: string
+      auto_loop: number
+      auto_loop_ready: number
+      no_progress_streak: number
+      tasks_total: number | null
+      tasks_done: number | null
+    }>
+    const out: Record<
+      string,
+      {
+        auto_loop: boolean
+        auto_loop_ready: boolean
+        no_progress_streak: number
+        tasks_done: number
+        tasks_total: number
+      }
+    > = {}
     for (const r of rows) {
       out[r.id] = {
         auto_loop: r.auto_loop === 1,
         auto_loop_ready: r.auto_loop_ready === 1,
         no_progress_streak: r.no_progress_streak,
+        tasks_done: r.tasks_done ?? 0,
+        tasks_total: r.tasks_total ?? 0,
       }
     }
     return c.json(out)
@@ -911,6 +941,35 @@ app.delete('/:id/pending-wakeup', (c) => {
     const id = c.req.param('id')
     wakeupService.cancel(id, 'manual')
     return c.json({ ok: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// GET /api/workspaces/:id/quota-backoff — returns the pending quota backoff or null.
+app.get('/:id/quota-backoff', (c) => {
+  try {
+    const id = c.req.param('id')
+    const ws = workspaceService.getWorkspace(id)
+    if (!ws) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    const pending = quotaBackoffService.getPending(id)
+    c.header('Cache-Control', 'no-store')
+    return c.json(pending)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// DELETE /api/workspaces/:id/quota-backoff — user-initiated cancel ("×" button).
+app.delete('/:id/quota-backoff', (c) => {
+  try {
+    const id = c.req.param('id')
+    const ws = workspaceService.getWorkspace(id)
+    if (!ws) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    quotaBackoffService.cancel(id, 'user')
+    return new Response(null, { status: 204 })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
@@ -1181,6 +1240,28 @@ app.post('/:id/tasks/notify-updated', (c) => {
   }
 })
 
+// POST /api/workspaces/:id/agent-description/notify-updated — broadcast
+// workspace:agent-description-updated after the MCP set_workspace_agent_description
+// handler wrote the column directly. Mirrors the notify-done / notify-updated
+// pattern: the route doesn't re-write, just emits the WS event so the sidebar
+// chip + workspace header italic line refresh in real time.
+app.post('/:id/agent-description/notify-updated', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+    wsService.emitEphemeral(id, 'workspace:agent-description-updated', {
+      agentDescription: workspace.agentDescription,
+    })
+    return new Response(null, { status: 204 })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
 // POST /api/workspaces/:id/tasks/:taskId/notify-done — broadcast task:updated event
 app.post('/:id/tasks/:taskId/notify-done', (c) => {
   try {
@@ -1421,11 +1502,17 @@ app.patch('/:id', migrationGuard, async (c) => {
       reasoningEffort?: string
       agentPermissionMode?: AgentPermissionMode
       name?: string
+      description?: string | null
     }>()
 
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+
+    // agent_description is exclusively writable via the MCP tool, never via the API.
+    if ('agent_description' in (body as Record<string, unknown>)) {
+      return c.json({ error: 'agent_description must be set via the agent MCP tool, not via the API' }, 400)
     }
 
     let updated = workspace
@@ -1450,14 +1537,25 @@ app.patch('/:id', migrationGuard, async (c) => {
     if (body.name !== undefined) {
       updated = workspaceService.updateWorkspaceName(id, body.name)
     }
+    if ('description' in body) {
+      const desc = body.description
+      if (desc !== null && typeof desc !== 'string') {
+        return c.json({ error: 'description must be a string or null' }, 400)
+      }
+      updated = workspaceService.updateWorkspaceDescription(id, desc)
+    }
     if (
       !body.status &&
       body.model === undefined &&
       body.reasoningEffort === undefined &&
       body.agentPermissionMode === undefined &&
-      body.name === undefined
+      body.name === undefined &&
+      !('description' in body)
     ) {
-      return c.json({ error: 'Missing field: status, model, reasoningEffort, agentPermissionMode, or name' }, 400)
+      return c.json(
+        { error: 'Missing field: status, model, reasoningEffort, agentPermissionMode, name, or description' },
+        400,
+      )
     }
 
     return c.json(updated)
@@ -1469,7 +1567,8 @@ app.patch('/:id', migrationGuard, async (c) => {
     if (
       message.includes('Invalid status transition') ||
       message.includes('name cannot be empty') ||
-      message.includes('name cannot exceed')
+      message.includes('name cannot exceed') ||
+      message.includes('Description must be')
     ) {
       return c.json({ error: message }, 400)
     }

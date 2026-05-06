@@ -14,6 +14,7 @@ vi.mock('../server/services/workspace-service.js', () => ({
   updateWorktreePath: vi.fn(),
   updateWorkspaceModel: vi.fn(),
   updateWorkspaceReasoningEffort: vi.fn(),
+  updateWorkspaceDescription: vi.fn(),
   updateAgentPermissionMode: vi.fn(),
   deleteWorkspace: vi.fn(),
   createTask: vi.fn(),
@@ -677,6 +678,34 @@ describe('POST /api/workspaces', () => {
     expect(res.status).toBe(201)
     expect(vi.mocked(setupScriptService.runSetupScript)).not.toHaveBeenCalled()
   })
+
+  it('POST / brainstorm prompt advertises kobo__set_workspace_agent_description with the user-description boundary', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktree).mockReturnValue('/tmp/worktree')
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const startSpy = vi.mocked(agentManager.startAgent)
+    startSpy.mockClear()
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/agent-desc-mention',
+      }),
+    })
+    expect(res.status).toBe(201)
+    expect(startSpy).toHaveBeenCalledTimes(1)
+    // Third positional arg of startAgent(workspaceId, workingDir, prompt, …)
+    const prompt = startSpy.mock.calls[0][2]
+    expect(prompt).toMatch(/kobo__set_workspace_agent_description/)
+    expect(prompt).toMatch(/short one-line summary/i)
+    expect(prompt).not.toMatch(/kobo__set_workspace_description\b(?!_)/)
+    expect(prompt).toMatch(/user[- ]controlled `?description`?[\s\S]*not touch/i)
+  })
 })
 
 // ── Initial-prompt template injection (Notion + Sentry) ──────────────────────
@@ -1306,6 +1335,53 @@ describe('POST /api/workspaces/:id/tasks/notify-updated', () => {
   })
 })
 
+describe('POST /api/workspaces/:id/agent-description/notify-updated', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('emits workspace:agent-description-updated with the current value and returns 204', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      id: 'ws-1',
+      agentDescription: 'Live status',
+    } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/agent-description/notify-updated', {
+      method: 'POST',
+    })
+
+    expect(res.status).toBe(204)
+    expect(wsService.emitEphemeral).toHaveBeenCalledWith('ws-1', 'workspace:agent-description-updated', {
+      agentDescription: 'Live status',
+    })
+  })
+
+  it('emits null when agentDescription is cleared', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      id: 'ws-1',
+      agentDescription: null,
+    } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/agent-description/notify-updated', {
+      method: 'POST',
+    })
+
+    expect(res.status).toBe(204)
+    expect(wsService.emitEphemeral).toHaveBeenCalledWith('ws-1', 'workspace:agent-description-updated', {
+      agentDescription: null,
+    })
+  })
+
+  it('returns 404 when workspace is unknown', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
+
+    const res = await app.request('/api/workspaces/unknown/agent-description/notify-updated', {
+      method: 'POST',
+    })
+
+    expect(res.status).toBe(404)
+    expect(wsService.emitEphemeral).not.toHaveBeenCalled()
+  })
+})
+
 describe('PATCH /api/workspaces/:id', () => {
   it('updates workspace status', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
@@ -1347,6 +1423,92 @@ describe('PATCH /api/workspaces/:id', () => {
     })
 
     expect(res.status).toBe(404)
+  })
+})
+
+describe('PATCH /api/workspaces/:id — description', () => {
+  it('updates the description and returns 200 with the updated workspace', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(workspaceService.updateWorkspaceDescription).mockReturnValue({
+      ...fakeWorkspace,
+      description: 'Investigating SERVICE-1600',
+    } as never)
+
+    const res = await app.request('/api/workspaces/ws-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description: 'Investigating SERVICE-1600' }),
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { description: string }
+    expect(body.description).toBe('Investigating SERVICE-1600')
+    expect(workspaceService.updateWorkspaceDescription).toHaveBeenCalledWith('ws-1', 'Investigating SERVICE-1600')
+  })
+
+  it('returns 400 when description exceeds 200 chars', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(workspaceService.updateWorkspaceDescription).mockImplementation(() => {
+      throw new Error('Description must be 200 characters or fewer (got 201)')
+    })
+
+    const res = await app.request('/api/workspaces/ws-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description: 'x'.repeat(201) }),
+    })
+
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toMatch(/200/)
+  })
+
+  it('returns 404 when workspace not found', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+
+    const res = await app.request('/api/workspaces/does-not-exist', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description: 'hi' }),
+    })
+
+    expect(res.status).toBe(404)
+  })
+
+  it('accepts null to clear the description', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(workspaceService.updateWorkspaceDescription).mockReturnValue({
+      ...fakeWorkspace,
+      description: null,
+    } as never)
+
+    const res = await app.request('/api/workspaces/ws-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description: null }),
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { description: string | null }
+    expect(body.description).toBeNull()
+    expect(workspaceService.updateWorkspaceDescription).toHaveBeenCalledWith('ws-1', null)
+  })
+})
+
+describe('PATCH /api/workspaces/:id — rejects agent_description', () => {
+  it('returns 400 when the body contains agent_description', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+
+    const res = await app.request('/api/workspaces/ws-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ agent_description: 'attempt to bypass MCP' }),
+    })
+
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toMatch(/agent_description/i)
+    expect(body.error).toMatch(/MCP/i)
   })
 })
 

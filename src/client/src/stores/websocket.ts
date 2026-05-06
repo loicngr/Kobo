@@ -674,6 +674,20 @@ export const useWebSocketStore = defineStore('websocket', {
           break
         }
 
+        case 'workspace:description-updated': {
+          if (!wid) break
+          const desc = (payload.description as string | null | undefined) ?? null
+          workspaceStore.updateWorkspaceFromEvent(wid, { description: desc })
+          break
+        }
+
+        case 'workspace:agent-description-updated': {
+          if (!wid) break
+          const desc = (payload.agentDescription as string | null | undefined) ?? null
+          workspaceStore.updateWorkspaceFromEvent(wid, { agentDescription: desc })
+          break
+        }
+
         case 'workspace:archived':
         case 'workspace:unarchived': {
           // If the workspace just archived is the one the user is viewing,
@@ -741,6 +755,23 @@ export const useWebSocketStore = defineStore('websocket', {
         case 'wakeup:fired':
         case 'wakeup:skipped': {
           if (wid) workspaceStore.clearPendingWakeup(wid)
+          break
+        }
+
+        case 'agent:quota-backoff': {
+          if (!wid) break
+          const p = payload as { targetAt?: string; resetsAt?: string | null; source?: string }
+          if (typeof p.targetAt === 'string' && typeof p.source === 'string') {
+            workspaceStore.setPendingQuotaBackoff(wid, {
+              targetAt: p.targetAt,
+              resetsAt: p.resetsAt ?? null,
+              source: p.source,
+            })
+          }
+          break
+        }
+        case 'agent:quota-backoff-cancelled': {
+          if (wid) workspaceStore.clearPendingQuotaBackoff(wid)
           break
         }
 

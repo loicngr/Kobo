@@ -23,6 +23,7 @@ import workspacesRouter from './routes/workspaces.js'
 import {
   getAvailableSkills,
   reconcileOrphanSessions,
+  restoreRetryCountsFromDb,
   sendMessage,
   setBackendPort,
   startAgent,
@@ -35,6 +36,7 @@ import { runContentMigrationIfNeeded } from './services/content-migration-servic
 import { createDailyDbBackupIfNeeded } from './services/db-backup-service.js'
 import { startDevServer, stopDevServer } from './services/dev-server-service.js'
 import { startPrWatcher, stopPrWatcher } from './services/pr-watcher-service.js'
+import * as quotaBackoffService from './services/quota-backoff-service.js'
 import { createTerminal, destroyAllTerminals, getTerminal } from './services/terminal-service.js'
 import { startUsagePoller, stopUsagePoller } from './services/usage/index.js'
 import * as wakeupService from './services/wakeup-service.js'
@@ -67,6 +69,11 @@ reconcileOrphanSessions()
 startWatchdog()
 wakeupService.rehydrate()
 autoLoopService.rehydrate()
+// Restore in-memory retry counts BEFORE re-arming the persisted backoff timers,
+// otherwise the next arm() after restart would compute the next ladder rung
+// from retryCount=0 and undo the progression.
+restoreRetryCountsFromDb()
+quotaBackoffService.restoreOnBoot((workspaceId) => autoLoopService.onQuotaBackoffExpired(workspaceId))
 startPrWatcher()
 startUsagePoller()
 

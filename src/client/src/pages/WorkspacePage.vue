@@ -145,10 +145,36 @@
       </template>
     </div>
 
+    <!-- Workspace description (own line under the header) -->
+    <div v-if="selectedWs" class="wp-subheader column q-px-md q-pb-sm">
+      <q-input
+        v-model="descriptionDraft"
+        dense
+        dark
+        borderless
+        :placeholder="t('workspace.descriptionPlaceholder')"
+        :maxlength="200"
+        input-class="text-caption text-grey-5"
+        class="workspace-description-input"
+        style="width: 100%; max-width: 960px;"
+        @blur="saveDescription"
+        @keydown.enter.prevent="saveDescription"
+      />
+      <div
+        v-if="selectedWs?.agentDescription"
+        class="text-caption text-grey-7 q-mt-xs ellipsis"
+        style="font-style: italic; max-width: 960px;"
+        :title="t('workspace.agentDescriptionTooltip')"
+      >
+        {{ selectedWs.agentDescription }}
+      </div>
+    </div>
+
     <q-separator dark />
 
     <AgentErrorBanner v-if="selectedId" :workspace-id="selectedId" />
     <StaleSessionBanner v-if="selectedId" :workspace-id="selectedId" />
+    <QuotaBackoffBanner v-if="selectedId" :workspace-id="selectedId" />
 
     <!-- Activity Feed with Suspense -->
     <Suspense v-if="selectedId">
@@ -224,6 +250,7 @@ import AskUserQuestionPanel from 'src/components/AskUserQuestionPanel.vue'
 import AutoLoopChip from 'src/components/AutoLoopChip.vue'
 import ChatInput from 'src/components/ChatInput.vue'
 import PermissionRequestPanel from 'src/components/PermissionRequestPanel.vue'
+import QuotaBackoffBanner from 'src/components/QuotaBackoffBanner.vue'
 import StaleSessionBanner from 'src/components/StaleSessionBanner.vue'
 import WakeupBanner from 'src/components/WakeupBanner.vue'
 
@@ -240,6 +267,33 @@ function statusLabel(status: string): string {
 const starting = ref(false)
 const stopping = ref(false)
 const pendingWorkspaceUpdates = new Set<Promise<unknown>>()
+
+const descriptionDraft = ref<string>('')
+
+watch(
+  () => store.selectedWorkspace?.description ?? '',
+  (val) => {
+    descriptionDraft.value = val
+  },
+  { immediate: true },
+)
+
+async function saveDescription(): Promise<void> {
+  if (!store.selectedWorkspace) return
+  const next = descriptionDraft.value.trim()
+  const current = store.selectedWorkspace.description ?? ''
+  if (next === current) return // no-op
+  if (next.length > 200) {
+    $q.notify({ type: 'negative', message: t('workspace.descriptionTooLong'), position: 'top' })
+    return
+  }
+  try {
+    await store.updateWorkspaceDescription(store.selectedWorkspace.id, next.length > 0 ? next : null)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : t('workspace.descriptionSaveFailed')
+    $q.notify({ type: 'negative', message, position: 'top' })
+  }
+}
 
 // Fields that deal with agent-spawn-time flags (--model, --effort, plan mode).
 // When the user changes them while an agent is already running, the change

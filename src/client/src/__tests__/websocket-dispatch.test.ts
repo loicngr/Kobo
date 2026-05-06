@@ -27,6 +27,8 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
         archivedAt: null,
         favoritedAt: null,
         tags: [],
+        description: null,
+        agentDescription: null,
         autoLoop: true,
         autoLoopReady: true,
         noProgressStreak: 0,

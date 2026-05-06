@@ -35,8 +35,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 18', () => {
-    expect(SCHEMA_VERSION).toBe(18)
+  it('exporte SCHEMA_VERSION = 21', () => {
+    expect(SCHEMA_VERSION).toBe(21)
   })
 
   it('migration v17 unifies legacy permission_mode + permission_profile into agent_permission_mode', () => {
@@ -1005,6 +1005,271 @@ describe('migration v18: add-pending-wakeup-agent-session-id', () => {
     expect(row.workspace_id).toBe('w1')
     expect(row.prompt).toBe('resume')
     expect(row.agent_session_id).toBeNull()
+    db.close()
+  })
+})
+
+describe('migration v19 — add-pending-quota-backoffs', () => {
+  it('creates pending_quota_backoffs table on a v18 database', () => {
+    const db = new Database(':memory:')
+    // Build a v18 schema by running all migrations, then unwinding v19 history.
+    runMigrations(db)
+    db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(19)
+    db.prepare('DROP TABLE IF EXISTS pending_quota_backoffs').run()
+
+    runMigrations(db)
+
+    const cols = db.prepare('PRAGMA table_info(pending_quota_backoffs)').all() as Array<{
+      name: string
+      type: string
+      notnull: number
+      pk: number
+    }>
+    expect(cols.map((c) => c.name).sort()).toEqual(
+      ['created_at', 'resets_at', 'retry_count', 'source', 'target_at', 'workspace_id'].sort(),
+    )
+    const pk = cols.find((c) => c.pk === 1)
+    expect(pk?.name).toBe('workspace_id')
+    db.close()
+  })
+
+  it('fresh-install initSchema produces the same table at v19', () => {
+    const db = new Database(':memory:')
+    initSchema(db)
+    const row = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").get('pending_quota_backoffs')
+    expect(row).toBeDefined()
+    db.close()
+  })
+
+  it('SCHEMA_VERSION is 21', () => {
+    expect(SCHEMA_VERSION).toBe(21)
+  })
+
+  it('cascade-deletes the row when the workspace is deleted', () => {
+    const db = new Database(':memory:')
+    initSchema(db)
+    // Foreign keys are off by default in SQLite — enable them for the cascade test.
+    db.pragma('foreign_keys = ON')
+    db.prepare(
+      "INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, status, created_at, updated_at) VALUES ('w1','n','/p','main','feature/x','idle','t','t')",
+    ).run()
+    db.prepare(
+      "INSERT INTO pending_quota_backoffs (workspace_id, target_at, source, created_at) VALUES ('w1', 't', 'fallback_ladder', 't')",
+    ).run()
+    db.prepare("DELETE FROM workspaces WHERE id = 'w1'").run()
+    const row = db.prepare("SELECT * FROM pending_quota_backoffs WHERE workspace_id = 'w1'").get()
+    expect(row).toBeUndefined()
+    db.close()
+  })
+})
+
+describe('migration v20 — add-workspace-description', () => {
+  it('seeds a fresh DB with the description column', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string; type: string }>
+    const desc = cols.find((c) => c.name === 'description')
+    expect(desc).toBeDefined()
+    expect(desc?.type.toUpperCase()).toBe('TEXT')
+    db.close()
+  })
+
+  it('upgrades a v19 DB without losing existing rows', () => {
+    const db = new Database(':memory:')
+    // Build a v19-shaped DB by mirroring the v18 migration test setup: create
+    // the legacy workspaces, pending_wakeups and pending_quota_backoffs tables,
+    // then mark every migration up to v19 as already applied so runMigrations
+    // only applies v20.
+    db.exec(`
+      CREATE TABLE workspaces (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        project_path TEXT NOT NULL,
+        source_branch TEXT NOT NULL,
+        working_branch TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'created',
+        notion_url TEXT,
+        notion_page_id TEXT,
+        sentry_url TEXT,
+        worktree_path TEXT,
+        worktree_owned INTEGER NOT NULL DEFAULT 1,
+        model TEXT NOT NULL,
+        reasoning_effort TEXT NOT NULL DEFAULT 'auto',
+        permission_mode TEXT NOT NULL DEFAULT 'auto-accept',
+        dev_server_status TEXT NOT NULL DEFAULT 'stopped',
+        has_unread INTEGER NOT NULL DEFAULT 0,
+        archived_at TEXT,
+        favorited_at TEXT,
+        tags TEXT NOT NULL DEFAULT '[]',
+        engine TEXT NOT NULL DEFAULT 'claude-code',
+        auto_loop INTEGER NOT NULL DEFAULT 0,
+        auto_loop_ready INTEGER NOT NULL DEFAULT 0,
+        no_progress_streak INTEGER NOT NULL DEFAULT 0,
+        permission_profile TEXT NOT NULL DEFAULT 'bypass',
+        agent_permission_mode TEXT NOT NULL DEFAULT 'bypass',
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE pending_wakeups (
+        workspace_id     TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+        target_at        TEXT NOT NULL,
+        prompt           TEXT NOT NULL,
+        reason           TEXT,
+        created_at       TEXT NOT NULL,
+        agent_session_id TEXT
+      );
+      CREATE TABLE pending_quota_backoffs (
+        workspace_id TEXT PRIMARY KEY,
+        target_at    TEXT NOT NULL,
+        resets_at    TEXT,
+        source       TEXT NOT NULL CHECK (source IN ('rate_limit_info', 'usage_api', 'fallback_ladder')),
+        retry_count  INTEGER NOT NULL DEFAULT 0,
+        created_at   TEXT NOT NULL,
+        FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+      );
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+    `)
+    const now = '2026-05-06T00:00:00Z'
+    db.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(1, 'init-schema', now)
+    for (const m of migrations) {
+      if (m.version <= 19) {
+        db.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(m.version, m.name, now)
+      }
+    }
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, status, model, reasoning_effort, permission_mode, dev_server_status, has_unread, worktree_owned, tags, engine, auto_loop, auto_loop_ready, no_progress_streak, permission_profile, agent_permission_mode, created_at, updated_at)
+       VALUES ('w1', 'Test', '/tmp/p', 'main', 'feature/x', 'created', 'claude-opus-4-7', 'auto', 'auto-accept', 'stopped', 0, 1, '[]', 'claude-code', 0, 0, 0, 'bypass', 'bypass', ?, ?)`,
+    ).run(now, now)
+
+    runMigrations(db)
+
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
+    expect(cols.some((c) => c.name === 'description')).toBe(true)
+    const row = db.prepare('SELECT id, name, description FROM workspaces WHERE id=?').get('w1') as {
+      id: string
+      name: string
+      description: string | null
+    }
+    expect(row.id).toBe('w1')
+    expect(row.name).toBe('Test')
+    expect(row.description).toBeNull()
+    db.close()
+  })
+
+  it('is idempotent (re-running migrations does not fail or duplicate the column)', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    expect(() => runMigrations(db)).not.toThrow()
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
+    const descCount = cols.filter((c) => c.name === 'description').length
+    expect(descCount).toBe(1)
+    db.close()
+  })
+})
+
+describe('migration v21 — add-workspace-agent-description', () => {
+  it('seeds a fresh DB with the agent_description column', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string; type: string }>
+    const agentDesc = cols.find((c) => c.name === 'agent_description')
+    expect(agentDesc).toBeDefined()
+    expect(agentDesc?.type.toUpperCase()).toBe('TEXT')
+    db.close()
+  })
+
+  it('upgrades a v20 DB without losing existing rows', () => {
+    const db = new Database(':memory:')
+    // Build a v20-shaped DB by mirroring the v20 migration test setup: create
+    // the legacy workspaces (with `description` from v20), pending_wakeups and
+    // pending_quota_backoffs tables, then mark every migration up to v20 as
+    // already applied so runMigrations only applies v21.
+    db.exec(`
+      CREATE TABLE workspaces (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        project_path TEXT NOT NULL,
+        source_branch TEXT NOT NULL,
+        working_branch TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'created',
+        notion_url TEXT,
+        notion_page_id TEXT,
+        sentry_url TEXT,
+        worktree_path TEXT,
+        worktree_owned INTEGER NOT NULL DEFAULT 1,
+        model TEXT NOT NULL,
+        reasoning_effort TEXT NOT NULL DEFAULT 'auto',
+        permission_mode TEXT NOT NULL DEFAULT 'auto-accept',
+        dev_server_status TEXT NOT NULL DEFAULT 'stopped',
+        has_unread INTEGER NOT NULL DEFAULT 0,
+        archived_at TEXT,
+        favorited_at TEXT,
+        tags TEXT NOT NULL DEFAULT '[]',
+        engine TEXT NOT NULL DEFAULT 'claude-code',
+        auto_loop INTEGER NOT NULL DEFAULT 0,
+        auto_loop_ready INTEGER NOT NULL DEFAULT 0,
+        no_progress_streak INTEGER NOT NULL DEFAULT 0,
+        permission_profile TEXT NOT NULL DEFAULT 'bypass',
+        agent_permission_mode TEXT NOT NULL DEFAULT 'bypass',
+        description TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE pending_wakeups (
+        workspace_id     TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+        target_at        TEXT NOT NULL,
+        prompt           TEXT NOT NULL,
+        reason           TEXT,
+        created_at       TEXT NOT NULL,
+        agent_session_id TEXT
+      );
+      CREATE TABLE pending_quota_backoffs (
+        workspace_id TEXT PRIMARY KEY,
+        target_at    TEXT NOT NULL,
+        resets_at    TEXT,
+        source       TEXT NOT NULL CHECK (source IN ('rate_limit_info', 'usage_api', 'fallback_ladder')),
+        retry_count  INTEGER NOT NULL DEFAULT 0,
+        created_at   TEXT NOT NULL,
+        FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+      );
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+    `)
+    const now = '2026-05-06T00:00:00Z'
+    db.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(1, 'init-schema', now)
+    for (const m of migrations) {
+      if (m.version <= 20) {
+        db.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(m.version, m.name, now)
+      }
+    }
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, status, model, reasoning_effort, permission_mode, dev_server_status, has_unread, worktree_owned, tags, engine, auto_loop, auto_loop_ready, no_progress_streak, permission_profile, agent_permission_mode, description, created_at, updated_at)
+       VALUES ('w1', 'Test', '/tmp/p', 'main', 'feature/x', 'created', 'claude-opus-4-7', 'auto', 'auto-accept', 'stopped', 0, 1, '[]', 'claude-code', 0, 0, 0, 'bypass', 'bypass', 'human summary', ?, ?)`,
+    ).run(now, now)
+
+    runMigrations(db)
+
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
+    expect(cols.some((c) => c.name === 'agent_description')).toBe(true)
+    const row = db.prepare('SELECT id, description, agent_description FROM workspaces WHERE id=?').get('w1') as {
+      id: string
+      description: string | null
+      agent_description: string | null
+    }
+    expect(row.id).toBe('w1')
+    expect(row.description).toBe('human summary')
+    expect(row.agent_description).toBeNull()
+    db.close()
+  })
+
+  it('is idempotent — re-running migrations does not fail or duplicate the column', () => {
+    const db = new Database(':memory:')
+    expect(() => {
+      runMigrations(db)
+      runMigrations(db)
+    }).not.toThrow()
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
+    const agentDescCount = cols.filter((c) => c.name === 'agent_description').length
+    expect(agentDescCount).toBe(1)
     db.close()
   })
 })

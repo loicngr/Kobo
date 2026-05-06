@@ -1,6 +1,10 @@
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import { describe, expect, it } from 'vitest'
-import { createMapperState, mapSdkMessage } from '../server/services/agent/engines/claude-code/event-mapper.js'
+import {
+  createMapperState,
+  KNOWN_ERROR_RESULT_SUBTYPES,
+  mapSdkMessage,
+} from '../server/services/agent/engines/claude-code/event-mapper.js'
 
 // The SDK type union is broad; tests build minimal-shape objects and cast through
 // `unknown as SDKMessage` so we don't have to spell out every required field.
@@ -389,5 +393,50 @@ describe('event-mapper', () => {
       )
       expect(state.sawErrorResult).toBe(false)
     })
+  })
+})
+
+describe('mapSdkMessage — error result subtype quota discriminator', () => {
+  it('flags out-of-extra-usage errors as category=quota', () => {
+    const subtype = [...KNOWN_ERROR_RESULT_SUBTYPES][0]
+    const state = createMapperState()
+    const events = mapSdkMessage(
+      asMsg({
+        type: 'result',
+        subtype,
+        error: "You're out of extra usage · resets 1:30pm (Europe/Paris)",
+      }),
+      state,
+    )
+    const errEvent = events.find((e) => e.kind === 'error')
+    expect(errEvent).toBeDefined()
+    expect((errEvent as { kind: 'error'; category: string }).category).toBe('quota')
+  })
+
+  it('flags rate-limit errors as category=quota', () => {
+    const subtype = [...KNOWN_ERROR_RESULT_SUBTYPES][0]
+    const state = createMapperState()
+    const events = mapSdkMessage(asMsg({ type: 'result', subtype, error: 'rate limit reached, retry later' }), state)
+    const errEvent = events.find((e) => e.kind === 'error') as { kind: 'error'; category: string } | undefined
+    expect(errEvent?.category).toBe('quota')
+  })
+
+  it('flags "Claude AI usage limit reached" errors as category=quota', () => {
+    const subtype = [...KNOWN_ERROR_RESULT_SUBTYPES][0]
+    const state = createMapperState()
+    const events = mapSdkMessage(
+      asMsg({ type: 'result', subtype, error: 'Claude AI usage limit reached. Resets at 1:30pm.' }),
+      state,
+    )
+    const errEvent = events.find((e) => e.kind === 'error') as { kind: 'error'; category: string } | undefined
+    expect(errEvent?.category).toBe('quota')
+  })
+
+  it('keeps category=other for generic error subtypes', () => {
+    const subtype = [...KNOWN_ERROR_RESULT_SUBTYPES][0]
+    const state = createMapperState()
+    const events = mapSdkMessage(asMsg({ type: 'result', subtype, error: 'some unexpected internal failure' }), state)
+    const errEvent = events.find((e) => e.kind === 'error') as { kind: 'error'; category: string } | undefined
+    expect(errEvent?.category).toBe('other')
   })
 })

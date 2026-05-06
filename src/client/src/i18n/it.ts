@@ -521,6 +521,11 @@ export default {
   'agent.error.rate_limit': 'Limite di frequenza raggiunto',
   'agent.error.resume_failed': 'Sessione non trovata — avvio di una nuova sessione',
   'agent.error.other': "Errore dell'agente",
+  'quotaBackoff.banner.title': 'Ripresa automatica alle {time}',
+  'quotaBackoff.banner.tooltip':
+    "Quota Claude esaurita. L'auto-loop riprenderà automaticamente quando la quota si reimposta alle {resets_at}.",
+  'quotaBackoff.banner.cancel': 'Annulla ripresa',
+  'quotaBackoff.cancelled': 'Ripresa automatica annullata — puoi riprendere manualmente in qualsiasi momento',
   'rateLimitType.fiveHour': 'Sessione 5h',
   'rateLimitType.sevenDay': 'Settimanale',
 
@@ -619,6 +624,7 @@ export default {
 
   // Context menu
   'contextMenu.rename': 'Rinomina',
+  'contextMenu.editDescription': 'Modifica descrizione',
   'contextMenu.copyPath': 'Copia percorso worktree',
   'contextMenu.openEditor': "Apri nell'editor",
   'contextMenu.runSetup': 'Esegui script di setup',
@@ -629,6 +635,12 @@ export default {
   'workspace.favorite': 'Segna come preferito',
   'workspace.unfavorite': 'Rimuovi dai preferiti',
   'workspace.showFavoritesOnly': 'Mostra solo i preferiti',
+  'workspace.descriptionPlaceholder': 'Aggiungi una breve descrizione',
+  'workspace.descriptionDialogHint': 'Testo semplice, massimo 200 caratteri. Lasciare vuoto per cancellare.',
+  'workspace.descriptionTooLong': 'La descrizione deve avere al massimo 200 caratteri.',
+  'workspace.descriptionSaveFailed': 'Impossibile salvare la descrizione.',
+  'workspace.agentDescriptionTooltip': "Stato live mantenuto dall'agente",
+  'mcp.tool.setWorkspaceDescription': 'Imposta la breve descrizione del workspace (≤ 200 caratteri).',
   'tags.manage': 'Gestisci tag',
   'tags.manageTitle': 'Gestisci i tag del workspace',
   'tags.noTagsDefined': 'Nessun tag definito. Aggiungine in Impostazioni > Globale > Tag.',
