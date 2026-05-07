@@ -20,7 +20,7 @@ interface PendingWakeupRow {
 }
 
 const MIN_DELAY_SECONDS = 60
-const MAX_DELAY_SECONDS = 3600
+const MAX_DELAY_SECONDS = 21600
 const STALE_WAKEUP_GRACE_MS = 5 * 60 * 1000
 const AUTONOMOUS_LOOP_SENTINEL = '<<autonomous-loop-dynamic>>'
 const AUTONOMOUS_LOOP_FALLBACK_PROMPT = 'Continue where you left off.'

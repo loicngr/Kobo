@@ -24,17 +24,18 @@
     </q-btn>
 
     <q-btn
-      v-if="!isReady"
+      v-if="!isOn"
       dense
       no-caps
       outline
       color="indigo-4"
       icon="build"
-      :label="t('autoLoop.prepare')"
+      :label="isReady ? t('autoLoop.reprepare') : t('autoLoop.prepare')"
       :disable="isAgentBusy"
       @click="onPrepare"
     >
       <q-tooltip v-if="isAgentBusy">{{ t('autoLoop.prepareBusy') }}</q-tooltip>
+      <q-tooltip v-else-if="isReady">{{ t('autoLoop.reprepareTooltip') }}</q-tooltip>
     </q-btn>
 
     <q-btn

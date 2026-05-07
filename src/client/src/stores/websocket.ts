@@ -9,6 +9,7 @@ import type { DevServerStatus } from './dev-server'
 import { useDevServerStore } from './dev-server'
 import type { MigrationStatus } from './migration'
 import { useMigrationStore } from './migration'
+import type { PendingCron } from './workspace'
 import { useWorkspaceStore } from './workspace'
 
 const t = i18n.global.t
@@ -685,6 +686,58 @@ export const useWebSocketStore = defineStore('websocket', {
           if (!wid) break
           const desc = (payload.agentDescription as string | null | undefined) ?? null
           workspaceStore.updateWorkspaceFromEvent(wid, { agentDescription: desc })
+          break
+        }
+
+        case 'cron:created': {
+          if (!wid) break
+          const cron = (payload as { cron?: PendingCron }).cron
+          if (!cron) break
+          const list = workspaceStore.crons[wid] ?? []
+          if (!list.some((c) => c.id === cron.id)) {
+            workspaceStore.crons[wid] = [...list, cron]
+          }
+          // Keep the sidebar indicator (driven by autoLoopStates[wid].crons_count)
+          // in sync without waiting for the next /auto-loop-states snapshot.
+          const status = workspaceStore.autoLoopStates[wid]
+          if (status) status.crons_count = workspaceStore.crons[wid].length
+          break
+        }
+        case 'cron:fired': {
+          if (!wid) break
+          // Server-authoritative payload: lastFiredAt = the actual fire time
+          // recorded in DB. Falling back to client-side now() only if missing
+          // for resilience against older server payloads.
+          const p = payload as { id?: string; nextFireAt?: string; lastFiredAt?: string; status?: string }
+          const list = workspaceStore.crons[wid] ?? []
+          workspaceStore.crons[wid] = list.map((c) =>
+            c.id === p.id
+              ? {
+                  ...c,
+                  nextFireAt: p.nextFireAt ?? c.nextFireAt,
+                  lastFiredAt: p.lastFiredAt ?? new Date().toISOString(),
+                }
+              : c,
+          )
+          break
+        }
+        case 'cron:cancelled': {
+          if (!wid) break
+          const id = (payload as { id?: string }).id
+          if (!id) break
+          workspaceStore.crons[wid] = (workspaceStore.crons[wid] ?? []).filter((c) => c.id !== id)
+          const status = workspaceStore.autoLoopStates[wid]
+          if (status) status.crons_count = workspaceStore.crons[wid].length
+          break
+        }
+        case 'cron:updated': {
+          if (!wid) break
+          const crons = (payload as { crons?: PendingCron[] }).crons
+          if (Array.isArray(crons)) {
+            workspaceStore.crons[wid] = crons
+            const status = workspaceStore.autoLoopStates[wid]
+            if (status) status.crons_count = crons.length
+          }
           break
         }
 

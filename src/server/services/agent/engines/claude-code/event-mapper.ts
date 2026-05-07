@@ -31,6 +31,16 @@ function makeBucket(id: string, source: Record<string, unknown>): RateLimitBucke
   return { id, label, usedPct: Math.max(0, Math.min(100, usedPct)), resetsAt, details }
 }
 
+const RATE_LIMIT_STATUSES = new Set(['allowed', 'allowed_warning', 'rejected'])
+
+function extractStatus(info: Record<string, unknown>): RateLimitInfo['status'] {
+  const raw = info.status
+  if (typeof raw === 'string' && RATE_LIMIT_STATUSES.has(raw)) {
+    return raw as RateLimitInfo['status']
+  }
+  return undefined
+}
+
 function normalizeRateLimitInfo(info: Record<string, unknown>): RateLimitInfo {
   const buckets: RateLimitBucket[] = []
   if (typeof info.rateLimitType === 'string') {
@@ -50,10 +60,27 @@ function normalizeRateLimitInfo(info: Record<string, unknown>): RateLimitInfo {
       if (b) buckets.push(b)
     }
   }
-  return { buckets }
+  const status = extractStatus(info)
+  return status ? { buckets, status } : { buckets }
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
+
+/**
+ * Canonical "out of quota" surfaces from the Claude SDK and CLI. Centralised
+ * so the three call-sites stay in sync:
+ *  - `result` events with an error subtype (`parsed.error` / `parsed.result`)
+ *  - assistant `message:text` blocks (the SDK occasionally streams the user-
+ *    visible quota notice as plain assistant text instead of a structured
+ *    error result; see workspace `-GyiAYM7X4xTWyZbcHGiR` session #25 for the
+ *    repro that motivated this path)
+ *  - CLI stderr in `engine.ts`
+ *
+ * Patterns are kept loose on purpose to absorb minor wording drift between
+ * Anthropic's surfaces (`rate_limit_exceeded`, `Claude AI usage limit
+ * reached`, `You're out of extra usage`, `quota exceeded`).
+ */
+export const QUOTA_PATTERN = /out of extra usage|rate[_ ]limit|usage limit|quota exceeded/i
 
 /** Mutable state carried across SDK messages within the same stream. */
 export interface MapperState {
@@ -64,15 +91,28 @@ export interface MapperState {
   /** Track streaming text messages: messageId → seenTextOnce (for `streaming` flag). */
   openMessages: Map<string, { sawText: boolean }>
   /**
-   * Set when a `result` message with an error subtype was observed. Read by
-   * the engine after the iterator drains so the natural-completion
-   * `session:ended` carries `reason: 'error'` instead of `'completed'`.
+   * Set when a `result` message with an error subtype was observed, or when
+   * a quota notice was detected in assistant text. Read by the engine after
+   * the iterator drains so the natural-completion `session:ended` carries
+   * `reason: 'error'` instead of `'completed'`.
    */
   sawErrorResult: boolean
+  /**
+   * One-shot guard: a single SDK run can stream the quota text repeatedly
+   * (e.g. on each subsequent assistant turn before termination). Without
+   * this, the orchestrator would receive duplicate `error/quota` events and
+   * arm the backoff multiple times.
+   */
+  quotaErrorEmitted: boolean
 }
 
 export function createMapperState(): MapperState {
-  return { sessionStartedEmitted: false, openMessages: new Map(), sawErrorResult: false }
+  return {
+    sessionStartedEmitted: false,
+    openMessages: new Map(),
+    sawErrorResult: false,
+    quotaErrorEmitted: false,
+  }
 }
 
 /** Known SDK `result` subtypes that indicate the run failed. */
@@ -82,6 +122,38 @@ function isErrorResultSubtype(subtype: string | undefined): boolean {
   if (!subtype) return false
   if (KNOWN_ERROR_RESULT_SUBTYPES.has(subtype)) return true
   return subtype.startsWith('error')
+}
+
+/**
+ * SDK error codes (`SDKAssistantMessageError`) that map to a quota exhaustion
+ * — the user has hit the 5h/7d cap or run out of overage credits.
+ *  - `'rate_limit'`: classic 429 / Anthropic rate-limit reached
+ *  - `'billing_error'`: claude.ai overage credits exhausted
+ */
+export const QUOTA_ASSISTANT_ERRORS = new Set(['rate_limit', 'billing_error'])
+
+/**
+ * Emit an `error/quota` event exactly once per SDK run, regardless of which
+ * surface detected the quota (stderr, SDK iterator, message:text fallback…).
+ * Also sets `sawErrorResult` so the engine surfaces
+ * `session:ended.reason='error'`, which the orchestrator then maps to a
+ * `quota` status transition via the `category: 'quota'` discriminator.
+ *
+ * Exported so the stderr path in `engine.ts` (which bypasses `mapSdkMessage`)
+ * can share the same one-shot guard. Without this, two quota surfaces in the
+ * same run would call `handleQuota` twice → `retryCount` doubled and the
+ * persisted backoff row overwritten.
+ */
+export function tryEmitQuota(state: MapperState, emit: (ev: AgentEvent) => void, message: string): void {
+  if (state.quotaErrorEmitted) return
+  state.quotaErrorEmitted = true
+  state.sawErrorResult = true
+  emit({ kind: 'error', category: 'quota', message })
+}
+
+/** Internal wrapper for the in-mapper push pattern. */
+function tryEmitQuotaError(state: MapperState, events: AgentEvent[], message: string): void {
+  tryEmitQuota(state, (ev) => events.push(ev), message)
 }
 
 /**
@@ -101,7 +173,13 @@ export function mapSdkMessage(msg: SDKMessage, state: MapperState): AgentEvent[]
   if (type === 'rate_limit_event') {
     const info = parsed.rate_limit_info
     if (info && typeof info === 'object') {
-      events.push({ kind: 'rate_limit', info: normalizeRateLimitInfo(info as Record<string, unknown>) })
+      const normalized = normalizeRateLimitInfo(info as Record<string, unknown>)
+      events.push({ kind: 'rate_limit', info: normalized })
+      // `status: 'rejected'` from the SDK is the explicit "request blocked,
+      // out of quota" signal — the most reliable structured surface.
+      if (normalized.status === 'rejected') {
+        tryEmitQuotaError(state, events, 'Rate limit rejected by Claude SDK (rate_limit_event)')
+      }
     }
     return events
   }
@@ -153,6 +231,15 @@ export function mapSdkMessage(msg: SDKMessage, state: MapperState): AgentEvent[]
   }
 
   if (type === 'assistant') {
+    // `SDKAssistantMessage.error` is a typed enum that includes 'rate_limit'
+    // and 'billing_error' — explicit, structured quota signals. Surface them
+    // before any text processing so the orchestrator transitions to `quota`
+    // even on otherwise empty assistant turns.
+    const assistantError = typeof parsed.error === 'string' ? (parsed.error as string) : undefined
+    if (assistantError && QUOTA_ASSISTANT_ERRORS.has(assistantError)) {
+      tryEmitQuotaError(state, events, `Assistant message error: ${assistantError}`)
+    }
+
     const message = parsed.message as Record<string, unknown> | undefined
     const messageId = typeof message?.id === 'string' ? (message.id as string) : 'unknown'
     const content = Array.isArray(message?.content) ? (message?.content as Record<string, unknown>[]) : []
@@ -175,10 +262,18 @@ export function mapSdkMessage(msg: SDKMessage, state: MapperState): AgentEvent[]
     for (const block of content) {
       const blockType = block.type as string | undefined
       if (blockType === 'text' && typeof block.text === 'string') {
-        events.push({ kind: 'message:text', messageId, text: block.text, streaming: true })
+        const text = block.text as string
+        events.push({ kind: 'message:text', messageId, text, streaming: true })
         msgState.sawText = true
-        if ((block.text as string).includes('[BRAINSTORM_COMPLETE]')) {
+        if (text.includes('[BRAINSTORM_COMPLETE]')) {
           events.push({ kind: 'session:brainstorm-complete' })
+        }
+        // Last-resort fallback: some SDK runs surface the quota notice as
+        // plain assistant text without setting `assistant.error` or a
+        // `result.error`. The structured signals above cover modern SDK
+        // versions; this regex absorbs older or drifted wordings.
+        if (QUOTA_PATTERN.test(text)) {
+          tryEmitQuotaError(state, events, text)
         }
       }
       if (blockType === 'tool_use') {
@@ -242,12 +337,14 @@ export function mapSdkMessage(msg: SDKMessage, state: MapperState): AgentEvent[]
       state.sawErrorResult = true
       const detail =
         (typeof parsed.error === 'string' && parsed.error) || (typeof parsed.result === 'string' && parsed.result) || ''
-      // "Claude AI usage limit reached" is Anthropic's 5h/4h cap surface — added
-      // to the regex so the orchestrator transitions the workspace to `quota`
-      // (not `error`) and the auto-loop backoff path engages.
-      const isQuota = /out of extra usage|rate limit|usage limit/i.test(detail)
+      const isQuota = QUOTA_PATTERN.test(detail)
       const message = detail ? `Agent run failed (${subtype}): ${detail}` : `Agent run failed (${subtype})`
-      events.push({ kind: 'error', category: isQuota ? 'quota' : 'other', message })
+      if (isQuota) {
+        // Coordinate with the structured quota path so we never emit twice.
+        tryEmitQuotaError(state, events, message)
+      } else {
+        events.push({ kind: 'error', category: 'other', message })
+      }
     }
     const usage = parsed.usage as Record<string, unknown> | undefined
     if (usage) {

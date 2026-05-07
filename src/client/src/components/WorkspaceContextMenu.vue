@@ -41,6 +41,10 @@
         <q-item-section side><q-icon name="open_in_new" size="xs" /></q-item-section>
         <q-item-section>{{ $t('contextMenu.openSentry') }}</q-item-section>
       </q-item>
+      <q-item v-if="prUrl" clickable v-close-popup @click="openExternal(prUrl!)">
+        <q-item-section side><q-icon name="merge_type" size="xs" /></q-item-section>
+        <q-item-section>{{ $t('contextMenu.openPr') }}</q-item-section>
+      </q-item>
       <q-separator dark />
       <q-item v-if="archived" clickable v-close-popup @click="(e) => emit('unarchive', workspace, e)">
         <q-item-section side><q-icon name="unarchive" size="xs" /></q-item-section>
@@ -60,9 +64,10 @@
 
 <script setup lang="ts">
 import { useSettingsStore } from 'src/stores/settings'
-import type { Workspace } from 'src/stores/workspace'
+import { useWorkspaceStore, type Workspace } from 'src/stores/workspace'
+import { computed } from 'vue'
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     workspace: Workspace
     archived?: boolean
@@ -88,4 +93,11 @@ function openExternal(url: string) {
 }
 
 const settingsStore = useSettingsStore()
+const workspaceStore = useWorkspaceStore()
+
+// PR url comes from the cached git-stats (populated when the workspace is
+// selected — see workspace store `selectWorkspace`). Falls back to undefined
+// when the user right-clicks before ever opening the workspace, in which
+// case the menu item is hidden.
+const prUrl = computed(() => workspaceStore.gitStatsCache[props.workspace.id]?.prUrl ?? null)
 </script>

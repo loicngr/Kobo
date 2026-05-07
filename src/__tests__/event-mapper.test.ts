@@ -4,7 +4,9 @@ import {
   createMapperState,
   KNOWN_ERROR_RESULT_SUBTYPES,
   mapSdkMessage,
+  tryEmitQuota,
 } from '../server/services/agent/engines/claude-code/event-mapper.js'
+import type { AgentEvent } from '../server/services/agent/engines/types.js'
 
 // The SDK type union is broad; tests build minimal-shape objects and cast through
 // `unknown as SDKMessage` so we don't have to spell out every required field.
@@ -438,5 +440,217 @@ describe('mapSdkMessage — error result subtype quota discriminator', () => {
     const events = mapSdkMessage(asMsg({ type: 'result', subtype, error: 'some unexpected internal failure' }), state)
     const errEvent = events.find((e) => e.kind === 'error') as { kind: 'error'; category: string } | undefined
     expect(errEvent?.category).toBe('other')
+  })
+})
+
+describe('mapSdkMessage — structured quota signals from the SDK', () => {
+  // SDKAssistantMessage carries a typed `error` field — `'rate_limit'` and
+  // `'billing_error'` are explicit quota signals.
+  it('emits error/quota when assistant message has error="rate_limit"', () => {
+    const state = createMapperState()
+    const events = mapSdkMessage(
+      asMsg({
+        type: 'assistant',
+        error: 'rate_limit',
+        message: { id: 'msg-1', content: [] },
+      }),
+      state,
+    )
+    const errEvent = events.find((e) => e.kind === 'error') as { kind: 'error'; category: string } | undefined
+    expect(errEvent?.category).toBe('quota')
+    expect(state.sawErrorResult).toBe(true)
+  })
+
+  it('emits error/quota when assistant message has error="billing_error"', () => {
+    const state = createMapperState()
+    const events = mapSdkMessage(
+      asMsg({ type: 'assistant', error: 'billing_error', message: { id: 'msg-1', content: [] } }),
+      state,
+    )
+    const errEvent = events.find((e) => e.kind === 'error') as { kind: 'error'; category: string } | undefined
+    expect(errEvent?.category).toBe('quota')
+  })
+
+  it('does not emit error/quota for non-quota assistant errors', () => {
+    const state = createMapperState()
+    const events = mapSdkMessage(
+      asMsg({ type: 'assistant', error: 'invalid_request', message: { id: 'msg-1', content: [] } }),
+      state,
+    )
+    expect(events.find((e) => e.kind === 'error')).toBeUndefined()
+    expect(state.sawErrorResult).toBe(false)
+  })
+
+  // SDKRateLimitInfo.status === 'rejected' means the request was outright
+  // blocked by Anthropic — the most explicit quota signal available.
+  it('emits error/quota when rate_limit_event has status="rejected"', () => {
+    const state = createMapperState()
+    const events = mapSdkMessage(
+      asMsg({
+        type: 'rate_limit_event',
+        rate_limit_info: {
+          status: 'rejected',
+          rateLimitType: 'five_hour',
+          utilization: 1,
+          resetsAt: 1714521600,
+        },
+      }),
+      state,
+    )
+    const errEvent = events.find((e) => e.kind === 'error') as { kind: 'error'; category: string } | undefined
+    const rateEvent = events.find((e) => e.kind === 'rate_limit') as
+      | { kind: 'rate_limit'; info: { status?: string } }
+      | undefined
+    expect(rateEvent).toBeDefined()
+    expect(rateEvent?.info.status).toBe('rejected')
+    expect(errEvent?.category).toBe('quota')
+    expect(state.sawErrorResult).toBe(true)
+  })
+
+  it('does NOT emit error/quota when rate_limit_event status is "allowed_warning"', () => {
+    const state = createMapperState()
+    const events = mapSdkMessage(
+      asMsg({
+        type: 'rate_limit_event',
+        rate_limit_info: { status: 'allowed_warning', rateLimitType: 'five_hour', utilization: 0.85 },
+      }),
+      state,
+    )
+    expect(events.find((e) => e.kind === 'error')).toBeUndefined()
+    expect(state.sawErrorResult).toBe(false)
+  })
+
+  // One-shot guard across signal types: structured signal first, then text
+  // fallback must not duplicate the error emission.
+  it('does not double-emit when both rate_limit_event(rejected) and quota text appear', () => {
+    const state = createMapperState()
+    const first = mapSdkMessage(
+      asMsg({
+        type: 'rate_limit_event',
+        rate_limit_info: { status: 'rejected', rateLimitType: 'five_hour' },
+      }),
+      state,
+    )
+    const second = mapSdkMessage(
+      asMsg({
+        type: 'assistant',
+        message: {
+          id: 'msg-1',
+          content: [{ type: 'text', text: "You're out of extra usage" }],
+        },
+      }),
+      state,
+    )
+    expect(first.filter((e) => e.kind === 'error')).toHaveLength(1)
+    expect(second.filter((e) => e.kind === 'error')).toHaveLength(0)
+  })
+})
+
+describe('tryEmitQuota — cross-surface one-shot guard', () => {
+  // The stderr handler in engine.ts and the SDK iterator share a single
+  // MapperState. Both surfaces calling tryEmitQuota must result in a single
+  // error/quota emission, otherwise handleQuota fires twice → retryCount
+  // doubles and the persisted backoff row gets overwritten.
+  it('emits a single error event when stderr fires before the SDK signal', () => {
+    const state = createMapperState()
+    const captured: AgentEvent[] = []
+    const emit = (ev: AgentEvent) => captured.push(ev)
+
+    // 1) stderr quota match
+    tryEmitQuota(state, emit, 'rate_limit_exceeded')
+    // 2) SDK iterator surfaces a structured quota signal in the same run
+    const sdkEvents = mapSdkMessage(
+      asMsg({
+        type: 'rate_limit_event',
+        rate_limit_info: { status: 'rejected', rateLimitType: 'five_hour' },
+      }),
+      state,
+    )
+
+    const stderrErrors = captured.filter((e) => e.kind === 'error')
+    const sdkErrors = sdkEvents.filter((e) => e.kind === 'error')
+    expect(stderrErrors).toHaveLength(1)
+    expect(sdkErrors).toHaveLength(0)
+    expect(state.quotaErrorEmitted).toBe(true)
+    expect(state.sawErrorResult).toBe(true)
+  })
+
+  it('emits a single error event when the SDK signal fires before stderr', () => {
+    const state = createMapperState()
+    const captured: AgentEvent[] = []
+    const emit = (ev: AgentEvent) => captured.push(ev)
+
+    // 1) SDK iterator emits structured quota first
+    const sdkEvents = mapSdkMessage(
+      asMsg({ type: 'assistant', error: 'rate_limit', message: { id: 'msg-1', content: [] } }),
+      state,
+    )
+    // 2) stderr matches afterwards (CLI lag-write)
+    tryEmitQuota(state, emit, "You're out of extra usage")
+
+    expect(sdkEvents.filter((e) => e.kind === 'error')).toHaveLength(1)
+    expect(captured.filter((e) => e.kind === 'error')).toHaveLength(0)
+  })
+})
+
+describe('mapSdkMessage — quota detected in assistant text', () => {
+  // Build a minimal `assistant`-typed SDKMessage carrying a single text block.
+  // The SDK sometimes streams the canonical "You're out of extra usage..."
+  // string this way (no `result.error`), so we must catch it here too.
+  function assistantTextMsg(text: string, opts: { stop?: boolean; messageId?: string } = {}): Record<string, unknown> {
+    return {
+      type: 'assistant',
+      message: {
+        id: opts.messageId ?? 'msg-1',
+        content: [{ type: 'text', text }],
+        ...(opts.stop ? { stop_reason: 'end_turn' } : {}),
+      },
+    }
+  }
+
+  it('emits an error/quota event when assistant text matches the quota pattern', () => {
+    const state = createMapperState()
+    const events = mapSdkMessage(
+      asMsg(assistantTextMsg("You're out of extra usage · resets 1:20pm (Europe/Paris)")),
+      state,
+    )
+    const errEvent = events.find((e) => e.kind === 'error') as
+      | { kind: 'error'; category: string; message: string }
+      | undefined
+    expect(errEvent).toBeDefined()
+    expect(errEvent?.category).toBe('quota')
+  })
+
+  it('flips sawErrorResult so engine surfaces session:ended.reason=error', () => {
+    const state = createMapperState()
+    mapSdkMessage(asMsg(assistantTextMsg('Claude AI usage limit reached. Resets at 1:30pm.')), state)
+    expect(state.sawErrorResult).toBe(true)
+  })
+
+  it('emits the error event only once even if the pattern reappears in later text', () => {
+    const state = createMapperState()
+    const first = mapSdkMessage(asMsg(assistantTextMsg("You're out of extra usage · resets 1:20pm")), state)
+    const second = mapSdkMessage(
+      asMsg(assistantTextMsg("Still: you're out of extra usage", { messageId: 'msg-2' })),
+      state,
+    )
+    expect(first.filter((e) => e.kind === 'error')).toHaveLength(1)
+    expect(second.filter((e) => e.kind === 'error')).toHaveLength(0)
+  })
+
+  it('does not flag normal assistant text', () => {
+    const state = createMapperState()
+    const events = mapSdkMessage(asMsg(assistantTextMsg('Working on the file…')), state)
+    expect(events.find((e) => e.kind === 'error')).toBeUndefined()
+    expect(state.sawErrorResult).toBe(false)
+  })
+
+  it('still streams the message:text event normally alongside the quota error', () => {
+    const state = createMapperState()
+    const events = mapSdkMessage(asMsg(assistantTextMsg("You're out of extra usage")), state)
+    const textEvent = events.find((e) => e.kind === 'message:text')
+    const errEvent = events.find((e) => e.kind === 'error')
+    expect(textEvent).toBeDefined()
+    expect(errEvent).toBeDefined()
   })
 })

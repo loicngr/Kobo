@@ -4,9 +4,12 @@ import path from 'node:path'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
-import Database from 'better-sqlite3'
+import type Database from 'better-sqlite3'
+import { getDb } from '../server/db/index.js'
+import { runMigrations } from '../server/db/migrations.js'
 import {
   createTaskHandler,
+  cronListHandler,
   deleteTaskHandler,
   getDevServerStatusHandler,
   getSessionUsageHandler,
@@ -40,10 +43,21 @@ if (!dbPath) {
 
 let db: Database.Database
 try {
-  db = new Database(dbPath, { readonly: false })
-  db.pragma('journal_mode = WAL')
-  db.pragma('busy_timeout = 5000')
-  db.pragma('foreign_keys = ON')
+  // Use the shared `getDb` singleton so any service that calls `getDb()`
+  // internally (e.g. cron-service.arm) hits the SAME connection as this
+  // MCP server, against the SAME DB file. Without this bootstrap, the
+  // singleton would resolve via getDbPath() → getKoboHome() → KOBO_HOME
+  // env var, which the agent SDK does NOT pass to the MCP server (only
+  // KOBO_DB_PATH is passed). That would silently open a second connection
+  // against the user's prod DB at ~/.config/kobo/kobo.db, which may not
+  // even have the same schema as the dev DB the backend is using.
+  db = getDb(dbPath)
+  // Defensive: run migrations to ensure the schema is at the latest version.
+  // The backend already ran them at boot, but this MCP server might be the
+  // first to touch the DB (e.g. tests, race at first boot, or KOBO_DB_PATH
+  // pointing somewhere the backend hasn't migrated). Idempotent — no-op if
+  // the DB is already at SCHEMA_VERSION.
+  runMigrations(db)
 } catch (err) {
   console.error('[kobo-tasks-server] Failed to open database:', err)
   process.exit(1)
@@ -225,6 +239,58 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       },
     },
     {
+      name: 'cron_create',
+      description:
+        'Schedule a recurring trigger on THIS workspace. At each fire, Kōbō waits for the workspace to be idle (no active session) and then resumes the same conversation by injecting `prompt` as the next user message — same UX as `schedule_wakeup` but recurring. Skip-if-active: if a session is already running when the timer fires, that occurrence is skipped, the next occurrence is computed, and the cron continues. The cron persists across server restarts (skip-missed semantics on boot — no catchup spam). Delete with `cron_delete(id)`. Multiple crons per workspace are allowed.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          expression: {
+            type: 'string',
+            description:
+              'Standard 5-field cron expression (`min hour dom month dow`) or one of the helpers `@hourly`, `@daily`, `@weekly`, `@monthly`, `@yearly`. Example: `*/30 * * * *` = every 30 minutes; `0 9 * * 1` = every Monday at 9am. Validated at create time.',
+          },
+          prompt: {
+            type: 'string',
+            description: 'The prompt to inject as the next user message at each fire.',
+          },
+          label: {
+            type: 'string',
+            description: 'Optional human-readable label for the cron (shown in the UI).',
+          },
+          mode: {
+            type: 'string',
+            enum: ['resume', 'fresh'],
+            description:
+              "How each fire is handled. 'resume' (default) pins the cron to the session you're calling from, so every fire continues THAT conversation by injecting `prompt` as the next user message — use this when the cron should follow up on ongoing work. 'fresh' starts a brand-new session at every fire with a clean context — use this for periodic checks (e.g. CI watch, daily standup) that don't need conversation continuity.",
+          },
+          oneShot: {
+            type: 'boolean',
+            description:
+              "When true, the cron cancels itself after the first real fire (default false = recurring). Use this to schedule a single trigger at a specific cron-expressible time (e.g. `0 14 7 6 *` = next 7 June at 14:00) without it repeating yearly. Skip-active fires don't consume the one-shot — the cron retries at the next occurrence until it actually runs once.",
+          },
+        },
+        required: ['expression', 'prompt'],
+      },
+    },
+    {
+      name: 'cron_delete',
+      description:
+        "Cancel a previously-armed cron by id. Idempotent — returns ok=true even if the id is unknown. Only the workspace's own crons can be cancelled (cron_list to see them).",
+      inputSchema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'The cron id returned by cron_create.' },
+        },
+        required: ['id'],
+      },
+    },
+    {
+      name: 'cron_list',
+      description: 'List all crons currently armed on THIS workspace, including their next and last fire times.',
+      inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+    },
+    {
       name: 'get_git_info',
       description:
         'CALL BEFORE creating a PR, committing in batches, or reporting progress to the user. Returns commit count ahead of source, files changed, insertions/deletions, and existing PR URL if any.',
@@ -373,13 +439,13 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'schedule_wakeup',
       description:
-        'CALL to schedule a follow-up turn on THIS workspace after a delay. End the current turn normally; once it finishes and the workspace is idle, Kōbō waits `delaySeconds`, then resumes the same conversation by injecting `prompt` as the next user message. The wakeup is scoped to the current workspace and resumes its latest session — you cannot target another workspace or another session. If a turn is still active when the timer fires, the wakeup is skipped (status: `session-active`). Replaces any previously pending wakeup on this workspace. Delay is clamped to [60, 3600] seconds. Prefer this over the built-in `ScheduleWakeup` tool — it is the SDK-supported entry point.',
+        'CALL to schedule a follow-up turn on THIS workspace after a delay. End the current turn normally; once it finishes and the workspace is idle, Kōbō waits `delaySeconds`, then resumes the same conversation by injecting `prompt` as the next user message. The wakeup is scoped to the current workspace and resumes its latest session — you cannot target another workspace or another session. If a turn is still active when the timer fires, the wakeup is skipped (status: `session-active`). Replaces any previously pending wakeup on this workspace. Delay is clamped to [60, 21600] seconds (1min to 6h). Prefer this over the built-in `ScheduleWakeup` tool — it is the SDK-supported entry point.',
       inputSchema: {
         type: 'object',
         properties: {
           delaySeconds: {
             type: 'number',
-            description: 'Seconds from now until the wakeup fires. Clamped to [60, 3600].',
+            description: 'Seconds from now until the wakeup fires. Clamped to [60, 21600] (1min to 6h).',
           },
           prompt: {
             type: 'string',
@@ -491,6 +557,56 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if ('ok' in result && result.ok) {
         void notifyAgentDescriptionUpdated()
       }
+      return ok(result)
+    }
+
+    if (name === 'cron_create') {
+      const expression = a.expression as string | undefined
+      const prompt = a.prompt as string | undefined
+      const label = typeof a.label === 'string' ? (a.label as string) : undefined
+      const mode = typeof a.mode === 'string' ? (a.mode as string) : undefined
+      const oneShot = typeof a.oneShot === 'boolean' ? (a.oneShot as boolean) : undefined
+      if (typeof expression !== 'string' || typeof prompt !== 'string') {
+        return fail('expression and prompt parameters are required')
+      }
+      if (mode !== undefined && mode !== 'resume' && mode !== 'fresh') {
+        return fail("mode must be 'resume' or 'fresh'")
+      }
+      // Route through the backend so the in-memory `setTimeout` lives in the
+      // backend process (which owns orchestrator + WS broadcast). Calling
+      // cron-service.arm() directly here would persist the row but arm the
+      // timer in the MCP server sub-process, which dies with the agent
+      // session — fires would never trigger a real session resume.
+      try {
+        const created = (await backendRequest('POST', `/api/workspaces/${workspaceId}/crons`, {
+          expression,
+          prompt,
+          label,
+          mode,
+          oneShot,
+        })) as { cron: unknown }
+        return ok({ ok: true, cron: created.cron })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        return ok({ ok: false, error: message })
+      }
+    }
+
+    if (name === 'cron_delete') {
+      const id = a.id as string | undefined
+      if (typeof id !== 'string') return fail('id parameter is required')
+      // Same reason as cron_create — the backend owns the timer Map.
+      try {
+        await backendRequest('DELETE', `/api/workspaces/${workspaceId}/crons/${id}`)
+        return ok({ ok: true })
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        return ok({ ok: false, error: message })
+      }
+    }
+
+    if (name === 'cron_list') {
+      const result = cronListHandler(db, workspaceId!)
       return ok(result)
     }
 

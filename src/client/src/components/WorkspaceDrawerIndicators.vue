@@ -12,6 +12,14 @@
     <q-tooltip>{{ t('wakeup.pendingIndicator') }}</q-tooltip>
   </q-icon>
   <q-icon
+    v-if="cronCount > 0"
+    name="event_repeat"
+    size="14px"
+    color="cyan-4"
+  >
+    <q-tooltip>{{ t('cron.pendingIndicator', { n: cronCount }) }}</q-tooltip>
+  </q-icon>
+  <q-icon
     v-if="workspaceStore.prStates[workspace.id] === 'OPEN'"
     name="merge_type"
     size="14px"
@@ -36,13 +44,16 @@
 import { useDevServerStore } from 'src/stores/dev-server'
 import type { Workspace } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-defineProps<{ workspace: Workspace }>()
+const props = defineProps<{ workspace: Workspace }>()
 
 const devServerStore = useDevServerStore()
 const workspaceStore = useWorkspaceStore()
 const { t } = useI18n()
+
+const cronCount = computed(() => workspaceStore.autoLoopStates[props.workspace.id]?.crons_count ?? 0)
 </script>
 
 <style scoped lang="scss">

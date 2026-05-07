@@ -13,8 +13,21 @@ vi.mock('../server/services/settings-service.js', () => ({
   getProjectSettings: vi.fn(),
 }))
 
+// Mock websocket-service so cron-service's emitEphemeral does not require a real WS layer.
+vi.mock('../server/services/websocket-service.js', () => ({
+  emit: vi.fn(),
+  emitEphemeral: vi.fn(),
+}))
+
+// Mock orchestrator so cron-service does not try to spawn agents during tests.
+vi.mock('../server/services/agent/orchestrator.js', () => ({
+  startAgent: vi.fn(),
+  hasController: vi.fn(() => false),
+}))
+
 import {
   createTaskHandler,
+  cronListHandler,
   deleteTaskHandler,
   getDevServerStatusHandler,
   getSessionUsageHandler,
@@ -29,6 +42,8 @@ import {
   setWorkspaceAgentDescriptionHandler,
   updateTaskHandler,
 } from '../mcp-server/kobo-tasks-handlers.js'
+import { closeDb, getDb } from '../server/db/index.js'
+import { runMigrations } from '../server/db/migrations.js'
 import { initSchema } from '../server/db/schema.js'
 
 describe('MCP tasks server handlers', () => {
@@ -617,5 +632,83 @@ describe('MCP server tool registration — set_workspace_agent_description', () 
     expect(serverSource).toMatch(
       /name === 'set_workspace_agent_description'[\s\S]*?setWorkspaceAgentDescriptionHandler\s*\(/,
     )
+  })
+})
+
+describe('MCP cron handlers', () => {
+  let tmpDir: string
+  let dbPath: string
+  let db: Database.Database
+  const workspaceId = 'ws-cron-test'
+
+  beforeEach(() => {
+    // Ensure no leftover singleton from a previous test owns the connection.
+    closeDb()
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'at-mcp-cron-test-'))
+    dbPath = path.join(tmpDir, 'test.db')
+    // Pre-init schema on the file so getDb() opens a fully-migrated DB.
+    const seed = new Database(dbPath)
+    seed.pragma('journal_mode = WAL')
+    seed.pragma('foreign_keys = ON')
+    initSchema(seed)
+    runMigrations(seed)
+    seed.close()
+
+    db = getDb(dbPath)
+    const now = new Date().toISOString()
+    db.prepare(
+      'INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run(workspaceId, 'Cron WS', '/tmp', 'main', 'feature/cron', 'idle', now, now)
+    vi.clearAllMocks()
+  })
+
+  afterEach(() => {
+    closeDb()
+    fs.rmSync(tmpDir, { recursive: true, force: true })
+  })
+
+  describe('cronListHandler', () => {
+    it('returns the workspace crons', async () => {
+      const cronService = await import('../server/services/cron-service.js')
+      cronService.arm(workspaceId, { expression: '@hourly', prompt: 'a' })
+      cronService.arm(workspaceId, { expression: '@daily', prompt: 'b' })
+      const result = cronListHandler(db, workspaceId)
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.crons).toHaveLength(2)
+    })
+
+    it('returns an empty list for a workspace without crons', () => {
+      const result = cronListHandler(db, workspaceId)
+      expect(result.ok).toBe(true)
+      if (!result.ok) return
+      expect(result.crons).toEqual([])
+    })
+  })
+})
+
+describe('MCP server tool registration — cron family', () => {
+  it('exposes cron_create, cron_delete, cron_list with right schemas', () => {
+    const serverSource = fs.readFileSync(path.join(__dirname, '..', 'mcp-server', 'kobo-tasks-server.ts'), 'utf-8')
+    expect(serverSource).toMatch(/name:\s*['"]cron_create['"]/)
+    expect(serverSource).toMatch(/name:\s*['"]cron_delete['"]/)
+    expect(serverSource).toMatch(/name:\s*['"]cron_list['"]/)
+    expect(serverSource).toMatch(/required:\s*\[['"]expression['"]\s*,\s*['"]prompt['"]\]/)
+    expect(serverSource).toMatch(/required:\s*\[['"]id['"]\]/)
+  })
+
+  it('routes cron_create / cron_delete through the backend HTTP and dispatches cron_list locally', () => {
+    const serverSource = fs.readFileSync(path.join(__dirname, '..', 'mcp-server', 'kobo-tasks-server.ts'), 'utf-8')
+    // cron_create + cron_delete must NOT call cron-service.arm/cancel directly
+    // — those would arm the in-memory setTimeout in the MCP sub-process, which
+    // dies with the agent session. The backend owns the timer Map.
+    expect(serverSource).toMatch(
+      /name === 'cron_create'[\s\S]*?backendRequest\(\s*['"]POST['"]\s*,\s*`\/api\/workspaces\/\$\{workspaceId\}\/crons`/,
+    )
+    expect(serverSource).toMatch(
+      /name === 'cron_delete'[\s\S]*?backendRequest\(\s*['"]DELETE['"]\s*,\s*`\/api\/workspaces\/\$\{workspaceId\}\/crons\/\$\{id\}`/,
+    )
+    // cron_list is read-only — no timer involvement, fine to dispatch locally.
+    expect(serverSource).toMatch(/name === 'cron_list'[\s\S]*?cronListHandler\s*\(/)
   })
 })

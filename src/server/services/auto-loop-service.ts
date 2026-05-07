@@ -85,12 +85,19 @@ export function enable(workspaceId: string): void {
     throw new Error(`Workspace '${workspaceId}' is not ready for auto-loop (run grooming first)`)
   }
 
+  // Refuse to enable when there is nothing to spawn — without this, auto_loop
+  // would flip to 1 silently with no iteration running, locking the chat input
+  // (auto-loop banner) without doing any work. The user must add a task or
+  // unmark a done task before re-enabling.
+  const pending = countPendingTasks(workspaceId)
+  if (pending === 0) {
+    throw new Error(`Workspace '${workspaceId}' has no pending tasks; add or unmark a task before enabling auto-loop`)
+  }
+
   const db = getDb()
   db.prepare('UPDATE workspaces SET auto_loop = 1, no_progress_streak = 0 WHERE id = ?').run(workspaceId)
   emitEphemeral(workspaceId, 'autoloop:enabled', {})
 
-  const pending = countPendingTasks(workspaceId)
-  if (pending === 0) return
   if (orchestrator.hasController(workspaceId)) return
   // spawnNextIteration throws on initial spawn failure (see flag).
   spawnNextIteration(workspaceId, { throwOnStartAgentError: true })

@@ -108,6 +108,153 @@
         </q-card-section>
       </q-card>
 
+      <!-- Active state — quota backoffs, wakeups, auto-loops, sessions, dev servers -->
+      <div class="text-subtitle1 q-mt-md q-mb-xs text-grey-5">{{ $t('health.activeTitle') }}</div>
+
+      <q-card dark flat bordered>
+        <q-card-section>
+          <div class="row items-center">
+            <q-icon name="hourglass_top" size="sm" color="amber-6" class="q-mr-sm" />
+            <div class="text-subtitle2">{{ $t('health.activeQuotaBackoffs') }}</div>
+            <q-space />
+            <q-badge :label="report.active.quotaBackoffs.length" color="grey-8" text-color="grey-3" />
+          </div>
+          <div v-if="report.active.quotaBackoffs.length === 0" class="text-caption text-grey-7 q-mt-xs">
+            {{ $t('health.noneActive') }}
+          </div>
+          <q-list v-else dense dark class="q-mt-xs">
+            <q-item
+              v-for="row in report.active.quotaBackoffs"
+              :key="row.workspaceId"
+              clickable
+              @click="goToWorkspace(row.workspaceId)"
+            >
+              <q-item-section>
+                <div class="text-body2">{{ row.name }}</div>
+                <div class="text-caption text-grey-6">
+                  {{ $t('health.quotaResumeAt', { time: formatTime(row.targetAt) }) }}
+                  · {{ row.source }} · retry #{{ row.retryCount }}
+                </div>
+              </q-item-section>
+            </q-item>
+          </q-list>
+        </q-card-section>
+      </q-card>
+
+      <q-card dark flat bordered>
+        <q-card-section>
+          <div class="row items-center">
+            <q-icon name="schedule" size="sm" color="indigo-4" class="q-mr-sm" />
+            <div class="text-subtitle2">{{ $t('health.activeWakeups') }}</div>
+            <q-space />
+            <q-badge :label="report.active.pendingWakeups.length" color="grey-8" text-color="grey-3" />
+          </div>
+          <div v-if="report.active.pendingWakeups.length === 0" class="text-caption text-grey-7 q-mt-xs">
+            {{ $t('health.noneActive') }}
+          </div>
+          <q-list v-else dense dark class="q-mt-xs">
+            <q-item
+              v-for="row in report.active.pendingWakeups"
+              :key="row.workspaceId"
+              clickable
+              @click="goToWorkspace(row.workspaceId)"
+            >
+              <q-item-section>
+                <div class="text-body2">{{ row.name }}</div>
+                <div class="text-caption text-grey-6">
+                  {{ $t('health.wakeupAt', { time: formatTime(row.targetAt) }) }}
+                  <span v-if="row.reason"> · {{ row.reason }}</span>
+                </div>
+              </q-item-section>
+            </q-item>
+          </q-list>
+        </q-card-section>
+      </q-card>
+
+      <q-card dark flat bordered>
+        <q-card-section>
+          <div class="row items-center">
+            <q-icon name="autorenew" size="sm" color="amber-7" class="q-mr-sm" />
+            <div class="text-subtitle2">{{ $t('health.activeAutoLoop') }}</div>
+            <q-space />
+            <q-badge :label="report.active.autoLoopActive.length" color="grey-8" text-color="grey-3" />
+          </div>
+          <div v-if="report.active.autoLoopActive.length === 0" class="text-caption text-grey-7 q-mt-xs">
+            {{ $t('health.noneActive') }}
+          </div>
+          <q-list v-else dense dark class="q-mt-xs">
+            <q-item
+              v-for="row in report.active.autoLoopActive"
+              :key="row.workspaceId"
+              clickable
+              @click="goToWorkspace(row.workspaceId)"
+            >
+              <q-item-section>
+                <div class="text-body2">{{ row.name }}</div>
+                <div class="text-caption text-grey-6">
+                  {{ row.ready ? $t('health.autoLoopReady') : $t('health.autoLoopGrooming') }}
+                </div>
+              </q-item-section>
+            </q-item>
+          </q-list>
+        </q-card-section>
+      </q-card>
+
+      <q-card dark flat bordered>
+        <q-card-section>
+          <div class="row items-center">
+            <q-icon name="play_arrow" size="sm" color="green-5" class="q-mr-sm" />
+            <div class="text-subtitle2">{{ $t('health.activeAgentSessions') }}</div>
+            <q-space />
+            <q-badge :label="report.active.agentSessionsAlive.length" color="grey-8" text-color="grey-3" />
+          </div>
+          <div v-if="report.active.agentSessionsAlive.length === 0" class="text-caption text-grey-7 q-mt-xs">
+            {{ $t('health.noneActive') }}
+          </div>
+          <q-list v-else dense dark class="q-mt-xs">
+            <q-item
+              v-for="row in report.active.agentSessionsAlive"
+              :key="`${row.workspaceId}-${row.pid}`"
+              clickable
+              @click="goToWorkspace(row.workspaceId)"
+            >
+              <q-item-section>
+                <div class="text-body2">{{ row.workspaceName }}</div>
+                <div class="text-caption text-grey-6">
+                  pid {{ row.pid }} · {{ $t('health.startedAgo', { time: formatRelative(row.startedAt) }) }}
+                </div>
+              </q-item-section>
+            </q-item>
+          </q-list>
+        </q-card-section>
+      </q-card>
+
+      <q-card dark flat bordered>
+        <q-card-section>
+          <div class="row items-center">
+            <q-icon name="dns" size="sm" color="cyan-5" class="q-mr-sm" />
+            <div class="text-subtitle2">{{ $t('health.activeDevServers') }}</div>
+            <q-space />
+            <q-badge :label="report.active.devServersRunning.length" color="grey-8" text-color="grey-3" />
+          </div>
+          <div v-if="report.active.devServersRunning.length === 0" class="text-caption text-grey-7 q-mt-xs">
+            {{ $t('health.noneActive') }}
+          </div>
+          <q-list v-else dense dark class="q-mt-xs">
+            <q-item
+              v-for="row in report.active.devServersRunning"
+              :key="row.workspaceId"
+              clickable
+              @click="goToWorkspace(row.workspaceId)"
+            >
+              <q-item-section>
+                <div class="text-body2">{{ row.name }}</div>
+              </q-item-section>
+            </q-item>
+          </q-list>
+        </q-card-section>
+      </q-card>
+
       <!-- Integrations -->
       <q-card dark flat bordered>
         <q-card-section>
@@ -156,6 +303,40 @@ interface WorktreeCheck {
   exists: boolean
 }
 
+interface QuotaBackoffRow {
+  workspaceId: string
+  name: string
+  targetAt: string
+  resetsAt: string | null
+  source: string
+  retryCount: number
+}
+
+interface PendingWakeupRow {
+  workspaceId: string
+  name: string
+  targetAt: string
+  reason: string | null
+}
+
+interface AutoLoopRow {
+  workspaceId: string
+  name: string
+  ready: boolean
+}
+
+interface AgentSessionAliveRow {
+  workspaceId: string
+  workspaceName: string
+  pid: number
+  startedAt: string
+}
+
+interface DevServerRunningRow {
+  workspaceId: string
+  name: string
+}
+
 interface HealthReport {
   koboHome: string
   db: { path: string; sizeBytes: number | null; schemaVersion: number; currentSchemaVersion: number }
@@ -167,6 +348,13 @@ interface HealthReport {
     notion: { configured: boolean }
     sentry: { configured: boolean }
     editor: { configured: boolean }
+  }
+  active: {
+    quotaBackoffs: QuotaBackoffRow[]
+    pendingWakeups: PendingWakeupRow[]
+    autoLoopActive: AutoLoopRow[]
+    agentSessionsAlive: AgentSessionAliveRow[]
+    devServersRunning: DevServerRunningRow[]
   }
 }
 
@@ -207,5 +395,26 @@ function statusIcon(ok: boolean) {
 
 function statusColor(ok: boolean) {
   return ok ? 'positive' : 'negative'
+}
+
+function formatTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })
+}
+
+function formatRelative(iso: string): string {
+  const deltaMs = Date.now() - new Date(iso).getTime()
+  if (Number.isNaN(deltaMs) || deltaMs < 0) return '—'
+  const seconds = Math.floor(deltaMs / 1000)
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h${minutes % 60 ? ` ${minutes % 60}m` : ''}`
+  const days = Math.floor(hours / 24)
+  return `${days}d`
+}
+
+function goToWorkspace(id: string): void {
+  router.push({ name: 'workspace', params: { id } }).catch(() => {})
 }
 </script>

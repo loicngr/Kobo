@@ -9,7 +9,7 @@ import {
 import { nanoid } from 'nanoid'
 import type { AgentEngine, AgentEvent, EngineProcess, StartOptions } from '../types.js'
 import { CLAUDE_CODE_CAPABILITIES } from './capabilities.js'
-import { createMapperState, mapSdkMessage } from './event-mapper.js'
+import { createMapperState, mapSdkMessage, QUOTA_PATTERN, tryEmitQuota } from './event-mapper.js'
 import { buildClaudeOptions } from './options-builder.js'
 import { buildPreCompactCustomInstructions } from './precompact-hook.js'
 import { resolveClaudeBinaryPath } from './resolve-binary.js'
@@ -123,17 +123,19 @@ export function createClaudeCodeEngine(): AgentEngine {
         hooks,
         canUseTool,
         stderr: (data: string) => {
+          // QUOTA_PATTERN covers the canonical surfaces (rate_limit,
+          // out of extra usage, usage limit, quota exceeded). The 429+rate
+          // combo is a CLI-only HTTP-level surface that the SDK never emits
+          // structurally, so it stays as a separate guard alongside.
           const lower = data.toLowerCase()
-          if (
-            lower.includes('rate limit exceeded') ||
-            lower.includes('rate_limit_exceeded') ||
-            (lower.includes('429') && lower.includes('rate')) ||
-            lower.includes('quota exceeded') ||
-            lower.includes('out of extra usage') ||
-            // "Claude AI usage limit reached" — Anthropic's 5h/4h cap message
-            lower.includes('usage limit')
-          ) {
-            onEvent({ kind: 'error', category: 'quota', message: data })
+          const isQuota = QUOTA_PATTERN.test(data) || (lower.includes('429') && lower.includes('rate'))
+          if (isQuota) {
+            // Share `mapperState.quotaErrorEmitted` with the SDK iterator so
+            // a single run that surfaces quota via BOTH stderr AND a
+            // structured SDK signal (assistant.error / rate_limit_event)
+            // does not double-fire `handleQuota` (which would double the
+            // retryCount and overwrite the persisted backoff row).
+            tryEmitQuota(mapperState, onEvent, data)
           } else if (lower.includes('no conversation found with session id')) {
             onEvent({ kind: 'error', category: 'resume_failed', message: data })
           } else if (data.trim().length > 0) {

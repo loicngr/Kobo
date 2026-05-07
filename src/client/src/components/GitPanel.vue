@@ -1013,6 +1013,10 @@ async function handleOpenPr() {
   border-radius: 3px;
   background-color: rgba(129, 140, 248, 0.14);
   color: #c7d2fe;
-  white-space: nowrap;
+  // Long branch names (e.g. `feature/<TK-id>--<long-slug>`) used to force a
+  // horizontal scrollbar inside the push/merge/rebase dialogs because of
+  // `white-space: nowrap`. `overflow-wrap: anywhere` keeps short names on
+  // a single line and only breaks when the container would otherwise overflow.
+  overflow-wrap: anywhere;
 }
 </style>

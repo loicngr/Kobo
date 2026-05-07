@@ -93,6 +93,12 @@ export interface RateLimitBucket {
 
 export interface RateLimitInfo {
   buckets: RateLimitBucket[]
+  /**
+   * Verbatim of `SDKRateLimitInfo.status` from the Claude SDK. `'rejected'`
+   * means the request was blocked because the user is out of quota — the
+   * orchestrator surfaces this as a quota error.
+   */
+  status?: 'allowed' | 'allowed_warning' | 'rejected'
 }
 
 export type AgentEvent =

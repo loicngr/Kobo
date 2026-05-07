@@ -33,6 +33,7 @@ import {
 } from './services/agent/orchestrator.js'
 import * as autoLoopService from './services/auto-loop-service.js'
 import { runContentMigrationIfNeeded } from './services/content-migration-service.js'
+import * as cronService from './services/cron-service.js'
 import { createDailyDbBackupIfNeeded } from './services/db-backup-service.js'
 import { startDevServer, stopDevServer } from './services/dev-server-service.js'
 import { startPrWatcher, stopPrWatcher } from './services/pr-watcher-service.js'
@@ -74,6 +75,7 @@ autoLoopService.rehydrate()
 // from retryCount=0 and undo the progression.
 restoreRetryCountsFromDb()
 quotaBackoffService.restoreOnBoot((workspaceId) => autoLoopService.onQuotaBackoffExpired(workspaceId))
+cronService.restoreOnBoot()
 startPrWatcher()
 startUsagePoller()
 

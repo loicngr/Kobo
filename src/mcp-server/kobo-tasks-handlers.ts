@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type Database from 'better-sqlite3'
 import { nanoid } from 'nanoid'
+import * as cronService from '../server/services/cron-service.js'
 import * as settingsService from '../server/services/settings-service.js'
 import { slugifyProjectName } from '../server/utils/project-slug.js'
 import { resolveWorkspaceWorktreePath } from '../server/utils/worktree-paths.js'
@@ -564,4 +565,23 @@ export function getSessionUsageHandler(db: Database.Database, workspaceId: strin
     workspaceTotals: totals,
     currentSession: { sessionId: currentSessionId, ...current },
   }
+}
+
+// ── Crons ────────────────────────────────────────────────────────────────────
+
+/**
+ * List every cron currently armed for a workspace.
+ *
+ * Note: cron_create and cron_delete are NOT exposed as handlers — they route
+ * through the backend HTTP API (`POST/DELETE /api/workspaces/:id/crons`)
+ * because their `setTimeout` must live in the backend process (which owns
+ * the orchestrator). Handlers here would arm timers in the MCP sub-process,
+ * which dies with the agent session, and fires would never reach a real
+ * session resume. The list handler is a pure read so it's safe to keep local.
+ */
+export function cronListHandler(
+  _db: Database.Database,
+  workspaceId: string,
+): { ok: true; crons: cronService.PendingCron[] } {
+  return { ok: true, crons: cronService.listForWorkspace(workspaceId) }
 }

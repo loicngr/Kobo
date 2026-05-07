@@ -12,6 +12,7 @@ import {
 } from '../../utils/paths.js'
 import { unregisterProcess } from '../../utils/process-tracker.js'
 import * as autoLoopService from '../auto-loop-service.js'
+import * as cronService from '../cron-service.js'
 import * as quotaBackoffService from '../quota-backoff-service.js'
 import { getEffectiveSettings } from '../settings-service.js'
 import { refreshNow } from '../usage/poller.js'
@@ -557,6 +558,54 @@ function handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent
       )
       wakeupService.schedule(workspaceId, delay, prompt, reason, agentSessionId)
     }
+  }
+
+  // Same legacy bridge for the SDK's native `CronCreate`. The native tool is
+  // session-only (the cron dies when the agent session exits and is not
+  // persisted to disk), which makes it useless for any real "schedule a
+  // recurring trigger" need. We intercept the tool:call and arm an equivalent
+  // kobo cron in parallel — persistent across restarts, owned by the backend.
+  if (ev.kind === 'tool:call' && ev.name === 'CronCreate') {
+    const input = ev.input as Record<string, unknown> | undefined
+    const prompt = typeof input?.prompt === 'string' ? input.prompt : ''
+    // The SDK's exact field name has drifted across versions — try the most
+    // likely candidates. If none match we log the input shape so the user
+    // can extend this list.
+    const expression =
+      (typeof input?.cron === 'string' && input.cron) ||
+      (typeof input?.schedule === 'string' && input.schedule) ||
+      (typeof input?.expression === 'string' && input.expression) ||
+      ''
+    if (prompt && expression) {
+      console.warn(
+        `[orchestrator] Native CronCreate intercepted for workspace '${workspaceId}' — armed equivalent kobo cron. Prefer kobo__cron_create.`,
+      )
+      try {
+        cronService.arm(workspaceId, {
+          expression,
+          prompt,
+          label: 'from-native-CronCreate',
+          agentSessionId,
+        })
+      } catch (err) {
+        console.error('[orchestrator] Failed to mirror native CronCreate as kobo cron:', err)
+      }
+    } else if (prompt || input) {
+      console.warn(
+        `[orchestrator] Native CronCreate intercepted but unrecognised input shape (workspace '${workspaceId}'):`,
+        Object.keys(input ?? {}),
+      )
+    }
+  }
+
+  // Native `CronDelete` and `CronList` are noisy but harmless to ignore.
+  // The native cron is session-only so deletion is moot once the session
+  // ends; the kobo equivalents (kobo__cron_delete / kobo__cron_list) are
+  // the persistent path. Log to track usage and avoid silent confusion.
+  if (ev.kind === 'tool:call' && (ev.name === 'CronDelete' || ev.name === 'CronList')) {
+    console.warn(
+      `[orchestrator] Native ${ev.name} called on workspace '${workspaceId}' — has no effect on kobo crons. Use kobo__${ev.name === 'CronDelete' ? 'cron_delete' : 'cron_list'} instead.`,
+    )
   }
 
   if (ev.kind === 'skills:discovered') {

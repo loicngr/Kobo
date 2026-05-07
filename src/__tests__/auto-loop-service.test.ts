@@ -82,6 +82,8 @@ describe('auto-loop-service', () => {
     // (spawnNextIteration). Here we only verify the state change + event.
     const svc = await import('../server/services/auto-loop-service.js')
     const ws = await import('../server/services/websocket-service.js')
+    const { createTask } = await import('../server/services/workspace-service.js')
+    createTask(wsId, { title: 't1', isAcceptanceCriterion: false, sortOrder: 0 })
     svc._test_setAutoLoopReady(wsId, true)
     svc.enable(wsId)
 
@@ -89,10 +91,15 @@ describe('auto-loop-service', () => {
     expect(ws.emitEphemeral).toHaveBeenCalledWith(wsId, 'autoloop:enabled', {})
   })
 
-  it('enable is no-op if no pending tasks', async () => {
+  it('enable throws when there are no pending tasks (without flipping auto_loop)', async () => {
+    // Without this guard, auto_loop would flip to 1 silently with no iteration
+    // spawning — the chat input lock would engage with no actual work running,
+    // confusing the user. Throw so the UI surfaces a clear toast and the DB
+    // stays consistent.
     const svc = await import('../server/services/auto-loop-service.js')
     svc._test_setAutoLoopReady(wsId, true)
-    svc.enable(wsId)
+    expect(() => svc.enable(wsId)).toThrowError(/no pending tasks/i)
+    expect(svc.getStatus(wsId).auto_loop).toBe(false)
     const { startAgent } = await import('../server/services/agent/orchestrator.js')
     expect(startAgent).not.toHaveBeenCalled()
   })

@@ -238,6 +238,13 @@ async function loadOlder(): Promise<void> {
   const startedAt = Date.now()
   try {
     const area = scrollRef.value
+    // Wait for Vue to render the "loading older messages…" DOM block so its
+    // height is included in `prevSize`. Without this, an empty fetch (new
+    // session, no history) would still produce a positive delta from the
+    // loader itself and the position-preserve branch below would push the
+    // user past the FETCH_MORE_THRESHOLD even though no content was actually
+    // prepended — making the top of the feed unreachable.
+    await nextTick()
     const prevSize = area?.getScroll().verticalSize ?? 0
     const prevPos = area?.getScroll().verticalPosition ?? 0
 

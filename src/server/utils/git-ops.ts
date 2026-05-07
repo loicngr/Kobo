@@ -639,7 +639,14 @@ export function getUnpushedChangedFiles(repoPath: string, branchName: string, re
 export function getFileAtRef(repoPath: string, ref: string, filePath: string): string | null {
   const resolvedRef = resolveBase(repoPath, ref)
   try {
-    return git(repoPath, ['show', `${resolvedRef}:${filePath}`])
+    // Bypass the `git()` helper here: it `.trimEnd()`s the output, which would
+    // strip trailing newlines from the original file content and produce a
+    // false diff against `getFileContent`'s untrimmed `readFileSync` output
+    // (last line marked added/removed even when identical).
+    return execFileSync('git', ['show', `${resolvedRef}:${filePath}`], {
+      cwd: repoPath,
+      encoding: 'utf-8',
+    })
   } catch {
     return null
   }

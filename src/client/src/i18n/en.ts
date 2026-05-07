@@ -626,11 +626,13 @@ export default {
   'contextMenu.runSetup': 'Run setup script',
   'contextMenu.openNotion': 'Open in Notion',
   'contextMenu.openSentry': 'Open in Sentry',
+  'contextMenu.openPr': 'Open PR',
 
   // Workspace
   'workspace.favorite': 'Mark as favorite',
   'workspace.unfavorite': 'Remove from favorites',
   'workspace.showFavoritesOnly': 'Show favorites only',
+  'workspace.searchArchivedToggle': 'Also search archived workspaces',
   'workspace.descriptionPlaceholder': 'Add a short description',
   'workspace.descriptionDialogHint': 'Plain text, 200 characters max. Leave empty to clear.',
   'workspace.descriptionTooLong': 'Description must be 200 characters or fewer.',
@@ -680,6 +682,18 @@ export default {
   'health.integrationsTitle': 'Integrations',
   'health.integrationConfigured': 'configured',
   'health.integrationMissing': 'not configured',
+  'health.activeTitle': 'Active state',
+  'health.activeQuotaBackoffs': 'Pending quota backoffs',
+  'health.activeWakeups': 'Scheduled wakeups',
+  'health.activeAutoLoop': 'Auto-loop running',
+  'health.activeAgentSessions': 'Live agent sessions',
+  'health.activeDevServers': 'Running dev servers',
+  'health.noneActive': 'None.',
+  'health.quotaResumeAt': 'resumes at {time}',
+  'health.wakeupAt': 'wakes at {time}',
+  'health.startedAgo': 'started {time} ago',
+  'health.autoLoopReady': 'ready, iterating',
+  'health.autoLoopGrooming': 'grooming in progress',
 
   // Agent event stream — session, tool, activity
   'session.started': 'Session started',
@@ -717,6 +731,16 @@ export default {
   'wakeup.reason': 'Reason: {reason}',
   'wakeup.cancel': 'Cancel this wakeup',
   'wakeup.pendingIndicator': 'Wakeup scheduled',
+  'cron.pendingIndicator': '{n} cron(s) scheduled',
+
+  // Schedule panel
+  'schedule.tabLabel': 'Schedule',
+  'schedule.wakeupTitle': 'Wakeup pending',
+  'schedule.cronsTitle': 'Recurring schedules',
+  'schedule.noWakeup': 'No wakeup scheduled',
+  'schedule.noCrons': 'No cron scheduled',
+  'schedule.nextFireAt': 'next at {time}',
+  'schedule.lastFiredAt': 'last fired {time} ago',
 
   // AskUserQuestion deferred tool-use panel
   'askUserQuestion.title': 'The agent is asking a question',
@@ -746,6 +770,8 @@ export default {
   'autoLoop.toggle': 'Auto-loop',
   'autoLoop.start': 'Start auto-loop',
   'autoLoop.prepare': 'Prepare for auto-loop',
+  'autoLoop.reprepare': 'Re-prepare for auto-loop',
+  'autoLoop.reprepareTooltip': 'Re-run the grooming pass to add or refresh tasks before resuming the loop',
   'autoLoop.prepareBusy': 'Wait for the agent to finish before preparing',
   'autoLoop.forceReady': "I know what I'm doing — skip grooming",
   'autoLoop.forceReadyConfirm':

@@ -84,6 +84,22 @@ export function initSchema(db: Database.Database): void {
       created_at   TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS pending_crons (
+      id                TEXT PRIMARY KEY,
+      workspace_id      TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      expression        TEXT NOT NULL,
+      prompt            TEXT NOT NULL,
+      label             TEXT,
+      agent_session_id  TEXT,
+      next_fire_at      TEXT NOT NULL,
+      last_fired_at     TEXT,
+      one_shot          INTEGER NOT NULL DEFAULT 0,
+      created_at        TEXT NOT NULL
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_pending_crons_workspace ON pending_crons(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_pending_crons_next_fire ON pending_crons(next_fire_at);
+
     CREATE TABLE IF NOT EXISTS usage_snapshots (
       provider_id   TEXT PRIMARY KEY,
       status        TEXT NOT NULL,

@@ -35,7 +35,9 @@ Think of it as an apprentice's hall: you hand out missions, each apprentice sets
 - **Attach existing worktrees** — Kōbō detects orphan git worktrees for the selected project (created outside Kōbō, or left over from an earlier install) and lets you attach them to a new workspace from the creation form, picking up the existing branch and folder instead of cloning a new one
 - **Persistent quota backoff** — when a Claude rate limit is hit mid-session, Kōbō schedules the retry at the actual reset time reported by the API (via `rate_limit.info.buckets[].resetsAt`), falling back to the OAuth usage poller, then to a 15 → 30 → 60 → 180 → 300 min ladder when both are missing. The pending backoff is **persisted in SQLite** and re-armed on server restart, so nothing is lost if the host reboots mid-window. A live banner counts down to the reset and lets the user cancel the wait. Only auto-loop workspaces resume automatically — others stay in `quota` status awaiting a manual nudge
 - **Workspace description fields** — every workspace has TWO independent description fields. The user-side `description` is editable via the header input or right-click **Modifier la description**, and stays under the user's control (the agent cannot overwrite it). The agent maintains its own `agent_description` via the `set_workspace_agent_description` MCP tool to broadcast a live status (e.g. "Investigating SERVICE-1600 → enriching local Notion file"). Both are visible: the sidebar shows `agent_description` when set, falling back to the user `description`; the workspace header shows the user input plus an italic read-only line for the agent's current focus
-- **Scheduled wakeups** — the `ScheduleWakeup` tool is honoured server-side: Kōbō persists the wakeup in SQLite, rehydrates on restart, and respawns the agent with `--resume` at the target time
+- **Scheduled wakeups** — the `ScheduleWakeup` tool is honoured server-side: Kōbō persists the wakeup in SQLite, rehydrates on restart, and respawns the agent with `--resume` at the target time. Delay is clamped to `[60s, 6h]`. The kobo-tasks MCP server also exposes `kobo__schedule_wakeup` / `kobo__cancel_wakeup` for the same flow with first-class tool descriptors
+- **Recurring & one-shot crons** — agents schedule recurring triggers via `kobo__cron_create(expression, prompt, label?, mode?, oneShot?)`. Standard 5-field cron expressions (`*/30 * * * *`) plus helpers (`@hourly`, `@daily`, `@weekly`, `@monthly`, `@yearly`). Two modes: `'resume'` (default) pins the cron to the session that scheduled it so each fire continues that conversation; `'fresh'` spawns a brand-new session per fire (clean context, ideal for periodic CI / dashboard checks). `oneShot: true` cancels the cron after the first real fire — useful for "trigger once at a specific date/time" without recurring. Crons are persisted in SQLite, re-armed on restart with skip-missed semantics (no catchup spam after downtime), and skip-if-active when a session is already running. Multiple crons per workspace. The native Claude Code `CronCreate` tool is also intercepted and mirrored as a kobo cron so even agents using the SDK-default tool benefit from persistence
+- **Schedule panel in the right drawer** — dedicated tab listing every wakeup and cron currently armed for the focused workspace, with their next/last fire times, prompt preview, and a `×` button to cancel inline. Sidebar workspace cards display an `event_repeat` icon when one or more crons are scheduled, even for workspaces not currently focused — broadcast live via WebSocket events
 
 ## Tech stack
 
@@ -231,6 +233,8 @@ src/
 │   │   ├── content-migration-service.ts    # legacy ws_events → normalised AgentEvent rows, with DB backup
 │   │   ├── usage/                          # pluggable quota provider, 60s poller, persistence, WS broadcast
 │   │   ├── quota-backoff-service.ts        # persisted Claude rate-limit backoff timers (re-armed on restart)
+│   │   ├── cron-service.ts                 # persisted cron schedules (recurring + one-shot, resume/fresh modes)
+│   │   ├── wakeup-service.ts               # persisted one-shot session resumes (clamped to [60s, 6h])
 │   │   └── …                               # workspace, dev-server, ws, notion, sentry, settings, pr-template
 │   ├── routes/                             # Hono handlers (workspaces, engines, migration, templates, usage, …)
 │   └── utils/                              # git-ops, process-tracker, paths
@@ -261,6 +265,7 @@ See [`AGENTS.md`](./AGENTS.md) for a deeper dive into conventions, data model, W
 | `usage_snapshots` | latest quota snapshot per provider (one row per `provider_id`) — populated by the 60s polling loop, used for cold-start hydration of the chat-footer quota badge |
 | `pending_wakeups` | one row per scheduled wakeup, target time and resume context, re-armed on server restart |
 | `pending_quota_backoffs` | one row per workspace currently waiting on a Claude rate-limit reset, target time + reset metadata + retry count, re-armed on server restart |
+| `pending_crons` | one row per scheduled cron — expression, prompt, label, optional pinned `agent_session_id` (= resume mode) or NULL (= fresh mode), `next_fire_at`, `last_fired_at`, `one_shot` flag, re-armed on server restart with skip-missed semantics |
 
 ## MCP server
 
@@ -273,9 +278,9 @@ Each workspace spawns its own `kobo-tasks` MCP server as a child process of the 
 - **Dev server** — `get_dev_server_status`, `start_dev_server`, `stop_dev_server`, `get_dev_server_logs`
 - **External sources** — `get_notion_ticket`, `get_settings`
 - **Documents & search** — `list_documents`, `read_document`, `log_thought`, `search_codebase`, `list_workspace_images`
-- **Scheduling & telemetry** — `schedule_wakeup`, `cancel_wakeup`, `get_session_usage`
+- **Scheduling & telemetry** — `schedule_wakeup`, `cancel_wakeup`, `cron_create`, `cron_delete`, `cron_list`, `get_session_usage`
 
-State-mutating tools that change UI-visible data (tasks, agent description, auto-loop readiness) write directly to SQLite for low latency, then fire-and-forget a `notify-*` HTTP call to the backend so the WebSocket layer broadcasts the change to every connected client.
+State-mutating tools that change UI-visible data (tasks, agent description, auto-loop readiness) write directly to SQLite for low latency, then fire-and-forget a `notify-*` HTTP call to the backend so the WebSocket layer broadcasts the change to every connected client. Tools that arm in-memory timers (`cron_create`, `cron_delete`) route through the backend HTTP API instead — the timer Map lives in the backend process which owns the orchestrator, so the cron survives the MCP server's session-bound lifetime.
 
 The MCP server reads and writes the same SQLite database as the main backend. Isolation between workspaces is enforced via the `KOBO_WORKSPACE_ID` environment variable passed at spawn time and validated on every query.
 

@@ -1068,12 +1068,19 @@ onUnmounted(() => {
     min-height: 22px;
     align-items: center;
   }
-  :deep(.q-tree__node--selected) > .q-tree__node-header {
-    background-color: #2a2a4a;
-    outline: 1px solid rgba(108, 99, 255, 0.4);
-    border-left: 2px solid #6c63ff;
+  // Quasar applies `q-tree__node--selected` directly ON the `q-tree__node-header`
+  // element (NOT on a parent wrapper) — see node_modules/quasar/src/components/
+  // tree/QTree.js:593. So the selector is the two classes combined on the same
+  // element, not a descendant relationship.
+  // `!important` keeps the selected style winning against Quasar's `q-hoverable`
+  // pseudo-class hover background.
+  :deep(.q-tree__node-header.q-tree__node--selected) {
+    background-color: rgba(108, 99, 255, 0.18) !important;
+    border-left: 2px solid #6c63ff !important;
   }
-  :deep(.q-tree__node-header:hover) {
+  // Hover style applied only on non-selected rows so the selected background
+  // stays clean while the cursor browses other files.
+  :deep(.q-tree__node-header:not(.q-tree__node--selected):hover) {
     background-color: rgba(255, 255, 255, 0.03);
   }
 }

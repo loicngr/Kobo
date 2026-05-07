@@ -35,8 +35,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 21', () => {
-    expect(SCHEMA_VERSION).toBe(21)
+  it('exporte SCHEMA_VERSION = 23', () => {
+    expect(SCHEMA_VERSION).toBe(23)
   })
 
   it('migration v17 unifies legacy permission_mode + permission_profile into agent_permission_mode', () => {
@@ -1041,10 +1041,6 @@ describe('migration v19 — add-pending-quota-backoffs', () => {
     db.close()
   })
 
-  it('SCHEMA_VERSION is 21', () => {
-    expect(SCHEMA_VERSION).toBe(21)
-  })
-
   it('cascade-deletes the row when the workspace is deleted', () => {
     const db = new Database(':memory:')
     initSchema(db)
@@ -1270,6 +1266,228 @@ describe('migration v21 — add-workspace-agent-description', () => {
     const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
     const agentDescCount = cols.filter((c) => c.name === 'agent_description').length
     expect(agentDescCount).toBe(1)
+    db.close()
+  })
+})
+
+describe('migration v22 — add-pending-crons', () => {
+  it('seeds a fresh DB with the pending_crons table', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    const cols = db.prepare('PRAGMA table_info(pending_crons)').all() as Array<{
+      name: string
+      type: string
+      notnull: number
+    }>
+    expect(cols.length).toBeGreaterThan(0)
+    const colByName = Object.fromEntries(cols.map((c) => [c.name, c]))
+    expect(colByName.id?.type.toUpperCase()).toBe('TEXT')
+    expect(colByName.workspace_id?.type.toUpperCase()).toBe('TEXT')
+    expect(colByName.workspace_id?.notnull).toBe(1)
+    expect(colByName.expression?.type.toUpperCase()).toBe('TEXT')
+    expect(colByName.expression?.notnull).toBe(1)
+    expect(colByName.prompt?.type.toUpperCase()).toBe('TEXT')
+    expect(colByName.prompt?.notnull).toBe(1)
+    expect(colByName.label?.type.toUpperCase()).toBe('TEXT')
+    expect(colByName.agent_session_id?.type.toUpperCase()).toBe('TEXT')
+    expect(colByName.next_fire_at?.type.toUpperCase()).toBe('TEXT')
+    expect(colByName.next_fire_at?.notnull).toBe(1)
+    expect(colByName.last_fired_at?.type.toUpperCase()).toBe('TEXT')
+    expect(colByName.created_at?.type.toUpperCase()).toBe('TEXT')
+    expect(colByName.created_at?.notnull).toBe(1)
+    db.close()
+  })
+
+  it('upgrades a v21 DB without losing existing rows', () => {
+    const db = new Database(':memory:')
+    // Build a v21-shaped DB (workspaces with description + agent_description)
+    // and mark every migration up to v21 as already applied so runMigrations
+    // only applies v22.
+    db.exec(`
+      CREATE TABLE workspaces (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        project_path TEXT NOT NULL,
+        source_branch TEXT NOT NULL,
+        working_branch TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'created',
+        notion_url TEXT,
+        notion_page_id TEXT,
+        sentry_url TEXT,
+        worktree_path TEXT,
+        worktree_owned INTEGER NOT NULL DEFAULT 1,
+        model TEXT NOT NULL,
+        reasoning_effort TEXT NOT NULL DEFAULT 'auto',
+        permission_mode TEXT NOT NULL DEFAULT 'auto-accept',
+        dev_server_status TEXT NOT NULL DEFAULT 'stopped',
+        has_unread INTEGER NOT NULL DEFAULT 0,
+        archived_at TEXT,
+        favorited_at TEXT,
+        tags TEXT NOT NULL DEFAULT '[]',
+        engine TEXT NOT NULL DEFAULT 'claude-code',
+        auto_loop INTEGER NOT NULL DEFAULT 0,
+        auto_loop_ready INTEGER NOT NULL DEFAULT 0,
+        no_progress_streak INTEGER NOT NULL DEFAULT 0,
+        permission_profile TEXT NOT NULL DEFAULT 'bypass',
+        agent_permission_mode TEXT NOT NULL DEFAULT 'bypass',
+        description TEXT,
+        agent_description TEXT,
+        created_at TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      );
+      CREATE TABLE pending_wakeups (
+        workspace_id     TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+        target_at        TEXT NOT NULL,
+        prompt           TEXT NOT NULL,
+        reason           TEXT,
+        created_at       TEXT NOT NULL,
+        agent_session_id TEXT
+      );
+      CREATE TABLE pending_quota_backoffs (
+        workspace_id TEXT PRIMARY KEY,
+        target_at    TEXT NOT NULL,
+        resets_at    TEXT,
+        source       TEXT NOT NULL CHECK (source IN ('rate_limit_info', 'usage_api', 'fallback_ladder')),
+        retry_count  INTEGER NOT NULL DEFAULT 0,
+        created_at   TEXT NOT NULL,
+        FOREIGN KEY (workspace_id) REFERENCES workspaces(id) ON DELETE CASCADE
+      );
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+    `)
+    const now = '2026-05-07T00:00:00Z'
+    db.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(1, 'init-schema', now)
+    for (const m of migrations) {
+      if (m.version <= 21) {
+        db.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(m.version, m.name, now)
+      }
+    }
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, status, model, reasoning_effort, permission_mode, dev_server_status, has_unread, worktree_owned, tags, engine, auto_loop, auto_loop_ready, no_progress_streak, permission_profile, agent_permission_mode, description, agent_description, created_at, updated_at)
+       VALUES ('w1', 'Test', '/tmp/p', 'main', 'feature/x', 'created', 'claude-opus-4-7', 'auto', 'auto-accept', 'stopped', 0, 1, '[]', 'claude-code', 0, 0, 0, 'bypass', 'bypass', 'pre-existing description', 'pre-existing agent description', ?, ?)`,
+    ).run(now, now)
+
+    runMigrations(db)
+
+    const cols = db.prepare('PRAGMA table_info(pending_crons)').all() as Array<{ name: string }>
+    expect(cols.some((c) => c.name === 'id')).toBe(true)
+    const wsRow = db.prepare('SELECT id, description, agent_description FROM workspaces WHERE id=?').get('w1') as {
+      id: string
+      description: string | null
+      agent_description: string | null
+    }
+    expect(wsRow.id).toBe('w1')
+    expect(wsRow.description).toBe('pre-existing description')
+    expect(wsRow.agent_description).toBe('pre-existing agent description')
+    db.close()
+  })
+
+  it('cascade deletes pending_crons on workspace delete', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    // Foreign keys must be enabled for ON DELETE CASCADE to fire.
+    db.pragma('foreign_keys = ON')
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, status, model, reasoning_effort, permission_mode, agent_permission_mode, dev_server_status, has_unread, worktree_owned, tags, engine, auto_loop, auto_loop_ready, no_progress_streak, permission_profile, created_at, updated_at)
+       VALUES ('w1', 'T', '/p', 'main', 'feature/c', 'created', 'claude-opus-4-7', 'auto', 'auto-accept', 'bypass', 'stopped', 0, 1, '[]', 'claude-code', 0, 0, 0, 'bypass', '2026-05-07T00:00:00Z', '2026-05-07T00:00:00Z')`,
+    ).run()
+    db.prepare(
+      `INSERT INTO pending_crons (id, workspace_id, expression, prompt, next_fire_at, created_at)
+       VALUES ('c1', 'w1', '*/5 * * * *', 'do something', '2026-05-07T01:00:00Z', '2026-05-07T00:00:00Z')`,
+    ).run()
+    expect(db.prepare('SELECT COUNT(*) AS c FROM pending_crons WHERE workspace_id=?').get('w1')).toEqual({ c: 1 })
+
+    db.prepare('DELETE FROM workspaces WHERE id = ?').run('w1')
+    expect(db.prepare('SELECT COUNT(*) AS c FROM pending_crons WHERE workspace_id=?').get('w1')).toEqual({ c: 0 })
+    db.close()
+  })
+
+  it('is idempotent — re-running migrations does not fail or duplicate the table', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    expect(() => runMigrations(db)).not.toThrow()
+    const dupes = db
+      .prepare(
+        `SELECT name, COUNT(*) AS c FROM sqlite_master WHERE type='table' AND name='pending_crons' GROUP BY name`,
+      )
+      .get() as { name: string; c: number } | undefined
+    expect(dupes?.c ?? 0).toBe(1)
+    db.close()
+  })
+})
+
+describe('migration v23 — add-pending-crons-one-shot', () => {
+  it('adds the one_shot column with NOT NULL DEFAULT 0 on a fresh install', () => {
+    const db = new Database(':memory:')
+    db.pragma('foreign_keys = ON')
+    initSchema(db)
+    runMigrations(db)
+    const cols = db.prepare('PRAGMA table_info(pending_crons)').all() as Array<{
+      name: string
+      type: string
+      notnull: number
+      dflt_value: string | null
+    }>
+    const oneShot = cols.find((c) => c.name === 'one_shot')
+    expect(oneShot).toBeDefined()
+    expect(oneShot?.type.toUpperCase()).toBe('INTEGER')
+    expect(oneShot?.notnull).toBe(1)
+    expect(oneShot?.dflt_value).toBe('0')
+    db.close()
+  })
+
+  it('upgrades a v22 DB by adding one_shot=0 to existing rows', () => {
+    const db = new Database(':memory:')
+    db.pragma('foreign_keys = ON')
+    // Bring the DB up to v22 only — no one_shot column yet.
+    db.prepare(
+      `CREATE TABLE pending_crons (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        expression TEXT NOT NULL,
+        prompt TEXT NOT NULL,
+        label TEXT,
+        agent_session_id TEXT,
+        next_fire_at TEXT NOT NULL,
+        last_fired_at TEXT,
+        created_at TEXT NOT NULL
+      )`,
+    ).run()
+    db.prepare(
+      'CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL)',
+    ).run()
+    for (let v = 1; v <= 22; v++) {
+      db.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(
+        v,
+        `seed-v${v}`,
+        new Date().toISOString(),
+      )
+    }
+    db.prepare(
+      `INSERT INTO pending_crons (id, workspace_id, expression, prompt, next_fire_at, created_at)
+       VALUES ('c1', 'w1', '@hourly', 'tick', '2027-01-01T00:00:00Z', '2026-05-07T00:00:00Z')`,
+    ).run()
+
+    runMigrations(db)
+
+    const row = db.prepare('SELECT id, one_shot FROM pending_crons WHERE id=?').get('c1') as {
+      id: string
+      one_shot: number
+    }
+    expect(row.id).toBe('c1')
+    expect(row.one_shot).toBe(0)
+    db.close()
+  })
+
+  it('is idempotent — re-running runMigrations does not fail or add the column twice', () => {
+    const db = new Database(':memory:')
+    initSchema(db)
+    runMigrations(db)
+    expect(() => runMigrations(db)).not.toThrow()
+    const dupes = db
+      .prepare('PRAGMA table_info(pending_crons)')
+      .all()
+      .filter((c: { name: string }) => c.name === 'one_shot')
+    expect(dupes).toHaveLength(1)
     db.close()
   })
 })

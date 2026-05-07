@@ -777,4 +777,106 @@ describe('workspace store', () => {
       expect(store.pendingQuotaBackoffs.w1).toBeUndefined()
     })
   })
+
+  describe('cron WS handlers', () => {
+    it('cron:created adds the cron to the workspace list', () => {
+      const store = useWorkspaceStore()
+      const ws = useWebSocketStore()
+      store.crons.w1 = []
+      ws._routeMessage({
+        type: 'cron:created',
+        workspaceId: 'w1',
+        payload: {
+          cron: {
+            id: 'c1',
+            workspaceId: 'w1',
+            expression: '@hourly',
+            prompt: 'p',
+            label: null,
+            agentSessionId: null,
+            nextFireAt: '2026-05-07T11:00:00Z',
+            lastFiredAt: null,
+            oneShot: false,
+            createdAt: '2026-05-07T10:00:00Z',
+          },
+        },
+      })
+      expect(store.crons.w1).toHaveLength(1)
+      expect(store.crons.w1?.[0]?.id).toBe('c1')
+    })
+
+    it('cron:fired updates nextFireAt + lastFiredAt of the matching cron', () => {
+      const store = useWorkspaceStore()
+      const ws = useWebSocketStore()
+      store.crons.w1 = [
+        {
+          id: 'c1',
+          workspaceId: 'w1',
+          expression: '@hourly',
+          prompt: 'p',
+          label: null,
+          agentSessionId: null,
+          nextFireAt: '2026-05-07T11:00:00Z',
+          lastFiredAt: null,
+          oneShot: false,
+          createdAt: '2026-05-07T10:00:00Z',
+        },
+      ]
+      ws._routeMessage({
+        type: 'cron:fired',
+        workspaceId: 'w1',
+        payload: { id: 'c1', nextFireAt: '2026-05-07T12:00:00Z', status: 'fired' },
+      })
+      expect(store.crons.w1?.[0]?.nextFireAt).toBe('2026-05-07T12:00:00Z')
+      expect(store.crons.w1?.[0]?.lastFiredAt).not.toBeNull()
+    })
+
+    it('cron:cancelled removes the cron', () => {
+      const store = useWorkspaceStore()
+      const ws = useWebSocketStore()
+      store.crons.w1 = [
+        {
+          id: 'c1',
+          workspaceId: 'w1',
+          expression: '@hourly',
+          prompt: 'p',
+          label: null,
+          agentSessionId: null,
+          nextFireAt: '2026-05-07T11:00:00Z',
+          lastFiredAt: null,
+          oneShot: false,
+          createdAt: '2026-05-07T10:00:00Z',
+        },
+      ]
+      ws._routeMessage({ type: 'cron:cancelled', workspaceId: 'w1', payload: { id: 'c1', reason: 'user' } })
+      expect(store.crons.w1).toHaveLength(0)
+    })
+
+    it('cron:updated replaces the workspace list', () => {
+      const store = useWorkspaceStore()
+      const ws = useWebSocketStore()
+      store.crons.w1 = []
+      ws._routeMessage({
+        type: 'cron:updated',
+        workspaceId: 'w1',
+        payload: {
+          crons: [
+            {
+              id: 'c1',
+              workspaceId: 'w1',
+              expression: '@hourly',
+              prompt: 'p',
+              label: null,
+              agentSessionId: null,
+              nextFireAt: '2026-05-07T11:00:00Z',
+              lastFiredAt: null,
+              oneShot: false,
+              createdAt: '2026-05-07T10:00:00Z',
+            },
+          ],
+        },
+      })
+      expect(store.crons.w1).toHaveLength(1)
+    })
+  })
 })

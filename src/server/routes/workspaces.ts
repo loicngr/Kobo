@@ -16,6 +16,7 @@ import { migrationGuard } from '../middleware/migration-guard.js'
 import { listEngines } from '../services/agent/engines/registry.js'
 import * as agentManager from '../services/agent/orchestrator.js'
 import * as autoLoopService from '../services/auto-loop-service.js'
+import * as cronService from '../services/cron-service.js'
 import * as devServerService from '../services/dev-server-service.js'
 import {
   DEFAULT_NOTION_INITIAL_PROMPT,
@@ -677,6 +678,9 @@ app.post('/', migrationGuard, async (c) => {
         brainstormPrompt += `- get_notion_ticket() — retrieve the Notion ticket info (URL, ticket ID, extracted content)\n`
       }
       brainstormPrompt += `- kobo__set_workspace_agent_description(description) — keep the workspace's agent_description up to date as a short one-line summary of what you're currently doing or have just accomplished. The user sees this in the sidebar without opening the workspace. Update it whenever your focus shifts (e.g. "Investigating SERVICE-1600 → enriching local Notion file", then "Writing failing test for FacturX validator"). Plain text, max 200 chars. The current value is in kobo__get_workspace_info.\nThere is also a separate user-controlled \`description\` field on the workspace — DO NOT touch it. Only set_workspace_agent_description is yours to write; the user owns the other one.\n`
+      brainstormPrompt += `- kobo__cron_create(expression, prompt, label?, mode?, oneShot?) — schedule a (recurring or one-shot) trigger on THIS workspace. At each fire Kōbō waits for the workspace to be idle and then injects \`prompt\` as the next user message. \`expression\` is a standard 5-field cron (\`min hour dom month dow\`) or a helper (\`@hourly\`, \`@daily\`, \`@weekly\`, \`@monthly\`, \`@yearly\`). Examples: \`*/30 * * * *\` = every 30 min; \`0 9 * * 1\` = every Monday at 9am; \`0 14 7 6 *\` = 7 June at 14:00. \`mode\` is \`'resume'\` (default — every fire continues the SAME conversation that scheduled the cron, so you can chain follow-ups) or \`'fresh'\` (every fire starts a brand-new session with a clean context, ideal for periodic checks like CI watch). \`oneShot\` (default false): when true, the cron cancels itself after the first real fire — use this to trigger once at a specific time without recurring. Skip-if-active: occurrences fired while a session is running are skipped, the next is computed, and the cron continues. Persists across restarts. Returns a cron \`id\`.\n`
+      brainstormPrompt += `- kobo__cron_delete(id) — cancel a previously-armed cron by id (idempotent).\n`
+      brainstormPrompt += `- kobo__cron_list() — list every cron currently armed on THIS workspace, with their next/last fire times.\n`
 
       if (effectiveSettings.gitConventions) {
         brainstormPrompt += `\n# Git conventions\nIMPORTANT: Before any git operation (commit, branch, rebase, merge, push), read and apply the conventions defined in \`.ai/.git-conventions.md\`. They are project-specific and override any default behavior. Re-read this file if you're unsure or if context was compacted.\n`
@@ -831,7 +835,8 @@ app.get('/auto-loop-states', (c) => {
       .prepare(
         `SELECT w.id, w.auto_loop, w.auto_loop_ready, w.no_progress_streak,
                 COUNT(t.id) AS tasks_total,
-                SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END) AS tasks_done
+                SUM(CASE WHEN t.status = 'done' THEN 1 ELSE 0 END) AS tasks_done,
+                (SELECT COUNT(*) FROM pending_crons p WHERE p.workspace_id = w.id) AS crons_count
          FROM workspaces w
          LEFT JOIN tasks t ON t.workspace_id = w.id
          WHERE w.archived_at IS NULL
@@ -844,6 +849,7 @@ app.get('/auto-loop-states', (c) => {
       no_progress_streak: number
       tasks_total: number | null
       tasks_done: number | null
+      crons_count: number | null
     }>
     const out: Record<
       string,
@@ -853,6 +859,7 @@ app.get('/auto-loop-states', (c) => {
         no_progress_streak: number
         tasks_done: number
         tasks_total: number
+        crons_count: number
       }
     > = {}
     for (const r of rows) {
@@ -862,6 +869,7 @@ app.get('/auto-loop-states', (c) => {
         no_progress_streak: r.no_progress_streak,
         tasks_done: r.tasks_done ?? 0,
         tasks_total: r.tasks_total ?? 0,
+        crons_count: r.crons_count ?? 0,
       }
     }
     return c.json(out)
@@ -916,6 +924,81 @@ app.post('/:id/auto-loop-ready', (c) => {
     wsService.emitEphemeral(id, 'autoloop:ready-flipped', {})
     autoLoopService.onAutoLoopReadySet(id)
     return c.json({ ok: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// GET /api/workspaces/:id/crons — list pending crons for a workspace.
+app.get('/:id/crons', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    return c.json({ crons: cronService.listForWorkspace(id) })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// POST /api/workspaces/:id/crons — arm a new cron. Validates the expression
+// in the service layer; invalid expressions surface as a 400.
+app.post('/:id/crons', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>
+    const expression = typeof body.expression === 'string' ? body.expression : ''
+    const prompt = typeof body.prompt === 'string' ? body.prompt : ''
+    const label = typeof body.label === 'string' ? body.label : undefined
+    const rawMode = typeof body.mode === 'string' ? body.mode : 'resume'
+    if (rawMode !== 'resume' && rawMode !== 'fresh') {
+      return c.json({ error: "mode must be 'resume' or 'fresh'" }, 400)
+    }
+    const mode = rawMode as 'resume' | 'fresh'
+    const oneShot = body.oneShot === true
+    if (!expression || !prompt) {
+      return c.json({ error: 'expression and prompt are required' }, 400)
+    }
+    try {
+      // Mode controls how each fire is handled:
+      //   - 'resume' (default): pin the cron to the session that scheduled it,
+      //     so each fire resumes THAT conversation. Same pattern as wakeup.
+      //   - 'fresh': don't pin a session — every fire spawns a new session
+      //     with a clean context. Useful for periodic checks (e.g. CI watch)
+      //     that don't need conversation continuity.
+      // oneShot=true cancels the cron after the first real fire (skip-active
+      // ticks don't consume the one-shot — the cron retries at the next
+      // occurrence until it actually fires once).
+      // The DB encodes mode via `agent_session_id`: non-NULL = resume that
+      // session; NULL = fresh. When mode='resume' but no session is active
+      // at create time, fall back to NULL — fire will spawn fresh.
+      const agentSessionId = mode === 'resume' ? (agentManager.getActiveSessionId(id) ?? undefined) : undefined
+      const cron = cronService.arm(id, { expression, prompt, label, agentSessionId, oneShot })
+      return c.json({ cron }, 201)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return c.json({ error: message }, 400)
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// DELETE /api/workspaces/:id/crons/:cronId — cancel a single cron. Idempotent:
+// returns 204 even when the cron does not exist (matches pending-wakeup style).
+app.delete('/:id/crons/:cronId', (c) => {
+  try {
+    const id = c.req.param('id')
+    const cronId = c.req.param('cronId')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    cronService.cancel(cronId, 'user')
+    return new Response(null, { status: 204 })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
@@ -1255,6 +1338,21 @@ app.post('/:id/agent-description/notify-updated', (c) => {
     wsService.emitEphemeral(id, 'workspace:agent-description-updated', {
       agentDescription: workspace.agentDescription,
     })
+    return new Response(null, { status: 204 })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// POST /api/workspaces/:id/crons/notify-updated — broadcast cron list changed
+// after the MCP cron_create / cron_delete handlers wrote directly to DB.
+app.post('/:id/crons/notify-updated', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    wsService.emitEphemeral(id, 'cron:updated', { crons: cronService.listForWorkspace(id) })
     return new Response(null, { status: 204 })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

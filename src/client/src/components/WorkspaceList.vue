@@ -84,9 +84,21 @@
         flat
         dense
         round
+        size="sm"
         @click="favoritesOnly = !favoritesOnly"
       >
         <q-tooltip>{{ $t('workspace.showFavoritesOnly') }}</q-tooltip>
+      </q-btn>
+      <q-btn
+        icon="inventory_2"
+        :color="searchArchived ? 'indigo-4' : 'grey-7'"
+        flat
+        dense
+        round
+        size="sm"
+        @click="searchArchived = !searchArchived"
+      >
+        <q-tooltip>{{ $t('workspace.searchArchivedToggle') }}</q-tooltip>
       </q-btn>
     </div>
 
@@ -349,13 +361,13 @@
       </div>
 
       <!-- Archived -->
-      <div v-if="store.archived.length > 0 || archivedExpanded" class="wl-group q-mt-xs">
+      <div v-if="filteredArchived.length > 0 || archivedExpanded" class="wl-group q-mt-xs">
         <div
           class="wl-group-header row items-center q-px-md q-py-xs cursor-pointer non-selectable"
           @click="toggleArchived"
         >
           <q-icon
-            :name="archivedExpanded ? 'expand_more' : 'chevron_right'"
+            :name="archivedExpanded || archivedAutoExpanded ? 'expand_more' : 'chevron_right'"
             size="xs"
             color="grey-7"
           />
@@ -364,8 +376,8 @@
             {{ $t('workspaceList.archived') }}
           </span>
           <q-badge
-            v-if="store.archived.length > 0"
-            :label="store.archived.length"
+            v-if="filteredArchived.length > 0"
+            :label="filteredArchived.length"
             color="grey-9"
             text-color="grey-5"
             class="q-ml-auto"
@@ -373,9 +385,9 @@
           />
         </div>
 
-        <div v-show="archivedExpanded">
+        <div v-show="archivedExpanded || archivedAutoExpanded">
           <div
-            v-for="ws in store.archived"
+            v-for="ws in filteredArchived"
             :key="ws.id"
             class="wl-item wl-item--archived q-pa-sm q-mx-xs rounded-borders"
             :style="[
@@ -425,7 +437,7 @@
 
       <!-- Empty state -->
       <div
-        v-if="filteredNeedsAttention.length === 0 && filteredRunning.length === 0 && filteredIdle.length === 0 && store.archived.length === 0"
+        v-if="filteredNeedsAttention.length === 0 && filteredRunning.length === 0 && filteredIdle.length === 0 && filteredArchived.length === 0"
         class="q-pa-lg text-center text-grey-6 text-caption"
       >
         <template v-if="store.loading">{{ $t('common.loading') }}</template>
@@ -534,6 +546,13 @@ const searchQuery = ref('')
 const favoritesOnly = ref<boolean>(localStorage.getItem('kobo:favorites-filter') === '1')
 watch(favoritesOnly, (v) => localStorage.setItem('kobo:favorites-filter', v ? '1' : '0'))
 
+// When ON and a search query is active, the archived section is filtered by
+// the same substring match as the live groups and auto-expands to surface
+// matches. When OFF (default), archived is hidden behind its collapsed
+// header regardless of the query — preserves the prior behaviour.
+const searchArchived = ref<boolean>(localStorage.getItem('kobo:search-archived') === '1')
+watch(searchArchived, (v) => localStorage.setItem('kobo:search-archived', v ? '1' : '0'))
+
 const tagsDialogOpen = ref(false)
 const tagsDialogWorkspace = ref<Workspace | null>(null)
 function onManageTags(ws: Workspace) {
@@ -582,6 +601,24 @@ const filteredIdle = computed(() =>
 const groupedNeedsAttention = computed(() => groupByProject(filteredNeedsAttention.value))
 const groupedRunning = computed(() => groupByProject(filteredRunning.value))
 const groupedIdle = computed(() => groupByProject(filteredIdle.value))
+
+// Archived list filtered by the search query when `searchArchived` is ON,
+// and by `favoritesOnly` whenever it's ON. With both toggles OFF and an
+// empty query, returns the full archived list (current default behaviour).
+const filteredArchived = computed(() => {
+  const q = searchQuery.value.toLowerCase()
+  return store.archived
+    .filter((w) => !searchArchived.value || q.length === 0 || w.name.toLowerCase().includes(q))
+    .filter((w) => !favoritesOnly.value || w.favoritedAt !== null)
+})
+
+// Auto-expand the archived section when the user toggles `searchArchived`
+// ON and types a query that matches archived workspaces — surfaces matches
+// without a manual click. Empty query or zero matches → no auto-expand
+// (header stays collapsed unless the user clicks it).
+const archivedAutoExpanded = computed(
+  () => searchArchived.value && searchQuery.value.length > 0 && filteredArchived.value.length > 0,
+)
 
 const totalCount = computed(() => store.workspaces.length)
 const runningCount = computed(() => store.running.length)

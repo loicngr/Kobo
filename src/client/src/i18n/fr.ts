@@ -631,11 +631,13 @@ export default {
   'contextMenu.runSetup': 'Lancer le script de setup',
   'contextMenu.openNotion': 'Ouvrir dans Notion',
   'contextMenu.openSentry': 'Ouvrir dans Sentry',
+  'contextMenu.openPr': 'Ouvrir la PR',
 
   // Workspace
   'workspace.favorite': 'Ajouter aux favoris',
   'workspace.unfavorite': 'Retirer des favoris',
   'workspace.showFavoritesOnly': 'Afficher uniquement les favoris',
+  'workspace.searchArchivedToggle': 'Inclure les workspaces archivés dans la recherche',
   'workspace.descriptionPlaceholder': 'Ajouter une courte description',
   'workspace.descriptionDialogHint': 'Texte brut, 200 caractères maximum. Laisser vide pour effacer.',
   'workspace.descriptionTooLong': 'La description doit faire 200 caractères ou moins.',
@@ -685,6 +687,18 @@ export default {
   'health.integrationsTitle': 'Intégrations',
   'health.integrationConfigured': 'configurée',
   'health.integrationMissing': 'non configurée',
+  'health.activeTitle': 'État actif',
+  'health.activeQuotaBackoffs': 'Quota backoffs en attente',
+  'health.activeWakeups': 'Wakeups programmés',
+  'health.activeAutoLoop': 'Auto-loop en cours',
+  'health.activeAgentSessions': 'Sessions agent en cours',
+  'health.activeDevServers': 'Serveurs de dev lancés',
+  'health.noneActive': 'Aucun.',
+  'health.quotaResumeAt': 'reprise à {time}',
+  'health.wakeupAt': 'réveil à {time}',
+  'health.startedAgo': 'démarré il y a {time}',
+  'health.autoLoopReady': 'prêt, itération en cours',
+  'health.autoLoopGrooming': 'grooming en cours',
 
   // Agent event stream — session, tool, activity
   'session.started': 'Session démarrée',
@@ -722,6 +736,16 @@ export default {
   'wakeup.reason': 'Raison : {reason}',
   'wakeup.cancel': 'Annuler ce réveil',
   'wakeup.pendingIndicator': 'Réveil programmé',
+  'cron.pendingIndicator': '{n} cron(s) programmé(s)',
+
+  // Schedule panel
+  'schedule.tabLabel': 'Programmation',
+  'schedule.wakeupTitle': 'Wakeup en attente',
+  'schedule.cronsTitle': 'Tâches récurrentes',
+  'schedule.noWakeup': 'Aucun wakeup programmé',
+  'schedule.noCrons': 'Aucun cron programmé',
+  'schedule.nextFireAt': 'prochain à {time}',
+  'schedule.lastFiredAt': 'dernier fire il y a {time}',
 
   // AskUserQuestion deferred tool-use panel
   'askUserQuestion.title': "L'agent te pose une question",
@@ -751,6 +775,9 @@ export default {
   'autoLoop.toggle': 'Auto-loop',
   'autoLoop.start': "Démarrer l'auto-loop",
   'autoLoop.prepare': 'Préparer pour auto-loop',
+  'autoLoop.reprepare': 'Re-préparer pour auto-loop',
+  'autoLoop.reprepareTooltip':
+    'Relancer la phase de grooming pour ajouter ou rafraîchir les tâches avant de relancer la boucle',
   'autoLoop.prepareBusy': "Attendre la fin de l'agent avant de préparer",
   'autoLoop.forceReady': 'Je sais ce que je fais — passer le grooming',
   'autoLoop.forceReadyConfirm':

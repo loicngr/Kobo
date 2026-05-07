@@ -130,6 +130,7 @@ describe('GET /api/workspaces/auto-loop-states', () => {
       no_progress_streak: 0,
       tasks_done: 0,
       tasks_total: 0,
+      crons_count: 0,
     })
   })
 
@@ -150,6 +151,20 @@ describe('POST /api/workspaces/:id/auto-loop', () => {
     expect(res.status).toBe(400)
     const body = (await res.json()) as { error: string }
     expect(body.error).toMatch(/not ready/i)
+  })
+
+  it('returns 400 when ready but no pending tasks (without flipping auto_loop)', async () => {
+    const { setAutoLoopReady } = await import('../server/services/workspace-service.js')
+    setAutoLoopReady(wsId, true)
+    // No task created — pending count is 0.
+    const res = await app.request(`/api/workspaces/${wsId}/auto-loop`, { method: 'POST' })
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toMatch(/no pending tasks/i)
+
+    const statusRes = await app.request(`/api/workspaces/${wsId}/auto-loop`)
+    const status = await statusRes.json()
+    expect(status).toMatchObject({ auto_loop: false })
   })
 
   it('enables the loop when ready + returns 200', async () => {

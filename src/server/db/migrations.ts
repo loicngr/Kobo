@@ -264,6 +264,46 @@ export const migrations: Migration[] = [
       db.prepare('ALTER TABLE workspaces ADD COLUMN agent_description TEXT').run()
     },
   },
+  {
+    version: 22,
+    name: 'add-pending-crons',
+    migrate: (db) => {
+      // Per-workspace cron schedules: each row arms a recurring agent prompt
+      // on a cron expression. Sibling timer table to pending_wakeups /
+      // pending_quota_backoffs. Many rows per workspace (unlike the one-row
+      // sibling tables), so id is the primary key. CASCADE on workspace
+      // delete to keep the timer set tidy. Idempotent via IF NOT EXISTS.
+      db.prepare(
+        `CREATE TABLE IF NOT EXISTS pending_crons (
+          id                TEXT PRIMARY KEY,
+          workspace_id      TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+          expression        TEXT NOT NULL,
+          prompt            TEXT NOT NULL,
+          label             TEXT,
+          agent_session_id  TEXT,
+          next_fire_at      TEXT NOT NULL,
+          last_fired_at     TEXT,
+          created_at        TEXT NOT NULL
+        )`,
+      ).run()
+      db.prepare('CREATE INDEX IF NOT EXISTS idx_pending_crons_workspace ON pending_crons(workspace_id)').run()
+      db.prepare('CREATE INDEX IF NOT EXISTS idx_pending_crons_next_fire ON pending_crons(next_fire_at)').run()
+    },
+  },
+  {
+    version: 23,
+    name: 'add-pending-crons-one-shot',
+    migrate: (db) => {
+      // One-shot cron: fires once and cancels itself. Distinct from a wakeup
+      // because it still uses cron expressions (can target an absolute date,
+      // e.g. `0 14 7 6 *` = "next 7 June at 14:00") rather than a delay.
+      // Default 0 (recurring) preserves existing behaviour.
+      const cols = db.prepare('PRAGMA table_info(pending_crons)').all() as Array<{ name: string }>
+      if (!cols.some((c) => c.name === 'one_shot')) {
+        db.prepare('ALTER TABLE pending_crons ADD COLUMN one_shot INTEGER NOT NULL DEFAULT 0').run()
+      }
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

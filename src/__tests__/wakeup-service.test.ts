@@ -111,12 +111,12 @@ describe('wakeup-service', () => {
     expect(new Date(pending!.targetAt).getTime()).toBe(Date.now() + 60_000)
   })
 
-  it('schedule clamps delaySeconds above 3600 to 3600', async () => {
+  it('schedule clamps delaySeconds above 21600 to 21600', async () => {
     const wakeupService = await import('../server/services/wakeup-service.js')
 
     wakeupService.schedule(wsId, 99_999, 'resume', undefined)
     const pending = wakeupService.getPending(wsId)
-    expect(new Date(pending!.targetAt).getTime()).toBe(Date.now() + 3_600_000)
+    expect(new Date(pending!.targetAt).getTime()).toBe(Date.now() + 21_600_000)
   })
 
   it('cancel clears the row, emits wakeup:cancelled with the reason', async () => {

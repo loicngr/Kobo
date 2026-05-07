@@ -200,6 +200,20 @@ export interface AutoLoopStatus {
   no_progress_streak: number
   tasks_done: number
   tasks_total: number
+  crons_count: number
+}
+
+export interface PendingCron {
+  id: string
+  workspaceId: string
+  expression: string
+  prompt: string
+  label: string | null
+  agentSessionId: string | null
+  nextFireAt: string
+  lastFiredAt: string | null
+  oneShot: boolean
+  createdAt: string
 }
 
 const MAX_FEED_ITEMS = 5000
@@ -247,6 +261,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     pendingQueue: {} as Record<string, PendingItem[]>,
     prStates: {} as Record<string, string>,
     autoLoopStates: {} as Record<string, AutoLoopStatus>,
+    crons: {} as Record<string, PendingCron[]>,
   }),
 
   getters: {
@@ -1125,6 +1140,29 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     clearAutoLoopState(id: string): void {
       delete this.autoLoopStates[id]
+    },
+
+    async fetchCrons(workspaceId: string): Promise<void> {
+      try {
+        const res = await fetch(`/api/workspaces/${workspaceId}/crons`)
+        if (!res.ok) return
+        const body = (await res.json()) as { crons: PendingCron[] }
+        this.crons[workspaceId] = body.crons
+      } catch (err) {
+        console.error('[workspace-store] fetchCrons failed:', err)
+      }
+    },
+
+    async cancelCron(workspaceId: string, cronId: string): Promise<void> {
+      const prev = this.crons[workspaceId] ?? []
+      this.crons[workspaceId] = prev.filter((c) => c.id !== cronId)
+      try {
+        const res = await fetch(`/api/workspaces/${workspaceId}/crons/${cronId}`, { method: 'DELETE' })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      } catch (err) {
+        this.crons[workspaceId] = prev
+        throw err
+      }
     },
 
     async fetchPendingWakeup(workspaceId: string): Promise<void> {

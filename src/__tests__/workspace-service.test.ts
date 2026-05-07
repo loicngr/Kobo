@@ -1412,3 +1412,30 @@ describe('updateWorkspaceAgentDescription()', () => {
     expect(() => updateWorkspaceAgentDescription('does-not-exist', 'hi')).toThrowError(/not found/)
   })
 })
+
+describe('archiveWorkspace + deleteWorkspace — cron cascade', () => {
+  it('cancels all crons of a workspace on archive', async () => {
+    const { createWorkspace, archiveWorkspace } = await import('../server/services/workspace-service.js')
+    const cronService = await import('../server/services/cron-service.js')
+    const ws = createWorkspace({ name: 'W', projectPath: '/tmp/p', sourceBranch: 'main', workingBranch: 'feature/x' })
+    cronService.arm(ws.id, { expression: '@hourly', prompt: 'a' })
+    cronService.arm(ws.id, { expression: '@daily', prompt: 'b' })
+    expect(cronService.listForWorkspace(ws.id)).toHaveLength(2)
+
+    archiveWorkspace(ws.id)
+
+    expect(cronService.listForWorkspace(ws.id)).toHaveLength(0)
+  })
+
+  it('cancels all crons of a workspace on delete', async () => {
+    const { createWorkspace, deleteWorkspace } = await import('../server/services/workspace-service.js')
+    const cronService = await import('../server/services/cron-service.js')
+    const ws = createWorkspace({ name: 'W', projectPath: '/tmp/p', sourceBranch: 'main', workingBranch: 'feature/x' })
+    cronService.arm(ws.id, { expression: '@hourly', prompt: 'a' })
+    expect(cronService.listForWorkspace(ws.id)).toHaveLength(1)
+
+    deleteWorkspace(ws.id)
+
+    expect(cronService.listForWorkspace(ws.id)).toHaveLength(0)
+  })
+})

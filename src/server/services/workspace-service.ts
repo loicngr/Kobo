@@ -3,6 +3,7 @@ import { getDb } from '../db/index.js'
 import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 import * as orchestrator from './agent/orchestrator.js'
 import * as autoLoopService from './auto-loop-service.js'
+import * as cronService from './cron-service.js'
 import * as quotaBackoffService from './quota-backoff-service.js'
 import * as wakeupService from './wakeup-service.js'
 import { emitEphemeral } from './websocket-service.js'
@@ -563,6 +564,15 @@ export function deleteWorkspace(id: string): void {
     console.error('[workspace-service] cancel quota backoff on delete failed:', err)
   }
 
+  // Cancel every pending cron BEFORE the FK cascade removes the rows so
+  // in-memory setTimeout timers are cleared. Best-effort: failure must not
+  // block delete.
+  try {
+    cronService.cancelAllForWorkspace(id, 'deleted')
+  } catch (err) {
+    console.error('[workspace-service] cancel crons on delete failed:', err)
+  }
+
   // Drop the cached rate_limit.info so memory doesn't leak on workspace
   // churn. The Map has no FK to clean up for it automatically.
   orchestrator.forgetRateLimitInfo(id)
@@ -677,6 +687,14 @@ export function archiveWorkspace(id: string): Workspace {
     quotaBackoffService.cancel(id, 'archive')
   } catch (err) {
     console.error('[workspace-service] cancel quota backoff on archive failed:', err)
+  }
+
+  // Cancel every pending cron — archived workspaces must not fire scheduled
+  // prompts. Best-effort: failure here must not block archive.
+  try {
+    cronService.cancelAllForWorkspace(id, 'archive')
+  } catch (err) {
+    console.error('[workspace-service] cancel crons on archive failed:', err)
   }
 
   // Disable auto-loop — archived workspaces should not keep looping.

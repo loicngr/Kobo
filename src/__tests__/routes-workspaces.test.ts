@@ -127,6 +127,13 @@ vi.mock('../server/services/wakeup-service.js', () => ({
   getPending: vi.fn(() => null),
 }))
 
+vi.mock('../server/services/cron-service.js', () => ({
+  arm: vi.fn(),
+  cancel: vi.fn(),
+  listForWorkspace: vi.fn(),
+  cancelAllForWorkspace: vi.fn(),
+}))
+
 vi.mock('../server/services/pr-watcher-service.js', () => ({
   getAllPrStates: vi.fn(() => ({})),
   startPrWatcher: vi.fn(),
@@ -188,6 +195,7 @@ import * as fs from 'node:fs'
 import { getDb } from '../server/db/index.js'
 import router from '../server/routes/workspaces.js'
 import * as agentManager from '../server/services/agent/orchestrator.js'
+import * as cronService from '../server/services/cron-service.js'
 import * as devServerService from '../server/services/dev-server-service.js'
 import * as notionService from '../server/services/notion-service.js'
 import * as settingsService from '../server/services/settings-service.js'
@@ -3921,5 +3929,217 @@ describe('POST /api/workspaces — Working directory in brainstorm prompt', () =
     expect(agentManager.startAgent).toHaveBeenCalledOnce()
     const promptArg = vi.mocked(agentManager.startAgent).mock.calls[0][2]
     expect(promptArg).toContain('Working directory: ')
+  })
+})
+
+describe('GET /api/workspaces/:id/crons', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('returns the list of crons for a workspace', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(cronService.listForWorkspace).mockReturnValue([
+      {
+        id: 'c1',
+        workspaceId: 'ws-1',
+        expression: '@hourly',
+        prompt: 'tick',
+        label: null,
+        agentSessionId: null,
+        nextFireAt: '2026-05-07T11:00:00Z',
+        lastFiredAt: null,
+        createdAt: '2026-05-07T10:00:00Z',
+      },
+    ])
+    const res = await app.request('/api/workspaces/ws-1/crons')
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { crons: unknown[] }
+    expect(body.crons).toHaveLength(1)
+  })
+
+  it('returns 404 when workspace is unknown', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
+    const res = await app.request('/api/workspaces/unknown/crons')
+    expect(res.status).toBe(404)
+  })
+})
+
+describe('POST /api/workspaces/:id/crons', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('arms a new cron and returns it', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    const cron = {
+      id: 'c1',
+      workspaceId: 'ws-1',
+      expression: '@hourly',
+      prompt: 'tick',
+      label: null,
+      agentSessionId: null,
+      nextFireAt: '2026-05-07T11:00:00Z',
+      lastFiredAt: null,
+      createdAt: '2026-05-07T10:00:00Z',
+    }
+    vi.mocked(cronService.arm).mockReturnValue(cron)
+    const res = await app.request('/api/workspaces/ws-1/crons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expression: '@hourly', prompt: 'tick' }),
+    })
+    expect(res.status).toBe(201)
+    expect(await res.json()).toMatchObject({ cron: expect.objectContaining({ id: 'c1' }) })
+  })
+
+  it('returns 400 on invalid expression (service throws)', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(cronService.arm).mockImplementation(() => {
+      throw new Error('Invalid cron expression: foo')
+    })
+    const res = await app.request('/api/workspaces/ws-1/crons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expression: 'foo', prompt: 'p' }),
+    })
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toMatch(/invalid cron expression/i)
+  })
+
+  it('returns 400 when expression or prompt is missing', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    const res = await app.request('/api/workspaces/ws-1/crons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expression: '@hourly' }),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it("returns 400 on invalid mode (anything other than 'resume' or 'fresh')", async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    const res = await app.request('/api/workspaces/ws-1/crons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expression: '@hourly', prompt: 'tick', mode: 'maybe' }),
+    })
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toMatch(/mode/)
+  })
+
+  it("mode='resume' (default) captures active session id and pins it", async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(agentManager.getActiveSessionId).mockReturnValue('sess-active-1')
+    const cron = {
+      id: 'c1',
+      workspaceId: 'ws-1',
+      expression: '@hourly',
+      prompt: 'tick',
+      label: null,
+      agentSessionId: 'sess-active-1',
+      nextFireAt: '2026-05-07T11:00:00Z',
+      lastFiredAt: null,
+      oneShot: false,
+      createdAt: '2026-05-07T10:00:00Z',
+    }
+    vi.mocked(cronService.arm).mockReturnValue(cron)
+    const res = await app.request('/api/workspaces/ws-1/crons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expression: '@hourly', prompt: 'tick' }),
+    })
+    expect(res.status).toBe(201)
+    expect(cronService.arm).toHaveBeenCalledWith(
+      'ws-1',
+      expect.objectContaining({ agentSessionId: 'sess-active-1', oneShot: false }),
+    )
+  })
+
+  it("mode='fresh' does NOT pin a session (agentSessionId undefined)", async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(agentManager.getActiveSessionId).mockReturnValue('sess-active-1')
+    vi.mocked(cronService.arm).mockReturnValue({
+      id: 'c2',
+      workspaceId: 'ws-1',
+      expression: '@hourly',
+      prompt: 'tick',
+      label: null,
+      agentSessionId: null,
+      nextFireAt: '2026-05-07T11:00:00Z',
+      lastFiredAt: null,
+      oneShot: false,
+      createdAt: '2026-05-07T10:00:00Z',
+    })
+    const res = await app.request('/api/workspaces/ws-1/crons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expression: '@hourly', prompt: 'tick', mode: 'fresh' }),
+    })
+    expect(res.status).toBe(201)
+    expect(cronService.arm).toHaveBeenCalledWith('ws-1', expect.objectContaining({ agentSessionId: undefined }))
+  })
+
+  it('forwards oneShot=true to the service', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(cronService.arm).mockReturnValue({
+      id: 'c3',
+      workspaceId: 'ws-1',
+      expression: '0 14 7 6 *',
+      prompt: 'one-time',
+      label: null,
+      agentSessionId: null,
+      nextFireAt: '2026-06-07T12:00:00Z',
+      lastFiredAt: null,
+      oneShot: true,
+      createdAt: '2026-05-07T10:00:00Z',
+    })
+    const res = await app.request('/api/workspaces/ws-1/crons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expression: '0 14 7 6 *', prompt: 'one-time', mode: 'fresh', oneShot: true }),
+    })
+    expect(res.status).toBe(201)
+    expect(cronService.arm).toHaveBeenCalledWith('ws-1', expect.objectContaining({ oneShot: true }))
+  })
+
+  it('oneShot is false unless body explicitly === true (no truthy coercion)', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(cronService.arm).mockReturnValue({
+      id: 'c4',
+      workspaceId: 'ws-1',
+      expression: '@hourly',
+      prompt: 'tick',
+      label: null,
+      agentSessionId: null,
+      nextFireAt: '2026-05-07T11:00:00Z',
+      lastFiredAt: null,
+      oneShot: false,
+      createdAt: '2026-05-07T10:00:00Z',
+    })
+    const res = await app.request('/api/workspaces/ws-1/crons', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expression: '@hourly', prompt: 'tick', oneShot: 'yes' }),
+    })
+    expect(res.status).toBe(201)
+    expect(cronService.arm).toHaveBeenCalledWith('ws-1', expect.objectContaining({ oneShot: false }))
+  })
+})
+
+describe('DELETE /api/workspaces/:id/crons/:cronId', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('cancels the cron and returns 204', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(cronService.cancel).mockReturnValue(true)
+    const res = await app.request('/api/workspaces/ws-1/crons/c1', { method: 'DELETE' })
+    expect(res.status).toBe(204)
+    expect(cronService.cancel).toHaveBeenCalledWith('c1', 'user')
+  })
+
+  it('returns 204 even when cron is unknown (idempotent)', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(cronService.cancel).mockReturnValue(false)
+    const res = await app.request('/api/workspaces/ws-1/crons/unknown', { method: 'DELETE' })
+    expect(res.status).toBe(204)
   })
 })
