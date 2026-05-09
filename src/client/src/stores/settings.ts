@@ -63,6 +63,30 @@ interface GlobalSettings {
   tags: string[]
   worktreesPath: string
   worktreesPrefixByProject: boolean
+  voiceEnabled: boolean
+  voicePttKey: 'alt' | 'ctrl+space'
+  voiceLanguage: string
+  voiceModel: string | null
+  voiceCommandPath: string
+  voiceFfmpegPath: string
+  voiceTemperature: number
+  voicePrompt: string
+  voiceTranslateToEnglish: boolean
+  voiceSuppressNonSpeechTokens: boolean
+}
+
+export interface VoiceModelStatus {
+  name: string
+  installed: boolean
+  fileName: string
+}
+
+export interface VoiceRuntimeStatus {
+  available: boolean
+  command: string
+  error?: string
+  ffmpegAvailable: boolean
+  ffmpegError?: string
 }
 
 interface ActiveMcpServer {
@@ -100,7 +124,20 @@ export const useSettingsStore = defineStore('settings', {
       tags: [],
       worktreesPath: WORKTREES_PATH,
       worktreesPrefixByProject: false,
+      voiceEnabled: false,
+      voicePttKey: 'alt',
+      voiceLanguage: 'auto',
+      voiceModel: null,
+      voiceCommandPath: '',
+      voiceFfmpegPath: '',
+      voiceTemperature: 0,
+      voicePrompt: '',
+      voiceTranslateToEnglish: false,
+      voiceSuppressNonSpeechTokens: true,
     } as GlobalSettings,
+    voiceModels: [] as VoiceModelStatus[],
+    voiceModelsLoading: false,
+    voiceRuntime: null as VoiceRuntimeStatus | null,
     activeMcpServers: [] as ActiveMcpServer[],
     projects: [] as ProjectSettings[],
     loading: false,
@@ -205,6 +242,43 @@ export const useSettingsStore = defineStore('settings', {
         console.error('[settings store] deleteProject failed:', err)
         throw err
       }
+    },
+
+    async fetchVoiceModels() {
+      this.voiceModelsLoading = true
+      try {
+        const res = await fetch('/api/voice/models')
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const data = (await res.json()) as { available: VoiceModelStatus[]; activeModel: string | null }
+        this.voiceModels = data.available
+        this.global.voiceModel = data.activeModel
+      } catch (err) {
+        console.error('[settings store] fetchVoiceModels failed:', err)
+      } finally {
+        this.voiceModelsLoading = false
+      }
+    },
+
+    async fetchVoiceRuntime() {
+      try {
+        const res = await fetch('/api/voice/runtime')
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        this.voiceRuntime = (await res.json()) as VoiceRuntimeStatus
+      } catch (err) {
+        console.error('[settings store] fetchVoiceRuntime failed:', err)
+      }
+    },
+
+    async downloadVoiceModel(name: string) {
+      const res = await fetch(`/api/voice/models/${encodeURIComponent(name)}/download`, { method: 'POST' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      await this.fetchVoiceModels()
+    },
+
+    async deleteVoiceModel(name: string) {
+      const res = await fetch(`/api/voice/models/${encodeURIComponent(name)}`, { method: 'DELETE' })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      await this.fetchVoiceModels()
     },
   },
 })

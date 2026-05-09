@@ -177,6 +177,36 @@
             @keydown.ctrl.enter="handleCreate"
             @keydown.meta.enter="handleCreate"
           />
+          <div class="row items-center justify-end q-px-sm q-pb-xs q-gutter-sm">
+            <div v-if="isCreateVoiceTranscribing" class="row items-center text-caption text-amber-6">
+              <q-spinner-dots size="14px" color="amber-6" class="q-mr-xs" />
+              <span>{{ $t('voice.transcribing') }}</span>
+            </div>
+            <q-btn
+              flat
+              dense
+              size="sm"
+              :icon="isCreateVoiceTranscribing ? 'hourglass_top' : isCreateVoiceRecording ? 'mic' : 'mic_none'"
+              :color="isCreateVoiceRecording ? 'red-5' : isCreateVoiceTranscribing ? 'amber-6' : 'grey-6'"
+              :disable="!createVoiceEnabled || isCreateVoiceTranscribing"
+              :class="{ 'voice-btn--recording': isCreateVoiceRecording }"
+              @mousedown.prevent="startCreateVoiceCapture"
+              @mouseup.prevent="stopCreateVoiceCapture"
+              @mouseleave.prevent="stopCreateVoiceCapture"
+              @touchstart.prevent="startCreateVoiceCapture"
+              @touchend.prevent="stopCreateVoiceCapture"
+            >
+              <q-tooltip>
+                {{
+                  isCreateVoiceTranscribing
+                    ? $t('voice.transcribing')
+                    : isCreateVoiceRecording
+                      ? $t('voice.recording')
+                      : $t('voice.holdToTalk')
+                }}
+              </q-tooltip>
+            </q-btn>
+          </div>
           <SlashSuggestionsPopup
             v-if="showSlashPopup && slashFlat.length > 0"
             class="create-slash-popup"
@@ -697,6 +727,13 @@ const pathFilterOptions = ref<string[]>([])
 const workspaceName = ref('')
 const description = ref('')
 const descriptionRef = ref<QInput | null>(null)
+const isCreateVoiceRecording = ref(false)
+const isCreateVoiceTranscribing = ref(false)
+const createVoiceRecorderRef = ref<MediaRecorder | null>(null)
+const createVoiceStreamRef = ref<MediaStream | null>(null)
+const createVoiceChunksRef = ref<BlobPart[]>([])
+const createVoiceTimeoutRef = ref<ReturnType<typeof setTimeout> | null>(null)
+const CREATE_VOICE_MAX_MS = 60_000
 const notionUrl = ref('')
 const useNotion = ref(false)
 const model = ref('claude-opus-4-7')
@@ -705,6 +742,7 @@ const projectPath = ref('')
 const branch = ref<string | null>(null)
 const branchType = ref('feature')
 const skipSetupScript = ref(false)
+const createVoiceEnabled = computed(() => settingsStore.global.voiceEnabled)
 
 // Engine selector state — engine list is loaded from `/api/engines` on mount.
 const engines = ref<EngineDto[]>([])
@@ -848,6 +886,112 @@ function onDescriptionKeydown(event: KeyboardEvent) {
   } else if (event.key === 'Escape') {
     event.preventDefault()
     closeSlash()
+  }
+}
+
+async function startCreateVoiceCapture() {
+  if (!createVoiceEnabled.value || isCreateVoiceRecording.value || isCreateVoiceTranscribing.value) return
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+    $q.notify({ type: 'warning', message: t('voice.notSupported'), position: 'top', timeout: 4000 })
+    return
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    createVoiceStreamRef.value = stream
+    createVoiceChunksRef.value = []
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : ''
+    const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream)
+    recorder.ondataavailable = (event) => {
+      if (event.data && event.data.size > 0) createVoiceChunksRef.value.push(event.data)
+    }
+    recorder.start()
+    createVoiceRecorderRef.value = recorder
+    isCreateVoiceRecording.value = true
+    createVoiceTimeoutRef.value = setTimeout(() => {
+      void stopCreateVoiceCapture()
+      $q.notify({ type: 'info', message: t('voice.maxDurationReached'), position: 'top', timeout: 3500 })
+    }, CREATE_VOICE_MAX_MS)
+  } catch {
+    $q.notify({ type: 'negative', message: t('voice.errorMicPermission'), position: 'top', timeout: 5000 })
+  }
+}
+
+async function stopCreateVoiceCapture() {
+  if (!isCreateVoiceRecording.value) return
+  const recorder = createVoiceRecorderRef.value
+  if (!recorder) return
+  isCreateVoiceRecording.value = false
+  isCreateVoiceTranscribing.value = true
+  if (createVoiceTimeoutRef.value) {
+    clearTimeout(createVoiceTimeoutRef.value)
+    createVoiceTimeoutRef.value = null
+  }
+  const blob = await new Promise<Blob>((resolve) => {
+    recorder.onstop = () => resolve(new Blob(createVoiceChunksRef.value, { type: 'audio/webm' }))
+    recorder.stop()
+  })
+  try {
+    if (blob.size === 0) throw new Error('MIC_AUDIO_INVALID')
+    const fd = new FormData()
+    fd.append('audio', blob, 'voice.webm')
+    fd.append('language', settingsStore.global.voiceLanguage || 'auto')
+    const res = await fetch('/api/voice/transcribe', { method: 'POST', body: fd })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(String(body.code ?? body.error ?? `HTTP_${res.status}`))
+    }
+    const data = (await res.json()) as { text: string }
+    if (data.text?.trim())
+      description.value = description.value ? `${description.value.trimEnd()} ${data.text.trim()}` : data.text.trim()
+  } catch (err) {
+    const code = err instanceof Error ? err.message : 'TRANSCRIPTION_FAILED'
+    const map: Record<string, string> = {
+      VOICE_DISABLED: 'voice.errorDisabled',
+      MODEL_NOT_CONFIGURED: 'voice.errorModelMissing',
+      MODEL_NOT_INSTALLED: 'voice.errorModelNotInstalled',
+      VOICE_RUNTIME_MISSING: 'voice.errorRuntimeMissing',
+      MIC_AUDIO_INVALID: 'voice.errorAudioInvalid',
+      LANGUAGE_INVALID: 'voice.errorLanguageInvalid',
+      TRANSCRIPTION_TIMEOUT: 'voice.errorTranscription',
+    }
+    $q.notify({ type: 'negative', message: t(map[code] ?? 'voice.errorTranscription'), position: 'top', timeout: 5000 })
+  } finally {
+    createVoiceRecorderRef.value = null
+    createVoiceChunksRef.value = []
+    createVoiceStreamRef.value?.getTracks().forEach((t) => {
+      t.stop()
+    })
+    createVoiceStreamRef.value = null
+    isCreateVoiceTranscribing.value = false
+  }
+}
+
+function shouldHandleCreatePtt(event: KeyboardEvent): boolean {
+  if (!createVoiceEnabled.value) return false
+  const key = settingsStore.global.voicePttKey
+  if (key === 'ctrl+space') return event.ctrlKey && event.code === 'Space'
+  return event.key === 'Alt'
+}
+
+function onCreateWindowKeyDown(event: KeyboardEvent) {
+  if (!shouldHandleCreatePtt(event) || event.repeat) return
+  event.preventDefault()
+  void startCreateVoiceCapture()
+}
+
+function onCreateWindowKeyUp(event: KeyboardEvent) {
+  if (!shouldHandleCreatePtt(event)) return
+  event.preventDefault()
+  void stopCreateVoiceCapture()
+}
+
+function onCreateWindowBlur() {
+  if (isCreateVoiceRecording.value) void stopCreateVoiceCapture()
+}
+
+function onCreateVisibilityChange() {
+  if (document.visibilityState !== 'visible' && isCreateVoiceRecording.value) {
+    void stopCreateVoiceCapture()
   }
 }
 
@@ -1116,11 +1260,24 @@ onMounted(async () => {
   } catch {
     // Best-effort: the legacy hardcoded fallback keeps the form usable.
   }
+  window.addEventListener('keydown', onCreateWindowKeyDown)
+  window.addEventListener('keyup', onCreateWindowKeyUp)
+  window.addEventListener('blur', onCreateWindowBlur)
+  document.addEventListener('visibilitychange', onCreateVisibilityChange)
 })
 
 // Cleanup debounce timer on unmount
 onUnmounted(() => {
   if (pathDebounce) clearTimeout(pathDebounce)
+  window.removeEventListener('keydown', onCreateWindowKeyDown)
+  window.removeEventListener('keyup', onCreateWindowKeyUp)
+  window.removeEventListener('blur', onCreateWindowBlur)
+  document.removeEventListener('visibilitychange', onCreateVisibilityChange)
+  if (createVoiceTimeoutRef.value) {
+    clearTimeout(createVoiceTimeoutRef.value)
+    createVoiceTimeoutRef.value = null
+  }
+  if (isCreateVoiceRecording.value) void stopCreateVoiceCapture()
 })
 
 // Convert text to kebab-case feature branch name.
@@ -1379,6 +1536,25 @@ async function handleCreate() {
     &::placeholder {
       color: #666;
     }
+  }
+}
+
+.voice-btn--recording {
+  animation: voice-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes voice-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.06);
+    opacity: 0.86;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
   }
 }
 

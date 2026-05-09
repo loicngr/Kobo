@@ -19,6 +19,7 @@ import sentryRouter from './routes/sentry.js'
 import settingsRouter from './routes/settings.js'
 import templatesRouter from './routes/templates.js'
 import usageRoutes from './routes/usage.js'
+import voiceRouter from './routes/voice.js'
 import workspacesRouter from './routes/workspaces.js'
 import {
   getAvailableSkills,
@@ -100,6 +101,7 @@ app.route('/api/search', searchRouter)
 app.route('/api/health', healthRouter)
 app.route('/api/engines', enginesRouter)
 app.route('/api/migration', migrationRouter)
+app.route('/api/voice', voiceRouter)
 
 // Skills endpoint
 app.get('/api/skills', (c) => c.json(getAvailableSkills()))

@@ -166,6 +166,202 @@
               </div>
             </div>
 
+            <!-- Voice transcription -->
+            <div class="settings-card q-pa-md rounded-borders q-pb-sm q-mb-sm">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('voice.title') }}</div>
+              <div class="column q-gutter-sm">
+                <q-toggle
+                  v-model="globalVoiceEnabled"
+                  :label="$t('voice.enabled')"
+                  dark
+                  dense
+                  color="indigo-4"
+                  class="text-grey-5 text-caption"
+                />
+                <q-select
+                  v-model="globalVoicePttKey"
+                  :label="$t('voice.pttKey')"
+                  :options="[
+                    { label: $t('voice.pttAlt'), value: 'alt' },
+                    { label: $t('voice.pttCtrlSpace'), value: 'ctrl+space' },
+                  ]"
+                  emit-value
+                  map-options
+                  dense
+                  dark
+                  outlined
+                  class="settings-input"
+                />
+                <q-select
+                  v-model="globalVoiceLanguage"
+                  :label="$t('voice.language')"
+                  :options="voiceLanguageOptions"
+                  emit-value
+                  map-options
+                  dense
+                  dark
+                  outlined
+                  class="settings-input"
+                />
+                <q-select
+                  v-model="globalVoiceModel"
+                  :label="$t('voice.model')"
+                  :options="voiceModelOptions"
+                  emit-value
+                  map-options
+                  dense
+                  dark
+                  outlined
+                  class="settings-input"
+                />
+                <q-input
+                  v-model="globalVoiceCommandPath"
+                  :label="$t('voice.commandPath')"
+                  dense
+                  dark
+                  outlined
+                  class="settings-input"
+                />
+                <q-input
+                  v-model="globalVoiceFfmpegPath"
+                  :label="$t('voice.ffmpegPath')"
+                  dense
+                  dark
+                  outlined
+                  class="settings-input"
+                />
+                <div class="row items-center q-gutter-sm">
+                  <div class="text-caption text-grey-5">{{ $t('voice.temperature') }}</div>
+                  <q-slider
+                    v-model="globalVoiceTemperature"
+                    :min="0"
+                    :max="1"
+                    :step="0.05"
+                    dark
+                    dense
+                    color="indigo-4"
+                    class="col"
+                  />
+                  <div class="text-caption text-grey-5" style="min-width: 40px; text-align: right;">
+                    {{ globalVoiceTemperature.toFixed(2) }}
+                  </div>
+                </div>
+                <div class="text-caption text-grey-7 q-mt-xs q-mb-sm">{{ $t('voice.temperatureHint') }}</div>
+                <q-input
+                  v-model="globalVoicePrompt"
+                  :label="$t('voice.initialPrompt')"
+                  type="textarea"
+                  dense
+                  dark
+                  outlined
+                  :rows="2"
+                  class="settings-input"
+                />
+                <div class="text-caption text-grey-7 q-mt-xs q-mb-sm">{{ $t('voice.initialPromptHint') }}</div>
+                <q-toggle
+                  v-model="globalVoiceTranslateToEnglish"
+                  :label="$t('voice.translateToEnglish')"
+                  dark
+                  dense
+                  color="indigo-4"
+                  class="text-grey-5 text-caption"
+                />
+                <div class="text-caption text-grey-7 q-mt-xs q-mb-sm">{{ $t('voice.translateToEnglishHint') }}</div>
+                <q-toggle
+                  v-model="globalVoiceSuppressNst"
+                  :label="$t('voice.suppressNst')"
+                  dark
+                  dense
+                  color="indigo-4"
+                  class="text-grey-5 text-caption"
+                />
+                <div class="text-caption text-grey-7 q-mt-xs q-mb-sm">{{ $t('voice.suppressNstHint') }}</div>
+                <div class="row q-gutter-sm items-center">
+                  <q-btn
+                    v-for="m in store.voiceModels"
+                    :key="m.name"
+                    flat
+                    dense
+                    no-caps
+                    size="sm"
+                    :color="m.installed ? 'red-5' : 'indigo-4'"
+                    :label="m.installed ? `${$t('voice.delete')} ${m.name}` : `${$t('voice.download')} ${m.name}`"
+                    :loading="voiceActionModel === m.name"
+                    @click="m.installed ? removeVoiceModel(m.name) : installVoiceModel(m.name)"
+                  />
+                </div>
+                <div class="row items-center q-mt-sm">
+                  <span
+                    class="text-caption"
+                    :class="store.voiceRuntime?.available ? 'text-green-5' : 'text-red-5'"
+                  >
+                    {{
+                      store.voiceRuntime?.available
+                        ? t('voice.runtimeReady', { command: store.voiceRuntime?.command ?? 'whisper-cli' })
+                        : t('voice.runtimeMissing', { command: store.voiceRuntime?.command ?? 'whisper-cli' })
+                    }}
+                  </span>
+                  <q-space />
+                  <q-btn
+                    flat
+                    dense
+                    size="sm"
+                    icon="refresh"
+                    color="grey-5"
+                    :label="t('common.refresh')"
+                    @click="store.fetchVoiceRuntime()"
+                  />
+                </div>
+                <div class="row items-center q-mt-xs">
+                  <span
+                    class="text-caption"
+                    :class="store.voiceRuntime?.ffmpegAvailable ? 'text-green-5' : 'text-red-5'"
+                  >
+                    {{
+                      store.voiceRuntime?.ffmpegAvailable
+                        ? t('voice.ffmpegReady')
+                        : t('voice.ffmpegMissing')
+                    }}
+                  </span>
+                </div>
+                <q-expansion-item
+                  dense
+                  dark
+                  icon="help_outline"
+                  :label="$t('voice.installGuideTitle')"
+                  class="variables-panel rounded-borders q-mt-sm"
+                >
+                  <div class="q-pa-sm text-caption text-grey-5">
+                    <div class="q-mb-sm">{{ $t('voice.installGuideIntro') }}</div>
+                    <div class="q-mb-sm">
+                      <a
+                        href="https://github.com/ggml-org/whisper.cpp"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="text-indigo-4"
+                      >
+                        {{ $t('voice.installLink') }}
+                      </a>
+                    </div>
+                    <div class="q-mb-xs text-grey-4">{{ $t('voice.installGuideUbuntuTitle') }}</div>
+                    <pre class="mono-guide q-mb-sm">sudo apt update
+sudo apt install -y cmake build-essential ffmpeg
+git clone https://github.com/ggml-org/whisper.cpp.git
+cd whisper.cpp
+cmake -B build
+cmake --build build -j</pre>
+                    <div class="q-mb-sm">{{ $t('voice.installGuideBinaryPathHint') }}</div>
+                    <div class="q-mb-xs text-grey-4">{{ $t('voice.installGuideWindowsTitle') }}</div>
+                    <pre class="mono-guide q-mb-sm"># Install CMake + Visual Studio Build Tools (C/C++)
+# Install ffmpeg (choco/scoop)
+where whisper-cli
+where ffmpeg</pre>
+                    <div>{{ $t('voice.installGuideSettingsHint') }}</div>
+                  </div>
+                </q-expansion-item>
+              </div>
+            </div>
+
             <!-- PR template + Git conventions -->
             <div class="settings-card q-pa-md rounded-borders q-pb-sm q-mb-sm">
               <div class="row items-center q-mb-sm">
@@ -476,11 +672,12 @@
             </div>
 
             <!-- Save button -->
-            <div class="row justify-end">
+            <div class="row justify-end settings-sticky-actions">
               <q-btn
                 :label="$t('common.save')"
                 no-caps
                 unelevated
+                size="sm"
                 color="primary"
                 :loading="savingGlobal"
                 @click="saveGlobal"
@@ -854,12 +1051,13 @@
                   </div>
 
                   <!-- Actions -->
-                  <div class="row items-center q-gutter-sm">
+                  <div class="row items-center q-gutter-sm settings-sticky-actions">
                     <q-btn
                       v-if="!isNewProject"
                       :label="$t('common.delete')"
                       no-caps
                       flat
+                      size="sm"
                       color="red-5"
                       :loading="deletingProject"
                       @click="deleteProject"
@@ -869,6 +1067,7 @@
                       :label="$t('common.save')"
                       no-caps
                       unelevated
+                      size="sm"
                       color="primary"
                       :loading="savingProject"
                       @click="saveProject"
@@ -1070,6 +1269,25 @@ const globalTags = ref<string[]>([])
 const globalWorktreesPath = ref<string>(WORKTREES_PATH)
 const globalWorktreesPathInput = ref<QInput | null>(null)
 const globalWorktreesPrefixByProject = ref(true)
+const globalVoiceEnabled = ref(false)
+const globalVoicePttKey = ref<'alt' | 'ctrl+space'>('alt')
+const globalVoiceLanguage = ref('auto')
+const globalVoiceModel = ref<string | null>(null)
+const globalVoiceCommandPath = ref('')
+const globalVoiceFfmpegPath = ref('')
+const globalVoiceTemperature = ref(0)
+const globalVoicePrompt = ref('')
+const globalVoiceTranslateToEnglish = ref(false)
+const globalVoiceSuppressNst = ref(true)
+const voiceActionModel = ref<string | null>(null)
+const hydratingVoiceForm = ref(false)
+
+function recommendedTemperatureForModel(modelName: string | null): number {
+  if (!modelName) return 0.1
+  if (modelName === 'tiny' || modelName === 'base') return 0.1
+  if (modelName === 'small' || modelName === 'medium' || modelName === 'large-v3') return 0.2
+  return 0.2
+}
 const worktreesPathRules = [(value: string) => value.trim().length > 0 || t('settings.worktreesPathRequired')]
 const savingGlobal = ref(false)
 
@@ -1378,6 +1596,34 @@ const mcpServerOptions = computed(() => [
 ])
 
 const soundSelectOptions = computed(() => NOTIFICATION_SOUNDS.map((s) => ({ label: t(s.labelKey), value: s.id })))
+const voiceModelOptions = computed(() =>
+  [{ label: t('voice.noneModel'), value: null }].concat(
+    store.voiceModels.map((m) => ({
+      label: m.installed ? `${m.name}` : `${m.name} (${t('voice.notInstalled')})`,
+      value: m.name,
+    })),
+  ),
+)
+const voiceLanguageOptions = [
+  { label: 'auto', value: 'auto' },
+  { label: 'ar', value: 'ar' },
+  { label: 'de', value: 'de' },
+  { label: 'en', value: 'en' },
+  { label: 'es', value: 'es' },
+  { label: 'fr', value: 'fr' },
+  { label: 'hi', value: 'hi' },
+  { label: 'it', value: 'it' },
+  { label: 'ja', value: 'ja' },
+  { label: 'ko', value: 'ko' },
+  { label: 'nl', value: 'nl' },
+  { label: 'pl', value: 'pl' },
+  { label: 'pt', value: 'pt' },
+  { label: 'ru', value: 'ru' },
+  { label: 'tr', value: 'tr' },
+  { label: 'uk', value: 'uk' },
+  { label: 'vi', value: 'vi' },
+  { label: 'zh', value: 'zh' },
+]
 
 function previewNotificationSound(): void {
   playNotificationSound(globalAudioNotificationSound.value, globalAudioNotificationVolume.value)
@@ -1393,6 +1639,7 @@ const selectedProject = computed<ProjectSettings | null>(() => {
 
 // Init global form from store
 function syncGlobalForm() {
+  hydratingVoiceForm.value = true
   globalModel.value = store.global.defaultModel
   globalPrPrompt.value = store.global.prPromptTemplate
   globalReviewPrompt.value = store.global.reviewPromptTemplate ?? ''
@@ -1419,7 +1666,27 @@ function syncGlobalForm() {
   globalTags.value = Array.isArray(store.global.tags) ? [...store.global.tags] : []
   globalWorktreesPath.value = store.global.worktreesPath ?? WORKTREES_PATH
   globalWorktreesPrefixByProject.value = store.global.worktreesPrefixByProject ?? false
+  globalVoiceEnabled.value = store.global.voiceEnabled ?? false
+  globalVoicePttKey.value = store.global.voicePttKey === 'ctrl+space' ? 'ctrl+space' : 'alt'
+  globalVoiceLanguage.value = store.global.voiceLanguage ?? 'auto'
+  globalVoiceModel.value = store.global.voiceModel ?? null
+  globalVoiceCommandPath.value = store.global.voiceCommandPath ?? ''
+  globalVoiceFfmpegPath.value = store.global.voiceFfmpegPath ?? ''
+  globalVoiceTemperature.value = typeof store.global.voiceTemperature === 'number' ? store.global.voiceTemperature : 0
+  globalVoicePrompt.value = store.global.voicePrompt ?? ''
+  globalVoiceTranslateToEnglish.value = store.global.voiceTranslateToEnglish ?? false
+  globalVoiceSuppressNst.value = store.global.voiceSuppressNonSpeechTokens ?? true
+  hydratingVoiceForm.value = false
 }
+
+watch(
+  () => globalVoiceModel.value,
+  (next, prev) => {
+    if (hydratingVoiceForm.value) return
+    if (next === prev) return
+    globalVoiceTemperature.value = recommendedTemperatureForModel(next)
+  },
+)
 
 // Init project form from selected project
 function syncProjectForm(project: ProjectSettings | null) {
@@ -1616,12 +1883,45 @@ async function saveGlobal() {
       tags: globalTags.value,
       worktreesPath: globalWorktreesPath.value,
       worktreesPrefixByProject: globalWorktreesPrefixByProject.value,
+      voiceEnabled: globalVoiceEnabled.value,
+      voicePttKey: globalVoicePttKey.value,
+      voiceLanguage: globalVoiceLanguage.value,
+      voiceModel: globalVoiceModel.value,
+      voiceCommandPath: globalVoiceCommandPath.value.trim(),
+      voiceFfmpegPath: globalVoiceFfmpegPath.value.trim(),
+      voiceTemperature: globalVoiceTemperature.value,
+      voicePrompt: globalVoicePrompt.value,
+      voiceTranslateToEnglish: globalVoiceTranslateToEnglish.value,
+      voiceSuppressNonSpeechTokens: globalVoiceSuppressNst.value,
     })
     $q.notify({ type: 'positive', message: t('settings.saved'), position: 'top' })
   } catch {
     $q.notify({ type: 'negative', message: t('settings.saveError'), position: 'top' })
   } finally {
     savingGlobal.value = false
+  }
+}
+
+async function installVoiceModel(name: string) {
+  voiceActionModel.value = name
+  try {
+    await store.downloadVoiceModel(name)
+  } catch {
+    $q.notify({ type: 'negative', message: t('voice.downloadFailed'), position: 'top' })
+  } finally {
+    voiceActionModel.value = null
+  }
+}
+
+async function removeVoiceModel(name: string) {
+  voiceActionModel.value = name
+  try {
+    await store.deleteVoiceModel(name)
+    if (globalVoiceModel.value === name) globalVoiceModel.value = null
+  } catch {
+    $q.notify({ type: 'negative', message: t('voice.deleteFailed'), position: 'top' })
+  } finally {
+    voiceActionModel.value = null
   }
 }
 
@@ -1714,6 +2014,8 @@ function filterBranches(val: string, update: (fn: () => void) => void) {
 // Init
 onMounted(async () => {
   await Promise.all([store.fetchSettings(), store.fetchActiveMcpServers(), fetchAvailableSkills()])
+  await store.fetchVoiceModels()
+  await store.fetchVoiceRuntime()
   syncGlobalForm()
 })
 
@@ -1734,6 +2036,7 @@ onUnmounted(() => {
   width: 100%;
   max-width: 900px;
   margin: 0 auto;
+  padding-bottom: 88px;
 }
 
 .settings-header {
@@ -1794,6 +2097,19 @@ onUnmounted(() => {
   }
 }
 
+.mono-guide {
+  margin: 0;
+  white-space: pre-wrap;
+  background: #1a1a2e;
+  border: 1px solid #2a2a4a;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  line-height: 1.35;
+  color: #c9c9e8;
+}
+
 .readonly-input {
   :deep(.q-field__control) {
     background: #16162a;
@@ -1821,6 +2137,19 @@ onUnmounted(() => {
   &:hover {
     background-color: rgba(255, 255, 255, 0.03);
   }
+}
+
+.settings-sticky-actions {
+  position: fixed;
+  right: 20px;
+  bottom: 14px;
+  z-index: 20;
+  background: rgba(34, 34, 68, 0.94);
+  border: 1px solid #2a2a4a;
+  border-radius: 8px;
+  padding: 8px 10px;
+  backdrop-filter: blur(2px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
 }
 
 .project-item--active {

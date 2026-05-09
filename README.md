@@ -155,6 +155,90 @@ If you need to pin a specific version of the Notion MCP server, use a fork, or a
 
 Without a valid token configured, the Notion import field in the workspace creation form will return an error when you click **Refresh** or submit a Notion URL — the rest of Kōbō (workspaces, agents, tasks, Git integration) keeps working independently.
 
+## Voice transcription (local Whisper)
+
+Kōbō supports local voice transcription with push-to-talk in both:
+
+- `WorkspacePage` (chat input)
+- `CreatePage` (workspace instructions textarea)
+
+### Requirements
+
+- `whisper-cli` from [`whisper.cpp`](https://github.com/ggml-org/whisper.cpp)
+- `ffmpeg`
+- `cmake` (required to build `whisper.cpp` from source)
+- At least one Whisper model downloaded from **Settings → Voice**
+
+### Install `whisper.cpp` (Linux/macOS)
+
+```bash
+git clone https://github.com/ggml-org/whisper.cpp.git
+cd whisper.cpp
+cmake -B build
+cmake --build build -j
+```
+
+This usually produces `build/bin/whisper-cli`.
+
+You can also download a prebuilt archive from the `whisper.cpp` releases page (for example: <https://github.com/ggml-org/whisper.cpp/releases/tag/v1.8.4>) and point Kōbō to the extracted `whisper-cli` binary path.
+
+### Install `ffmpeg`
+
+Ubuntu / Debian:
+
+```bash
+sudo apt update
+sudo apt install -y cmake build-essential ffmpeg
+```
+
+Windows:
+
+- Install `ffmpeg` (for example via Chocolatey: `choco install ffmpeg`, or via Scoop: `scoop install ffmpeg`)
+- Verify in PowerShell:
+
+```powershell
+where ffmpeg
+ffmpeg -version
+```
+
+### Windows notes for `whisper.cpp`
+
+Install CMake and Visual Studio Build Tools (C/C++), then build `whisper.cpp` (or use a prebuilt `whisper-cli`), then verify:
+
+```powershell
+where whisper-cli
+whisper-cli -h
+```
+
+### Configure in Kōbō
+
+Open **Settings → Voice**:
+
+- Enable voice transcription
+- Optionally set:
+  - **Whisper binary path (optional)**
+  - **ffmpeg binary path (optional)**
+- If left empty, Kōbō falls back to:
+  - `whisper-cli` from `PATH` (or `WHISPER_CPP_COMMAND` if set)
+  - `ffmpeg` from `PATH`
+- Download a model (e.g. `base`) and select it as active
+
+The Voice panel shows runtime status (`ready/missing`) for both Whisper and ffmpeg so setup issues are visible immediately.
+
+### Advanced voice parameters
+
+Kōbō exposes additional transcription settings in **Settings → Voice**:
+
+- **Temperature** (`0..1`) — decoding stability vs flexibility
+- **Initial prompt** — optional context/jargon for better recognition
+- **Translate to English** — translate non-English speech to English
+- **Suppress non-speech tokens** — reduce non-speech artifacts in output
+
+Recommended defaults by model:
+
+- `tiny` / `base` → `0.1`
+- `small` / `medium` / `large-v3` → `0.2`
+
 ## Sentry integration
 
 Kōbō can turn a Sentry issue into a dedicated "fix workspace" — you paste the issue URL at workspace creation and Kōbō extracts the stacktrace, culprit, tags, offending spans and extra context, writes them as a local markdown file inside the worktree (`.ai/thoughts/SENTRY-<id>.md`), and primes the Claude agent with a TDD fix workflow that points at that file. The agent also keeps access to the Sentry MCP tools (`search_issue_events`, `get_issue_tag_values`, `get_sentry_resource`) so it can dig deeper on its own. **This feature is opt-in and reuses the Sentry MCP configuration you already have for Claude Code** — Kōbō does not manage a Sentry token separately.

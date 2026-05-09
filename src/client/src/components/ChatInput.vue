@@ -128,6 +128,30 @@
       </q-btn>
 
       <q-btn
+        flat
+        dense
+        :icon="isTranscribing ? 'hourglass_top' : isRecording ? 'mic' : 'mic_none'"
+        :color="isRecording ? 'red-5' : isTranscribing ? 'amber-6' : 'grey-6'"
+        :disable="!voiceEnabled || isTranscribing"
+        :class="{ 'voice-btn--recording': isRecording }"
+        @mousedown.prevent="startVoiceCapture"
+        @mouseup.prevent="stopVoiceCapture"
+        @mouseleave.prevent="stopVoiceCapture"
+        @touchstart.prevent="startVoiceCapture"
+        @touchend.prevent="stopVoiceCapture"
+      >
+        <q-tooltip>
+          {{
+            isTranscribing
+              ? $t('voice.transcribing')
+              : isRecording
+                ? $t('voice.recording')
+                : $t('voice.holdToTalk')
+          }}
+        </q-tooltip>
+      </q-btn>
+
+      <q-btn
         v-if="isQueued"
         flat
         dense
@@ -155,6 +179,10 @@
         <kbd>Enter</kbd> {{ $t('common.send') }} <span class="q-mx-xs">&middot;</span> <kbd>Shift+Enter</kbd> {{ $t('common.newLine') }} <span class="q-mx-xs">&middot;</span> <kbd>↑↓</kbd> {{ $t('common.history') }}
       </div>
       <q-space />
+      <div v-if="isTranscribing" class="row items-center text-caption text-amber-6 q-mr-sm">
+        <q-spinner-dots size="14px" color="amber-6" class="q-mr-xs" />
+        <span>{{ $t('voice.transcribing') }}</span>
+      </div>
       <QuotaFooter class="q-mr-md" />
       <q-btn
         v-if="showInterrupt"
@@ -181,13 +209,14 @@ import { useQuasar } from 'quasar'
 import QuotaFooter from 'src/components/QuotaFooter.vue'
 import SlashSuggestionsPopup from 'src/components/SlashSuggestionsPopup.vue'
 import { type SlashDropdownItem, useSlashAutocomplete } from 'src/composables/use-slash-autocomplete'
+import { useSettingsStore } from 'src/stores/settings'
 import { useTemplatesStore } from 'src/stores/templates'
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { buildTemplateVars, expandTemplate } from 'src/utils/expand-template'
 import { KOBO_COMMANDS } from 'src/utils/kobo-commands'
 import { isBusyStatus } from 'src/utils/workspace-status'
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{
@@ -197,6 +226,7 @@ const props = defineProps<{
 const { t } = useI18n()
 const $q = useQuasar()
 const store = useWorkspaceStore()
+const settingsStore = useSettingsStore()
 const wsStore = useWebSocketStore()
 const templatesStore = useTemplatesStore()
 const message = ref('')
@@ -267,6 +297,13 @@ interface PendingImage {
 const pendingImages = ref<PendingImage[]>([])
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const isDragging = ref(false)
+const isRecording = ref(false)
+const isTranscribing = ref(false)
+const mediaRecorderRef = ref<MediaRecorder | null>(null)
+const mediaStreamRef = ref<MediaStream | null>(null)
+const chunksRef = ref<BlobPart[]>([])
+const recordTimeoutRef = ref<ReturnType<typeof setTimeout> | null>(null)
+const MAX_RECORDING_MS = 60_000
 
 const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
 
@@ -449,6 +486,7 @@ watch(
   (wid) => {
     const queued = store.queuedMessages[wid]
     message.value = queued ? queued.content : ''
+    if (isRecording.value) void stopVoiceCapture()
   },
 )
 
@@ -470,6 +508,22 @@ watch(message, async () => {
   for (const tempId of removedTempIds) {
     removeImage(tempId)
   }
+})
+
+window.addEventListener('keydown', onWindowKeyDown)
+window.addEventListener('keyup', onWindowKeyUp)
+window.addEventListener('blur', onWindowBlur)
+document.addEventListener('visibilitychange', onVisibilityChange)
+onUnmounted(() => {
+  window.removeEventListener('keydown', onWindowKeyDown)
+  window.removeEventListener('keyup', onWindowKeyUp)
+  window.removeEventListener('blur', onWindowBlur)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
+  if (recordTimeoutRef.value) {
+    clearTimeout(recordTimeoutRef.value)
+    recordTimeoutRef.value = null
+  }
+  if (isRecording.value) void stopVoiceCapture()
 })
 
 function selectDropdownItem(item: SlashDropdownItem | undefined) {
@@ -564,6 +618,8 @@ const isAwaitingUser = computed(() => store.selectedWorkspace?.status === 'await
 const isDisabled = computed(() => {
   return !props.workspaceId || isAutoLoopRunning.value || isAwaitingUser.value
 })
+
+const voiceEnabled = computed(() => settingsStore.global.voiceEnabled && !isDisabled.value)
 
 const stoppingAutoLoop = ref(false)
 async function stopAutoLoopFromChat() {
@@ -704,6 +760,118 @@ async function sendMessage() {
     }
   } else {
     wsStore.sendChatMessage(props.workspaceId, composedText, store.selectedSessionId ?? undefined)
+  }
+}
+
+async function startVoiceCapture() {
+  if (!voiceEnabled.value || isRecording.value || isTranscribing.value) return
+  if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
+    $q.notify({ type: 'warning', message: t('voice.notSupported'), position: 'top', timeout: 4000 })
+    return
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+    mediaStreamRef.value = stream
+    chunksRef.value = []
+    const mimeType = MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : ''
+    const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream)
+    recorder.ondataavailable = (event) => {
+      if (event.data && event.data.size > 0) chunksRef.value.push(event.data)
+    }
+    recorder.start()
+    mediaRecorderRef.value = recorder
+    isRecording.value = true
+    recordTimeoutRef.value = setTimeout(() => {
+      void stopVoiceCapture()
+      $q.notify({ type: 'info', message: t('voice.maxDurationReached'), position: 'top', timeout: 3500 })
+    }, MAX_RECORDING_MS)
+  } catch {
+    $q.notify({ type: 'negative', message: t('voice.errorMicPermission'), position: 'top', timeout: 5000 })
+  }
+}
+
+async function stopVoiceCapture() {
+  if (!isRecording.value) return
+  const recorder = mediaRecorderRef.value
+  if (!recorder) return
+  isRecording.value = false
+  isTranscribing.value = true
+  if (recordTimeoutRef.value) {
+    clearTimeout(recordTimeoutRef.value)
+    recordTimeoutRef.value = null
+  }
+
+  const blob = await new Promise<Blob>((resolve) => {
+    recorder.onstop = () => resolve(new Blob(chunksRef.value, { type: 'audio/webm' }))
+    recorder.stop()
+  })
+
+  try {
+    if (blob.size === 0) throw new Error('MIC_AUDIO_INVALID')
+    const fd = new FormData()
+    fd.append('audio', blob, 'voice.webm')
+    fd.append('language', settingsStore.global.voiceLanguage || 'auto')
+    const res = await fetch(`/api/voice/workspaces/${encodeURIComponent(props.workspaceId)}/transcribe`, {
+      method: 'POST',
+      body: fd,
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      throw new Error(String(body.code ?? body.error ?? `HTTP_${res.status}`))
+    }
+    const data = (await res.json()) as { text: string }
+    if (data.text?.trim()) {
+      message.value = message.value ? `${message.value.trimEnd()} ${data.text.trim()}` : data.text.trim()
+    }
+  } catch (err) {
+    const code = err instanceof Error ? err.message : 'TRANSCRIPTION_FAILED'
+    const map: Record<string, string> = {
+      VOICE_DISABLED: 'voice.errorDisabled',
+      MODEL_NOT_CONFIGURED: 'voice.errorModelMissing',
+      MODEL_NOT_INSTALLED: 'voice.errorModelNotInstalled',
+      VOICE_RUNTIME_MISSING: 'voice.errorRuntimeMissing',
+      MIC_AUDIO_INVALID: 'voice.errorAudioInvalid',
+      LANGUAGE_INVALID: 'voice.errorLanguageInvalid',
+      TRANSCRIPTION_TIMEOUT: 'voice.errorTranscription',
+    }
+    $q.notify({ type: 'negative', message: t(map[code] ?? 'voice.errorTranscription'), position: 'top', timeout: 5000 })
+  } finally {
+    mediaRecorderRef.value = null
+    chunksRef.value = []
+    mediaStreamRef.value?.getTracks().forEach((t) => {
+      t.stop()
+    })
+    mediaStreamRef.value = null
+    isTranscribing.value = false
+  }
+}
+
+function shouldHandlePtt(event: KeyboardEvent): boolean {
+  if (!voiceEnabled.value) return false
+  const key = settingsStore.global.voicePttKey
+  if (key === 'ctrl+space') return event.ctrlKey && event.code === 'Space'
+  return event.key === 'Alt'
+}
+
+function onWindowKeyDown(event: KeyboardEvent) {
+  if (!shouldHandlePtt(event) || event.repeat) return
+  event.preventDefault()
+  void startVoiceCapture()
+}
+
+function onWindowKeyUp(event: KeyboardEvent) {
+  if (!shouldHandlePtt(event)) return
+  event.preventDefault()
+  void stopVoiceCapture()
+}
+
+function onWindowBlur() {
+  if (isRecording.value) void stopVoiceCapture()
+}
+
+function onVisibilityChange() {
+  if (document.visibilityState !== 'visible' && isRecording.value) {
+    void stopVoiceCapture()
   }
 }
 
@@ -855,6 +1023,25 @@ function onKeydown(event: KeyboardEvent) {
   background-color: #1e1e36;
   border-bottom: 1px solid rgba(108, 99, 255, 0.4);
   border-top: 1px solid rgba(108, 99, 255, 0.4);
+}
+
+.voice-btn--recording {
+  animation: voice-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes voice-pulse {
+  0% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.06);
+    opacity: 0.86;
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
 }
 
 .image-tag-close {

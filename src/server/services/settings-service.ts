@@ -132,6 +132,16 @@ export interface GlobalSettings {
   tags: string[]
   worktreesPath: string
   worktreesPrefixByProject: boolean
+  voiceEnabled: boolean
+  voicePttKey: 'alt' | 'ctrl+space'
+  voiceLanguage: string
+  voiceModel: string | null
+  voiceCommandPath: string
+  voiceFfmpegPath: string
+  voiceTemperature: number
+  voicePrompt: string
+  voiceTranslateToEnglish: boolean
+  voiceSuppressNonSpeechTokens: boolean
 }
 
 /** Default workspace tags seeded on fresh install and on settings upgrade. */
@@ -334,6 +344,29 @@ const settingsMigrations: SettingsMigration[] = [
       }
     },
   },
+  {
+    version: 17,
+    name: 'add-voice-transcription-settings',
+    migrate({ global }) {
+      if (typeof global.voiceEnabled !== 'boolean') global.voiceEnabled = false
+      if (global.voicePttKey !== 'alt' && global.voicePttKey !== 'ctrl+space') global.voicePttKey = 'alt'
+      if (typeof global.voiceLanguage !== 'string' || global.voiceLanguage.length === 0) global.voiceLanguage = 'auto'
+      if (typeof global.voiceModel !== 'string' && global.voiceModel !== null) global.voiceModel = null
+      if (typeof global.voiceCommandPath !== 'string') global.voiceCommandPath = ''
+      if (typeof global.voiceFfmpegPath !== 'string') global.voiceFfmpegPath = ''
+    },
+  },
+  {
+    version: 18,
+    name: 'add-voice-advanced-settings',
+    migrate({ global }) {
+      const t = Number(global.voiceTemperature)
+      if (!Number.isFinite(t) || t < 0 || t > 1) global.voiceTemperature = 0
+      if (typeof global.voicePrompt !== 'string') global.voicePrompt = ''
+      if (typeof global.voiceTranslateToEnglish !== 'boolean') global.voiceTranslateToEnglish = false
+      if (typeof global.voiceSuppressNonSpeechTokens !== 'boolean') global.voiceSuppressNonSpeechTokens = true
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -405,6 +438,16 @@ function defaultSettings(): Settings {
       tags: [...DEFAULT_WORKSPACE_TAGS],
       worktreesPath: WORKTREES_PATH,
       worktreesPrefixByProject: false,
+      voiceEnabled: false,
+      voicePttKey: 'alt',
+      voiceLanguage: 'auto',
+      voiceModel: null,
+      voiceCommandPath: '',
+      voiceFfmpegPath: '',
+      voiceTemperature: 0,
+      voicePrompt: '',
+      voiceTranslateToEnglish: false,
+      voiceSuppressNonSpeechTokens: true,
     },
     projects: [],
   }
@@ -680,6 +723,16 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'tags',
     'worktreesPath',
     'worktreesPrefixByProject',
+    'voiceEnabled',
+    'voicePttKey',
+    'voiceLanguage',
+    'voiceModel',
+    'voiceCommandPath',
+    'voiceFfmpegPath',
+    'voiceTemperature',
+    'voicePrompt',
+    'voiceTranslateToEnglish',
+    'voiceSuppressNonSpeechTokens',
   ]
   const filtered = pickKnownKeys<GlobalSettings>(data as Record<string, unknown>, allowedGlobalKeys)
   if (filtered.tags !== undefined) {
@@ -696,6 +749,10 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
   if (filtered.audioNotificationVolume !== undefined) {
     const v = Number(filtered.audioNotificationVolume)
     filtered.audioNotificationVolume = Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 1
+  }
+  if (filtered.voiceTemperature !== undefined) {
+    const t = Number(filtered.voiceTemperature)
+    filtered.voiceTemperature = Number.isFinite(t) ? Math.max(0, Math.min(1, t)) : settings.global.voiceTemperature
   }
   if (filtered.worktreesPath !== undefined) {
     filtered.worktreesPath = validateWorktreesPath(filtered.worktreesPath, { allowEmpty: false })
