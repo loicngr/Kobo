@@ -14,9 +14,11 @@ import { buildClaudeOptions } from './options-builder.js'
 import { buildPreCompactCustomInstructions } from './precompact-hook.js'
 import { resolveClaudeBinaryPath } from './resolve-binary.js'
 
+type McpStdioServerConfigWithAlwaysLoad = McpStdioServerConfig & { alwaysLoad: boolean }
+
 function toMcpServersMap(specs: StartOptions['mcpServers']): Options['mcpServers'] | undefined {
   if (!specs || specs.length === 0) return undefined
-  const map: Record<string, McpStdioServerConfig> = {}
+  const map: Record<string, McpStdioServerConfigWithAlwaysLoad> = {}
   for (const s of specs) {
     // `alwaysLoad: true` is required: without it, MCP tools sit behind the
     // SDK's ToolSearch indirection that — even under bypassPermissions —
