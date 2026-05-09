@@ -66,25 +66,25 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.2.126",
-    "@hono/node-server": "^1.19.13",
+    "@anthropic-ai/claude-agent-sdk": "^0.2.90",
+    "@hono/node-server": "^2.0.2",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "better-sqlite3": "^12.8.0",
+    "better-sqlite3": "^12.9.0",
     "cron-parser": "^5.5.0",
-    "hono": "^4.12.12",
-    "nanoid": "^5.1.7",
+    "hono": "^4.12.18",
+    "nanoid": "^5.1.11",
     "node-pty": "^1.1.0",
     "ws": "^8.20.0"
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.10",
     "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^25.5.2",
+    "@types/node": "^25.6.2",
     "@types/ws": "^8.18.1",
-    "@vitest/runner": "^4.1.2",
+    "@vitest/runner": "^4.1.5",
     "concurrently": "^9.2.1",
     "tsx": "^4.21.0",
-    "typescript": "^6.0.2",
-    "vitest": "^3.2.4"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.5"
   }
 }
