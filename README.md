@@ -1,6 +1,6 @@
 # Kōbō
 
-> **Kōbō** (工房) — Japanese for *workshop*. A multi-workspace agent manager for [Claude Code](https://claude.com/claude-code).
+> **Kōbō** (工房) — Japanese for *workshop*. A multi-workspace agent manager for [Claude Code](https://claude.com/claude-code) and [OpenAI Codex](https://developers.openai.com/codex/) *(Codex support is still experimental — see [the section below](#openai-codex-integration))*.
 
 > [!NOTE]
 > 🚧 **Active development** — breaking changes may still land on `develop`. The database layer ships with forward-only migrations and a timestamped pre-migration backup of `kobo.db` before any schema change, so upgrades preserve your data even across invasive refactors.
@@ -12,7 +12,7 @@ Think of it as an apprentice's hall: you hand out missions, each apprentice sets
 ## Features
 
 - **Isolated git worktrees** — every workspace runs on its own branch in its own directory, with a configurable global worktrees root for new workspaces, so concurrent Claude sessions never step on each other
-- **Pluggable agent engine** — Kōbō talks to agents through an `AgentEngine` contract with a normalised `AgentEvent` stream (`src/server/services/agent/engines/`). The `claude-code` engine runs on the official [`@anthropic-ai/claude-agent-sdk`](https://github.com/anthropics/claude-agent-sdk-typescript); adding a second runtime (e.g. Codex) only requires a new adapter, not a rewrite of the UI or orchestration layer
+- **Pluggable agent engine — two runtimes shipped** — Kōbō talks to agents through an `AgentEngine` contract with a normalised `AgentEvent` stream (`src/server/services/agent/engines/`). The `claude-code` engine runs on the official [`@anthropic-ai/claude-agent-sdk`](https://github.com/anthropics/claude-agent-sdk-typescript); the `codex` engine speaks the [`codex app-server`](https://github.com/openai/codex) JSON-RPC protocol over stdio with the official [`@openai/codex`](https://www.npmjs.com/package/@openai/codex) binary. Engine is chosen per-workspace at creation time, with a single normalised UI (sub-agents, tool calls, todos, reasoning, permission modes, MCP servers, auto-loop) covering both. Adding a third runtime only requires a new adapter, not a rewrite of the UI or orchestration layer
 - **Interactive `AskUserQuestion`** — when the agent invokes `AskUserQuestion`, Kōbō pauses the session via the SDK's `defer` pattern, surfaces a question panel in the UI, and resumes the agent once the user answers. The session does not occupy any resources while it waits
 - **Rich chat feed** — live streaming text, thinking blocks, inline tool calls with expandable diffs for Edit/Write, per-turn session cards, markdown rendering, jump-to-previous-user-message button, and infinite scroll-up over persisted history
 - **Task & acceptance criteria tracking** — the agent reports progress through a dedicated MCP server (`kobo-tasks`) that reads and updates tasks directly from the SQLite database
@@ -27,7 +27,7 @@ Think of it as an apprentice's hall: you hand out missions, each apprentice sets
 - **Prompt templates** — personal library of reusable prompts with variable substitution (`{working_branch}`, `{commit_count}`, etc.), insertable from the chat input via `/` autocomplete; editable in Settings > Templates
 - **Favorites and tags** — pin workspaces to the top via right-click favourite, organise with per-workspace tags filterable from the sidebar; a global tag catalogue keeps colours consistent across workspaces
 - **Health panel + config export/import** — inspect backend health (agent sessions, migration state, dev servers, DB size) and roundtrip your Kōbō config (settings, templates, skills) between machines via JSON
-- **Account-level quota panel** — a colored mini-bar badge in the chat footer shows the current Claude Code 5-hour and 7-day usage, fed by a backend service that polls Anthropic's OAuth usage endpoint every 60 seconds. Click to open a popover with full bars, reset times, a "Refresh now" button, and a one-click jump to the Stats tab. Pluggable per-provider (Codex-ready), persisted in SQLite so the badge is populated on cold start, and account-level so it's the same across workspaces sharing the same engine
+- **Account-level quota panel** — a colored mini-bar badge in the chat footer shows the current Claude Code 5-hour and 7-day usage (Claude workspaces) or live Codex rate-limit buckets (Codex workspaces — driven by the structured `account/rateLimits/updated` app-server notification). Click to open a popover with full bars, reset times, a "Refresh now" button, and a one-click jump to the Stats tab. Pluggable per-provider, persisted in SQLite so the badge is populated on cold start, and account-level so it's the same across workspaces sharing the same engine
 - **Resizable right drawer** — drag-to-resize horizontally and vertically, with tab state and split ratio persisted to localStorage
 - **Soft interrupt** — pause an agent mid-execution (SIGINT, like pressing Escape in Claude Code) without killing the process; the agent stops the current tool and waits for the next message
 - **Archive instead of delete** — soft-remove workspaces without losing the worktree, branches, or history; unarchive restores the exact pre-archive state
@@ -51,7 +51,9 @@ Think of it as an apprentice's hall: you hand out missions, each apprentice sets
 ### Prerequisites
 
 - Node.js ≥ 20
-- [Claude Code](https://claude.com/claude-code) authenticated via `claude /login` once. The `claude` CLI is **no longer required at runtime** — Kōbō embeds the official [`@anthropic-ai/claude-agent-sdk`](https://github.com/anthropics/claude-agent-sdk-typescript), which reuses the same login.
+- At least one agent runtime, authenticated:
+  - [Claude Code](https://claude.com/claude-code) — `claude /login` once. The `claude` CLI is **no longer required at runtime** — Kōbō embeds the official [`@anthropic-ai/claude-agent-sdk`](https://github.com/anthropics/claude-agent-sdk-typescript), which reuses the same login.
+  - [OpenAI Codex](https://developers.openai.com/codex/) — `codex login` once, or export `OPENAI_API_KEY` in the env. See [OpenAI Codex integration](#openai-codex-integration). Workspaces pick an engine at creation time, so you only need to set up the one(s) you use.
 - Git
 - Optional: Docker (if you configure per-workspace dev servers)
 - Optional: `gh` CLI (if you use the PR automation)
@@ -154,6 +156,62 @@ If you need to pin a specific version of the Notion MCP server, use a fork, or a
 - `NOTION_MCP_ARGS` — space-separated arguments (default: `-y @notionhq/notion-mcp-server`)
 
 Without a valid token configured, the Notion import field in the workspace creation form will return an error when you click **Refresh** or submit a Notion URL — the rest of Kōbō (workspaces, agents, tasks, Git integration) keeps working independently.
+
+## OpenAI Codex integration
+
+> [!WARNING]
+> 🧪 **Experimental** — the Codex engine has shipped but is still maturing. The Claude Code engine remains the primary, battle-tested path. Expect occasional rough edges on Codex-only flows (tool rendering for less common item types, sub-agent interactions, edge cases around `collaborationMode` and approval prompts). Bugs and feedback welcome on the issue tracker.
+
+Kōbō ships a second agent engine that runs on top of the official **OpenAI Codex** CLI. Pick `OpenAI Codex` in the engine selector when you create a workspace and the agent talks to the `codex` binary instead of Claude Code, with the same UI surface: streaming text, reasoning blocks, tool cards (Bash, Edit, Read, WebSearch, MCP tools, ImageGeneration), sub-agents (Codex's `collabAgentToolCall` family is mapped onto the same `Task` panel Claude's Task tool feeds), todo list, permission modes, interactive approvals, structured rate limits, auto-loop. **This feature is opt-in and requires you to authenticate the `codex` CLI separately from Claude Code** — Kōbō ships no OpenAI credentials.
+
+Under the hood, Kōbō spawns a long-lived `codex app-server` subprocess per workspace and speaks the [Codex app-server JSON-RPC protocol](https://github.com/openai/codex/tree/main/codex-rs/app-server) over stdio. The `codex` binary is pulled in via the [`@openai/codex`](https://www.npmjs.com/package/@openai/codex) npm package, which is a direct dependency — no separate install required.
+
+### Authenticating the Codex CLI
+
+Two paths, pick one:
+
+1. **`codex login` (recommended)** — run `codex login` once. The CLI writes a token to `~/.codex/auth.json` which Kōbō's spawned `codex app-server` reuses automatically:
+
+   ```bash
+   codex login
+   ```
+
+2. **`OPENAI_API_KEY` env var** — set the variable before launching Kōbō:
+
+   ```bash
+   OPENAI_API_KEY=sk-your-key-here PORT=9999 npx @loicngr/kobo@latest
+   ```
+
+Kōbō does not store or proxy the key. If you change the credential or revoke it, Kōbō follows automatically on the next session start.
+
+### Permission modes (Codex)
+
+Kōbō's four permission modes (`plan` / `bypass` / `strict` / `interactive`) map to Codex's `sandbox` + `approvalPolicy` pair, plus a separate `collaborationMode` flag that gates interactive questions:
+
+| Kōbō mode | Codex sandbox | Codex approvalPolicy | Codex collaborationMode | Effect |
+|---|---|---|---|---|
+| `plan` | `read-only` | `never` | `plan` | Read-only sandbox + the agent can ask interactive questions (`request_user_input`) |
+| `bypass` | `workspace-write` | `never` | `default` | Full autonomy in the worktree, no approvals |
+| `strict` | `workspace-write` | `on-request` | `default` | Writes allowed, approval prompted on sensitive commands |
+| `interactive` | `workspace-write` | `unless-trusted` | `default` | Writes allowed, approval prompted on every untrusted action |
+
+Interactive Q&A (`request_user_input`) is only available in `plan` — this is a constraint of Codex itself, not Kōbō. The typical workflow is: brainstorm in `plan` until the agent has the context it needs, then switch to `bypass`/`strict` for execution.
+
+### Models and reasoning effort
+
+The Codex engine exposes the OpenAI model catalogue (`gpt-5-codex`, `gpt-5.4`, `o4-mini`, `o3`) and the standard reasoning-effort scale (`auto` / `minimal` / `low` / `medium` / `high` / `xhigh`). Both selectors switch automatically when you flip the workspace's engine.
+
+### Sub-agents
+
+When the Codex agent uses its `spawnAgent` collab tool, Kōbō renders a **Task** card in the chat (like Claude's Task tool) and a live entry in the **SUB-AGENTS** panel of the right drawer — same plumbing the Claude engine uses. The same panel is hidden for engines that don't expose sub-agents.
+
+### MCP servers
+
+The `kobo-tasks` MCP server (and any other MCP server you configure on the workspace) is plumbed into Codex through the standard `config.mcp_servers` entry. Tool calls under those servers are pre-approved (`default_tools_approval_mode: 'auto'`) so the agent doesn't get blocked on every call.
+
+### When the binary is missing
+
+Without a working `codex` install or a valid credential, creating a `codex`-engine workspace returns a clear error at first turn and the workspace transitions to `error` status. The rest of Kōbō (Claude-engine workspaces, tasks, Git, dev servers) keeps working independently.
 
 ## Voice transcription (local Whisper)
 

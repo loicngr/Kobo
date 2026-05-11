@@ -1,8 +1,10 @@
 import { createClaudeCodeEngine } from './claude-code/engine.js'
+import { createCodexEngine } from './codex/engine.js'
 import type { AgentEngine } from './types.js'
 
 const ENGINES: Record<string, AgentEngine> = {
   'claude-code': createClaudeCodeEngine(),
+  codex: createCodexEngine(),
 }
 
 export function listEngines(): AgentEngine[] {

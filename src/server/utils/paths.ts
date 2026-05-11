@@ -111,8 +111,14 @@ export function getTemplatesPath(): string {
  * Absolute path to the compiled MCP server entry (shipped in the published
  * package as dist/mcp-server/kobo-tasks-server.js). Returns null if not
  * present — callers (orchestrator) then fall back to the TS source for dev.
+ *
+ * `KOBO_ENFORCE_LOCAL_HOME=1` (set by `npm run dev`) forces the source path
+ * even if a stale `dist/mcp-server/` from a prior `npm run build` is hanging
+ * around. Without this guard, edits to `kobo-tasks-server.ts` are silently
+ * ignored during dev (the orchestrator spawns the months-old compiled binary).
  */
 export function getCompiledMcpServerPath(): string | null {
+  if (process.env.KOBO_ENFORCE_LOCAL_HOME === '1') return null
   const compiled = getPackageAssetPath('dist', 'mcp-server', 'kobo-tasks-server.js')
   return fs.existsSync(compiled) ? compiled : null
 }

@@ -229,7 +229,9 @@
 
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
-import { MODEL_OPTION_DEFS } from 'src/constants/models'
+import { EFFORT_OPTION_DEFS_BY_ENGINE } from 'src/constants/efforts'
+import { MODEL_OPTION_DEFS, MODEL_OPTION_DEFS_BY_ENGINE } from 'src/constants/models'
+import { PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
 import type { AgentSession } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { useTimeAgo } from 'src/utils/formatters'
@@ -380,28 +382,35 @@ async function handleStop() {
   }
 }
 
-const modelOptions = computed(() => [
-  ...MODEL_OPTION_DEFS.map((option) => ({ label: t(option.i18nLabelKey), value: option.value })),
-])
+// All selectors below are driven by the active workspace's engine id (a
+// fixed value, set at creation). Falling back to Claude's full lists when the
+// engine id is unknown keeps existing workspaces working through any future
+// schema change.
+const currentEngineId = computed<string>(() => store.selectedWorkspace?.engine ?? 'claude-code')
 
-const reasoningOptions = computed(() => [
-  { label: formatReasoningLabel(t('reasoning.auto')), value: 'auto' },
-  { label: formatReasoningLabel(t('reasoning.low')), value: 'low' },
-  { label: formatReasoningLabel(t('reasoning.medium')), value: 'medium' },
-  { label: formatReasoningLabel(t('reasoning.high')), value: 'high' },
-  { label: formatReasoningLabel(t('reasoning.xhigh')), value: 'xhigh' },
-  { label: formatReasoningLabel(t('reasoning.max')), value: 'max' },
-])
+const modelOptions = computed(() => {
+  const defs = MODEL_OPTION_DEFS_BY_ENGINE[currentEngineId.value] ?? MODEL_OPTION_DEFS
+  return defs.map((option) => ({ label: t(option.i18nLabelKey), value: option.value }))
+})
+
+const reasoningOptions = computed(() => {
+  const defs = EFFORT_OPTION_DEFS_BY_ENGINE[currentEngineId.value] ?? EFFORT_OPTION_DEFS_BY_ENGINE['claude-code']
+  return defs.map((d) => ({
+    label: formatReasoningLabel(t(d.i18nLabelKey)),
+    value: d.value,
+  }))
+})
 
 const permissionModeOptions = computed(() => {
   const ws = store.selectedWorkspace
   const autoLoopOn = ws ? (store.autoLoopStates[ws.id]?.auto_loop ?? ws.autoLoop) : false
-  return [
-    { label: t('agentPermissionMode.plan'), value: 'plan' as const, disable: autoLoopOn },
-    { label: t('agentPermissionMode.bypass'), value: 'bypass' as const, disable: false },
-    { label: t('agentPermissionMode.strict'), value: 'strict' as const, disable: false },
-    { label: t('agentPermissionMode.interactive'), value: 'interactive' as const, disable: false },
-  ]
+  const supported = PERMISSION_MODES_BY_ENGINE[currentEngineId.value] ?? PERMISSION_MODES_BY_ENGINE['claude-code']
+  return supported.map((mode) => ({
+    label: t(`agentPermissionMode.${mode}`),
+    value: mode,
+    // `plan` is disabled while auto-loop is on (loop needs to execute, not plan).
+    disable: mode === 'plan' && autoLoopOn,
+  }))
 })
 
 const currentModel = computed({

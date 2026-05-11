@@ -44,19 +44,41 @@
         </q-card-section>
       </q-card>
 
-      <!-- Claude CLI -->
+      <!-- Agent runtimes (Claude + Codex) -->
       <q-card dark flat bordered>
         <q-card-section>
-          <div class="row items-center">
-            <div class="text-subtitle2">{{ $t('health.cliTitle') }}</div>
-            <q-space />
-            <q-icon :name="statusIcon(report.claudeCli.available)" :color="statusColor(report.claudeCli.available)" />
-          </div>
-          <div v-if="report.claudeCli.available" class="text-caption text-grey-5 q-mt-xs">
-            {{ report.claudeCli.version }}
-          </div>
-          <div v-else class="text-caption text-negative q-mt-xs">
-            {{ $t('health.cliMissing') }}
+          <div class="text-subtitle2 q-mb-sm">{{ $t('health.runtimesTitle') }}</div>
+          <div class="column q-gutter-sm">
+            <div class="row items-center">
+              <q-icon
+                :name="statusIcon(report.claudeCli.available)"
+                :color="statusColor(report.claudeCli.available)"
+                size="sm"
+              />
+              <span class="q-ml-sm text-body2">{{ $t('health.claudeCliTitle') }}</span>
+              <q-space />
+              <span v-if="report.claudeCli.available" class="text-caption text-grey-5">
+                {{ report.claudeCli.version }}
+              </span>
+              <span v-else class="text-caption text-negative">
+                {{ $t('health.claudeCliMissing') }}
+              </span>
+            </div>
+            <div class="row items-center">
+              <q-icon
+                :name="statusIcon(report.codexCli.available)"
+                :color="statusColor(report.codexCli.available)"
+                size="sm"
+              />
+              <span class="q-ml-sm text-body2">{{ $t('health.codexCliTitle') }}</span>
+              <q-space />
+              <span v-if="report.codexCli.available" class="text-caption text-grey-5">
+                {{ report.codexCli.version }}
+              </span>
+              <span v-else class="text-caption text-negative">
+                {{ $t('health.codexCliMissing') }}
+              </span>
+            </div>
           </div>
         </q-card-section>
       </q-card>
@@ -342,6 +364,7 @@ interface HealthReport {
   db: { path: string; sizeBytes: number | null; schemaVersion: number; currentSchemaVersion: number }
   settings: { schemaVersion: number }
   claudeCli: { available: boolean; version: string | null }
+  codexCli: { available: boolean; version: string | null }
   workspaces: { total: number; archived: number; worktreesMissing: WorktreeCheck[] }
   agentSessions: { orphaned: number }
   integrations: {

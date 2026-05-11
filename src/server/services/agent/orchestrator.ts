@@ -356,7 +356,7 @@ function readEffectiveSettingsSafe(projectPath: string): ReturnType<typeof getEf
   } catch (err) {
     console.warn('[orchestrator] Failed to load settings, using defaults:', err)
     return {
-      model: 'claude-opus-4-7',
+      model: 'auto',
       dangerouslySkipPermissions: true,
       prPromptTemplate: '',
       reviewPromptTemplate: '',

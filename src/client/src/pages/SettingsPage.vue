@@ -34,7 +34,7 @@
             <q-separator dark class="q-mb-md" />
 
             <!-- Localization -->
-            <div class="settings-card q-pa-md rounded-borders q-pb-sm q-mb-sm">
+            <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.language') }}</div>
               <q-select
                 :model-value="locale"
@@ -52,10 +52,10 @@
             </div>
 
             <!-- Default agent configuration -->
-            <div class="settings-card q-pa-md rounded-borders q-pb-sm q-mb-sm">
-              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.defaultModel') }}</div>
+            <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.defaultModelClaude') }}</div>
               <q-select
-                v-model="globalModel"
+                v-model="globalClaudeModel"
                 :options="modelOptions"
                 emit-value
                 map-options
@@ -67,16 +67,37 @@
                 class="settings-input q-mb-md"
               />
 
-              <div class="text-subtitle2 q-mb-sm q-mt-md">{{ $t('settings.defaultPermissionMode') }}</div>
+              <div class="text-subtitle2 q-mb-sm q-mt-md">{{ $t('settings.defaultModelCodex') }}</div>
+              <q-select
+                v-model="globalCodexModel"
+                :options="codexModelOptions"
+                emit-value
+                map-options
+                option-value="value"
+                option-label="label"
+                dense
+                dark
+                outlined
+                class="settings-input q-mb-md"
+              />
+
+              <div class="text-subtitle2 q-mb-sm q-mt-md">{{ $t('settings.defaultPermissionModeClaude') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.defaultPermissionModeHint') }}</div>
               <q-select
-                v-model="globalDefaultPermissionMode"
-                :options="[
-                  { label: $t('agentPermissionMode.plan'), value: 'plan' },
-                  { label: $t('agentPermissionMode.bypass'), value: 'bypass' },
-                  { label: $t('agentPermissionMode.strict'), value: 'strict' },
-                  { label: $t('agentPermissionMode.interactive'), value: 'interactive' },
-                ]"
+                v-model="globalClaudePermissionMode"
+                :options="claudePermissionModeOptions"
+                emit-value
+                map-options
+                dense
+                dark
+                outlined
+                class="settings-input q-mb-md"
+              />
+
+              <div class="text-subtitle2 q-mb-sm q-mt-md">{{ $t('settings.defaultPermissionModeCodex') }}</div>
+              <q-select
+                v-model="globalCodexPermissionMode"
+                :options="codexPermissionModeOptions"
                 emit-value
                 map-options
                 dense
@@ -87,7 +108,7 @@
             </div>
 
             <!-- Activity feed display -->
-            <div class="settings-card q-pa-md rounded-borders q-pb-sm q-mb-sm">
+            <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.activityFeed') }}</div>
               <q-toggle
                 :model-value="store.showVerboseSystemMessages"
@@ -101,7 +122,7 @@
             </div>
 
             <!-- Notifications -->
-            <div class="settings-card q-pa-md rounded-borders q-pb-sm q-mb-sm">
+            <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.notifications') }}</div>
               <div class="column q-gutter-xs">
                 <q-toggle
@@ -167,7 +188,7 @@
             </div>
 
             <!-- Voice transcription -->
-            <div class="settings-card q-pa-md rounded-borders q-pb-sm q-mb-sm">
+            <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('voice.title') }}</div>
               <div class="column q-gutter-sm">
                 <q-toggle
@@ -363,7 +384,7 @@ where ffmpeg</pre>
             </div>
 
             <!-- PR template + Git conventions -->
-            <div class="settings-card q-pa-md rounded-borders q-pb-sm q-mb-sm">
+            <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="row items-center q-mb-sm">
                 <div class="text-subtitle2">{{ $t('settings.prPromptTemplate') }}</div>
                 <q-space />
@@ -469,7 +490,7 @@ where ffmpeg</pre>
             </div>
 
             <!-- Editor -->
-            <div class="settings-card q-pa-md rounded-borders q-pb-sm q-mb-sm">
+            <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.editorCommand') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.editorCommandHint') }}</div>
               <q-input
@@ -483,7 +504,7 @@ where ffmpeg</pre>
             </div>
 
             <!-- MCP server selection -->
-            <div class="settings-card q-pa-md rounded-borders q-pb-sm q-mb-sm">
+            <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.mcpSelection') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.mcpSelectionHint') }}</div>
               <div class="q-mb-sm">
@@ -515,7 +536,7 @@ where ffmpeg</pre>
             </div>
 
             <!-- Notion integration status -->
-            <div class="settings-card q-pa-md rounded-borders q-pb-sm q-mb-sm">
+            <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.notionStatus') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.notionStatusHint') }}</div>
               <div class="q-mb-sm">
@@ -567,7 +588,7 @@ where ffmpeg</pre>
             </div>
 
             <!-- Sentry integration -->
-            <div class="settings-card q-pa-md rounded-borders q-pb-sm q-mb-sm">
+            <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ t('settings.sentryIntegration') }}</div>
               <div class="row items-center q-mb-sm">
                 <div class="text-subtitle2">{{ t('settings.sentryInitialPrompt') }}</div>
@@ -596,7 +617,7 @@ where ffmpeg</pre>
             </div>
 
             <!-- Workspace tags -->
-            <div class="settings-card q-pa-md rounded-borders q-pb-sm q-mb-sm">
+            <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.tagsTitle') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.tagsHint') }}</div>
               <q-select
@@ -614,7 +635,7 @@ where ffmpeg</pre>
               />
             </div>
 
-            <div class="settings-card q-pa-md rounded-borders q-pb-sm q-mb-sm">
+            <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.worktreesTitle') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.worktreesHint') }}</div>
               <q-input
@@ -641,7 +662,7 @@ where ffmpeg</pre>
             </div>
 
             <!-- Import / Export config -->
-            <div class="settings-card q-pa-md rounded-borders q-pb-sm q-mb-sm">
+            <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.shareTitle') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.shareHint') }}</div>
               <div class="row q-gutter-sm">
@@ -1223,7 +1244,8 @@ where ffmpeg</pre>
 
 <script setup lang="ts">
 import { type QInput, useQuasar } from 'quasar'
-import { MODEL_OPTION_DEFS } from 'src/constants/models'
+import { CODEX_MODEL_OPTION_DEFS, MODEL_OPTION_DEFS } from 'src/constants/models'
+import { type AgentPermissionMode, PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
 import type { ProjectSettings } from 'src/stores/settings'
 import { useSettingsStore } from 'src/stores/settings'
 import { type Template, useTemplatesStore } from 'src/stores/templates'
@@ -1242,7 +1264,8 @@ const { t, locale } = useI18n()
 const activeTab = ref('global')
 
 // Global form
-const globalModel = ref('auto')
+const globalClaudeModel = ref('auto')
+const globalCodexModel = ref('auto')
 const globalPrPrompt = ref('')
 const globalReviewPrompt = ref('')
 const globalGitConventions = ref('')
@@ -1262,7 +1285,8 @@ type ResettableField =
   | 'notionInitialPromptTemplate'
   | 'sentryInitialPromptTemplate'
 const resettingField = ref<ResettableField | null>(null)
-const globalDefaultPermissionMode = ref<'plan' | 'bypass' | 'strict' | 'interactive'>('bypass')
+const globalClaudePermissionMode = ref<AgentPermissionMode>('bypass')
+const globalCodexPermissionMode = ref<AgentPermissionMode>('bypass')
 const globalNotionMcpKey = ref('')
 const globalSentryMcpKey = ref('')
 const globalTags = ref<string[]>([])
@@ -1565,12 +1589,38 @@ function onLanguageChange(val: string) {
   localStorage.setItem('kobo:locale', val)
 }
 
-// Model options
+// Model options — split per engine. The Settings page exposes one selector
+// per engine (each engine has its own catalogue), and the project-level
+// selector keeps using the Claude catalogue (project default model is a
+// single string applied only when it matches the chosen engine; see
+// CreatePage's engine watcher for the runtime fallback).
 const modelOptions = computed(() => [
   ...MODEL_OPTION_DEFS.map((option) => ({ label: t(option.i18nLabelKey), value: option.value })),
 ])
 
+const codexModelOptions = computed(() => [
+  ...CODEX_MODEL_OPTION_DEFS.map((option) => ({ label: t(option.i18nLabelKey), value: option.value })),
+])
+
 const projectModelOptions = computed(() => [{ label: t('settings.useGlobal'), value: '' }, ...modelOptions.value])
+
+// Permission-mode lists per engine — single source of truth in
+// `constants/permissionModes.ts`, mirrored in backend capabilities. Codex
+// supports `interactive` since the app-server migration (item/tool/requestUserInput
+// gives real user-input round-trips); pulling from the constant ensures the
+// Settings dropdowns stay in sync with CreatePage/WorkspacePage automatically.
+const claudePermissionModeOptions = computed(() =>
+  PERMISSION_MODES_BY_ENGINE['claude-code'].map((value) => ({
+    label: t(`agentPermissionMode.${value}`),
+    value,
+  })),
+)
+const codexPermissionModeOptions = computed(() =>
+  PERMISSION_MODES_BY_ENGINE.codex.map((value) => ({
+    label: t(`agentPermissionMode.${value}`),
+    value,
+  })),
+)
 
 // Available template variables reference (displayed in the Global tab)
 const availableVariables = computed(() => [
@@ -1640,7 +1690,9 @@ const selectedProject = computed<ProjectSettings | null>(() => {
 // Init global form from store
 function syncGlobalForm() {
   hydratingVoiceForm.value = true
-  globalModel.value = store.global.defaultModel
+  const modelMap = store.global.defaultModelByEngine ?? {}
+  globalClaudeModel.value = modelMap['claude-code'] ?? 'auto'
+  globalCodexModel.value = modelMap.codex ?? 'auto'
   globalPrPrompt.value = store.global.prPromptTemplate
   globalReviewPrompt.value = store.global.reviewPromptTemplate ?? ''
   globalGitConventions.value = store.global.gitConventions
@@ -1654,12 +1706,15 @@ function syncGlobalForm() {
   globalNotionStatus.value = store.global.notionInProgressStatus ?? ''
   globalNotionInitialPrompt.value = store.global.notionInitialPromptTemplate ?? ''
   globalSentryInitialPrompt.value = store.global.sentryInitialPromptTemplate ?? ''
-  // Migrate legacy values ('auto-accept' or anything unrecognised) to 'bypass'
-  // — the safest non-plan default. 'plan' is preserved verbatim.
+  // Legacy/unknown values fall back to 'bypass' — safest non-plan default.
   {
-    const stored = store.global.defaultPermissionMode
-    globalDefaultPermissionMode.value =
-      stored === 'plan' || stored === 'bypass' || stored === 'strict' || stored === 'interactive' ? stored : 'bypass'
+    const modeMap = store.global.defaultPermissionModeByEngine ?? {}
+    const isValidMode = (v: unknown): v is 'plan' | 'bypass' | 'strict' | 'interactive' =>
+      v === 'plan' || v === 'bypass' || v === 'strict' || v === 'interactive'
+    const claudeStored = modeMap['claude-code']
+    globalClaudePermissionMode.value = isValidMode(claudeStored) ? claudeStored : 'bypass'
+    const codexStored = modeMap.codex
+    globalCodexPermissionMode.value = isValidMode(codexStored) ? codexStored : 'bypass'
   }
   globalNotionMcpKey.value = store.global.notionMcpKey ?? ''
   globalSentryMcpKey.value = store.global.sentryMcpKey ?? ''
@@ -1864,7 +1919,10 @@ async function saveGlobal() {
   savingGlobal.value = true
   try {
     await store.updateGlobal({
-      defaultModel: globalModel.value,
+      defaultModelByEngine: {
+        'claude-code': globalClaudeModel.value,
+        codex: globalCodexModel.value,
+      },
       prPromptTemplate: globalPrPrompt.value,
       reviewPromptTemplate: globalReviewPrompt.value,
       gitConventions: globalGitConventions.value,
@@ -1877,7 +1935,10 @@ async function saveGlobal() {
       notionInProgressStatus: globalNotionStatus.value,
       notionInitialPromptTemplate: globalNotionInitialPrompt.value,
       sentryInitialPromptTemplate: globalSentryInitialPrompt.value,
-      defaultPermissionMode: globalDefaultPermissionMode.value,
+      defaultPermissionModeByEngine: {
+        'claude-code': globalClaudePermissionMode.value,
+        codex: globalCodexPermissionMode.value,
+      },
       notionMcpKey: globalNotionMcpKey.value,
       sentryMcpKey: globalSentryMcpKey.value,
       tags: globalTags.value,
@@ -2062,6 +2123,11 @@ onUnmounted(() => {
 .settings-card {
   background: #222244;
   border: 1px solid #2a2a4a;
+}
+
+.settings-subcard {
+  background: #1a1a30;
+  border: 1px solid #3a3a5e;
 }
 
 .template-card {

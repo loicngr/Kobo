@@ -37,7 +37,12 @@ interface ProjectSettings {
 }
 
 interface GlobalSettings {
-  defaultModel: string
+  /**
+   * Default model id per engine. Keys are engine ids (e.g. `'claude-code'`,
+   * `'codex'`), values are model ids from that engine's catalogue (or `'auto'`).
+   * Replaces the legacy single-string `defaultModel` since v19.
+   */
+  defaultModelByEngine: Record<string, string>
   /** @deprecated Read-only legacy field. Use `defaultAgentPermissionMode`. */
   dangerouslySkipPermissions: boolean
   prPromptTemplate: string
@@ -53,11 +58,12 @@ interface GlobalSettings {
   notionStatusProperty: string
   notionInProgressStatus: string
   /**
-   * Unified default permission mode for new workspaces. May still hold legacy
-   * values like 'plan' or 'auto-accept' on first read after the migration —
-   * callers should treat anything unrecognised as a fallback to 'bypass'.
+   * Default permission mode per engine, applied at workspace creation when the
+   * user doesn't pick one explicitly. Codex's entry must be a mode it supports
+   * (no `'interactive'` — see backend `defaultPermissionModeByEngine`).
+   * Replaces the legacy single-string `defaultPermissionMode` since v20.
    */
-  defaultPermissionMode: string
+  defaultPermissionModeByEngine: Record<string, string>
   notionMcpKey: string
   sentryMcpKey: string
   tags: string[]
@@ -104,7 +110,7 @@ export type { DevServerConfig, E2eSettings, GlobalSettings, ProjectSettings }
 export const useSettingsStore = defineStore('settings', {
   state: () => ({
     global: {
-      defaultModel: 'claude-opus-4-7',
+      defaultModelByEngine: { 'claude-code': 'auto', codex: 'auto' } as Record<string, string>,
       dangerouslySkipPermissions: true,
       prPromptTemplate: '',
       reviewPromptTemplate: '',
@@ -118,7 +124,7 @@ export const useSettingsStore = defineStore('settings', {
       audioNotificationVolume: 1,
       notionStatusProperty: '',
       notionInProgressStatus: '',
-      defaultPermissionMode: 'plan',
+      defaultPermissionModeByEngine: { 'claude-code': 'plan', codex: 'plan' } as Record<string, string>,
       notionMcpKey: '',
       sentryMcpKey: '',
       tags: [],

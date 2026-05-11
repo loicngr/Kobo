@@ -59,19 +59,19 @@ function isAgentPermissionMode(value: unknown): value is AgentPermissionMode {
  *
  * Cascade: explicit body field → global default (validated) → 'bypass'.
  *
- * Legacy `defaultPermissionMode` values ('plan' / 'auto-accept') are honored:
- * 'plan' stays 'plan'; 'auto-accept' falls through to 'bypass' (the safest
- * non-plan default — matches the pre-refactor "skip prompts" behaviour).
+ * The per-engine default lives in `defaultPermissionModeByEngine[engineId]`
+ * (added in settings v20). If the engine id is missing or its entry is invalid,
+ * we fall back to 'bypass' (the safest non-plan default).
  */
 function resolveCreateAgentPermissionMode(
   bodyValue: unknown,
   _projectPath: string,
-  globalSettings: { defaultPermissionMode?: string },
+  globalSettings: { defaultPermissionModeByEngine?: Record<string, string> },
+  engineId: string,
 ): AgentPermissionMode {
   if (isAgentPermissionMode(bodyValue)) return bodyValue
-  const global = globalSettings.defaultPermissionMode
+  const global = globalSettings.defaultPermissionModeByEngine?.[engineId]
   if (isAgentPermissionMode(global)) return global
-  if (global === 'plan') return 'plan'
   return 'bypass'
 }
 
@@ -121,9 +121,27 @@ app.post('/', migrationGuard, async (c) => {
     // engine is rejected up-front so we don't create orphan workspaces that
     // can't spawn an agent.
     if (body.engine) {
-      const validEngineIds = listEngines().map((e) => e.id as string)
+      const engines = listEngines()
+      const validEngineIds = engines.map((e) => e.id as string)
       if (!validEngineIds.includes(body.engine)) {
         return c.json({ error: `Unknown engine '${body.engine}'. Valid engines: ${validEngineIds.join(', ')}` }, 400)
+      }
+      // Cross-validate engine × permission mode: each engine declares which
+      // modes it supports via `capabilities.permissionModes`. The UI already
+      // filters, but API consumers can still send any combo. Reject up-front
+      // so we don't park workspaces in a permanently broken state (e.g. Codex
+      // workspaces with `interactive` mode hang on the first tool call).
+      if (body.agentPermissionMode) {
+        const engine = engines.find((e) => (e.id as string) === body.engine)
+        const supported = engine?.capabilities.permissionModes ?? []
+        if (!supported.includes(body.agentPermissionMode)) {
+          return c.json(
+            {
+              error: `Engine '${body.engine}' does not support agentPermissionMode '${body.agentPermissionMode}'. Supported: ${supported.join(', ')}`,
+            },
+            400,
+          )
+        }
       }
     }
 
@@ -270,7 +288,12 @@ app.post('/', migrationGuard, async (c) => {
       worktreeOwned: !useReusedWorktree,
       model: body.model,
       reasoningEffort: body.reasoningEffort,
-      agentPermissionMode: resolveCreateAgentPermissionMode(body.agentPermissionMode, body.projectPath, globalSettings),
+      agentPermissionMode: resolveCreateAgentPermissionMode(
+        body.agentPermissionMode,
+        body.projectPath,
+        globalSettings,
+        body.engine ?? 'claude-code',
+      ),
       engine: body.engine,
       ...(useReusedWorktree ? {} : { worktreesPath: globalSettings.worktreesPath }),
     })
@@ -1624,6 +1647,20 @@ app.patch('/:id', migrationGuard, async (c) => {
       if (!isAgentPermissionMode(body.agentPermissionMode)) {
         return c.json(
           { error: `Invalid agentPermissionMode. Must be one of: ${VALID_AGENT_PERMISSION_MODES.join(', ')}` },
+          400,
+        )
+      }
+      // Cross-validate against the engine's declared capabilities — see the
+      // POST route for the same guard. Prevents parking a workspace in a mode
+      // its engine cannot honour.
+      const engineId = workspace.engine
+      const engine = listEngines().find((e) => (e.id as string) === engineId)
+      const supported = engine?.capabilities.permissionModes ?? []
+      if (engine && !supported.includes(body.agentPermissionMode)) {
+        return c.json(
+          {
+            error: `Engine '${engineId}' does not support agentPermissionMode '${body.agentPermissionMode}'. Supported: ${supported.join(', ')}`,
+          },
           400,
         )
       }

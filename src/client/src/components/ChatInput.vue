@@ -183,7 +183,7 @@
         <q-spinner-dots size="14px" color="amber-6" class="q-mr-xs" />
         <span>{{ $t('voice.transcribing') }}</span>
       </div>
-      <QuotaFooter class="q-mr-md" />
+      <QuotaFooter v-if="quotaStatusVisible" class="q-mr-md" />
       <q-btn
         v-if="showInterrupt"
         flat
@@ -209,6 +209,7 @@ import { useQuasar } from 'quasar'
 import QuotaFooter from 'src/components/QuotaFooter.vue'
 import SlashSuggestionsPopup from 'src/components/SlashSuggestionsPopup.vue'
 import { type SlashDropdownItem, useSlashAutocomplete } from 'src/composables/use-slash-autocomplete'
+import { supportsQuotaStatus } from 'src/constants/engineFeatures'
 import { useSettingsStore } from 'src/stores/settings'
 import { useTemplatesStore } from 'src/stores/templates'
 import { useWebSocketStore } from 'src/stores/websocket'
@@ -233,6 +234,11 @@ const message = ref('')
 const interrupting = ref(false)
 
 const showInterrupt = computed(() => isBusyStatus(store.selectedWorkspace?.status))
+
+// QuotaFooter is rendered only when the workspace's engine emits structured
+// rate-limit info Kōbō can display. Codex SDK doesn't surface it → hiding the
+// footer instead of leaving it stuck on "Loading…" forever.
+const quotaStatusVisible = computed(() => supportsQuotaStatus(store.selectedWorkspace?.engine))
 
 async function handleInterrupt() {
   if (!props.workspaceId) return

@@ -264,7 +264,7 @@ beforeEach(() => {
     notionInProgressStatus: '',
   })
   vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
-    defaultModel: 'auto',
+    defaultModelByEngine: { 'claude-code': 'auto', codex: 'auto' },
     dangerouslySkipPermissions: true,
     prPromptTemplate: '',
     reviewPromptTemplate: DEFAULT_REVIEW_PROMPT_TEMPLATE,

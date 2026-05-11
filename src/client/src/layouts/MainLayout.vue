@@ -36,7 +36,7 @@
           >
             <q-tab name="git" icon="commit" />
             <q-tab name="tasks" icon="checklist" />
-            <q-tab name="subagents" icon="smart_toy" />
+            <q-tab v-if="subagentsTabVisible" name="subagents" icon="smart_toy" />
             <q-tab name="documents" icon="description" />
             <q-tab name="schedule" icon="event">
               <q-tooltip>{{ $t('schedule.tabLabel') }}</q-tooltip>
@@ -59,7 +59,7 @@
                 <AgentTodosPanel />
               </q-tab-panel>
 
-              <q-tab-panel name="subagents" class="q-pa-none">
+              <q-tab-panel v-if="subagentsTabVisible" name="subagents" class="q-pa-none">
                 <SubagentsPanel />
               </q-tab-panel>
 
@@ -123,6 +123,7 @@ import TasksPanel from 'src/components/TasksPanel.vue'
 import TerminalPanel from 'src/components/TerminalPanel.vue'
 import ToolsPanel from 'src/components/ToolsPanel.vue'
 import WorkspaceList from 'src/components/WorkspaceList.vue'
+import { supportsSubagents } from 'src/constants/engineFeatures'
 import { useDocumentsStore } from 'src/stores/documents'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { computed, provide, ref, watch } from 'vue'
@@ -218,6 +219,20 @@ function startRightResize(event: MouseEvent) {
 
 const route = useRoute()
 const store = useWorkspaceStore()
+
+// The SUB-AGENTS tab is hidden when the selected workspace's engine cannot
+// surface sub-agent activity (e.g. Codex SDK — see `engineFeatures.ts`).
+// When the user has no workspace selected we keep the tab visible (default
+// experience matches the Claude case).
+const subagentsTabVisible = computed(() => supportsSubagents(store.selectedWorkspace?.engine))
+
+// If the user was viewing the SUB-AGENTS tab and switches to a workspace where
+// it's hidden, fall back to `tasks` so the right drawer doesn't render blank.
+watch(subagentsTabVisible, (visible) => {
+  if (!visible && rightTab.value === 'subagents') {
+    setRightTab('tasks')
+  }
+})
 
 watch(
   () => store.selectedWorkspaceId,

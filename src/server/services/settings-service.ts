@@ -112,7 +112,12 @@ export interface ProjectSettings {
 
 /** Global settings that apply as defaults when no project override is set. */
 export interface GlobalSettings {
-  defaultModel: string
+  /**
+   * Default model id per engine. Keys are engine ids (e.g. `'claude-code'`,
+   * `'codex'`), values are model ids from the engine's catalogue (or `'auto'`).
+   * Populated by migration v19 from the legacy single-string `defaultModel`.
+   */
+  defaultModelByEngine: Record<string, string>
   dangerouslySkipPermissions: boolean
   prPromptTemplate: string
   reviewPromptTemplate: string
@@ -126,7 +131,14 @@ export interface GlobalSettings {
   audioNotificationVolume: number
   notionStatusProperty: string
   notionInProgressStatus: string
-  defaultPermissionMode: string
+  /**
+   * Default permission mode per engine, applied at workspace creation when the
+   * user doesn't pick one explicitly. Keys are engine ids. Codex's map entry
+   * must be a mode it supports (`'plan' | 'bypass' | 'strict'` — never
+   * `'interactive'`, which requires Claude's canUseTool hook). Populated by
+   * migration v20 from the legacy single-string `defaultPermissionMode`.
+   */
+  defaultPermissionModeByEngine: Record<string, string>
   notionMcpKey: string
   sentryMcpKey: string
   tags: string[]
@@ -367,6 +379,57 @@ const settingsMigrations: SettingsMigration[] = [
       if (typeof global.voiceSuppressNonSpeechTokens !== 'boolean') global.voiceSuppressNonSpeechTokens = true
     },
   },
+  {
+    version: 19,
+    name: 'split-default-model-by-engine',
+    // Codex was added alongside Claude Code; the single `defaultModel` is now
+    // ambiguous (different engines have different model catalogues). Split it
+    // into a per-engine map. Preserve the legacy value as the claude-code
+    // default for back-compat, and seed codex with `'auto'`.
+    migrate({ global }) {
+      const existing = global.defaultModelByEngine
+      if (typeof existing !== 'object' || existing === null || Array.isArray(existing)) {
+        const legacyModel =
+          typeof global.defaultModel === 'string' && global.defaultModel.length > 0
+            ? (global.defaultModel as string)
+            : 'auto'
+        global.defaultModelByEngine = {
+          'claude-code': legacyModel,
+          codex: 'auto',
+        }
+      } else {
+        // Backfill any missing engine entries idempotently.
+        const map = existing as Record<string, unknown>
+        if (typeof map['claude-code'] !== 'string') map['claude-code'] = 'auto'
+        if (typeof map.codex !== 'string') map.codex = 'auto'
+      }
+      // Drop the legacy field once migrated.
+      delete global.defaultModel
+    },
+  },
+  {
+    version: 20,
+    name: 'split-default-permission-mode-by-engine',
+    // Mirrors v19 for permission modes. Both engines accept the full mode set.
+    migrate({ global }) {
+      const existing = global.defaultPermissionModeByEngine
+      const legacyMode =
+        typeof global.defaultPermissionMode === 'string' && global.defaultPermissionMode.length > 0
+          ? (global.defaultPermissionMode as string)
+          : 'plan'
+      if (typeof existing !== 'object' || existing === null || Array.isArray(existing)) {
+        global.defaultPermissionModeByEngine = {
+          'claude-code': legacyMode,
+          codex: legacyMode,
+        }
+      } else {
+        const map = existing as Record<string, unknown>
+        if (typeof map['claude-code'] !== 'string') map['claude-code'] = legacyMode
+        if (typeof map.codex !== 'string') map.codex = legacyMode
+      }
+      delete global.defaultPermissionMode
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -418,7 +481,7 @@ function defaultSettings(): Settings {
   return {
     schemaVersion: SETTINGS_SCHEMA_VERSION,
     global: {
-      defaultModel: 'claude-opus-4-7',
+      defaultModelByEngine: { 'claude-code': 'auto', codex: 'auto' },
       dangerouslySkipPermissions: true,
       prPromptTemplate: DEFAULT_PR_PROMPT_TEMPLATE,
       reviewPromptTemplate: DEFAULT_REVIEW_PROMPT_TEMPLATE,
@@ -432,7 +495,7 @@ function defaultSettings(): Settings {
       audioNotificationVolume: 1,
       notionStatusProperty: '',
       notionInProgressStatus: '',
-      defaultPermissionMode: 'plan',
+      defaultPermissionModeByEngine: { 'claude-code': 'plan', codex: 'plan' },
       notionMcpKey: '',
       sentryMcpKey: '',
       tags: [...DEFAULT_WORKSPACE_TAGS],
@@ -667,8 +730,9 @@ export function getEffectiveSettings(projectPath: string): EffectiveSettings {
   const project = settings.projects.find((p) => p.path === projectPath) ?? null
 
   if (!project) {
+    const claudeCodeDefault = settings.global.defaultModelByEngine?.['claude-code'] ?? 'auto'
     return {
-      model: settings.global.defaultModel,
+      model: claudeCodeDefault,
       dangerouslySkipPermissions: settings.global.dangerouslySkipPermissions,
       prPromptTemplate: settings.global.prPromptTemplate,
       reviewPromptTemplate: settings.global.reviewPromptTemplate,
@@ -683,8 +747,14 @@ export function getEffectiveSettings(projectPath: string): EffectiveSettings {
     }
   }
 
+  // `model` here is the legacy single-string field exposed via EffectiveSettings
+  // for back-compat with existing callers. The engine-aware default lives in
+  // `global.defaultModelByEngine[engineId]` and is read directly by the create
+  // flow / settings UI. Fall back through claude-code's entry (the historical
+  // semantics) so this field never goes empty.
+  const claudeCodeDefault = settings.global.defaultModelByEngine?.['claude-code'] ?? 'auto'
   return {
-    model: project.defaultModel || settings.global.defaultModel,
+    model: project.defaultModel || claudeCodeDefault,
     dangerouslySkipPermissions: project.dangerouslySkipPermissions ?? settings.global.dangerouslySkipPermissions,
     prPromptTemplate: project.prPromptTemplate || settings.global.prPromptTemplate,
     reviewPromptTemplate: project.reviewPromptTemplate || settings.global.reviewPromptTemplate,
@@ -703,7 +773,7 @@ export function getEffectiveSettings(projectPath: string): EffectiveSettings {
 export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSettings {
   const settings = readSettings()
   const allowedGlobalKeys = [
-    'defaultModel',
+    'defaultModelByEngine',
     'dangerouslySkipPermissions',
     'prPromptTemplate',
     'reviewPromptTemplate',
@@ -717,7 +787,7 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'audioNotificationVolume',
     'notionStatusProperty',
     'notionInProgressStatus',
-    'defaultPermissionMode',
+    'defaultPermissionModeByEngine',
     'notionMcpKey',
     'sentryMcpKey',
     'tags',

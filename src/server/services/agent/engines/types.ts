@@ -8,7 +8,7 @@ import type { EffectiveSettings } from '../../settings-service.js'
  * values are untyped — validation happens at workspace creation via
  * `listEngines()` (see `workspace-service.ts` / `mapWorkspace`).
  */
-export type EngineId = 'claude-code'
+export type EngineId = 'claude-code' | 'codex'
 
 export interface AgentEngine {
   readonly id: EngineId
@@ -79,6 +79,26 @@ export interface EngineCapabilities {
   supportsResume: boolean
   supportsMcp: boolean
   supportsSkills: boolean
+  /**
+   * Whether the engine surfaces sub-agent spawn/progress events to Kōbō.
+   *
+   * Claude Code emits `subagent:progress` events via the SDK Task tool, so the
+   * SUB-AGENTS panel and the AgentBusyBanner are populated. The Codex SDK
+   * internally spawns sub-agents through `functions.spawn_agent` /
+   * `functions.wait_agent` but does NOT expose them as ThreadEvents — Kōbō has
+   * no visibility, so the UI should hide the panel rather than show an empty
+   * shell that's misleading.
+   */
+  supportsSubagents: boolean
+  /**
+   * Whether the engine exposes structured rate-limit / quota info that Kōbō
+   * can surface in the QuotaFooter at the bottom of the chat.
+   *
+   * Claude SDK emits `rate_limit_event` items with bucket usage percentages
+   * and reset timestamps. The Codex SDK has no equivalent → the footer would
+   * stay stuck on "Loading…" indefinitely. The UI should hide it.
+   */
+  supportsQuotaStatus: boolean
 }
 
 // ── Event model ───────────────────────────────────────────────────────────────

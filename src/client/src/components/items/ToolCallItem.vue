@@ -135,6 +135,7 @@ function extractRawLabel(input: unknown): string {
 const diffLines = computed<DiffLine[] | null>(() => {
   const fc = fileChange.value
   if (!fc) return null
+  if (fc.diffLines) return fc.diffLines
   if (fc.toolName === 'Edit' && fc.oldString !== undefined && fc.newString !== undefined) {
     return computeInlineDiff(fc.oldString, fc.newString)
   }

@@ -39,7 +39,8 @@ describe('getSettings()', () => {
     expect(fs.existsSync(settingsPath)).toBe(false)
     const settings = getSettings()
     expect(fs.existsSync(settingsPath)).toBe(true)
-    expect(settings.global.defaultModel).toBe('claude-opus-4-7')
+    expect(settings.global.defaultModelByEngine['claude-code']).toBe('auto')
+    expect(settings.global.defaultModelByEngine.codex).toBe('auto')
     expect(settings.global.worktreesPath).toBe('.worktrees')
     expect(typeof settings.global.prPromptTemplate).toBe('string')
     expect(settings.projects).toEqual([])
@@ -47,7 +48,10 @@ describe('getSettings()', () => {
 
   it('reads existing settings file correctly', () => {
     const existing: Settings = {
-      global: { defaultModel: 'claude-sonnet-4-6', prPromptTemplate: 'my template' },
+      global: {
+        defaultModelByEngine: { 'claude-code': 'claude-sonnet-4-6', codex: 'auto' },
+        prPromptTemplate: 'my template',
+      },
       projects: [
         {
           path: '/home/user/project',
@@ -62,7 +66,7 @@ describe('getSettings()', () => {
     fs.writeFileSync(settingsPath, JSON.stringify(existing, null, 2), 'utf-8')
 
     const settings = getSettings()
-    expect(settings.global.defaultModel).toBe('claude-sonnet-4-6')
+    expect(settings.global.defaultModelByEngine['claude-code']).toBe('claude-sonnet-4-6')
     expect(settings.global.prPromptTemplate).toBe('my template')
     expect(settings.projects.length).toBe(1)
     expect(settings.projects[0].path).toBe('/home/user/project')
@@ -79,7 +83,7 @@ describe('getSettings()', () => {
     expect(backups.length).toBe(1)
     // The new settings.json should contain valid defaults
     const written = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'))
-    expect(written.global.defaultModel).toBe('claude-opus-4-7')
+    expect(written.global.defaultModelByEngine?.['claude-code']).toBe('auto')
   })
 
   it('restores missing global fields to defaults when schemaVersion is current', () => {
@@ -107,7 +111,7 @@ describe('getSettings()', () => {
     const settings = getSettings()
 
     // Missing fields must be restored to their defaults
-    expect(settings.global.defaultModel).toBe('claude-opus-4-7')
+    expect(settings.global.defaultModelByEngine['claude-code']).toBe('auto')
     expect(typeof settings.global.prPromptTemplate).toBe('string')
     expect(settings.global.prPromptTemplate.length).toBeGreaterThan(0)
     // Existing custom values must be preserved
@@ -120,10 +124,10 @@ describe('getSettings()', () => {
 describe('getGlobalSettings()', () => {
   it('returns global section only', () => {
     getSettings() // ensure file exists
-    updateGlobalSettings({ defaultModel: 'test-model' })
+    updateGlobalSettings({ defaultModelByEngine: { 'claude-code': 'test-model', codex: 'auto' } })
 
     const global = getGlobalSettings()
-    expect(global.defaultModel).toBe('test-model')
+    expect(global.defaultModelByEngine['claude-code']).toBe('test-model')
     expect(typeof global.prPromptTemplate).toBe('string')
   })
 })
@@ -134,19 +138,19 @@ describe('updateGlobalSettings()', () => {
     updateGlobalSettings({ prPromptTemplate: 'new template' })
 
     const global = getGlobalSettings()
-    expect(global.defaultModel).toBe('claude-opus-4-7') // unchanged
+    expect(global.defaultModelByEngine['claude-code']).toBe('auto') // unchanged
     expect(global.prPromptTemplate).toBe('new template') // updated
   })
 
   it('patches multiple fields at once', () => {
     getSettings()
     const updated = updateGlobalSettings({
-      defaultModel: 'opus',
+      defaultModelByEngine: { 'claude-code': 'opus', codex: 'auto' },
       prPromptTemplate: 'tmpl',
       notionMcpKey: 'notion',
       sentryMcpKey: 'sentry',
     })
-    expect(updated.defaultModel).toBe('opus')
+    expect(updated.defaultModelByEngine['claude-code']).toBe('opus')
     expect(updated.prPromptTemplate).toBe('tmpl')
     expect(updated.notionMcpKey).toBe('notion')
     expect(updated.sentryMcpKey).toBe('sentry')
@@ -336,7 +340,10 @@ describe('getProjectSettings()', () => {
 describe('getEffectiveSettings()', () => {
   it('merges global and project (project overrides)', () => {
     getSettings()
-    updateGlobalSettings({ defaultModel: 'global-model', prPromptTemplate: 'global-template' })
+    updateGlobalSettings({
+      defaultModelByEngine: { 'claude-code': 'global-model', codex: 'auto' },
+      prPromptTemplate: 'global-template',
+    })
     upsertProject('/home/user/project', {
       defaultModel: 'project-model',
       prPromptTemplate: 'project-template',
@@ -353,7 +360,10 @@ describe('getEffectiveSettings()', () => {
 
   it('falls back to global when project field is empty string', () => {
     getSettings()
-    updateGlobalSettings({ defaultModel: 'global-model', prPromptTemplate: 'global-template' })
+    updateGlobalSettings({
+      defaultModelByEngine: { 'claude-code': 'global-model', codex: 'auto' },
+      prPromptTemplate: 'global-template',
+    })
     upsertProject('/home/user/project', {
       defaultModel: '',
       prPromptTemplate: '',
@@ -368,7 +378,10 @@ describe('getEffectiveSettings()', () => {
 
   it('returns globals when no project exists', () => {
     getSettings()
-    updateGlobalSettings({ defaultModel: 'global-model', prPromptTemplate: 'global-template' })
+    updateGlobalSettings({
+      defaultModelByEngine: { 'claude-code': 'global-model', codex: 'auto' },
+      prPromptTemplate: 'global-template',
+    })
 
     const effective = getEffectiveSettings('/non/existent')
     expect(effective.model).toBe('global-model')
@@ -399,13 +412,13 @@ describe('listProjects()', () => {
 describe('atomic write', () => {
   it('settings file is not corrupted after write', () => {
     getSettings()
-    updateGlobalSettings({ defaultModel: 'test-model' })
+    updateGlobalSettings({ defaultModelByEngine: { 'claude-code': 'test-model', codex: 'auto' } })
     upsertProject('/project', { displayName: 'Project', defaultSourceBranch: 'main' })
 
     // Read the raw file and verify it is valid JSON
     const raw = fs.readFileSync(settingsPath, 'utf-8')
     const parsed = JSON.parse(raw) as Settings
-    expect(parsed.global.defaultModel).toBe('test-model')
+    expect(parsed.global.defaultModelByEngine['claude-code']).toBe('test-model')
     expect(parsed.projects.length).toBe(1)
     expect(parsed.projects[0].path).toBe('/project')
 
@@ -565,7 +578,7 @@ describe('runSettingsMigrations()', () => {
     const current: Settings = {
       schemaVersion: SETTINGS_SCHEMA_VERSION,
       global: {
-        defaultModel: 'claude-opus-4-6',
+        defaultModelByEngine: { 'claude-code': 'claude-opus-4-6', codex: 'auto' },
         prPromptTemplate: 'template',
         gitConventions: 'conv',
       },
@@ -573,7 +586,7 @@ describe('runSettingsMigrations()', () => {
     }
     const migrated = runSettingsMigrations(current as unknown as Record<string, unknown>)
     expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
-    expect(migrated.global.defaultModel).toBe('claude-opus-4-6')
+    expect(migrated.global.defaultModelByEngine['claude-code']).toBe('claude-opus-4-6')
   })
 
   it('backfills missing global and projects fields on empty object', () => {
@@ -681,6 +694,22 @@ describe('exportConfigBundle()', () => {
     expect(bundle.templates).toEqual(templates)
     expect(bundle.exportedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/)
   })
+
+  it('includes per-engine maps (defaultModelByEngine, defaultPermissionModeByEngine) in the export', () => {
+    updateGlobalSettings({
+      defaultModelByEngine: { 'claude-code': 'claude-opus-4-7', codex: 'gpt-5-codex' },
+      defaultPermissionModeByEngine: { 'claude-code': 'plan', codex: 'interactive' },
+    })
+    const bundle = exportConfigBundle([])
+    expect(bundle.settings.global.defaultModelByEngine).toEqual({
+      'claude-code': 'claude-opus-4-7',
+      codex: 'gpt-5-codex',
+    })
+    expect(bundle.settings.global.defaultPermissionModeByEngine).toEqual({
+      'claude-code': 'plan',
+      codex: 'interactive',
+    })
+  })
 })
 
 describe('importConfigBundle()', () => {
@@ -709,6 +738,44 @@ describe('importConfigBundle()', () => {
   it('rejects a bundle with a non-object project entry', () => {
     const bundle = { bundleVersion: 1, settings: { global: {}, projects: ['hello'] } } as unknown
     expect(() => importConfigBundle(bundle as never)).toThrow('settings.projects[0]')
+  })
+
+  it('migrates a legacy bundle (schemaVersion < 19) to the per-engine maps on import', () => {
+    const legacyBundle = {
+      bundleVersion: 1,
+      exportedAt: '',
+      settings: {
+        schemaVersion: 18,
+        global: {
+          defaultModel: 'claude-opus-4-7',
+          defaultPermissionMode: 'strict',
+          dangerouslySkipPermissions: false,
+          prPromptTemplate: '',
+          gitConventions: '',
+          editorCommand: '',
+          browserNotifications: false,
+          audioNotifications: false,
+          notionStatusProperty: '',
+          notionInProgressStatus: '',
+          notionMcpKey: '',
+          sentryMcpKey: '',
+          tags: [],
+          worktreesPath: '$HOME/kobo/worktrees',
+        },
+        projects: [],
+      },
+      templates: [],
+    }
+    importConfigBundle(legacyBundle as never)
+    const after = getGlobalSettings()
+    // v19 migration: defaultModel → defaultModelByEngine (mirrored for both engines)
+    expect(after.defaultModelByEngine?.['claude-code']).toBe('claude-opus-4-7')
+    expect(after.defaultModelByEngine?.codex).toBeDefined()
+    // v20 migration: defaultPermissionMode → defaultPermissionModeByEngine
+    expect(after.defaultPermissionModeByEngine?.['claude-code']).toBe('strict')
+    expect(after.defaultPermissionModeByEngine?.codex).toBe('strict')
+    expect((after as unknown as { defaultModel?: string }).defaultModel).toBeUndefined()
+    expect((after as unknown as { defaultPermissionMode?: string }).defaultPermissionMode).toBeUndefined()
   })
 
   it('preserves local MCP keys when importing', () => {
@@ -1128,5 +1195,129 @@ describe('settings migration v16 — add Notion/Sentry initial prompts', () => {
     const p = getProjectSettings('/p')
     expect(p?.notionInitialPromptTemplate).toBe('CUSTOM-PROJ-NOTION')
     expect(p?.sentryInitialPromptTemplate).toBe('CUSTOM-PROJ')
+  })
+})
+
+describe('settings migration v19 — split defaultModel by engine', () => {
+  it('migrates legacy defaultModel to defaultModelByEngine.claude-code', () => {
+    const legacy = {
+      schemaVersion: 18,
+      global: {
+        defaultModel: 'claude-sonnet-4-6',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        reviewPromptTemplate: '',
+        gitConventions: '',
+        editorCommand: '',
+        browserNotifications: true,
+        audioNotifications: true,
+        audioNotificationSound: 'hey.mp3',
+        audioNotificationVolume: 1,
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+        defaultPermissionMode: 'plan',
+        notionMcpKey: '',
+        sentryMcpKey: '',
+        tags: [],
+        worktreesPath: '.worktrees',
+        worktreesPrefixByProject: false,
+        voiceEnabled: false,
+        voicePttKey: 'alt',
+        voiceLanguage: 'auto',
+        voiceModel: null,
+        voiceCommandPath: '',
+        voiceFfmpegPath: '',
+        voiceTemperature: 0,
+        voicePrompt: '',
+        voiceTranslateToEnglish: false,
+        voiceSuppressNonSpeechTokens: true,
+      },
+      projects: [],
+    }
+    fs.writeFileSync(settingsPath, JSON.stringify(legacy), 'utf-8')
+    const settings = getSettings()
+    expect(settings.global.defaultModelByEngine).toEqual({
+      'claude-code': 'claude-sonnet-4-6',
+      codex: 'auto',
+    })
+    // Legacy field must be deleted
+    expect((settings.global as unknown as { defaultModel?: string }).defaultModel).toBeUndefined()
+  })
+
+  it('seeds defaults to auto when legacy field is empty', () => {
+    const legacy = { schemaVersion: 18, global: { defaultModel: '' }, projects: [] }
+    fs.writeFileSync(settingsPath, JSON.stringify(legacy), 'utf-8')
+    const settings = getSettings()
+    expect(settings.global.defaultModelByEngine['claude-code']).toBe('auto')
+    expect(settings.global.defaultModelByEngine.codex).toBe('auto')
+  })
+
+  it('preserves an existing defaultModelByEngine and backfills missing keys', () => {
+    const existing = {
+      schemaVersion: 18,
+      global: { defaultModelByEngine: { 'claude-code': 'claude-opus-4-7' } },
+      projects: [],
+    }
+    fs.writeFileSync(settingsPath, JSON.stringify(existing), 'utf-8')
+    const settings = getSettings()
+    expect(settings.global.defaultModelByEngine['claude-code']).toBe('claude-opus-4-7')
+    expect(settings.global.defaultModelByEngine.codex).toBe('auto')
+  })
+})
+
+describe('settings migration v20 — split defaultPermissionMode by engine', () => {
+  it('migrates legacy defaultPermissionMode to defaultPermissionModeByEngine.claude-code', () => {
+    const legacy = { schemaVersion: 19, global: { defaultPermissionMode: 'strict' }, projects: [] }
+    fs.writeFileSync(settingsPath, JSON.stringify(legacy), 'utf-8')
+    const settings = getSettings()
+    expect(settings.global.defaultPermissionModeByEngine).toEqual({
+      'claude-code': 'strict',
+      codex: 'strict',
+    })
+    // Legacy field must be deleted
+    expect((settings.global as unknown as { defaultPermissionMode?: string }).defaultPermissionMode).toBeUndefined()
+  })
+
+  it('preserves interactive verbatim for both engines', () => {
+    const legacy = { schemaVersion: 19, global: { defaultPermissionMode: 'interactive' }, projects: [] }
+    fs.writeFileSync(settingsPath, JSON.stringify(legacy), 'utf-8')
+    const settings = getSettings()
+    expect(settings.global.defaultPermissionModeByEngine['claude-code']).toBe('interactive')
+    expect(settings.global.defaultPermissionModeByEngine.codex).toBe('interactive')
+  })
+
+  it('defaults to plan when legacy field is missing', () => {
+    const legacy = { schemaVersion: 19, global: {}, projects: [] }
+    fs.writeFileSync(settingsPath, JSON.stringify(legacy), 'utf-8')
+    const settings = getSettings()
+    expect(settings.global.defaultPermissionModeByEngine['claude-code']).toBe('plan')
+    expect(settings.global.defaultPermissionModeByEngine.codex).toBe('plan')
+  })
+
+  it('preserves an existing defaultPermissionModeByEngine and backfills missing keys', () => {
+    const existing = {
+      schemaVersion: 19,
+      global: { defaultPermissionModeByEngine: { 'claude-code': 'bypass' } },
+      projects: [],
+    }
+    fs.writeFileSync(settingsPath, JSON.stringify(existing), 'utf-8')
+    const settings = getSettings()
+    expect(settings.global.defaultPermissionModeByEngine['claude-code']).toBe('bypass')
+    // Backfilled from legacy 'plan' since the user didn't set codex explicitly.
+    expect(settings.global.defaultPermissionModeByEngine.codex).toBe('plan')
+  })
+
+  it('leaves an explicit codex=interactive in place', () => {
+    const existing = {
+      schemaVersion: 19,
+      global: {
+        defaultPermissionModeByEngine: { 'claude-code': 'interactive', codex: 'interactive' },
+      },
+      projects: [],
+    }
+    fs.writeFileSync(settingsPath, JSON.stringify(existing), 'utf-8')
+    const settings = getSettings()
+    expect(settings.global.defaultPermissionModeByEngine['claude-code']).toBe('interactive')
+    expect(settings.global.defaultPermissionModeByEngine.codex).toBe('interactive')
   })
 })

@@ -691,7 +691,9 @@ import type { QInput } from 'quasar'
 import { useQuasar } from 'quasar'
 import SlashSuggestionsPopup from 'src/components/SlashSuggestionsPopup.vue'
 import { type SlashDropdownItem, useSlashAutocomplete } from 'src/composables/use-slash-autocomplete'
-import { MODEL_OPTION_DEFS } from 'src/constants/models'
+import { EFFORT_OPTION_DEFS_BY_ENGINE } from 'src/constants/efforts'
+import { MODEL_OPTION_DEFS, MODEL_OPTION_DEFS_BY_ENGINE } from 'src/constants/models'
+import { PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
 import { useSettingsStore } from 'src/stores/settings'
 import { useTemplatesStore } from 'src/stores/templates'
 import { useWebSocketStore } from 'src/stores/websocket'
@@ -768,28 +770,37 @@ const ALL_AGENT_PERMISSION_MODES: AgentPermissionMode[] = ['plan', 'bypass', 'st
  *
  * Cascade:
  *   1. Per-project `agentPermissionMode` setting (if defined for this path).
- *   2. Global `defaultAgentPermissionMode` / `defaultPermissionMode` setting.
+ *   2. Global per-engine `defaultPermissionModeByEngine[engineId]` setting.
  *   3. Legacy fallback: `dangerouslySkipPermissions` → 'bypass' / 'interactive'.
  *   4. Hard fallback: 'bypass'.
+ *
+ * The engine id is needed because Codex doesn't honour `'interactive'` — the
+ * per-engine map ensures the picked value is compatible with the selected
+ * engine.
  */
-function deriveDefaultAgentPermissionMode(projectPath: string): AgentPermissionMode {
+function deriveDefaultAgentPermissionMode(projectPath: string, engineId: string): AgentPermissionMode {
   const project = projectPath ? settingsStore.getProjectByPath(projectPath) : undefined
   const projectMode = (project as { agentPermissionMode?: unknown } | null)?.agentPermissionMode
   if (typeof projectMode === 'string' && (ALL_AGENT_PERMISSION_MODES as string[]).includes(projectMode)) {
     return projectMode as AgentPermissionMode
   }
-  const global = settingsStore.global.defaultPermissionMode
-  if ((ALL_AGENT_PERMISSION_MODES as string[]).includes(global)) return global as AgentPermissionMode
-  if (global === 'plan') return 'plan'
+  const global = settingsStore.global.defaultPermissionModeByEngine?.[engineId]
+  if (typeof global === 'string' && (ALL_AGENT_PERMISSION_MODES as string[]).includes(global)) {
+    return global as AgentPermissionMode
+  }
   // Legacy fallback for installs that only ever saw the boolean toggle.
   const skip =
     (project as { dangerouslySkipPermissions?: boolean } | null)?.dangerouslySkipPermissions ??
     settingsStore.global.dangerouslySkipPermissions ??
     true
-  return skip ? 'bypass' : 'interactive'
+  // Honour engine compatibility: Codex cannot use 'interactive' even on the
+  // legacy path, so the false branch picks 'plan' (the safest restrictive mode)
+  // when the engine doesn't support 'interactive'.
+  if (skip) return 'bypass'
+  return engineId === 'codex' ? 'plan' : 'interactive'
 }
 
-const agentPermissionMode = ref<AgentPermissionMode>(deriveDefaultAgentPermissionMode(''))
+const agentPermissionMode = ref<AgentPermissionMode>(deriveDefaultAgentPermissionMode('', selectedEngineId.value))
 
 const agentPermissionModeIcon = computed<string>(() => {
   switch (agentPermissionMode.value) {
@@ -805,8 +816,10 @@ const agentPermissionModeIcon = computed<string>(() => {
 })
 
 // 'plan' is disabled when auto-loop is on — picking it would deadlock the loop.
+// Driven by the local per-engine constant to avoid a flicker before
+// `/api/engines` returns; the backend capabilities still validate at POST time.
 const agentPermissionModeOptions = computed(() => {
-  const supported = selectedEngine.value?.capabilities.permissionModes ?? ALL_AGENT_PERMISSION_MODES
+  const supported = PERMISSION_MODES_BY_ENGINE[selectedEngineId.value] ?? ALL_AGENT_PERMISSION_MODES
   return supported.map((value) => ({
     value,
     label: t(`agentPermissionMode.${value}`),
@@ -995,18 +1008,48 @@ function onCreateVisibilityChange() {
   }
 }
 
-// Model options — `MODEL_OPTION_DEFS` is the single source of truth for
-// the display list (i18n labels + descriptions). The backend capabilities
-// are used only for server-side validation in `POST /api/workspaces`, not
-// for UI rendering, so we don't override the local list when /api/engines
-// responds. Any future model additions go in `src/constants/models.ts`.
-const modelOptions = computed(() =>
-  MODEL_OPTION_DEFS.map((option) => ({
+// Model options — derived from the per-engine catalogue in
+// `src/constants/models.ts` (which mirrors the shared shared/*-models.ts
+// definitions). Server-side capabilities are used only for validation in
+// `POST /api/workspaces`, not for UI rendering. Falls back to Claude's
+// catalogue if the engine id isn't recognised (e.g. third-party engine
+// added server-side before the frontend ships the matching list).
+const modelOptions = computed(() => {
+  const defs = MODEL_OPTION_DEFS_BY_ENGINE[selectedEngineId.value] ?? MODEL_OPTION_DEFS
+  return defs.map((option) => ({
     label: t(option.i18nLabelKey),
     value: option.value,
     description: t(option.i18nDescriptionKey),
-  })),
-)
+  }))
+})
+
+// When the user switches engine, apply the per-engine default model from
+// global settings if it's part of the new catalogue. Falls back to 'auto' if
+// neither the current value nor the configured default is compatible.
+// Also re-derives the permission mode so a value incompatible with the new
+// engine (e.g. 'interactive' under Codex) is replaced by the engine's
+// configured default.
+watch(selectedEngineId, () => {
+  const validIds = modelOptions.value.map((m) => m.value)
+  if (validIds.length > 0) {
+    const globalDefault = settingsStore.global.defaultModelByEngine?.[selectedEngineId.value]
+    if (typeof globalDefault === 'string' && validIds.includes(globalDefault)) {
+      model.value = globalDefault
+    } else if (!validIds.includes(model.value)) {
+      model.value = validIds.includes('auto') ? 'auto' : (validIds[0] ?? 'auto')
+    }
+  }
+  const supportedModes = PERMISSION_MODES_BY_ENGINE[selectedEngineId.value] ?? []
+  if (supportedModes.length > 0 && !supportedModes.includes(agentPermissionMode.value)) {
+    agentPermissionMode.value = deriveDefaultAgentPermissionMode(projectPath.value, selectedEngineId.value)
+  }
+  // Reasoning effort: drop a value that isn't supported by the new engine
+  // (e.g. 'max' under Codex, or 'minimal' under Claude). Falls back to 'auto'.
+  const supportedEfforts = (EFFORT_OPTION_DEFS_BY_ENGINE[selectedEngineId.value] ?? []).map((e) => e.value)
+  if (supportedEfforts.length > 0 && !supportedEfforts.includes(reasoningEffort.value)) {
+    reasoningEffort.value = supportedEfforts.includes('auto') ? 'auto' : (supportedEfforts[0] ?? 'auto')
+  }
+})
 
 function formatReasoningLabel(label: string): string {
   const separatorIndex = label.indexOf(':')
@@ -1014,26 +1057,19 @@ function formatReasoningLabel(label: string): string {
   return label
 }
 
-// Reasoning effort options — local i18n-driven list. Same story as
-// `modelOptions`: UI rendering comes from the frontend translations, not
-// from /api/engines. The backend's `effortLevels` field is used only for
-// server-side validation on the POST route.
-const reasoningOptions = computed(() => [
-  { label: formatReasoningLabel(t('reasoning.auto')), value: 'auto', description: t('reasoning.autoDescription') },
-  { label: formatReasoningLabel(t('reasoning.low')), value: 'low', description: t('reasoning.lowDescription') },
-  {
-    label: formatReasoningLabel(t('reasoning.medium')),
-    value: 'medium',
-    description: t('reasoning.mediumDescription'),
-  },
-  { label: formatReasoningLabel(t('reasoning.high')), value: 'high', description: t('reasoning.highDescription') },
-  {
-    label: formatReasoningLabel(t('reasoning.xhigh')),
-    value: 'xhigh',
-    description: t('reasoning.xhighDescription'),
-  },
-  { label: formatReasoningLabel(t('reasoning.max')), value: 'max', description: t('reasoning.maxDescription') },
-])
+// Reasoning effort options — driven by the per-engine catalogue in
+// `src/constants/efforts.ts` (mirror of backend `capabilities.effortLevels`).
+// Using local constants avoids a render flicker while `/api/engines` is in
+// flight. Labels/descriptions stay engine-agnostic via the shared i18n keys
+// `reasoning.<id>` / `reasoning.<id>Description`.
+const reasoningOptions = computed(() => {
+  const defs = EFFORT_OPTION_DEFS_BY_ENGINE[selectedEngineId.value] ?? EFFORT_OPTION_DEFS_BY_ENGINE['claude-code']
+  return defs.map((d) => ({
+    value: d.value,
+    label: formatReasoningLabel(t(d.i18nLabelKey)),
+    description: t(d.i18nDescriptionKey),
+  }))
+})
 
 // Validate Notion URL
 const isValidNotionUrl = computed(() => notionUrl.value.trim().startsWith('https://www.notion.so/'))
@@ -1206,13 +1242,22 @@ function applyProjectDefaults(path: string) {
     if (project.defaultSourceBranch) {
       branch.value = project.defaultSourceBranch
     }
-    if (project.defaultModel) {
+    // Pick a model that's valid for the currently selected engine. Cascade:
+    //   1. Project default (if in the engine's catalogue)
+    //   2. Global per-engine default
+    //   3. Leave model untouched (CreatePage's engine watcher already keeps
+    //      it consistent with the selected engine).
+    const validIds = modelOptions.value.map((m) => m.value)
+    if (project.defaultModel && validIds.includes(project.defaultModel)) {
       model.value = project.defaultModel
-    } else if (settingsStore.global.defaultModel) {
-      model.value = settingsStore.global.defaultModel
+    } else {
+      const globalDefault = settingsStore.global.defaultModelByEngine?.[selectedEngineId.value]
+      if (typeof globalDefault === 'string' && validIds.includes(globalDefault)) {
+        model.value = globalDefault
+      }
     }
   }
-  agentPermissionMode.value = deriveDefaultAgentPermissionMode(path)
+  agentPermissionMode.value = deriveDefaultAgentPermissionMode(path, selectedEngineId.value)
 }
 
 // Debounce for project path input
@@ -1251,7 +1296,7 @@ onMounted(async () => {
     projectPath.value = prefs.projectPath
   }
 
-  agentPermissionMode.value = deriveDefaultAgentPermissionMode(projectPath.value)
+  agentPermissionMode.value = deriveDefaultAgentPermissionMode(projectPath.value, selectedEngineId.value)
   try {
     const res = await fetch('/api/engines')
     if (res.ok) {
@@ -1259,6 +1304,19 @@ onMounted(async () => {
     }
   } catch {
     // Best-effort: the legacy hardcoded fallback keeps the form usable.
+  }
+
+  // Apply the per-engine global default model now that both settings and
+  // engines have loaded. The engine-change watcher only fires on switch, so we
+  // run the same logic once at mount for the initially-selected engine.
+  {
+    const validIds = modelOptions.value.map((m) => m.value)
+    const globalDefault = settingsStore.global.defaultModelByEngine?.[selectedEngineId.value]
+    if (typeof globalDefault === 'string' && validIds.includes(globalDefault)) {
+      model.value = globalDefault
+    } else if (validIds.length > 0 && !validIds.includes(model.value)) {
+      model.value = validIds.includes('auto') ? 'auto' : (validIds[0] ?? 'auto')
+    }
   }
   window.addEventListener('keydown', onCreateWindowKeyDown)
   window.addEventListener('keyup', onCreateWindowKeyUp)

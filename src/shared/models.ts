@@ -1,23 +1,29 @@
 /**
- * Single source of truth for the Claude Code model catalogue.
+ * Single source of truth for the Claude Code engine's model catalogue.
  *
  * Imported BOTH by the server (engine capabilities + validation) and by
  * the client (CreatePage / WorkspacePage selectors). No other file should
  * list these IDs — add a new variant here and both sides pick it up.
+ *
+ * The `AgentModel` interface is shared across engine catalogues. The Codex
+ * engine has its own catalogue in `./codex-models.ts`.
  *
  * The `label` is a human-readable fallback for any consumer that doesn't
  * go through i18n (e.g. backend logs, `/api/engines` responses). The
  * `i18nLabelKey` / `i18nDescriptionKey` point at translation keys in
  * `src/client/src/i18n/<locale>.ts` for the frontend UI.
  */
-export interface ClaudeModel {
+export interface AgentModel {
   id: string
   label: string
   i18nLabelKey: string
   i18nDescriptionKey: string
 }
 
-export const CLAUDE_MODELS: readonly ClaudeModel[] = [
+/** @deprecated Use AgentModel instead */
+export type ClaudeModel = AgentModel
+
+export const CLAUDE_MODELS: readonly AgentModel[] = [
   {
     id: 'auto',
     label: 'Auto',

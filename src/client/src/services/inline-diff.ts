@@ -52,6 +52,31 @@ export interface FileChangeInfo {
   replaceAll?: boolean
   additions: number
   deletions: number
+  /** Pre-parsed diff, populated when the source already gave us a unified diff. */
+  diffLines?: DiffLine[]
+}
+
+/**
+ * Parse a unified-diff blob into a flat `DiffLine[]`.
+ * Hunk headers and file headers are dropped; untagged lines fall back to `context`.
+ */
+export function parseUnifiedDiff(diff: string): DiffLine[] {
+  const lines = diff.split('\n')
+  const result: DiffLine[] = []
+  for (const line of lines) {
+    if (line.startsWith('@@')) continue
+    if (line.startsWith('+++') || line.startsWith('---')) continue
+    if (line.startsWith('+')) {
+      result.push({ type: 'add', content: line.slice(1) })
+    } else if (line.startsWith('-')) {
+      result.push({ type: 'del', content: line.slice(1) })
+    } else if (line.startsWith(' ')) {
+      result.push({ type: 'context', content: line.slice(1) })
+    } else if (line.length > 0) {
+      result.push({ type: 'context', content: line })
+    }
+  }
+  return result
 }
 
 /**
@@ -67,6 +92,17 @@ export function getFileChangeInfo(toolName: string, input: unknown): FileChangeI
     if (!filePath) return null
     const oldStr = (rec.old_string as string) ?? ''
     const newStr = (rec.new_string as string) ?? ''
+    const unifiedDiff = typeof rec.diff === 'string' ? rec.diff : ''
+    if (!oldStr && !newStr && unifiedDiff.length > 0) {
+      const parsed = parseUnifiedDiff(unifiedDiff)
+      return {
+        toolName: 'Edit',
+        filePath,
+        additions: parsed.filter((l) => l.type === 'add').length,
+        deletions: parsed.filter((l) => l.type === 'del').length,
+        diffLines: parsed,
+      }
+    }
     return {
       toolName: 'Edit',
       filePath,

@@ -148,6 +148,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       description:
         'CALL FIRST on any non-trivial turn to know what the user wants done and what is already completed. Returns every task and acceptance criterion for the current workspace with its id and status. Re-call periodically (before marking something done, or after the user asks for a status) to stay in sync with user-added or external updates.',
       inputSchema: { type: 'object', properties: {}, required: [] },
+      annotations: { readOnlyHint: true, openWorldHint: false },
     },
     {
       name: 'mark_task_done',
@@ -160,12 +161,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
         required: ['task_id'],
       },
+      annotations: { destructiveHint: false, openWorldHint: false },
     },
     {
       name: 'mark_auto_loop_ready',
       description:
         'CALL ONLY at the end of a `/kobo-prep-autoloop` grooming session, once all tasks look atomic and implementable in one session. Flips a flag on the workspace that unlocks the auto-loop toggle in the UI. Do NOT call during normal sessions.',
       inputSchema: { type: 'object', properties: {}, required: [] },
+      annotations: { destructiveHint: false, openWorldHint: false },
     },
     {
       name: 'create_task',
@@ -182,6 +185,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
         required: ['title'],
       },
+      annotations: { destructiveHint: false, openWorldHint: false },
     },
     {
       name: 'update_task',
@@ -204,6 +208,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
         required: ['task_id'],
       },
+      annotations: { destructiveHint: false, openWorldHint: false },
     },
     {
       name: 'delete_task',
@@ -216,12 +221,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
         required: ['task_id'],
       },
+      annotations: { destructiveHint: false, openWorldHint: false },
     },
     {
       name: 'get_workspace_info',
       description:
         'CALL EARLY in a session to confirm project path, working/source branch, worktree path, model, and notion link. Cheap read — useful when the user refers to "this workspace" or when you need the worktree path to locate files.',
       inputSchema: { type: 'object', properties: {}, required: [] },
+      annotations: { readOnlyHint: true, openWorldHint: false },
     },
     {
       name: 'set_workspace_agent_description',
@@ -237,6 +244,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
         required: ['description'],
       },
+      annotations: { destructiveHint: false, openWorldHint: false },
     },
     {
       name: 'cron_create',
@@ -272,6 +280,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
         required: ['expression', 'prompt'],
       },
+      annotations: { destructiveHint: false, openWorldHint: false },
     },
     {
       name: 'cron_delete',
@@ -284,17 +293,20 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
         required: ['id'],
       },
+      annotations: { destructiveHint: false, openWorldHint: false },
     },
     {
       name: 'cron_list',
       description: 'List all crons currently armed on THIS workspace, including their next and last fire times.',
       inputSchema: { type: 'object', properties: {}, additionalProperties: false },
+      annotations: { readOnlyHint: true, openWorldHint: false },
     },
     {
       name: 'get_git_info',
       description:
         'CALL BEFORE creating a PR, committing in batches, or reporting progress to the user. Returns commit count ahead of source, files changed, insertions/deletions, and existing PR URL if any.',
       inputSchema: { type: 'object', properties: {}, required: [] },
+      annotations: { readOnlyHint: true, openWorldHint: false },
     },
     {
       name: 'set_workspace_status',
@@ -311,29 +323,34 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
         required: ['status'],
       },
+      annotations: { destructiveHint: false, openWorldHint: false },
     },
     {
       name: 'get_notion_ticket',
       description:
         'CALL when the user references "the ticket", "the Notion page", or when you need the source-of-truth text for the mission. Returns the Notion URL + locally-extracted ticket content from .ai/thoughts/.',
       inputSchema: { type: 'object', properties: {}, required: [] },
+      annotations: { readOnlyHint: true, openWorldHint: false },
     },
     {
       name: 'get_dev_server_status',
       description:
         'CALL BEFORE asking the user whether the app is running, or when your change is dev-server-sensitive. Returns running/stopped/starting/error + URL, port, container names.',
       inputSchema: { type: 'object', properties: {}, required: [] },
+      annotations: { readOnlyHint: true, openWorldHint: false },
     },
     {
       name: 'start_dev_server',
       description: 'CALL WHEN the user asks you to test the running app and the dev server is stopped.',
       inputSchema: { type: 'object', properties: {}, required: [] },
+      annotations: { destructiveHint: false, openWorldHint: false },
     },
     {
       name: 'stop_dev_server',
       description:
         'CALL WHEN the user explicitly asks to stop the dev server, or before destructive operations that require a clean boot.',
       inputSchema: { type: 'object', properties: {}, required: [] },
+      annotations: { destructiveHint: false, openWorldHint: false },
     },
     {
       name: 'get_dev_server_logs',
@@ -346,12 +363,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
         required: [],
       },
+      annotations: { readOnlyHint: true, openWorldHint: false },
     },
     {
       name: 'list_workspace_images',
       description:
         'CALL WHEN the user mentions "the screenshot", "the attached image", or when you need to reference a previously-uploaded image. Returns uid, originalName, relativePath, createdAt for every image in .ai/images/.',
       inputSchema: { type: 'object', properties: {}, required: [] },
+      annotations: { readOnlyHint: true, openWorldHint: false },
     },
     {
       name: 'get_settings',
@@ -367,6 +386,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
         required: [],
       },
+      annotations: { readOnlyHint: true, openWorldHint: false },
     },
     // ── Knowledge / context tools ─────────────────────────────────────────────
     {
@@ -374,6 +394,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       description:
         'CALL EARLY on a new session to discover plans, specs, and thoughts previously written for this workspace. Recursively lists every .md under docs/plans/, docs/superpowers/, and .ai/thoughts/. Before writing a new plan, check if one already exists.',
       inputSchema: { type: 'object', properties: {}, required: [] },
+      annotations: { readOnlyHint: true, openWorldHint: false },
     },
     {
       name: 'read_document',
@@ -390,6 +411,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
         required: ['path'],
       },
+      annotations: { readOnlyHint: true, openWorldHint: false },
     },
     {
       name: 'log_thought',
@@ -407,6 +429,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
         required: ['title', 'content'],
       },
+      annotations: { destructiveHint: false, openWorldHint: false },
     },
     {
       name: 'search_codebase',
@@ -429,12 +452,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
         required: ['query'],
       },
+      annotations: { readOnlyHint: true, openWorldHint: false },
     },
     {
       name: 'get_session_usage',
       description:
         'CALL when you need to self-regulate on long missions — returns token/cost totals for the workspace lifetime and for the currently running agent_session. Useful before spawning heavy subagents or deep reasoning on already-expensive sessions.',
       inputSchema: { type: 'object', properties: {}, required: [] },
+      annotations: { readOnlyHint: true, openWorldHint: false },
     },
     {
       name: 'schedule_wakeup',
@@ -458,12 +483,14 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
         },
         required: ['delaySeconds', 'prompt'],
       },
+      annotations: { destructiveHint: false, openWorldHint: false },
     },
     {
       name: 'cancel_wakeup',
       description:
         'CALL to cancel any pending wakeup on this workspace (e.g. the condition you were waiting on resolved early, or you decided not to continue). Idempotent — safe to call when nothing is pending.',
       inputSchema: { type: 'object', properties: {}, required: [] },
+      annotations: { destructiveHint: false, openWorldHint: false },
     },
   ],
 }))

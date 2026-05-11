@@ -52,7 +52,10 @@ vi.mock('../server/services/agent/orchestrator.js', () => ({
 }))
 
 vi.mock('../server/services/agent/engines/registry.js', () => ({
-  listEngines: vi.fn().mockReturnValue([{ id: 'claude-code' }]),
+  listEngines: vi.fn().mockReturnValue([
+    { id: 'claude-code', capabilities: { permissionModes: ['plan', 'bypass', 'strict', 'interactive'] } },
+    { id: 'codex', capabilities: { permissionModes: ['plan', 'bypass', 'strict'] } },
+  ]),
   resolveEngine: vi.fn(),
 }))
 
@@ -713,6 +716,71 @@ describe('POST /api/workspaces', () => {
     expect(prompt).toMatch(/short one-line summary/i)
     expect(prompt).not.toMatch(/kobo__set_workspace_description\b(?!_)/)
     expect(prompt).toMatch(/user[- ]controlled `?description`?[\s\S]*not touch/i)
+  })
+
+  it('accepts engine: codex on creation', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktree).mockReturnValue('/tmp/worktree')
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Codex Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/codex',
+        engine: 'codex',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(workspaceService.createWorkspace).toHaveBeenCalledWith(expect.objectContaining({ engine: 'codex' }))
+  })
+
+  it('rejects unknown engine with 400', async () => {
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Bad Engine Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/bad-engine',
+        engine: 'gemini',
+      }),
+    })
+
+    expect(res.status).toBe(400)
+    const data = (await res.json()) as { error: string }
+    expect(data.error).toMatch(/gemini/)
+    expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('rejects engine=codex paired with agentPermissionMode=interactive', async () => {
+    // Codex does not expose a canUseTool-equivalent hook, so 'interactive'
+    // would park the workspace in `awaiting-user` forever. The route must
+    // refuse the combination up-front.
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Codex Interactive Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/codex-interactive',
+        engine: 'codex',
+        agentPermissionMode: 'interactive',
+      }),
+    })
+
+    expect(res.status).toBe(400)
+    const data = (await res.json()) as { error: string }
+    expect(data.error).toMatch(/codex/)
+    expect(data.error).toMatch(/interactive/)
+    expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
   })
 })
 

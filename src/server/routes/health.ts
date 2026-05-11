@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import { Hono } from 'hono'
 import { getDb } from '../db/index.js'
 import { SCHEMA_VERSION } from '../db/migrations.js'
+import { resolveCodexBinary } from '../services/agent/engines/codex/spawn.js'
 import { getGlobalSettings, getProjectSettings, SETTINGS_SCHEMA_VERSION } from '../services/settings-service.js'
 import { getDbPath, getKoboHome } from '../utils/paths.js'
 import { slugifyProjectName } from '../utils/project-slug.js'
@@ -66,6 +67,10 @@ interface HealthReport {
     available: boolean
     version: string | null
   }
+  codexCli: {
+    available: boolean
+    version: string | null
+  }
   workspaces: {
     total: number
     archived: number
@@ -91,6 +96,17 @@ interface HealthReport {
 function checkClaudeCli(): { available: boolean; version: string | null } {
   try {
     const r = spawnSync('claude', ['--version'], { encoding: 'utf-8' })
+    if (r.error || r.status !== 0) return { available: false, version: null }
+    return { available: true, version: (r.stdout ?? '').trim() || null }
+  } catch {
+    return { available: false, version: null }
+  }
+}
+
+function checkCodexCli(): { available: boolean; version: string | null } {
+  try {
+    const bin = resolveCodexBinary()
+    const r = spawnSync(bin, ['--version'], { encoding: 'utf-8' })
     if (r.error || r.status !== 0) return { available: false, version: null }
     return { available: true, version: (r.stdout ?? '').trim() || null }
   } catch {
@@ -243,6 +259,7 @@ app.get('/report', (c) => {
     },
     settings: { schemaVersion: SETTINGS_SCHEMA_VERSION },
     claudeCli: checkClaudeCli(),
+    codexCli: checkCodexCli(),
     workspaces: {
       total: settingsRow.n,
       archived: archivedRow.n,

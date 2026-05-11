@@ -316,15 +316,15 @@ describe('MCP tasks server handlers', () => {
       fs.writeFileSync(
         settingsPath,
         JSON.stringify({
-          global: { defaultModel: 'auto' },
+          global: { defaultModelByEngine: { 'claude-code': 'auto', codex: 'auto' } },
           projects: [{ path: '/a', displayName: 'A' }],
         }),
       )
       const result = getSettingsHandler(settingsPath) as {
-        global: { defaultModel: string }
+        global: { defaultModelByEngine: Record<string, string> }
         projects: unknown[]
       }
-      expect(result.global.defaultModel).toBe('auto')
+      expect(result.global.defaultModelByEngine['claude-code']).toBe('auto')
       expect(result.projects).toHaveLength(1)
     })
 
@@ -332,7 +332,7 @@ describe('MCP tasks server handlers', () => {
       fs.writeFileSync(
         settingsPath,
         JSON.stringify({
-          global: { defaultModel: 'auto' },
+          global: { defaultModelByEngine: { 'claude-code': 'auto', codex: 'auto' } },
           projects: [
             { path: '/a', displayName: 'A' },
             { path: '/b', displayName: 'B' },

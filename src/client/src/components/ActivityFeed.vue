@@ -70,7 +70,7 @@ import { useSettingsStore } from 'src/stores/settings'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import type { AgentEvent } from 'src/types/agent-event'
 import { isBusyStatus } from 'src/utils/workspace-status'
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import TurnCard from './TurnCard.vue'
 
 const props = defineProps<{ workspaceId: string }>()
@@ -346,6 +346,23 @@ async function scrollToBottom(duration = 0) {
   area.setScrollPosition('vertical', scroll.verticalSize, duration)
 }
 
+// Coalesce streaming scrolls: animate the first one after a quiet period,
+// snap the rest within a burst. Avoids stacked animations on per-delta events.
+let pendingScrollFrame: number | null = null
+let lastScrollAt = 0
+const SCROLL_BURST_WINDOW_MS = 180
+
+function requestStreamScrollToBottom() {
+  if (pendingScrollFrame != null) return
+  const now = performance.now()
+  const inBurst = now - lastScrollAt < SCROLL_BURST_WINDOW_MS
+  pendingScrollFrame = requestAnimationFrame(() => {
+    pendingScrollFrame = null
+    lastScrollAt = performance.now()
+    void scrollToBottom(inBurst ? 0 : 180)
+  })
+}
+
 // Handler for the `scrollTo` event emitted by TurnCard's "scroll to top of
 // this message" button. The payload is the absolute Y in the scroll content
 // — TurnCard computes it locally via getBoundingClientRect so it doesn't
@@ -531,7 +548,14 @@ watch(eventCount, async (newLen, oldLen) => {
     return
   }
   if (newLen > oldLen && stickToBottom.value && !loadingOlder.value) {
-    await scrollToBottom(180)
+    requestStreamScrollToBottom()
+  }
+})
+
+onUnmounted(() => {
+  if (pendingScrollFrame != null) {
+    cancelAnimationFrame(pendingScrollFrame)
+    pendingScrollFrame = null
   }
 })
 
