@@ -205,92 +205,99 @@
           <q-tooltip v-if="!canOpenPr && createPrDisabledReason">{{ createPrDisabledReason }}</q-tooltip>
         </q-btn>
 
-        <!-- Secondary row: Sync dropdown + Diff Review + overflow -->
-        <div class="row items-center q-gutter-xs">
-          <q-btn-dropdown
-            v-if="gitStats"
-            split dense no-caps size="sm" outline color="grey-5"
-            icon="sync"
-            :label="$t('git.sync')"
-            class="git-btn git-sync-btn col"
-            :loading="pulling || rebasing || merging"
-            :disable="!workspace || pushing"
-            @click="gitStats.unpushedCount === -1 ? handleRebase() : handlePull()"
-          >
-            <q-list dark dense style="min-width: 140px;">
-              <q-item
-                clickable v-close-popup
-                :disable="pulling || rebasing || merging || gitStats.unpushedCount === -1"
-                @click="handlePull"
-              >
-                <q-item-section avatar style="min-width: 28px;">
-                  <q-icon name="download" size="16px" color="grey-5" />
-                </q-item-section>
-                <q-item-section>{{ $t('git.pull') }}</q-item-section>
-                <q-tooltip v-if="gitStats.unpushedCount === -1">{{ $t('git.pullNoUpstream') }}</q-tooltip>
-              </q-item>
-              <q-item clickable v-close-popup :disable="pulling || rebasing || merging" @click="handleRebase">
-                <q-item-section avatar style="min-width: 28px;">
-                  <q-icon name="replay" size="16px" color="orange-4" />
-                </q-item-section>
-                <q-item-section>{{ $t('git.rebase') }}</q-item-section>
-              </q-item>
-              <q-item clickable v-close-popup :disable="pulling || rebasing || merging" @click="handleMerge">
-                <q-item-section avatar style="min-width: 28px;">
-                  <q-icon name="merge" size="16px" color="purple-4" />
-                </q-item-section>
-                <q-item-section>{{ $t('git.merge') }}</q-item-section>
-              </q-item>
-            </q-list>
-          </q-btn-dropdown>
-
-          <q-btn
-            v-if="gitStats?.unpushedCount !== 0"
-            dense no-caps size="sm" outline color="orange-5"
-            icon="upload"
-            :label="$t('git.push')"
-            class="git-btn"
-            :loading="pushing"
-            :disable="!workspace || openingPr || pulling || rebasing"
-            @click="handlePush"
-          >
-            <q-tooltip anchor="bottom middle" self="top middle" :delay="400">{{ $t('git.push') }}</q-tooltip>
-          </q-btn>
-
-          <q-btn
-            dense no-caps size="sm" outline color="indigo-4"
-            icon="rate_review"
-            :label="$t('git.diffReview')"
-            class="git-btn"
-            :disable="!workspace"
-            @click="openDiff(true)"
-          >
-            <q-tooltip anchor="bottom middle" self="top middle" :delay="400">{{ $t('git.diffReviewTooltip') }}</q-tooltip>
-          </q-btn>
-
-          <q-btn
-            v-if="hasOverflowActions"
-            dense flat size="sm" color="grey-5"
-            icon="more_horiz"
-            class="git-btn"
-          >
-            <q-menu>
-              <q-list dark dense style="min-width: 160px;">
+        <!-- Secondary row: Sync dropdown + Push + Diff Review + overflow.
+             Each action lives in its own `col` so the four share space evenly
+             without overlap; the overflow icon stays at natural width via `col-auto`. -->
+        <div class="row no-wrap items-stretch q-gutter-xs">
+          <div v-if="gitStats" class="col">
+            <q-btn-dropdown
+              split dense no-caps size="sm" outline color="grey-5"
+              icon="sync"
+              :label="$t('git.sync')"
+              class="full-width git-btn"
+              :loading="pulling || rebasing || merging"
+              :disable="!workspace || pushing"
+              @click="gitStats.unpushedCount === -1 ? handleRebase() : handlePull()"
+            >
+              <q-list dark dense style="min-width: 140px;">
                 <q-item
-                  v-if="gitStats?.prUrl && gitStats.prState === 'OPEN'"
                   clickable v-close-popup
-                  :disable="changingBase"
-                  @click="handleChangePrBase"
+                  :disable="pulling || rebasing || merging || gitStats.unpushedCount === -1"
+                  @click="handlePull"
                 >
                   <q-item-section avatar style="min-width: 28px;">
-                    <q-icon name="swap_horiz" size="16px" color="grey-5" />
+                    <q-icon name="download" size="16px" color="grey-5" />
                   </q-item-section>
-                  <q-item-section>{{ $t('git.changePrBase') }}</q-item-section>
+                  <q-item-section>{{ $t('git.pull') }}</q-item-section>
+                  <q-tooltip v-if="gitStats.unpushedCount === -1">{{ $t('git.pullNoUpstream') }}</q-tooltip>
+                </q-item>
+                <q-item clickable v-close-popup :disable="pulling || rebasing || merging" @click="handleRebase">
+                  <q-item-section avatar style="min-width: 28px;">
+                    <q-icon name="replay" size="16px" color="orange-4" />
+                  </q-item-section>
+                  <q-item-section>{{ $t('git.rebase') }}</q-item-section>
+                </q-item>
+                <q-item clickable v-close-popup :disable="pulling || rebasing || merging" @click="handleMerge">
+                  <q-item-section avatar style="min-width: 28px;">
+                    <q-icon name="merge" size="16px" color="purple-4" />
+                  </q-item-section>
+                  <q-item-section>{{ $t('git.merge') }}</q-item-section>
                 </q-item>
               </q-list>
-            </q-menu>
-            <q-tooltip>{{ $t('git.actions.more') }}</q-tooltip>
-          </q-btn>
+            </q-btn-dropdown>
+          </div>
+
+          <div v-if="gitStats?.unpushedCount !== 0" class="col">
+            <q-btn
+              dense no-caps size="sm" outline color="orange-5"
+              icon="upload"
+              :label="$t('git.push')"
+              class="full-width git-btn"
+              :loading="pushing"
+              :disable="!workspace || openingPr || pulling || rebasing"
+              @click="handlePush"
+            >
+              <q-tooltip anchor="bottom middle" self="top middle" :delay="400">{{ $t('git.push') }}</q-tooltip>
+            </q-btn>
+          </div>
+
+          <div class="col">
+            <q-btn
+              dense no-caps size="sm" outline color="indigo-4"
+              icon="rate_review"
+              :label="$t('git.diffReview')"
+              class="full-width git-btn"
+              :disable="!workspace"
+              @click="openDiff(true)"
+            >
+              <q-tooltip anchor="bottom middle" self="top middle" :delay="400">{{ $t('git.diffReviewTooltip') }}</q-tooltip>
+            </q-btn>
+          </div>
+
+          <div v-if="hasOverflowActions" class="col-auto">
+            <q-btn
+              dense flat size="sm" color="grey-5"
+              icon="more_horiz"
+              class="git-btn"
+            >
+              <q-menu>
+                <q-list dark dense style="min-width: 160px;">
+                  <q-item
+                    v-if="gitStats?.prUrl && gitStats.prState === 'OPEN'"
+                    clickable v-close-popup
+                    :disable="changingBase"
+                    @click="handleChangePrBase"
+                  >
+                    <q-item-section avatar style="min-width: 28px;">
+                      <q-icon name="swap_horiz" size="16px" color="grey-5" />
+                    </q-item-section>
+                    <q-item-section>{{ $t('git.changePrBase') }}</q-item-section>
+                  </q-item>
+                </q-list>
+              </q-menu>
+              <q-tooltip>{{ $t('git.actions.more') }}</q-tooltip>
+            </q-btn>
+          </div>
         </div>
       </div>
 
@@ -950,26 +957,6 @@ async function handleOpenPr() {
 <style lang="scss" scoped>
 .git-btn {
   font-size: 11px;
-  padding: 2px 8px;
-}
-// Split button — the outer dropdown wraps two child buttons. `.git-btn`
-// padding on the outer edge would double-pad on the right, so we move the
-// horizontal padding from the outer shell to each inner half. Result: the
-// dropdown ends flush with the chevron, identical right-edge rhythm to
-// the siblings (so `q-gutter-xs` between Sync and Diff equals the gap
-// between Diff and Create PR).
-.git-sync-btn {
-  padding: 2px 0;
-}
-.git-sync-btn :deep(.q-btn__content) {
-  padding: 0 8px;
-}
-.git-sync-btn :deep(.q-btn-dropdown__arrow-container) {
-  padding: 0 4px;
-  border-left: 1px solid rgba(255, 255, 255, 0.12);
-}
-.git-sync-btn :deep(.q-btn-dropdown--split) {
-  gap: 0;
 }
 // Commit list — compact rows, clickable, hoverable.
 .commit-toggle:hover {

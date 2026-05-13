@@ -69,6 +69,19 @@ export const useTemplatesStore = defineStore('templates', {
       return updated
     },
 
+    async reloadDefaults(): Promise<{ added: string[]; kept: string[] }> {
+      const res = await fetch('/api/templates/reload-defaults', { method: 'POST' })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.error ?? `HTTP ${res.status}`)
+      }
+      const result = (await res.json()) as { added: string[]; kept: string[] }
+      if (result.added.length > 0) {
+        await this.fetchTemplates()
+      }
+      return result
+    },
+
     async deleteTemplate(slug: string): Promise<void> {
       const res = await fetch(`/api/templates/${encodeURIComponent(slug)}`, { method: 'DELETE' })
       if (!res.ok) {

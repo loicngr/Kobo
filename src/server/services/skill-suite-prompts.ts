@@ -172,10 +172,15 @@ For reproducible regression coverage that runs on every PR, prefer **Cypress** s
   brainstormingInstruction:
     'Brainstorm using both suites — each plays to its strength:\n' +
     '1. Early product framing: prefer gstack `/office-hours` for product-shaped work (six forcing questions + design doc). Fall back to `superpowers:brainstorming` for purely infra/refactor work where the product lens does not apply.\n' +
-    '2. Plan construction: prefer gstack `/autoplan` for the chained CEO/design/eng/DX pipeline. Use `superpowers:writing-plans` instead when you need a TDD-shaped multi-step plan that maps cleanly onto subagent dispatch.\n' +
-    '3. If you need fine control on either side, invoke the individual skills explicitly (`/plan-ceo-review`, `/plan-eng-review`, …) or stay with the superpowers brainstorm flow.\n' +
-    '4. For debugging during exploration, prefer `/investigate` (gstack — root-cause methodology) or `superpowers:systematic-debugging`, whichever you reach for first.\n' +
-    '5. Wait for explicit user approval on the final plan before announcing brainstorming is done.',
+    '2. Plan construction — pick whichever fits the work better:\n' +
+    '   - gstack `/autoplan` for the chained CEO/design/eng/DX pipeline (auto-detects which apply).\n' +
+    '   - `superpowers:writing-plans` for a TDD-shaped multi-step plan that maps cleanly onto subagent dispatch.\n' +
+    '3. For debugging during exploration, prefer `/investigate` (gstack — root-cause methodology) or `superpowers:systematic-debugging`, whichever you reach for first.\n' +
+    '4. Plan review gate (MANDATORY before announcing brainstorming is done): once the plan is ready, it MUST pass the gstack plan-review skills before you proceed.\n' +
+    '   - If you built the plan via `/autoplan`, you have ALREADY passed the chained reviews — skip this step.\n' +
+    '   - Otherwise (plan came from `superpowers:writing-plans` or any other path), run `/autoplan` now on the existing plan to chain the reviews, OR invoke the relevant ones individually: `/plan-ceo-review` (scope challenge), `/plan-eng-review` (architecture / edge cases / tests), `/plan-design-review` (UI / AI slop, when there is UI scope), `/plan-devex-review` (when the work has developer-facing surface).\n' +
+    '   - Apply any changes the reviews recommend before moving on.\n' +
+    '5. Wait for explicit user approval on the final reviewed plan before announcing brainstorming is done.',
 }
 
 /**

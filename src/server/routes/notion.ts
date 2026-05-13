@@ -1,8 +1,19 @@
 import { Hono } from 'hono'
-import { extractNotionPage } from '../services/notion-service.js'
+import { extractNotionPage, listNotionUsers } from '../services/notion-service.js'
 
 /** Hono sub-router for Notion page extraction. */
 const app = new Hono()
+
+// GET /api/notion/users — list workspace users (humans only, for the settings dropdown)
+app.get('/users', async (c) => {
+  try {
+    const users = await listNotionUsers()
+    return c.json({ users })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
 
 // POST /api/notion/extract — extract a Notion page
 app.post('/extract', async (c) => {

@@ -273,6 +273,22 @@ These rules are the source of truth and are also written to `.ai/.git-convention
 
 The human user of this repository prefers French for conversational exchanges. Code, tests, commit messages, and documentation (including this file) remain in English for toolchain compatibility, but chat responses should be in French unless the user switches.
 
+## Design System
+
+Always read `DESIGN.md` (repo root) before making any visual or UI decisions. Every
+font choice, color, spacing value, and aesthetic decision is defined there. The CSS
+variables in `src/client/src/css/design-tokens.scss` are the runtime source of truth
+for the values documented in `DESIGN.md` — never hardcode hex colors or spacing
+literals in components.
+
+Aesthetic direction: **Brutally Minimal × Industrial** (Linear / Anthropic Console
+reference). Dark-native, monochrome, single indigo accent (`--kobo-accent` /
+`#6c63ff`) used rarely. No purple gradients, no decorative illustrations, no
+bubble-pill shapes, no spring physics. Geist + Geist Mono for technical values.
+
+When reviewing or writing UI code, flag any deviation from `DESIGN.md`. Do not
+deviate from the documented system without explicit user approval.
+
 ## What NOT to do
 
 - Don't drop-and-recreate the database to apply schema changes. The project is in production — every schema change ships as a migration that preserves data (see [Database migrations](#database-migrations)).
@@ -282,3 +298,4 @@ The human user of this repository prefers French for conversational exchanges. C
 - Don't break the single-source-of-truth of `CLAUDE.md` → `AGENTS.md` symlink. Edit `AGENTS.md`; `CLAUDE.md` follows automatically.
 - Don't skip `try/catch` swallowing on best-effort cleanup (agent stop, dev-server stop, worktree removal). These must never break the primary operation.
 - Don't hardcode user-visible text in the frontend. Every string must go through `$t()` / `t()` with keys in all 5 locale files. See [Internationalization (i18n)](#internationalization-i18n).
+- Don't hardcode hex colors, spacing literals, or font names in components. Use the CSS variables from `src/client/src/css/design-tokens.scss` and the patterns in `DESIGN.md`. See [Design System](#design-system).

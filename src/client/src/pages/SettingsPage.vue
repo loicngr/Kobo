@@ -1,40 +1,37 @@
 <template>
   <q-page class="settings-page">
-    <div class="settings-inner">
-      <!-- Header -->
-      <div class="settings-header row items-center q-mb-lg">
-        <q-icon name="settings" size="24px" color="indigo-4" class="q-mr-sm" />
-        <span class="text-h5 text-weight-medium text-grey-3">{{ $t('settings.title') }}</span>
-      </div>
+    <div class="settings-layout">
+      <!-- Sidebar nav -->
+      <aside class="settings-nav">
+        <div class="settings-nav__title">{{ $t('settings.title') }}</div>
+        <q-list dense class="settings-nav__list">
+          <q-item
+            v-for="item in navItems"
+            :key="item.value"
+            clickable
+            v-ripple="false"
+            :class="['settings-nav__item', { 'settings-nav__item--active': activeTab === item.value }]"
+            @click="activeTab = item.value"
+          >
+            <q-item-section avatar class="settings-nav__icon">
+              <q-icon :name="item.icon" size="16px" />
+            </q-item-section>
+            <q-item-section class="settings-nav__label">{{ item.label }}</q-item-section>
+          </q-item>
+        </q-list>
+      </aside>
 
-      <!-- Tabs -->
-      <q-tabs
-        v-model="activeTab"
-        dense
-        active-color="indigo-4"
-        indicator-color="indigo-4"
-        class="settings-tabs q-mb-lg"
-        align="left"
-        narrow-indicator
-      >
-        <q-tab name="global" :label="$t('settings.global')" />
-        <q-tab name="projects" :label="$t('settings.projects')" />
-        <q-tab name="templates" :label="$t('templates.title')" />
-      </q-tabs>
+      <!-- Content panel -->
+      <main class="settings-content">
+        <header class="settings-content__header">
+          <h2 class="settings-content__title">{{ activeNavLabel }}</h2>
+        </header>
 
-      <!-- Tab panels -->
-      <q-tab-panels v-model="activeTab" animated class="settings-panels">
-        <!-- Global tab -->
-        <q-tab-panel name="global" class="q-pa-none">
-          <div class="settings-card rounded-borders q-pa-lg">
-            <div class="text-subtitle1 text-weight-medium q-mb-md text-grey-3">
-              {{ $t('settings.globalSettings') }}
-            </div>
-
-            <q-separator dark class="q-mb-md" />
+        <div class="settings-panels">
+        <div v-show="isGlobalSection" class="settings-global-wrap">
 
             <!-- Localization -->
-            <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-show="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.language') }}</div>
               <q-select
                 :model-value="locale"
@@ -52,7 +49,7 @@
             </div>
 
             <!-- Workspace list display -->
-            <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-show="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.workspaceListSection') }}</div>
               <q-toggle
                 v-model="globalFlattenWorkspaceList"
@@ -66,7 +63,7 @@
             </div>
 
             <!-- Skill suite -->
-            <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-show="activeTab === 'skills'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.skillSuite.section') }}</div>
 
               <q-option-group
@@ -98,28 +95,57 @@
               />
             </div>
 
-            <!-- Custom prompts: visible only in custom mode -->
-            <div v-if="globalSkillSuite === 'custom'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-if="activeTab === 'skills' && globalSkillSuite === 'custom'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.skillSuite.customPrompts') }}</div>
 
               <div class="text-caption text-grey-6 q-mb-xs q-mt-sm">{{ $t('settings.skillSuite.reviewTemplate') }}</div>
-              <q-input v-model="globalCustomReviewTemplate" type="textarea" filled dense rows="8" dark />
+              <q-input
+                v-model="globalCustomReviewTemplate"
+                type="textarea"
+                outlined
+                autogrow
+                class="settings-input mono-textarea"
+              />
 
               <div class="text-caption text-grey-6 q-mt-md q-mb-xs">{{ $t('settings.skillSuite.autoLoopReviewGate') }}</div>
-              <q-input v-model="globalCustomAutoLoopReviewGate" type="textarea" filled dense rows="6" dark />
+              <q-input
+                v-model="globalCustomAutoLoopReviewGate"
+                type="textarea"
+                outlined
+                autogrow
+                class="settings-input mono-textarea"
+              />
 
               <div class="text-caption text-grey-6 q-mt-md q-mb-xs">{{ $t('settings.skillSuite.autoLoopGroomingIntro') }}</div>
-              <q-input v-model="globalCustomAutoLoopGroomingIntro" type="textarea" filled dense rows="4" dark />
+              <q-input
+                v-model="globalCustomAutoLoopGroomingIntro"
+                type="textarea"
+                outlined
+                autogrow
+                class="settings-input mono-textarea"
+              />
 
               <div class="text-caption text-grey-6 q-mt-md q-mb-xs">{{ $t('settings.skillSuite.qaTemplate') }}</div>
-              <q-input v-model="globalCustomQaPromptTemplate" type="textarea" filled dense rows="6" dark />
+              <q-input
+                v-model="globalCustomQaPromptTemplate"
+                type="textarea"
+                outlined
+                autogrow
+                class="settings-input mono-textarea"
+              />
 
               <div class="text-caption text-grey-6 q-mt-md q-mb-xs">{{ $t('settings.skillSuite.brainstormingInstruction') }}</div>
-              <q-input v-model="globalCustomBrainstormingInstruction" type="textarea" filled dense rows="6" dark />
+              <q-input
+                v-model="globalCustomBrainstormingInstruction"
+                type="textarea"
+                outlined
+                autogrow
+                class="settings-input mono-textarea"
+              />
             </div>
 
             <!-- Default agent configuration -->
-            <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-show="activeTab === 'agents'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.defaultModelClaude') }}</div>
               <q-select
                 v-model="globalClaudeModel"
@@ -175,7 +201,7 @@
             </div>
 
             <!-- Activity feed display -->
-            <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-show="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.activityFeed') }}</div>
               <q-toggle
                 :model-value="store.showVerboseSystemMessages"
@@ -189,7 +215,7 @@
             </div>
 
             <!-- Notifications -->
-            <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-show="activeTab === 'notifications'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.notifications') }}</div>
               <div class="column q-gutter-xs">
                 <q-toggle
@@ -255,7 +281,7 @@
             </div>
 
             <!-- Voice transcription -->
-            <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-show="activeTab === 'voice'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('voice.title') }}</div>
               <div class="column q-gutter-sm">
                 <q-toggle
@@ -450,8 +476,7 @@ where ffmpeg</pre>
               </div>
             </div>
 
-            <!-- PR template + Git conventions -->
-            <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-if="activeTab === 'prompts'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="row items-center q-mb-sm">
                 <div class="text-subtitle2">{{ $t('settings.prPromptTemplate') }}</div>
                 <q-space />
@@ -557,7 +582,7 @@ where ffmpeg</pre>
             </div>
 
             <!-- Editor -->
-            <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-show="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.editorCommand') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.editorCommandHint') }}</div>
               <q-input
@@ -570,8 +595,7 @@ where ffmpeg</pre>
               />
             </div>
 
-            <!-- MCP server selection -->
-            <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-show="activeTab === 'notion' || activeTab === 'sentry'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.mcpSelection') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.mcpSelectionHint') }}</div>
               <div class="q-mb-sm">
@@ -602,8 +626,7 @@ where ffmpeg</pre>
               </div>
             </div>
 
-            <!-- Notion integration status -->
-            <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-if="activeTab === 'notion'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.notionStatus') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.notionStatusHint') }}</div>
               <div class="q-mb-sm">
@@ -654,8 +677,85 @@ where ffmpeg</pre>
               />
             </div>
 
-            <!-- Sentry integration -->
-            <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <!-- Notion assignment -->
+            <div v-show="activeTab === 'notion'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.notionAssignee') }}</div>
+              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.notionAssigneeHint') }}</div>
+              <div class="q-mb-sm">
+                <div class="field-label-sub text-caption q-mb-xs text-grey-7">{{ $t('settings.notionAssigneeProperty') }}</div>
+                <q-input
+                  v-model="globalNotionAssigneeProperty"
+                  dense
+                  dark
+                  outlined
+                  :placeholder="$t('settings.notionAssigneePropertyPlaceholder')"
+                  class="settings-input"
+                />
+              </div>
+              <div class="q-mb-sm">
+                <div class="row items-center q-mb-xs">
+                  <div class="field-label-sub text-caption text-grey-7 col">{{ $t('settings.notionUserId') }}</div>
+                  <q-btn
+                    flat
+                    dense
+                    no-caps
+                    size="sm"
+                    icon="refresh"
+                    color="grey-5"
+                    :loading="loadingNotionUsers"
+                    :label="$t('settings.notionUsersRefresh')"
+                    @click="loadNotionUsers(true)"
+                  />
+                </div>
+                <q-select
+                  v-if="notionUsers.length > 0"
+                  v-model="globalNotionUserId"
+                  :options="notionUserOptions"
+                  emit-value
+                  map-options
+                  clearable
+                  dense
+                  dark
+                  outlined
+                  :hint="$t('settings.notionUserIdHint')"
+                  class="settings-input"
+                >
+                  <template #option="scope">
+                    <q-item v-bind="scope.itemProps">
+                      <q-item-section avatar>
+                        <q-avatar size="24px">
+                          <img v-if="scope.opt.avatarUrl" :src="scope.opt.avatarUrl" :alt="scope.opt.label">
+                          <q-icon v-else name="person" size="20px" />
+                        </q-avatar>
+                      </q-item-section>
+                      <q-item-section>
+                        <q-item-label>{{ scope.opt.name }}</q-item-label>
+                        <q-item-label caption>{{ scope.opt.email }}</q-item-label>
+                      </q-item-section>
+                    </q-item>
+                  </template>
+                </q-select>
+                <div v-else-if="loadingNotionUsers" class="text-caption text-grey-7 q-py-sm">
+                  {{ $t('settings.notionUsersLoading') }}
+                </div>
+                <template v-else>
+                  <div v-if="notionUsersError" class="text-caption text-orange-5 q-mb-xs">
+                    {{ $t('settings.notionUsersLoadFailed', { error: notionUsersError }) }}
+                  </div>
+                  <q-input
+                    v-model="globalNotionUserId"
+                    dense
+                    dark
+                    outlined
+                    :placeholder="$t('settings.notionUserIdPlaceholder')"
+                    :hint="notionUsersError ? $t('settings.notionUsersManualFallback') : $t('settings.notionUserIdHint')"
+                    class="settings-input"
+                  />
+                </template>
+              </div>
+            </div>
+
+            <div v-if="activeTab === 'sentry'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ t('settings.sentryIntegration') }}</div>
               <div class="row items-center q-mb-sm">
                 <div class="text-subtitle2">{{ t('settings.sentryInitialPrompt') }}</div>
@@ -684,7 +784,7 @@ where ffmpeg</pre>
             </div>
 
             <!-- Workspace tags -->
-            <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-show="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.tagsTitle') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.tagsHint') }}</div>
               <q-select
@@ -702,7 +802,7 @@ where ffmpeg</pre>
               />
             </div>
 
-            <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-show="activeTab === 'worktrees'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.worktreesTitle') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.worktreesHint') }}</div>
               <q-input
@@ -729,7 +829,7 @@ where ffmpeg</pre>
             </div>
 
             <!-- Import / Export config -->
-            <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-show="activeTab === 'export'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.shareTitle') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.shareHint') }}</div>
               <div class="row q-gutter-sm">
@@ -773,10 +873,9 @@ where ffmpeg</pre>
               />
             </div>
           </div>
-        </q-tab-panel>
 
-        <!-- Projects tab -->
-        <q-tab-panel name="projects" class="q-pa-none">
+        <!-- Projects panel -->
+        <div v-show="activeTab === 'projects'" class="q-pa-none">
           <div class="row q-gutter-md" style="min-height: 500px;">
             <!-- Left column: project list (30%) -->
             <div class="project-list-col">
@@ -980,10 +1079,9 @@ where ffmpeg</pre>
                     <q-input
                       v-model="projectForm.prPromptTemplate"
                       type="textarea"
-                      dense
-                      dark
                       outlined
-                      :rows="4"
+                      autogrow
+                      :input-style="{ minHeight: '100px' }"
                       :placeholder="$t('settings.prPromptPlaceholder.project')"
                       class="settings-input mono-textarea"
                     />
@@ -995,10 +1093,9 @@ where ffmpeg</pre>
                     <q-input
                       v-model="projectForm.reviewPromptTemplate"
                       type="textarea"
-                      dense
-                      dark
                       outlined
-                      :rows="4"
+                      autogrow
+                      :input-style="{ minHeight: '100px' }"
                       :placeholder="$t('settings.reviewPromptPlaceholder')"
                       class="settings-input mono-textarea"
                     />
@@ -1036,10 +1133,9 @@ where ffmpeg</pre>
                     <q-input
                       v-model="projectForm.gitConventions"
                       type="textarea"
-                      dense
-                      dark
                       outlined
-                      :rows="6"
+                      autogrow
+                      :input-style="{ minHeight: '140px' }"
                       :placeholder="$t('settings.gitConventionsEmpty')"
                       class="settings-input mono-textarea"
                     />
@@ -1052,10 +1148,9 @@ where ffmpeg</pre>
                     <q-input
                       v-model="projectForm.setupScript"
                       type="textarea"
-                      dense
-                      dark
                       outlined
-                      :rows="5"
+                      autogrow
+                      :input-style="{ minHeight: '100px' }"
                       :placeholder="$t('settings.setupScriptPlaceholder')"
                       class="settings-input mono-textarea"
                     />
@@ -1070,10 +1165,9 @@ where ffmpeg</pre>
                       <q-input
                         v-model="projectForm.devServer.startCommand"
                         type="textarea"
-                        dense
-                        dark
                         outlined
-                        :rows="3"
+                        autogrow
+                        :input-style="{ minHeight: '60px' }"
                         :placeholder="$t('settings.devServerStartPlaceholder')"
                         class="settings-input mono-textarea"
                       />
@@ -1083,10 +1177,9 @@ where ffmpeg</pre>
                       <q-input
                         v-model="projectForm.devServer.stopCommand"
                         type="textarea"
-                        dense
-                        dark
                         outlined
-                        :rows="3"
+                        autogrow
+                        :input-style="{ minHeight: '60px' }"
                         :placeholder="$t('settings.devServerStopPlaceholder')"
                         class="settings-input mono-textarea"
                       />
@@ -1209,22 +1302,36 @@ where ffmpeg</pre>
               </div>
             </div>
           </div>
-        </q-tab-panel>
-        <!-- Templates tab -->
-        <q-tab-panel name="templates" class="q-pa-none">
+        </div>
+        <!-- Templates panel -->
+        <div v-show="activeTab === 'templates'" class="q-pa-none">
           <div class="settings-card rounded-borders q-pa-lg">
             <div class="row items-center justify-between q-mb-md">
               <div class="text-subtitle1 text-weight-medium text-grey-3">
                 {{ $t('templates.title') }}
               </div>
-              <q-btn
-                color="primary"
-                icon="add"
-                :label="$t('templates.newTemplate')"
-                dense
-                no-caps
-                @click="openCreateDialog"
-              />
+              <div class="row q-gutter-sm items-center">
+                <q-btn
+                  flat
+                  color="grey-4"
+                  icon="restart_alt"
+                  :label="$t('templates.reloadDefaults')"
+                  dense
+                  no-caps
+                  :loading="reloadingDefaults"
+                  @click="confirmReloadDefaults"
+                >
+                  <q-tooltip>{{ $t('templates.reloadDefaultsHint') }}</q-tooltip>
+                </q-btn>
+                <q-btn
+                  color="primary"
+                  icon="add"
+                  :label="$t('templates.newTemplate')"
+                  dense
+                  no-caps
+                  @click="openCreateDialog"
+                />
+              </div>
             </div>
 
             <q-separator dark class="q-mb-md" />
@@ -1265,9 +1372,26 @@ where ffmpeg</pre>
               {{ $t('templates.filePath', { path: '~/.config/kobo/templates.json' }) }}
             </div>
           </div>
-        </q-tab-panel>
-      </q-tab-panels>
+        </div>
+        </div>
+      </main>
+
+      <transition name="save-bar">
+        <div v-if="savebarVisible" class="settings-savebar">
+          <span class="settings-savebar__label">{{ $t('settings.unsavedChanges') }}</span>
+          <q-btn
+            dense
+            no-caps
+            unelevated
+            class="settings-savebar__action"
+            :loading="savebarLoading"
+            :label="$t('common.save')"
+            @click="savebarSave"
+          />
+        </div>
+      </transition>
     </div>
+
 
     <!-- Templates create/edit dialog -->
     <q-dialog v-model="showTemplateDialog" persistent>
@@ -1371,7 +1495,38 @@ const templatesStore = useTemplatesStore()
 const { t, locale } = useI18n()
 
 // Tab state
-const activeTab = ref('global')
+const activeTab = ref('general')
+
+const navItems = computed(() => [
+  { value: 'general', icon: 'tune', label: t('settings.nav.general') },
+  { value: 'agents', icon: 'smart_toy', label: t('settings.nav.agents') },
+  { value: 'skills', icon: 'extension', label: t('settings.nav.skills') },
+  { value: 'prompts', icon: 'text_snippet', label: t('settings.nav.prompts') },
+  { value: 'notion', icon: 'integration_instructions', label: t('settings.nav.notion') },
+  { value: 'sentry', icon: 'bug_report', label: t('settings.nav.sentry') },
+  { value: 'voice', icon: 'mic', label: t('settings.nav.voice') },
+  { value: 'notifications', icon: 'notifications', label: t('settings.nav.notifications') },
+  { value: 'worktrees', icon: 'account_tree', label: t('settings.nav.worktrees') },
+  { value: 'projects', icon: 'folder', label: t('settings.projects') },
+  { value: 'templates', icon: 'description', label: t('templates.title') },
+  { value: 'export', icon: 'import_export', label: t('settings.nav.export') },
+])
+const activeNavLabel = computed(() => navItems.value.find((i) => i.value === activeTab.value)?.label ?? '')
+
+const isGlobalSection = computed(() =>
+  [
+    'general',
+    'agents',
+    'skills',
+    'prompts',
+    'notion',
+    'sentry',
+    'voice',
+    'notifications',
+    'worktrees',
+    'export',
+  ].includes(activeTab.value),
+)
 
 // Global form
 const globalClaudeModel = ref('auto')
@@ -1386,6 +1541,45 @@ const globalAudioNotificationSound = ref(DEFAULT_NOTIFICATION_SOUND)
 const globalAudioNotificationVolume = ref(1)
 const globalNotionStatusProperty = ref('')
 const globalNotionStatus = ref('')
+const globalNotionAssigneeProperty = ref('')
+const globalNotionUserId = ref('')
+
+interface NotionUserOption {
+  id: string
+  name: string
+  email: string
+  avatarUrl: string | null
+}
+const notionUsers = ref<NotionUserOption[]>([])
+const loadingNotionUsers = ref(false)
+const notionUsersError = ref('')
+const notionUserOptions = computed(() =>
+  notionUsers.value.map((u) => ({
+    label: `${u.name} — ${u.email}`,
+    value: u.id,
+    name: u.name,
+    email: u.email,
+    avatarUrl: u.avatarUrl,
+  })),
+)
+
+async function loadNotionUsers(force = false) {
+  if (loadingNotionUsers.value) return
+  if (!force && notionUsers.value.length > 0) return
+  loadingNotionUsers.value = true
+  notionUsersError.value = ''
+  try {
+    const res = await fetch('/api/notion/users')
+    const body = (await res.json().catch(() => ({}))) as { users?: NotionUserOption[]; error?: string }
+    if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`)
+    notionUsers.value = Array.isArray(body.users) ? body.users : []
+  } catch (err) {
+    notionUsersError.value = err instanceof Error ? err.message : String(err)
+    notionUsers.value = []
+  } finally {
+    loadingNotionUsers.value = false
+  }
+}
 const globalNotionInitialPrompt = ref('')
 const globalSentryInitialPrompt = ref('')
 type ResettableField =
@@ -1623,6 +1817,7 @@ const formDescription = ref('')
 const formContent = ref('')
 const formError = ref('')
 const saving = ref(false)
+const reloadingDefaults = ref(false)
 
 const sortedTemplates = computed(() => [...templatesStore.templates].sort((a, b) => a.slug.localeCompare(b.slug)))
 
@@ -1699,6 +1894,35 @@ async function saveTemplate() {
   } finally {
     saving.value = false
   }
+}
+
+function confirmReloadDefaults() {
+  $q.dialog({
+    title: t('templates.reloadDefaults'),
+    message: t('templates.reloadDefaultsConfirmMessage'),
+    dark: true,
+    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    ok: { flat: true, label: t('templates.reloadDefaults'), color: 'primary' },
+  }).onOk(async () => {
+    reloadingDefaults.value = true
+    try {
+      const result = await templatesStore.reloadDefaults()
+      $q.notify({
+        type: 'positive',
+        message: t('templates.reloadDefaultsSuccess', { added: result.added.length, kept: result.kept.length }),
+        position: 'top',
+        timeout: 4000,
+      })
+    } catch (err) {
+      $q.notify({
+        type: 'negative',
+        message: err instanceof Error ? err.message : t('templates.reloadDefaultsFailed'),
+        position: 'top',
+      })
+    } finally {
+      reloadingDefaults.value = false
+    }
+  })
 }
 
 async function confirmDeleteTemplate(template: Template) {
@@ -1854,6 +2078,8 @@ function captureGlobalSnapshot(): string {
     audioNotificationVolume: globalAudioNotificationVolume.value,
     notionStatusProperty: globalNotionStatusProperty.value,
     notionStatus: globalNotionStatus.value,
+    notionAssigneeProperty: globalNotionAssigneeProperty.value,
+    notionUserId: globalNotionUserId.value,
     notionInitialPrompt: globalNotionInitialPrompt.value,
     sentryInitialPrompt: globalSentryInitialPrompt.value,
     claudePermissionMode: globalClaudePermissionMode.value,
@@ -1890,6 +2116,18 @@ function captureProjectSnapshot(): string {
 const isGlobalDirty = computed(() => captureGlobalSnapshot() !== globalSavedSnapshot.value)
 const isProjectDirty = computed(() => captureProjectSnapshot() !== projectSavedSnapshot.value)
 
+const savebarVisible = computed(() => {
+  if (activeTab.value === 'projects')
+    return isProjectDirty.value && (selectedProject.value !== null || isNewProject.value)
+  if (activeTab.value === 'templates') return false
+  return isGlobalDirty.value
+})
+const savebarLoading = computed(() => (activeTab.value === 'projects' ? savingProject.value : saving.value))
+function savebarSave() {
+  if (activeTab.value === 'projects') saveProject()
+  else saveGlobal()
+}
+
 // Init global form from store
 function syncGlobalForm() {
   hydratingVoiceForm.value = true
@@ -1907,6 +2145,8 @@ function syncGlobalForm() {
   globalAudioNotificationVolume.value = typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 1
   globalNotionStatusProperty.value = store.global.notionStatusProperty ?? ''
   globalNotionStatus.value = store.global.notionInProgressStatus ?? ''
+  globalNotionAssigneeProperty.value = store.global.notionAssigneeProperty ?? ''
+  globalNotionUserId.value = store.global.notionUserId ?? ''
   globalNotionInitialPrompt.value = store.global.notionInitialPromptTemplate ?? ''
   globalSentryInitialPrompt.value = store.global.sentryInitialPromptTemplate ?? ''
   // Legacy/unknown values fall back to 'bypass' — safest non-plan default.
@@ -2148,6 +2388,8 @@ async function saveGlobal() {
       audioNotificationVolume: globalAudioNotificationVolume.value,
       notionStatusProperty: globalNotionStatusProperty.value,
       notionInProgressStatus: globalNotionStatus.value,
+      notionAssigneeProperty: globalNotionAssigneeProperty.value,
+      notionUserId: globalNotionUserId.value,
       notionInitialPromptTemplate: globalNotionInitialPrompt.value,
       sentryInitialPromptTemplate: globalSentryInitialPrompt.value,
       defaultPermissionModeByEngine: {
@@ -2303,6 +2545,7 @@ onMounted(async () => {
   await store.fetchVoiceModels()
   await store.fetchVoiceRuntime()
   syncGlobalForm()
+  loadNotionUsers().catch(() => {})
 })
 
 // Cleanup debounce timer on unmount
@@ -2312,52 +2555,139 @@ onUnmounted(() => {
 </script>
 
 <style lang="scss" scoped>
-.settings-page {
-  background-color: #1a1a2e;
-  min-height: 100%;
-  padding: 32px 24px;
+.settings-page.q-page {
+  background-color: var(--kobo-bg);
+  position: relative;
+  padding: 0;
+  min-height: 100vh;
 }
 
-.settings-inner {
-  width: 100%;
-  max-width: 900px;
-  margin: 0 auto;
-  padding-bottom: 88px;
+.settings-layout {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: stretch;
+  overflow: hidden;
 }
 
-.settings-header {
-  min-height: 48px;
+.settings-nav {
+  width: 240px;
+  flex-shrink: 0;
+  background-color: var(--kobo-surface);
+  border-right: 1px solid var(--kobo-border-subtle);
+  padding: 24px 12px;
+  overflow-y: auto;
 }
 
-.settings-tabs {
-  :deep(.q-tab) {
-    color: #888;
-    text-transform: none;
-    font-weight: 500;
+.settings-nav__title {
+  font-family: var(--kobo-font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--kobo-text-3);
+  padding: 0 12px;
+  margin-bottom: 16px;
+}
+
+.settings-nav__list {
+  padding: 0;
+}
+
+.settings-nav__item {
+  border-radius: var(--kobo-radius-sm);
+  padding: 6px 12px;
+  color: var(--kobo-text-2);
+  font-size: 13px;
+  font-weight: 500;
+  min-height: 30px;
+  transition: background-color var(--kobo-duration-micro) var(--kobo-ease-out),
+              color var(--kobo-duration-micro) var(--kobo-ease-out);
+
+  &:hover {
+    background-color: var(--kobo-hover);
+    color: var(--kobo-text);
   }
+}
 
-  :deep(.q-tab--active) {
-    color: #6c63ff;
+.settings-nav__item--active {
+  background-color: var(--kobo-hover);
+  color: var(--kobo-text);
+  position: relative;
+
+  &::before {
+    content: '';
+    position: absolute;
+    left: -8px;
+    top: 6px;
+    bottom: 6px;
+    width: 2px;
+    background-color: var(--kobo-accent);
+    border-radius: 1px;
   }
+}
+
+.settings-nav__icon {
+  min-width: 24px;
+  color: inherit;
+}
+
+.settings-nav__label {
+  padding-left: 4px;
+}
+
+.settings-content {
+  flex: 1;
+  min-width: 0;
+  padding: 24px 32px 80px;
+  overflow-y: auto;
+}
+
+.settings-content__header {
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--kobo-border-subtle);
+  position: sticky;
+  top: -24px;
+  background-color: var(--kobo-bg);
+  margin-top: -24px;
+  padding-top: 24px;
+  z-index: 2;
+}
+
+.settings-content__title {
+  font-family: var(--kobo-font-sans);
+  font-size: 22px;
+  font-weight: 600;
+  color: var(--kobo-text);
+  margin: 0;
+  line-height: 1.2;
 }
 
 .settings-panels {
   background: transparent;
 }
 
+.settings-global-wrap {
+  display: block;
+}
+
 .settings-card {
-  background: #222244;
-  border: 1px solid #2a2a4a;
+  background: var(--kobo-surface);
+  border: 1px solid var(--kobo-border-subtle);
+  border-radius: var(--kobo-radius-md);
 }
 
 .settings-subcard {
-  background: #1a1a30;
-  border: 1px solid #3a3a5e;
+  background: var(--kobo-surface);
+  border: 1px solid var(--kobo-border-subtle);
+  border-radius: var(--kobo-radius-md);
+  margin-bottom: 16px;
 }
 
 .template-card {
-  background: #1a1a2e;
-  border: 1px solid #2a2a4a;
+  background: var(--kobo-surface);
+  border: 1px solid var(--kobo-border-subtle);
 }
 
 // field-label: font-size and font-weight moved to template (text-body2 text-weight-medium)
@@ -2366,24 +2696,24 @@ onUnmounted(() => {
 
 .settings-input {
   :deep(.q-field__control) {
-    background: #1a1a2e;
-    border-color: #2a2a4a;
+    background: var(--kobo-surface-2);
+    border-color: var(--kobo-border-subtle);
   }
 
   :deep(.q-field__native),
   :deep(input),
   :deep(textarea) {
-    color: #e0e0e0;
+    color: var(--kobo-text);
   }
 
   :deep(.q-field__label) {
-    color: #888;
+    color: var(--kobo-text-3);
   }
 }
 
 .mono-textarea {
   :deep(textarea) {
-    font-family: 'JetBrains Mono', 'Fira Code', monospace;
+    font-family: var(--kobo-font-mono);
     font-size: 13px;
   }
 }
@@ -2391,23 +2721,23 @@ onUnmounted(() => {
 .mono-guide {
   margin: 0;
   white-space: pre-wrap;
-  background: #1a1a2e;
-  border: 1px solid #2a2a4a;
-  border-radius: 6px;
+  background: var(--kobo-surface-2);
+  border: 1px solid var(--kobo-border-subtle);
+  border-radius: var(--kobo-radius-sm);
   padding: 8px 10px;
-  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-family: var(--kobo-font-mono);
   font-size: 12px;
   line-height: 1.35;
-  color: #c9c9e8;
+  color: var(--kobo-text-2);
 }
 
 .readonly-input {
   :deep(.q-field__control) {
-    background: #16162a;
+    background: var(--kobo-bg);
   }
 
   :deep(input) {
-    color: #888;
+    color: var(--kobo-text-3);
   }
 }
 
@@ -2417,6 +2747,10 @@ onUnmounted(() => {
   max-width: 280px;
   flex-shrink: 0;
   overflow: hidden;
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  max-height: calc(100vh - 140px);
 }
 
 .project-form-col {
@@ -2431,28 +2765,64 @@ onUnmounted(() => {
 }
 
 .settings-sticky-actions {
-  position: fixed;
-  right: 20px;
-  bottom: 14px;
-  z-index: 20;
-  background: rgba(34, 34, 68, 0.94);
-  border: 1px solid #2a2a4a;
-  border-radius: 8px;
-  padding: 8px 10px;
-  backdrop-filter: blur(2px);
-  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.25);
+  display: none;
 }
 
 .project-item--active {
-  background-color: #2a2a4a !important;
-  border-left: 3px solid #6c63ff;
+  background-color: var(--kobo-hover) !important;
+  border-left: 2px solid var(--kobo-accent);
 }
 
 .save-btn--dirty {
-  /* `box-shadow` survives Quasar's internal outline reset (q-btn applies
-     `outline: 0`). 0-spread + 3px-spread mimics outline+offset visually. */
-  box-shadow: 0 0 0 2px #f59e0b !important; /* amber-5 — signals unsaved changes */
-  border-radius: 4px;
-  transition: box-shadow 120ms ease-in-out;
+  box-shadow: 0 0 0 2px var(--kobo-accent) !important;
+  border-radius: var(--kobo-radius-sm);
+  transition: box-shadow var(--kobo-duration-short) var(--kobo-ease-out);
+}
+
+.settings-savebar {
+  position: absolute;
+  bottom: 0;
+  left: 240px;
+  right: 0;
+  z-index: 30;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 32px;
+  background-color: var(--kobo-surface);
+  border-top: 1px solid var(--kobo-border-subtle);
+}
+
+.settings-savebar__label {
+  font-family: var(--kobo-font-sans);
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--kobo-text-2);
+}
+
+.settings-savebar__action {
+  background-color: var(--kobo-accent) !important;
+  color: var(--kobo-accent-fg) !important;
+  font-weight: 500;
+  font-size: 13px;
+  padding: 6px 16px;
+  border-radius: var(--kobo-radius-sm);
+
+  &:hover {
+    background-color: var(--kobo-accent-hover) !important;
+  }
+}
+
+.save-bar-enter-active,
+.save-bar-leave-active {
+  transition: transform var(--kobo-duration-medium) var(--kobo-ease-out),
+              opacity var(--kobo-duration-medium) var(--kobo-ease-out);
+}
+
+.save-bar-enter-from,
+.save-bar-leave-to {
+  transform: translateY(100%);
+  opacity: 0;
 }
 </style>

@@ -77,6 +77,7 @@ export interface SentryIssueContent {
   tags: Record<string, string>
   offendingSpans: string[]
   extraContext: string
+  assignee: string
 }
 
 function matchField(md: string, label: string): string {
@@ -133,6 +134,10 @@ export function parseSentryResponse(markdown: string, numericId: string): Sentry
   const additionalContext = matchSection(markdown, 'Additional Context')
   const extraContext = [extraData, additionalContext].filter((s) => s.length > 0).join('\n\n')
 
+  const rawAssignee =
+    matchField(markdown, 'Assigned To') || matchField(markdown, 'Assignee') || matchField(markdown, 'Assigned')
+  const assignee = /^(unassigned|none|-|n\/a)$/i.test(rawAssignee.trim()) ? '' : rawAssignee.trim()
+
   return {
     issueId,
     issueNumericId: numericId,
@@ -146,6 +151,7 @@ export function parseSentryResponse(markdown: string, numericId: string): Sentry
     tags,
     offendingSpans: parseOffendingSpans(markdown),
     extraContext,
+    assignee,
   }
 }
 
@@ -181,6 +187,70 @@ export async function extractSentryIssue(url: string): Promise<SentryIssueConten
     }
 
     return parseSentryResponse(markdown, numericId)
+  } finally {
+    mcpProcess.stdin?.end()
+    mcpProcess.kill()
+  }
+}
+
+function extractSentryUserId(whoamiResult: unknown): string | null {
+  if (typeof whoamiResult === 'string') {
+    const match = whoamiResult.match(/User\s*ID(?:\s*is)?\s*[:=]?\s*(\d+)/i)
+    return match ? match[1] : null
+  }
+  if (!whoamiResult || typeof whoamiResult !== 'object') return null
+  const r = whoamiResult as Record<string, unknown>
+  if (typeof r.id === 'string' && r.id.length > 0) return r.id
+  if (typeof r.id === 'number') return String(r.id)
+  for (const key of ['user', 'data', 'me']) {
+    const nested = r[key]
+    if (nested && typeof nested === 'object') {
+      const inner = nested as Record<string, unknown>
+      if (typeof inner.id === 'string' && inner.id.length > 0) return inner.id
+      if (typeof inner.id === 'number') return String(inner.id)
+    }
+  }
+  return null
+}
+
+export async function assignSentryIssueToSelf(issueUrl: string): Promise<{
+  assigned: boolean
+  reason: string
+}> {
+  let config: SentryMcpConfig
+  try {
+    const global = getGlobalSettings()
+    config = readSentryMcpConfig(global.sentryMcpKey)
+  } catch (err) {
+    return { assigned: false, reason: err instanceof Error ? err.message : String(err) }
+  }
+
+  const mcpProcess = spawnMcpProcess(config.command, config.args, config.env)
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => resolve(), 1000)
+      mcpProcess.on('error', (err: Error) => {
+        clearTimeout(timeout)
+        reject(new Error(`Failed to start Sentry MCP server: ${err.message}`))
+      })
+    })
+
+    await initializeMcp(mcpProcess)
+
+    const whoamiRaw = await callMcpTool(mcpProcess, 'whoami', {})
+    const whoami = unwrapMcpResult(whoamiRaw)
+    const userId = extractSentryUserId(whoami)
+    if (!userId) {
+      return { assigned: false, reason: 'whoami did not return a user id' }
+    }
+
+    await callMcpTool(mcpProcess, 'update_issue', {
+      issueUrl,
+      assignedTo: `user:${userId}`,
+    })
+    return { assigned: true, reason: `assigned to user:${userId}` }
+  } catch (err) {
+    return { assigned: false, reason: err instanceof Error ? err.message : String(err) }
   } finally {
     mcpProcess.stdin?.end()
     mcpProcess.kill()

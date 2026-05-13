@@ -65,6 +65,17 @@ app.patch('/:slug', async (c) => {
   }
 })
 
+// POST /api/templates/reload-defaults — re-apply default seed without overwriting user templates
+app.post('/reload-defaults', (c) => {
+  try {
+    const result = templatesService.reloadDefaultTemplates()
+    return c.json(result)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
 // DELETE /api/templates/:slug — delete a template
 app.delete('/:slug', (c) => {
   try {

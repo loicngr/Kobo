@@ -81,16 +81,99 @@
     </div>
 
     <!-- CI footer -->
-    <div v-if="snapshot.ci.rollup !== null" class="pr-panel__ci row items-center">
-      <q-icon :name="ciIcon" :color="ciColor" size="16px" class="q-mr-sm" />
-      <span class="pr-panel__ci-label">{{ ciLabel }}</span>
-      <span v-if="snapshot.ci.checks.length > 0" class="pr-panel__ci-details q-ml-sm">
-        <template v-for="c in snapshot.ci.checks" :key="c.name">
-          <span :style="{ color: checkColor(c.conclusion) }" class="q-mr-sm">
-            {{ c.name }} {{ checkSymbol(c.conclusion) }}
+    <div v-if="snapshot.ci.rollup !== null" class="pr-panel__ci">
+      <!-- Summary header: icon + label + counts -->
+      <div class="row items-center q-gutter-sm pr-panel__ci-summary">
+        <q-icon :name="ciIcon" :color="ciColor" size="16px" />
+        <span class="pr-panel__ci-label">{{ ciLabel }}</span>
+        <div class="row items-center q-gutter-sm pr-panel__ci-counts">
+          <span v-if="ciGroups.failed.length > 0" class="pr-panel__ci-count pr-panel__ci-count--failed">
+            <q-icon name="cancel" size="12px" />
+            <span>{{ $t('git.pr.ci.failedCount', { n: ciGroups.failed.length }) }}</span>
           </span>
-        </template>
-      </span>
+          <span v-if="ciGroups.pending.length > 0" class="pr-panel__ci-count pr-panel__ci-count--pending">
+            <q-icon name="hourglass_top" size="12px" />
+            <span>{{ $t('git.pr.ci.pendingCount', { n: ciGroups.pending.length }) }}</span>
+          </span>
+          <span v-if="ciGroups.passed.length > 0" class="pr-panel__ci-count pr-panel__ci-count--passed">
+            <q-icon name="check_circle" size="12px" />
+            <span>{{ $t('git.pr.ci.passedCount', { n: ciGroups.passed.length }) }}</span>
+          </span>
+          <span v-if="ciGroups.skipped.length > 0" class="pr-panel__ci-count pr-panel__ci-count--skipped">
+            <q-icon name="remove_circle_outline" size="12px" />
+            <span>{{ $t('git.pr.ci.skippedCount', { n: ciGroups.skipped.length }) }}</span>
+          </span>
+        </div>
+      </div>
+
+      <!-- Failed checks: always visible -->
+      <div v-if="ciGroups.failed.length > 0" class="pr-panel__ci-list q-mt-sm">
+        <component
+          :is="c.detailsUrl ? 'a' : 'div'"
+          v-for="c in ciGroups.failed"
+          :key="`f-${c.name}-${c.detailsUrl ?? ''}`"
+          :href="c.detailsUrl ?? undefined"
+          target="_blank"
+          rel="noopener"
+          class="pr-panel__ci-item pr-panel__ci-item--failed"
+        >
+          <q-icon name="cancel" size="14px" />
+          <span class="ellipsis">{{ c.name }}</span>
+        </component>
+      </div>
+
+      <!-- Pending checks: always visible -->
+      <div v-if="ciGroups.pending.length > 0" class="pr-panel__ci-list q-mt-xs">
+        <component
+          :is="c.detailsUrl ? 'a' : 'div'"
+          v-for="c in ciGroups.pending"
+          :key="`p-${c.name}-${c.detailsUrl ?? ''}`"
+          :href="c.detailsUrl ?? undefined"
+          target="_blank"
+          rel="noopener"
+          class="pr-panel__ci-item pr-panel__ci-item--pending"
+        >
+          <q-icon name="hourglass_top" size="14px" />
+          <span class="ellipsis">{{ c.name }}</span>
+        </component>
+      </div>
+
+      <!-- Passed/skipped checks: collapsed by default -->
+      <div v-if="ciGroups.passed.length + ciGroups.skipped.length > 0" class="q-mt-xs">
+        <q-btn
+          dense flat no-caps size="sm"
+          :icon="showPassed ? 'expand_less' : 'expand_more'"
+          :label="showPassed ? $t('git.pr.ci.hidePassed') : $t('git.pr.ci.showPassed', { n: ciGroups.passed.length + ciGroups.skipped.length })"
+          class="pr-panel__ci-toggle"
+          @click="showPassed = !showPassed"
+        />
+        <div v-if="showPassed" class="pr-panel__ci-list q-mt-xs">
+          <component
+            :is="c.detailsUrl ? 'a' : 'div'"
+            v-for="c in ciGroups.passed"
+            :key="`s-${c.name}-${c.detailsUrl ?? ''}`"
+            :href="c.detailsUrl ?? undefined"
+            target="_blank"
+            rel="noopener"
+            class="pr-panel__ci-item pr-panel__ci-item--passed"
+          >
+            <q-icon name="check_circle" size="14px" />
+            <span class="ellipsis">{{ c.name }}</span>
+          </component>
+          <component
+            :is="c.detailsUrl ? 'a' : 'div'"
+            v-for="c in ciGroups.skipped"
+            :key="`k-${c.name}-${c.detailsUrl ?? ''}`"
+            :href="c.detailsUrl ?? undefined"
+            target="_blank"
+            rel="noopener"
+            class="pr-panel__ci-item pr-panel__ci-item--skipped"
+          >
+            <q-icon name="remove_circle_outline" size="14px" />
+            <span class="ellipsis">{{ c.name }}</span>
+          </component>
+        </div>
+      </div>
     </div>
   </div>
 </template>
@@ -99,11 +182,14 @@
 import type { PrSnapshot } from 'src/stores/workspace'
 import { pickReadableForeground } from 'src/utils/color'
 import { isChangesRequestedBlocking } from 'src/utils/pr-status'
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+
+type Check = PrSnapshot['ci']['checks'][number]
 
 const props = defineProps<{ snapshot: PrSnapshot }>()
 const { t } = useI18n()
+const showPassed = ref(false)
 
 function reviewerColor(state: PrSnapshot['reviewers'][number]['state']): string {
   switch (state) {
@@ -118,17 +204,32 @@ function reviewerColor(state: PrSnapshot['reviewers'][number]['state']): string 
   }
 }
 
-function checkColor(conclusion: string | null): string {
-  if (conclusion === 'SUCCESS') return '#4ade80'
-  if (conclusion === 'FAILURE') return '#ef4444'
-  return '#9ca3af'
-}
-
-function checkSymbol(conclusion: string | null): string {
-  if (conclusion === 'SUCCESS') return '✓'
-  if (conclusion === 'FAILURE') return '✕'
-  return '⌛'
-}
+const ciGroups = computed<{ failed: Check[]; pending: Check[]; passed: Check[]; skipped: Check[] }>(() => {
+  const failed: Check[] = []
+  const pending: Check[] = []
+  const passed: Check[] = []
+  const skipped: Check[] = []
+  for (const c of props.snapshot.ci.checks) {
+    if (c.status !== 'COMPLETED') {
+      pending.push(c)
+      continue
+    }
+    if (c.conclusion === 'FAILURE' || c.conclusion === 'CANCELLED' || c.conclusion === 'TIMED_OUT') {
+      failed.push(c)
+    } else if (c.conclusion === 'SUCCESS') {
+      passed.push(c)
+    } else {
+      // SKIPPED / NEUTRAL / unknown
+      skipped.push(c)
+    }
+  }
+  const byName = (a: Check, b: Check) => a.name.localeCompare(b.name)
+  failed.sort(byName)
+  pending.sort(byName)
+  passed.sort(byName)
+  skipped.sort(byName)
+  return { failed, pending, passed, skipped }
+})
 
 const ciIcon = computed(() => {
   switch (props.snapshot.ci.rollup) {
@@ -228,7 +329,50 @@ const ciLabel = computed(() => {
   font-size: 11px;
   color: #ddd;
 }
-.pr-panel__ci-details {
+.pr-panel__ci-summary {
+  flex-wrap: wrap;
+}
+.pr-panel__ci-counts {
+  flex-wrap: wrap;
+}
+.pr-panel__ci-count {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background-color: rgba(255, 255, 255, 0.04);
+}
+.pr-panel__ci-count--failed { color: #fca5a5; }
+.pr-panel__ci-count--pending { color: #fcd34d; }
+.pr-panel__ci-count--passed { color: #86efac; }
+.pr-panel__ci-count--skipped { color: #9ca3af; }
+.pr-panel__ci-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.pr-panel__ci-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  font-size: 11px;
+  border-radius: 3px;
+  text-decoration: none;
+  min-width: 0;
+}
+a.pr-panel__ci-item:hover {
+  background-color: rgba(255, 255, 255, 0.05);
+  text-decoration: underline;
+}
+.pr-panel__ci-item--failed { color: #fca5a5; }
+.pr-panel__ci-item--pending { color: #fcd34d; }
+.pr-panel__ci-item--passed { color: #86efac; }
+.pr-panel__ci-item--skipped { color: #9ca3af; }
+.pr-panel__ci-toggle {
   color: #9ca3af;
   font-size: 10px;
 }

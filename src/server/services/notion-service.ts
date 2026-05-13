@@ -346,6 +346,128 @@ export async function extractNotionPage(notionUrl: string): Promise<NotionPageCo
   }
 }
 
+export interface NotionUser {
+  id: string
+  name: string
+  email: string
+  avatarUrl: string | null
+}
+
+export async function listNotionUsers(): Promise<NotionUser[]> {
+  const global = getGlobalSettings()
+  const mcpProcess = spawnNotionMcp(global.notionMcpKey)
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => resolve(), 1000)
+      mcpProcess.on('error', (err) => {
+        clearTimeout(timeout)
+        reject(new Error(`Failed to start MCP Notion server: ${err.message}`))
+      })
+      mcpProcess.stdout?.once('data', () => {
+        clearTimeout(timeout)
+        resolve()
+      })
+    })
+
+    await initializeMcp(mcpProcess)
+
+    const collected: NotionUser[] = []
+    let startCursor: string | undefined
+    for (let i = 0; i < 50; i++) {
+      const args: Record<string, unknown> = { page_size: 100 }
+      if (startCursor) args.start_cursor = startCursor
+      const raw = await callMcpTool(mcpProcess, 'API-get-users', args)
+      const result = unwrapMcpResult(raw)
+      if (!result || typeof result !== 'object') break
+      const page = result as Record<string, unknown>
+      const results = Array.isArray(page.results) ? (page.results as Array<Record<string, unknown>>) : []
+      for (const entry of results) {
+        if (entry.type !== 'person') continue
+        const id = typeof entry.id === 'string' ? entry.id : ''
+        const name = typeof entry.name === 'string' ? entry.name.trim() : ''
+        const person = entry.person as Record<string, unknown> | undefined
+        const email = person && typeof person.email === 'string' ? person.email : ''
+        if (!id || !email) continue
+        const avatarUrl = typeof entry.avatar_url === 'string' && entry.avatar_url.length > 0 ? entry.avatar_url : null
+        collected.push({ id, name: name || email, email, avatarUrl })
+      }
+      if (!page.has_more) break
+      startCursor = typeof page.next_cursor === 'string' ? page.next_cursor : undefined
+      if (!startCursor) break
+    }
+    collected.sort((a, b) => a.name.localeCompare(b.name, 'fr'))
+    return collected
+  } finally {
+    mcpProcess.stdin?.end()
+    mcpProcess.kill()
+  }
+}
+
+export async function assignNotionPageToSelf(
+  notionUrl: string,
+  propertyName: string,
+): Promise<{ assigned: boolean; reason: string }> {
+  if (!propertyName) return { assigned: false, reason: 'no property name configured' }
+
+  const global = getGlobalSettings()
+  const userId = global.notionUserId.trim()
+  if (!userId) return { assigned: false, reason: 'no Notion user UUID configured in settings' }
+
+  let pageId: string
+  try {
+    pageId = parseNotionUrl(notionUrl)
+  } catch (err) {
+    return { assigned: false, reason: err instanceof Error ? err.message : String(err) }
+  }
+
+  let mcpProcess: ChildProcess
+  try {
+    mcpProcess = spawnNotionMcp(global.notionMcpKey)
+  } catch (err) {
+    return { assigned: false, reason: err instanceof Error ? err.message : String(err) }
+  }
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(() => resolve(), 1000)
+      mcpProcess.on('error', (err) => {
+        clearTimeout(timeout)
+        reject(new Error(`Failed to start MCP Notion server: ${err.message}`))
+      })
+      mcpProcess.stdout?.once('data', () => {
+        clearTimeout(timeout)
+        resolve()
+      })
+    })
+
+    await initializeMcp(mcpProcess)
+
+    const pageRaw = await callMcpTool(mcpProcess, 'API-retrieve-a-page', { page_id: pageId })
+    const pageResult = unwrapMcpResult(pageRaw)
+    if (pageResult && typeof pageResult === 'object') {
+      const props = (pageResult as Record<string, unknown>).properties as Record<string, unknown> | undefined
+      const prop = props?.[propertyName] as Record<string, unknown> | undefined
+      if (prop && Array.isArray(prop.people) && prop.people.length > 0) {
+        return { assigned: false, reason: 'property already has an assignee' }
+      }
+    }
+
+    await callMcpTool(mcpProcess, 'API-patch-page', {
+      page_id: pageId,
+      properties: {
+        [propertyName]: { people: [{ id: userId }] },
+      },
+    })
+    return { assigned: true, reason: `assigned ${userId} to "${propertyName}"` }
+  } catch (err) {
+    return { assigned: false, reason: err instanceof Error ? err.message : String(err) }
+  } finally {
+    mcpProcess.stdin?.end()
+    mcpProcess.kill()
+  }
+}
+
 /** Update a status property on a Notion page. Best-effort, does not throw. */
 export async function updateNotionStatus(notionUrl: string, propertyName: string, statusValue: string): Promise<void> {
   const pageId = parseNotionUrl(notionUrl)

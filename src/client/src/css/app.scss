@@ -1,4 +1,6 @@
 // App global styles
+@import 'design-tokens';
+
 * {
   box-sizing: border-box;
 }
@@ -12,13 +14,13 @@ body,
 }
 
 .bg-dark-sidebar {
-  background-color: #16162a;
+  background-color: var(--kobo-bg-deep);
 }
 
 .bg-dark-main {
-  background-color: #1a1a2e;
+  background-color: var(--kobo-bg);
 }
 
 .bg-dark-card {
-  background-color: #222244;
+  background-color: var(--kobo-surface);
 }

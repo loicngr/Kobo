@@ -201,6 +201,18 @@ app.post('/', migrationGuard, async (c) => {
         const message = err instanceof Error ? err.message : String(err)
         return c.json({ error: `Failed to extract Notion page: ${message}` }, 422)
       }
+      const assigneeProperty = settingsService.getGlobalSettings().notionAssigneeProperty
+      if (assigneeProperty && body.notionUrl) {
+        const notionUrl = body.notionUrl
+        notionService
+          .assignNotionPageToSelf(notionUrl, assigneeProperty)
+          .then((result) => {
+            if (!result.assigned) {
+              console.warn(`[notion] Auto-assign skipped for ${notionUrl}: ${result.reason}`)
+            }
+          })
+          .catch((err) => console.error('[notion] Auto-assign threw unexpectedly:', err))
+      }
     }
 
     let sentryContent: sentryService.SentryIssueContent | null = null
@@ -210,6 +222,17 @@ app.post('/', migrationGuard, async (c) => {
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         return c.json({ error: `Failed to extract Sentry issue: ${message}` }, 422)
+      }
+      if (sentryContent && sentryContent.assignee.length === 0) {
+        const sentryUrl = body.sentryUrl
+        sentryService
+          .assignSentryIssueToSelf(sentryUrl)
+          .then((result) => {
+            if (!result.assigned) {
+              console.warn(`[sentry] Auto-assign skipped for ${sentryUrl}: ${result.reason}`)
+            }
+          })
+          .catch((err) => console.error('[sentry] Auto-assign threw unexpectedly:', err))
       }
     }
 
@@ -716,6 +739,15 @@ app.post('/', migrationGuard, async (c) => {
       const suitePrompts = getSuitePrompts(globalSettings.skillSuite, {
         brainstormingInstruction: globalSettings.customBrainstormingInstruction,
       })
+
+      // gstack brain sync — load project-specific learnings (patterns, pitfalls,
+      // preferences) accumulated by /learn across prior sessions. Only when the
+      // active skill suite includes gstack, and only if the user has actually
+      // installed gstack locally (the binary may be absent — skip silently).
+      // Fast + idempotent; safe to run on every workspace boot.
+      if (globalSettings.skillSuite === 'gstack' || globalSettings.skillSuite === 'superpowers+gstack') {
+        brainstormPrompt += `\n\nIMPORTANT (gstack): Before brainstorming, check whether \`~/.claude/skills/gstack/bin/gstack-brain-sync\` exists. If it does, run it with \`--once\` to load gstack learnings (project-specific patterns, pitfalls, and preferences from prior sessions) into memory. If the binary is missing (gstack not installed in this environment), skip silently and continue — do NOT install anything and do NOT mention the absence. Fast and idempotent when present.`
+      }
 
       if (body.autoLoop === true) {
         // Auto-loop is armed — brainstorm must end with task seeding + mark-ready,

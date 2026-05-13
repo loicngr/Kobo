@@ -39,6 +39,7 @@ describe('POST /api/sentry/extract', () => {
       tags: {},
       offendingSpans: [],
       extraContext: '',
+      assignee: '',
     }
     vi.mocked(sentryService.extractSentryIssue).mockResolvedValueOnce(fake)
     const res = await sentryRouter.fetch(makeRequest({ url: 'https://sentry.io/issues/1' }))

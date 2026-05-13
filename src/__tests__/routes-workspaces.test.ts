@@ -84,11 +84,15 @@ vi.mock('../server/services/pr-template-service.js', () => ({
 vi.mock('../server/services/notion-service.js', () => ({
   extractNotionPage: vi.fn(),
   parseNotionUrl: vi.fn(),
+  assignNotionPageToSelf: vi.fn().mockResolvedValue({ assigned: false, reason: 'mock' }),
+  listNotionUsers: vi.fn().mockResolvedValue([]),
+  updateNotionStatus: vi.fn().mockResolvedValue(undefined),
 }))
 
 vi.mock('../server/services/sentry-service.js', () => ({
   extractSentryIssue: vi.fn(),
   parseSentryUrl: vi.fn(),
+  assignSentryIssueToSelf: vi.fn().mockResolvedValue({ assigned: false, reason: 'mock' }),
 }))
 
 vi.mock('../server/utils/git-ops.js', () => ({
@@ -833,6 +837,7 @@ describe('POST /api/workspaces — Notion/Sentry initial prompt injection', () =
       issueId: opts.issueId,
       issueNumericId: '42',
       culprit: 'fn',
+      url: 'https://my-org.sentry.io/issues/42',
       platform: 'js',
       occurrences: 1,
       firstSeen: '2026-01-01',
@@ -840,6 +845,7 @@ describe('POST /api/workspaces — Notion/Sentry initial prompt injection', () =
       tags: {},
       offendingSpans: [],
       extraContext: '',
+      assignee: '',
     })
   }
 
@@ -3560,6 +3566,7 @@ describe('POST /api/workspaces — pre-flight URL validation', () => {
       issueId: 'ACME-API-3',
       issueNumericId: '42',
       culprit: 'fn',
+      url: 'https://my-org.sentry.io/issues/ACME-API-3',
       platform: 'js',
       occurrences: 1,
       firstSeen: '2026-01-01',
@@ -3567,6 +3574,7 @@ describe('POST /api/workspaces — pre-flight URL validation', () => {
       tags: {},
       offendingSpans: [],
       extraContext: '',
+      assignee: '',
     })
     vi.mocked(wsService.createWorkspace).mockReturnValue({
       id: 'ws-new',
@@ -3630,6 +3638,7 @@ describe('POST /api/workspaces — pre-flight URL validation', () => {
       issueId: 'SEKUR-IOS-9',
       issueNumericId: '99',
       culprit: 'fn',
+      url: 'https://my-org.sentry.io/issues/SEKUR-IOS-9',
       platform: 'js',
       occurrences: 1,
       firstSeen: '2026-01-01',
@@ -3637,6 +3646,7 @@ describe('POST /api/workspaces — pre-flight URL validation', () => {
       tags: {},
       offendingSpans: [],
       extraContext: '',
+      assignee: '',
     })
     vi.mocked(wsService.createWorkspace).mockReturnValue({
       ...fakeWorkspace,

@@ -135,6 +135,8 @@ export interface GlobalSettings {
   audioNotificationVolume: number
   notionStatusProperty: string
   notionInProgressStatus: string
+  notionAssigneeProperty: string
+  notionUserId: string
   /**
    * Default permission mode per engine, applied at workspace creation when the
    * user doesn't pick one explicitly. Keys are engine ids. Codex's map entry
@@ -503,6 +505,24 @@ const settingsMigrations: SettingsMigration[] = [
       }
     },
   },
+  {
+    version: 24,
+    name: 'add-notion-assignee-property',
+    migrate: ({ global }) => {
+      if (typeof global.notionAssigneeProperty !== 'string') {
+        global.notionAssigneeProperty = ''
+      }
+    },
+  },
+  {
+    version: 25,
+    name: 'add-notion-user-id',
+    migrate: ({ global }) => {
+      if (typeof global.notionUserId !== 'string') {
+        global.notionUserId = ''
+      }
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -568,6 +588,8 @@ function defaultSettings(): Settings {
       audioNotificationVolume: 1,
       notionStatusProperty: '',
       notionInProgressStatus: '',
+      notionAssigneeProperty: '',
+      notionUserId: '',
       defaultPermissionModeByEngine: { 'claude-code': 'plan', codex: 'plan' },
       notionMcpKey: '',
       sentryMcpKey: '',
@@ -876,6 +898,8 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'audioNotificationVolume',
     'notionStatusProperty',
     'notionInProgressStatus',
+    'notionAssigneeProperty',
+    'notionUserId',
     'defaultPermissionModeByEngine',
     'notionMcpKey',
     'sentryMcpKey',

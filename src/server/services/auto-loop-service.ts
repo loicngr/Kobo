@@ -226,6 +226,8 @@ Current pending task (highest priority, non-acceptance-criterion first):
 - Title: {taskTitle}
 - Is acceptance criterion: {isAcceptanceCriterion}
 {overrideBlock}
+Throughout the steps below, keep the workspace description current via \`kobo__set_workspace_agent_description(description)\` so the user sees your state in the sidebar without opening the workspace. Update it at the start of the iteration (e.g. "Iter #{n}: implementing <short task title>") AND whenever your focus shifts (e.g. "Running tests", "Awaiting code review", "Fixing review feedback", "Marking task done"). Plain text, ≤200 chars.
+
 Your job this iteration:
 1. Read \`kobo__list_tasks\` to see all tasks and the big picture.
 2. Implement the SINGLE task above and nothing else. Do not pick a different task.

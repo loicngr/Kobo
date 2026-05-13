@@ -151,88 +151,95 @@ export function replaceAllTemplates(templates: unknown[]): void {
   writeTemplates(validated)
 }
 
+export interface DefaultTemplate {
+  slug: string
+  description: string
+  content: string
+}
+
+export const DEFAULT_TEMPLATES: readonly DefaultTemplate[] = [
+  {
+    slug: 'review-quality',
+    description: 'Code quality review',
+    content:
+      'Review the recently modified code in {working_branch} for:\n- Logic bugs\n- Missing error handling\n- Style issues\n\nReport only high-confidence findings.',
+  },
+  {
+    slug: 'add-tests',
+    description: 'Add unit tests following existing patterns',
+    content:
+      'Add unit tests for the recently modified code. Follow the existing test patterns in this project. Focus on:\n- Happy paths\n- Edge cases\n- Error handling',
+  },
+  {
+    slug: 'explain',
+    description: 'Explain the recent changes',
+    content: 'Explain what the recently modified code does in {working_branch}, focusing on the non-obvious parts.',
+  },
+  {
+    slug: 'refactor',
+    description: 'Safe refactoring',
+    content:
+      'Refactor the selected code to improve readability without changing its behavior. Explain your reasoning as you go.',
+  },
+  {
+    slug: 'plan-tasks',
+    description: 'Break work into kobo tasks',
+    content:
+      'Break down the work for this workspace ({workspace_name}) into concrete tasks. Use the kobo-tasks MCP tool `create_task` to register each one with a short, actionable title. Start with a high-level analysis of what needs to happen.',
+  },
+  {
+    slug: 'show-tasks',
+    description: 'List current kobo tasks',
+    content:
+      'List the current tasks for this workspace using the kobo-tasks MCP tool `list_tasks`. Show their status and highlight what is still pending.',
+  },
+  {
+    slug: 'mark-done',
+    description: 'Mark completed kobo tasks',
+    content:
+      'Review the work completed so far. Identify which tasks from the kobo-tasks list are now done, and mark them using the `mark_task_done` MCP tool.',
+  },
+  {
+    slug: 'sync-tasks',
+    description: 'Sync kobo tasks with the codebase',
+    content:
+      'Compare the current state of the codebase against the kobo-tasks list. Create missing tasks with `create_task`, mark completed ones with `mark_task_done`, and delete stale ones with `delete_task`. Explain each change before making it.',
+  },
+  {
+    slug: 'pr-review-comments',
+    description: 'List PR review comments requesting changes',
+    content:
+      'Check if a pull request exists for branch {working_branch}.\n\nIf a PR exists (PR {pr_url}):\n1. Use the GitHub MCP tools to fetch the PR reviews and comments\n2. Filter for reviews with status "CHANGES_REQUESTED"\n3. List each review comment with:\n   - The reviewer name\n   - The file and line referenced\n   - The comment body\n   - Whether it has been resolved\n4. Summarize the outstanding requested changes that still need to be addressed\n\nIf no PR exists, say so and suggest pushing the branch first.',
+  },
+  {
+    slug: 'ci-status',
+    description: 'Check GitHub Actions status on PR',
+    content:
+      'Check the CI/CD status for the pull request on branch {working_branch}.\n\nIf a PR exists (PR {pr_url}):\n1. Use the GitHub MCP tools to list the check runs / status checks on the latest commit of the PR\n2. For each check, report:\n   - Check name\n   - Status (queued, in_progress, completed)\n   - Conclusion (success, failure, neutral, skipped, etc.)\n   - Duration if available\n3. If any checks failed, fetch the logs or annotations and summarize what went wrong\n4. Give an overall summary: all green, some failing, or still running\n\nIf no PR exists, say so and suggest creating one first.',
+  },
+] as const
+
 function seedTemplates(): void {
   const now = new Date().toISOString()
-  const seed: Template[] = [
-    {
-      slug: 'review-quality',
-      description: 'Code quality review',
-      content:
-        'Review the recently modified code in {working_branch} for:\n- Logic bugs\n- Missing error handling\n- Style issues\n\nReport only high-confidence findings.',
-      createdAt: now,
-      updatedAt: now,
-    },
-    {
-      slug: 'add-tests',
-      description: 'Add unit tests following existing patterns',
-      content:
-        'Add unit tests for the recently modified code. Follow the existing test patterns in this project. Focus on:\n- Happy paths\n- Edge cases\n- Error handling',
-      createdAt: now,
-      updatedAt: now,
-    },
-    {
-      slug: 'explain',
-      description: 'Explain the recent changes',
-      content: 'Explain what the recently modified code does in {working_branch}, focusing on the non-obvious parts.',
-      createdAt: now,
-      updatedAt: now,
-    },
-    {
-      slug: 'refactor',
-      description: 'Safe refactoring',
-      content:
-        'Refactor the selected code to improve readability without changing its behavior. Explain your reasoning as you go.',
-      createdAt: now,
-      updatedAt: now,
-    },
-    {
-      slug: 'plan-tasks',
-      description: 'Break work into kobo tasks',
-      content:
-        'Break down the work for this workspace ({workspace_name}) into concrete tasks. Use the kobo-tasks MCP tool `create_task` to register each one with a short, actionable title. Start with a high-level analysis of what needs to happen.',
-      createdAt: now,
-      updatedAt: now,
-    },
-    {
-      slug: 'show-tasks',
-      description: 'List current kobo tasks',
-      content:
-        'List the current tasks for this workspace using the kobo-tasks MCP tool `list_tasks`. Show their status and highlight what is still pending.',
-      createdAt: now,
-      updatedAt: now,
-    },
-    {
-      slug: 'mark-done',
-      description: 'Mark completed kobo tasks',
-      content:
-        'Review the work completed so far. Identify which tasks from the kobo-tasks list are now done, and mark them using the `mark_task_done` MCP tool.',
-      createdAt: now,
-      updatedAt: now,
-    },
-    {
-      slug: 'sync-tasks',
-      description: 'Sync kobo tasks with the codebase',
-      content:
-        'Compare the current state of the codebase against the kobo-tasks list. Create missing tasks with `create_task`, mark completed ones with `mark_task_done`, and delete stale ones with `delete_task`. Explain each change before making it.',
-      createdAt: now,
-      updatedAt: now,
-    },
-    {
-      slug: 'pr-review-comments',
-      description: 'List PR review comments requesting changes',
-      content:
-        'Check if a pull request exists for branch {working_branch}.\n\nIf a PR exists (PR {pr_url}):\n1. Use the GitHub MCP tools to fetch the PR reviews and comments\n2. Filter for reviews with status "CHANGES_REQUESTED"\n3. List each review comment with:\n   - The reviewer name\n   - The file and line referenced\n   - The comment body\n   - Whether it has been resolved\n4. Summarize the outstanding requested changes that still need to be addressed\n\nIf no PR exists, say so and suggest pushing the branch first.',
-      createdAt: now,
-      updatedAt: now,
-    },
-    {
-      slug: 'ci-status',
-      description: 'Check GitHub Actions status on PR',
-      content:
-        'Check the CI/CD status for the pull request on branch {working_branch}.\n\nIf a PR exists (PR {pr_url}):\n1. Use the GitHub MCP tools to list the check runs / status checks on the latest commit of the PR\n2. For each check, report:\n   - Check name\n   - Status (queued, in_progress, completed)\n   - Conclusion (success, failure, neutral, skipped, etc.)\n   - Duration if available\n3. If any checks failed, fetch the logs or annotations and summarize what went wrong\n4. Give an overall summary: all green, some failing, or still running\n\nIf no PR exists, say so and suggest creating one first.',
-      createdAt: now,
-      updatedAt: now,
-    },
-  ]
+  const seed: Template[] = DEFAULT_TEMPLATES.map((t) => ({ ...t, createdAt: now, updatedAt: now }))
   writeTemplates(seed)
+}
+
+export function reloadDefaultTemplates(): { added: string[]; kept: string[] } {
+  const existing = listTemplates()
+  const existingBySlug = new Map(existing.map((t) => [t.slug, t]))
+  const now = new Date().toISOString()
+  const added: string[] = []
+  const kept: string[] = []
+  const next: Template[] = [...existing]
+  for (const def of DEFAULT_TEMPLATES) {
+    if (existingBySlug.has(def.slug)) {
+      kept.push(def.slug)
+      continue
+    }
+    next.push({ ...def, createdAt: now, updatedAt: now })
+    added.push(def.slug)
+  }
+  if (added.length > 0) writeTemplates(next)
+  return { added, kept }
 }

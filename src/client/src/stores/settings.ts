@@ -60,6 +60,8 @@ interface GlobalSettings {
   audioNotificationVolume: number
   notionStatusProperty: string
   notionInProgressStatus: string
+  notionAssigneeProperty: string
+  notionUserId: string
   /**
    * Default permission mode per engine, applied at workspace creation when the
    * user doesn't pick one explicitly. Codex's entry must be a mode it supports
@@ -134,6 +136,8 @@ export const useSettingsStore = defineStore('settings', {
       audioNotificationVolume: 1,
       notionStatusProperty: '',
       notionInProgressStatus: '',
+      notionAssigneeProperty: '',
+      notionUserId: '',
       defaultPermissionModeByEngine: { 'claude-code': 'plan', codex: 'plan' } as Record<string, string>,
       notionMcpKey: '',
       sentryMcpKey: '',
