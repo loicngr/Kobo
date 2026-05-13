@@ -7,12 +7,13 @@ import {
 } from '../server/services/skill-suite-prompts.js'
 
 describe('skill-suite-prompts', () => {
-  it('every constant has all 4 fields populated', () => {
+  it('every constant has all 5 fields populated', () => {
     for (const c of [SUPERPOWERS_PROMPTS, GSTACK_PROMPTS, AGNOSTIC_PROMPTS]) {
       expect(c.reviewTemplate).toBeTruthy()
       expect(c.autoLoopReviewGate).toBeTruthy()
       expect(c.autoLoopGroomingIntro).toBeTruthy()
       expect(c.qaPromptTemplate).toBeTruthy()
+      expect(c.brainstormingInstruction).toBeTruthy()
     }
   })
 
@@ -21,6 +22,7 @@ describe('skill-suite-prompts', () => {
     expect(SUPERPOWERS_PROMPTS.autoLoopReviewGate).not.toBe(GSTACK_PROMPTS.autoLoopReviewGate)
     expect(SUPERPOWERS_PROMPTS.autoLoopGroomingIntro).not.toBe(GSTACK_PROMPTS.autoLoopGroomingIntro)
     expect(SUPERPOWERS_PROMPTS.qaPromptTemplate).not.toBe(GSTACK_PROMPTS.qaPromptTemplate)
+    expect(SUPERPOWERS_PROMPTS.brainstormingInstruction).not.toBe(GSTACK_PROMPTS.brainstormingInstruction)
   })
 
   it('agnostic prompts mention no specific suite by name', () => {

@@ -7,13 +7,16 @@
  * - `superpowers`: prompts cite `superpowers:*` skills (default for new and
  *    migrated installs).
  * - `gstack`: prompts cite gstack slash commands (`/review`, `/ship`, `/qa`, …).
+ * - `superpowers+gstack`: combined — prompts cite both, specialised by intent
+ *    (e.g. `/review` for tactical bug-hunting, `superpowers:requesting-code-review`
+ *    for principles-level critique). For users who install both suites.
  * - `custom`: prompts come from the user-editable `custom*` fields in settings,
  *    initialised to the AGNOSTIC defaults below.
  */
-export type SkillSuite = 'superpowers' | 'gstack' | 'custom'
+export type SkillSuite = 'superpowers' | 'gstack' | 'superpowers+gstack' | 'custom'
 
 export function isValidSkillSuite(value: unknown): value is SkillSuite {
-  return value === 'superpowers' || value === 'gstack' || value === 'custom'
+  return value === 'superpowers' || value === 'gstack' || value === 'superpowers+gstack' || value === 'custom'
 }
 
 // ── Agnostic prompt strings ───────────────────────────────────────────────────
@@ -70,6 +73,9 @@ export const AGNOSTIC_AUTO_LOOP_GROOMING_INTRO =
 export const AGNOSTIC_QA_PROMPT_TEMPLATE =
   'QA pass for workspace "{{workspace_name}}" in project {{project_name}}.\n\nBranch: {{branch_name}}\nStaging URL: {{staging_url}}\n\nIf a QA skill is configured in this environment, invoke it on {{staging_url}}. Otherwise, manually exercise the staging URL against the workspace\'s acceptance criteria and report findings.'
 
+export const AGNOSTIC_BRAINSTORMING_INSTRUCTION =
+  'Brainstorm the implementation approach. Explore the codebase to understand the existing structure. Ask clarifying questions if needed. When you have a clear, user-approved plan, save it as a plan file in the project.'
+
 // ── Grooming intro: superpowers + gstack variants ────────────────────────────
 // Only the grooming intro is needed shared (both backend auto-loop-prompts and
 // frontend kobo-commands use it). The review/review-gate/QA variants are
@@ -81,6 +87,9 @@ export const GROOMING_INTRO_SUPERPOWERS =
 export const GROOMING_INTRO_GSTACK =
   'You are preparing this workspace for Kōbō auto-loop mode. This is a GROOMING session only — DO NOT implement anything, DO NOT write or edit code, DO NOT run tests or builds, DO NOT invoke `/ship`, `/autoplan`, `/land-and-deploy`, or any implementation skill. Your ONLY job is to curate the Kōbō task list via MCP tools.'
 
+export const GROOMING_INTRO_COMBINED =
+  'You are preparing this workspace for Kōbō auto-loop mode. This is a GROOMING session only — DO NOT implement anything, DO NOT write or edit code, DO NOT run tests or builds, DO NOT invoke `superpowers:executing-plans`, `/ship`, `/autoplan`, `/land-and-deploy`, or any other implementation, planning, or release skill. Your ONLY job is to curate the Kōbō task list via MCP tools.'
+
 /**
  * Resolve the grooming intro for the given suite. In `custom` mode, the
  * user-provided override is used (or AGNOSTIC if the override is empty/blank).
@@ -90,6 +99,7 @@ export function getGroomingIntro(suite: SkillSuite, customOverride?: string): st
     const trimmed = (customOverride ?? '').trim()
     return trimmed || AGNOSTIC_AUTO_LOOP_GROOMING_INTRO
   }
+  if (suite === 'superpowers+gstack') return GROOMING_INTRO_COMBINED
   if (suite === 'gstack') return GROOMING_INTRO_GSTACK
   return GROOMING_INTRO_SUPERPOWERS
 }

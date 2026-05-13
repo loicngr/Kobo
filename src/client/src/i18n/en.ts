@@ -277,6 +277,9 @@ export default {
   'settings.skillSuite.superpowersHint': 'Opinionated TDD / brainstorm / plan workflow (github.com/obra/superpowers).',
   'settings.skillSuite.gstackHint':
     "Garry Tan's stack — /review, /ship, /qa, /office-hours, etc. (github.com/garrytan/gstack).",
+  'settings.skillSuite.superpowersGstack': 'Superpowers + gstack',
+  'settings.skillSuite.superpowersGstackHint':
+    'Both suites stack — superpowers for process discipline (brainstorm / TDD / plans / principles-level review), gstack for concrete workflows (/review, /qa, /browse, /design-review, /investigate).',
   'settings.skillSuite.customHint': 'Edit the four prompts below yourself. Starts from the agnostic baseline.',
   'settings.skillSuite.reloadDefaults': 'Reload defaults',
   'settings.skillSuite.reloadDefaultsConfirm': 'Replace the four custom prompts with the agnostic defaults?',
@@ -285,6 +288,7 @@ export default {
   'settings.skillSuite.autoLoopReviewGate': 'Auto-loop review gate',
   'settings.skillSuite.autoLoopGroomingIntro': 'Auto-loop grooming intro',
   'settings.skillSuite.qaTemplate': 'QA template',
+  'settings.skillSuite.brainstormingInstruction': 'Brainstorming-phase instruction',
   'settings.global': 'Global',
   'settings.projects': 'Projects',
   'settings.globalSettings': 'Global Settings',

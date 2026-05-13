@@ -173,6 +173,9 @@ export interface GlobalSettings {
   customAutoLoopGroomingIntro: string
   /** Custom QA prompt template — only consulted when `skillSuite === 'custom'`. */
   customQaPromptTemplate: string
+  /** Custom brainstorming-phase instruction injected into the workspace
+   *  bootstrap prompt — only consulted when `skillSuite === 'custom'`. */
+  customBrainstormingInstruction: string
 }
 
 /** Default workspace tags seeded on fresh install and on settings upgrade. */
@@ -488,6 +491,18 @@ const settingsMigrations: SettingsMigration[] = [
       }
     },
   },
+  {
+    version: 23,
+    name: 'add-custom-brainstorming-instruction',
+    // Adds the 5th `custom*` field — the brainstorming-phase instruction
+    // injected into the workspace bootstrap prompt. Seeds with the agnostic
+    // baseline so users in `custom` mode can edit from a neutral start.
+    migrate: ({ global }) => {
+      if (typeof global.customBrainstormingInstruction !== 'string') {
+        global.customBrainstormingInstruction = AGNOSTIC_PROMPTS.brainstormingInstruction
+      }
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -575,6 +590,7 @@ function defaultSettings(): Settings {
       customAutoLoopReviewGate: AGNOSTIC_PROMPTS.autoLoopReviewGate,
       customAutoLoopGroomingIntro: AGNOSTIC_PROMPTS.autoLoopGroomingIntro,
       customQaPromptTemplate: AGNOSTIC_PROMPTS.qaPromptTemplate,
+      customBrainstormingInstruction: AGNOSTIC_PROMPTS.brainstormingInstruction,
     },
     projects: [],
   }
@@ -882,6 +898,7 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'customAutoLoopReviewGate',
     'customAutoLoopGroomingIntro',
     'customQaPromptTemplate',
+    'customBrainstormingInstruction',
   ]
   const filtered = pickKnownKeys<GlobalSettings>(data as Record<string, unknown>, allowedGlobalKeys)
   if (filtered.tags !== undefined) {

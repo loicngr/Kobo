@@ -506,6 +506,15 @@ export interface PrSnapshot {
  *  Remove once all imports are switched. */
 export type PrStatus = PrSnapshot
 
+// NOTE: `reviewThreads` is intentionally NOT in this list.
+// As of `gh` CLI 2.92 (latest at time of writing) the `--json reviewThreads`
+// flag is rejected with `Unknown JSON field: "reviewThreads"` — there is no
+// stable `gh` version that exposes it via `pr view --json`. Until upstream
+// adds it, `unresolvedReviewThreadsCount` stays at 0 and the
+// "hide changes-requested badge when all threads are resolved" feature
+// degrades to "badge stays visible". To restore that feature later, either
+// (a) re-add the field here once `gh` supports it, or (b) make a separate
+// `gh api graphql` call for `pullRequest.reviewThreads.nodes`.
 const GH_PR_FIELDS = [
   'number',
   'title',
@@ -518,7 +527,6 @@ const GH_PR_FIELDS = [
   'labels',
   'latestReviews',
   'reviewRequests',
-  'reviewThreads',
   'statusCheckRollup',
   'updatedAt',
 ].join(',')

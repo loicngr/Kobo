@@ -20,6 +20,14 @@
     </div>
 
     <template v-if="workspace">
+      <!-- Loader: full panel while the new workspace's stats are being fetched.
+           Replaces every sub-card (Repository / Changes / Actions / PR) so the
+           user doesn't see a half-empty panel during the switch. -->
+      <div v-if="loadingStats && !gitStats" class="row items-center justify-center q-py-xl">
+        <q-spinner size="32px" color="indigo-4" />
+      </div>
+
+      <template v-else>
       <!-- Repository sub-card -->
       <div class="git-subcard">
         <div class="git-subcard-title">{{ $t('git.section.repository') }}</div>
@@ -83,13 +91,6 @@
             <span v-else style="color: #f59e0b;">{{ $t('git.unpushed', { count: gitStats.unpushedCount }) }}</span>
           </template>
         </div>
-      </div>
-
-      <!-- Loader: shown while the new workspace's stats are being fetched.
-           Repository sub-card stays visible above because it reads from
-           `workspace` (already up-to-date), not from `gitStats`. -->
-      <div v-if="loadingStats && !gitStats" class="row items-center justify-center q-py-md">
-        <q-spinner size="24px" color="indigo-4" />
       </div>
 
       <!-- Changes sub-card -->
@@ -176,14 +177,7 @@
         </div>
       </div>
 
-      <!-- Pull request sub-card -->
-      <div v-if="prSnapshot && prSnapshot.state === 'OPEN'" class="git-subcard">
-        <div class="git-subcard-title">{{ $t('git.section.pullRequest') }}</div>
-        <PrPanel :snapshot="prSnapshot" />
-      </div>
-
-      <!-- Actions sub-card — gated on gitStats to avoid triggering Sync/Push
-           against the previous workspace's state while a fetch is in flight. -->
+      <!-- Actions sub-card — placed BEFORE Pull request per UX request. -->
       <div v-if="workspace && gitStats" class="git-subcard">
         <div class="git-subcard-title">{{ $t('git.section.actions') }}</div>
 
@@ -251,6 +245,19 @@
           </q-btn-dropdown>
 
           <q-btn
+            v-if="gitStats?.unpushedCount !== 0"
+            dense no-caps size="sm" outline color="orange-5"
+            icon="upload"
+            :label="$t('git.push')"
+            class="git-btn"
+            :loading="pushing"
+            :disable="!workspace || openingPr || pulling || rebasing"
+            @click="handlePush"
+          >
+            <q-tooltip anchor="bottom middle" self="top middle" :delay="400">{{ $t('git.push') }}</q-tooltip>
+          </q-btn>
+
+          <q-btn
             dense no-caps size="sm" outline color="indigo-4"
             icon="rate_review"
             :label="$t('git.diffReview')"
@@ -270,17 +277,6 @@
             <q-menu>
               <q-list dark dense style="min-width: 160px;">
                 <q-item
-                  v-if="!gitStats || gitStats.unpushedCount !== 0"
-                  clickable v-close-popup
-                  :disable="!workspace || openingPr || pulling || rebasing"
-                  @click="handlePush"
-                >
-                  <q-item-section avatar style="min-width: 28px;">
-                    <q-icon name="upload" size="16px" color="grey-5" />
-                  </q-item-section>
-                  <q-item-section>{{ $t('git.push') }}</q-item-section>
-                </q-item>
-                <q-item
                   v-if="gitStats?.prUrl && gitStats.prState === 'OPEN'"
                   clickable v-close-popup
                   :disable="changingBase"
@@ -297,6 +293,13 @@
           </q-btn>
         </div>
       </div>
+
+      <!-- Pull request sub-card — placed AFTER Actions per UX request. -->
+      <div v-if="prSnapshot && prSnapshot.state === 'OPEN'" class="git-subcard">
+        <div class="git-subcard-title">{{ $t('git.section.pullRequest') }}</div>
+        <PrPanel :snapshot="prSnapshot" />
+      </div>
+      </template>
     </template>
 
     <div v-else class="text-caption text-grey-8">
@@ -543,11 +546,10 @@ const createPrDisabledReason = computed(() => {
   return ''
 })
 
-const hasOverflowActions = computed(() => {
-  const pushVisible = !gitStats.value || gitStats.value.unpushedCount !== 0
-  const changeBaseVisible = !!(gitStats.value?.prUrl && gitStats.value.prState === 'OPEN')
-  return pushVisible || changeBaseVisible
-})
+// Push has been promoted from the overflow menu to a first-class secondary
+// button (visible whenever `unpushedCount !== 0`). The overflow `⋯` now only
+// surfaces "Change PR base", which itself is gated on an open PR.
+const hasOverflowActions = computed(() => !!(gitStats.value?.prUrl && gitStats.value.prState === 'OPEN'))
 
 // Branch divergence dialog state
 const divergenceDialogOpen = ref(false)

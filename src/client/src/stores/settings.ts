@@ -88,6 +88,7 @@ interface GlobalSettings {
   customAutoLoopReviewGate: string
   customAutoLoopGroomingIntro: string
   customQaPromptTemplate: string
+  customBrainstormingInstruction: string
 }
 
 export interface VoiceModelStatus {
@@ -155,6 +156,7 @@ export const useSettingsStore = defineStore('settings', {
       customAutoLoopReviewGate: '',
       customAutoLoopGroomingIntro: '',
       customQaPromptTemplate: '',
+      customBrainstormingInstruction: '',
     } as GlobalSettings,
     voiceModels: [] as VoiceModelStatus[],
     voiceModelsLoading: false,

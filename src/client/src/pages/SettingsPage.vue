@@ -72,9 +72,10 @@
               <q-option-group
                 v-model="globalSkillSuite"
                 :options="[
-                  { label: $t('settings.skillSuite.superpowers'), value: 'superpowers' },
-                  { label: $t('settings.skillSuite.gstack'),      value: 'gstack' },
-                  { label: $t('settings.skillSuite.custom'),      value: 'custom' },
+                  { label: $t('settings.skillSuite.superpowers'),         value: 'superpowers' },
+                  { label: $t('settings.skillSuite.gstack'),              value: 'gstack' },
+                  { label: $t('settings.skillSuite.superpowersGstack'),   value: 'superpowers+gstack' },
+                  { label: $t('settings.skillSuite.custom'),              value: 'custom' },
                 ]"
                 type="radio"
                 color="indigo-4"
@@ -83,7 +84,7 @@
                 inline
               />
               <div class="text-caption text-grey-6 q-mt-xs">
-                {{ $t(`settings.skillSuite.${globalSkillSuite}Hint`) }}
+                {{ $t(skillSuiteHintKey) }}
               </div>
 
               <q-btn
@@ -112,6 +113,9 @@
 
               <div class="text-caption text-grey-6 q-mt-md q-mb-xs">{{ $t('settings.skillSuite.qaTemplate') }}</div>
               <q-input v-model="globalCustomQaPromptTemplate" type="textarea" filled dense rows="6" dark />
+
+              <div class="text-caption text-grey-6 q-mt-md q-mb-xs">{{ $t('settings.skillSuite.brainstormingInstruction') }}</div>
+              <q-input v-model="globalCustomBrainstormingInstruction" type="textarea" filled dense rows="6" dark />
             </div>
 
             <!-- Default agent configuration -->
@@ -1355,6 +1359,7 @@ import { WORKTREES_PATH } from '../../../shared/consts'
 import {
   AGNOSTIC_AUTO_LOOP_GROOMING_INTRO,
   AGNOSTIC_AUTO_LOOP_REVIEW_GATE,
+  AGNOSTIC_BRAINSTORMING_INSTRUCTION,
   AGNOSTIC_QA_PROMPT_TEMPLATE,
   AGNOSTIC_REVIEW_TEMPLATE,
   type SkillSuite,
@@ -1400,10 +1405,23 @@ const globalWorktreesPathInput = ref<QInput | null>(null)
 const globalWorktreesPrefixByProject = ref(true)
 const globalFlattenWorkspaceList = ref(false)
 const globalSkillSuite = ref<SkillSuite>('superpowers')
+const skillSuiteHintKey = computed(() => {
+  switch (globalSkillSuite.value) {
+    case 'gstack':
+      return 'settings.skillSuite.gstackHint'
+    case 'superpowers+gstack':
+      return 'settings.skillSuite.superpowersGstackHint'
+    case 'custom':
+      return 'settings.skillSuite.customHint'
+    default:
+      return 'settings.skillSuite.superpowersHint'
+  }
+})
 const globalCustomReviewTemplate = ref('')
 const globalCustomAutoLoopReviewGate = ref('')
 const globalCustomAutoLoopGroomingIntro = ref('')
 const globalCustomQaPromptTemplate = ref('')
+const globalCustomBrainstormingInstruction = ref('')
 const globalVoiceEnabled = ref(false)
 const globalVoicePttKey = ref<'alt' | 'ctrl+space'>('alt')
 const globalVoiceLanguage = ref('auto')
@@ -1429,6 +1447,7 @@ function confirmReloadCustomPrompts(): void {
     globalCustomAutoLoopReviewGate.value = AGNOSTIC_AUTO_LOOP_REVIEW_GATE
     globalCustomAutoLoopGroomingIntro.value = AGNOSTIC_AUTO_LOOP_GROOMING_INTRO
     globalCustomQaPromptTemplate.value = AGNOSTIC_QA_PROMPT_TEMPLATE
+    globalCustomBrainstormingInstruction.value = AGNOSTIC_BRAINSTORMING_INSTRUCTION
   })
 }
 
@@ -1850,6 +1869,7 @@ function captureGlobalSnapshot(): string {
     customAutoLoopReviewGate: globalCustomAutoLoopReviewGate.value,
     customAutoLoopGroomingIntro: globalCustomAutoLoopGroomingIntro.value,
     customQaPromptTemplate: globalCustomQaPromptTemplate.value,
+    customBrainstormingInstruction: globalCustomBrainstormingInstruction.value,
     voiceEnabled: globalVoiceEnabled.value,
     voicePttKey: globalVoicePttKey.value,
     voiceLanguage: globalVoiceLanguage.value,
@@ -1910,6 +1930,7 @@ function syncGlobalForm() {
   globalCustomAutoLoopReviewGate.value = store.global.customAutoLoopReviewGate ?? ''
   globalCustomAutoLoopGroomingIntro.value = store.global.customAutoLoopGroomingIntro ?? ''
   globalCustomQaPromptTemplate.value = store.global.customQaPromptTemplate ?? ''
+  globalCustomBrainstormingInstruction.value = store.global.customBrainstormingInstruction ?? ''
   globalVoiceEnabled.value = store.global.voiceEnabled ?? false
   globalVoicePttKey.value = store.global.voicePttKey === 'ctrl+space' ? 'ctrl+space' : 'alt'
   globalVoiceLanguage.value = store.global.voiceLanguage ?? 'auto'
@@ -2144,6 +2165,7 @@ async function saveGlobal() {
       customAutoLoopReviewGate: globalCustomAutoLoopReviewGate.value,
       customAutoLoopGroomingIntro: globalCustomAutoLoopGroomingIntro.value,
       customQaPromptTemplate: globalCustomQaPromptTemplate.value,
+      customBrainstormingInstruction: globalCustomBrainstormingInstruction.value,
       voiceEnabled: globalVoiceEnabled.value,
       voicePttKey: globalVoicePttKey.value,
       voiceLanguage: globalVoiceLanguage.value,

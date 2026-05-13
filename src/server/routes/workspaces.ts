@@ -28,6 +28,7 @@ import { getActiveReviewTemplate, renderReviewTemplate } from '../services/revie
 import * as sentryService from '../services/sentry-service.js'
 import * as settingsService from '../services/settings-service.js'
 import { runSetupScript } from '../services/setup-script-service.js'
+import { getSuitePrompts } from '../services/skill-suite-prompts.js'
 import * as terminalService from '../services/terminal-service.js'
 import * as wakeupService from '../services/wakeup-service.js'
 import * as wsService from '../services/websocket-service.js'
@@ -707,6 +708,15 @@ app.post('/', migrationGuard, async (c) => {
 
       brainstormPrompt += `\nIMPORTANT: Start by reading CLAUDE.md and/or AGENTS.md at the project root if they exist — they contain project conventions and instructions you must follow.`
 
+      // Resolve the suite-specific brainstorming instruction (citing
+      // superpowers:brainstorming / writing-plans, or gstack /office-hours +
+      // /autoplan, etc.). The marker `[BRAINSTORM_COMPLETE]` stays universal —
+      // only the path to it changes per suite.
+      const globalSettings = settingsService.getGlobalSettings()
+      const suitePrompts = getSuitePrompts(globalSettings.skillSuite, {
+        brainstormingInstruction: globalSettings.customBrainstormingInstruction,
+      })
+
       if (body.autoLoop === true) {
         // Auto-loop is armed — brainstorm must end with task seeding + mark-ready,
         // NOT with implementation. The auto-loop will drive implementation after.
@@ -720,7 +730,7 @@ app.post('/', migrationGuard, async (c) => {
         const projectSettingsForE2e = settingsService.getProjectSettings(body.projectPath)
         const e2eSettings = projectSettingsForE2e?.e2e ?? { framework: '', skill: '', prompt: '' }
         const finalizationSettings = projectSettingsForE2e?.finalization ?? { prompt: '' }
-        brainstormPrompt += `\n\nThen brainstorm the implementation approach. Explore the codebase to understand the existing structure. Ask clarifying questions if needed. When you have a clear plan, create a plan file.
+        brainstormPrompt += `\n\n${suitePrompts.brainstormingInstruction}
 
 Auto-loop mode is active for this workspace. After the plan is ready, DO NOT implement anything. Instead:
 
@@ -730,7 +740,9 @@ When the steps above are complete, output [BRAINSTORM_COMPLETE] on its own line 
 
 ${AUTO_LOOP_HARD_RULES}`
       } else {
-        brainstormPrompt += `\n\nThen brainstorm the implementation approach. Explore the codebase to understand the existing structure. Ask clarifying questions if needed. When you're done brainstorming and have a clear plan, create a plan file and proceed with implementation. Once you have completed the brainstorming phase, output [BRAINSTORM_COMPLETE] on its own line.`
+        brainstormPrompt += `\n\n${suitePrompts.brainstormingInstruction}
+
+Once the brainstorming + planning steps above are complete and you have a saved plan file, output [BRAINSTORM_COMPLETE] on its own line BEFORE starting implementation. Kōbō uses that marker to transition the workspace from \`brainstorming\` to \`executing\`. Then proceed with implementation.`
       }
 
       try {
