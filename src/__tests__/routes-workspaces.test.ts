@@ -138,7 +138,8 @@ vi.mock('../server/services/cron-service.js', () => ({
 }))
 
 vi.mock('../server/services/pr-watcher-service.js', () => ({
-  getAllPrStates: vi.fn(() => ({})),
+  getAllPrSnapshots: vi.fn(),
+  refreshPrSnapshot: vi.fn(),
   startPrWatcher: vi.fn(),
   stopPrWatcher: vi.fn(),
 }))
@@ -2395,16 +2396,22 @@ describe('GET /api/workspaces/pr-states', () => {
 
   it('returns the snapshot from pr-watcher', async () => {
     const prWatcher = await import('../server/services/pr-watcher-service.js')
-    vi.mocked(prWatcher.getAllPrStates).mockReturnValue({ w1: 'OPEN', w2: 'CLOSED' })
+    vi.mocked(prWatcher.getAllPrSnapshots).mockReturnValue({
+      w1: { number: 1, state: 'OPEN' } as never,
+      w2: { number: 2, state: 'CLOSED' } as never,
+    })
 
     const res = await app.request('/api/workspaces/pr-states')
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ w1: 'OPEN', w2: 'CLOSED' })
+    expect(await res.json()).toEqual({
+      w1: { number: 1, state: 'OPEN' },
+      w2: { number: 2, state: 'CLOSED' },
+    })
   })
 
   it('returns an empty object when no PRs are known', async () => {
     const prWatcher = await import('../server/services/pr-watcher-service.js')
-    vi.mocked(prWatcher.getAllPrStates).mockReturnValue({})
+    vi.mocked(prWatcher.getAllPrSnapshots).mockReturnValue({})
 
     const res = await app.request('/api/workspaces/pr-states')
     expect(res.status).toBe(200)
@@ -2413,12 +2420,12 @@ describe('GET /api/workspaces/pr-states', () => {
 
   it('is not matched by GET /:id (route order regression)', async () => {
     const prWatcher = await import('../server/services/pr-watcher-service.js')
-    vi.mocked(prWatcher.getAllPrStates).mockReturnValue({})
+    vi.mocked(prWatcher.getAllPrSnapshots).mockReturnValue({})
     vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(null)
 
     const res = await app.request('/api/workspaces/pr-states')
     expect(res.status).toBe(200)
-    expect(prWatcher.getAllPrStates).toHaveBeenCalled()
+    expect(prWatcher.getAllPrSnapshots).toHaveBeenCalled()
     expect(workspaceService.getWorkspaceWithTasks).not.toHaveBeenCalled()
   })
 })
@@ -4209,5 +4216,61 @@ describe('DELETE /api/workspaces/:id/crons/:cronId', () => {
     vi.mocked(cronService.cancel).mockReturnValue(false)
     const res = await app.request('/api/workspaces/ws-1/crons/unknown', { method: 'DELETE' })
     expect(res.status).toBe(204)
+  })
+})
+
+describe('GET /api/workspaces/pr-states (rich payload)', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('returns the snapshot map from getAllPrSnapshots', async () => {
+    const { default: app } = await import('../server/routes/workspaces.js')
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.getAllPrSnapshots).mockReturnValue({
+      'ws-1': { number: 42, state: 'OPEN', reviewDecision: 'CHANGES_REQUESTED' } as never,
+    })
+    const res = await app.request('/pr-states')
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({
+      'ws-1': { number: 42, state: 'OPEN', reviewDecision: 'CHANGES_REQUESTED' },
+    })
+  })
+})
+
+describe('POST /api/workspaces/pr-snapshot/refresh/:id', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('200 with snapshot when refreshPrSnapshot succeeds', async () => {
+    const { default: app } = await import('../server/routes/workspaces.js')
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.refreshPrSnapshot).mockResolvedValue({ number: 7, state: 'OPEN' } as never)
+    const res = await app.request('/pr-snapshot/refresh/ws-1', { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ snapshot: { number: 7, state: 'OPEN' } })
+  })
+
+  it('404 when no PR is associated', async () => {
+    const { default: app } = await import('../server/routes/workspaces.js')
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.refreshPrSnapshot).mockResolvedValue(null)
+    const res = await app.request('/pr-snapshot/refresh/ws-1', { method: 'POST' })
+    expect(res.status).toBe(404)
+    expect(await res.json()).toEqual({ error: 'No PR for this workspace' })
+  })
+
+  it('404 when workspace does not exist', async () => {
+    const { default: app } = await import('../server/routes/workspaces.js')
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.refreshPrSnapshot).mockRejectedValue(new Error("Workspace 'ws-1' not found"))
+    const res = await app.request('/pr-snapshot/refresh/ws-1', { method: 'POST' })
+    expect(res.status).toBe(404)
+  })
+
+  it('500 on unexpected error', async () => {
+    const { default: app } = await import('../server/routes/workspaces.js')
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.refreshPrSnapshot).mockRejectedValue(new Error('gh exploded'))
+    const res = await app.request('/pr-snapshot/refresh/ws-1', { method: 'POST' })
+    expect(res.status).toBe(500)
+    expect(((await res.json()) as { error: string }).error).toMatch(/gh exploded/)
   })
 })

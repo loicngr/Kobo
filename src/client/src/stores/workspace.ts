@@ -203,6 +203,41 @@ export interface AutoLoopStatus {
   crons_count: number
 }
 
+export interface PrReviewer {
+  login: string
+  state: 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED' | 'DISMISSED' | 'PENDING'
+}
+
+export interface PrCiCheck {
+  name: string
+  conclusion: string | null
+  status: string
+  detailsUrl: string | null
+}
+
+export interface PrSnapshot {
+  number: number
+  title: string
+  url: string
+  state: 'OPEN' | 'CLOSED' | 'MERGED'
+  base: string
+  reviewDecision: 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null
+  author: { login: string }
+  assignees: Array<{ login: string }>
+  reviewers: PrReviewer[]
+  labels: Array<{ name: string; color: string }>
+  ci: { rollup: 'SUCCESS' | 'FAILURE' | 'PENDING' | 'CANCELLED' | 'NEUTRAL' | null; checks: PrCiCheck[] }
+  updatedAt: string
+  /**
+   * Number of review threads still unresolved on the PR. GitHub keeps
+   * `reviewDecision` at `CHANGES_REQUESTED` until the reviewer re-reviews or
+   * dismisses, even after the author resolves every comment thread. The UI
+   * combines this counter with `reviewDecision` to decide whether the PR is
+   * truly blocking or merely flagged stale.
+   */
+  unresolvedReviewThreadsCount: number
+}
+
 export interface PendingCron {
   id: string
   workspaceId: string
@@ -218,12 +253,12 @@ export interface PendingCron {
 
 const MAX_FEED_ITEMS = 5000
 
-// Debounce window for `fetchPrStates` called via `triggerGitRefresh`. The
+// Debounce window for `fetchPrSnapshots` called via `triggerGitRefresh`. The
 // backend cache (pr-watcher) only updates on its own 30 s poll, so coalescing
 // many git bumps into a single fetch costs nothing and keeps the network
 // quiet during loops like repeated `git status`.
-const PR_STATES_DEBOUNCE_MS = 500
-let _prStatesDebounceTimer: ReturnType<typeof setTimeout> | null = null
+const PR_SNAPSHOTS_DEBOUNCE_MS = 500
+let _prSnapshotsDebounceTimer: ReturnType<typeof setTimeout> | null = null
 
 function engineToProviderId(engine: string | undefined): ProviderId | null {
   if (engine === 'claude-code') return 'claude-code'
@@ -259,7 +294,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     pendingQuotaBackoffs: {} as Record<string, { targetAt: string; resetsAt: string | null; source: string }>,
     pendingDeferred: {} as Record<string, PendingDeferredToolUse>,
     pendingQueue: {} as Record<string, PendingItem[]>,
-    prStates: {} as Record<string, string>,
+    prSnapshots: {} as Record<string, PrSnapshot>,
     autoLoopStates: {} as Record<string, AutoLoopStatus>,
     crons: {} as Record<string, PendingCron[]>,
   }),
@@ -1060,32 +1095,54 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     triggerGitRefresh() {
       this.gitRefreshTrigger++
-      this.schedulePrStatesRefresh()
+      this.schedulePrSnapshotsRefresh()
     },
 
     /**
-     * Trailing-edge debounce for `fetchPrStates`. `triggerGitRefresh` fires
+     * Trailing-edge debounce for `fetchPrSnapshots`. `triggerGitRefresh` fires
      * on every git-matching Bash tool:call, which can be many per minute
-     * (`git status` loops, etc.). A single pr-states refetch per burst is
+     * (`git status` loops, etc.). A single pr-snapshots refetch per burst is
      * enough — the backend snapshot is updated only every 30 s by the
      * pr-watcher poll anyway.
      */
-    schedulePrStatesRefresh() {
-      if (_prStatesDebounceTimer !== null) clearTimeout(_prStatesDebounceTimer)
-      _prStatesDebounceTimer = setTimeout(() => {
-        _prStatesDebounceTimer = null
-        void this.fetchPrStates()
-      }, PR_STATES_DEBOUNCE_MS)
+    schedulePrSnapshotsRefresh() {
+      if (_prSnapshotsDebounceTimer !== null) clearTimeout(_prSnapshotsDebounceTimer)
+      _prSnapshotsDebounceTimer = setTimeout(() => {
+        _prSnapshotsDebounceTimer = null
+        void this.fetchPrSnapshots()
+      }, PR_SNAPSHOTS_DEBOUNCE_MS)
     },
 
-    async fetchPrStates(): Promise<void> {
+    async fetchPrSnapshots(): Promise<void> {
       try {
         const res = await fetch('/api/workspaces/pr-states', { cache: 'no-store' })
         if (!res.ok) return
-        const data = (await res.json()) as Record<string, string>
-        this.prStates = data
+        const data = (await res.json()) as Record<string, PrSnapshot>
+        this.prSnapshots = data
       } catch (err) {
-        console.error('[workspace-store] fetchPrStates failed:', err)
+        console.error('[workspace-store] fetchPrSnapshots failed:', err)
+      }
+    },
+
+    async refreshPrSnapshot(workspaceId: string): Promise<PrSnapshot | null> {
+      try {
+        const res = await fetch(`/api/workspaces/pr-snapshot/refresh/${workspaceId}`, { method: 'POST' })
+        if (res.status === 404) {
+          const next = { ...this.prSnapshots }
+          delete next[workspaceId]
+          this.prSnapshots = next
+          return null
+        }
+        if (!res.ok) {
+          console.error('[workspace-store] refreshPrSnapshot non-OK:', res.status)
+          return null
+        }
+        const data = (await res.json()) as { snapshot: PrSnapshot }
+        this.prSnapshots = { ...this.prSnapshots, [workspaceId]: data.snapshot }
+        return data.snapshot
+      } catch (err) {
+        console.error('[workspace-store] refreshPrSnapshot failed:', err)
+        return null
       }
     },
 

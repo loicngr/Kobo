@@ -1,4 +1,6 @@
 import path from 'node:path'
+import { getGlobalSettings } from './settings-service.js'
+import { getSuitePrompts, SUPERPOWERS_PROMPTS } from './skill-suite-prompts.js'
 import type { Workspace } from './workspace-service.js'
 
 /** Variables available for substitution in a review prompt template. */
@@ -10,37 +12,29 @@ export interface ReviewTemplateContext {
   additionalInstructions: string
 }
 
-export const DEFAULT_REVIEW_PROMPT_TEMPLATE = `You are reviewing code changes on workspace "{{workspace_name}}" in project {{project_name}}.
+/**
+ * Back-compat alias for the legacy review-template default. The canonical
+ * default now lives in `SUPERPOWERS_PROMPTS.reviewTemplate`; this export is
+ * kept so existing seed/migration paths in `settings-service.ts` and
+ * `routes/settings.ts` (the "reset to default" endpoint) keep working
+ * without being rewritten. Runtime readers should call
+ * `getActiveReviewTemplate()` instead, which respects the user's
+ * `skillSuite` choice.
+ */
+export const DEFAULT_REVIEW_PROMPT_TEMPLATE: string = SUPERPOWERS_PROMPTS.reviewTemplate
 
-Branch: {{branch_name}}  (base: {{source_branch}})
-Base commit: {{base_commit}}
-
-If a code-review skill is available (e.g. superpowers:requesting-code-review), invoke it to drive this review. Otherwise follow the steps below directly.
-
-## Scope
-
-Review ALL changes — both committed and uncommitted in the working tree:
-- \`git diff {{base_commit}}..HEAD\` — committed changes on this branch
-- \`git status\` and \`git diff\` — uncommitted changes (staged + unstaged)
-
-## Diff summary
-{{diff_stats}}
-
-## Commits
-{{commits}}
-
-## Additional instructions
-{{additional_instructions}}
-
-## Output
-
-If no review skill is available, structure your reply as:
-1. Summary — what changed and why
-2. Issues — bugs, regressions, security or perf concerns (with file:line)
-3. Suggestions — refactor / improvement opportunities
-4. Tests — coverage gaps
-5. Verdict — ship / fix-then-ship / blocked
-`
+/**
+ * Resolve the review prompt template active for this user right now:
+ * read the global `skillSuite` and, in `custom` mode, the
+ * `customReviewTemplate` override. On the default `superpowers` suite this
+ * returns the same text as the legacy `DEFAULT_REVIEW_PROMPT_TEMPLATE`.
+ */
+export function getActiveReviewTemplate(): string {
+  const global = getGlobalSettings()
+  return getSuitePrompts(global.skillSuite, {
+    reviewTemplate: global.customReviewTemplate,
+  }).reviewTemplate
+}
 
 function buildVariableMap(ctx: ReviewTemplateContext): Record<string, string> {
   return {

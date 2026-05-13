@@ -100,6 +100,7 @@
         autogrow
         :readonly="isQueued"
         :placeholder="$t('chatInput.placeholder')"
+        :input-style="{ maxHeight: '200px', overflowY: 'auto' }"
         class="chat-input col rounded-borders"
         :disable="isDisabled"
         @keydown="onKeydown"

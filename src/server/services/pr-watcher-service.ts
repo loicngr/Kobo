@@ -1,8 +1,8 @@
-import { getPrStatusAsync } from '../utils/git-ops.js'
+import { getPrStatusAsync, type PrSnapshot } from '../utils/git-ops.js'
 import { stopDevServer } from './dev-server-service.js'
 import { destroyTerminal } from './terminal-service.js'
 import { emitEphemeral } from './websocket-service.js'
-import { archiveWorkspace, listWorkspaces, updateWorkspaceSourceBranch } from './workspace-service.js'
+import { archiveWorkspace, getWorkspace, listWorkspaces, updateWorkspaceSourceBranch } from './workspace-service.js'
 
 // ── PR Watcher ────────────────────────────────────────────────────────────────
 // Polls GitHub every POLL_INTERVAL_MS to detect merged/closed PRs and
@@ -18,26 +18,18 @@ const POLL_INTERVAL_MS = 30 * 1000 // 30 seconds
 let timer: ReturnType<typeof setTimeout> | null = null
 let checking = false
 
-/** Tracks the last known PR state + base branch per workspace, used to
- *  detect both state transitions (OPEN → CLOSED/MERGED) and base-branch
- *  changes (`develop` → `main`). */
-interface KnownPr {
-  state: string
-  base?: string
-}
-const lastKnownPr = new Map<string, KnownPr>()
+/** Tracks the last known PR snapshot per workspace, used to detect transitions
+ *  (state, base, reviewDecision). */
+const lastKnownPr = new Map<string, PrSnapshot>()
 
 /**
- * Read-only snapshot of PR states known to the watcher, keyed by workspace id.
- * Used by the drawer to show a small PR-open indicator without N separate
- * `gh pr view` calls per workspace. Only contains entries where a PR has been
- * detected at least once by the watcher since boot; workspaces without a PR
- * are absent from the map.
+ * Read-only snapshot map, keyed by workspace id. Used by the drawer indicator
+ * AND the Git panel. Workspaces without a known PR are absent.
  */
-export function getAllPrStates(): Record<string, string> {
-  const out: Record<string, string> = {}
-  for (const [id, known] of lastKnownPr) {
-    out[id] = known.state
+export function getAllPrSnapshots(): Record<string, PrSnapshot> {
+  const out: Record<string, PrSnapshot> = {}
+  for (const [id, snap] of lastKnownPr) {
+    out[id] = snap
   }
   return out
 }
@@ -61,9 +53,6 @@ export async function checkPrStatuses(): Promise<void> {
   }
 
   for (const ws of workspaces) {
-    // Only check workspaces that are not actively running an agent
-    if (['extracting', 'brainstorming', 'executing'].includes(ws.status)) continue
-
     try {
       const pr = await getPrStatusAsync(ws.projectPath, ws.workingBranch)
       if (!pr) continue
@@ -78,6 +67,13 @@ export async function checkPrStatuses(): Promise<void> {
       // Archive on a transition FROM OPEN to CLOSED/MERGED. Skips the
       // base-change detection below — archiving wins.
       if (prev?.state === 'OPEN' && (pr.state === 'MERGED' || pr.state === 'CLOSED')) {
+        if (['extracting', 'brainstorming', 'executing'].includes(ws.status)) {
+          // Agent is working — update the cache but skip auto-archive.
+          // (The defensive base preservation from the no-base branch doesn't apply here
+          // because we ARE in the OPEN→MERGED/CLOSED branch which always has a base.)
+          lastKnownPr.set(ws.id, pr)
+          continue
+        }
         console.log(`[pr-watcher] PR ${pr.state.toLowerCase()} for workspace '${ws.name}' — archiving`)
 
         // Best-effort cleanup (same as manual archive): stop dev server + terminal.
@@ -102,13 +98,32 @@ export async function checkPrStatuses(): Promise<void> {
         continue // do not run base-change detection on a workspace we just archived
       }
 
+      // Review-decision transitions (only on OPEN PRs; first-sight is silent).
+      // Reuses the baseline rule from base-change detection: emits only when we
+      // observe an actual transition between two known states.
+      if (pr.state === 'OPEN' && prev) {
+        if (prev.reviewDecision !== 'CHANGES_REQUESTED' && pr.reviewDecision === 'CHANGES_REQUESTED') {
+          emitEphemeral(ws.id, 'pr:changes-requested', {
+            prNumber: pr.number,
+            prUrl: pr.url,
+          })
+        } else if (prev.reviewDecision === 'CHANGES_REQUESTED' && pr.reviewDecision === 'APPROVED') {
+          emitEphemeral(ws.id, 'pr:approved', {
+            prNumber: pr.number,
+            prUrl: pr.url,
+          })
+        }
+      }
+
       // Base-branch change detection. Only relevant for OPEN PRs — closed/
       // merged PRs don't accept base changes. Skip if the GitHub response
       // didn't include a baseRefName (defensive against malformed data).
       if (pr.state !== 'OPEN' || !pr.base) {
         // Still update the cache for the state — keeps the OPEN→CLOSED/MERGED
-        // archiving logic working on the next tick.
-        lastKnownPr.set(ws.id, { state: pr.state, base: prev?.base })
+        // archiving logic working on the next tick. Preserve the previous
+        // `base` if the fresh snapshot is missing one (defensive).
+        const next: PrSnapshot = pr.base ? pr : { ...pr, base: prev?.base ?? pr.base }
+        lastKnownPr.set(ws.id, next)
         continue
       }
 
@@ -119,8 +134,8 @@ export async function checkPrStatuses(): Promise<void> {
       //    that happened while Kobo was offline.
       const previousBase = prev?.base ?? ws.sourceBranch
       if (previousBase === pr.base) {
-        // No-op path: still record the base so subsequent ticks have a baseline.
-        lastKnownPr.set(ws.id, { state: pr.state, base: pr.base })
+        // No-op path: still record the snapshot so subsequent ticks have a baseline.
+        lastKnownPr.set(ws.id, pr)
         continue
       }
 
@@ -138,7 +153,7 @@ export async function checkPrStatuses(): Promise<void> {
       }
       // Both the persistence and the emit are part of "we successfully
       // observed a base change" — only NOW commit the new state to the cache.
-      lastKnownPr.set(ws.id, { state: pr.state, base: pr.base })
+      lastKnownPr.set(ws.id, pr)
       emitEphemeral(ws.id, 'pr:base-changed', {
         oldBase: previousBase,
         newBase: pr.base,
@@ -153,22 +168,48 @@ export async function checkPrStatuses(): Promise<void> {
   }
 }
 
+/**
+ * On-demand refresh of a single workspace's PR snapshot. Bypasses the 30s tick.
+ * No side effects beyond cache update — no archive, no transition emits. The
+ * user is watching the UI; we don't replay events for state they're already
+ * looking at.
+ *
+ * Returns the fresh snapshot, or null if the workspace has no PR (cache entry
+ * cleared in that case). Throws if the workspace doesn't exist.
+ */
+export async function refreshPrSnapshot(workspaceId: string): Promise<PrSnapshot | null> {
+  const ws = getWorkspace(workspaceId)
+  if (!ws) throw new Error(`Workspace '${workspaceId}' not found`)
+
+  const snap = await getPrStatusAsync(ws.projectPath, ws.workingBranch)
+  if (snap === null) {
+    lastKnownPr.delete(workspaceId)
+    return null
+  }
+  lastKnownPr.set(workspaceId, snap)
+  return snap
+}
+
+/**
+ * Runs a single check while honouring the `checking` re-entrancy guard. Used
+ * both by the immediate boot-time kick-off and by the periodic timer tick.
+ */
+async function runOneCheck(): Promise<void> {
+  if (checking) return
+  checking = true
+  try {
+    await checkPrStatuses()
+  } catch (err) {
+    console.error('[pr-watcher] Unexpected error in checkPrStatuses:', err)
+  } finally {
+    checking = false
+  }
+}
+
 function scheduleNext(): void {
   timer = setTimeout(async () => {
-    if (checking) {
-      // Previous run still in progress — skip and reschedule
-      scheduleNext()
-      return
-    }
-    checking = true
-    try {
-      await checkPrStatuses()
-    } catch (err) {
-      console.error('[pr-watcher] Unexpected error in checkPrStatuses:', err)
-    } finally {
-      checking = false
-      scheduleNext()
-    }
+    await runOneCheck()
+    scheduleNext()
   }, POLL_INTERVAL_MS)
   timer.unref?.()
 }
@@ -176,6 +217,10 @@ function scheduleNext(): void {
 /** Start polling GitHub for merged/closed PRs to auto-archive workspaces. */
 export function startPrWatcher(): void {
   if (timer) return
+  // Kick off an immediate check so the front-end has fresh PR data on boot
+  // without waiting for the first 30s tick. Fire-and-forget; the recurring
+  // loop is scheduled independently and the `checking` guard prevents overlap.
+  void runOneCheck()
   scheduleNext()
 }
 

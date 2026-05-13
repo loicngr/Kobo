@@ -459,30 +459,143 @@ export function getPrUrl(repoPath: string, branchName: string): string | null {
   }
 }
 
-/** State and URL of a GitHub pull request. */
-export interface PrStatus {
-  state: 'OPEN' | 'CLOSED' | 'MERGED'
-  url: string
-  /** Base branch of the PR (`baseRefName` from `gh pr view`). Optional so
-   *  callers that don't care about the base (drawer indicator, chat template)
-   *  keep working with partial mocks. */
-  base?: string
+/** Per-reviewer state in a PR. Pending = requested but no review yet. */
+export interface PrReviewer {
+  login: string
+  state: 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED' | 'DISMISSED' | 'PENDING'
 }
 
-/** Get the state and URL of the PR for a branch. Returns null if no PR exists. */
-export function getPrStatus(repoPath: string, branchName: string): PrStatus | null {
+/** Per-check entry from the PR's status check rollup. */
+export interface PrCiCheck {
+  name: string
+  conclusion: string | null
+  status: string
+  detailsUrl: string | null
+}
+
+/** Rich snapshot of a GitHub pull request, captured from a single `gh pr view`. */
+export interface PrSnapshot {
+  number: number
+  title: string
+  url: string
+  state: 'OPEN' | 'CLOSED' | 'MERGED'
+  base: string
+  reviewDecision: 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null
+  author: { login: string }
+  assignees: Array<{ login: string }>
+  reviewers: PrReviewer[]
+  labels: Array<{ name: string; color: string }>
+  ci: {
+    // 'CANCELLED' and 'NEUTRAL' are reserved for future gh check conclusions;
+    // the current mapper only emits null|FAILURE|PENDING|SUCCESS.
+    rollup: 'SUCCESS' | 'FAILURE' | 'PENDING' | 'CANCELLED' | 'NEUTRAL' | null
+    checks: PrCiCheck[]
+  }
+  updatedAt: string
+  /**
+   * Number of review threads that are still unresolved on the PR. GitHub keeps
+   * `reviewDecision` at `CHANGES_REQUESTED` until the reviewer re-reviews or
+   * dismisses, even after the author resolves every comment thread. The UI
+   * uses this counter (combined with `reviewDecision`) to decide whether the
+   * PR is truly blocked or merely flagged stale.
+   */
+  unresolvedReviewThreadsCount: number
+}
+
+/** Back-compat alias for old callers that imported the previous name.
+ *  Remove once all imports are switched. */
+export type PrStatus = PrSnapshot
+
+const GH_PR_FIELDS = [
+  'number',
+  'title',
+  'url',
+  'state',
+  'baseRefName',
+  'reviewDecision',
+  'author',
+  'assignees',
+  'labels',
+  'latestReviews',
+  'reviewRequests',
+  'reviewThreads',
+  'statusCheckRollup',
+  'updatedAt',
+].join(',')
+
+interface RawGhPr {
+  number: number
+  title: string
+  url: string
+  state: string
+  baseRefName?: string
+  reviewDecision?: string | null
+  author?: { login?: string } | null
+  assignees?: Array<{ login: string }>
+  labels?: Array<{ name: string; color: string }>
+  latestReviews?: Array<{ author: { login: string }; state: string }>
+  reviewRequests?: Array<{ login: string }>
+  reviewThreads?: Array<{ isResolved: boolean }>
+  statusCheckRollup?: Array<{ name: string; conclusion: string | null; status: string; detailsUrl: string | null }>
+  updatedAt?: string
+}
+
+function mapGhPrToSnapshot(raw: RawGhPr): PrSnapshot {
+  const reviewers: PrReviewer[] = []
+  const seen = new Set<string>()
+  for (const r of raw.latestReviews ?? []) {
+    const login = r.author?.login
+    if (!login || seen.has(login)) continue
+    seen.add(login)
+    reviewers.push({ login, state: (r.state as PrReviewer['state']) ?? 'COMMENTED' })
+  }
+  for (const r of raw.reviewRequests ?? []) {
+    if (!r.login || seen.has(r.login)) continue
+    seen.add(r.login)
+    reviewers.push({ login: r.login, state: 'PENDING' })
+  }
+
+  const checks: PrCiCheck[] = (raw.statusCheckRollup ?? []).map((c) => ({
+    name: c.name,
+    conclusion: c.conclusion ?? null,
+    status: c.status,
+    detailsUrl: c.detailsUrl ?? null,
+  }))
+  let rollup: PrSnapshot['ci']['rollup'] = null
+  if (checks.length > 0) {
+    if (checks.some((c) => c.conclusion === 'FAILURE')) rollup = 'FAILURE'
+    else if (checks.some((c) => c.status !== 'COMPLETED')) rollup = 'PENDING'
+    else rollup = 'SUCCESS'
+  }
+
+  const unresolvedReviewThreadsCount = (raw.reviewThreads ?? []).reduce((acc, t) => acc + (t.isResolved ? 0 : 1), 0)
+
+  return {
+    number: raw.number,
+    title: raw.title,
+    url: raw.url,
+    state: raw.state as PrSnapshot['state'],
+    base: raw.baseRefName ?? '',
+    reviewDecision: (raw.reviewDecision as PrSnapshot['reviewDecision']) ?? null,
+    author: { login: raw.author?.login ?? '' },
+    assignees: (raw.assignees ?? []).map((a) => ({ login: a.login })),
+    reviewers,
+    labels: (raw.labels ?? []).map((l) => ({ name: l.name, color: l.color })),
+    ci: { rollup, checks },
+    updatedAt: raw.updatedAt ?? '',
+    unresolvedReviewThreadsCount,
+  }
+}
+
+/** Get a rich snapshot of the PR for a branch. Returns null if no PR exists. */
+export function getPrStatus(repoPath: string, branchName: string): PrSnapshot | null {
   try {
-    const raw = execFileSync('gh', ['pr', 'view', branchName, '--json', 'state,url,baseRefName'], {
+    const raw = execFileSync('gh', ['pr', 'view', branchName, '--json', GH_PR_FIELDS], {
       cwd: repoPath,
       encoding: 'utf-8',
     }).trim()
     if (!raw) return null
-    const parsed = JSON.parse(raw) as { state: string; url: string; baseRefName?: string }
-    return {
-      state: parsed.state as PrStatus['state'],
-      url: parsed.url,
-      base: parsed.baseRefName || undefined,
-    }
+    return mapGhPrToSnapshot(JSON.parse(raw) as RawGhPr)
   } catch {
     return null
   }
@@ -830,20 +943,15 @@ export async function getPrUrlAsync(repoPath: string, branchName: string): Promi
 }
 
 /** Async version of getPrStatus. Returns null if no PR exists. */
-export async function getPrStatusAsync(repoPath: string, branchName: string): Promise<PrStatus | null> {
+export async function getPrStatusAsync(repoPath: string, branchName: string): Promise<PrSnapshot | null> {
   try {
-    const { stdout } = await execFileAsync('gh', ['pr', 'view', branchName, '--json', 'state,url,baseRefName'], {
+    const { stdout } = await execFileAsync('gh', ['pr', 'view', branchName, '--json', GH_PR_FIELDS], {
       cwd: repoPath,
       encoding: 'utf-8',
     })
     const raw = stdout.trim()
     if (!raw) return null
-    const parsed = JSON.parse(raw) as { state: string; url: string; baseRefName?: string }
-    return {
-      state: parsed.state as PrStatus['state'],
-      url: parsed.url,
-      base: parsed.baseRefName || undefined,
-    }
+    return mapGhPrToSnapshot(JSON.parse(raw) as RawGhPr)
   } catch {
     return null
   }

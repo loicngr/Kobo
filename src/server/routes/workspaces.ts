@@ -6,11 +6,7 @@ const execFileAsync = promisify(execFileCb)
 import fs from 'node:fs'
 import path from 'node:path'
 import { Hono } from 'hono'
-import {
-  AUTO_LOOP_HARD_RULES,
-  buildAutoLoopGroomingSteps,
-  PREP_AUTOLOOP_INTRO,
-} from '../../shared/auto-loop-prompts.js'
+import { AUTO_LOOP_HARD_RULES, buildAutoLoopGroomingSteps, buildGroomingIntro } from '../../shared/auto-loop-prompts.js'
 import { getDb } from '../db/index.js'
 import { migrationGuard } from '../middleware/migration-guard.js'
 import { listEngines } from '../services/agent/engines/registry.js'
@@ -26,9 +22,9 @@ import {
 } from '../services/initial-prompt-template-service.js'
 import * as notionService from '../services/notion-service.js'
 import { renderPrTemplate } from '../services/pr-template-service.js'
-import { getAllPrStates } from '../services/pr-watcher-service.js'
+import { getAllPrSnapshots, refreshPrSnapshot } from '../services/pr-watcher-service.js'
 import * as quotaBackoffService from '../services/quota-backoff-service.js'
-import { DEFAULT_REVIEW_PROMPT_TEMPLATE, renderReviewTemplate } from '../services/review-template-service.js'
+import { getActiveReviewTemplate, renderReviewTemplate } from '../services/review-template-service.js'
 import * as sentryService from '../services/sentry-service.js'
 import * as settingsService from '../services/settings-service.js'
 import { runSetupScript } from '../services/setup-script-service.js'
@@ -840,9 +836,27 @@ app.get('/:id/sessions', (c) => {
 // exhaustive over the workspace list).
 app.get('/pr-states', (c) => {
   try {
-    return c.json(getAllPrStates())
+    return c.json(getAllPrSnapshots())
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// POST /api/workspaces/pr-snapshot/refresh/:id — on-demand refresh of a single
+// workspace's PR snapshot, driven by the Git tab refresh button. Static prefix
+// keeps it ahead of `/:id` in the Hono matcher.
+app.post('/pr-snapshot/refresh/:id', async (c) => {
+  const id = c.req.param('id')
+  try {
+    const snapshot = await refreshPrSnapshot(id)
+    if (snapshot === null) {
+      return c.json({ error: 'No PR for this workspace' }, 404)
+    }
+    return c.json({ snapshot })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (/not found/i.test(message)) return c.json({ error: message }, 404)
     return c.json({ error: message }, 500)
   }
 })
@@ -1537,7 +1551,10 @@ app.get('/:id/prep-autoloop-prompt', (c) => {
     const e2eSettings = projectSettings?.e2e ?? { framework: '', skill: '', prompt: '' }
     const finalizationSettings = projectSettings?.finalization ?? { prompt: '' }
 
-    const prompt = `${PREP_AUTOLOOP_INTRO}
+    const globalSettings = settingsService.getGlobalSettings()
+    const intro = buildGroomingIntro(globalSettings.skillSuite, globalSettings.customAutoLoopGroomingIntro)
+
+    const prompt = `${intro}
 
 ${buildAutoLoopGroomingSteps(e2eSettings, finalizationSettings)}
 
@@ -2815,8 +2832,7 @@ app.post('/:id/start-review', async (c) => {
         ? `${committedStats}\n\n— Working tree (uncommitted) —\n${workingTreeStats}`
         : committedStats
 
-    const effective = settingsService.getEffectiveSettings(workspace.projectPath)
-    const template = effective.reviewPromptTemplate || DEFAULT_REVIEW_PROMPT_TEMPLATE
+    const template = getActiveReviewTemplate()
 
     const rendered = renderReviewTemplate(template, {
       workspace,

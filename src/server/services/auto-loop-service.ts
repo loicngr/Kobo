@@ -5,6 +5,7 @@ import { slugifyProjectName } from '../utils/project-slug.js'
 import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 import * as orchestrator from './agent/orchestrator.js'
 import * as settingsService from './settings-service.js'
+import { getSuitePrompts } from './skill-suite-prompts.js'
 import { emit, emitEphemeral } from './websocket-service.js'
 import { listTasks, type Task } from './workspace-service.js'
 
@@ -231,7 +232,7 @@ Your job this iteration:
 3. Run the project's quality checks (lint, typecheck, tests). Check \`.ai/.git-conventions.md\` for the exact commands if unclear.
 4. If checks fail, fix until they pass. If blocked, leave the task unchanged and explain in chat.
 5. Commit with a conventional message (\`feat: [short description]\` or similar per repo conventions).
-6. Code review gate — BEFORE marking the task done, dispatch an independent code-reviewer subagent via the Task tool with \`subagent_type: "code-reviewer"\` (or \`"superpowers:code-reviewer"\` / \`"pr-review-toolkit:code-reviewer"\` — use whichever exists in this environment; fall back to \`superpowers:requesting-code-review\` skill if none is available). Brief the reviewer with: what you just implemented, the task title, and the commit SHA (via \`git rev-parse HEAD\`). Ask specifically whether the change matches the task scope, whether edge cases are handled, and whether the commit is clean.
+6. {reviewGate}
 7. Act on the review:
    - If Critical/Important issues: fix them, amend or add a fix-up commit, re-run checks from step 3. Do NOT mark_task_done.
    - If only Minor issues: fix them if trivial (< 2 min), otherwise note them in the chat and proceed.
@@ -241,6 +242,19 @@ Your job this iteration:
 Do NOT modify other tasks' state. Do NOT create a PR. Do NOT skip the checks.
 Do NOT run \`kill\`, \`pkill\`, \`killall\`, \`pgrep -k\`, or any process-killing command — you may tear down the Kōbō server itself or sibling dev servers. If a dev server needs restarting, let the user do it.
 When you're done (success or blocked), end your turn cleanly.`
+
+/**
+ * Resolve the active auto-loop review gate sentence (step 6 of the iteration
+ * prompt) for the current global skill suite, honouring any user override in
+ * `custom` mode. On the default `superpowers` suite this returns the same
+ * text that was historically inlined into PROMPT_TEMPLATE.
+ */
+function getActiveAutoLoopReviewGate(): string {
+  const global = settingsService.getGlobalSettings()
+  return getSuitePrompts(global.skillSuite, {
+    autoLoopReviewGate: global.customAutoLoopReviewGate,
+  }).autoLoopReviewGate
+}
 
 function pickNextTask(workspaceId: string): Task | null {
   const pending = listTasks(workspaceId).filter((t) => t.status !== 'done')
@@ -302,6 +316,7 @@ function spawnNextIteration(workspaceId: string, opts: { throwOnStartAgentError?
     .replaceAll('{taskTitle}', task.title)
     .replaceAll('{isAcceptanceCriterion}', String(task.isAcceptanceCriterion))
     .replaceAll('{overrideBlock}', overrideBlock)
+    .replaceAll('{reviewGate}', getActiveAutoLoopReviewGate())
 
   const globalSettings = settingsService.getGlobalSettings()
   const projectSlug = globalSettings.worktreesPrefixByProject

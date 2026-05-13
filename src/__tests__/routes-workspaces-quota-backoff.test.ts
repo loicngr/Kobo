@@ -135,7 +135,8 @@ vi.mock('../server/services/quota-backoff-service.js', () => ({
 }))
 
 vi.mock('../server/services/pr-watcher-service.js', () => ({
-  getAllPrStates: vi.fn(() => ({})),
+  getAllPrSnapshots: vi.fn(() => ({})),
+  refreshPrSnapshot: vi.fn(),
   startPrWatcher: vi.fn(),
   stopPrWatcher: vi.fn(),
 }))

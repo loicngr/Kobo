@@ -17,6 +17,8 @@
  * `AUTO_LOOP_HARD_RULES` is the trailing hard-rules block, same for both.
  */
 
+import { getGroomingIntro, type SkillSuite } from './skill-suite-prompts.js'
+
 export interface E2eSettings {
   framework: 'cypress' | 'playwright' | 'jest' | 'vitest' | 'other' | ''
   skill: string
@@ -27,7 +29,24 @@ export interface FinalizationSettings {
   prompt: string
 }
 
-export const PREP_AUTOLOOP_INTRO = `You are preparing this workspace for Kōbō auto-loop mode. This is a GROOMING session only — DO NOT implement anything, DO NOT write or edit code, DO NOT run tests or builds, DO NOT invoke \`superpowers:executing-plans\` or any implementation skill. Your ONLY job is to curate the Kōbō task list via MCP tools.`
+/**
+ * Build the grooming intro for the chosen skill suite. In `custom` mode the
+ * user's `customAutoLoopGroomingIntro` overrides the agnostic default (when
+ * non-empty). This is the runtime-correct way to obtain the intro — every
+ * new consumer should call this rather than reading the legacy
+ * `PREP_AUTOLOOP_INTRO` constant below.
+ */
+export function buildGroomingIntro(suite: SkillSuite, customOverride?: string): string {
+  return getGroomingIntro(suite, customOverride)
+}
+
+/**
+ * Back-compat alias resolving to the `superpowers` variant (the historical
+ * inlined text). Kept so any existing import still works without a
+ * behaviour change. New code should call `buildGroomingIntro(suite, override)`
+ * with live settings so the user's `skillSuite` choice is honoured.
+ */
+export const PREP_AUTOLOOP_INTRO = getGroomingIntro('superpowers')
 
 export function buildAutoLoopGroomingSteps(e2e: E2eSettings, finalization: FinalizationSettings): string {
   const steps: string[] = [

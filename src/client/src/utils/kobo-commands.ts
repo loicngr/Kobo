@@ -1,6 +1,8 @@
+import { useSettingsStore } from 'src/stores/settings'
 import type { useWebSocketStore } from 'src/stores/websocket'
 import type { useWorkspaceStore } from 'src/stores/workspace'
 import { AUTO_LOOP_GROOMING_STEPS, AUTO_LOOP_HARD_RULES } from '../../../shared/auto-loop-prompts'
+import { getGroomingIntro } from '../../../shared/skill-suite-prompts'
 
 const CHECK_PROGRESS_PROMPT = `Review your progress on the tasks and acceptance criteria. Use the kobo-tasks MCP server: call list_tasks() to check the current status, then update any tasks you have completed using mark_task_done(). Report what is done and what remains.
 
@@ -9,11 +11,27 @@ Then suggest concrete next actions. Format them exactly like this so I can click
 1. **Short label** → Description of the action
 2. **Short label** → Description of the action`
 
-const PREP_AUTOLOOP_PROMPT = `You are preparing this workspace for Kōbō auto-loop mode. This is a GROOMING session only — DO NOT implement anything, DO NOT write or edit code, DO NOT run tests or builds, DO NOT invoke \`superpowers:executing-plans\` or any implementation skill. Your ONLY job is to curate the Kōbō task list via MCP tools.
-
-${AUTO_LOOP_GROOMING_STEPS}
+/** The numbered grooming steps + hard rules — the body of the prep-autoloop
+ * prompt, independent of the leading intro sentence (which is suite-aware). */
+const PREP_AUTOLOOP_BODY = `${AUTO_LOOP_GROOMING_STEPS}
 
 ${AUTO_LOOP_HARD_RULES}`
+
+/** Build the local fallback prep-autoloop prompt, picking the grooming intro
+ * variant matching the user's chosen skill suite (with custom override when
+ * `skillSuite === 'custom'`). The backend route
+ * `/api/workspaces/:id/prep-autoloop-prompt` returns the canonical prompt
+ * (which also honours the suite); this is only used when that fetch fails. */
+function buildPrepAutoloopPrompt(): string {
+  const store = useSettingsStore()
+  const intro = getGroomingIntro(store.global.skillSuite, store.global.customAutoLoopGroomingIntro)
+  return `${intro}\n\n${PREP_AUTOLOOP_BODY}`
+}
+
+/** Static fallback used in slash-command listings where no settings store is
+ * accessible (always returns the `superpowers` variant — byte-identical to
+ * the historical hardcoded constant). */
+const PREP_AUTOLOOP_PROMPT_STATIC = `${getGroomingIntro('superpowers')}\n\n${PREP_AUTOLOOP_BODY}`
 
 /** Map of Kobo built-in slash commands. */
 export const KOBO_COMMANDS: Record<string, { prompt: string; descriptionKey: string }> = {
@@ -22,7 +40,7 @@ export const KOBO_COMMANDS: Record<string, { prompt: string; descriptionKey: str
     descriptionKey: 'koboCommand.checkProgressDesc',
   },
   '/kobo-prep-autoloop': {
-    prompt: PREP_AUTOLOOP_PROMPT,
+    prompt: PREP_AUTOLOOP_PROMPT_STATIC,
     descriptionKey: 'koboCommand.prepAutoloopDesc',
   },
 }
@@ -66,7 +84,7 @@ export async function sendPrepAutoloop(
     // best-effort — the per-message override below is the safety net
   }
 
-  let prompt = PREP_AUTOLOOP_PROMPT
+  let prompt = buildPrepAutoloopPrompt()
   try {
     const res = await fetch(`/api/workspaces/${workspaceId}/prep-autoloop-prompt`, { cache: 'no-store' })
     if (res.ok) {
@@ -74,7 +92,7 @@ export async function sendPrepAutoloop(
       if (data.prompt) prompt = data.prompt
     }
   } catch {
-    // best-effort — the local PREP_AUTOLOOP_PROMPT default still applies
+    // best-effort — the local suite-aware fallback still applies
   }
 
   wsStore.sendChatMessage(workspaceId, prompt, undefined, 'bypass')

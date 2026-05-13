@@ -794,6 +794,51 @@ export const useWebSocketStore = defineStore('websocket', {
           break
         }
 
+        case 'pr:changes-requested': {
+          if (!wid) break
+          const p = payload as { prNumber?: number; prUrl?: string }
+          const prNumber = p.prNumber ?? 0
+          const message = t('toast.prChangesRequested', { n: prNumber })
+          const actions: Array<Record<string, unknown>> = []
+          if (p.prUrl) {
+            actions.push({
+              label: t('pr.openPr'),
+              color: 'white',
+              noDismiss: true,
+              handler: () => window.open(p.prUrl, '_blank'),
+            })
+          }
+          actions.push({ label: t('pr.dismiss'), color: 'white' })
+          Notify.create({
+            type: 'warning',
+            position: 'top',
+            timeout: 0,
+            message,
+            actions,
+          })
+          notify(message, undefined, wid)
+          // Refresh the local snapshot so the icon flips immediately without
+          // waiting for the next watcher tick to re-pull from /pr-states.
+          void workspaceStore.refreshPrSnapshot(wid)
+          break
+        }
+
+        case 'pr:approved': {
+          if (!wid) break
+          const p = payload as { prNumber?: number; prUrl?: string }
+          const prNumber = p.prNumber ?? 0
+          const message = t('toast.prApproved', { n: prNumber })
+          Notify.create({
+            type: 'positive',
+            position: 'top',
+            timeout: 5000,
+            message,
+          })
+          notify(message, undefined, wid)
+          void workspaceStore.refreshPrSnapshot(wid)
+          break
+        }
+
         case 'wakeup:scheduled': {
           if (wid) {
             const p = payload as { targetAt?: string; reason?: string }

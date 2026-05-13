@@ -130,13 +130,75 @@
         </div>
 
         <div v-show="attentionExpanded">
-          <div v-for="group in groupedNeedsAttention" :key="group.projectPath" class="wl-project-group">
-            <div class="wl-project-label q-px-md q-pt-xs">
-              <q-icon name="folder" size="12px" color="grey-7" class="q-mr-xs" />
-              <span class="text-caption text-grey-7">{{ group.projectName }}</span>
+          <template v-if="!flatten">
+            <div v-for="group in groupedNeedsAttention" :key="group.projectPath" class="wl-project-group">
+              <div class="wl-project-label q-px-md q-pt-xs">
+                <q-icon name="folder" size="12px" :color="group.projectColor ?? 'grey-7'" class="q-mr-xs" />
+                <span class="text-caption" :class="group.projectColor ? `text-${group.projectColor}` : 'text-grey-7'">
+                  {{ group.projectName }}
+                </span>
+              </div>
+              <div
+                v-for="ws in group.workspaces"
+                :key="ws.id"
+                class="wl-item cursor-pointer q-pa-sm q-mx-xs rounded-borders"
+                :class="{ 'wl-item--selected': ws.id === store.selectedWorkspaceId }"
+                :style="[
+                  { borderLeft: `3px solid ${ws.status === 'awaiting-user' ? '#f59e0b' : '#ef4444'}` },
+                  ws.favoritedAt ? { borderBottom: '2px solid #f59e0b' } : {},
+                ]"
+                @click="selectWorkspace(ws.id)"
+                @contextmenu.prevent
+              >
+                <WorkspaceContextMenu
+                  :workspace="ws"
+                  @rename="renameWorkspace"
+                  @edit-description="editDescription"
+                  @copy-path="copyWorktreePath"
+                  @open-editor="openInEditor"
+                  @run-setup="runSetupScript"
+                  @toggle-favorite="onToggleFavorite"
+                  @manage-tags="onManageTags"
+                  @archive="onArchiveClick"
+                  @delete="openDeleteDialog"
+                />
+                <div class="col" style="min-width: 0;">
+                  <div class="row items-center no-wrap q-gutter-xs">
+                    <WorkspaceDrawerIndicators :workspace="ws" />
+                    <div class="wl-item-name text-body2 text-grey-3 ellipsis" :style="{ fontWeight: ws.hasUnread ? 700 : 400, opacity: ws.hasUnread ? 1 : 0.75, maxWidth: '400px' }">
+                      {{ ws.name }}
+                      <q-tooltip>{{ ws.name }}</q-tooltip>
+                    </div>
+                  </div>
+                  <div
+                    v-if="ws.agentDescription || ws.description"
+                    class="text-caption text-grey-7 ellipsis q-mt-xs"
+                    :title="ws.agentDescription || ws.description"
+                    style="max-width: 100%; font-size: 11px;"
+                  >
+                    {{ ws.agentDescription || ws.description }}
+                  </div>
+                  <AutoLoopChip :workspace="ws" class="q-mt-xs" />
+                  <div class="text-caption q-mt-xs">
+                    <q-icon
+                      :name="ws.status === 'awaiting-user' ? 'help' : 'warning'"
+                      size="xs"
+                      :color="ws.status === 'awaiting-user' ? 'amber-5' : 'red-5'"
+                      class="q-mr-xs"
+                    />
+                    <span :class="ws.status === 'awaiting-user' ? 'text-amber-5' : 'text-red-5'">{{ statusLabel(ws.status) }}</span>
+                    <span class="q-ml-xs text-grey-8">&middot; {{ timeAgo(ws.updatedAt) }}</span>
+                  </div>
+                  <div v-if="ws.tags.length > 0" class="row q-gutter-xs q-mt-xs">
+                    <q-chip v-for="tag in ws.tags" :key="tag" dense size="sm" color="grey-8" text-color="grey-3" :label="tag" />
+                  </div>
+                </div>
+              </div>
             </div>
+          </template>
+          <template v-else>
             <div
-              v-for="ws in group.workspaces"
+              v-for="ws in flatNeedsAttention"
               :key="ws.id"
               class="wl-item cursor-pointer q-pa-sm q-mx-xs rounded-borders"
               :class="{ 'wl-item--selected': ws.id === store.selectedWorkspaceId }"
@@ -186,12 +248,20 @@
                   <span :class="ws.status === 'awaiting-user' ? 'text-amber-5' : 'text-red-5'">{{ statusLabel(ws.status) }}</span>
                   <span class="q-ml-xs text-grey-8">&middot; {{ timeAgo(ws.updatedAt) }}</span>
                 </div>
-                <div v-if="ws.tags.length > 0" class="row q-gutter-xs q-mt-xs">
+                <div v-if="flatten || ws.tags.length > 0" class="row q-gutter-xs q-mt-xs">
+                  <q-chip
+                    v-if="flatten"
+                    dense
+                    size="sm"
+                    :color="projectColorFor(ws) ?? 'grey-8'"
+                    :text-color="projectTextColorFor(ws)"
+                    :label="projectNameFor(ws)"
+                  />
                   <q-chip v-for="tag in ws.tags" :key="tag" dense size="sm" color="grey-8" text-color="grey-3" :label="tag" />
                 </div>
               </div>
             </div>
-          </div>
+          </template>
         </div>
       </div>
 
@@ -219,13 +289,69 @@
         </div>
 
         <div v-show="runningExpanded">
-          <div v-for="group in groupedRunning" :key="group.projectPath" class="wl-project-group">
-            <div class="wl-project-label q-px-md q-pt-xs">
-              <q-icon name="folder" size="12px" color="grey-7" class="q-mr-xs" />
-              <span class="text-caption text-grey-7">{{ group.projectName }}</span>
+          <template v-if="!flatten">
+            <div v-for="group in groupedRunning" :key="group.projectPath" class="wl-project-group">
+              <div class="wl-project-label q-px-md q-pt-xs">
+                <q-icon name="folder" size="12px" :color="group.projectColor ?? 'grey-7'" class="q-mr-xs" />
+                <span class="text-caption" :class="group.projectColor ? `text-${group.projectColor}` : 'text-grey-7'">
+                  {{ group.projectName }}
+                </span>
+              </div>
+              <div
+                v-for="ws in group.workspaces"
+                :key="ws.id"
+                class="wl-item cursor-pointer q-pa-sm q-mx-xs rounded-borders"
+                :class="{ 'wl-item--selected': ws.id === store.selectedWorkspaceId }"
+                :style="[
+                  { borderLeft: '3px solid #4ade80' },
+                  ws.favoritedAt ? { borderBottom: '2px solid #f59e0b' } : {},
+                ]"
+                @click="selectWorkspace(ws.id)"
+                @contextmenu.prevent
+              >
+                <WorkspaceContextMenu
+                  :workspace="ws"
+                  @rename="renameWorkspace"
+                  @edit-description="editDescription"
+                  @copy-path="copyWorktreePath"
+                  @open-editor="openInEditor"
+                  @run-setup="runSetupScript"
+                  @toggle-favorite="onToggleFavorite"
+                  @manage-tags="onManageTags"
+                  @archive="onArchiveClick"
+                  @delete="openDeleteDialog"
+                />
+                <div class="col" style="min-width: 0;">
+                  <div class="row items-center no-wrap q-gutter-xs">
+                    <WorkspaceDrawerIndicators :workspace="ws" />
+                    <div class="wl-item-name text-body2 text-grey-3 ellipsis" :style="{ fontWeight: ws.hasUnread ? 700 : 400, opacity: ws.hasUnread ? 1 : 0.75, maxWidth: '400px' }">
+                      {{ ws.name }}
+                      <q-tooltip>{{ ws.name }}</q-tooltip>
+                    </div>
+                  </div>
+                  <div
+                    v-if="ws.agentDescription || ws.description"
+                    class="text-caption text-grey-7 ellipsis q-mt-xs"
+                    :title="ws.agentDescription || ws.description"
+                    style="max-width: 100%; font-size: 11px;"
+                  >
+                    {{ ws.agentDescription || ws.description }}
+                  </div>
+                  <AutoLoopChip :workspace="ws" class="q-mt-xs" />
+                  <div class="text-caption q-mt-xs">
+                    <span class="text-green-4">{{ ws.status }}</span>
+                    <span class="q-ml-xs text-grey-8">&middot; {{ timeAgo(ws.updatedAt) }}</span>
+                  </div>
+                  <div v-if="ws.tags.length > 0" class="row q-gutter-xs q-mt-xs">
+                    <q-chip v-for="tag in ws.tags" :key="tag" dense size="sm" color="grey-8" text-color="grey-3" :label="tag" />
+                  </div>
+                </div>
+              </div>
             </div>
+          </template>
+          <template v-else>
             <div
-              v-for="ws in group.workspaces"
+              v-for="ws in flatRunning"
               :key="ws.id"
               class="wl-item cursor-pointer q-pa-sm q-mx-xs rounded-borders"
               :class="{ 'wl-item--selected': ws.id === store.selectedWorkspaceId }"
@@ -269,12 +395,20 @@
                   <span class="text-green-4">{{ ws.status }}</span>
                   <span class="q-ml-xs text-grey-8">&middot; {{ timeAgo(ws.updatedAt) }}</span>
                 </div>
-                <div v-if="ws.tags.length > 0" class="row q-gutter-xs q-mt-xs">
+                <div v-if="flatten || ws.tags.length > 0" class="row q-gutter-xs q-mt-xs">
+                  <q-chip
+                    v-if="flatten"
+                    dense
+                    size="sm"
+                    :color="projectColorFor(ws) ?? 'grey-8'"
+                    :text-color="projectTextColorFor(ws)"
+                    :label="projectNameFor(ws)"
+                  />
                   <q-chip v-for="tag in ws.tags" :key="tag" dense size="sm" color="grey-8" text-color="grey-3" :label="tag" />
                 </div>
               </div>
             </div>
-          </div>
+          </template>
         </div>
       </div>
 
@@ -302,13 +436,68 @@
         </div>
 
         <div v-show="idleExpanded">
-          <div v-for="group in groupedIdle" :key="group.projectPath" class="wl-project-group">
-            <div class="wl-project-label q-px-md q-pt-xs">
-              <q-icon name="folder" size="12px" color="grey-7" class="q-mr-xs" />
-              <span class="text-caption text-grey-7">{{ group.projectName }}</span>
+          <template v-if="!flatten">
+            <div v-for="group in groupedIdle" :key="group.projectPath" class="wl-project-group">
+              <div class="wl-project-label q-px-md q-pt-xs">
+                <q-icon name="folder" size="12px" :color="group.projectColor ?? 'grey-7'" class="q-mr-xs" />
+                <span class="text-caption" :class="group.projectColor ? `text-${group.projectColor}` : 'text-grey-7'">
+                  {{ group.projectName }}
+                </span>
+              </div>
+              <div
+                v-for="ws in group.workspaces"
+                :key="ws.id"
+                class="wl-item cursor-pointer q-pa-sm q-mx-xs rounded-borders"
+                :class="{ 'wl-item--selected': ws.id === store.selectedWorkspaceId }"
+                :style="[
+                  { borderLeft: '3px solid #666' },
+                  ws.favoritedAt ? { borderBottom: '2px solid #f59e0b' } : {},
+                ]"
+                @click="selectWorkspace(ws.id)"
+                @contextmenu.prevent
+              >
+                <WorkspaceContextMenu
+                  :workspace="ws"
+                  @rename="renameWorkspace"
+                  @edit-description="editDescription"
+                  @copy-path="copyWorktreePath"
+                  @open-editor="openInEditor"
+                  @run-setup="runSetupScript"
+                  @toggle-favorite="onToggleFavorite"
+                  @manage-tags="onManageTags"
+                  @archive="onArchiveClick"
+                  @delete="openDeleteDialog"
+                />
+                <div class="col" style="min-width: 0;">
+                  <div class="row items-center no-wrap q-gutter-xs">
+                    <WorkspaceDrawerIndicators :workspace="ws" />
+                    <div class="wl-item-name text-body2 text-grey-3 ellipsis" :style="{ fontWeight: ws.hasUnread ? 700 : 400, opacity: ws.hasUnread ? 1 : 0.75, maxWidth: '400px' }">
+                      {{ ws.name }}
+                      <q-tooltip>{{ ws.name }}</q-tooltip>
+                    </div>
+                  </div>
+                  <div
+                    v-if="ws.agentDescription || ws.description"
+                    class="text-caption text-grey-7 ellipsis q-mt-xs"
+                    :title="ws.agentDescription || ws.description"
+                    style="max-width: 100%; font-size: 11px;"
+                  >
+                    {{ ws.agentDescription || ws.description }}
+                  </div>
+                  <AutoLoopChip :workspace="ws" class="q-mt-xs" />
+                  <div class="wl-item-meta text-caption text-grey-8">
+                    {{ timeAgo(ws.updatedAt) }}
+                  </div>
+                  <div v-if="ws.tags.length > 0" class="row q-gutter-xs q-mt-xs">
+                    <q-chip v-for="tag in ws.tags" :key="tag" dense size="sm" color="grey-8" text-color="grey-3" :label="tag" />
+                  </div>
+                </div>
+              </div>
             </div>
+          </template>
+          <template v-else>
             <div
-              v-for="ws in group.workspaces"
+              v-for="ws in flatIdle"
               :key="ws.id"
               class="wl-item cursor-pointer q-pa-sm q-mx-xs rounded-borders"
               :class="{ 'wl-item--selected': ws.id === store.selectedWorkspaceId }"
@@ -351,12 +540,20 @@
                 <div class="wl-item-meta text-caption text-grey-8">
                   {{ timeAgo(ws.updatedAt) }}
                 </div>
-                <div v-if="ws.tags.length > 0" class="row q-gutter-xs q-mt-xs">
+                <div v-if="flatten || ws.tags.length > 0" class="row q-gutter-xs q-mt-xs">
+                  <q-chip
+                    v-if="flatten"
+                    dense
+                    size="sm"
+                    :color="projectColorFor(ws) ?? 'grey-8'"
+                    :text-color="projectTextColorFor(ws)"
+                    :label="projectNameFor(ws)"
+                  />
                   <q-chip v-for="tag in ws.tags" :key="tag" dense size="sm" color="grey-8" text-color="grey-3" :label="tag" />
                 </div>
               </div>
             </div>
-          </div>
+          </template>
         </div>
       </div>
 
@@ -427,7 +624,15 @@
               <div class="wl-item-meta text-caption text-grey-8">
                 {{ $t('workspaceList.archived') }} {{ timeAgo(ws.archivedAt!) }}
               </div>
-              <div v-if="ws.tags.length > 0" class="row q-gutter-xs q-mt-xs">
+              <div v-if="flatten || ws.tags.length > 0" class="row q-gutter-xs q-mt-xs">
+                <q-chip
+                  v-if="flatten"
+                  dense
+                  size="sm"
+                  :color="projectColorFor(ws) ?? 'grey-8'"
+                  :text-color="projectTextColorFor(ws)"
+                  :label="projectNameFor(ws)"
+                />
                 <q-chip v-for="tag in ws.tags" :key="tag" dense size="sm" color="grey-8" text-color="grey-3" :label="tag" />
               </div>
             </div>
@@ -523,6 +728,8 @@ import { useWebSocketStore } from 'src/stores/websocket'
 import type { Workspace } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { useTimeAgo } from 'src/utils/formatters'
+import type { ProjectColor } from 'src/utils/project-color'
+import { projectColorFor, projectNameFor, projectNameForPath, projectTextColorFor } from 'src/utils/project-color'
 import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -563,6 +770,7 @@ function onManageTags(ws: Workspace) {
 interface ProjectGroup {
   projectPath: string
   projectName: string
+  projectColor: ProjectColor | null
   workspaces: Workspace[]
 }
 
@@ -575,7 +783,8 @@ function groupByProject(workspaces: Workspace[]): ProjectGroup[] {
   }
   return [...groups.entries()].map(([path, wsList]) => ({
     projectPath: path,
-    projectName: path.split('/').pop() ?? path,
+    projectName: projectNameForPath(path),
+    projectColor: settingsStore.getProjectByPath(path)?.color ?? null,
     workspaces: wsList,
   }))
 }
@@ -601,6 +810,12 @@ const filteredIdle = computed(() =>
 const groupedNeedsAttention = computed(() => groupByProject(filteredNeedsAttention.value))
 const groupedRunning = computed(() => groupByProject(filteredRunning.value))
 const groupedIdle = computed(() => groupByProject(filteredIdle.value))
+
+const flatten = computed(() => settingsStore.global.flattenWorkspaceList ?? false)
+
+const flatNeedsAttention = computed(() => groupedNeedsAttention.value.flatMap((g) => g.workspaces))
+const flatRunning = computed(() => groupedRunning.value.flatMap((g) => g.workspaces))
+const flatIdle = computed(() => groupedIdle.value.flatMap((g) => g.workspaces))
 
 // Archived list filtered by the search query when `searchArchived` is ON,
 // and by `favoritesOnly` whenever it's ON. With both toggles OFF and an
@@ -851,10 +1066,10 @@ onMounted(async () => {
   // Silently fetch archived workspaces so the Archived group header renders
   // if any exist — the group stays collapsed by default.
   await store.fetchArchivedWorkspaces()
-  // Batch PR-state snapshot from pr-watcher cache (free — no gh calls).
+  // Batch PR-snapshot from pr-watcher cache (free — no gh calls).
   // Drives the small PR indicator in the drawer. Refreshed on gitRefreshTrigger
   // bumps (see store.triggerGitRefresh).
-  void store.fetchPrStates()
+  void store.fetchPrSnapshots()
   void store.fetchAutoLoopStates()
   await settingsStore.fetchSettings()
   // Subscribe to ALL workspaces so events are received even when not viewing them

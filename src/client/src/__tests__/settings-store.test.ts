@@ -45,6 +45,7 @@ describe('settings store', () => {
           devServer: { startCommand: '', stopCommand: '' },
           e2e: { framework: '', skill: '', prompt: '' },
           finalization: { prompt: '' },
+          color: null,
         },
       ]
       expect(store.getProjectByPath('/a')?.displayName).toBe('A')
@@ -69,6 +70,7 @@ describe('settings store', () => {
           devServer: { startCommand: '', stopCommand: '' },
           e2e: { framework: '', skill: '', prompt: '' },
           finalization: { prompt: '' },
+          color: null,
         },
         {
           path: '/b',
@@ -85,6 +87,7 @@ describe('settings store', () => {
           devServer: { startCommand: '', stopCommand: '' },
           e2e: { framework: '', skill: '', prompt: '' },
           finalization: { prompt: '' },
+          color: null,
         },
       ]
       expect(store.projectPaths).toEqual(['/a', '/b'])

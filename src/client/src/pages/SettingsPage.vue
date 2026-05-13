@@ -51,6 +51,69 @@
               />
             </div>
 
+            <!-- Workspace list display -->
+            <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.workspaceListSection') }}</div>
+              <q-toggle
+                v-model="globalFlattenWorkspaceList"
+                :label="$t('settings.flattenWorkspaceList')"
+                dark
+                dense
+                color="indigo-4"
+                class="text-grey-5 text-caption"
+              />
+              <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.flattenWorkspaceListHint') }}</div>
+            </div>
+
+            <!-- Skill suite -->
+            <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.skillSuite.section') }}</div>
+
+              <q-option-group
+                v-model="globalSkillSuite"
+                :options="[
+                  { label: $t('settings.skillSuite.superpowers'), value: 'superpowers' },
+                  { label: $t('settings.skillSuite.gstack'),      value: 'gstack' },
+                  { label: $t('settings.skillSuite.custom'),      value: 'custom' },
+                ]"
+                type="radio"
+                color="indigo-4"
+                dense
+                dark
+                inline
+              />
+              <div class="text-caption text-grey-6 q-mt-xs">
+                {{ $t(`settings.skillSuite.${globalSkillSuite}Hint`) }}
+              </div>
+
+              <q-btn
+                flat dense no-caps size="sm"
+                color="grey-5"
+                icon="restart_alt"
+                :label="$t('settings.skillSuite.reloadDefaults')"
+                :disable="globalSkillSuite !== 'custom'"
+                class="q-mt-sm"
+                @click="confirmReloadCustomPrompts"
+              />
+            </div>
+
+            <!-- Custom prompts: visible only in custom mode -->
+            <div v-if="globalSkillSuite === 'custom'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.skillSuite.customPrompts') }}</div>
+
+              <div class="text-caption text-grey-6 q-mb-xs q-mt-sm">{{ $t('settings.skillSuite.reviewTemplate') }}</div>
+              <q-input v-model="globalCustomReviewTemplate" type="textarea" filled dense rows="8" dark />
+
+              <div class="text-caption text-grey-6 q-mt-md q-mb-xs">{{ $t('settings.skillSuite.autoLoopReviewGate') }}</div>
+              <q-input v-model="globalCustomAutoLoopReviewGate" type="textarea" filled dense rows="6" dark />
+
+              <div class="text-caption text-grey-6 q-mt-md q-mb-xs">{{ $t('settings.skillSuite.autoLoopGroomingIntro') }}</div>
+              <q-input v-model="globalCustomAutoLoopGroomingIntro" type="textarea" filled dense rows="4" dark />
+
+              <div class="text-caption text-grey-6 q-mt-md q-mb-xs">{{ $t('settings.skillSuite.qaTemplate') }}</div>
+              <q-input v-model="globalCustomQaPromptTemplate" type="textarea" filled dense rows="6" dark />
+            </div>
+
             <!-- Default agent configuration -->
             <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.defaultModelClaude') }}</div>
@@ -701,6 +764,7 @@ where ffmpeg</pre>
                 size="sm"
                 color="primary"
                 :loading="savingGlobal"
+                :class="{ 'save-btn--dirty': isGlobalDirty }"
                 @click="saveGlobal"
               />
             </div>
@@ -829,6 +893,38 @@ where ffmpeg</pre>
                       :placeholder="$t('settings.displayNamePlaceholder')"
                       class="settings-input"
                     />
+                  </div>
+
+                  <!-- Color -->
+                  <div class="q-mb-md">
+                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">
+                      {{ $t('settings.projectColor') }}
+                    </div>
+                    <div class="row items-center q-gutter-xs">
+                      <q-chip
+                        v-for="c in PROJECT_COLOR_PALETTE"
+                        :key="c"
+                        dense
+                        clickable
+                        :color="c"
+                        :icon="projectForm.color === c ? 'check' : undefined"
+                        text-color="white"
+                        @click="projectForm.color = c"
+                      />
+                      <q-btn
+                        flat
+                        dense
+                        no-caps
+                        size="xs"
+                        :label="$t('settings.projectColorClear')"
+                        color="grey-5"
+                        :disable="!projectForm.color"
+                        @click="projectForm.color = null"
+                      />
+                    </div>
+                    <div class="text-caption text-grey-6 q-mt-xs">
+                      {{ projectForm.color ?? $t('settings.projectColorDefault') }}
+                    </div>
                   </div>
 
                   <!-- Default source branch -->
@@ -1091,6 +1187,7 @@ where ffmpeg</pre>
                       size="sm"
                       color="primary"
                       :loading="savingProject"
+                      :class="{ 'save-btn--dirty': isProjectDirty }"
                       @click="saveProject"
                     />
                   </div>
@@ -1251,9 +1348,17 @@ import { useSettingsStore } from 'src/stores/settings'
 import { type Template, useTemplatesStore } from 'src/stores/templates'
 import { DEFAULT_NOTIFICATION_SOUND, NOTIFICATION_SOUNDS, resolveSoundId } from 'src/utils/notification-sounds'
 import { playNotificationSound } from 'src/utils/notifications'
+import { PROJECT_COLOR_PALETTE, type ProjectColor } from 'src/utils/project-color'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { WORKTREES_PATH } from '../../../shared/consts'
+import {
+  AGNOSTIC_AUTO_LOOP_GROOMING_INTRO,
+  AGNOSTIC_AUTO_LOOP_REVIEW_GATE,
+  AGNOSTIC_QA_PROMPT_TEMPLATE,
+  AGNOSTIC_REVIEW_TEMPLATE,
+  type SkillSuite,
+} from '../../../shared/skill-suite-prompts'
 
 const $q = useQuasar()
 const store = useSettingsStore()
@@ -1293,6 +1398,12 @@ const globalTags = ref<string[]>([])
 const globalWorktreesPath = ref<string>(WORKTREES_PATH)
 const globalWorktreesPathInput = ref<QInput | null>(null)
 const globalWorktreesPrefixByProject = ref(true)
+const globalFlattenWorkspaceList = ref(false)
+const globalSkillSuite = ref<SkillSuite>('superpowers')
+const globalCustomReviewTemplate = ref('')
+const globalCustomAutoLoopReviewGate = ref('')
+const globalCustomAutoLoopGroomingIntro = ref('')
+const globalCustomQaPromptTemplate = ref('')
 const globalVoiceEnabled = ref(false)
 const globalVoicePttKey = ref<'alt' | 'ctrl+space'>('alt')
 const globalVoiceLanguage = ref('auto')
@@ -1305,6 +1416,21 @@ const globalVoiceTranslateToEnglish = ref(false)
 const globalVoiceSuppressNst = ref(true)
 const voiceActionModel = ref<string | null>(null)
 const hydratingVoiceForm = ref(false)
+
+function confirmReloadCustomPrompts(): void {
+  $q.dialog({
+    title: t('settings.skillSuite.reloadDefaults'),
+    message: t('settings.skillSuite.reloadDefaultsConfirm'),
+    cancel: true,
+    persistent: true,
+    dark: true,
+  }).onOk(() => {
+    globalCustomReviewTemplate.value = AGNOSTIC_REVIEW_TEMPLATE
+    globalCustomAutoLoopReviewGate.value = AGNOSTIC_AUTO_LOOP_REVIEW_GATE
+    globalCustomAutoLoopGroomingIntro.value = AGNOSTIC_AUTO_LOOP_GROOMING_INTRO
+    globalCustomQaPromptTemplate.value = AGNOSTIC_QA_PROMPT_TEMPLATE
+  })
+}
 
 function recommendedTemperatureForModel(modelName: string | null): number {
   if (!modelName) return 0.1
@@ -1321,6 +1447,7 @@ const isNewProject = ref(false)
 const projectForm = ref({
   path: '',
   displayName: '',
+  color: null as ProjectColor | null,
   defaultSourceBranch: '',
   defaultModel: '',
   prPromptTemplate: '',
@@ -1687,6 +1814,62 @@ const selectedProject = computed<ProjectSettings | null>(() => {
   return store.projects[selectedProjectIndex.value] ?? null
 })
 
+// Dirty-state tracking — snapshots of the saved form state captured at
+// hydration and after each successful save. The Save buttons compare the
+// current ref values against these snapshots to surface unsaved changes
+// with an orange outline.
+const globalSavedSnapshot = ref<string>('')
+const projectSavedSnapshot = ref<string>('')
+
+function captureGlobalSnapshot(): string {
+  return JSON.stringify({
+    claudeModel: globalClaudeModel.value,
+    codexModel: globalCodexModel.value,
+    prPrompt: globalPrPrompt.value,
+    reviewPrompt: globalReviewPrompt.value,
+    gitConventions: globalGitConventions.value,
+    editorCommand: globalEditorCommand.value,
+    browserNotifications: globalBrowserNotifications.value,
+    audioNotifications: globalAudioNotifications.value,
+    audioNotificationSound: globalAudioNotificationSound.value,
+    audioNotificationVolume: globalAudioNotificationVolume.value,
+    notionStatusProperty: globalNotionStatusProperty.value,
+    notionStatus: globalNotionStatus.value,
+    notionInitialPrompt: globalNotionInitialPrompt.value,
+    sentryInitialPrompt: globalSentryInitialPrompt.value,
+    claudePermissionMode: globalClaudePermissionMode.value,
+    codexPermissionMode: globalCodexPermissionMode.value,
+    notionMcpKey: globalNotionMcpKey.value,
+    sentryMcpKey: globalSentryMcpKey.value,
+    tags: globalTags.value,
+    worktreesPath: globalWorktreesPath.value,
+    worktreesPrefixByProject: globalWorktreesPrefixByProject.value,
+    flattenWorkspaceList: globalFlattenWorkspaceList.value,
+    skillSuite: globalSkillSuite.value,
+    customReviewTemplate: globalCustomReviewTemplate.value,
+    customAutoLoopReviewGate: globalCustomAutoLoopReviewGate.value,
+    customAutoLoopGroomingIntro: globalCustomAutoLoopGroomingIntro.value,
+    customQaPromptTemplate: globalCustomQaPromptTemplate.value,
+    voiceEnabled: globalVoiceEnabled.value,
+    voicePttKey: globalVoicePttKey.value,
+    voiceLanguage: globalVoiceLanguage.value,
+    voiceModel: globalVoiceModel.value,
+    voiceCommandPath: globalVoiceCommandPath.value,
+    voiceFfmpegPath: globalVoiceFfmpegPath.value,
+    voiceTemperature: globalVoiceTemperature.value,
+    voicePrompt: globalVoicePrompt.value,
+    voiceTranslateToEnglish: globalVoiceTranslateToEnglish.value,
+    voiceSuppressNst: globalVoiceSuppressNst.value,
+  })
+}
+
+function captureProjectSnapshot(): string {
+  return JSON.stringify(projectForm.value)
+}
+
+const isGlobalDirty = computed(() => captureGlobalSnapshot() !== globalSavedSnapshot.value)
+const isProjectDirty = computed(() => captureProjectSnapshot() !== projectSavedSnapshot.value)
+
 // Init global form from store
 function syncGlobalForm() {
   hydratingVoiceForm.value = true
@@ -1721,6 +1904,12 @@ function syncGlobalForm() {
   globalTags.value = Array.isArray(store.global.tags) ? [...store.global.tags] : []
   globalWorktreesPath.value = store.global.worktreesPath ?? WORKTREES_PATH
   globalWorktreesPrefixByProject.value = store.global.worktreesPrefixByProject ?? false
+  globalFlattenWorkspaceList.value = store.global.flattenWorkspaceList ?? false
+  globalSkillSuite.value = store.global.skillSuite ?? 'superpowers'
+  globalCustomReviewTemplate.value = store.global.customReviewTemplate ?? ''
+  globalCustomAutoLoopReviewGate.value = store.global.customAutoLoopReviewGate ?? ''
+  globalCustomAutoLoopGroomingIntro.value = store.global.customAutoLoopGroomingIntro ?? ''
+  globalCustomQaPromptTemplate.value = store.global.customQaPromptTemplate ?? ''
   globalVoiceEnabled.value = store.global.voiceEnabled ?? false
   globalVoicePttKey.value = store.global.voicePttKey === 'ctrl+space' ? 'ctrl+space' : 'alt'
   globalVoiceLanguage.value = store.global.voiceLanguage ?? 'auto'
@@ -1732,6 +1921,7 @@ function syncGlobalForm() {
   globalVoiceTranslateToEnglish.value = store.global.voiceTranslateToEnglish ?? false
   globalVoiceSuppressNst.value = store.global.voiceSuppressNonSpeechTokens ?? true
   hydratingVoiceForm.value = false
+  globalSavedSnapshot.value = captureGlobalSnapshot()
 }
 
 watch(
@@ -1749,6 +1939,7 @@ function syncProjectForm(project: ProjectSettings | null) {
     projectForm.value = {
       path: '',
       displayName: '',
+      color: null,
       defaultSourceBranch: '',
       defaultModel: '',
       prPromptTemplate: '',
@@ -1762,11 +1953,13 @@ function syncProjectForm(project: ProjectSettings | null) {
       finalization: { prompt: '' },
     }
     projectBranches.value = []
+    projectSavedSnapshot.value = captureProjectSnapshot()
     return
   }
   projectForm.value = {
     path: project.path,
     displayName: project.displayName,
+    color: project.color ?? null,
     defaultSourceBranch: project.defaultSourceBranch,
     defaultModel: project.defaultModel,
     prPromptTemplate: project.prPromptTemplate,
@@ -1788,6 +1981,7 @@ function syncProjectForm(project: ProjectSettings | null) {
       prompt: project.finalization?.prompt ?? '',
     },
   }
+  projectSavedSnapshot.value = captureProjectSnapshot()
   if (project.path) {
     void fetchProjectBranches(project.path)
   }
@@ -1944,6 +2138,12 @@ async function saveGlobal() {
       tags: globalTags.value,
       worktreesPath: globalWorktreesPath.value,
       worktreesPrefixByProject: globalWorktreesPrefixByProject.value,
+      flattenWorkspaceList: globalFlattenWorkspaceList.value,
+      skillSuite: globalSkillSuite.value,
+      customReviewTemplate: globalCustomReviewTemplate.value,
+      customAutoLoopReviewGate: globalCustomAutoLoopReviewGate.value,
+      customAutoLoopGroomingIntro: globalCustomAutoLoopGroomingIntro.value,
+      customQaPromptTemplate: globalCustomQaPromptTemplate.value,
       voiceEnabled: globalVoiceEnabled.value,
       voicePttKey: globalVoicePttKey.value,
       voiceLanguage: globalVoiceLanguage.value,
@@ -1955,6 +2155,7 @@ async function saveGlobal() {
       voiceTranslateToEnglish: globalVoiceTranslateToEnglish.value,
       voiceSuppressNonSpeechTokens: globalVoiceSuppressNst.value,
     })
+    globalSavedSnapshot.value = captureGlobalSnapshot()
     $q.notify({ type: 'positive', message: t('settings.saved'), position: 'top' })
   } catch {
     $q.notify({ type: 'negative', message: t('settings.saveError'), position: 'top' })
@@ -1996,6 +2197,7 @@ async function saveProject() {
   try {
     await store.upsertProject(projectForm.value.path.trim(), {
       displayName: projectForm.value.displayName,
+      color: projectForm.value.color,
       defaultSourceBranch: projectForm.value.defaultSourceBranch,
       defaultModel: projectForm.value.defaultModel,
       prPromptTemplate: projectForm.value.prPromptTemplate,
@@ -2012,6 +2214,7 @@ async function saveProject() {
     // Select the project we just saved
     const idx = store.projects.findIndex((p) => p.path === projectForm.value.path.trim())
     if (idx >= 0) selectedProjectIndex.value = idx
+    projectSavedSnapshot.value = captureProjectSnapshot()
     $q.notify({ type: 'positive', message: t('settings.projectSaved'), position: 'top' })
   } catch {
     $q.notify({ type: 'negative', message: t('settings.projectSaveError'), position: 'top' })
@@ -2221,5 +2424,13 @@ onUnmounted(() => {
 .project-item--active {
   background-color: #2a2a4a !important;
   border-left: 3px solid #6c63ff;
+}
+
+.save-btn--dirty {
+  /* `box-shadow` survives Quasar's internal outline reset (q-btn applies
+     `outline: 0`). 0-spread + 3px-spread mimics outline+offset visually. */
+  box-shadow: 0 0 0 2px #f59e0b !important; /* amber-5 — signals unsaved changes */
+  border-radius: 4px;
+  transition: box-shadow 120ms ease-in-out;
 }
 </style>

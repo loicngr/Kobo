@@ -1,6 +1,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { WORKTREES_PATH } from '../../shared/consts.js'
+import { isValidProjectColor, type ProjectColor } from '../../shared/project-colors.js'
+import { isValidSkillSuite, type SkillSuite } from '../../shared/skill-suite-prompts.js'
 import { listClaudeMcpEntries } from '../utils/mcp-client.js'
 import { getSettingsPath } from '../utils/paths.js'
 import {
@@ -11,6 +13,7 @@ import {
 } from '../utils/worktree-paths.js'
 import { DEFAULT_NOTION_INITIAL_PROMPT, DEFAULT_SENTRY_INITIAL_PROMPT } from './initial-prompt-template-service.js'
 import { DEFAULT_REVIEW_PROMPT_TEMPLATE } from './review-template-service.js'
+import { AGNOSTIC_PROMPTS } from './skill-suite-prompts.js'
 
 export const DEFAULT_GIT_CONVENTIONS = `# Git conventions
 
@@ -108,6 +111,7 @@ export interface ProjectSettings {
   devServer: DevServerConfig
   e2e: E2eSettings
   finalization: FinalizationSettings
+  color: ProjectColor | null
 }
 
 /** Global settings that apply as defaults when no project override is set. */
@@ -154,6 +158,21 @@ export interface GlobalSettings {
   voicePrompt: string
   voiceTranslateToEnglish: boolean
   voiceSuppressNonSpeechTokens: boolean
+  flattenWorkspaceList: boolean
+  /**
+   * Skill suite selector — controls which ecosystem Kōbō's auto-generated
+   * prompts reference (review, auto-loop review gate, grooming intro, QA).
+   * Default `'superpowers'` for both fresh installs and migrated users.
+   */
+  skillSuite: SkillSuite
+  /** Custom review template — only consulted when `skillSuite === 'custom'`. */
+  customReviewTemplate: string
+  /** Custom auto-loop review gate — only consulted when `skillSuite === 'custom'`. */
+  customAutoLoopReviewGate: string
+  /** Custom auto-loop grooming intro — only consulted when `skillSuite === 'custom'`. */
+  customAutoLoopGroomingIntro: string
+  /** Custom QA prompt template — only consulted when `skillSuite === 'custom'`. */
+  customQaPromptTemplate: string
 }
 
 /** Default workspace tags seeded on fresh install and on settings upgrade. */
@@ -430,6 +449,45 @@ const settingsMigrations: SettingsMigration[] = [
       delete global.defaultPermissionMode
     },
   },
+  {
+    version: 21,
+    name: 'add-project-color-and-flatten',
+    migrate: ({ global, projects }) => {
+      if (typeof global.flattenWorkspaceList !== 'boolean') {
+        global.flattenWorkspaceList = false
+      }
+      for (const p of projects) {
+        if (!('color' in p) || (p.color !== null && !isValidProjectColor(p.color))) {
+          ;(p as Record<string, unknown>).color = null
+        }
+      }
+    },
+  },
+  {
+    version: 22,
+    name: 'add-skill-suite-selector',
+    // Auto-migrate every existing user to `superpowers` (the closest match to
+    // today's behaviour). New installs get the same default via
+    // `defaultSettings()`. The 4 `custom*` fields seed with the agnostic
+    // baseline so users switching to `custom` mode have a sane editable start.
+    migrate: ({ global }) => {
+      if (!isValidSkillSuite(global.skillSuite)) {
+        global.skillSuite = 'superpowers'
+      }
+      if (typeof global.customReviewTemplate !== 'string') {
+        global.customReviewTemplate = AGNOSTIC_PROMPTS.reviewTemplate
+      }
+      if (typeof global.customAutoLoopReviewGate !== 'string') {
+        global.customAutoLoopReviewGate = AGNOSTIC_PROMPTS.autoLoopReviewGate
+      }
+      if (typeof global.customAutoLoopGroomingIntro !== 'string') {
+        global.customAutoLoopGroomingIntro = AGNOSTIC_PROMPTS.autoLoopGroomingIntro
+      }
+      if (typeof global.customQaPromptTemplate !== 'string') {
+        global.customQaPromptTemplate = AGNOSTIC_PROMPTS.qaPromptTemplate
+      }
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -511,6 +569,12 @@ function defaultSettings(): Settings {
       voicePrompt: '',
       voiceTranslateToEnglish: false,
       voiceSuppressNonSpeechTokens: true,
+      flattenWorkspaceList: false,
+      skillSuite: 'superpowers',
+      customReviewTemplate: AGNOSTIC_PROMPTS.reviewTemplate,
+      customAutoLoopReviewGate: AGNOSTIC_PROMPTS.autoLoopReviewGate,
+      customAutoLoopGroomingIntro: AGNOSTIC_PROMPTS.autoLoopGroomingIntro,
+      customQaPromptTemplate: AGNOSTIC_PROMPTS.qaPromptTemplate,
     },
     projects: [],
   }
@@ -541,6 +605,7 @@ function defaultProjectSettings(projectPath: string): ProjectSettings {
     finalization: {
       prompt: DEFAULT_FINALIZATION_PROMPT,
     },
+    color: null,
   }
 }
 
@@ -772,6 +837,14 @@ export function getEffectiveSettings(projectPath: string): EffectiveSettings {
 /** Merge partial updates into global settings and persist. */
 export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSettings {
   const settings = readSettings()
+  // Validate skillSuite before merging: drop invalid values so the previous
+  // value is preserved (same pattern as `upsertProject`'s color validation).
+  if ('skillSuite' in data) {
+    if (!isValidSkillSuite(data.skillSuite)) {
+      console.warn(`[settings] Invalid skillSuite value rejected: ${data.skillSuite}`)
+      delete (data as Record<string, unknown>).skillSuite
+    }
+  }
   const allowedGlobalKeys = [
     'defaultModelByEngine',
     'dangerouslySkipPermissions',
@@ -803,6 +876,12 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'voicePrompt',
     'voiceTranslateToEnglish',
     'voiceSuppressNonSpeechTokens',
+    'flattenWorkspaceList',
+    'skillSuite',
+    'customReviewTemplate',
+    'customAutoLoopReviewGate',
+    'customAutoLoopGroomingIntro',
+    'customQaPromptTemplate',
   ]
   const filtered = pickKnownKeys<GlobalSettings>(data as Record<string, unknown>, allowedGlobalKeys)
   if (filtered.tags !== undefined) {
@@ -854,6 +933,13 @@ function isNonNativeWindowsPath(value: string): boolean {
 
 /** Create or update project-specific settings. Merges devServer, e2e, and finalization fields on update. */
 export function upsertProject(projectPath: string, data: Partial<Omit<ProjectSettings, 'path'>>): ProjectSettings {
+  // Validate color: accept null or a valid palette entry; drop anything else.
+  if ('color' in data) {
+    if (data.color !== null && !isValidProjectColor(data.color)) {
+      console.warn(`[settings] Invalid color value rejected for project '${projectPath}': ${data.color}`)
+      delete (data as Record<string, unknown>).color
+    }
+  }
   const allowedProjectKeys = [
     'displayName',
     'defaultSourceBranch',
@@ -868,6 +954,7 @@ export function upsertProject(projectPath: string, data: Partial<Omit<ProjectSet
     'devServer',
     'e2e',
     'finalization',
+    'color',
   ]
   const allowedDevServerKeys = ['startCommand', 'stopCommand']
   const allowedE2eKeys: Array<keyof E2eSettings> = ['framework', 'skill', 'prompt']

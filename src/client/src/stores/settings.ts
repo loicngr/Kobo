@@ -1,5 +1,7 @@
 import { defineStore } from 'pinia'
+import type { ProjectColor } from 'src/utils/project-color'
 import { WORKTREES_PATH } from '../../../shared/consts'
+import type { SkillSuite } from '../../../shared/skill-suite-prompts'
 
 interface DevServerConfig {
   startCommand: string
@@ -34,6 +36,7 @@ interface ProjectSettings {
   devServer: DevServerConfig
   e2e: E2eSettings
   finalization: FinalizationSettings
+  color: ProjectColor | null
 }
 
 interface GlobalSettings {
@@ -79,6 +82,12 @@ interface GlobalSettings {
   voicePrompt: string
   voiceTranslateToEnglish: boolean
   voiceSuppressNonSpeechTokens: boolean
+  flattenWorkspaceList: boolean
+  skillSuite: SkillSuite
+  customReviewTemplate: string
+  customAutoLoopReviewGate: string
+  customAutoLoopGroomingIntro: string
+  customQaPromptTemplate: string
 }
 
 export interface VoiceModelStatus {
@@ -140,6 +149,12 @@ export const useSettingsStore = defineStore('settings', {
       voicePrompt: '',
       voiceTranslateToEnglish: false,
       voiceSuppressNonSpeechTokens: true,
+      flattenWorkspaceList: false,
+      skillSuite: 'superpowers' as SkillSuite,
+      customReviewTemplate: '',
+      customAutoLoopReviewGate: '',
+      customAutoLoopGroomingIntro: '',
+      customQaPromptTemplate: '',
     } as GlobalSettings,
     voiceModels: [] as VoiceModelStatus[],
     voiceModelsLoading: false,

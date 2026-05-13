@@ -1321,3 +1321,106 @@ describe('settings migration v20 — split defaultPermissionMode by engine', () 
     expect(settings.global.defaultPermissionModeByEngine.codex).toBe('interactive')
   })
 })
+
+describe('migration v21 — add-project-color-and-flatten', () => {
+  it('fresh project defaults include color=null', () => {
+    getSettings()
+    const proj = upsertProject('/tmp/p1', { displayName: 'P1' })
+    expect(proj.color).toBeNull()
+  })
+
+  it('fresh global settings include flattenWorkspaceList=false', () => {
+    const settings = getSettings()
+    expect(settings.global.flattenWorkspaceList).toBe(false)
+  })
+
+  it('upsertProject accepts a valid palette colour', () => {
+    getSettings()
+    upsertProject('/tmp/p1', { displayName: 'P1' })
+    const updated = upsertProject('/tmp/p1', { color: 'purple-5' })
+    expect(updated.color).toBe('purple-5')
+  })
+
+  it('upsertProject ignores an invalid colour (keeps previous)', () => {
+    getSettings()
+    upsertProject('/tmp/p1', { color: 'purple-5' })
+    const updated = upsertProject('/tmp/p1', { color: 'not-a-color' as never })
+    expect(updated.color).toBe('purple-5')
+  })
+
+  it('upsertProject accepts null (clears the colour)', () => {
+    getSettings()
+    upsertProject('/tmp/p1', { color: 'purple-5' })
+    const updated = upsertProject('/tmp/p1', { color: null })
+    expect(updated.color).toBeNull()
+  })
+})
+
+describe('migration v22 — add-skill-suite-selector', () => {
+  it('fresh project defaults include skillSuite=superpowers', () => {
+    const settings = getSettings()
+    expect(settings.global.skillSuite).toBe('superpowers')
+  })
+
+  it('fresh project seeds the 4 custom* fields with agnostic defaults', () => {
+    const settings = getSettings()
+    expect(settings.global.customReviewTemplate).toContain('reviewing code changes')
+    expect(settings.global.customAutoLoopReviewGate).toContain('Code review gate')
+    expect(settings.global.customAutoLoopGroomingIntro).toContain('GROOMING session only')
+    expect(settings.global.customQaPromptTemplate).toContain('QA pass for workspace')
+  })
+
+  it('existing users without skillSuite are auto-migrated to superpowers', () => {
+    // Seed a legacy settings file (no skillSuite, no custom* fields) and confirm
+    // the migration backfills them.
+    const legacy = {
+      schemaVersion: 21,
+      global: {
+        flattenWorkspaceList: false,
+      },
+      projects: [],
+    }
+    fs.writeFileSync(settingsPath, JSON.stringify(legacy, null, 2), 'utf-8')
+
+    const settings = getSettings()
+    expect(settings.global.skillSuite).toBe('superpowers')
+    expect(typeof settings.global.customReviewTemplate).toBe('string')
+    expect(settings.global.customReviewTemplate.length).toBeGreaterThan(0)
+    expect(typeof settings.global.customAutoLoopReviewGate).toBe('string')
+    expect(settings.global.customAutoLoopReviewGate.length).toBeGreaterThan(0)
+    expect(typeof settings.global.customAutoLoopGroomingIntro).toBe('string')
+    expect(settings.global.customAutoLoopGroomingIntro.length).toBeGreaterThan(0)
+    expect(typeof settings.global.customQaPromptTemplate).toBe('string')
+    expect(settings.global.customQaPromptTemplate.length).toBeGreaterThan(0)
+  })
+
+  it('updateGlobalSettings accepts skillSuite=gstack', () => {
+    updateGlobalSettings({ skillSuite: 'gstack' })
+    expect(getSettings().global.skillSuite).toBe('gstack')
+  })
+
+  it('updateGlobalSettings accepts skillSuite=custom', () => {
+    updateGlobalSettings({ skillSuite: 'custom' })
+    expect(getSettings().global.skillSuite).toBe('custom')
+  })
+
+  it('updateGlobalSettings rejects invalid skillSuite values (previous value preserved)', () => {
+    updateGlobalSettings({ skillSuite: 'gstack' })
+    updateGlobalSettings({ skillSuite: 'not-a-suite' as never })
+    expect(getSettings().global.skillSuite).toBe('gstack')
+  })
+
+  it('updateGlobalSettings accepts the 4 custom* string fields', () => {
+    updateGlobalSettings({
+      customReviewTemplate: 'CR',
+      customAutoLoopReviewGate: 'CG',
+      customAutoLoopGroomingIntro: 'CI',
+      customQaPromptTemplate: 'CQ',
+    })
+    const s = getSettings()
+    expect(s.global.customReviewTemplate).toBe('CR')
+    expect(s.global.customAutoLoopReviewGate).toBe('CG')
+    expect(s.global.customAutoLoopGroomingIntro).toBe('CI')
+    expect(s.global.customQaPromptTemplate).toBe('CQ')
+  })
+})

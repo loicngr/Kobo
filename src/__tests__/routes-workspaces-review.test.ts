@@ -125,7 +125,8 @@ vi.mock('../server/services/wakeup-service.js', () => ({
 }))
 
 vi.mock('../server/services/pr-watcher-service.js', () => ({
-  getAllPrStates: vi.fn(() => ({})),
+  getAllPrSnapshots: vi.fn(() => ({})),
+  refreshPrSnapshot: vi.fn(),
   startPrWatcher: vi.fn(),
   stopPrWatcher: vi.fn(),
 }))
@@ -280,6 +281,11 @@ beforeEach(() => {
     tags: [],
     worktreesPath: '.worktrees',
     worktreesPrefixByProject: false,
+    skillSuite: 'superpowers',
+    customReviewTemplate: '',
+    customAutoLoopReviewGate: '',
+    customAutoLoopGroomingIntro: '',
+    customQaPromptTemplate: '',
   } as never)
 })
 
@@ -451,19 +457,34 @@ describe('POST /api/workspaces/:id/start-review', () => {
     expect(agentManager.startAgent).toHaveBeenCalledTimes(1)
   })
 
-  it('uses project reviewPromptTemplate when non-empty (overrides global default)', async () => {
-    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-      model: 'auto',
+  it('uses customReviewTemplate when skillSuite === custom (suite-aware path)', async () => {
+    // Since the skill-suite refactor, the active review template is resolved
+    // from `global.skillSuite` + `global.customReviewTemplate` via
+    // `getActiveReviewTemplate()`. The legacy per-project/global
+    // `reviewPromptTemplate` field is orphan and no longer read.
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
+      defaultModelByEngine: { 'claude-code': 'auto', codex: 'auto' },
       dangerouslySkipPermissions: true,
       prPromptTemplate: '',
-      reviewPromptTemplate: TEMPLATE_WITH_PROJECT,
+      reviewPromptTemplate: DEFAULT_REVIEW_PROMPT_TEMPLATE,
       gitConventions: '',
-      sourceBranch: 'main',
-      devServer: null,
-      setupScript: '',
+      editorCommand: '',
+      browserNotifications: true,
+      audioNotifications: true,
       notionStatusProperty: '',
       notionInProgressStatus: '',
-    })
+      defaultPermissionMode: 'plan',
+      notionMcpKey: '',
+      sentryMcpKey: '',
+      tags: [],
+      worktreesPath: '.worktrees',
+      worktreesPrefixByProject: false,
+      skillSuite: 'custom',
+      customReviewTemplate: TEMPLATE_WITH_PROJECT,
+      customAutoLoopReviewGate: '',
+      customAutoLoopGroomingIntro: '',
+      customQaPromptTemplate: '',
+    } as never)
     vi.mocked(agentManager.sendMessage).mockReturnValue(undefined as never)
 
     const res = await app.request('/api/workspaces/ws-1/start-review', {

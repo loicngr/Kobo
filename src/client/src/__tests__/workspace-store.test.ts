@@ -879,4 +879,87 @@ describe('workspace store', () => {
       expect(store.crons.w1).toHaveLength(1)
     })
   })
+
+  describe('prSnapshots', () => {
+    beforeEach(() => {
+      setActivePinia(createPinia())
+      vi.restoreAllMocks()
+    })
+
+    it('fetchPrSnapshots populates the store with the rich payload', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            'ws-1': {
+              number: 42,
+              state: 'OPEN',
+              reviewDecision: 'CHANGES_REQUESTED',
+              title: 't',
+              url: 'u',
+              base: 'main',
+              author: { login: 'a' },
+              assignees: [],
+              reviewers: [],
+              labels: [],
+              ci: { rollup: null, checks: [] },
+              updatedAt: 'now',
+            },
+          }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      const store = useWorkspaceStore()
+      await store.fetchPrSnapshots()
+
+      expect(store.prSnapshots['ws-1']).toMatchObject({ number: 42, reviewDecision: 'CHANGES_REQUESTED' })
+      expect(fetchMock).toHaveBeenCalledWith('/api/workspaces/pr-states', expect.anything())
+    })
+
+    it('refreshPrSnapshot updates a single workspace entry', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            snapshot: {
+              number: 99,
+              state: 'OPEN',
+              reviewDecision: 'APPROVED',
+              title: 't',
+              url: 'u',
+              base: 'main',
+              author: { login: 'a' },
+              assignees: [],
+              reviewers: [],
+              labels: [],
+              ci: { rollup: null, checks: [] },
+              updatedAt: 'now',
+            },
+          }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      const store = useWorkspaceStore()
+      store.prSnapshots = { 'ws-1': { number: 1, state: 'OPEN', reviewDecision: null } as never }
+      await store.refreshPrSnapshot('ws-1')
+
+      expect(store.prSnapshots['ws-1']).toMatchObject({ number: 99, reviewDecision: 'APPROVED' })
+      expect(fetchMock).toHaveBeenCalledWith('/api/workspaces/pr-snapshot/refresh/ws-1', { method: 'POST' })
+    })
+
+    it('refreshPrSnapshot clears the entry when the server returns 404', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+        json: () => Promise.resolve({ error: 'No PR for this workspace' }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      const store = useWorkspaceStore()
+      store.prSnapshots = { 'ws-1': { number: 1, state: 'OPEN' } as never }
+      await store.refreshPrSnapshot('ws-1')
+
+      expect(store.prSnapshots['ws-1']).toBeUndefined()
+    })
+  })
 })

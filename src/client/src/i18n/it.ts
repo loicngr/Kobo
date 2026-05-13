@@ -266,6 +266,29 @@ export default {
   // Settings Page
   'settings.title': 'Impostazioni',
   'settings.language': 'Lingua',
+  'settings.projectColor': 'Colore',
+  'settings.projectColorClear': 'Cancella',
+  'settings.projectColorDefault': 'Predefinito (grigio)',
+  'settings.workspaceListSection': 'Lista dei workspace',
+  'settings.flattenWorkspaceList': 'Lista piatta dei workspace',
+  'settings.flattenWorkspaceListHint':
+    'Mostra tutti i workspace in una lista piatta con un badge progetto, invece di raggrupparli per progetto.',
+  'settings.skillSuite.section': 'Suite di skill',
+  'settings.skillSuite.superpowers': 'Superpowers',
+  'settings.skillSuite.gstack': 'gstack',
+  'settings.skillSuite.custom': 'Personalizzato',
+  'settings.skillSuite.superpowersHint': 'Workflow opinionato TDD / brainstorm / plan (github.com/obra/superpowers).',
+  'settings.skillSuite.gstackHint':
+    'Suite di Garry Tan — /review, /ship, /qa, /office-hours, ecc. (github.com/garrytan/gstack).',
+  'settings.skillSuite.customHint': 'Modifica i quattro prompt qui sotto tu stesso. Parte dalla base agnostica.',
+  'settings.skillSuite.reloadDefaults': 'Ripristina predefiniti',
+  'settings.skillSuite.reloadDefaultsConfirm':
+    'Sostituire i quattro prompt personalizzati con i valori agnostici predefiniti?',
+  'settings.skillSuite.customPrompts': 'Prompt personalizzati',
+  'settings.skillSuite.reviewTemplate': 'Template di review',
+  'settings.skillSuite.autoLoopReviewGate': 'Gate di review auto-loop',
+  'settings.skillSuite.autoLoopGroomingIntro': 'Intro di grooming auto-loop',
+  'settings.skillSuite.qaTemplate': 'Template QA',
   'settings.global': 'Globale',
   'settings.projects': 'Progetti',
   'settings.globalSettings': 'Impostazioni globali',
@@ -440,6 +463,11 @@ export default {
 
   // Git Panel
   'git.title': 'Git',
+  'git.section.repository': 'Repository',
+  'git.section.changes': 'Modifiche',
+  'git.section.pullRequest': 'Pull request',
+  'git.section.actions': 'Azioni',
+  'git.actions.more': 'Altre',
   'git.localOnly': 'solo locale',
   'git.pushed': 'pushed',
   'git.unpushed': '{count} non pushati',
@@ -525,6 +553,17 @@ export default {
   'git.divergence.failed': 'Impossibile caricare la divergenza',
   'git.divergence.retry': 'Riprova',
   'git.prCreated': 'PR #{n} creata',
+  'git.pr.author': 'Autore',
+  'git.pr.reviewers': 'Revisori',
+  'git.pr.assignees': 'Assegnati',
+  'git.pr.labels': 'Etichette',
+  'git.pr.changesRequestedBadge': 'Modifiche richieste',
+  'git.pr.approvedBadge': 'Approvata',
+  'git.pr.ci.passed': 'CI OK',
+  'git.pr.ci.failed': 'CI fallita',
+  'git.pr.ci.pending': 'CI in corso',
+  'toast.prChangesRequested': 'Sono state richieste modifiche per la PR #{n}',
+  'toast.prApproved': 'La PR #{n} è stata approvata',
 
   // Dev Server Panel
   'devServer.title': 'Server di sviluppo',
@@ -838,7 +877,8 @@ export default {
   'workspaceStatus.awaitingUser': 'in attesa della tua risposta',
 
   // Workspace list drawer indicators
-  'workspaceList.prOpen': 'Pull request aperta',
+  'workspaceList.prOpen': '#{n} — Pull request aperta',
+  'workspaceList.prChangesRequested': '#{n} — Modifiche richieste',
 
   // Auto-loop
   'autoLoop.toggle': 'Auto-loop',

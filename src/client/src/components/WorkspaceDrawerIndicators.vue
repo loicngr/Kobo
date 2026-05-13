@@ -20,12 +20,14 @@
     <q-tooltip>{{ t('cron.pendingIndicator', { n: cronCount }) }}</q-tooltip>
   </q-icon>
   <q-icon
-    v-if="workspaceStore.prStates[workspace.id] === 'OPEN'"
+    v-if="prSnapshot?.state === 'OPEN'"
     name="merge_type"
     size="14px"
-    color="green-5"
+    :color="prIconColor"
+    class="cursor-pointer"
+    @click.stop="openPr"
   >
-    <q-tooltip>{{ t('workspaceList.prOpen') }}</q-tooltip>
+    <q-tooltip>{{ prTooltip }}</q-tooltip>
   </q-icon>
   <q-icon
     v-if="workspaceStore.autoLoopStates[workspace.id]?.auto_loop"
@@ -44,6 +46,7 @@
 import { useDevServerStore } from 'src/stores/dev-server'
 import type { Workspace } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { isChangesRequestedBlocking } from 'src/utils/pr-status'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -54,6 +57,26 @@ const workspaceStore = useWorkspaceStore()
 const { t } = useI18n()
 
 const cronCount = computed(() => workspaceStore.autoLoopStates[props.workspace.id]?.crons_count ?? 0)
+
+const prSnapshot = computed(() => workspaceStore.prSnapshots[props.workspace.id])
+const prIconColor = computed(() => {
+  const s = prSnapshot.value
+  if (!s) return 'green-5'
+  return isChangesRequestedBlocking(s) ? 'red-5' : 'green-5'
+})
+const prTooltip = computed(() => {
+  const s = prSnapshot.value
+  if (!s) return ''
+  if (isChangesRequestedBlocking(s)) {
+    return t('workspaceList.prChangesRequested', { n: s.number })
+  }
+  return t('workspaceList.prOpen', { n: s.number })
+})
+
+function openPr(): void {
+  const url = prSnapshot.value?.url
+  if (url) window.open(url, '_blank', 'noopener,noreferrer')
+}
 </script>
 
 <style scoped lang="scss">

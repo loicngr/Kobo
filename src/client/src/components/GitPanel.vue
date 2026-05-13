@@ -13,120 +13,133 @@
         icon="refresh"
         color="grey-6"
         :loading="loadingStats"
-        @click="loadGitStats({ freshFetch: true })"
+        @click="handleRefreshAll"
       >
         <q-tooltip>{{ $t('tooltip.refreshGitStats') }}</q-tooltip>
       </q-btn>
     </div>
 
     <template v-if="workspace">
-      <!-- Repo name -->
-      <div class="row items-center q-mb-sm">
-        <q-icon name="folder" size="14px" color="grey-6" class="q-mr-xs" />
-        <span class="text-caption text-grey-3">{{ repoName }}</span>
-      </div>
+      <!-- Repository sub-card -->
+      <div class="git-subcard">
+        <div class="git-subcard-title">{{ $t('git.section.repository') }}</div>
 
-      <!-- Branch (click the pencil to rename in-place) -->
-      <div class="row items-center q-mb-sm">
-        <span
-          style="width: 8px; height: 8px; border-radius: 50%; background-color: #4ade80; display: inline-block;"
-          class="q-mr-xs"
-        />
-        <span class="text-caption text-grey-4" style="font-family: 'Roboto Mono', monospace; font-size: 11px;">
-          {{ workspace.workingBranch }}
-        </span>
-        <q-btn
-          v-if="workspace?.worktreeOwned !== false"
-          flat
-          round
-          dense
-          size="xs"
-          icon="edit"
-          color="grey-6"
-          class="q-ml-xs"
-          :loading="renamingBranch"
-          @click="openRenameBranchDialog"
-        >
-          <q-tooltip>{{ $t('git.renameBranch') }}</q-tooltip>
-        </q-btn>
-        <q-icon
-          v-if="workspace?.worktreeOwned === false"
-          name="info"
-          size="14px"
-          color="grey-6"
-          class="q-ml-xs"
-        >
-          <q-tooltip>{{ $t('git.renameDisabledForExternal') }}</q-tooltip>
-        </q-icon>
-      </div>
+        <!-- Repo name -->
+        <div class="row items-center q-mb-xs">
+          <q-icon name="folder" size="14px" color="grey-6" class="q-mr-xs" />
+          <span class="text-caption text-grey-3">{{ repoName }}</span>
+        </div>
 
-      <!-- Source branch info -->
-      <div class="text-caption q-mb-sm text-grey-8" style="font-size: 11px;">
-        {{ $t('git.from') }} {{ workspace.sourceBranch }}
-        <template v-if="gitStats">
-          <span v-if="gitStats.commitCount > 0 || gitStats.behindCount > 0" class="q-ml-xs">
-            <span
-              v-if="gitStats.commitCount > 0"
-              class="cursor-pointer arrow-clickable"
-              style="color: #4ade80;"
-              @click.stop="openDivergence('ahead')"
-            >
-              ↑{{ gitStats.commitCount }}
-            </span>
-            <span
-              v-if="gitStats.behindCount > 0"
-              class="cursor-pointer arrow-clickable q-ml-xs"
-              style="color: #f87171;"
-              @click.stop="openDivergence('behind')"
-            >
-              ↓{{ gitStats.behindCount }}
-            </span>
-            <q-tooltip>
-              {{ $t('git.aheadBehindTooltip', { ahead: gitStats.commitCount, behind: gitStats.behindCount, source: workspace.sourceBranch }) }}
-            </q-tooltip>
-          </span>
-          &middot;
-          <span v-if="gitStats.unpushedCount === -1">{{ $t('git.localOnly') }}</span>
-          <span v-else-if="gitStats.unpushedCount === 0" style="color: #4ade80;">{{ $t('git.pushed') }}</span>
-          <span v-else style="color: #f59e0b;">{{ $t('git.unpushed', { count: gitStats.unpushedCount }) }}</span>
-        </template>
-      </div>
-
-      <!-- Git stats -->
-      <template v-if="gitStats">
-        <!-- Commit count (clickable to expand the commit list) -->
-        <div
-          v-if="gitStats.commitCount > 0"
-          class="row items-center q-mb-xs commit-toggle cursor-pointer"
-          @click="toggleCommits"
-        >
-          <q-icon name="commit" size="14px" color="grey-6" class="q-mr-xs" />
-          <span class="text-caption text-grey-4" style="font-size: 11px;">
-            {{ $t('git.commits', { count: gitStats.commitCount }, gitStats.commitCount) }}
-          </span>
-          <q-spinner
-            v-if="loadingCommits"
-            size="12px"
-            color="indigo-4"
-            class="q-ml-xs"
+        <!-- Branch (click the pencil to rename in-place) -->
+        <div class="row items-center q-mb-xs">
+          <span
+            style="width: 8px; height: 8px; border-radius: 50%; background-color: #4ade80; display: inline-block;"
+            class="q-mr-xs"
           />
+          <span class="text-caption text-grey-4" style="font-family: 'Roboto Mono', monospace; font-size: 11px;">
+            {{ workspace.workingBranch }}
+          </span>
+          <q-btn
+            v-if="workspace?.worktreeOwned !== false"
+            flat
+            round
+            dense
+            size="xs"
+            icon="edit"
+            color="grey-6"
+            class="q-ml-xs"
+            :loading="renamingBranch"
+            @click="openRenameBranchDialog"
+          >
+            <q-tooltip>{{ $t('git.renameBranch') }}</q-tooltip>
+          </q-btn>
           <q-icon
-            v-else
-            :name="showCommits ? 'expand_less' : 'expand_more'"
+            v-if="workspace?.worktreeOwned === false"
+            name="info"
             size="14px"
             color="grey-6"
             class="q-ml-xs"
-          />
-        </div>
-        <div v-else class="row items-center q-mb-xs">
-          <q-icon name="commit" size="14px" color="grey-6" class="q-mr-xs" />
-          <span class="text-caption text-grey-4" style="font-size: 11px;">
-            {{ $t('git.commits', { count: 0 }, 0) }}
-          </span>
+          >
+            <q-tooltip>{{ $t('git.renameDisabledForExternal') }}</q-tooltip>
+          </q-icon>
         </div>
 
-        <!-- Commit list (click row → append SHA to chat draft, hover → full SHA tooltip) -->
-        <div v-if="showCommits" class="commit-list q-mb-sm">
+        <!-- Source branch info — 1 line, no "from" prefix (section title is enough) -->
+        <div class="text-caption text-grey-8" style="font-size: 11px;">
+          {{ workspace.sourceBranch }}
+          <template v-if="gitStats">
+            <span v-if="gitStats.commitCount > 0" class="cursor-pointer arrow-clickable" style="color: #4ade80;" @click.stop="openDivergence('ahead')">
+              · ↑{{ gitStats.commitCount }}
+            </span>
+            <span v-if="gitStats.behindCount > 0" class="cursor-pointer arrow-clickable" style="color: #f87171;" @click.stop="openDivergence('behind')">
+              · ↓{{ gitStats.behindCount }}
+            </span>
+            <q-tooltip v-if="gitStats.commitCount > 0 || gitStats.behindCount > 0">
+              {{ $t('git.aheadBehindTooltip', { ahead: gitStats.commitCount, behind: gitStats.behindCount, source: workspace.sourceBranch }) }}
+            </q-tooltip>
+            ·
+            <span v-if="gitStats.unpushedCount === -1">{{ $t('git.localOnly') }}</span>
+            <span v-else-if="gitStats.unpushedCount === 0" style="color: #4ade80;">{{ $t('git.pushed') }}</span>
+            <span v-else style="color: #f59e0b;">{{ $t('git.unpushed', { count: gitStats.unpushedCount }) }}</span>
+          </template>
+        </div>
+      </div>
+
+      <!-- Loader: shown while the new workspace's stats are being fetched.
+           Repository sub-card stays visible above because it reads from
+           `workspace` (already up-to-date), not from `gitStats`. -->
+      <div v-if="loadingStats && !gitStats" class="row items-center justify-center q-py-md">
+        <q-spinner size="24px" color="indigo-4" />
+      </div>
+
+      <!-- Changes sub-card -->
+      <div v-if="gitStats" class="git-subcard">
+        <div class="git-subcard-title">{{ $t('git.section.changes') }}</div>
+
+        <div class="row items-center" style="font-size: 11px; gap: 14px; flex-wrap: wrap;">
+          <!-- Commits (clickable to expand) -->
+          <div
+            v-if="gitStats.commitCount > 0"
+            class="row items-center commit-toggle cursor-pointer"
+            @click="toggleCommits"
+          >
+            <q-icon name="commit" size="14px" color="grey-6" class="q-mr-xs" />
+            <span class="text-grey-4">{{ $t('git.commits', { count: gitStats.commitCount }, gitStats.commitCount) }}</span>
+            <q-spinner v-if="loadingCommits" size="12px" color="indigo-4" class="q-ml-xs" />
+            <q-icon v-else :name="showCommits ? 'expand_less' : 'expand_more'" size="14px" color="grey-6" class="q-ml-xs" />
+          </div>
+          <div v-else class="row items-center">
+            <q-icon name="commit" size="14px" color="grey-6" class="q-mr-xs" />
+            <span class="text-grey-4">{{ $t('git.commits', { count: 0 }, 0) }}</span>
+          </div>
+
+          <!-- Files -->
+          <div v-if="gitStats.filesChanged > 0" class="row items-center">
+            <q-icon name="insert_drive_file" size="14px" color="grey-6" class="q-mr-xs" />
+            <span class="text-grey-4">{{ gitStats.filesChanged }}</span>
+            <span v-if="gitStats.insertions > 0" class="q-ml-xs" style="color: #4ade80;">+{{ gitStats.insertions }}</span>
+            <span v-if="gitStats.deletions > 0" class="q-ml-xs" style="color: #f87171;">-{{ gitStats.deletions }}</span>
+          </div>
+
+          <!-- Working tree (only if dirty) -->
+          <div
+            v-if="gitStats.workingTree && (gitStats.workingTree.staged > 0 || gitStats.workingTree.modified > 0 || gitStats.workingTree.untracked > 0)"
+            class="row items-center"
+          >
+            <q-icon name="edit_note" size="14px" color="grey-6" class="q-mr-xs" />
+            <span v-if="gitStats.workingTree.staged > 0" style="color: #4ade80;">{{ gitStats.workingTree.staged }}s</span>
+            <span v-if="gitStats.workingTree.modified > 0" class="q-ml-xs" style="color: #f59e0b;">{{ gitStats.workingTree.modified }}m</span>
+            <span v-if="gitStats.workingTree.untracked > 0" class="q-ml-xs text-grey-6">{{ gitStats.workingTree.untracked }}u</span>
+            <q-tooltip>
+              {{ $t('git.staged', { count: gitStats.workingTree.staged }) }} ·
+              {{ $t('git.modified', { count: gitStats.workingTree.modified }) }} ·
+              {{ $t('git.untracked', { count: gitStats.workingTree.untracked }) }}
+            </q-tooltip>
+          </div>
+        </div>
+
+        <!-- Commit list expand — kept inside the sub-card, below the stats row -->
+        <div v-if="showCommits" class="commit-list q-mt-sm">
           <div v-if="loadingCommits" class="text-caption text-grey-6 q-pa-xs">
             <q-spinner size="xs" class="q-mr-xs" />{{ $t('git.commits.loading') }}
           </div>
@@ -161,159 +174,128 @@
             </div>
           </template>
         </div>
+      </div>
 
-        <!-- File changes -->
-        <div v-if="gitStats.filesChanged > 0" class="row items-center q-mb-md">
-          <q-icon name="insert_drive_file" size="14px" color="grey-6" class="q-mr-xs" />
-          <span class="text-caption text-grey-4" style="font-size: 11px;">
-            {{ $t('git.files', { count: gitStats.filesChanged }, gitStats.filesChanged) }}
-          </span>
-          <span v-if="gitStats.insertions > 0" class="text-caption q-ml-xs" style="font-size: 11px; color: #4ade80;">
-            +{{ gitStats.insertions }}
-          </span>
-          <span v-if="gitStats.deletions > 0" class="text-caption q-ml-xs" style="font-size: 11px; color: #f87171;">
-            -{{ gitStats.deletions }}
-          </span>
-        </div>
-        <div v-else class="q-mb-xs" />
+      <!-- Pull request sub-card -->
+      <div v-if="prSnapshot && prSnapshot.state === 'OPEN'" class="git-subcard">
+        <div class="git-subcard-title">{{ $t('git.section.pullRequest') }}</div>
+        <PrPanel :snapshot="prSnapshot" />
+      </div>
 
-        <!-- Working tree -->
-        <div
-          v-if="gitStats.workingTree && (gitStats.workingTree.staged > 0 || gitStats.workingTree.modified > 0 || gitStats.workingTree.untracked > 0)"
-          class="row items-center q-gutter-xs q-mb-md"
-          style="font-size: 11px;"
-        >
-          <q-icon name="edit_note" size="14px" color="grey-6" />
-          <span v-if="gitStats.workingTree.staged > 0" class="text-caption" style="color: #4ade80;">
-            {{ $t('git.staged', { count: gitStats.workingTree.staged }) }}
-          </span>
-          <span v-if="gitStats.workingTree.modified > 0" class="text-caption" style="color: #f59e0b;">
-            {{ $t('git.modified', { count: gitStats.workingTree.modified }) }}
-          </span>
-          <span v-if="gitStats.workingTree.untracked > 0" class="text-caption text-grey-6">
-            {{ $t('git.untracked', { count: gitStats.workingTree.untracked }) }}
-          </span>
-        </div>
-        <div v-else class="q-mb-md" />
-      </template>
+      <!-- Actions sub-card — gated on gitStats to avoid triggering Sync/Push
+           against the previous workspace's state while a fetch is in flight. -->
+      <div v-if="workspace && gitStats" class="git-subcard">
+        <div class="git-subcard-title">{{ $t('git.section.actions') }}</div>
 
-      <!-- Actions — single row, uniform outlined look. PR button shares the
-           same size/shape but keeps its indigo accent as the primary CTA. -->
-      <div class="row items-center q-gutter-xs">
-        <q-btn-dropdown
-          v-if="gitStats"
-          split
-          dense
-          no-caps
-          size="sm"
-          outline
-          color="grey-5"
-          icon="sync"
-          :label="$t('git.sync')"
-          class="git-btn git-sync-btn"
-          :loading="pulling || rebasing || merging"
-          :disable="!workspace || pushing"
-          @click="gitStats.unpushedCount === -1 ? handleRebase() : handlePull()"
-        >
-          <q-list dark dense style="min-width: 140px;">
-            <q-item
-              clickable
-              v-close-popup
-              :disable="pulling || rebasing || merging || gitStats.unpushedCount === -1"
-              @click="handlePull"
-            >
-              <q-item-section avatar style="min-width: 28px;">
-                <q-icon name="download" size="16px" color="grey-5" />
-              </q-item-section>
-              <q-item-section>{{ $t('git.pull') }}</q-item-section>
-              <q-tooltip v-if="gitStats.unpushedCount === -1">{{ $t('git.pullNoUpstream') }}</q-tooltip>
-            </q-item>
-            <q-item clickable v-close-popup :disable="pulling || rebasing || merging" @click="handleRebase">
-              <q-item-section avatar style="min-width: 28px;">
-                <q-icon name="replay" size="16px" color="orange-4" />
-              </q-item-section>
-              <q-item-section>{{ $t('git.rebase') }}</q-item-section>
-            </q-item>
-            <q-item clickable v-close-popup :disable="pulling || rebasing || merging" @click="handleMerge">
-              <q-item-section avatar style="min-width: 28px;">
-                <q-icon name="merge" size="16px" color="purple-4" />
-              </q-item-section>
-              <q-item-section>{{ $t('git.merge') }}</q-item-section>
-            </q-item>
-          </q-list>
-        </q-btn-dropdown>
-        <q-btn
-          v-if="!gitStats || gitStats.unpushedCount !== 0"
-          dense
-          no-caps
-          size="sm"
-          outline
-          color="grey-5"
-          icon="upload"
-          :label="$t('git.push')"
-          class="git-btn"
-          :loading="pushing"
-          :disable="!workspace || openingPr || pulling || rebasing"
-          @click="handlePush"
-        />
-        <q-btn
-          dense
-          no-caps
-          size="sm"
-          outline
-          color="indigo-4"
-          icon="rate_review"
-          :label="$t('git.diffReview')"
-          class="git-btn"
-          :disable="!workspace"
-          @click="openDiff(true)"
-        >
-          <q-tooltip anchor="bottom middle" self="top middle" :delay="400">
-            {{ $t('git.diffReviewTooltip') }}
-          </q-tooltip>
-        </q-btn>
+        <!-- Primary action: View PR (green) when PR open, else Create PR (indigo) -->
         <q-btn
           v-if="gitStats?.prUrl && gitStats.prState === 'OPEN'"
-          dense
-          no-caps
-          size="sm"
-          outline
-          color="grey-5"
-          icon="swap_horiz"
-          :loading="changingBase"
-          class="git-btn"
-          @click="handleChangePrBase"
-        >
-          <q-tooltip>{{ $t('git.changePrBase') }}</q-tooltip>
-        </q-btn>
-        <q-btn
-          v-if="gitStats?.prUrl"
-          dense
-          no-caps
-          size="sm"
-          outline
-          color="green-4"
+          no-caps unelevated dense size="sm"
+          color="green-7"
           icon="open_in_new"
           :label="$t('git.viewPr')"
-          class="git-btn"
+          class="full-width q-mb-xs"
           @click="viewPr"
         />
         <q-btn
-          v-if="!gitStats?.prUrl || gitStats.prState === 'CLOSED' || gitStats.prState === 'MERGED'"
-          dense
-          no-caps
-          size="sm"
-          outline
-          color="indigo-4"
+          v-else
+          no-caps unelevated dense size="sm"
+          color="indigo-5"
           icon="open_in_new"
           :label="$t('git.createPr')"
-          class="git-btn"
+          class="full-width q-mb-xs"
           :loading="openingPr"
           :disable="!workspace || pushing || !canOpenPr"
           @click="handleOpenPr"
         >
           <q-tooltip v-if="!canOpenPr && createPrDisabledReason">{{ createPrDisabledReason }}</q-tooltip>
         </q-btn>
+
+        <!-- Secondary row: Sync dropdown + Diff Review + overflow -->
+        <div class="row items-center q-gutter-xs">
+          <q-btn-dropdown
+            v-if="gitStats"
+            split dense no-caps size="sm" outline color="grey-5"
+            icon="sync"
+            :label="$t('git.sync')"
+            class="git-btn git-sync-btn col"
+            :loading="pulling || rebasing || merging"
+            :disable="!workspace || pushing"
+            @click="gitStats.unpushedCount === -1 ? handleRebase() : handlePull()"
+          >
+            <q-list dark dense style="min-width: 140px;">
+              <q-item
+                clickable v-close-popup
+                :disable="pulling || rebasing || merging || gitStats.unpushedCount === -1"
+                @click="handlePull"
+              >
+                <q-item-section avatar style="min-width: 28px;">
+                  <q-icon name="download" size="16px" color="grey-5" />
+                </q-item-section>
+                <q-item-section>{{ $t('git.pull') }}</q-item-section>
+                <q-tooltip v-if="gitStats.unpushedCount === -1">{{ $t('git.pullNoUpstream') }}</q-tooltip>
+              </q-item>
+              <q-item clickable v-close-popup :disable="pulling || rebasing || merging" @click="handleRebase">
+                <q-item-section avatar style="min-width: 28px;">
+                  <q-icon name="replay" size="16px" color="orange-4" />
+                </q-item-section>
+                <q-item-section>{{ $t('git.rebase') }}</q-item-section>
+              </q-item>
+              <q-item clickable v-close-popup :disable="pulling || rebasing || merging" @click="handleMerge">
+                <q-item-section avatar style="min-width: 28px;">
+                  <q-icon name="merge" size="16px" color="purple-4" />
+                </q-item-section>
+                <q-item-section>{{ $t('git.merge') }}</q-item-section>
+              </q-item>
+            </q-list>
+          </q-btn-dropdown>
+
+          <q-btn
+            dense no-caps size="sm" outline color="indigo-4"
+            icon="rate_review"
+            :label="$t('git.diffReview')"
+            class="git-btn"
+            :disable="!workspace"
+            @click="openDiff(true)"
+          >
+            <q-tooltip anchor="bottom middle" self="top middle" :delay="400">{{ $t('git.diffReviewTooltip') }}</q-tooltip>
+          </q-btn>
+
+          <q-btn
+            v-if="hasOverflowActions"
+            dense flat size="sm" color="grey-5"
+            icon="more_horiz"
+            class="git-btn"
+          >
+            <q-menu>
+              <q-list dark dense style="min-width: 160px;">
+                <q-item
+                  v-if="!gitStats || gitStats.unpushedCount !== 0"
+                  clickable v-close-popup
+                  :disable="!workspace || openingPr || pulling || rebasing"
+                  @click="handlePush"
+                >
+                  <q-item-section avatar style="min-width: 28px;">
+                    <q-icon name="upload" size="16px" color="grey-5" />
+                  </q-item-section>
+                  <q-item-section>{{ $t('git.push') }}</q-item-section>
+                </q-item>
+                <q-item
+                  v-if="gitStats?.prUrl && gitStats.prState === 'OPEN'"
+                  clickable v-close-popup
+                  :disable="changingBase"
+                  @click="handleChangePrBase"
+                >
+                  <q-item-section avatar style="min-width: 28px;">
+                    <q-icon name="swap_horiz" size="16px" color="grey-5" />
+                  </q-item-section>
+                  <q-item-section>{{ $t('git.changePrBase') }}</q-item-section>
+                </q-item>
+              </q-list>
+            </q-menu>
+            <q-tooltip>{{ $t('git.actions.more') }}</q-tooltip>
+          </q-btn>
+        </div>
       </div>
     </template>
 
@@ -444,6 +426,7 @@ import { useI18n } from 'vue-i18n'
 const DiffViewer = defineAsyncComponent(() => import('./DiffViewer.vue'))
 
 import BranchDivergenceDialog from 'src/components/BranchDivergenceDialog.vue'
+import PrPanel from 'src/components/PrPanel.vue'
 import type { BranchCommit, GitStats, Workspace } from 'src/stores/workspace'
 import { useWorkspaceStore, WorkspaceActionError } from 'src/stores/workspace'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
@@ -539,6 +522,12 @@ const repoName = computed(() => {
   return parts[parts.length - 1] || parts[parts.length - 2] || '-'
 })
 
+const prSnapshot = computed(() => {
+  const id = props.workspace?.id
+  if (!id) return undefined
+  return store.prSnapshots[id]
+})
+
 // Gate the "Create PR" button: the branch must exist on the remote, otherwise
 // `gh pr create` fails downstream. Once it's pushed, let the user open a PR
 // even if the commit count is zero — the server will surface a clear error.
@@ -552,6 +541,12 @@ const createPrDisabledReason = computed(() => {
   if (!gitStats.value) return ''
   if (gitStats.value.unpushedCount === -1) return t('git.createPrNoRemote')
   return ''
+})
+
+const hasOverflowActions = computed(() => {
+  const pushVisible = !gitStats.value || gitStats.value.unpushedCount !== 0
+  const changeBaseVisible = !!(gitStats.value?.prUrl && gitStats.value.prState === 'OPEN')
+  return pushVisible || changeBaseVisible
 })
 
 // Branch divergence dialog state
@@ -590,18 +585,33 @@ async function loadGitStats(opts: { freshFetch?: boolean } = {}) {
   }
 }
 
+async function handleRefreshAll() {
+  const id = props.workspace?.id
+  if (!id) return
+  await Promise.allSettled([loadGitStats({ freshFetch: true }), store.refreshPrSnapshot(id)])
+}
+
 // Refresh when agent runs git commands (debounced)
 let gitRefreshTimeout: ReturnType<typeof setTimeout> | null = null
 
 watch(
   () => props.workspace?.id,
-  () => {
+  (newId, oldId) => {
     inflightController?.abort()
     if (gitRefreshTimeout) {
       clearTimeout(gitRefreshTimeout)
       gitRefreshTimeout = null
     }
-    loadGitStats({ freshFetch: true })
+    // Immediately clear the previous workspace's data so the panel shows a
+    // loader instead of stale info while the new fetch is in flight.
+    if (newId !== oldId) {
+      gitStats.value = null
+      commits.value = []
+      showCommits.value = false
+    }
+    if (newId) {
+      loadGitStats({ freshFetch: true })
+    }
   },
   { immediate: true },
 )
@@ -999,6 +1009,21 @@ async function handleOpenPr() {
 .arrow-clickable:hover {
   opacity: 0.75;
   text-decoration: underline;
+}
+.git-subcard {
+  background: #1f2538;
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin-bottom: 8px;
+}
+
+.git-subcard-title {
+  color: #6b7280;
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
 }
 </style>
 
