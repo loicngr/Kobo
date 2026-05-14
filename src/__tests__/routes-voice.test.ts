@@ -24,6 +24,7 @@ vi.mock('../server/services/transcription-service.js', () => {
     listVoiceModels: vi.fn(),
     getVoiceRuntimeStatus: vi.fn(),
     downloadVoiceModel: vi.fn(),
+    cancelVoiceModelDownload: vi.fn(),
     deleteVoiceModel: vi.fn(),
     transcribeAudio: vi.fn(),
   }
@@ -44,9 +45,19 @@ beforeEach(() => {
 })
 
 describe('GET /api/voice/models', () => {
-  it('returns model inventory', async () => {
+  it('returns model inventory with size, filePath and modelsDir', async () => {
     vi.mocked(transcriptionService.listVoiceModels).mockReturnValue({
-      available: [{ name: 'base', installed: true, fileName: 'ggml-base.bin' }],
+      modelsDir: '/tmp/whisper',
+      available: [
+        {
+          name: 'base',
+          installed: true,
+          fileName: 'ggml-base.bin',
+          sizeBytes: 147_964_211,
+          installedSizeBytes: 147_964_211,
+          filePath: '/tmp/whisper/ggml-base.bin',
+        },
+      ],
       activeModel: 'base',
     })
 
@@ -54,7 +65,26 @@ describe('GET /api/voice/models', () => {
     expect(res.status).toBe(200)
     const data = await res.json()
     expect(data.activeModel).toBe('base')
-    expect(data.available).toHaveLength(1)
+    expect(data.modelsDir).toBe('/tmp/whisper')
+    expect(data.available[0].sizeBytes).toBe(147_964_211)
+    expect(data.available[0].filePath).toBe('/tmp/whisper/ggml-base.bin')
+  })
+})
+
+describe('DELETE /api/voice/models/:name/download', () => {
+  it('returns 204 when cancel succeeds', async () => {
+    vi.mocked(transcriptionService.cancelVoiceModelDownload).mockReturnValue(true)
+    const res = await app.request('/api/voice/models/base/download', { method: 'DELETE' })
+    expect(res.status).toBe(204)
+    expect(transcriptionService.cancelVoiceModelDownload).toHaveBeenCalledWith('base')
+  })
+
+  it('returns 404 when no download is in progress', async () => {
+    vi.mocked(transcriptionService.cancelVoiceModelDownload).mockReturnValue(false)
+    const res = await app.request('/api/voice/models/base/download', { method: 'DELETE' })
+    expect(res.status).toBe(404)
+    const data = await res.json()
+    expect(data.code).toBe('MODEL_DOWNLOAD_NOT_RUNNING')
   })
 })
 

@@ -2,6 +2,8 @@ import { execFile } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { Readable } from 'node:stream'
+import { pipeline } from 'node:stream/promises'
 import { promisify } from 'node:util'
 import { getKoboHome } from '../utils/paths.js'
 import { getGlobalSettings } from './settings-service.js'
@@ -24,6 +26,25 @@ export interface VoiceModelDefinition {
   name: string
   fileName: string
   url: string
+  // Expected size in bytes (from huggingface ggml-*.bin). Used to show the
+  // weight before any HTTP call and to compute progress %.
+  sizeBytes: number
+}
+
+export interface VoiceModelInfo {
+  name: string
+  fileName: string
+  installed: boolean
+  sizeBytes: number
+  installedSizeBytes?: number
+  filePath: string
+  download?: VoiceModelDownloadProgress
+}
+
+export interface VoiceModelDownloadProgress {
+  downloaded: number
+  total: number
+  startedAt: number
 }
 
 export interface VoiceRuntimeStatus {
@@ -39,28 +60,42 @@ export const VOICE_MODELS: VoiceModelDefinition[] = [
     name: 'tiny',
     fileName: 'ggml-tiny.bin',
     url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin?download=true',
+    sizeBytes: 77_691_713,
   },
   {
     name: 'base',
     fileName: 'ggml-base.bin',
     url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin?download=true',
+    sizeBytes: 147_964_211,
   },
   {
     name: 'small',
     fileName: 'ggml-small.bin',
     url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small.bin?download=true',
+    sizeBytes: 487_701_384,
   },
   {
     name: 'medium',
     fileName: 'ggml-medium.bin',
     url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium.bin?download=true',
+    sizeBytes: 1_533_763_059,
   },
   {
     name: 'large-v3',
     fileName: 'ggml-large-v3.bin',
     url: 'https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3.bin?download=true',
+    sizeBytes: 3_094_623_691,
   },
 ]
+
+interface ActiveDownload {
+  downloaded: number
+  total: number
+  startedAt: number
+  controller: AbortController
+}
+
+const activeDownloads = new Map<string, ActiveDownload>()
 
 function voiceHome(): string {
   return path.join(getKoboHome(), 'voice')
@@ -68,6 +103,10 @@ function voiceHome(): string {
 
 function modelsDir(): string {
   return path.join(voiceHome(), 'models', 'whisper')
+}
+
+export function getVoiceModelsDir(): string {
+  return modelsDir()
 }
 
 function resolveWhisperCommand(): string {
@@ -95,17 +134,39 @@ function resolveModel(name: string): VoiceModelDefinition {
 }
 
 export function listVoiceModels(): {
-  available: Array<{ name: string; installed: boolean; fileName: string }>
+  modelsDir: string
+  available: VoiceModelInfo[]
   activeModel: string | null
 } {
   ensureVoiceDirs()
   const settings = getGlobalSettings()
-  const available = VOICE_MODELS.map((m) => ({
-    name: m.name,
-    fileName: m.fileName,
-    installed: fs.existsSync(path.join(modelsDir(), m.fileName)),
-  }))
-  return { available, activeModel: settings.voiceModel }
+  const dir = modelsDir()
+  const available: VoiceModelInfo[] = VOICE_MODELS.map((m) => {
+    const filePath = path.join(dir, m.fileName)
+    const installed = fs.existsSync(filePath)
+    let installedSizeBytes: number | undefined
+    if (installed) {
+      try {
+        installedSizeBytes = fs.statSync(filePath).size
+      } catch {
+        installedSizeBytes = undefined
+      }
+    }
+    const active = activeDownloads.get(m.name)
+    const download: VoiceModelDownloadProgress | undefined = active
+      ? { downloaded: active.downloaded, total: active.total, startedAt: active.startedAt }
+      : undefined
+    return {
+      name: m.name,
+      fileName: m.fileName,
+      installed,
+      sizeBytes: m.sizeBytes,
+      installedSizeBytes,
+      filePath,
+      download,
+    }
+  })
+  return { modelsDir: dir, available, activeModel: settings.voiceModel }
 }
 
 export async function getVoiceRuntimeStatus(): Promise<VoiceRuntimeStatus> {
@@ -130,20 +191,55 @@ export async function getVoiceRuntimeStatus(): Promise<VoiceRuntimeStatus> {
 export async function downloadVoiceModel(name: string): Promise<{ name: string; filePath: string }> {
   ensureVoiceDirs()
   const model = resolveModel(name)
-  const res = await fetch(model.url)
-  if (!res.ok) {
-    throw new VoiceError(`Failed to download model '${name}' (HTTP ${res.status})`, 'MODEL_DOWNLOAD_FAILED', 500)
+  if (activeDownloads.has(name)) {
+    throw new VoiceError(`Model '${name}' is already downloading`, 'MODEL_DOWNLOAD_IN_PROGRESS', 409)
   }
+  const controller = new AbortController()
+  const state: ActiveDownload = {
+    downloaded: 0,
+    total: model.sizeBytes,
+    startedAt: Date.now(),
+    controller,
+  }
+  activeDownloads.set(name, state)
+
   const filePath = path.join(modelsDir(), model.fileName)
   const tmpPath = `${filePath}.tmp`
   try {
-    const bytes = Buffer.from(await res.arrayBuffer())
-    fs.writeFileSync(tmpPath, bytes)
+    const res = await fetch(model.url, { signal: controller.signal })
+    if (!res.ok) {
+      throw new VoiceError(`Failed to download model '${name}' (HTTP ${res.status})`, 'MODEL_DOWNLOAD_FAILED', 500)
+    }
+    const contentLength = Number.parseInt(res.headers.get('content-length') ?? '', 10)
+    if (Number.isFinite(contentLength) && contentLength > 0) state.total = contentLength
+    if (!res.body) {
+      throw new VoiceError(`Empty response body for model '${name}'`, 'MODEL_DOWNLOAD_FAILED', 500)
+    }
+
+    const source = Readable.fromWeb(res.body as never)
+    source.on('data', (chunk: Buffer | string) => {
+      state.downloaded += typeof chunk === 'string' ? Buffer.byteLength(chunk) : chunk.length
+    })
+    const dest = fs.createWriteStream(tmpPath)
+    await pipeline(source, dest)
     fs.renameSync(tmpPath, filePath)
-  } finally {
+    return { name, filePath }
+  } catch (err) {
     if (fs.existsSync(tmpPath)) fs.rmSync(tmpPath, { force: true })
+    if (controller.signal.aborted) {
+      throw new VoiceError(`Download for model '${name}' was cancelled`, 'MODEL_DOWNLOAD_CANCELLED', 400)
+    }
+    throw err
+  } finally {
+    activeDownloads.delete(name)
   }
-  return { name, filePath }
+}
+
+export function cancelVoiceModelDownload(name: string): boolean {
+  const state = activeDownloads.get(name)
+  if (!state) return false
+  state.controller.abort()
+  return true
 }
 
 export function deleteVoiceModel(name: string): void {

@@ -92,6 +92,15 @@ app.post('/models/:name/download', async (c) => {
   }
 })
 
+app.delete('/models/:name/download', (c) => {
+  const name = c.req.param('name')
+  const cancelled = transcriptionService.cancelVoiceModelDownload(name)
+  if (!cancelled) {
+    return c.json({ error: `No download in progress for model '${name}'`, code: 'MODEL_DOWNLOAD_NOT_RUNNING' }, 404)
+  }
+  return c.body(null, 204)
+})
+
 app.delete('/models/:name', (c) => {
   try {
     const name = c.req.param('name')

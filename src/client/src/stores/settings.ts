@@ -93,10 +93,20 @@ interface GlobalSettings {
   customBrainstormingInstruction: string
 }
 
+export interface VoiceModelDownloadProgress {
+  downloaded: number
+  total: number
+  startedAt: number
+}
+
 export interface VoiceModelStatus {
   name: string
   installed: boolean
   fileName: string
+  sizeBytes: number
+  installedSizeBytes?: number
+  filePath: string
+  download?: VoiceModelDownloadProgress
 }
 
 export interface VoiceRuntimeStatus {
@@ -164,6 +174,7 @@ export const useSettingsStore = defineStore('settings', {
     } as GlobalSettings,
     voiceModels: [] as VoiceModelStatus[],
     voiceModelsLoading: false,
+    voiceModelsDir: '' as string,
     voiceRuntime: null as VoiceRuntimeStatus | null,
     activeMcpServers: [] as ActiveMcpServer[],
     projects: [] as ProjectSettings[],
@@ -276,14 +287,25 @@ export const useSettingsStore = defineStore('settings', {
       try {
         const res = await fetch('/api/voice/models')
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const data = (await res.json()) as { available: VoiceModelStatus[]; activeModel: string | null }
+        const data = (await res.json()) as {
+          modelsDir: string
+          available: VoiceModelStatus[]
+          activeModel: string | null
+        }
         this.voiceModels = data.available
+        this.voiceModelsDir = data.modelsDir
         this.global.voiceModel = data.activeModel
       } catch (err) {
         console.error('[settings store] fetchVoiceModels failed:', err)
       } finally {
         this.voiceModelsLoading = false
       }
+    },
+
+    async cancelVoiceModelDownload(name: string) {
+      const res = await fetch(`/api/voice/models/${encodeURIComponent(name)}/download`, { method: 'DELETE' })
+      if (!res.ok && res.status !== 404) throw new Error(`HTTP ${res.status}`)
+      await this.fetchVoiceModels()
     },
 
     async fetchVoiceRuntime() {

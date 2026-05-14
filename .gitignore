@@ -9,3 +9,4 @@ docs/
 src/client/.quasar/
 .mcp.json
 .vscode/
+.gstack/

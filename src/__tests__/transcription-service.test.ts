@@ -24,7 +24,9 @@ vi.mock('../server/services/settings-service.js', () => ({
 
 import * as settingsService from '../server/services/settings-service.js'
 import {
+  cancelVoiceModelDownload,
   downloadVoiceModel,
+  getVoiceModelsDir,
   listVoiceModels,
   transcribeAudio,
   type VoiceError,
@@ -65,21 +67,123 @@ describe('listVoiceModels()', () => {
     const base = res.available.find((m) => m.name === 'base')
     expect(base?.installed).toBe(true)
   })
+
+  it('exposes the absolute models directory and per-model file paths and sizes', () => {
+    const modelsRoot = path.join(tmpDir, 'voice', 'models', 'whisper')
+    fs.mkdirSync(modelsRoot, { recursive: true })
+    fs.writeFileSync(path.join(modelsRoot, 'ggml-base.bin'), 'XX')
+
+    const res = listVoiceModels()
+    expect(res.modelsDir).toBe(modelsRoot)
+    expect(res.modelsDir).toBe(getVoiceModelsDir())
+    const base = res.available.find((m) => m.name === 'base')
+    expect(base?.filePath).toBe(path.join(modelsRoot, 'ggml-base.bin'))
+    expect(base?.installedSizeBytes).toBe(2)
+    expect(base?.sizeBytes).toBeGreaterThan(0)
+    const tiny = res.available.find((m) => m.name === 'tiny')
+    expect(tiny?.installedSizeBytes).toBeUndefined()
+  })
 })
 
+function streamingFetchMock(bytes: Uint8Array, contentLength?: number) {
+  return vi.fn().mockResolvedValue({
+    ok: true,
+    headers: {
+      get: (h: string) => (h.toLowerCase() === 'content-length' ? String(contentLength ?? bytes.length) : null),
+    },
+    body: new ReadableStream({
+      start(controller) {
+        controller.enqueue(bytes)
+        controller.close()
+      },
+    }),
+  })
+}
+
 describe('downloadVoiceModel()', () => {
-  it('downloads and writes model to local voice directory', async () => {
-    vi.stubGlobal(
-      'fetch',
-      vi.fn().mockResolvedValue({
-        ok: true,
-        arrayBuffer: async () => new TextEncoder().encode('model-bytes').buffer,
-      }),
-    )
+  it('streams model bytes to disk via createWriteStream', async () => {
+    const bytes = new TextEncoder().encode('model-bytes')
+    vi.stubGlobal('fetch', streamingFetchMock(bytes))
 
     const out = await downloadVoiceModel('base')
     expect(fs.existsSync(out.filePath)).toBe(true)
     expect(fs.readFileSync(out.filePath, 'utf-8')).toBe('model-bytes')
+  })
+
+  it('reports active download progress while running', async () => {
+    const chunks = [new Uint8Array([1, 2, 3]), new Uint8Array([4, 5])]
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue({
+        ok: true,
+        headers: { get: () => '5' },
+        body: new ReadableStream({
+          async start(controller) {
+            controller.enqueue(chunks[0])
+            await gate
+            controller.enqueue(chunks[1])
+            controller.close()
+          },
+        }),
+      }),
+    )
+
+    const pending = downloadVoiceModel('base')
+    // give the stream a microtask to enqueue chunk 0
+    await new Promise((r) => setTimeout(r, 10))
+    const midRun = listVoiceModels().available.find((m) => m.name === 'base')
+    expect(midRun?.download).toBeDefined()
+    expect(midRun?.download?.total).toBe(5)
+    release()
+    await pending
+    const after = listVoiceModels().available.find((m) => m.name === 'base')
+    expect(after?.download).toBeUndefined()
+    expect(after?.installed).toBe(true)
+  })
+
+  it('rejects with MODEL_DOWNLOAD_CANCELLED when cancelled mid-stream', async () => {
+    let release: () => void = () => {}
+    const gate = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation((_url: string, init?: { signal?: AbortSignal }) => {
+        return Promise.resolve({
+          ok: true,
+          headers: { get: () => '10' },
+          body: new ReadableStream({
+            async start(controller) {
+              controller.enqueue(new Uint8Array([1, 2]))
+              init?.signal?.addEventListener('abort', () =>
+                controller.error(init.signal?.reason ?? new Error('aborted')),
+              )
+              await gate
+              controller.close()
+            },
+          }),
+        })
+      }),
+    )
+
+    const pending = downloadVoiceModel('base')
+    await new Promise((r) => setTimeout(r, 10))
+    const cancelled = cancelVoiceModelDownload('base')
+    expect(cancelled).toBe(true)
+    release()
+    await expect(pending).rejects.toMatchObject({ code: 'MODEL_DOWNLOAD_CANCELLED' })
+    const modelsRoot = path.join(tmpDir, 'voice', 'models', 'whisper')
+    // tmp file should be cleaned up; final file should not exist
+    expect(fs.existsSync(path.join(modelsRoot, 'ggml-base.bin'))).toBe(false)
+    expect(fs.existsSync(path.join(modelsRoot, 'ggml-base.bin.tmp'))).toBe(false)
+  })
+
+  it('cancelVoiceModelDownload returns false when no download is active', () => {
+    expect(cancelVoiceModelDownload('base')).toBe(false)
   })
 })
 

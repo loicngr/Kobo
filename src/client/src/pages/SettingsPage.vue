@@ -280,131 +280,29 @@
               </div>
             </div>
 
-            <!-- Voice transcription -->
+            <!-- Voice transcription — Runtime status -->
             <div v-show="activeTab === 'voice'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
-              <div class="text-subtitle2 q-mb-sm">{{ $t('voice.title') }}</div>
-              <div class="column q-gutter-sm">
-                <q-toggle
-                  v-model="globalVoiceEnabled"
-                  :label="$t('voice.enabled')"
-                  dark
+              <div class="row items-center q-mb-sm">
+                <div class="text-subtitle2">{{ $t('voice.sectionRuntime') }}</div>
+                <q-space />
+                <q-btn
+                  flat
                   dense
-                  color="indigo-4"
-                  class="text-grey-5 text-caption"
+                  no-caps
+                  size="sm"
+                  icon="refresh"
+                  color="grey-5"
+                  :label="t('common.refresh')"
+                  @click="store.fetchVoiceRuntime()"
                 />
-                <q-select
-                  v-model="globalVoicePttKey"
-                  :label="$t('voice.pttKey')"
-                  :options="[
-                    { label: $t('voice.pttAlt'), value: 'alt' },
-                    { label: $t('voice.pttCtrlSpace'), value: 'ctrl+space' },
-                  ]"
-                  emit-value
-                  map-options
-                  dense
-                  dark
-                  outlined
-                  class="settings-input"
-                />
-                <q-select
-                  v-model="globalVoiceLanguage"
-                  :label="$t('voice.language')"
-                  :options="voiceLanguageOptions"
-                  emit-value
-                  map-options
-                  dense
-                  dark
-                  outlined
-                  class="settings-input"
-                />
-                <q-select
-                  v-model="globalVoiceModel"
-                  :label="$t('voice.model')"
-                  :options="voiceModelOptions"
-                  emit-value
-                  map-options
-                  dense
-                  dark
-                  outlined
-                  class="settings-input"
-                />
-                <q-input
-                  v-model="globalVoiceCommandPath"
-                  :label="$t('voice.commandPath')"
-                  dense
-                  dark
-                  outlined
-                  class="settings-input"
-                />
-                <q-input
-                  v-model="globalVoiceFfmpegPath"
-                  :label="$t('voice.ffmpegPath')"
-                  dense
-                  dark
-                  outlined
-                  class="settings-input"
-                />
+              </div>
+              <div class="column q-gutter-xs">
                 <div class="row items-center q-gutter-sm">
-                  <div class="text-caption text-grey-5">{{ $t('voice.temperature') }}</div>
-                  <q-slider
-                    v-model="globalVoiceTemperature"
-                    :min="0"
-                    :max="1"
-                    :step="0.05"
-                    dark
-                    dense
-                    color="indigo-4"
-                    class="col"
+                  <q-icon
+                    :name="store.voiceRuntime?.available ? 'check_circle' : 'cancel'"
+                    :color="store.voiceRuntime?.available ? 'green-5' : 'red-5'"
+                    size="xs"
                   />
-                  <div class="text-caption text-grey-5" style="min-width: 40px; text-align: right;">
-                    {{ globalVoiceTemperature.toFixed(2) }}
-                  </div>
-                </div>
-                <div class="text-caption text-grey-7 q-mt-xs q-mb-sm">{{ $t('voice.temperatureHint') }}</div>
-                <q-input
-                  v-model="globalVoicePrompt"
-                  :label="$t('voice.initialPrompt')"
-                  type="textarea"
-                  dense
-                  dark
-                  outlined
-                  :rows="2"
-                  class="settings-input"
-                />
-                <div class="text-caption text-grey-7 q-mt-xs q-mb-sm">{{ $t('voice.initialPromptHint') }}</div>
-                <q-toggle
-                  v-model="globalVoiceTranslateToEnglish"
-                  :label="$t('voice.translateToEnglish')"
-                  dark
-                  dense
-                  color="indigo-4"
-                  class="text-grey-5 text-caption"
-                />
-                <div class="text-caption text-grey-7 q-mt-xs q-mb-sm">{{ $t('voice.translateToEnglishHint') }}</div>
-                <q-toggle
-                  v-model="globalVoiceSuppressNst"
-                  :label="$t('voice.suppressNst')"
-                  dark
-                  dense
-                  color="indigo-4"
-                  class="text-grey-5 text-caption"
-                />
-                <div class="text-caption text-grey-7 q-mt-xs q-mb-sm">{{ $t('voice.suppressNstHint') }}</div>
-                <div class="row q-gutter-sm items-center">
-                  <q-btn
-                    v-for="m in store.voiceModels"
-                    :key="m.name"
-                    flat
-                    dense
-                    no-caps
-                    size="sm"
-                    :color="m.installed ? 'red-5' : 'indigo-4'"
-                    :label="m.installed ? `${$t('voice.delete')} ${m.name}` : `${$t('voice.download')} ${m.name}`"
-                    :loading="voiceActionModel === m.name"
-                    @click="m.installed ? removeVoiceModel(m.name) : installVoiceModel(m.name)"
-                  />
-                </div>
-                <div class="row items-center q-mt-sm">
                   <span
                     class="text-caption"
                     :class="store.voiceRuntime?.available ? 'text-green-5' : 'text-red-5'"
@@ -415,18 +313,13 @@
                         : t('voice.runtimeMissing', { command: store.voiceRuntime?.command ?? 'whisper-cli' })
                     }}
                   </span>
-                  <q-space />
-                  <q-btn
-                    flat
-                    dense
-                    size="sm"
-                    icon="refresh"
-                    color="grey-5"
-                    :label="t('common.refresh')"
-                    @click="store.fetchVoiceRuntime()"
-                  />
                 </div>
-                <div class="row items-center q-mt-xs">
+                <div class="row items-center q-gutter-sm">
+                  <q-icon
+                    :name="store.voiceRuntime?.ffmpegAvailable ? 'check_circle' : 'cancel'"
+                    :color="store.voiceRuntime?.ffmpegAvailable ? 'green-5' : 'red-5'"
+                    size="xs"
+                  />
                   <span
                     class="text-caption"
                     :class="store.voiceRuntime?.ffmpegAvailable ? 'text-green-5' : 'text-red-5'"
@@ -438,42 +331,281 @@
                     }}
                   </span>
                 </div>
-                <q-expansion-item
-                  dense
-                  dark
-                  icon="help_outline"
-                  :label="$t('voice.installGuideTitle')"
-                  class="variables-panel rounded-borders q-mt-sm"
-                >
-                  <div class="q-pa-sm text-caption text-grey-5">
-                    <div class="q-mb-sm">{{ $t('voice.installGuideIntro') }}</div>
-                    <div class="q-mb-sm">
-                      <a
-                        href="https://github.com/ggml-org/whisper.cpp"
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        class="text-indigo-4"
-                      >
-                        {{ $t('voice.installLink') }}
-                      </a>
-                    </div>
-                    <div class="q-mb-xs text-grey-4">{{ $t('voice.installGuideUbuntuTitle') }}</div>
-                    <pre class="mono-guide q-mb-sm">sudo apt update
+              </div>
+              <q-expansion-item
+                dense
+                dark
+                icon="help_outline"
+                :label="$t('voice.installGuideTitle')"
+                class="variables-panel rounded-borders q-mt-sm"
+              >
+                <div class="q-pa-sm text-caption text-grey-5">
+                  <div class="q-mb-sm">{{ $t('voice.installGuideIntro') }}</div>
+                  <div class="q-mb-sm">
+                    <a
+                      href="https://github.com/ggml-org/whisper.cpp"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      class="text-indigo-4"
+                    >
+                      {{ $t('voice.installLink') }}
+                    </a>
+                  </div>
+                  <div class="q-mb-xs text-grey-4">{{ $t('voice.installGuideUbuntuTitle') }}</div>
+                  <pre class="mono-guide q-mb-sm">sudo apt update
 sudo apt install -y cmake build-essential ffmpeg
 git clone https://github.com/ggml-org/whisper.cpp.git
 cd whisper.cpp
 cmake -B build
 cmake --build build -j</pre>
-                    <div class="q-mb-sm">{{ $t('voice.installGuideBinaryPathHint') }}</div>
-                    <div class="q-mb-xs text-grey-4">{{ $t('voice.installGuideWindowsTitle') }}</div>
-                    <pre class="mono-guide q-mb-sm"># Install CMake + Visual Studio Build Tools (C/C++)
+                  <div class="q-mb-sm">{{ $t('voice.installGuideBinaryPathHint') }}</div>
+                  <div class="q-mb-xs text-grey-4">{{ $t('voice.installGuideWindowsTitle') }}</div>
+                  <pre class="mono-guide q-mb-sm"># Install CMake + Visual Studio Build Tools (C/C++)
 # Install ffmpeg (choco/scoop)
 where whisper-cli
 where ffmpeg</pre>
-                    <div>{{ $t('voice.installGuideSettingsHint') }}</div>
-                  </div>
-                </q-expansion-item>
+                  <div>{{ $t('voice.installGuideSettingsHint') }}</div>
+                </div>
+              </q-expansion-item>
+            </div>
+
+            <!-- Voice transcription — Activation -->
+            <div v-show="activeTab === 'voice'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('voice.sectionActivation') }}</div>
+              <q-toggle
+                v-model="globalVoiceEnabled"
+                :label="$t('voice.enabled')"
+                dark
+                dense
+                color="indigo-4"
+                class="text-grey-5 text-caption q-mb-sm"
+              />
+              <div class="row q-col-gutter-sm">
+                <div class="col-12 col-sm-6">
+                  <q-select
+                    v-model="globalVoicePttKey"
+                    :label="$t('voice.pttKey')"
+                    :options="[
+                      { label: $t('voice.pttAlt'), value: 'alt' },
+                      { label: $t('voice.pttCtrlSpace'), value: 'ctrl+space' },
+                    ]"
+                    emit-value
+                    map-options
+                    dense
+                    dark
+                    outlined
+                    class="settings-input"
+                  />
+                </div>
+                <div class="col-12 col-sm-6">
+                  <q-select
+                    v-model="globalVoiceLanguage"
+                    :label="$t('voice.language')"
+                    :options="voiceLanguageOptions"
+                    emit-value
+                    map-options
+                    dense
+                    dark
+                    outlined
+                    class="settings-input"
+                  />
+                </div>
               </div>
+            </div>
+
+            <!-- Voice transcription — Models -->
+            <div v-show="activeTab === 'voice'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('voice.sectionModels') }}</div>
+              <q-select
+                v-model="globalVoiceModel"
+                :label="$t('voice.model')"
+                :options="voiceModelOptions"
+                emit-value
+                map-options
+                dense
+                dark
+                outlined
+                class="settings-input q-mb-md"
+              />
+              <div v-if="store.voiceModelsDir" class="voice-models-dir row items-center q-gutter-sm q-mb-md">
+                <q-icon name="folder" color="grey-5" size="xs" />
+                <span class="text-caption text-grey-5 ellipsis-2-lines" style="flex: 1; min-width: 0; word-break: break-all;">
+                  {{ store.voiceModelsDir }}
+                </span>
+                <q-btn
+                  flat
+                  dense
+                  round
+                  size="xs"
+                  icon="content_copy"
+                  color="grey-5"
+                  :title="t('common.copy')"
+                  @click="copyToClipboard(store.voiceModelsDir)"
+                />
+              </div>
+              <div class="column q-gutter-sm">
+                <div
+                  v-for="m in store.voiceModels"
+                  :key="m.name"
+                  class="voice-model-row q-pa-sm rounded-borders"
+                  :class="{ 'voice-model-row--active': m.download }"
+                >
+                  <div class="row items-center q-gutter-sm">
+                    <q-icon
+                      :name="m.download ? 'downloading' : m.installed ? 'check_circle' : 'circle'"
+                      :color="m.download ? 'indigo-4' : m.installed ? 'green-5' : 'grey-7'"
+                      size="xs"
+                    />
+                    <span class="text-body2 text-grey-3" style="font-family: var(--kobo-font-mono, monospace);">
+                      {{ m.name }}
+                    </span>
+                    <span class="text-caption text-grey-6">
+                      {{ formatBytes(m.installedSizeBytes ?? m.sizeBytes) }}
+                    </span>
+                    <q-space />
+                    <q-btn
+                      v-if="m.download"
+                      flat
+                      dense
+                      no-caps
+                      size="sm"
+                      color="grey-5"
+                      icon="close"
+                      :label="$t('common.cancel')"
+                      @click="cancelVoiceDownload(m.name)"
+                    />
+                    <q-btn
+                      v-else
+                      flat
+                      dense
+                      no-caps
+                      size="sm"
+                      :color="m.installed ? 'red-5' : 'indigo-4'"
+                      :icon="m.installed ? 'delete_outline' : 'download'"
+                      :label="m.installed ? $t('voice.delete') : $t('voice.download')"
+                      :loading="voiceActionModel === m.name"
+                      @click="m.installed ? removeVoiceModel(m.name) : installVoiceModel(m.name)"
+                    />
+                  </div>
+                  <div v-if="m.download" class="q-mt-sm">
+                    <q-linear-progress
+                      :value="m.download.total > 0 ? Math.min(1, m.download.downloaded / m.download.total) : 0"
+                      :indeterminate="!m.download.total"
+                      color="indigo-4"
+                      track-color="grey-9"
+                      size="6px"
+                      rounded
+                    />
+                    <div class="row items-center q-mt-xs">
+                      <span class="text-caption text-grey-6">
+                        {{ formatBytes(m.download.downloaded) }} / {{ formatBytes(m.download.total) }}
+                      </span>
+                      <q-space />
+                      <span class="text-caption text-indigo-4">
+                        {{
+                          m.download.total > 0
+                            ? `${Math.floor((m.download.downloaded / m.download.total) * 100)}%`
+                            : '—'
+                        }}
+                      </span>
+                    </div>
+                  </div>
+                  <div
+                    v-else-if="m.installed"
+                    class="text-caption text-grey-7 q-mt-xs ellipsis"
+                    style="font-family: var(--kobo-font-mono, monospace); word-break: break-all;"
+                  >
+                    {{ m.fileName }}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Voice transcription — Advanced options -->
+            <div v-show="activeTab === 'voice'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('voice.sectionAdvanced') }}</div>
+              <q-expansion-item
+                dense
+                dark
+                icon="tune"
+                :label="$t('voice.sectionBehavior')"
+                class="variables-panel rounded-borders q-mb-sm"
+              >
+                <div class="q-pa-sm column q-gutter-sm">
+                  <div class="row items-center q-gutter-sm">
+                    <div class="text-caption text-grey-5">{{ $t('voice.temperature') }}</div>
+                    <q-slider
+                      v-model="globalVoiceTemperature"
+                      :min="0"
+                      :max="1"
+                      :step="0.05"
+                      dark
+                      dense
+                      color="indigo-4"
+                      class="col"
+                    />
+                    <div class="text-caption text-grey-5" style="min-width: 40px; text-align: right;">
+                      {{ globalVoiceTemperature.toFixed(2) }}
+                    </div>
+                  </div>
+                  <div class="text-caption text-grey-7">{{ $t('voice.temperatureHint') }}</div>
+                  <q-input
+                    v-model="globalVoicePrompt"
+                    :label="$t('voice.initialPrompt')"
+                    type="textarea"
+                    dense
+                    dark
+                    outlined
+                    :rows="2"
+                    class="settings-input"
+                  />
+                  <div class="text-caption text-grey-7">{{ $t('voice.initialPromptHint') }}</div>
+                  <q-toggle
+                    v-model="globalVoiceTranslateToEnglish"
+                    :label="$t('voice.translateToEnglish')"
+                    dark
+                    dense
+                    color="indigo-4"
+                    class="text-grey-5 text-caption"
+                  />
+                  <div class="text-caption text-grey-7">{{ $t('voice.translateToEnglishHint') }}</div>
+                  <q-toggle
+                    v-model="globalVoiceSuppressNst"
+                    :label="$t('voice.suppressNst')"
+                    dark
+                    dense
+                    color="indigo-4"
+                    class="text-grey-5 text-caption"
+                  />
+                  <div class="text-caption text-grey-7">{{ $t('voice.suppressNstHint') }}</div>
+                </div>
+              </q-expansion-item>
+              <q-expansion-item
+                dense
+                dark
+                icon="terminal"
+                :label="$t('voice.sectionBinaries')"
+                class="variables-panel rounded-borders"
+              >
+                <div class="q-pa-sm column q-gutter-sm">
+                  <q-input
+                    v-model="globalVoiceCommandPath"
+                    :label="$t('voice.commandPath')"
+                    dense
+                    dark
+                    outlined
+                    class="settings-input"
+                  />
+                  <q-input
+                    v-model="globalVoiceFfmpegPath"
+                    :label="$t('voice.ffmpegPath')"
+                    dense
+                    dark
+                    outlined
+                    class="settings-input"
+                  />
+                </div>
+              </q-expansion-item>
             </div>
 
             <div v-if="activeTab === 'prompts'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
@@ -2430,12 +2562,14 @@ async function saveGlobal() {
 
 async function installVoiceModel(name: string) {
   voiceActionModel.value = name
+  startVoiceModelsPolling()
   try {
     await store.downloadVoiceModel(name)
   } catch {
     $q.notify({ type: 'negative', message: t('voice.downloadFailed'), position: 'top' })
   } finally {
     voiceActionModel.value = null
+    stopVoiceModelsPolling()
   }
 }
 
@@ -2448,6 +2582,50 @@ async function removeVoiceModel(name: string) {
     $q.notify({ type: 'negative', message: t('voice.deleteFailed'), position: 'top' })
   } finally {
     voiceActionModel.value = null
+  }
+}
+
+async function cancelVoiceDownload(name: string) {
+  try {
+    await store.cancelVoiceModelDownload(name)
+  } catch {
+    $q.notify({ type: 'negative', message: t('voice.cancelFailed'), position: 'top' })
+  }
+}
+
+function formatBytes(bytes: number | undefined | null): string {
+  if (bytes === undefined || bytes === null || !Number.isFinite(bytes) || bytes < 0) return '—'
+  if (bytes < 1024) return `${bytes} B`
+  const units = ['KB', 'MB', 'GB', 'TB']
+  let value = bytes / 1024
+  let i = 0
+  while (value >= 1024 && i < units.length - 1) {
+    value /= 1024
+    i++
+  }
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[i]}`
+}
+
+let voiceModelsPollTimer: ReturnType<typeof setInterval> | null = null
+function startVoiceModelsPolling() {
+  if (voiceModelsPollTimer) return
+  voiceModelsPollTimer = setInterval(() => {
+    store.fetchVoiceModels().catch(() => {})
+  }, 800)
+}
+function stopVoiceModelsPolling() {
+  if (voiceModelsPollTimer) {
+    clearInterval(voiceModelsPollTimer)
+    voiceModelsPollTimer = null
+  }
+}
+
+async function copyToClipboard(text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    $q.notify({ type: 'positive', message: t('common.copied'), position: 'top', timeout: 1200 })
+  } catch {
+    $q.notify({ type: 'negative', message: t('common.copyFailed'), position: 'top' })
   }
 }
 
@@ -2551,6 +2729,7 @@ onMounted(async () => {
 // Cleanup debounce timer on unmount
 onUnmounted(() => {
   if (pathDebounce) clearTimeout(pathDebounce)
+  stopVoiceModelsPolling()
 })
 </script>
 
@@ -2683,6 +2862,23 @@ onUnmounted(() => {
   border: 1px solid var(--kobo-border-subtle);
   border-radius: var(--kobo-radius-md);
   margin-bottom: 16px;
+}
+
+.voice-model-row {
+  background: var(--kobo-surface-2);
+  border: 1px solid var(--kobo-border-subtle);
+  transition: border-color var(--kobo-duration-short) var(--kobo-ease-out);
+}
+
+.voice-model-row--active {
+  border-color: var(--kobo-accent);
+}
+
+.voice-models-dir {
+  background: var(--kobo-surface-2);
+  border: 1px solid var(--kobo-border-subtle);
+  border-radius: var(--kobo-radius-sm);
+  padding: 6px 10px;
 }
 
 .template-card {
