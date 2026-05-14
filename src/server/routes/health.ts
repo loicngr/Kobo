@@ -5,7 +5,7 @@ import { getDb } from '../db/index.js'
 import { SCHEMA_VERSION } from '../db/migrations.js'
 import { resolveCodexBinary } from '../services/agent/engines/codex/spawn.js'
 import { getGlobalSettings, getProjectSettings, SETTINGS_SCHEMA_VERSION } from '../services/settings-service.js'
-import { getDbPath, getKoboHome } from '../utils/paths.js'
+import { getDbPath, getKoboHome, getPackageVersion } from '../utils/paths.js'
 import { slugifyProjectName } from '../utils/project-slug.js'
 import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 
@@ -53,6 +53,7 @@ interface DevServerRunningRow {
 }
 
 interface HealthReport {
+  version: string
   koboHome: string
   db: {
     path: string
@@ -250,6 +251,7 @@ app.get('/report', (c) => {
   }
 
   const report: HealthReport = {
+    version: getPackageVersion(),
     koboHome: home,
     db: {
       path: dbPath,

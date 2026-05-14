@@ -832,6 +832,7 @@ export default {
   'health.title': 'Status',
   'health.tooltip': 'Systemstatus',
   'health.envTitle': 'Umgebung',
+  'health.version': 'Version',
   'health.koboHome': 'Kōbō home',
   'health.dbTitle': 'Datenbank',
   'health.dbPath': 'Pfad',

@@ -828,6 +828,7 @@ export default {
   'health.title': 'Santé',
   'health.tooltip': 'Santé du système',
   'health.envTitle': 'Environnement',
+  'health.version': 'Version',
   'health.koboHome': 'Kōbō home',
   'health.dbTitle': 'Base de données',
   'health.dbPath': 'Chemin',

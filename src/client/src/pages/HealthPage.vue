@@ -14,8 +14,18 @@
       <q-card dark flat bordered>
         <q-card-section>
           <div class="text-subtitle2 q-mb-sm">{{ $t('health.envTitle') }}</div>
-          <div class="text-caption text-grey-6">{{ $t('health.koboHome') }}</div>
-          <div class="text-body2">{{ report.koboHome }}</div>
+          <div class="row q-col-gutter-md">
+            <div class="col-auto">
+              <div class="text-caption text-grey-6">{{ $t('health.version') }}</div>
+              <div class="text-body2" style="font-family: var(--kobo-font-mono, monospace);">
+                {{ report.version }}
+              </div>
+            </div>
+            <div class="col">
+              <div class="text-caption text-grey-6">{{ $t('health.koboHome') }}</div>
+              <div class="text-body2">{{ report.koboHome }}</div>
+            </div>
+          </div>
         </q-card-section>
       </q-card>
 
@@ -360,6 +370,7 @@ interface DevServerRunningRow {
 }
 
 interface HealthReport {
+  version: string
   koboHome: string
   db: { path: string; sizeBytes: number | null; schemaVersion: number; currentSchemaVersion: number }
   settings: { schemaVersion: number }
