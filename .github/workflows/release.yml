@@ -113,7 +113,16 @@ jobs:
           body: |
             Published to npm as [`@loicngr/kobo@${{ steps.version.outputs.version }}`](https://www.npmjs.com/package/@loicngr/kobo/v/${{ steps.version.outputs.version }}).
 
-            Install:
+            ## Install (this release, pinned)
+
             ```bash
-            PORT=9999 npx @loicngr/kobo@${{ steps.version.outputs.version }}
+            SERVER_PORT=9997 PORT=9998 npx @loicngr/kobo@${{ steps.version.outputs.version }}
             ```
+
+            Or always grab the latest:
+
+            ```bash
+            SERVER_PORT=9997 PORT=9998 npx @loicngr/kobo@latest
+            ```
+
+            Pick any free pair of ports — `SERVER_PORT` is the server's listening port (read first), `PORT` is its fallback. Default is `3000` when neither is set.

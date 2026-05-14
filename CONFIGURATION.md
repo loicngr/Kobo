@@ -48,8 +48,8 @@ A production-installed Kōbō (`npx @loicngr/kobo`) and a dev server can run sid
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `PORT` | `9999` | HTTP / WebSocket server port. |
-| `SERVER_PORT` | — | Alias for `PORT` (used by the `npx` runner). |
+| `PORT` | `3000` | HTTP / WebSocket server port. Overridden by `SERVER_PORT` when both are set. |
+| `SERVER_PORT` | — | Takes precedence over `PORT`. Useful for stacking Kōbō next to other tools that also honour `PORT`. |
 | `KOBO_HOME` | `~/.config/kobo` | Override the storage directory. |
 | `KOBO_ENFORCE_LOCAL_HOME` | — | When set, refuses any `KOBO_HOME` that resolves outside the current directory. Used by `npm run dev` to guarantee dev data lives in `./data`. |
 | `KOBO_MCP_INIT_TIMEOUT_MS` | `30000` | Handshake timeout for the Notion and Sentry MCP servers. Bump it if cold `npx` fetches are slow on your network. |

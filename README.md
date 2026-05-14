@@ -31,7 +31,13 @@ Requires Node.js ≥ 20 and a logged-in Claude Code **or** Codex CLI.
 npx @loicngr/kobo@latest
 ```
 
-Open <http://localhost:9999>. Data is persisted under `~/.config/kobo/` (override via `KOBO_HOME`).
+Default port is `3000`. If you already run something on that port (or another Kōbō instance), pick your own — `SERVER_PORT` is read first, `PORT` is the fallback:
+
+```bash
+SERVER_PORT=9997 PORT=9998 npx @loicngr/kobo@latest
+```
+
+Open <http://localhost:3000> (or whichever port you picked). Data is persisted under `~/.config/kobo/` (override via `KOBO_HOME`).
 
 ### From source
 
@@ -51,7 +57,8 @@ The most common knobs:
 
 | Env var | Default | Purpose |
 |---|---|---|
-| `PORT` | `9999` | HTTP / WebSocket server port |
+| `PORT` | `3000` | HTTP / WebSocket server port (overridden by `SERVER_PORT` if set) |
+| `SERVER_PORT` | — | Preferred override for the server port; takes precedence over `PORT` |
 | `KOBO_HOME` | `~/.config/kobo` | Data directory (SQLite, settings, voice models) |
 | `NOTION_API_TOKEN` | — | Notion integration token |
 | `OPENAI_API_KEY` | — | Codex engine credential (alternative to `codex login`) |
