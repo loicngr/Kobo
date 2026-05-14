@@ -111,18 +111,33 @@ jobs:
           name: ${{ steps.version.outputs.tag }}
           generate_release_notes: true
           body: |
-            Published to npm as [`@loicngr/kobo@${{ steps.version.outputs.version }}`](https://www.npmjs.com/package/@loicngr/kobo/v/${{ steps.version.outputs.version }}).
+            **Kōbō** — multi-workspace orchestrator for Claude Code and OpenAI Codex agents.
 
-            ## Install (this release, pinned)
+            ## Install
+
+            Pinned to this release:
 
             ```bash
             SERVER_PORT=9997 PORT=9998 npx @loicngr/kobo@${{ steps.version.outputs.version }}
             ```
 
-            Or always grab the latest:
+            Or stay on the moving tip:
 
             ```bash
             SERVER_PORT=9997 PORT=9998 npx @loicngr/kobo@latest
             ```
 
-            Pick any free pair of ports — `SERVER_PORT` is the server's listening port (read first), `PORT` is its fallback. Default is `3000` when neither is set.
+            Then open <http://localhost:9997>. Pick any free pair of ports — `SERVER_PORT` is read first, `PORT` is its fallback (default `3000`).
+
+            Requires Node.js ≥ 20 and a logged-in Claude Code **or** Codex CLI.
+
+            ## Documentation (this release)
+
+            - [README](https://github.com/loicngr/Kobo/blob/${{ steps.version.outputs.tag }}/README.md) — what Kōbō does and how to run it
+            - [CONFIGURATION.md](https://github.com/loicngr/Kobo/blob/${{ steps.version.outputs.tag }}/CONFIGURATION.md) — every env var, every setting, MCP / Notion / Sentry / Voice setup
+            - [AGENTS.md](https://github.com/loicngr/Kobo/blob/${{ steps.version.outputs.tag }}/AGENTS.md) — architecture, conventions, contribution guide
+
+            ## Links
+
+            - npm: [`@loicngr/kobo@${{ steps.version.outputs.version }}`](https://www.npmjs.com/package/@loicngr/kobo/v/${{ steps.version.outputs.version }})
+            - Bugs & feature requests: [Issue tracker](https://github.com/loicngr/Kobo/issues)
