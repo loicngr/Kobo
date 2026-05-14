@@ -1,459 +1,132 @@
 # Kōbō
 
-> **Kōbō** (工房) — Japanese for *workshop*. A multi-workspace agent manager for [Claude Code](https://claude.com/claude-code) and [OpenAI Codex](https://developers.openai.com/codex/) *(Codex support is still experimental — see [the section below](#openai-codex-integration))*.
+> Multi-workspace orchestrator for [Claude Code](https://claude.com/claude-code) and [OpenAI Codex](https://developers.openai.com/codex/) agents.
+
+[![npm](https://img.shields.io/npm/v/@loicngr/kobo.svg)](https://www.npmjs.com/package/@loicngr/kobo)
+[![license](https://img.shields.io/npm/l/@loicngr/kobo.svg)](./LICENSE)
+[![node](https://img.shields.io/node/v/@loicngr/kobo.svg)](https://nodejs.org/)
+
+Kōbō runs multiple coding agents in parallel, each isolated in its own git worktree, branch, and dev server. A single Vue dashboard streams output, tasks, git state, and quota usage across every workspace.
 
 > [!NOTE]
-> 🚧 **Active development** — breaking changes may still land on `develop`. The database layer ships with forward-only migrations and a timestamped pre-migration backup of `kobo.db` before any schema change, so upgrades preserve your data even across invasive refactors.
-
-Kōbō lets you delegate multiple coding missions to Claude Code agents in parallel. Each workspace lives in its own isolated git worktree with its own branch, its own Claude session, optionally its own dev server, and a custom MCP tools server the agent uses to track progress. A Vue 3 dashboard shows live agent output, tasks, acceptance criteria, and git state across every workspace.
-
-Think of it as an apprentice's hall: you hand out missions, each apprentice sets up their own workbench, and you watch them work from a single control surface.
+> Active development on `develop`. Forward-only migrations and timestamped pre-migration backups keep upgrades safe.
 
 ## Features
 
-- **Isolated git worktrees** — every workspace runs on its own branch in its own directory, with a configurable global worktrees root for new workspaces, so concurrent Claude sessions never step on each other
-- **Pluggable agent engine — two runtimes shipped** — Kōbō talks to agents through an `AgentEngine` contract with a normalised `AgentEvent` stream (`src/server/services/agent/engines/`). The `claude-code` engine runs on the official [`@anthropic-ai/claude-agent-sdk`](https://github.com/anthropics/claude-agent-sdk-typescript); the `codex` engine speaks the [`codex app-server`](https://github.com/openai/codex) JSON-RPC protocol over stdio with the official [`@openai/codex`](https://www.npmjs.com/package/@openai/codex) binary. Engine is chosen per-workspace at creation time, with a single normalised UI (sub-agents, tool calls, todos, reasoning, permission modes, MCP servers, auto-loop) covering both. Adding a third runtime only requires a new adapter, not a rewrite of the UI or orchestration layer
-- **Interactive `AskUserQuestion`** — when the agent invokes `AskUserQuestion`, Kōbō pauses the session via the SDK's `defer` pattern, surfaces a question panel in the UI, and resumes the agent once the user answers. The session does not occupy any resources while it waits
-- **Rich chat feed** — live streaming text, thinking blocks, inline tool calls with expandable diffs for Edit/Write, per-turn session cards, markdown rendering, jump-to-previous-user-message button, and infinite scroll-up over persisted history
-- **Task & acceptance criteria tracking** — the agent reports progress through a dedicated MCP server (`kobo-tasks`) that reads and updates tasks directly from the SQLite database
-- **Documents panel** — tree view in the right drawer that surfaces every AI-generated markdown file under `docs/plans/`, `docs/superpowers/`, and `.ai/thoughts/`. Paths mentioned in chat messages are auto-detected against the catalogue and become one-click deep-links into the panel
-- **Git panel with inline diff viewer** — Monaco-powered side-by-side / inline diff of the working branch against its source, with file tree (same q-tree as Documents), inline rebase/merge conflict resolution, and a clean action bar: `Sync` split-button (pull / rebase / merge), `Push`, `Diff`, `Create PR`
-- **Notion integration** — pull workspace missions straight from Notion pages, extract markdown, and use it as the source of truth for acceptance criteria. Right-click a Notion-sourced workspace to jump back to its source page in one click
-- **Sentry integration** — paste a Sentry issue URL to spin up a dedicated "fix workspace" with the stacktrace, tags, and offending spans written to `.ai/thoughts/SENTRY-<id>.md`; the agent is primed with a TDD fix workflow and has access to the Sentry MCP tools for deeper digging. Right-click reopens the Sentry issue in Sentry's UI
-- **Per-workspace dev servers** — start/stop Docker or Node dev servers scoped to each branch, with log streaming
-- **Conventional-commit enforcement** — project-level git conventions are written to `.ai/.git-conventions.md` inside every workspace so Claude follows them during commits
-- **Pull request automation** — one-click `push`, `pull`, `open-pr`, and "change PR base" endpoints integrate with the GitHub CLI, using a configurable prompt template
-- **Multi-session support** — create multiple Claude agent sessions per workspace, each with its own chat history; resume completed sessions via `--resume`; sessions are named and persisted in localStorage
-- **Prompt templates** — personal library of reusable prompts with variable substitution (`{working_branch}`, `{commit_count}`, etc.), insertable from the chat input via `/` autocomplete; editable in Settings > Templates
-- **Favorites and tags** — pin workspaces to the top via right-click favourite, organise with per-workspace tags filterable from the sidebar; a global tag catalogue keeps colours consistent across workspaces
-- **Health panel + config export/import** — inspect backend health (agent sessions, migration state, dev servers, DB size) and roundtrip your Kōbō config (settings, templates, skills) between machines via JSON
-- **Account-level quota panel** — a colored mini-bar badge in the chat footer shows the current Claude Code 5-hour and 7-day usage (Claude workspaces) or live Codex rate-limit buckets (Codex workspaces — driven by the structured `account/rateLimits/updated` app-server notification). Click to open a popover with full bars, reset times, a "Refresh now" button, and a one-click jump to the Stats tab. Pluggable per-provider, persisted in SQLite so the badge is populated on cold start, and account-level so it's the same across workspaces sharing the same engine
-- **Resizable right drawer** — drag-to-resize horizontally and vertically, with tab state and split ratio persisted to localStorage
-- **Soft interrupt** — pause an agent mid-execution (SIGINT, like pressing Escape in Claude Code) without killing the process; the agent stops the current tool and waits for the next message
-- **Archive instead of delete** — soft-remove workspaces without losing the worktree, branches, or history; unarchive restores the exact pre-archive state
-- **Auto-loop mode** — opt-in, per-workspace: when enabled, Kōbō spawns a fresh Claude session for the next pending task after every `session:ended`, walking through the task list until all are `done`. Stops automatically on error, on stall (3 consecutive sessions with no task completed), or when the user clicks Stop. A grooming step (`/kobo-prep-autoloop`) ensures tasks are atomic before the loop runs; Notion-imported workspaces with both todos and acceptance criteria are auto-unlocked. **E2E grooming** — when a project declares an E2E framework in Settings (Cypress, Playwright, Vitest, etc.), the grooming phase injects an `[E2E] ` test sub-task between every parent task; each iteration then runs the matching E2E suite as part of its acceptance check. **Sidebar progress chip** — auto-loop workspaces show an `X / Y tâches` badge in the workspace list, fed by the same task counts used by the in-page chip
-- **Attach existing worktrees** — Kōbō detects orphan git worktrees for the selected project (created outside Kōbō, or left over from an earlier install) and lets you attach them to a new workspace from the creation form, picking up the existing branch and folder instead of cloning a new one
-- **Persistent quota backoff** — when a Claude rate limit is hit mid-session, Kōbō schedules the retry at the actual reset time reported by the API (via `rate_limit.info.buckets[].resetsAt`), falling back to the OAuth usage poller, then to a 15 → 30 → 60 → 180 → 300 min ladder when both are missing. The pending backoff is **persisted in SQLite** and re-armed on server restart, so nothing is lost if the host reboots mid-window. A live banner counts down to the reset and lets the user cancel the wait. Only auto-loop workspaces resume automatically — others stay in `quota` status awaiting a manual nudge
-- **Workspace description fields** — every workspace has TWO independent description fields. The user-side `description` is editable via the header input or right-click **Modifier la description**, and stays under the user's control (the agent cannot overwrite it). The agent maintains its own `agent_description` via the `set_workspace_agent_description` MCP tool to broadcast a live status (e.g. "Investigating SERVICE-1600 → enriching local Notion file"). Both are visible: the sidebar shows `agent_description` when set, falling back to the user `description`; the workspace header shows the user input plus an italic read-only line for the agent's current focus
-- **Scheduled wakeups** — the `ScheduleWakeup` tool is honoured server-side: Kōbō persists the wakeup in SQLite, rehydrates on restart, and respawns the agent with `--resume` at the target time. Delay is clamped to `[60s, 6h]`. The kobo-tasks MCP server also exposes `kobo__schedule_wakeup` / `kobo__cancel_wakeup` for the same flow with first-class tool descriptors
-- **Recurring & one-shot crons** — agents schedule recurring triggers via `kobo__cron_create(expression, prompt, label?, mode?, oneShot?)`. Standard 5-field cron expressions (`*/30 * * * *`) plus helpers (`@hourly`, `@daily`, `@weekly`, `@monthly`, `@yearly`). Two modes: `'resume'` (default) pins the cron to the session that scheduled it so each fire continues that conversation; `'fresh'` spawns a brand-new session per fire (clean context, ideal for periodic CI / dashboard checks). `oneShot: true` cancels the cron after the first real fire — useful for "trigger once at a specific date/time" without recurring. Crons are persisted in SQLite, re-armed on restart with skip-missed semantics (no catchup spam after downtime), and skip-if-active when a session is already running. Multiple crons per workspace. The native Claude Code `CronCreate` tool is also intercepted and mirrored as a kobo cron so even agents using the SDK-default tool benefit from persistence
-- **Schedule panel in the right drawer** — dedicated tab listing every wakeup and cron currently armed for the focused workspace, with their next/last fire times, prompt preview, and a `×` button to cancel inline. Sidebar workspace cards display an `event_repeat` icon when one or more crons are scheduled, even for workspaces not currently focused — broadcast live via WebSocket events
-
-## Tech stack
-
-- **Backend** — Node.js ≥ 20, [Hono](https://hono.dev/), [better-sqlite3](https://github.com/WiseLibs/better-sqlite3), [ws](https://github.com/websockets/ws), [`@modelcontextprotocol/sdk`](https://github.com/modelcontextprotocol/typescript-sdk)
-- **Frontend** — [Vue 3](https://vuejs.org/), [Quasar 2](https://quasar.dev/), [Pinia](https://pinia.vuejs.org/), `vue-router`, [Monaco Editor](https://microsoft.github.io/monaco-editor/) (git diff viewer), `marked` + `dompurify` (markdown rendering)
-- **Tooling** — TypeScript, [Vitest](https://vitest.dev/), [Biome](https://biomejs.dev/) (lint + format), `tsx` for dev
-- **Storage** — single SQLite file (`~/.config/kobo/kobo.db` by default, overridable via `KOBO_HOME`) with WAL mode and forward-only migrations
+- **Isolated worktrees** — each workspace is a dedicated git worktree on its own branch; parallel sessions never collide.
+- **Two agent engines** — Claude Code (via `@anthropic-ai/claude-agent-sdk`) and OpenAI Codex (via `codex app-server`), chosen per workspace.
+- **Live chat** — streaming text, reasoning blocks, inline Edit/Write diffs, per-turn cards, infinite scrollback.
+- **Task tracking** — per-workspace MCP server (`kobo-tasks`) lets the agent manage its own tasks, acceptance criteria, and live status.
+- **Git panel** — Monaco-based diff viewer, inline conflict resolution, `Sync` / `Push` / `Open PR` wired to the `gh` CLI.
+- **Auto-loop** — opt-in mode that walks the task list, spawning a fresh session per task and stopping on completion, stall, or error.
+- **Quota-aware** — 5-hour / 7-day Claude usage and Codex rate-limit buckets in the footer; sessions auto-resume after a rate-limit reset.
+- **Persistent scheduling** — wakeups and crons survive restarts; the scheduler re-arms them at boot with skip-missed semantics.
+- **Optional integrations** — Notion (import missions), Sentry (fix from issue URL), local voice transcription (whisper.cpp).
 
 ## Quick start
 
-### Prerequisites
-
-- Node.js ≥ 20
-- At least one agent runtime, authenticated:
-  - [Claude Code](https://claude.com/claude-code) — `claude /login` once. The `claude` CLI is **no longer required at runtime** — Kōbō embeds the official [`@anthropic-ai/claude-agent-sdk`](https://github.com/anthropics/claude-agent-sdk-typescript), which reuses the same login.
-  - [OpenAI Codex](https://developers.openai.com/codex/) — `codex login` once, or export `OPENAI_API_KEY` in the env. See [OpenAI Codex integration](#openai-codex-integration). Workspaces pick an engine at creation time, so you only need to set up the one(s) you use.
-- Git
-- Optional: Docker (if you configure per-workspace dev servers)
-- Optional: `gh` CLI (if you use the PR automation)
-- Optional: a Notion integration token (only if you want to import workspace missions from Notion pages — see [Notion integration](#notion-integration))
-- Optional: a Sentry auth token (only if you want to create fix workspaces from Sentry issue URLs — see [Sentry integration](#sentry-integration))
-
-### Run via `npx` (recommended)
+Requires Node.js ≥ 20 and a logged-in Claude Code **or** Codex CLI.
 
 ```bash
-SERVER_PORT=9998 PORT=9999 npx @loicngr/kobo@latest
+npx @loicngr/kobo@latest
 ```
 
-That's it. npm downloads the package, installs dependencies, starts the Kōbō server on the port you specified, and serves the web UI at `http://localhost:9999`. Data is persisted to `~/.config/kobo/` (overridable via `KOBO_HOME`).
+Open <http://localhost:9999>. Data is persisted under `~/.config/kobo/` (override via `KOBO_HOME`).
 
-On first launch Kōbō creates `~/.config/kobo/` if it doesn't exist. If you have not yet logged in to Claude Code (`claude /login`), the SDK will prompt for an `ANTHROPIC_API_KEY` instead — log in once to share the same authentication across Claude Code, the embedded SDK, and the quota poller.
-
-### Run from source (contributors)
+### From source
 
 ```bash
-git clone https://github.com/loicngr/kobo.git
-cd kobo
+git clone https://github.com/loicngr/Kobo.git
+cd Kobo
 npm install
 (cd src/client && npm install)
+npm run dev:all   # backend :3300 + client :8080
 ```
 
-### Run (development)
-
-```bash
-npm run dev:all
-```
-
-This starts the Hono backend on port `3300` (via `tsx watch`, with `KOBO_HOME=./data` so dev uses the repo-local data directory and never touches your real `~/.config/kobo/`) and the Quasar dev server on port `8080` concurrently. Open <http://localhost:8080> in your browser.
-
-You can run a production-installed Kōbō (`npx @loicngr/kobo`) alongside a dev server without any conflict — they use different data directories by design.
-
-To run them separately:
-
-```bash
-npm run dev         # backend only (KOBO_HOME=./data automatically)
-npm run dev:client  # frontend only
-```
-
-### Build (production)
-
-```bash
-npm run build       # builds client + server
-npm start           # runs the compiled server
-```
-
-### Test & lint
-
-```bash
-npm test            # backend vitest suite (1200+ tests)
-npm run test:client # client vitest suite (Pinia stores + pure utils, 230+ tests)
-npm run test:all    # backend + client suites
-npm run lint        # biome check (lint + format verification)
-npm run lint:fix    # biome check with safe auto-fixes
-npm run format      # biome format --write
-npx tsc --noEmit    # server type check
-```
-
-## Notion integration
-
-Kōbō can pull the content of a Notion page (title, body, checklists) and turn it into tasks and acceptance criteria when you create a workspace. **This feature is opt-in and requires you to configure your own Notion credentials** — Kōbō does not ship an API key.
-
-Under the hood, Kōbō spawns the official [`@notionhq/notion-mcp-server`](https://github.com/makenotion/notion-mcp-server) as a child process and talks to it over stdio using the Model Context Protocol. The package is fetched via `npx -y @notionhq/notion-mcp-server` the first time you trigger an import, so there is nothing to install manually — only a token to provide.
-
-### Getting a Notion integration token
-
-1. Go to <https://www.notion.so/profile/integrations> and create a new internal integration
-2. Give it a name (e.g. `kobo`) and the capabilities you need (at minimum: *Read content*)
-3. Copy the internal integration secret (format `ntn_...` or `secret_...`)
-4. Open the Notion page you want to import, click **…** → **Connections** → **Add connection** → select your integration. Kōbō can only read pages that are explicitly shared with the integration.
-
-### Giving the token to Kōbō
-
-Kōbō reads the token from the first source available, in this order:
-
-1. `NOTION_API_TOKEN` environment variable
-2. `NOTION_TOKEN` environment variable
-3. `~/.claude.json` — if you already have the Notion MCP configured for Claude Code, Kōbō reads the token from `mcpServers.notion.env.NOTION_TOKEN` (or `NOTION_API_TOKEN`). **This is the recommended setup** — one token configured once, shared by both Claude Code and Kōbō.
-
-Example: configure Notion MCP in Claude Code (one-time setup that also unlocks Kōbō's Notion import):
-
-```bash
-claude mcp add notion -s user -e NOTION_TOKEN=ntn_your_token_here -- npx -y @notionhq/notion-mcp-server
-```
-
-Or launch Kōbō with the token inline:
-
-```bash
-NOTION_API_TOKEN=ntn_your_token_here PORT=9999 npx @loicngr/kobo@latest
-```
-
-### Advanced: overriding the MCP command
-
-If you need to pin a specific version of the Notion MCP server, use a fork, or avoid `npx`, set these env vars before launching Kōbō:
-
-- `NOTION_MCP_COMMAND` — the binary to run (default: `npx`)
-- `NOTION_MCP_ARGS` — space-separated arguments (default: `-y @notionhq/notion-mcp-server`)
-
-Without a valid token configured, the Notion import field in the workspace creation form will return an error when you click **Refresh** or submit a Notion URL — the rest of Kōbō (workspaces, agents, tasks, Git integration) keeps working independently.
-
-## OpenAI Codex integration
-
-> [!WARNING]
-> 🧪 **Experimental** — the Codex engine has shipped but is still maturing. The Claude Code engine remains the primary, battle-tested path. Expect occasional rough edges on Codex-only flows (tool rendering for less common item types, sub-agent interactions, edge cases around `collaborationMode` and approval prompts). Bugs and feedback welcome on the issue tracker.
-
-Kōbō ships a second agent engine that runs on top of the official **OpenAI Codex** CLI. Pick `OpenAI Codex` in the engine selector when you create a workspace and the agent talks to the `codex` binary instead of Claude Code, with the same UI surface: streaming text, reasoning blocks, tool cards (Bash, Edit, Read, WebSearch, MCP tools, ImageGeneration), sub-agents (Codex's `collabAgentToolCall` family is mapped onto the same `Task` panel Claude's Task tool feeds), todo list, permission modes, interactive approvals, structured rate limits, auto-loop. **This feature is opt-in and requires you to authenticate the `codex` CLI separately from Claude Code** — Kōbō ships no OpenAI credentials.
-
-Under the hood, Kōbō spawns a long-lived `codex app-server` subprocess per workspace and speaks the [Codex app-server JSON-RPC protocol](https://github.com/openai/codex/tree/main/codex-rs/app-server) over stdio. The `codex` binary is pulled in via the [`@openai/codex`](https://www.npmjs.com/package/@openai/codex) npm package, which is a direct dependency — no separate install required.
-
-### Authenticating the Codex CLI
-
-Two paths, pick one:
-
-1. **`codex login` (recommended)** — run `codex login` once. The CLI writes a token to `~/.codex/auth.json` which Kōbō's spawned `codex app-server` reuses automatically:
-
-   ```bash
-   codex login
-   ```
-
-2. **`OPENAI_API_KEY` env var** — set the variable before launching Kōbō:
-
-   ```bash
-   OPENAI_API_KEY=sk-your-key-here PORT=9999 npx @loicngr/kobo@latest
-   ```
-
-Kōbō does not store or proxy the key. If you change the credential or revoke it, Kōbō follows automatically on the next session start.
-
-### Permission modes (Codex)
-
-Kōbō's four permission modes (`plan` / `bypass` / `strict` / `interactive`) map to Codex's `sandbox` + `approvalPolicy` pair, plus a separate `collaborationMode` flag that gates interactive questions:
-
-| Kōbō mode | Codex sandbox | Codex approvalPolicy | Codex collaborationMode | Effect |
-|---|---|---|---|---|
-| `plan` | `read-only` | `never` | `plan` | Read-only sandbox + the agent can ask interactive questions (`request_user_input`) |
-| `bypass` | `workspace-write` | `never` | `default` | Full autonomy in the worktree, no approvals |
-| `strict` | `workspace-write` | `on-request` | `default` | Writes allowed, approval prompted on sensitive commands |
-| `interactive` | `workspace-write` | `unless-trusted` | `default` | Writes allowed, approval prompted on every untrusted action |
-
-Interactive Q&A (`request_user_input`) is only available in `plan` — this is a constraint of Codex itself, not Kōbō. The typical workflow is: brainstorm in `plan` until the agent has the context it needs, then switch to `bypass`/`strict` for execution.
-
-### Models and reasoning effort
-
-The Codex engine exposes the OpenAI model catalogue (`gpt-5-codex`, `gpt-5.4`, `o4-mini`, `o3`) and the standard reasoning-effort scale (`auto` / `minimal` / `low` / `medium` / `high` / `xhigh`). Both selectors switch automatically when you flip the workspace's engine.
-
-### Sub-agents
-
-When the Codex agent uses its `spawnAgent` collab tool, Kōbō renders a **Task** card in the chat (like Claude's Task tool) and a live entry in the **SUB-AGENTS** panel of the right drawer — same plumbing the Claude engine uses. The same panel is hidden for engines that don't expose sub-agents.
-
-### MCP servers
-
-The `kobo-tasks` MCP server (and any other MCP server you configure on the workspace) is plumbed into Codex through the standard `config.mcp_servers` entry. Tool calls under those servers are pre-approved (`default_tools_approval_mode: 'auto'`) so the agent doesn't get blocked on every call.
-
-### When the binary is missing
-
-Without a working `codex` install or a valid credential, creating a `codex`-engine workspace returns a clear error at first turn and the workspace transitions to `error` status. The rest of Kōbō (Claude-engine workspaces, tasks, Git, dev servers) keeps working independently.
-
-## Voice transcription (local Whisper)
-
-Kōbō supports local voice transcription with push-to-talk in both:
-
-- `WorkspacePage` (chat input)
-- `CreatePage` (workspace instructions textarea)
-
-### Requirements
-
-- `whisper-cli` from [`whisper.cpp`](https://github.com/ggml-org/whisper.cpp)
-- `ffmpeg`
-- `cmake` (required to build `whisper.cpp` from source)
-- At least one Whisper model downloaded from **Settings → Voice**
-
-### Install `whisper.cpp` (Linux/macOS)
-
-```bash
-git clone https://github.com/ggml-org/whisper.cpp.git
-cd whisper.cpp
-cmake -B build
-cmake --build build -j
-```
-
-This usually produces `build/bin/whisper-cli`.
-
-You can also download a prebuilt archive from the `whisper.cpp` releases page (for example: <https://github.com/ggml-org/whisper.cpp/releases/tag/v1.8.4>) and point Kōbō to the extracted `whisper-cli` binary path.
-
-### Install `ffmpeg`
-
-Ubuntu / Debian:
-
-```bash
-sudo apt update
-sudo apt install -y cmake build-essential ffmpeg
-```
-
-Windows:
-
-- Install `ffmpeg` (for example via Chocolatey: `choco install ffmpeg`, or via Scoop: `scoop install ffmpeg`)
-- Verify in PowerShell:
-
-```powershell
-where ffmpeg
-ffmpeg -version
-```
-
-### Windows notes for `whisper.cpp`
-
-Install CMake and Visual Studio Build Tools (C/C++), then build `whisper.cpp` (or use a prebuilt `whisper-cli`), then verify:
-
-```powershell
-where whisper-cli
-whisper-cli -h
-```
-
-### Configure in Kōbō
-
-Open **Settings → Voice**:
-
-- Enable voice transcription
-- Optionally set:
-  - **Whisper binary path (optional)**
-  - **ffmpeg binary path (optional)**
-- If left empty, Kōbō falls back to:
-  - `whisper-cli` from `PATH` (or `WHISPER_CPP_COMMAND` if set)
-  - `ffmpeg` from `PATH`
-- Download a model (e.g. `base`) and select it as active
-
-The Voice panel shows runtime status (`ready/missing`) for both Whisper and ffmpeg so setup issues are visible immediately.
-
-### Advanced voice parameters
-
-Kōbō exposes additional transcription settings in **Settings → Voice**:
-
-- **Temperature** (`0..1`) — decoding stability vs flexibility
-- **Initial prompt** — optional context/jargon for better recognition
-- **Translate to English** — translate non-English speech to English
-- **Suppress non-speech tokens** — reduce non-speech artifacts in output
-
-Recommended defaults by model:
-
-- `tiny` / `base` → `0.1`
-- `small` / `medium` / `large-v3` → `0.2`
-
-## Sentry integration
-
-Kōbō can turn a Sentry issue into a dedicated "fix workspace" — you paste the issue URL at workspace creation and Kōbō extracts the stacktrace, culprit, tags, offending spans and extra context, writes them as a local markdown file inside the worktree (`.ai/thoughts/SENTRY-<id>.md`), and primes the Claude agent with a TDD fix workflow that points at that file. The agent also keeps access to the Sentry MCP tools (`search_issue_events`, `get_issue_tag_values`, `get_sentry_resource`) so it can dig deeper on its own. **This feature is opt-in and reuses the Sentry MCP configuration you already have for Claude Code** — Kōbō does not manage a Sentry token separately.
-
-Under the hood, Kōbō spawns the official [`@sentry/mcp-server`](https://www.npmjs.com/package/@sentry/mcp-server) as a child process using the exact `command`, `args`, and `env` from your `~/.claude.json`, then calls `get_sentry_resource` over stdio. No token handling inside Kōbō — if you change the token or the host in your Claude Code config, Kōbō follows automatically.
-
-### Getting a Sentry auth token
-
-1. In Sentry, go to **Settings → Developer Settings → Custom Integrations** (or **User Auth Tokens** for personal use)
-2. Create a token with at least these scopes: `project:read`, `event:read`, `org:read`
-3. Copy the token (format `sntryu_...` for user tokens)
-
-### Configuring the Sentry MCP in Claude Code
-
-The recommended setup is to register the Sentry MCP once in Claude Code — Kōbō picks it up automatically:
-
-```bash
-claude mcp add sentry -s user \
-  -e SENTRY_ACCESS_TOKEN=sntryu_your_token_here \
-  -e SENTRY_HOST=your-org.sentry.io \
-  -- npx -y @sentry/mcp-server@latest
-```
-
-For self-hosted Sentry, set `SENTRY_HOST` to your Sentry hostname (e.g. `sentry.mycompany.com`).
-
-### How Kōbō picks the entry
-
-Kōbō reads `~/.claude.json` and uses the first entry under `mcpServers` whose key contains `sentry` (case-insensitive) **and is not disabled**. This means:
-
-- A single `sentry` entry → used as-is
-- Multiple entries whose key contains `sentry` → the first matching non-disabled key wins
-- Toggle `"disabled": true` on an entry to make Kōbō skip it
-
-### Usage
-
-1. In the workspace creation form, click **Import Sentry**
-2. Paste the issue URL (e.g. `https://your-org.sentry.io/issues/112081699`)
-3. Submit — Kōbō extracts the issue, writes `.ai/thoughts/SENTRY-<numericId>.md`, creates a `Fix: <title>` task, and boots the agent with the fix workflow
-
-The Sentry issue Short-ID (e.g. `ACME-API-3` — the canonical identifier Sentry assigns to each issue) is used as the ticket prefix for the working branch (e.g. `fix/ACME-API-3--slow-db-query` or `bugfix/ACME-API-3--slow-db-query`, depending on the branch prefix you chose at creation). The Short-ID is also what Sentry recognises in commit messages like `Fixes ACME-API-3` to auto-close the issue on merge. The local copy of the issue is written to `.ai/thoughts/SENTRY-<shortId>.md` (e.g. `SENTRY-ACME-API-3.md`). When Sentry is active, the description field becomes optional — the extracted context is enough to start work.
-
-If the MCP server is slow to initialize (e.g. cold `npx` fetch, self-hosted host validation), bump the handshake timeout with `KOBO_MCP_INIT_TIMEOUT_MS` (default: `30000`).
-
-Without a valid Sentry MCP configured in `~/.claude.json`, the Sentry import field returns a clear error when you submit — the rest of Kōbō keeps working.
-
-## Recommended: Superpowers plugin for Claude Code
-
-For the best experience, we recommend installing the [**superpowers**](https://github.com/obra/superpowers) plugin in Claude Code. Kōbō is designed to work well with it out of the box:
-
-- **Brainstorming → spec → plan → execute** workflow — superpowers produces design specs in `docs/superpowers/specs/` and implementation plans in `docs/superpowers/plans/`; Kōbō's **Plan browser** (right-side drawer) lists both so you can review them without leaving the UI
-- **Subagent-driven development** — executes plans task-by-task via parallel subagents; Kōbō surfaces sub-agent activity in the chat feed and the *Agent busy* banner so you always know what's running
-- **Test-driven development, systematic debugging, code review** — all integrated with Kōbō's task tracking and git workflow
-
-Install inside Claude Code:
-
-```bash
-/plugin marketplace add obra/superpowers-marketplace
-/plugin install superpowers@superpowers-marketplace
-```
-
-Then start a new workspace in Kōbō — the agent will pick up the skills automatically.
-
-## Architecture
-
-```
-src/
-├── server/                                 # Hono backend
-│   ├── index.ts                            # app bootstrap + WS upgrade
-│   ├── db/                                 # SQLite schema, migrations, singleton
-│   ├── services/
-│   │   ├── agent/                          # agent engine abstraction (replaces agent-manager.ts)
-│   │   │   ├── orchestrator.ts             # per-workspace engine map, retry/quota, watchdog, public API
-│   │   │   ├── session-controller.ts       # lifecycle wrapper around one AgentEngine instance
-│   │   │   ├── event-router.ts             # maps engine AgentEvent stream to WS emit + DB side-effects
-│   │   │   └── engines/claude-code/        # spawn + NDJSON stream-parser + args-builder + mcp-config + capabilities
-│   │   ├── content-migration-service.ts    # legacy ws_events → normalised AgentEvent rows, with DB backup
-│   │   ├── usage/                          # pluggable quota provider, 60s poller, persistence, WS broadcast
-│   │   ├── quota-backoff-service.ts        # persisted Claude rate-limit backoff timers (re-armed on restart)
-│   │   ├── cron-service.ts                 # persisted cron schedules (recurring + one-shot, resume/fresh modes)
-│   │   ├── wakeup-service.ts               # persisted one-shot session resumes (clamped to [60s, 6h])
-│   │   └── …                               # workspace, dev-server, ws, notion, sentry, settings, pr-template
-│   ├── routes/                             # Hono handlers (workspaces, engines, migration, templates, usage, …)
-│   └── utils/                              # git-ops, process-tracker, paths
-├── shared/                                 # modules shared by backend and frontend (e.g. model catalogue)
-├── client/                                 # Vue 3 + Quasar SPA
-│   └── src/
-│       ├── stores/                         # Pinia: workspace, websocket, agent-stream, migration, settings, …
-│       ├── components/                     # ActivityFeed, TurnCard, WorkspaceList, ChatInput, GitPanel, …
-│       ├── services/                       # agent-event-view (foldEvents), conversation-turns (groupIntoTurns), inline-diff
-│       ├── pages/                          # WorkspacePage, CreatePage, SettingsPage
-│       └── router/
-├── mcp-server/                             # standalone MCP server spawned per workspace
-│   ├── kobo-tasks-server.ts                # entry point, registers list_tasks & mark_task_done
-│   └── kobo-tasks-handlers.ts              # pure handlers over SQLite
-└── __tests__/                              # Vitest suite (engines, orchestrator, migration, routes, …)
-```
-
-See [`AGENTS.md`](./AGENTS.md) for a deeper dive into conventions, data model, WebSocket protocol, and contribution guidelines.
-
-## Data model
-
-| Table | Purpose |
-|---|---|
-| `workspaces` | the unit of work — branch, `worktree_path`, status, model, engine, `archived_at`, `favorited_at`, `tags`, Notion link, plus the two independent description columns (`description` user-controlled, `agent_description` agent-controlled), … |
-| `tasks` | workspace sub-items — tasks and acceptance criteria |
-| `agent_sessions` | agent runs — pid, `engine_session_id`, lifecycle |
-| `ws_events` | persisted WebSocket events (chat history, `agent:event` stream, user messages) for replay on reconnect |
-| `usage_snapshots` | latest quota snapshot per provider (one row per `provider_id`) — populated by the 60s polling loop, used for cold-start hydration of the chat-footer quota badge |
-| `pending_wakeups` | one row per scheduled wakeup, target time and resume context, re-armed on server restart |
-| `pending_quota_backoffs` | one row per workspace currently waiting on a Claude rate-limit reset, target time + reset metadata + retry count, re-armed on server restart |
-| `pending_crons` | one row per scheduled cron — expression, prompt, label, optional pinned `agent_session_id` (= resume mode) or NULL (= fresh mode), `next_fire_at`, `last_fired_at`, `one_shot` flag, re-armed on server restart with skip-missed semantics |
-
-## MCP server
-
-Each workspace spawns its own `kobo-tasks` MCP server as a child process of the Claude Code agent. It exposes a curated tool surface tailored for agents working inside a Kōbō workspace, grouped by intent:
-
-- **Tasks** — `list_tasks`, `create_task`, `update_task`, `delete_task`, `mark_task_done`
-- **Workspace metadata** — `get_workspace_info` (returns name, branch, status, both `description` and `agentDescription`, etc.), `set_workspace_agent_description` (live status the user sees in the sidebar without opening the workspace), `set_workspace_status`
-- **Auto-loop** — `mark_auto_loop_ready` (flip the grooming gate when the brainstorm step is done)
-- **Git** — `get_git_info` (branch, commit count, dirty state)
-- **Dev server** — `get_dev_server_status`, `start_dev_server`, `stop_dev_server`, `get_dev_server_logs`
-- **External sources** — `get_notion_ticket`, `get_settings`
-- **Documents & search** — `list_documents`, `read_document`, `log_thought`, `search_codebase`, `list_workspace_images`
-- **Scheduling & telemetry** — `schedule_wakeup`, `cancel_wakeup`, `cron_create`, `cron_delete`, `cron_list`, `get_session_usage`
-
-State-mutating tools that change UI-visible data (tasks, agent description, auto-loop readiness) write directly to SQLite for low latency, then fire-and-forget a `notify-*` HTTP call to the backend so the WebSocket layer broadcasts the change to every connected client. Tools that arm in-memory timers (`cron_create`, `cron_delete`) route through the backend HTTP API instead — the timer Map lives in the backend process which owns the orchestrator, so the cron survives the MCP server's session-bound lifetime.
-
-The MCP server reads and writes the same SQLite database as the main backend. Isolation between workspaces is enforced via the `KOBO_WORKSPACE_ID` environment variable passed at spawn time and validated on every query.
+A production-installed Kōbō (`npx @loicngr/kobo`) and a dev server can run side by side — they use separate data directories.
 
 ## Configuration
 
-Kōbō reads settings from `~/.config/kobo/settings.json` (or falls back to defaults). Global settings define defaults, with per-project overrides for project-scoped fields:
+The most common knobs:
 
-- `defaultModel` — Claude model to use (e.g. `claude-opus-4-6`)
-- `worktreesPath` — where new workspace worktrees are created. Defaults to `.worktrees`, resolved relative to the project. Absolute Linux/macOS paths, Windows paths (`C:\kobo\worktrees`, UNC shares), `$HOME/...`, `${HOME}/...`, `~/...`, and `%USERPROFILE%\...` are accepted. Paths containing parent-directory traversal (`..`) or drive-relative Windows syntax (`C:foo`) are rejected.
-- `prPromptTemplate` — template rendered when opening a PR via the `/open-pr` endpoint; supports `{{pr_number}}`, `{{pr_url}}`, `{{branch_name}}`, `{{diff_stats}}`, `{{commits}}`, etc.
-- `gitConventions` — markdown-formatted git conventions written to `.ai/.git-conventions.md` in every workspace so the agent follows them when committing
-- `devServer` — per-project `startCommand` / `stopCommand` for launching workspace-scoped dev servers
-- `e2e` — per-project E2E test framework (`cypress`, `playwright`, `jest`, `vitest`, `other`, or none) plus an optional skill name and prompt; consumed by the auto-loop grooming step to inject `[E2E] ` test sub-tasks alongside parent tasks
-- `finalization` — per-project free-form prompt that runs as the very last auto-loop iteration. The grooming step injects a `[FINAL]`-prefixed task at the end of the list whose iteration block is replaced by this prompt. Default content asks the agent to run linters, type-checkers, and tests. Empty string disables the feature.
+| Env var | Default | Purpose |
+|---|---|---|
+| `PORT` | `9999` | HTTP / WebSocket server port |
+| `KOBO_HOME` | `~/.config/kobo` | Data directory (SQLite, settings, voice models) |
+| `NOTION_API_TOKEN` | — | Notion integration token |
+| `OPENAI_API_KEY` | — | Codex engine credential (alternative to `codex login`) |
+
+Per-project settings (worktree path, dev server commands, E2E framework, prompt templates, git conventions) are edited in **Settings** at runtime.
+
+The full reference — every env var, every setting key, MCP server registration, Notion / Sentry / Voice setup — is in [`CONFIGURATION.md`](./CONFIGURATION.md).
+
+## Agent runtimes
+
+- **Claude Code.** Authenticate once with `claude /login`. Kōbō calls the embedded SDK directly — no `claude` binary required at runtime.
+- **OpenAI Codex** (experimental). Run `codex login` or export `OPENAI_API_KEY`. Kōbō spawns a long-lived `codex app-server` subprocess per workspace and bridges its JSON-RPC stream to the same UI.
+
+Engine selection happens at workspace creation. Both share the same task tracking, permission modes, sub-agent panel, and quota footer. The mapping of Kōbō's four permission modes (`plan` / `bypass` / `strict` / `interactive`) to each engine's native sandbox + approval semantics is in [`CONFIGURATION.md`](./CONFIGURATION.md#permission-modes).
+
+## Optional integrations
+
+Kōbō ships first-class support for three external systems. All are opt-in and reuse credentials you may already have configured for Claude Code.
+
+- **Notion** — import missions, tasks, and acceptance criteria from a Notion page.
+- **Sentry** — paste an issue URL to spawn a fix workspace with the stacktrace, tags, and a TDD workflow.
+- **Voice transcription** — local push-to-talk via [`whisper.cpp`](https://github.com/ggml-org/whisper.cpp).
+
+See [`CONFIGURATION.md`](./CONFIGURATION.md) for the setup of each.
+
+## Skill suites
+
+Kōbō's auto-generated prompts (review, auto-loop grooming, QA, brainstorming) can target four different skill ecosystems, selectable in **Settings → Skills**:
+
+- **[superpowers](https://github.com/obra/superpowers)** (default) — plugin for Claude Code with the brainstorm → spec → plan → execute discipline, TDD, debugging, code review.
+- **[gstack](https://github.com/garrytan/gstack)** — CLI slash commands for navigation, QA, design review, ship pipeline, second-opinion via Codex.
+- **superpowers + gstack** — both, with each used for what it does best.
+- **custom** — write your own prompts.
+
+Optionally pair with **[gbrain](https://github.com/garrytan/gbrain)** — a per-project knowledge graph + semantic search exposed as an MCP server. Inherited automatically from your `~/.claude.json` config.
+
+Full install instructions and the prompt-suite differences are in [`CONFIGURATION.md`](./CONFIGURATION.md#skill-suites).
+
+## Architecture
+
+Hono backend, Vue 3 + Quasar SPA, SQLite (WAL) for persistence, WebSocket for live updates. Each workspace spawns its own agent engine and a dedicated MCP server (`kobo-tasks`) the agent uses to query and mutate workspace state.
+
+```
+src/
+├── server/         # Hono backend (routes, services, db, agent orchestrator)
+│   ├── services/agent/engines/  # claude-code/ + codex/ engines
+│   └── ...
+├── client/         # Vue 3 + Quasar SPA
+├── mcp-server/     # kobo-tasks MCP server, spawned per workspace
+├── shared/         # types shared backend ↔ frontend
+└── __tests__/      # Vitest suite (1500+ tests)
+```
+
+[`AGENTS.md`](./AGENTS.md) covers the data model, WebSocket protocol, engine contracts, MCP tool surface, migration discipline, i18n rules, and contribution guidelines.
+
+## Scripts
+
+```bash
+npm run dev:all        # backend (:3300) + client (:8080)
+npm run build          # production build (client + server)
+npm start              # run the compiled server
+npm test               # backend vitest suite
+npm run test:client    # client vitest suite
+npm run lint           # biome check (lint + format)
+make ci                # full CI pipeline (audit + lint + tsc + tests)
+```
 
 ## Contributing
 
-This is a personal tool, but PRs and issues are welcome. Before submitting:
-
-1. Read [`AGENTS.md`](./AGENTS.md) — it covers the commit rules, branching model, and code conventions
-2. Run `npm run lint`, `npx tsc --noEmit`, and `npm test` locally
-3. Base your branch on `develop` (not `main`); PRs target `develop`
-
-CI runs lint + type check + tests on every PR to `develop`.
+PRs welcome. Branch off `develop`, follow Conventional Commits, run `make ci` before pushing. CI runs lint, type check, and tests on every PR to `develop`. See [`AGENTS.md`](./AGENTS.md) for code conventions and the database-migration discipline.
 
 ## Release
 
-Releases are cut from `main`. Bump `package.json` and `package-lock.json` on `develop`, merge `develop` into `main`, then push `main`. The release workflow builds, tests, publishes the current package version to npm, tags it as `v<version>`, and creates the GitHub Release. If the npm version or tag already exists, the workflow fails before publishing.
+Releases are cut from `main`. Bump `package.json` on `develop`, merge into `main`, push. The release workflow builds, tests, publishes to npm, tags `v<version>`, and creates the GitHub Release — failing early if the version or tag already exists.
 
 ## License
 
-GNU General Public License v3.0 or later. See [`LICENSE`](./LICENSE) for the full text.
-
-Kōbō links against [`better-sqlite3`](https://github.com/WiseLibs/better-sqlite3), [`@modelcontextprotocol/sdk`](https://github.com/modelcontextprotocol/typescript-sdk), [Vue](https://vuejs.org/), [Quasar](https://quasar.dev/), and other open-source libraries — see `package.json` for the full list.
+GPL-3.0-or-later. See [`LICENSE`](./LICENSE).
