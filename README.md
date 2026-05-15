@@ -15,12 +15,14 @@ Kōbō runs multiple coding agents in parallel, each isolated in its own git wor
 
 - **Isolated worktrees** — each workspace is a dedicated git worktree on its own branch; parallel sessions never collide.
 - **Two agent engines** — Claude Code (via `@anthropic-ai/claude-agent-sdk`) and OpenAI Codex (via `codex app-server`), chosen per workspace.
-- **Live chat** — streaming text, reasoning blocks, inline Edit/Write diffs, per-turn cards, infinite scrollback.
+- **Live chat** — streaming text, reasoning blocks, inline Edit/Write diffs, per-turn cards, infinite scrollback; `/` autocompletes skills & commands and `@` fuzzy-autocompletes worktree file paths; every workspace's session events are exportable to CSV.
 - **Task tracking** — per-workspace MCP server (`kobo-tasks`) lets the agent manage its own tasks, acceptance criteria, and live status.
 - **Git panel** — Monaco-based diff viewer, inline conflict resolution, `Sync` / `Push` / `Open PR` wired to the `gh` CLI.
 - **Auto-loop** — opt-in mode that walks the task list, spawning a fresh session per task and stopping on completion, stall, or error.
 - **Quota-aware** — 5-hour / 7-day Claude usage and Codex rate-limit buckets in the footer; sessions auto-resume after a rate-limit reset.
-- **Persistent scheduling** — wakeups and crons survive restarts; the scheduler re-arms them at boot with skip-missed semantics.
+- **Scheduled wakeups** — the agent schedules a one-shot wake-up via the `ScheduleWakeup` tool; Kōbō persists it across restarts, shows a live countdown, and re-invokes the agent with the stored prompt at the chosen time.
+- **Cron schedules** — recurring per-workspace triggers the agent registers through MCP tools (`cron_create` / `cron_delete` / `cron_list`); each tick resumes the workspace session (skipped if already active), and schedules are re-armed at boot with skip-missed semantics.
+- **Lifecycle scripts** — shell scripts run automatically at key moments: **setup** (worktree created), **cleanup** (session ended), **archive** (workspace archived). Configured globally or per project, with their output streamed into the chat.
 - **Optional integrations** — Notion (import missions), Sentry (fix from issue URL), local voice transcription (whisper.cpp).
 
 ## Quick start
@@ -63,7 +65,7 @@ The most common knobs:
 | `NOTION_API_TOKEN` | — | Notion integration token |
 | `OPENAI_API_KEY` | — | Codex engine credential (alternative to `codex login`) |
 
-Per-project settings (worktree path, dev server commands, E2E framework, prompt templates, git conventions) are edited in **Settings** at runtime.
+Global and per-project settings (worktree path, dev server commands, E2E framework, prompt templates, git conventions, branch prefixes, lifecycle scripts, task prompt) are edited in **Settings** at runtime — per-project values inherit from the global ones when left empty.
 
 The full reference — every env var, every setting key, MCP server registration, Notion / Sentry / Voice setup — is in [`CONFIGURATION.md`](./CONFIGURATION.md).
 

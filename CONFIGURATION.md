@@ -90,6 +90,11 @@ Settings are managed live from the **Settings** page in the UI and persisted to 
 | `notionInitialPromptTemplate` | `string` | Template injected as the first user message when a workspace is created from a Notion page. |
 | `sentryInitialPromptTemplate` | `string` | Template injected as the first user message when a workspace is created from a Sentry issue. |
 | `gitConventions` | `string` | Markdown block written to `.ai/.git-conventions.md` inside every workspace. |
+| `setupScript` | `string` | Shell script run in a worktree after it is created, before the agent starts. Empty disables. |
+| `cleanupScript` | `string` | Shell script run after a session ends. Empty disables. See `cleanupScriptMode`. |
+| `cleanupScriptMode` | `'idle' \| 'no-tasks'` | When the cleanup script fires: after every session (`idle`) or only when no Kōbō task remains (`no-tasks`). In auto-loop it runs only once every task is done. |
+| `cleanupScriptOnlyOnChanges` | `boolean` | Run the cleanup script only when the worktree has uncommitted changes (modified / added / deleted / untracked files). |
+| `archiveScript` | `string` | Shell script run server-side when a workspace is archived. Empty disables. |
 | `editorCommand` | `string` | Command used by the "Open in editor" action (e.g. `code`, `phpstorm`, `cursor`). The worktree path is appended as the last argument. |
 | `browserNotifications` | `boolean` | Trigger Web Notifications when an agent finishes a turn. |
 | `audioNotifications` | `boolean` | Play a sound when an agent finishes a turn. |
@@ -102,6 +107,7 @@ Settings are managed live from the **Settings** page in the UI and persisted to 
 | `notionAssigneeProperty` | `string` | Notion People property to auto-assign to the authenticated user. |
 | `notionUserId` | `string` | Notion user UUID assigned via `notionAssigneeProperty`. |
 | `tags` | `string[]` | Global tag catalogue exposed in the sidebar filters and the workspace-tag picker. |
+| `branchPrefixes` | `string[]` | Git branch prefixes offered on the workspace creation page (stored without the trailing `/`). The first entry is the default selection. |
 | `worktreesPath` | `string` | Root directory where new worktrees are created. Defaults to `.worktrees` (resolved relative to the project). Absolute, `$HOME`, `~`, and `%USERPROFILE%` are accepted; `..` and drive-relative Windows paths (`C:foo`) are rejected. |
 | `worktreesPrefixByProject` | `boolean` | Nest each worktree under a project-named subfolder, preventing collisions when multiple projects share the same `worktreesPath`. |
 | `voiceEnabled` | `boolean` | Enable local push-to-talk transcription. |
@@ -125,8 +131,10 @@ Projects override a subset of global settings — anything you set here takes pr
 | `defaultSourceBranch` | `string` | Source branch new workspaces branch from (e.g. `develop`). |
 | `defaultModel` | `string` | Project-scoped model default. |
 | `dangerouslySkipPermissions` | `boolean` | Project-scoped override. |
-| `prPromptTemplate`, `reviewPromptTemplate`, `notionInitialPromptTemplate`, `sentryInitialPromptTemplate`, `gitConventions` | `string` | Per-project versions of the global templates. |
-| `setupScript` | `string` | Shell command run once after a worktree is created (e.g. `npm install`). |
+| `prPromptTemplate`, `reviewPromptTemplate`, `notionInitialPromptTemplate`, `sentryInitialPromptTemplate`, `gitConventions` | `string` | Per-project versions of the global templates. Empty inherits the global value. |
+| `setupScript`, `cleanupScript`, `archiveScript` | `string` | Per-project versions of the global lifecycle scripts. Empty inherits the global value. |
+| `cleanupScriptMode` | `'' \| 'idle' \| 'no-tasks'` | Per-project override of the cleanup trigger mode. Empty inherits the global mode. |
+| `taskPromptTemplate` | `string` | Prompt auto-injected into the task-description textarea on the creation page when this project is selected. Empty disables. |
 | `devServer.startCommand` / `stopCommand` | `string` | Per-workspace dev server commands. Docker, npm, or any shell-startable process. |
 | `e2e.framework` | `'cypress' \| 'playwright' \| 'jest' \| 'vitest' \| 'other' \| ''` | E2E framework auto-loop grooming should target. |
 | `e2e.skill` | `string` | Optional skill name injected into the E2E grooming prompt. |
