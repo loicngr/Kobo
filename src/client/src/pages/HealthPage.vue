@@ -21,6 +21,12 @@
                 {{ report.version }}
               </div>
             </div>
+            <div class="col-auto">
+              <div class="text-caption text-grey-6">{{ $t('health.settingsSchemaVersion') }}</div>
+              <div class="text-body2" style="font-family: var(--kobo-font-mono, monospace);">
+                {{ report.settings.schemaVersion }}
+              </div>
+            </div>
             <div class="col">
               <div class="text-caption text-grey-6">{{ $t('health.koboHome') }}</div>
               <div class="text-body2">{{ report.koboHome }}</div>
