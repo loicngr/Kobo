@@ -19,6 +19,12 @@ vi.mock('../server/services/auto-loop-service.js', () => ({
   forgetAutoLoopState: vi.fn(),
   rehydrate: vi.fn(),
   onQuotaBackoffExpired: vi.fn(),
+  getStatus: vi.fn(() => ({ auto_loop: false, auto_loop_ready: false, no_progress_streak: 0 })),
+}))
+
+vi.mock('../server/services/cleanup-script-service.js', () => ({
+  onSessionEnded: vi.fn(),
+  onAutoLoopCompleted: vi.fn(),
 }))
 
 vi.mock('../server/services/usage/poller.js', () => ({

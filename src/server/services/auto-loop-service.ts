@@ -4,6 +4,7 @@ import { getDb } from '../db/index.js'
 import { slugifyProjectName } from '../utils/project-slug.js'
 import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 import * as orchestrator from './agent/orchestrator.js'
+import * as cleanupScriptService from './cleanup-script-service.js'
 import * as settingsService from './settings-service.js'
 import { getSuitePrompts } from './skill-suite-prompts.js'
 import { emit, emitEphemeral } from './websocket-service.js'
@@ -114,6 +115,13 @@ export function disable(workspaceId: string, reason: DisableReason): void {
   const db = getDb()
   db.prepare('UPDATE workspaces SET auto_loop = 0 WHERE id = ?').run(workspaceId)
   emitEphemeral(workspaceId, 'autoloop:disabled', { reason })
+
+  // The loop finished every task — run the project's cleanup script. Other
+  // disable reasons (stall / error / user-action) leave tasks unfinished, so
+  // they intentionally skip the cleanup.
+  if (reason === 'completed') {
+    cleanupScriptService.onAutoLoopCompleted(workspaceId)
+  }
 }
 
 /**

@@ -396,6 +396,51 @@ export function runMigrations(db: Database.Database): void {
       )
     }
   }
+
+  // Soft downgrade guard: if the database carries a migration version this
+  // build doesn't know about, it was migrated by a newer Kōbō. Forward-only
+  // migrations have no `down` step — warn loudly but let the app continue.
+  const maxVersion =
+    (db.prepare('SELECT MAX(version) AS v FROM schema_migrations').get() as { v: number | null }).v ?? 0
+  if (maxVersion > SCHEMA_VERSION) {
+    console.warn(
+      `[kobo] ⚠ Database schema version (${maxVersion}) is higher than this Kōbō build supports ` +
+        `(${SCHEMA_VERSION}). The database was migrated by a newer version of Kōbō — running an older ` +
+        `build may cause errors. Update Kōbō, or restore a pre-downgrade backup from the Kōbō home directory.`,
+    )
+  }
+}
+
+/**
+ * Return the versions of registered migrations not yet applied to `db`, without
+ * applying them. Used to decide whether a pre-migration backup is warranted.
+ * Returns `[]` for a fresh / uninitialised database — there is no data at risk.
+ */
+export function getPendingMigrations(db: Database.Database): number[] {
+  const tableExists = (name: string): boolean =>
+    (
+      db.prepare("SELECT count(*) AS c FROM sqlite_master WHERE type='table' AND name=?").get(name) as {
+        c: number
+      }
+    ).c > 0
+
+  let applied: Set<number>
+  if (tableExists('schema_migrations')) {
+    applied = new Set(
+      (db.prepare('SELECT version FROM schema_migrations').all() as { version: number }[]).map((r) => r.version),
+    )
+  } else if (tableExists('schema_version')) {
+    // Legacy single-row table: every version up to the stored one is applied.
+    const legacy =
+      (db.prepare('SELECT version FROM schema_version LIMIT 1').get() as { version: number } | undefined)?.version ?? 0
+    applied = new Set<number>()
+    for (let v = 1; v <= legacy; v++) applied.add(v)
+  } else {
+    // Fresh / uninitialised DB — initSchema bootstraps it, nothing to back up.
+    return []
+  }
+
+  return migrations.filter((m) => !applied.has(m.version)).map((m) => m.version)
 }
 
 /** Return the full migration history (for diagnostics / admin UI). */

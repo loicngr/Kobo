@@ -1784,6 +1784,99 @@ describe('DELETE /api/workspaces/:id', () => {
   })
 })
 
+describe('DELETE /api/workspaces/archived', () => {
+  beforeEach(() => {
+    // The DELETE /:id suite above leaves removeWorktree throwing — vi.clearAllMocks
+    // resets call history but not implementations, so restore the no-ops here.
+    vi.mocked(worktreeService.removeWorktree).mockReset()
+    vi.mocked(workspaceService.deleteWorkspace).mockReset()
+  })
+
+  const archivedA = {
+    ...fakeWorkspace,
+    id: 'ws-arch-1',
+    name: 'Archived A',
+    workingBranch: 'feature/a',
+    archivedAt: '2026-04-05T10:00:00.000Z',
+  }
+  const archivedB = {
+    ...fakeWorkspace,
+    id: 'ws-arch-2',
+    name: 'Archived B',
+    workingBranch: 'feature/b',
+    archivedAt: '2026-04-04T10:00:00.000Z',
+  }
+
+  it('bulk-deletes every archived workspace with full cleanup', async () => {
+    vi.mocked(workspaceService.listArchivedWorkspaces).mockReturnValue([archivedA, archivedB])
+
+    const res = await app.request('/api/workspaces/archived', {
+      method: 'DELETE',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ deleteLocalBranch: true, deleteRemoteBranch: true }),
+    })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok: boolean; deleted: number; warnings: string[] }
+    expect(body.ok).toBe(true)
+    expect(body.deleted).toBe(2)
+    expect(body.warnings).toEqual([])
+    expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-arch-1')
+    expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-arch-2')
+    expect(gitOps.deleteLocalBranch).toHaveBeenCalledWith('/tmp/project', 'feature/a')
+    expect(gitOps.deleteRemoteBranch).toHaveBeenCalledWith('/tmp/project', 'feature/b')
+  })
+
+  it('does not touch branches when no options are passed', async () => {
+    vi.mocked(workspaceService.listArchivedWorkspaces).mockReturnValue([archivedA])
+
+    const res = await app.request('/api/workspaces/archived', { method: 'DELETE' })
+
+    expect(res.status).toBe(200)
+    expect(gitOps.deleteLocalBranch).not.toHaveBeenCalled()
+    expect(gitOps.deleteRemoteBranch).not.toHaveBeenCalled()
+    expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-arch-1')
+  })
+
+  it('returns deleted: 0 when there are no archived workspaces', async () => {
+    vi.mocked(workspaceService.listArchivedWorkspaces).mockReturnValue([])
+
+    const res = await app.request('/api/workspaces/archived', { method: 'DELETE' })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { deleted: number; warnings: string[] }
+    expect(body.deleted).toBe(0)
+    expect(body.warnings).toEqual([])
+    expect(workspaceService.deleteWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('keeps deleting the rest of the batch when one workspace fails', async () => {
+    vi.mocked(workspaceService.listArchivedWorkspaces).mockReturnValue([archivedA, archivedB])
+    vi.mocked(workspaceService.deleteWorkspace).mockImplementation((id: string) => {
+      if (id === 'ws-arch-1') throw new Error('DB locked')
+    })
+
+    const res = await app.request('/api/workspaces/archived', { method: 'DELETE' })
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { deleted: number; warnings: string[] }
+    expect(body.deleted).toBe(1)
+    expect(body.warnings.join('\n')).toContain('Archived A')
+    expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-arch-2')
+  })
+
+  it('is not matched by DELETE /:id (route order regression)', async () => {
+    vi.mocked(workspaceService.listArchivedWorkspaces).mockReturnValue([])
+
+    const res = await app.request('/api/workspaces/archived', { method: 'DELETE' })
+
+    expect(res.status).toBe(200)
+    expect(workspaceService.listArchivedWorkspaces).toHaveBeenCalled()
+    // DELETE /:id resolves the target via getWorkspace — if it ran, order regressed.
+    expect(workspaceService.getWorkspace).not.toHaveBeenCalled()
+  })
+})
+
 describe('git conventions file creation on workspace create', () => {
   beforeEach(() => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace as never)

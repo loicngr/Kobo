@@ -5,10 +5,13 @@ import { serve } from '@hono/node-server'
 import { Hono } from 'hono'
 import WebSocket, { WebSocketServer } from 'ws'
 import { closeDb, getDb } from './db/index.js'
-import { runMigrations } from './db/migrations.js'
+import { getPendingMigrations, runMigrations } from './db/migrations.js'
+import changelogRouter from './routes/changelog.js'
 import devServerRouter from './routes/dev-server.js'
 import documentsRouter from './routes/documents.js'
 import { enginesRouter } from './routes/engines.js'
+import exportRouter from './routes/export.js'
+import fsRouter from './routes/fs.js'
 import gitRouter from './routes/git.js'
 import healthRouter from './routes/health.js'
 import imagesRouter from './routes/images.js'
@@ -35,7 +38,7 @@ import {
 import * as autoLoopService from './services/auto-loop-service.js'
 import { runContentMigrationIfNeeded } from './services/content-migration-service.js'
 import * as cronService from './services/cron-service.js'
-import { createDailyDbBackupIfNeeded } from './services/db-backup-service.js'
+import { createDailyDbBackupIfNeeded, createPreMigrationBackup } from './services/db-backup-service.js'
 import { startDevServer, stopDevServer } from './services/dev-server-service.js'
 import { startPrWatcher, stopPrWatcher } from './services/pr-watcher-service.js'
 import * as quotaBackoffService from './services/quota-backoff-service.js'
@@ -51,6 +54,20 @@ console.log(`[kobo] Kōbō home: ${getKoboHome()}`)
 
 // Initialize DB + run migrations
 const db = getDb()
+
+// Pre-migration backup: snapshot the DB before applying any pending schema
+// migration so a botched upgrade can be rolled back manually. Best-effort —
+// a backup failure must not block boot (the daily backup is a second net).
+try {
+  const pending = getPendingMigrations(db)
+  if (pending.length > 0) {
+    const result = await createPreMigrationBackup(db, getDbPath(), `v${pending[pending.length - 1]}`)
+    console.log(`[kobo] Pre-migration backup before applying ${pending.length} migration(s): ${result.created}`)
+  }
+} catch (err) {
+  console.error('[kobo] Pre-migration backup failed (continuing — daily backup remains as fallback):', err)
+}
+
 runMigrations(db)
 
 // Daily DB backup (best-effort, fire-and-forget — never blocks boot).
@@ -92,11 +109,14 @@ app.route('/api/workspaces', imagesRouter)
 app.route('/api/notion', notionRouter)
 app.route('/api/sentry', sentryRouter)
 app.route('/api/git', gitRouter)
+app.route('/api/fs', fsRouter)
+app.route('/api/changelog', changelogRouter)
 app.route('/api/settings', settingsRouter)
 app.route('/api/dev-server', devServerRouter)
 app.route('/api/templates', templatesRouter)
 app.route('/api/usage', usageRoutes)
 app.route('/api/workspaces', documentsRouter)
+app.route('/api/workspaces', exportRouter)
 app.route('/api/search', searchRouter)
 app.route('/api/health', healthRouter)
 app.route('/api/engines', enginesRouter)

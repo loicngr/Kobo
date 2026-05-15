@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import type { Settings } from '../server/services/settings-service.js'
 import {
   _setSettingsPath,
+  DEFAULT_BRANCH_PREFIXES,
   deleteProject,
   exportConfigBundle,
   getEffectiveSettings,
@@ -15,6 +16,7 @@ import {
   listProjects,
   runSettingsMigrations,
   SETTINGS_SCHEMA_VERSION,
+  sanitizeBranchPrefixes,
   updateGlobalSettings,
   upsertProject,
 } from '../server/services/settings-service.js'
@@ -232,6 +234,19 @@ describe('upsertProject()', () => {
 
     const projects = listProjects()
     expect(projects.length).toBe(1) // still one project
+  })
+
+  it('defaults taskPromptTemplate to an empty string on a new project', () => {
+    getSettings()
+    const project = upsertProject('/tmp/task-prompt-default', { displayName: 'P' })
+    expect(project.taskPromptTemplate).toBe('')
+  })
+
+  it('round-trips taskPromptTemplate via upsertProject + getProjectSettings', () => {
+    getSettings()
+    upsertProject('/tmp/task-prompt', { taskPromptTemplate: 'Describe the bug, steps, expected.' })
+    const got = getProjectSettings('/tmp/task-prompt')
+    expect(got?.taskPromptTemplate).toBe('Describe the bug, steps, expected.')
   })
 
   it('round-trips e2e settings via upsertProject + getProjectSettings', () => {
@@ -472,6 +487,17 @@ describe('automatic settings backups', () => {
       .some((content) => content === beforeDelete)
     expect(matching).toBe(true)
   })
+
+  it('rotates backups, keeping only the 5 most recent', () => {
+    getSettings()
+    // 8 updates → 8 backups created, but rotation keeps only the last 5.
+    for (let i = 0; i < 8; i++) {
+      updateGlobalSettings({ editorCommand: `editor-${i}` })
+    }
+
+    const backups = fs.readdirSync(tmpDir).filter((name) => /^settings\.json\.backup-/.test(name))
+    expect(backups.length).toBe(5)
+  })
 })
 
 describe('gitConventions', () => {
@@ -641,6 +667,287 @@ describe('runSettingsMigrations()', () => {
     const migrated = runSettingsMigrations(legacy as unknown as Record<string, unknown>)
     expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
     expect(migrated.global.worktreesPath).toBe('.worktrees')
+  })
+
+  it('migration v26 seeds the default branch prefixes on a legacy db', () => {
+    const legacy = {
+      schemaVersion: 25,
+      global: {},
+      projects: [],
+    }
+
+    const migrated = runSettingsMigrations(legacy as unknown as Record<string, unknown>)
+    expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+    expect(migrated.global.branchPrefixes).toEqual(DEFAULT_BRANCH_PREFIXES)
+  })
+
+  it('migration v26 preserves an existing branchPrefixes array', () => {
+    const legacy = {
+      schemaVersion: 25,
+      global: { branchPrefixes: ['feat', 'bug'] },
+      projects: [],
+    }
+
+    const migrated = runSettingsMigrations(legacy as unknown as Record<string, unknown>)
+    expect(migrated.global.branchPrefixes).toEqual(['feat', 'bug'])
+  })
+
+  it('migration v27 seeds taskPromptTemplate on legacy projects', () => {
+    const legacy = {
+      schemaVersion: 26,
+      global: {},
+      projects: [{ path: '/legacy', displayName: 'legacy' }],
+    }
+
+    const migrated = runSettingsMigrations(legacy as unknown as Record<string, unknown>)
+    expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+    expect(migrated.projects[0]?.taskPromptTemplate).toBe('')
+  })
+
+  it('migration v27 preserves an existing taskPromptTemplate', () => {
+    const legacy = {
+      schemaVersion: 26,
+      global: {},
+      projects: [{ path: '/legacy', taskPromptTemplate: 'keep me' }],
+    }
+
+    const migrated = runSettingsMigrations(legacy as unknown as Record<string, unknown>)
+    expect(migrated.projects[0]?.taskPromptTemplate).toBe('keep me')
+  })
+
+  it('migration v28 seeds cleanup script settings (global + projects)', () => {
+    const legacy = {
+      schemaVersion: 27,
+      global: {},
+      projects: [{ path: '/legacy', displayName: 'legacy' }],
+    }
+
+    const migrated = runSettingsMigrations(legacy as unknown as Record<string, unknown>)
+    expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+    expect(migrated.global.cleanupScript).toBe('')
+    expect(migrated.global.cleanupScriptMode).toBe('no-tasks')
+    expect(migrated.projects[0]?.cleanupScript).toBe('')
+    expect(migrated.projects[0]?.cleanupScriptMode).toBe('')
+  })
+
+  it('migration v28 preserves existing cleanup script values', () => {
+    const legacy = {
+      schemaVersion: 27,
+      global: { cleanupScript: 'global-clean', cleanupScriptMode: 'idle' },
+      projects: [{ path: '/legacy', cleanupScript: 'proj-clean', cleanupScriptMode: 'no-tasks' }],
+    }
+
+    const migrated = runSettingsMigrations(legacy as unknown as Record<string, unknown>)
+    expect(migrated.global.cleanupScript).toBe('global-clean')
+    expect(migrated.global.cleanupScriptMode).toBe('idle')
+    expect(migrated.projects[0]?.cleanupScript).toBe('proj-clean')
+    expect(migrated.projects[0]?.cleanupScriptMode).toBe('no-tasks')
+  })
+
+  it('migration v29 seeds the archive script (global + projects)', () => {
+    const legacy = {
+      schemaVersion: 28,
+      global: {},
+      projects: [{ path: '/legacy', displayName: 'legacy' }],
+    }
+
+    const migrated = runSettingsMigrations(legacy as unknown as Record<string, unknown>)
+    expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+    expect(migrated.global.archiveScript).toBe('')
+    expect(migrated.projects[0]?.archiveScript).toBe('')
+  })
+
+  it('migration v29 preserves existing archive script values', () => {
+    const legacy = {
+      schemaVersion: 28,
+      global: { archiveScript: 'global-archive' },
+      projects: [{ path: '/legacy', archiveScript: 'proj-archive' }],
+    }
+
+    const migrated = runSettingsMigrations(legacy as unknown as Record<string, unknown>)
+    expect(migrated.global.archiveScript).toBe('global-archive')
+    expect(migrated.projects[0]?.archiveScript).toBe('proj-archive')
+  })
+
+  it('migration v30 seeds the global setup script', () => {
+    const legacy = { schemaVersion: 29, global: {}, projects: [] }
+
+    const migrated = runSettingsMigrations(legacy as unknown as Record<string, unknown>)
+    expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+    expect(migrated.global.setupScript).toBe('')
+  })
+
+  it('migration v30 preserves an existing global setup script', () => {
+    const legacy = { schemaVersion: 29, global: { setupScript: 'global-setup' }, projects: [] }
+
+    const migrated = runSettingsMigrations(legacy as unknown as Record<string, unknown>)
+    expect(migrated.global.setupScript).toBe('global-setup')
+  })
+
+  it('migration v31 seeds cleanupScriptOnlyOnChanges = false', () => {
+    const legacy = { schemaVersion: 30, global: {}, projects: [] }
+
+    const migrated = runSettingsMigrations(legacy as unknown as Record<string, unknown>)
+    expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+    expect(migrated.global.cleanupScriptOnlyOnChanges).toBe(false)
+  })
+
+  it('migration v31 preserves an existing cleanupScriptOnlyOnChanges value', () => {
+    const legacy = { schemaVersion: 30, global: { cleanupScriptOnlyOnChanges: true }, projects: [] }
+
+    const migrated = runSettingsMigrations(legacy as unknown as Record<string, unknown>)
+    expect(migrated.global.cleanupScriptOnlyOnChanges).toBe(true)
+  })
+})
+
+describe('setup script settings', () => {
+  it('fresh install seeds an empty global setup script', () => {
+    expect(getGlobalSettings().setupScript).toBe('')
+  })
+
+  it('getEffectiveSettings falls back to the global setup script when the project leaves it empty', () => {
+    getSettings()
+    updateGlobalSettings({ setupScript: 'global-setup' })
+    upsertProject('/tmp/setup-fallback', { displayName: 'P' })
+    expect(getEffectiveSettings('/tmp/setup-fallback').setupScript).toBe('global-setup')
+  })
+
+  it('getEffectiveSettings lets the project setup script override the global one', () => {
+    getSettings()
+    updateGlobalSettings({ setupScript: 'global-setup' })
+    upsertProject('/tmp/setup-override', { setupScript: 'proj-setup' })
+    expect(getEffectiveSettings('/tmp/setup-override').setupScript).toBe('proj-setup')
+  })
+
+  it('getEffectiveSettings uses the global setup script for an unknown project path', () => {
+    getSettings()
+    updateGlobalSettings({ setupScript: 'global-setup' })
+    expect(getEffectiveSettings('/tmp/setup-unknown').setupScript).toBe('global-setup')
+  })
+})
+
+describe('archive script settings', () => {
+  it('fresh install seeds an empty global archive script', () => {
+    expect(getGlobalSettings().archiveScript).toBe('')
+  })
+
+  it('getEffectiveSettings falls back to the global archive script when the project leaves it empty', () => {
+    getSettings()
+    updateGlobalSettings({ archiveScript: 'global-archive' })
+    upsertProject('/tmp/archive-fallback', { displayName: 'P' })
+    expect(getEffectiveSettings('/tmp/archive-fallback').archiveScript).toBe('global-archive')
+  })
+
+  it('getEffectiveSettings lets the project archive script override the global one', () => {
+    getSettings()
+    updateGlobalSettings({ archiveScript: 'global-archive' })
+    upsertProject('/tmp/archive-override', { archiveScript: 'proj-archive' })
+    expect(getEffectiveSettings('/tmp/archive-override').archiveScript).toBe('proj-archive')
+  })
+
+  it('getEffectiveSettings uses the global archive script for an unknown project path', () => {
+    getSettings()
+    updateGlobalSettings({ archiveScript: 'global-archive' })
+    expect(getEffectiveSettings('/tmp/archive-unknown').archiveScript).toBe('global-archive')
+  })
+})
+
+describe('cleanup script settings', () => {
+  it('fresh install seeds an empty global cleanup script in no-tasks mode', () => {
+    const g = getGlobalSettings()
+    expect(g.cleanupScript).toBe('')
+    expect(g.cleanupScriptMode).toBe('no-tasks')
+    expect(g.cleanupScriptOnlyOnChanges).toBe(false)
+  })
+
+  it('exposes cleanupScriptOnlyOnChanges through getEffectiveSettings', () => {
+    getSettings()
+    updateGlobalSettings({ cleanupScriptOnlyOnChanges: true })
+    upsertProject('/tmp/clean-changes', { displayName: 'P' })
+    expect(getEffectiveSettings('/tmp/clean-changes').cleanupScriptOnlyOnChanges).toBe(true)
+    expect(getEffectiveSettings('/tmp/clean-unknown-changes').cleanupScriptOnlyOnChanges).toBe(true)
+  })
+
+  it('rejects an invalid global cleanupScriptMode and keeps the previous value', () => {
+    getSettings()
+    updateGlobalSettings({ cleanupScriptMode: 'idle' })
+    updateGlobalSettings({ cleanupScriptMode: 'bogus' as never })
+    expect(getGlobalSettings().cleanupScriptMode).toBe('idle')
+  })
+
+  it("accepts an empty project cleanupScriptMode ('' = inherit)", () => {
+    getSettings()
+    const p = upsertProject('/tmp/clean-inherit', { cleanupScriptMode: '' })
+    expect(p.cleanupScriptMode).toBe('')
+  })
+
+  it('rejects an invalid project cleanupScriptMode', () => {
+    getSettings()
+    upsertProject('/tmp/clean-bad', { cleanupScriptMode: 'no-tasks' })
+    upsertProject('/tmp/clean-bad', { cleanupScriptMode: 'bogus' as never })
+    expect(getProjectSettings('/tmp/clean-bad')?.cleanupScriptMode).toBe('no-tasks')
+  })
+
+  it('getEffectiveSettings falls back to the global cleanup script when the project leaves it empty', () => {
+    getSettings()
+    updateGlobalSettings({ cleanupScript: 'global-clean', cleanupScriptMode: 'idle' })
+    upsertProject('/tmp/clean-fallback', { displayName: 'P' })
+    const eff = getEffectiveSettings('/tmp/clean-fallback')
+    expect(eff.cleanupScript).toBe('global-clean')
+    expect(eff.cleanupScriptMode).toBe('idle')
+  })
+
+  it('getEffectiveSettings lets project cleanup values override the global ones', () => {
+    getSettings()
+    updateGlobalSettings({ cleanupScript: 'global-clean', cleanupScriptMode: 'idle' })
+    upsertProject('/tmp/clean-override', { cleanupScript: 'proj-clean', cleanupScriptMode: 'no-tasks' })
+    const eff = getEffectiveSettings('/tmp/clean-override')
+    expect(eff.cleanupScript).toBe('proj-clean')
+    expect(eff.cleanupScriptMode).toBe('no-tasks')
+  })
+
+  it('getEffectiveSettings uses global cleanup settings for an unknown project path', () => {
+    getSettings()
+    updateGlobalSettings({ cleanupScript: 'global-clean', cleanupScriptMode: 'idle' })
+    const eff = getEffectiveSettings('/tmp/clean-unknown')
+    expect(eff.cleanupScript).toBe('global-clean')
+    expect(eff.cleanupScriptMode).toBe('idle')
+  })
+})
+
+describe('sanitizeBranchPrefixes()', () => {
+  it('trims, strips surrounding slashes and dedupes', () => {
+    expect(sanitizeBranchPrefixes(['  feature/ ', '/fix/', 'feature'])).toEqual(['feature', 'fix'])
+  })
+
+  it('drops empty, oversized and invalid entries', () => {
+    expect(sanitizeBranchPrefixes(['', '   ', 'a'.repeat(51), 'has space', 'bad~char', 'up..down', 'ok'])).toEqual([
+      'ok',
+    ])
+  })
+
+  it('returns an empty array for non-array input', () => {
+    expect(sanitizeBranchPrefixes('feature')).toEqual([])
+    expect(sanitizeBranchPrefixes(undefined)).toEqual([])
+  })
+})
+
+describe('updateGlobalSettings() — branchPrefixes', () => {
+  it('fresh install seeds the default branch prefixes', () => {
+    expect(getGlobalSettings().branchPrefixes).toEqual(DEFAULT_BRANCH_PREFIXES)
+  })
+
+  it('sanitizes the saved list (trim, strip slashes, dedupe)', () => {
+    getSettings()
+    const updated = updateGlobalSettings({ branchPrefixes: [' feature/ ', 'fix', 'fix', '/chore/'] })
+    expect(updated.branchPrefixes).toEqual(['feature', 'fix', 'chore'])
+  })
+
+  it('keeps the previous list when the new one sanitizes to empty', () => {
+    getSettings()
+    updateGlobalSettings({ branchPrefixes: ['feature', 'fix'] })
+    const updated = updateGlobalSettings({ branchPrefixes: ['', '   ', 'bad char'] })
+    expect(updated.branchPrefixes).toEqual(['feature', 'fix'])
   })
 })
 

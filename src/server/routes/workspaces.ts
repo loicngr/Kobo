@@ -11,6 +11,7 @@ import { getDb } from '../db/index.js'
 import { migrationGuard } from '../middleware/migration-guard.js'
 import { listEngines } from '../services/agent/engines/registry.js'
 import * as agentManager from '../services/agent/orchestrator.js'
+import * as archiveScriptService from '../services/archive-script-service.js'
 import * as autoLoopService from '../services/auto-loop-service.js'
 import * as cronService from '../services/cron-service.js'
 import * as devServerService from '../services/dev-server-service.js'
@@ -1899,6 +1900,9 @@ app.post('/:id/archive', migrationGuard, (c) => {
 
     wsService.emitEphemeral(id, 'workspace:archived', { workspace: updated })
 
+    // Run the project's archive script (best-effort — never blocks the archive).
+    archiveScriptService.onWorkspaceArchived(id)
+
     return c.json(updated)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -1927,6 +1931,131 @@ app.post('/:id/unarchive', migrationGuard, (c) => {
   }
 })
 
+type WorkspaceRow = NonNullable<ReturnType<typeof workspaceService.getWorkspace>>
+
+// Shared teardown for a single workspace: stops the agent, destroys the
+// terminal, removes the owned worktree, optionally deletes local/remote
+// branches, then deletes the DB row (cascades to tasks/sessions/events).
+// Every side-effect is best-effort — failures are collected as warnings
+// rather than thrown, so a bulk delete never aborts mid-batch. Returns the
+// list of user-facing warning messages (empty when everything was clean).
+function deleteWorkspaceWithSideEffects(
+  workspace: WorkspaceRow,
+  opts: { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean },
+): string[] {
+  // Stop agent if running (best-effort)
+  try {
+    agentManager.stopAgent(workspace.id)
+  } catch {
+    // Agent may not be running — ignore
+  }
+
+  try {
+    terminalService.destroyTerminal(workspace.id)
+  } catch {
+    // Terminal may not exist — ignore
+  }
+
+  // Collected best-effort warnings: the DB deletion always proceeds, but
+  // side-effects (worktree, local/remote branches) can fail independently.
+  // We surface a user-friendly message per failure so the UI can show a
+  // sticky toast with a copy-pasteable recovery command — common case:
+  // Docker leaves root-owned files inside the worktree, git worktree
+  // remove fails with EACCES.
+  const warnings: string[] = []
+
+  // Remove worktree (only if owned — for attached external worktrees we
+  // never created the dir, so we must not delete it on the user's behalf).
+  const worktreePath = workspace.worktreePath
+  if (workspace.worktreeOwned) {
+    try {
+      worktreeService.removeWorktree(workspace.projectPath, worktreePath)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error(`[workspaces] Failed to remove worktree: ${message}`)
+      warnings.push(
+        `Failed to remove worktree directory '${worktreePath}'. The git entry may still reference it. ` +
+          `Fix manually:\n` +
+          `  sudo rm -rf '${worktreePath}'\n` +
+          `  cd '${workspace.projectPath}' && git worktree prune\n` +
+          `Reason: ${message}`,
+      )
+    }
+  } else {
+    console.log(`[workspaces] keeping reused worktree on delete: ${worktreePath}`)
+  }
+
+  // Delete local branch if requested
+  if (opts.deleteLocalBranch) {
+    try {
+      gitOps.deleteLocalBranch(workspace.projectPath, workspace.workingBranch)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error(`[workspaces] Failed to delete local branch: ${message}`)
+      warnings.push(
+        `Failed to delete local branch '${workspace.workingBranch}'. Fix manually:\n` +
+          `  cd '${workspace.projectPath}' && git branch -D '${workspace.workingBranch}'\n` +
+          `Reason: ${message}`,
+      )
+    }
+  }
+
+  // Delete remote branch if requested
+  if (opts.deleteRemoteBranch) {
+    try {
+      gitOps.deleteRemoteBranch(workspace.projectPath, workspace.workingBranch)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      console.error(`[workspaces] Failed to delete remote branch: ${message}`)
+      warnings.push(
+        `Failed to delete remote branch '${workspace.workingBranch}'. Fix manually:\n` +
+          `  cd '${workspace.projectPath}' && git push origin --delete '${workspace.workingBranch}'\n` +
+          `Reason: ${message}`,
+      )
+    }
+  }
+
+  // Delete workspace from DB (cascades to tasks, sessions, events)
+  workspaceService.deleteWorkspace(workspace.id)
+
+  return warnings
+}
+
+// DELETE /api/workspaces/archived — bulk-delete every archived workspace.
+// Must be declared BEFORE `DELETE /:id` or the dynamic segment captures it.
+// Each workspace teardown is isolated: an error on one is swallowed into the
+// warnings list and never aborts the batch.
+app.delete('/archived', migrationGuard, async (c) => {
+  try {
+    const body = await c.req
+      .json<{
+        deleteLocalBranch?: boolean
+        deleteRemoteBranch?: boolean
+      }>()
+      .catch(() => ({}) as { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean })
+
+    const archived = workspaceService.listArchivedWorkspaces()
+    const warnings: string[] = []
+    let deleted = 0
+
+    for (const workspace of archived) {
+      try {
+        warnings.push(...deleteWorkspaceWithSideEffects(workspace, body))
+        deleted++
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        console.error(`[workspaces] Failed to delete archived workspace '${workspace.id}': ${message}`)
+        warnings.push(`Failed to delete workspace '${workspace.name}': ${message}`)
+      }
+    }
+
+    return c.json({ ok: true, deleted, warnings }, 200)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
 // DELETE /api/workspaces/:id — delete workspace
 app.delete('/:id', migrationGuard, async (c) => {
   try {
@@ -1945,80 +2074,7 @@ app.delete('/:id', migrationGuard, async (c) => {
       }>()
       .catch(() => ({}) as { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean })
 
-    // Stop agent if running (best-effort)
-    try {
-      agentManager.stopAgent(id)
-    } catch {
-      // Agent may not be running — ignore
-    }
-
-    try {
-      terminalService.destroyTerminal(id)
-    } catch {
-      // Terminal may not exist — ignore
-    }
-
-    // Collected best-effort warnings: the DB deletion always proceeds, but
-    // side-effects (worktree, local/remote branches) can fail independently.
-    // We surface a user-friendly message per failure so the UI can show a
-    // sticky toast with a copy-pasteable recovery command — common case:
-    // Docker leaves root-owned files inside the worktree, git worktree
-    // remove fails with EACCES.
-    const warnings: string[] = []
-
-    // Remove worktree (only if owned — for attached external worktrees we
-    // never created the dir, so we must not delete it on the user's behalf).
-    const worktreePath = workspace.worktreePath
-    if (workspace.worktreeOwned) {
-      try {
-        worktreeService.removeWorktree(workspace.projectPath, worktreePath)
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        console.error(`[workspaces] Failed to remove worktree: ${message}`)
-        warnings.push(
-          `Failed to remove worktree directory '${worktreePath}'. The git entry may still reference it. ` +
-            `Fix manually:\n` +
-            `  sudo rm -rf '${worktreePath}'\n` +
-            `  cd '${workspace.projectPath}' && git worktree prune\n` +
-            `Reason: ${message}`,
-        )
-      }
-    } else {
-      console.log(`[workspaces] keeping reused worktree on delete: ${worktreePath}`)
-    }
-
-    // Delete local branch if requested
-    if (body.deleteLocalBranch) {
-      try {
-        gitOps.deleteLocalBranch(workspace.projectPath, workspace.workingBranch)
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        console.error(`[workspaces] Failed to delete local branch: ${message}`)
-        warnings.push(
-          `Failed to delete local branch '${workspace.workingBranch}'. Fix manually:\n` +
-            `  cd '${workspace.projectPath}' && git branch -D '${workspace.workingBranch}'\n` +
-            `Reason: ${message}`,
-        )
-      }
-    }
-
-    // Delete remote branch if requested
-    if (body.deleteRemoteBranch) {
-      try {
-        gitOps.deleteRemoteBranch(workspace.projectPath, workspace.workingBranch)
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        console.error(`[workspaces] Failed to delete remote branch: ${message}`)
-        warnings.push(
-          `Failed to delete remote branch '${workspace.workingBranch}'. Fix manually:\n` +
-            `  cd '${workspace.projectPath}' && git push origin --delete '${workspace.workingBranch}'\n` +
-            `Reason: ${message}`,
-        )
-      }
-    }
-
-    // Delete workspace from DB (cascades to tasks, sessions, events)
-    workspaceService.deleteWorkspace(id)
+    const warnings = deleteWorkspaceWithSideEffects(workspace, body)
 
     // When everything worked cleanly we keep the legacy 204 response so
     // existing clients aren't surprised by a JSON body. Warnings promote the

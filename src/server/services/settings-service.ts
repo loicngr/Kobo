@@ -41,6 +41,22 @@ export const DEFAULT_GIT_CONVENTIONS = `# Git conventions
 - Always inspect \`git status\` and \`git diff\` before staging
 `
 
+/**
+ * Cleanup-script trigger modes:
+ * - `idle` — run after every session where the agent finished, even if tasks remain.
+ * - `no-tasks` — run after a session only when no non-done Kōbō task remains.
+ *
+ * In auto-loop mode the cleanup script runs only when the loop completes (all
+ * tasks done), regardless of this mode.
+ */
+export type CleanupScriptMode = 'idle' | 'no-tasks'
+
+const CLEANUP_SCRIPT_MODES: CleanupScriptMode[] = ['idle', 'no-tasks']
+
+export function isValidCleanupScriptMode(value: unknown): value is CleanupScriptMode {
+  return typeof value === 'string' && (CLEANUP_SCRIPT_MODES as string[]).includes(value)
+}
+
 export const DEFAULT_PR_PROMPT_TEMPLATE = `A pull request has been opened: {{pr_url}} (#{{pr_number}})
 
 Context:
@@ -108,6 +124,27 @@ export interface ProjectSettings {
   sentryInitialPromptTemplate: string
   gitConventions: string
   setupScript: string
+  /**
+   * Custom prompt auto-injected into the task-description textarea on the
+   * workspace creation page when this project is selected. Empty by default.
+   * Seeded by migration v27.
+   */
+  taskPromptTemplate: string
+  /**
+   * Per-project override of the global cleanup script. Empty string inherits
+   * the global value (`global.cleanupScript`). Seeded by migration v28.
+   */
+  cleanupScript: string
+  /**
+   * Per-project override of the cleanup trigger mode. Empty string inherits the
+   * global `cleanupScriptMode`. Seeded by migration v28.
+   */
+  cleanupScriptMode: '' | CleanupScriptMode
+  /**
+   * Per-project override of the global archive script. Empty string inherits
+   * the global value (`global.archiveScript`). Seeded by migration v29.
+   */
+  archiveScript: string
   devServer: DevServerConfig
   e2e: E2eSettings
   finalization: FinalizationSettings
@@ -128,6 +165,29 @@ export interface GlobalSettings {
   notionInitialPromptTemplate: string
   sentryInitialPromptTemplate: string
   gitConventions: string
+  /**
+   * Shell script run in a worktree after it is created (before the agent
+   * starts). Empty = disabled. Projects may override it; see
+   * `ProjectSettings.setupScript`.
+   */
+  setupScript: string
+  /**
+   * Shell script run after a session completes. Empty = disabled. Projects may
+   * override it; see `ProjectSettings.cleanupScript`.
+   */
+  cleanupScript: string
+  /** When the global cleanup script fires. See {@link CleanupScriptMode}. */
+  cleanupScriptMode: CleanupScriptMode
+  /**
+   * When true, the cleanup script runs only if the worktree has uncommitted
+   * changes (modified / added / deleted / untracked files). Default false.
+   */
+  cleanupScriptOnlyOnChanges: boolean
+  /**
+   * Shell script run server-side when a workspace is archived. Empty = disabled.
+   * Projects may override it; see `ProjectSettings.archiveScript`.
+   */
+  archiveScript: string
   editorCommand: string
   browserNotifications: boolean
   audioNotifications: boolean
@@ -148,6 +208,12 @@ export interface GlobalSettings {
   notionMcpKey: string
   sentryMcpKey: string
   tags: string[]
+  /**
+   * User-managed git branch prefixes shown on the workspace creation page.
+   * Stored without the trailing `/`. The first entry is the default
+   * pre-selection. Seeded by migration v26 from `DEFAULT_BRANCH_PREFIXES`.
+   */
+  branchPrefixes: string[]
   worktreesPath: string
   worktreesPrefixByProject: boolean
   voiceEnabled: boolean
@@ -192,6 +258,36 @@ export const DEFAULT_WORKSPACE_TAGS: string[] = [
   'notion',
   'sentry',
 ]
+
+/**
+ * Default git branch prefixes seeded on fresh install and on settings upgrade.
+ * Stored without the trailing `/` — it's a separator added at display time and
+ * when composing the working branch (`<prefix>/<slug>`). The first entry is the
+ * one pre-selected on the workspace creation page.
+ */
+export const DEFAULT_BRANCH_PREFIXES: string[] = ['feature', 'fix', 'hotfix', 'chore', 'refactor', 'docs', 'test']
+
+/**
+ * Sanitize a raw branch-prefix list: trim, strip surrounding slashes, drop
+ * entries that aren't valid git branch segments, dedupe, cap length. Returns
+ * an empty array when nothing survives — callers decide the fallback.
+ */
+export function sanitizeBranchPrefixes(input: unknown): string[] {
+  if (!Array.isArray(input)) return []
+  const seen = new Set<string>()
+  const result: string[] = []
+  for (const raw of input) {
+    if (typeof raw !== 'string') continue
+    const value = raw.trim().replace(/^\/+|\/+$/g, '')
+    if (value.length === 0 || value.length > 50) continue
+    // Allow only characters safe in a git branch name; reject `..` runs.
+    if (!/^[A-Za-z0-9._/-]+$/.test(value) || value.includes('..')) continue
+    if (seen.has(value)) continue
+    seen.add(value)
+    result.push(value)
+  }
+  return result
+}
 
 /** Top-level settings structure persisted to settings.json. */
 export interface Settings {
@@ -523,6 +619,65 @@ const settingsMigrations: SettingsMigration[] = [
       }
     },
   },
+  {
+    version: 26,
+    name: 'add-branch-prefixes',
+    migrate: ({ global }) => {
+      if (!Array.isArray(global.branchPrefixes)) {
+        global.branchPrefixes = [...DEFAULT_BRANCH_PREFIXES]
+      }
+    },
+  },
+  {
+    version: 27,
+    name: 'add-project-task-prompt',
+    migrate: ({ projects }) => {
+      for (const p of projects) {
+        if (typeof p.taskPromptTemplate !== 'string') p.taskPromptTemplate = ''
+      }
+    },
+  },
+  {
+    version: 28,
+    name: 'add-cleanup-script',
+    migrate: ({ global, projects }) => {
+      if (typeof global.cleanupScript !== 'string') global.cleanupScript = ''
+      if (!isValidCleanupScriptMode(global.cleanupScriptMode)) global.cleanupScriptMode = 'no-tasks'
+      for (const p of projects) {
+        if (typeof p.cleanupScript !== 'string') p.cleanupScript = ''
+        // '' = inherit; any other value must be a valid mode.
+        if (p.cleanupScriptMode !== '' && !isValidCleanupScriptMode(p.cleanupScriptMode)) {
+          p.cleanupScriptMode = ''
+        }
+      }
+    },
+  },
+  {
+    version: 29,
+    name: 'add-archive-script',
+    migrate: ({ global, projects }) => {
+      if (typeof global.archiveScript !== 'string') global.archiveScript = ''
+      for (const p of projects) {
+        if (typeof p.archiveScript !== 'string') p.archiveScript = ''
+      }
+    },
+  },
+  {
+    version: 30,
+    name: 'add-global-setup-script',
+    migrate: ({ global }) => {
+      if (typeof global.setupScript !== 'string') global.setupScript = ''
+    },
+  },
+  {
+    version: 31,
+    name: 'add-cleanup-script-only-on-changes',
+    migrate: ({ global }) => {
+      if (typeof global.cleanupScriptOnlyOnChanges !== 'boolean') {
+        global.cleanupScriptOnlyOnChanges = false
+      }
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -541,6 +696,10 @@ export interface EffectiveSettings {
   sourceBranch: string
   devServer: DevServerConfig | null
   setupScript: string
+  cleanupScript: string
+  cleanupScriptMode: CleanupScriptMode
+  cleanupScriptOnlyOnChanges: boolean
+  archiveScript: string
   notionStatusProperty: string
   notionInProgressStatus: string
 }
@@ -581,6 +740,11 @@ function defaultSettings(): Settings {
       notionInitialPromptTemplate: DEFAULT_NOTION_INITIAL_PROMPT,
       sentryInitialPromptTemplate: DEFAULT_SENTRY_INITIAL_PROMPT,
       gitConventions: DEFAULT_GIT_CONVENTIONS,
+      setupScript: '',
+      cleanupScript: '',
+      cleanupScriptMode: 'no-tasks',
+      cleanupScriptOnlyOnChanges: false,
+      archiveScript: '',
       editorCommand: '',
       browserNotifications: true,
       audioNotifications: true,
@@ -594,6 +758,7 @@ function defaultSettings(): Settings {
       notionMcpKey: '',
       sentryMcpKey: '',
       tags: [...DEFAULT_WORKSPACE_TAGS],
+      branchPrefixes: [...DEFAULT_BRANCH_PREFIXES],
       worktreesPath: WORKTREES_PATH,
       worktreesPrefixByProject: false,
       voiceEnabled: false,
@@ -631,6 +796,10 @@ function defaultProjectSettings(projectPath: string): ProjectSettings {
     sentryInitialPromptTemplate: '',
     gitConventions: '',
     setupScript: '',
+    taskPromptTemplate: '',
+    cleanupScript: '',
+    cleanupScriptMode: '',
+    archiveScript: '',
     devServer: {
       startCommand: '',
       stopCommand: '',
@@ -723,6 +892,36 @@ function readSettings(): Settings {
   return migrated
 }
 
+/** Number of `settings.json.backup-*` files kept; older ones are rotated out. */
+const SETTINGS_BACKUP_KEEP = 5
+
+/**
+ * Keep only the `SETTINGS_BACKUP_KEEP` most recent `settings.json.backup-*`
+ * files in `dir`, deleting the rest. Best-effort — never throws.
+ */
+function pruneSettingsBackups(dir: string): void {
+  try {
+    const backups = fs
+      .readdirSync(dir)
+      .filter((f) => f.startsWith('settings.json.backup-'))
+      .map((f) => {
+        const full = path.join(dir, f)
+        return { path: full, mtimeMs: fs.statSync(full).mtimeMs }
+      })
+      .sort((a, b) => b.mtimeMs - a.mtimeMs)
+
+    for (const entry of backups.slice(SETTINGS_BACKUP_KEEP)) {
+      try {
+        fs.unlinkSync(entry.path)
+      } catch (err) {
+        console.error(`[settings] Failed to prune backup ${entry.path}:`, err)
+      }
+    }
+  } catch (err) {
+    console.error('[settings] Failed to prune settings backups:', err)
+  }
+}
+
 function createSettingsBackupIfPresent(): void {
   if (!fs.existsSync(settingsFilePath)) return
 
@@ -731,6 +930,7 @@ function createSettingsBackupIfPresent(): void {
   settingsBackupSequence += 1
   const backupPath = path.join(dir, `settings.json.backup-${stamp}-${settingsBackupSequence}`)
   fs.copyFileSync(settingsFilePath, backupPath)
+  pruneSettingsBackups(dir)
 }
 
 function writeSettings(settings: Settings, options?: { backup?: boolean }): void {
@@ -844,7 +1044,11 @@ export function getEffectiveSettings(projectPath: string): EffectiveSettings {
       gitConventions: settings.global.gitConventions,
       sourceBranch: '',
       devServer: null,
-      setupScript: '',
+      setupScript: settings.global.setupScript,
+      cleanupScript: settings.global.cleanupScript,
+      cleanupScriptMode: settings.global.cleanupScriptMode,
+      cleanupScriptOnlyOnChanges: settings.global.cleanupScriptOnlyOnChanges,
+      archiveScript: settings.global.archiveScript,
       notionStatusProperty: settings.global.notionStatusProperty,
       notionInProgressStatus: settings.global.notionInProgressStatus,
     }
@@ -866,7 +1070,11 @@ export function getEffectiveSettings(projectPath: string): EffectiveSettings {
     gitConventions: project.gitConventions || settings.global.gitConventions,
     sourceBranch: project.defaultSourceBranch,
     devServer: project.devServer,
-    setupScript: project.setupScript || '',
+    setupScript: project.setupScript || settings.global.setupScript,
+    cleanupScript: project.cleanupScript || settings.global.cleanupScript,
+    cleanupScriptMode: (project.cleanupScriptMode || settings.global.cleanupScriptMode) as CleanupScriptMode,
+    cleanupScriptOnlyOnChanges: settings.global.cleanupScriptOnlyOnChanges,
+    archiveScript: project.archiveScript || settings.global.archiveScript,
     notionStatusProperty: settings.global.notionStatusProperty,
     notionInProgressStatus: settings.global.notionInProgressStatus,
   }
@@ -883,6 +1091,13 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
       delete (data as Record<string, unknown>).skillSuite
     }
   }
+  // Validate cleanupScriptMode: drop invalid values so the previous one stays.
+  if ('cleanupScriptMode' in data) {
+    if (!isValidCleanupScriptMode(data.cleanupScriptMode)) {
+      console.warn(`[settings] Invalid cleanupScriptMode rejected: ${data.cleanupScriptMode}`)
+      delete (data as Record<string, unknown>).cleanupScriptMode
+    }
+  }
   const allowedGlobalKeys = [
     'defaultModelByEngine',
     'dangerouslySkipPermissions',
@@ -891,6 +1106,11 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'notionInitialPromptTemplate',
     'sentryInitialPromptTemplate',
     'gitConventions',
+    'setupScript',
+    'cleanupScript',
+    'cleanupScriptMode',
+    'cleanupScriptOnlyOnChanges',
+    'archiveScript',
     'editorCommand',
     'browserNotifications',
     'audioNotifications',
@@ -904,6 +1124,7 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'notionMcpKey',
     'sentryMcpKey',
     'tags',
+    'branchPrefixes',
     'worktreesPath',
     'worktreesPrefixByProject',
     'voiceEnabled',
@@ -935,6 +1156,12 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
           ),
         )
       : settings.global.tags
+  }
+  if (filtered.branchPrefixes !== undefined) {
+    // Drop invalid entries; never let the list collapse to empty (the creation
+    // page needs at least one prefix) — fall back to the previous value.
+    const sanitized = sanitizeBranchPrefixes(filtered.branchPrefixes)
+    filtered.branchPrefixes = sanitized.length > 0 ? sanitized : settings.global.branchPrefixes
   }
   if (filtered.audioNotificationVolume !== undefined) {
     const v = Number(filtered.audioNotificationVolume)
@@ -981,6 +1208,16 @@ export function upsertProject(projectPath: string, data: Partial<Omit<ProjectSet
       delete (data as Record<string, unknown>).color
     }
   }
+  // Validate cleanupScriptMode: '' means inherit; any other value must be a
+  // valid mode. Drop anything else so the stored value is preserved.
+  if ('cleanupScriptMode' in data) {
+    if (data.cleanupScriptMode !== '' && !isValidCleanupScriptMode(data.cleanupScriptMode)) {
+      console.warn(
+        `[settings] Invalid cleanupScriptMode rejected for project '${projectPath}': ${data.cleanupScriptMode}`,
+      )
+      delete (data as Record<string, unknown>).cleanupScriptMode
+    }
+  }
   const allowedProjectKeys = [
     'displayName',
     'defaultSourceBranch',
@@ -992,6 +1229,10 @@ export function upsertProject(projectPath: string, data: Partial<Omit<ProjectSet
     'sentryInitialPromptTemplate',
     'gitConventions',
     'setupScript',
+    'taskPromptTemplate',
+    'cleanupScript',
+    'cleanupScriptMode',
+    'archiveScript',
     'devServer',
     'e2e',
     'finalization',

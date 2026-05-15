@@ -50,9 +50,14 @@ describe('setup-script-service', () => {
     expect(texts.some((t) => t.includes('err'))).toBe(true)
   })
 
-  it('emits setup:complete on success', async () => {
+  it('emits setup:complete with hadOutput:true when the script printed something', async () => {
     await runSetupScript('ws-1', tmpDir, '#!/usr/bin/env bash\necho "ok"')
-    expect(vi.mocked(wsService.emitEphemeral)).toHaveBeenCalledWith('ws-1', 'setup:complete', {})
+    expect(vi.mocked(wsService.emitEphemeral)).toHaveBeenCalledWith('ws-1', 'setup:complete', { hadOutput: true })
+  })
+
+  it('emits setup:complete with hadOutput:false when the script printed nothing', async () => {
+    await runSetupScript('ws-1', tmpDir, '#!/usr/bin/env bash\nexit 0')
+    expect(vi.mocked(wsService.emitEphemeral)).toHaveBeenCalledWith('ws-1', 'setup:complete', { hadOutput: false })
   })
 
   it('emits setup:error on failure', async () => {

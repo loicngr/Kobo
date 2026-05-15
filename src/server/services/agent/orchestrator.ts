@@ -12,6 +12,7 @@ import {
 } from '../../utils/paths.js'
 import { unregisterProcess } from '../../utils/process-tracker.js'
 import * as autoLoopService from '../auto-loop-service.js'
+import * as cleanupScriptService from '../cleanup-script-service.js'
 import * as cronService from '../cron-service.js'
 import * as quotaBackoffService from '../quota-backoff-service.js'
 import { getEffectiveSettings } from '../settings-service.js'
@@ -366,6 +367,10 @@ function readEffectiveSettingsSafe(projectPath: string): ReturnType<typeof getEf
       sourceBranch: 'main',
       devServer: null,
       setupScript: '',
+      cleanupScript: '',
+      cleanupScriptMode: 'no-tasks',
+      cleanupScriptOnlyOnChanges: false,
+      archiveScript: '',
       notionStatusProperty: '',
       notionInProgressStatus: '',
     }
@@ -653,7 +658,12 @@ function handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent
     // cleared, next iteration will start fresh) — report 'completed' to
     // auto-loop so it continues.
     const effectiveReason = isResumeFailed ? 'completed' : ev.reason
+    // Capture the auto-loop flag BEFORE autoLoopService.onSessionEnded —
+    // disable() clears it, and the cleanup hook needs to know whether this was
+    // a mid-loop session (never cleans) or a standalone one.
+    const wasAutoLoop = autoLoopService.getStatus(workspaceId).auto_loop
     autoLoopService.onSessionEnded(workspaceId, effectiveReason, delta)
+    cleanupScriptService.onSessionEnded(workspaceId, effectiveReason, { wasAutoLoop })
   }
 
   if (ev.kind === 'session:user-input-requested') {

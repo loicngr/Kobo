@@ -1,6 +1,12 @@
 import Database from 'better-sqlite3'
-import { describe, expect, it } from 'vitest'
-import { getMigrationHistory, migrations, runMigrations, SCHEMA_VERSION } from '../server/db/migrations.js'
+import { describe, expect, it, vi } from 'vitest'
+import {
+  getMigrationHistory,
+  getPendingMigrations,
+  migrations,
+  runMigrations,
+  SCHEMA_VERSION,
+} from '../server/db/migrations.js'
 import { initSchema } from '../server/db/schema.js'
 
 describe('runMigrations(db)', () => {
@@ -1488,6 +1494,67 @@ describe('migration v23 — add-pending-crons-one-shot', () => {
       .all()
       .filter((c: { name: string }) => c.name === 'one_shot')
     expect(dupes).toHaveLength(1)
+    db.close()
+  })
+})
+
+describe('getPendingMigrations(db)', () => {
+  it('returns [] for a fresh, uninitialised database', () => {
+    const db = new Database(':memory:')
+    expect(getPendingMigrations(db)).toEqual([])
+    db.close()
+  })
+
+  it('returns [] for a fully-migrated database', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    expect(getPendingMigrations(db)).toEqual([])
+    db.close()
+  })
+
+  it('lists versions not yet applied (database migrated by an older build)', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    // Simulate a DB last migrated by an older Kōbō: drop the 2 latest records.
+    const versionsDesc = migrations.map((m) => m.version).sort((a, b) => b - a)
+    db.prepare('DELETE FROM schema_migrations WHERE version IN (?, ?)').run(versionsDesc[0], versionsDesc[1])
+
+    expect(getPendingMigrations(db).sort((a, b) => a - b)).toEqual(
+      [versionsDesc[0], versionsDesc[1]].sort((a, b) => a - b),
+    )
+    db.close()
+  })
+})
+
+describe('runMigrations(db) — soft downgrade guard', () => {
+  it('warns when the database carries a schema version newer than this build', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    // Simulate a DB migrated by a FUTURE Kōbō build.
+    db.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(
+      SCHEMA_VERSION + 5,
+      'future-migration',
+      new Date().toISOString(),
+    )
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    runMigrations(db)
+    // Read calls BEFORE mockRestore — restoring also clears mock.calls.
+    const warned = warnSpy.mock.calls.some((c) => String(c[0]).includes('Database schema version'))
+    warnSpy.mockRestore()
+
+    expect(warned).toBe(true)
+    db.close()
+  })
+
+  it('does not warn for a normally-migrated database', () => {
+    const db = new Database(':memory:')
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    runMigrations(db)
+    const warned = warnSpy.mock.calls.some((c) => String(c[0]).includes('Database schema version'))
+    warnSpy.mockRestore()
+
+    expect(warned).toBe(false)
     db.close()
   })
 })
