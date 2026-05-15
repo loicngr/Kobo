@@ -729,6 +729,9 @@ const pathFilterOptions = ref<string[]>([])
 const workspaceName = ref('')
 const description = ref('')
 const descriptionRef = ref<QInput | null>(null)
+// Tracks the last project task-prompt auto-injected into `description`. Used to
+// tell an untouched injected prompt (safe to replace) from user-typed content.
+const injectedProjectPrompt = ref('')
 const isCreateVoiceRecording = ref(false)
 const isCreateVoiceTranscribing = ref(false)
 const createVoiceRecorderRef = ref<MediaRecorder | null>(null)
@@ -751,15 +754,10 @@ const engines = ref<EngineDto[]>([])
 const selectedEngineId = ref<string>('claude-code')
 const selectedEngine = computed<EngineDto | undefined>(() => engines.value.find((e) => e.id === selectedEngineId.value))
 const engineSelectOptions = computed(() => engines.value.map((e) => ({ value: e.id, label: e.displayName })))
-const branchTypeOptions = [
-  { label: 'feature/', value: 'feature' },
-  { label: 'fix/', value: 'fix' },
-  { label: 'hotfix/', value: 'hotfix' },
-  { label: 'chore/', value: 'chore' },
-  { label: 'refactor/', value: 'refactor' },
-  { label: 'docs/', value: 'docs' },
-  { label: 'test/', value: 'test' },
-]
+// Branch prefix options are user-managed in global settings (stored without
+// the trailing `/`). The select emits the bare prefix; `/` is added at display
+// time and when composing the working branch (`<prefix>/<slug>`).
+const branchTypeOptions = computed(() => settingsStore.global.branchPrefixes.map((p) => ({ label: `${p}/`, value: p })))
 
 type AgentPermissionMode = 'plan' | 'bypass' | 'strict' | 'interactive'
 
@@ -1242,6 +1240,14 @@ function applyProjectDefaults(path: string) {
     if (project.defaultSourceBranch) {
       branch.value = project.defaultSourceBranch
     }
+    // Inject the project's custom task prompt into the description textarea —
+    // but only when the user hasn't typed their own content (textarea empty or
+    // still holding the previously-injected prompt verbatim).
+    const taskPrompt = project.taskPromptTemplate ?? ''
+    if (description.value === '' || description.value === injectedProjectPrompt.value) {
+      description.value = taskPrompt
+      injectedProjectPrompt.value = taskPrompt
+    }
     // Pick a model that's valid for the currently selected engine. Cascade:
     //   1. Project default (if in the engine's catalogue)
     //   2. Global per-engine default
@@ -1284,6 +1290,14 @@ onMounted(async () => {
   // Await settings before engines so permission-mode derivation sees the
   // project list. Re-derive after to fix a possible race with applyProjectDefaults.
   await settingsStore.fetchSettings()
+
+  // Default the branch-type selector to the first configured prefix when the
+  // current value isn't part of the user's list (e.g. legacy 'feature' default
+  // but the user renamed/removed it).
+  const branchPrefixes = settingsStore.global.branchPrefixes
+  if (branchPrefixes.length > 0 && !branchPrefixes.includes(branchType.value)) {
+    branchType.value = branchPrefixes[0]
+  }
 
   // Restore last-used inputs from localStorage. The projectPath is only
   // restored when it's still a known project — a stale path silently falls
