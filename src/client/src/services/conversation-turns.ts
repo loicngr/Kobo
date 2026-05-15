@@ -7,7 +7,7 @@ import type { ConversationItem } from './agent-event-view'
  * nested inside it. System events (session:started, etc.) and the initial
  * system prompt become their own standalone turns.
  */
-export type TurnSpeaker = 'user' | 'agent' | 'system-prompt' | 'session'
+export type TurnSpeaker = 'user' | 'agent' | 'system-prompt' | 'session' | 'script'
 
 export interface Turn {
   speaker: TurnSpeaker
@@ -15,10 +15,19 @@ export interface Turn {
   items: ConversationItem[]
 }
 
+/**
+ * Activity-feed `sender` values produced by lifecycle scripts (setup / cleanup
+ * / archive). They render in their own `script` turn card — never merged into
+ * the user's real messages.
+ */
+const SCRIPT_SENDERS = new Set(['setup', 'cleanup', 'archive'])
+
 function speakerOf(item: ConversationItem): TurnSpeaker {
   switch (item.type) {
     case 'user':
-      return item.sender === 'system-prompt' ? 'system-prompt' : 'user'
+      if (item.sender === 'system-prompt') return 'system-prompt'
+      if (SCRIPT_SENDERS.has(item.sender)) return 'script'
+      return 'user'
     case 'session':
       return 'session'
     default:
@@ -34,14 +43,19 @@ function speakerOf(item: ConversationItem): TurnSpeaker {
 export function groupIntoTurns(items: ConversationItem[]): Turn[] {
   const turns: Turn[] = []
   let current: Turn | null = null
+  let currentKey: string | null = null
 
   for (const item of items) {
     const speaker = speakerOf(item)
     // Session + system-prompt items are standalone: each gets its own turn.
     const standalone = speaker === 'session' || speaker === 'system-prompt'
+    // Script turns are keyed by their sender so a cleanup run and an archive
+    // run (both speaker 'script') never merge into a single mislabelled card.
+    const key = speaker === 'script' && item.type === 'user' ? `script:${item.sender}` : speaker
 
-    if (!current || current.speaker !== speaker || standalone) {
+    if (!current || currentKey !== key || standalone) {
       current = { speaker, ts: item.ts, items: [item] }
+      currentKey = key
       turns.push(current)
       if (standalone) current = null // force a fresh turn for the next item
     } else {

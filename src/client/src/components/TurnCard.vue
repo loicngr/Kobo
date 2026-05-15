@@ -104,6 +104,19 @@ const header = computed<HeaderMeta>(() => {
       return { label: t('chat.systemPrompt'), accent: '#757575', badgeClass: 'turn-badge-system' }
     case 'session':
       return { label: t('chat.session'), accent: '#616161', badgeClass: 'turn-badge-session' }
+    case 'script': {
+      // The speaker is the generic 'script'; the precise label (cleanup /
+      // archive / setup) comes from the first item's activity-feed sender.
+      const first = props.turn.items[0]
+      const sender = first?.type === 'user' ? first.sender : ''
+      const label =
+        sender === 'archive'
+          ? t('chat.archiveScript')
+          : sender === 'setup'
+            ? t('chat.setupScript')
+            : t('chat.cleanupScript')
+      return { label, accent: '#4db6ac', badgeClass: 'turn-badge-script' }
+    }
   }
 })
 
@@ -197,6 +210,10 @@ const actionCount = computed(() => props.turn.items.filter((i) => i.type === 'to
 .turn-badge-session {
   background: rgba(97, 97, 97, 0.2);
   color: #9e9e9e;
+}
+.turn-badge-script {
+  background: rgba(77, 182, 172, 0.15);
+  color: #4db6ac;
 }
 .turn-time {
   color: #666;

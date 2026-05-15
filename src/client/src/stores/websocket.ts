@@ -651,7 +651,7 @@ export const useWebSocketStore = defineStore('websocket', {
           workspaceStore.addActivityItem(wid, {
             id: msg.id ?? `setup-complete-${Date.now()}`,
             type: 'text',
-            content: '[setup] Complete',
+            content: msg.payload?.hadOutput === false ? t('chat.scriptDone') : '[setup] Complete',
             timestamp: msg.createdAt ?? new Date().toISOString(),
             meta: { sender: 'setup' },
           })
@@ -663,7 +663,67 @@ export const useWebSocketStore = defineStore('websocket', {
             type: 'text',
             content: `[setup] Error: ${msg.payload?.message ?? 'unknown'}`,
             timestamp: msg.createdAt ?? new Date().toISOString(),
-            meta: { sender: 'error' },
+            meta: { sender: 'setup' },
+          })
+          break
+
+        case 'cleanup:output':
+          workspaceStore.addActivityItem(wid, {
+            id: msg.id ?? `cleanup-${Date.now()}`,
+            type: 'text',
+            content: (msg.payload?.text as string) ?? '',
+            timestamp: msg.createdAt ?? new Date().toISOString(),
+            meta: { sender: 'cleanup' },
+          })
+          break
+
+        case 'cleanup:complete':
+          workspaceStore.addActivityItem(wid, {
+            id: msg.id ?? `cleanup-complete-${Date.now()}`,
+            type: 'text',
+            content: msg.payload?.hadOutput === false ? t('chat.scriptDone') : '[cleanup] Complete',
+            timestamp: msg.createdAt ?? new Date().toISOString(),
+            meta: { sender: 'cleanup' },
+          })
+          break
+
+        case 'cleanup:error':
+          workspaceStore.addActivityItem(wid, {
+            id: msg.id ?? `cleanup-error-${Date.now()}`,
+            type: 'text',
+            content: `[cleanup] Error: ${msg.payload?.message ?? 'unknown'}`,
+            timestamp: msg.createdAt ?? new Date().toISOString(),
+            meta: { sender: 'cleanup' },
+          })
+          break
+
+        case 'archive:output':
+          workspaceStore.addActivityItem(wid, {
+            id: msg.id ?? `archive-${Date.now()}`,
+            type: 'text',
+            content: (msg.payload?.text as string) ?? '',
+            timestamp: msg.createdAt ?? new Date().toISOString(),
+            meta: { sender: 'archive' },
+          })
+          break
+
+        case 'archive:complete':
+          workspaceStore.addActivityItem(wid, {
+            id: msg.id ?? `archive-complete-${Date.now()}`,
+            type: 'text',
+            content: msg.payload?.hadOutput === false ? t('chat.scriptDone') : '[archive] Complete',
+            timestamp: msg.createdAt ?? new Date().toISOString(),
+            meta: { sender: 'archive' },
+          })
+          break
+
+        case 'archive:error':
+          workspaceStore.addActivityItem(wid, {
+            id: msg.id ?? `archive-error-${Date.now()}`,
+            type: 'text',
+            content: `[archive] Error: ${msg.payload?.message ?? 'unknown'}`,
+            timestamp: msg.createdAt ?? new Date().toISOString(),
+            meta: { sender: 'archive' },
           })
           break
 
