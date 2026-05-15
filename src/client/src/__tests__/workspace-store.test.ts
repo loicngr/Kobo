@@ -449,6 +449,55 @@ describe('workspace store', () => {
     })
   })
 
+  describe('deleteAllArchived', () => {
+    beforeEach(() => {
+      vi.stubGlobal('fetch', vi.fn())
+    })
+
+    const archivedA = makeWorkspace({ id: 'a1', archivedAt: '2026-05-01T00:00:00Z' })
+    const archivedB = makeWorkspace({ id: 'a2', archivedAt: '2026-05-02T00:00:00Z' })
+
+    it('clears archived workspaces and returns the deleted count + targeted ids', async () => {
+      const store = useWorkspaceStore()
+      store.archivedWorkspaces = [{ ...archivedA }, { ...archivedB }]
+
+      vi.mocked(fetch).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ ok: true, deleted: 2, warnings: [] }),
+      } as Response)
+
+      const result = await store.deleteAllArchived({ deleteLocalBranch: true })
+
+      expect(fetch).toHaveBeenCalledWith('/api/workspaces/archived', expect.objectContaining({ method: 'DELETE' }))
+      expect(result.deleted).toBe(2)
+      expect(result.ids).toEqual(['a1', 'a2'])
+      expect(store.archivedWorkspaces).toEqual([])
+    })
+
+    it('surfaces best-effort warnings returned by the backend', async () => {
+      const store = useWorkspaceStore()
+      store.archivedWorkspaces = [{ ...archivedA }]
+
+      vi.mocked(fetch).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ ok: true, deleted: 1, warnings: ['worktree stuck'] }),
+      } as Response)
+
+      const result = await store.deleteAllArchived()
+      expect(result.warnings).toEqual(['worktree stuck'])
+    })
+
+    it('throws and keeps the archived list intact on API error', async () => {
+      const store = useWorkspaceStore()
+      store.archivedWorkspaces = [{ ...archivedA }]
+
+      vi.mocked(fetch).mockResolvedValueOnce({ ok: false, status: 500 } as Response)
+
+      await expect(store.deleteAllArchived()).rejects.toThrow()
+      expect(store.archivedWorkspaces.length).toBe(1)
+    })
+  })
+
   describe('disableAutoLoop', () => {
     beforeEach(() => {
       vi.stubGlobal('fetch', vi.fn())

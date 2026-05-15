@@ -601,6 +601,51 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
+    // Bulk-delete every archived workspace in one request. The backend never
+    // aborts mid-batch — failures come back as warnings. Returns the ids that
+    // were targeted so the caller can unsubscribe their WS feeds.
+    async deleteAllArchived(options?: {
+      deleteLocalBranch?: boolean
+      deleteRemoteBranch?: boolean
+    }): Promise<{ deleted: number; warnings: string[]; ids: string[] }> {
+      try {
+        // Capture ids before the request so we can clean per-workspace state
+        // once the backend confirms the bulk delete.
+        const ids = this.archivedWorkspaces.map((w) => w.id)
+        const res = await fetch('/api/workspaces/archived', {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(options ?? {}),
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+
+        const body = (await res.json().catch(() => ({}))) as {
+          deleted?: number
+          warnings?: string[]
+        }
+        const deleted = typeof body.deleted === 'number' ? body.deleted : 0
+        const warnings = Array.isArray(body.warnings) ? body.warnings : []
+
+        this.archivedWorkspaces = []
+        for (const id of ids) {
+          delete this.activityFeeds[id]
+          delete this.activityFeedIds[id]
+          delete this.activityCounts[id]
+          delete this.subagents[id]
+          delete this.agentTodos[id]
+          if (this.selectedWorkspaceId === id) {
+            this.selectedWorkspaceId = null
+            this.tasks = []
+          }
+        }
+
+        return { deleted, warnings, ids }
+      } catch (err) {
+        console.error('[workspace store] deleteAllArchived failed:', err)
+        throw err
+      }
+    },
+
     async updateModel(id: string, model: string) {
       try {
         const res = await fetch(`/api/workspaces/${id}`, {

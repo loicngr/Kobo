@@ -1,5 +1,5 @@
 <template>
-  <div class="workspace-list row column full-height">
+  <div class="workspace-list row column full-height" data-tour="workspace-list">
     <!-- Header -->
     <div class="row items-center no-wrap q-pl-md q-pr-xs q-py-sm">
       <span class="text-caption text-uppercase text-weight-bold text-grey-6 col ellipsis">
@@ -38,6 +38,7 @@
             class="q-ml-xs"
             size="sm"
             color="grey-5"
+            data-tour="health"
             @click="goToHealth"
         >
           <q-tooltip>{{ $t('health.tooltip') }}</q-tooltip>
@@ -50,6 +51,7 @@
             class="q-ml-xs"
             size="sm"
             color="grey-5"
+            data-tour="settings"
             @click="goToSettings"
         />
         <q-btn
@@ -59,6 +61,7 @@
             icon="add"
             size="sm"
             color="grey-5"
+            data-tour="create-workspace"
             @click="goToCreate"
         />
       </div>
@@ -73,6 +76,7 @@
         :placeholder="$t('common.search')"
         class="wl-search rounded-borders col"
         borderless
+        data-tour="search"
       >
         <template #prepend>
           <q-icon name="search" size="xs" color="grey-6" />
@@ -580,6 +584,19 @@
             class="q-ml-auto"
             style="font-size: 10px;"
           />
+          <q-btn
+            v-if="filteredArchived.length > 0"
+            flat
+            dense
+            round
+            size="xs"
+            icon="delete_sweep"
+            color="grey-7"
+            class="q-ml-xs"
+            @click.stop="openBulkDeleteArchivedDialog"
+          >
+            <q-tooltip>{{ $t('workspaceList.deleteArchivedDialog.tooltip') }}</q-tooltip>
+          </q-btn>
         </div>
 
         <div v-show="archivedExpanded || archivedAutoExpanded">
@@ -709,6 +726,58 @@
     </q-card>
   </q-dialog>
 
+  <q-dialog v-model="bulkDeleteArchivedDialog" persistent>
+    <q-card class="text-grey-3" style="min-width: 360px; background: #1e1e3a;">
+      <q-card-section>
+        <div class="text-h6">{{ $t('workspaceList.deleteArchivedDialog.title') }}</div>
+      </q-card-section>
+
+      <q-card-section class="q-pt-none">
+        <div class="text-body2 q-mb-md text-grey-6">
+          {{ $t('workspaceList.deleteArchivedDialog.message', { count: store.archived.length }) }}
+        </div>
+
+        <div class="column q-gutter-xs">
+          <q-checkbox
+            v-model="bulkDeleteLocalBranch"
+            :label="$t('workspaceList.deleteDialog.deleteLocal')"
+            dark
+            dense
+            color="red-5"
+          />
+          <q-checkbox
+            v-model="bulkDeleteRemoteBranch"
+            :disable="!bulkDeleteLocalBranch"
+            :label="$t('workspaceList.deleteDialog.deleteRemote')"
+            dark
+            dense
+            color="red-5"
+          />
+        </div>
+        <div v-if="bulkDeleteRemoteBranch" class="text-caption q-mt-sm text-red-5">
+          {{ $t('workspaceList.deleteDialog.warning') }}
+        </div>
+      </q-card-section>
+
+      <q-card-actions align="right">
+        <q-btn
+          flat
+          :label="$t('common.cancel')"
+          color="grey-5"
+          :disable="bulkDeleting"
+          @click="bulkDeleteArchivedDialog = false"
+        />
+        <q-btn
+          flat
+          :label="$t('common.delete')"
+          color="red-5"
+          :loading="bulkDeleting"
+          @click="confirmBulkDeleteArchived"
+        />
+      </q-card-actions>
+    </q-card>
+  </q-dialog>
+
   <ManageTagsDialog
     v-if="tagsDialogWorkspace"
     v-model="tagsDialogOpen"
@@ -813,9 +882,12 @@ const groupedIdle = computed(() => groupByProject(filteredIdle.value))
 
 const flatten = computed(() => settingsStore.global.flattenWorkspaceList ?? false)
 
-const flatNeedsAttention = computed(() => groupedNeedsAttention.value.flatMap((g) => g.workspaces))
-const flatRunning = computed(() => groupedRunning.value.flatMap((g) => g.workspaces))
-const flatIdle = computed(() => groupedIdle.value.flatMap((g) => g.workspaces))
+// Flat lists must keep the source order (`updated_at DESC` from the API), NOT
+// the project-grouped order. Deriving these from `groupedX` would re-sort by
+// project — making "flat list" still look grouped, just without the headers.
+const flatNeedsAttention = computed(() => filteredNeedsAttention.value)
+const flatRunning = computed(() => filteredRunning.value)
+const flatIdle = computed(() => filteredIdle.value)
 
 // Archived list filtered by the search query when `searchArchived` is ON,
 // and by `favoritesOnly` whenever it's ON. With both toggles OFF and an
@@ -856,6 +928,11 @@ const deleteTarget = ref<Workspace | null>(null)
 const deleteLocalBranch = ref(false)
 const deleteRemoteBranch = ref(false)
 const deleting = ref(false)
+
+const bulkDeleteArchivedDialog = ref(false)
+const bulkDeleteLocalBranch = ref(false)
+const bulkDeleteRemoteBranch = ref(false)
+const bulkDeleting = ref(false)
 
 function openDeleteDialog(ws: Workspace, event: Event) {
   event.stopPropagation()
@@ -910,6 +987,58 @@ async function confirmDelete() {
     console.error('Delete failed:', err)
   } finally {
     deleting.value = false
+  }
+}
+
+function openBulkDeleteArchivedDialog() {
+  // The button is only rendered when filteredArchived is non-empty, so the
+  // archived list is already loaded here — no extra fetch needed.
+  bulkDeleteLocalBranch.value = false
+  bulkDeleteRemoteBranch.value = false
+  bulkDeleteArchivedDialog.value = true
+}
+
+async function confirmBulkDeleteArchived() {
+  bulkDeleting.value = true
+  try {
+    const { warnings, ids } = await store.deleteAllArchived({
+      deleteLocalBranch: bulkDeleteLocalBranch.value,
+      deleteRemoteBranch: bulkDeleteRemoteBranch.value,
+    })
+    for (const id of ids) wsStore.unsubscribe(id)
+    bulkDeleteArchivedDialog.value = false
+    // If we were viewing one of the deleted workspaces, navigate away.
+    if (store.selectedWorkspaceId === null) {
+      router.push({ name: 'workspace' })
+    }
+
+    // Same recovery-toast pattern as single delete: a side-effect (worktree /
+    // branch) may have failed even though the DB rows are gone.
+    for (const message of warnings) {
+      $q.notify({
+        type: 'warning',
+        message,
+        position: 'top',
+        timeout: 0, // sticky until user dismisses
+        multiLine: true,
+        classes: 'workspace-delete-warning',
+        actions: [
+          {
+            icon: 'content_copy',
+            color: 'white',
+            round: true,
+            handler: () => {
+              void navigator.clipboard.writeText(message)
+            },
+          },
+          { label: 'OK', color: 'white', handler: () => undefined },
+        ],
+      })
+    }
+  } catch (err) {
+    console.error('Bulk delete archived failed:', err)
+  } finally {
+    bulkDeleting.value = false
   }
 }
 
