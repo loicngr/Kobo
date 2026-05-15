@@ -45,6 +45,10 @@
         <q-item-section side><q-icon name="merge_type" size="xs" /></q-item-section>
         <q-item-section>{{ $t('contextMenu.openPr') }}</q-item-section>
       </q-item>
+      <q-item clickable v-close-popup @click="exportEvents">
+        <q-item-section side><q-icon name="download" size="xs" /></q-item-section>
+        <q-item-section>{{ $t('contextMenu.exportEvents') }}</q-item-section>
+      </q-item>
       <q-separator dark />
       <q-item v-if="archived" clickable v-close-popup @click="(e) => emit('unarchive', workspace, e)">
         <q-item-section side><q-icon name="unarchive" size="xs" /></q-item-section>
@@ -63,9 +67,11 @@
 </template>
 
 <script setup lang="ts">
+import { useQuasar } from 'quasar'
 import { useSettingsStore } from 'src/stores/settings'
 import { useWorkspaceStore, type Workspace } from 'src/stores/workspace'
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 const props = withDefaults(
   defineProps<{
@@ -90,6 +96,45 @@ const emit = defineEmits<{
 
 function openExternal(url: string) {
   window.open(url, '_blank', 'noopener,noreferrer')
+}
+
+const $q = useQuasar()
+const { t } = useI18n()
+
+/**
+ * Download every ws_event of the workspace as a CSV. Shows a sticky spinner
+ * notification while the server prepares the file (the menu closes on click,
+ * but the notification is global and outlives it).
+ */
+async function exportEvents() {
+  const dismiss = $q.notify({
+    spinner: true,
+    message: t('contextMenu.exportingEvents'),
+    timeout: 0,
+    group: false,
+  })
+  try {
+    const res = await fetch(`/api/workspaces/${props.workspace.id}/events.csv`)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const blob = await res.blob()
+    const url = URL.createObjectURL(blob)
+    const slug = props.workspace.name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${slug || 'workspace'}-events.csv`
+    document.body.appendChild(a)
+    a.click()
+    a.remove()
+    URL.revokeObjectURL(url)
+  } catch (err) {
+    console.error('[WorkspaceContextMenu] export events failed:', err)
+    $q.notify({ type: 'negative', message: t('contextMenu.exportEventsError'), position: 'top' })
+  } finally {
+    dismiss()
+  }
 }
 
 const settingsStore = useSettingsStore()
