@@ -13,6 +13,7 @@
     "src/mcp-server/",
     "AGENTS.md",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE"
   ],
   "publishConfig": {

@@ -24,3 +24,45 @@ body,
 .bg-dark-card {
   background-color: var(--kobo-surface);
 }
+
+// ── Onboarding tour (driver.js) — dark theme override ──────────────────────
+.driver-popover.kobo-onboarding-popover {
+  background-color: #1e1e3a;
+  color: #e0e0e0;
+  border-radius: 8px;
+}
+.kobo-onboarding-popover .driver-popover-title {
+  color: #fff;
+}
+.kobo-onboarding-popover .driver-popover-description {
+  color: #bdbdbd;
+}
+.kobo-onboarding-popover .driver-popover-progress-text {
+  color: #888;
+}
+.kobo-onboarding-popover .driver-popover-close-btn {
+  color: #888;
+}
+.kobo-onboarding-popover .driver-popover-navigation-btns button {
+  background-color: #2a2a4a;
+  color: #e0e0e0;
+  text-shadow: none;
+  border-radius: 4px;
+}
+.kobo-onboarding-popover .driver-popover-navigation-btns button:hover {
+  background-color: #6c63ff;
+  color: #fff;
+}
+// Tooltip arrow — match the dark popover background on every side.
+.kobo-onboarding-popover .driver-popover-arrow-side-left.driver-popover-arrow {
+  border-left-color: #1e1e3a;
+}
+.kobo-onboarding-popover .driver-popover-arrow-side-right.driver-popover-arrow {
+  border-right-color: #1e1e3a;
+}
+.kobo-onboarding-popover .driver-popover-arrow-side-top.driver-popover-arrow {
+  border-top-color: #1e1e3a;
+}
+.kobo-onboarding-popover .driver-popover-arrow-side-bottom.driver-popover-arrow {
+  border-bottom-color: #1e1e3a;
+}

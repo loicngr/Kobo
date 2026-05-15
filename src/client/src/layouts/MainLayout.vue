@@ -109,6 +109,8 @@
     <q-page-container class="bg-dark">
       <router-view />
     </q-page-container>
+
+    <WhatsNewDialog v-model="showWhatsNew" :versions="newVersions" />
   </q-layout>
 </template>
 
@@ -122,12 +124,23 @@ import SubagentsPanel from 'src/components/SubagentsPanel.vue'
 import TasksPanel from 'src/components/TasksPanel.vue'
 import TerminalPanel from 'src/components/TerminalPanel.vue'
 import ToolsPanel from 'src/components/ToolsPanel.vue'
+import WhatsNewDialog from 'src/components/WhatsNewDialog.vue'
 import WorkspaceList from 'src/components/WorkspaceList.vue'
+import { useOnboarding } from 'src/composables/use-onboarding'
+import { useWhatsNew } from 'src/composables/use-whats-new'
 import { supportsSubagents } from 'src/constants/engineFeatures'
 import { useDocumentsStore } from 'src/stores/documents'
 import { useWorkspaceStore } from 'src/stores/workspace'
-import { computed, provide, ref, watch } from 'vue'
+import { computed, onMounted, provide, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
+
+// First-run onboarding tour, and the post-update "What's new" dialog.
+const { maybeStartOnFirstVisit } = useOnboarding()
+const { showDialog: showWhatsNew, newVersions, checkForUpdate } = useWhatsNew()
+onMounted(() => {
+  maybeStartOnFirstVisit()
+  void checkForUpdate()
+})
 
 const DRAWER_TAB_KEY = 'kobo:rightTab'
 const VALID_RIGHT_TABS = ['git', 'tasks', 'subagents', 'documents', 'schedule'] as const

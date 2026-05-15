@@ -144,6 +144,11 @@ export function getPackageVersion(): string {
   return _cachedVersion
 }
 
+/** Absolute path to the root CHANGELOG.md (read by the "What's new" dialog). */
+export function getChangelogPath(): string {
+  return getPackageAssetPath('CHANGELOG.md')
+}
+
 /**
  * Absolute path to the built Quasar SPA (src/client/dist/spa). Returns null
  * if the SPA has not been built yet.
