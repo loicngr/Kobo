@@ -10,6 +10,7 @@
             :key="item.value"
             clickable
             v-ripple="false"
+            :data-tour="`settings-nav-${item.value}`"
             :class="['settings-nav__item', { 'settings-nav__item--active': activeTab === item.value }]"
             @click="activeTab = item.value"
           >
@@ -31,7 +32,11 @@
         <div v-show="isGlobalSection" class="settings-global-wrap">
 
             <!-- Localization -->
-            <div v-show="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div
+              v-show="activeTab === 'general'"
+              data-tour="settings-card-general"
+              class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
+            >
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.language') }}</div>
               <q-select
                 :model-value="locale"
@@ -63,7 +68,11 @@
             </div>
 
             <!-- Skill suite -->
-            <div v-show="activeTab === 'skills'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div
+              v-show="activeTab === 'skills'"
+              data-tour="settings-card-skills"
+              class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
+            >
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.skillSuite.section') }}</div>
 
               <q-option-group
@@ -145,7 +154,11 @@
             </div>
 
             <!-- Default agent configuration -->
-            <div v-show="activeTab === 'agents'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div
+              v-show="activeTab === 'agents'"
+              data-tour="settings-card-agents"
+              class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
+            >
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.defaultModelClaude') }}</div>
               <q-select
                 v-model="globalClaudeModel"
@@ -215,7 +228,11 @@
             </div>
 
             <!-- Notifications -->
-            <div v-show="activeTab === 'notifications'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div
+              v-show="activeTab === 'notifications'"
+              data-tour="settings-card-notifications"
+              class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
+            >
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.notifications') }}</div>
               <div class="column q-gutter-xs">
                 <q-toggle
@@ -281,7 +298,11 @@
             </div>
 
             <!-- Voice transcription — Runtime status -->
-            <div v-show="activeTab === 'voice'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div
+              v-show="activeTab === 'voice'"
+              data-tour="settings-card-voice"
+              class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
+            >
               <div class="row items-center q-mb-sm">
                 <div class="text-subtitle2">{{ $t('voice.sectionRuntime') }}</div>
                 <q-space />
@@ -608,7 +629,11 @@ where ffmpeg</pre>
               </q-expansion-item>
             </div>
 
-            <div v-if="activeTab === 'prompts'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div
+              v-if="activeTab === 'prompts'"
+              data-tour="settings-card-prompts"
+              class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
+            >
               <div class="row items-center q-mb-sm">
                 <div class="text-subtitle2">{{ $t('settings.prPromptTemplate') }}</div>
                 <q-space />
@@ -727,7 +752,11 @@ where ffmpeg</pre>
               />
             </div>
 
-            <div v-show="activeTab === 'notion' || activeTab === 'sentry'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div
+              v-show="activeTab === 'notion' || activeTab === 'sentry'"
+              data-tour="settings-card-notion"
+              class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
+            >
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.mcpSelection') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.mcpSelectionHint') }}</div>
               <div class="q-mb-sm">
@@ -934,7 +963,192 @@ where ffmpeg</pre>
               />
             </div>
 
-            <div v-show="activeTab === 'worktrees'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <!-- Branch prefixes -->
+            <div v-show="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.branchPrefixesTitle') }}</div>
+              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.branchPrefixesHint') }}</div>
+
+              <q-list
+                v-if="globalBranchPrefixes.length > 0"
+                bordered
+                separator
+                class="rounded-borders q-mb-sm"
+              >
+                <q-item v-for="(prefix, index) in globalBranchPrefixes" :key="prefix">
+                  <q-item-section>
+                    <q-item-label class="cursor-pointer">
+                      {{ prefix }}/
+                      <q-popup-edit
+                        :model-value="prefix"
+                        auto-save
+                        @save="(val: string) => updateBranchPrefix(index, val)"
+                      >
+                        <template #default="scope">
+                          <q-input
+                            v-model="scope.value"
+                            dense
+                            dark
+                            autofocus
+                            @keyup.enter="scope.set"
+                          />
+                        </template>
+                      </q-popup-edit>
+                      <q-tooltip>{{ $t('settings.branchPrefixesEditHint') }}</q-tooltip>
+                    </q-item-label>
+                  </q-item-section>
+                  <q-item-section side>
+                    <div class="row items-center no-wrap">
+                      <q-btn
+                        flat
+                        dense
+                        round
+                        size="sm"
+                        icon="keyboard_arrow_up"
+                        color="grey-6"
+                        :disable="index === 0"
+                        :title="$t('settings.branchPrefixesMoveUp')"
+                        @click="moveBranchPrefix(index, -1)"
+                      />
+                      <q-btn
+                        flat
+                        dense
+                        round
+                        size="sm"
+                        icon="keyboard_arrow_down"
+                        color="grey-6"
+                        :disable="index === globalBranchPrefixes.length - 1"
+                        :title="$t('settings.branchPrefixesMoveDown')"
+                        @click="moveBranchPrefix(index, 1)"
+                      />
+                      <q-btn
+                        flat
+                        dense
+                        round
+                        size="sm"
+                        icon="delete"
+                        color="grey-6"
+                        :title="$t('common.delete')"
+                        @click="removeBranchPrefix(index)"
+                      />
+                    </div>
+                  </q-item-section>
+                </q-item>
+              </q-list>
+              <div v-else class="text-caption text-grey-7 q-mb-sm">
+                {{ $t('settings.branchPrefixesEmpty') }}
+              </div>
+
+              <div class="row items-center q-gutter-sm">
+                <q-input
+                  v-model="newBranchPrefix"
+                  :label="$t('settings.branchPrefixesAddLabel')"
+                  dense
+                  dark
+                  outlined
+                  class="col"
+                  @keyup.enter="addBranchPrefix"
+                />
+                <q-btn
+                  flat
+                  :label="$t('common.add')"
+                  icon="add"
+                  color="primary"
+                  :disable="normalizeBranchPrefix(newBranchPrefix).length === 0"
+                  @click="addBranchPrefix"
+                />
+              </div>
+            </div>
+
+            <!-- Setup script -->
+            <div
+              v-show="activeTab === 'scripts'"
+              data-tour="settings-card-scripts"
+              class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
+            >
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.setupScript') }}</div>
+              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.setupScriptHint') }}</div>
+              <q-input
+                v-model="globalSetupScript"
+                type="textarea"
+                dark
+                outlined
+                autogrow
+                :input-style="{ minHeight: '100px' }"
+                :placeholder="$t('settings.setupScriptPlaceholder')"
+                class="settings-input mono-textarea"
+              />
+            </div>
+
+            <!-- Onboarding tour -->
+            <div v-show="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.onboardingTitle') }}</div>
+              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.onboardingHint') }}</div>
+              <q-btn
+                flat
+                no-caps
+                icon="play_circle"
+                color="indigo-4"
+                :label="$t('settings.onboardingReplay')"
+                @click="startTour"
+              />
+            </div>
+
+            <!-- Cleanup script -->
+            <div v-show="activeTab === 'scripts'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.cleanupScript') }}</div>
+              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.cleanupScriptHint') }}</div>
+              <q-input
+                v-model="globalCleanupScript"
+                type="textarea"
+                dark
+                outlined
+                autogrow
+                :input-style="{ minHeight: '100px' }"
+                :placeholder="$t('settings.cleanupScriptPlaceholder')"
+                class="settings-input mono-textarea"
+              />
+              <div class="text-caption text-grey-6 q-mt-md q-mb-xs">{{ $t('settings.cleanupScriptMode') }}</div>
+              <q-option-group
+                v-model="globalCleanupScriptMode"
+                :options="[
+                  { label: $t('settings.cleanupScriptMode.idle'), value: 'idle' },
+                  { label: $t('settings.cleanupScriptMode.noTasks'), value: 'no-tasks' },
+                ]"
+                type="radio"
+                color="indigo-4"
+                dense
+              />
+              <q-checkbox
+                v-model="globalCleanupScriptOnlyOnChanges"
+                :label="$t('settings.cleanupScriptOnlyOnChanges')"
+                dark
+                dense
+                color="indigo-4"
+                class="q-mt-sm"
+              />
+            </div>
+
+            <!-- Archive script -->
+            <div v-show="activeTab === 'scripts'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.archiveScript') }}</div>
+              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.archiveScriptHint') }}</div>
+              <q-input
+                v-model="globalArchiveScript"
+                type="textarea"
+                dark
+                outlined
+                autogrow
+                :input-style="{ minHeight: '100px' }"
+                :placeholder="$t('settings.archiveScriptPlaceholder')"
+                class="settings-input mono-textarea"
+              />
+            </div>
+
+            <div
+              v-show="activeTab === 'worktrees'"
+              data-tour="settings-card-worktrees"
+              class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
+            >
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.worktreesTitle') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.worktreesHint') }}</div>
               <q-input
@@ -961,7 +1175,11 @@ where ffmpeg</pre>
             </div>
 
             <!-- Import / Export config -->
-            <div v-show="activeTab === 'export'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div
+              v-show="activeTab === 'export'"
+              data-tour="settings-card-export"
+              class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
+            >
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.shareTitle') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.shareHint') }}</div>
               <div class="row q-gutter-sm">
@@ -1054,6 +1272,7 @@ where ffmpeg</pre>
 
                 <div class="q-pa-sm">
                   <q-btn
+                    data-tour="settings-card-projects"
                     :label="$t('settings.addProject')"
                     icon="add"
                     no-caps
@@ -1071,8 +1290,23 @@ where ffmpeg</pre>
             <div class="project-form-col">
               <div class="settings-card rounded-borders q-pa-lg" style="height: 100%;">
                 <template v-if="selectedProject || isNewProject">
-                  <div class="text-subtitle1 text-weight-medium q-mb-md text-grey-3">
-                    {{ isNewProject ? $t('settings.newProject') : $t('settings.editProject') }}
+                  <div class="row items-center q-mb-md">
+                    <div class="text-subtitle1 text-weight-medium text-grey-3">
+                      {{ isNewProject ? $t('settings.newProject') : $t('settings.editProject') }}
+                    </div>
+                    <q-space />
+                    <q-btn
+                      v-if="!isNewProject"
+                      :label="$t('common.delete')"
+                      icon="delete_outline"
+                      no-caps
+                      flat
+                      dense
+                      size="sm"
+                      color="red-5"
+                      :loading="deletingProject"
+                      @click="deleteProject"
+                    />
                   </div>
 
                   <q-separator dark class="q-mb-md" />
@@ -1102,196 +1336,274 @@ where ffmpeg</pre>
                     </div>
                   </div>
 
-                  <!-- Path -->
-                  <div class="q-mb-md">
-                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.projectPath') }}</div>
-                    <q-input
-                      v-model="projectForm.path"
-                      dense
-                      dark
-                      outlined
-                      :readonly="!isNewProject"
-                      :placeholder="$t('settings.projectPathPlaceholder')"
-                      class="settings-input"
-                      :class="{ 'readonly-input': !isNewProject }"
-                    />
-                  </div>
+                  <!-- Identity -->
+                  <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+                    <div class="text-subtitle2 q-mb-md">{{ $t('settings.projectGroup.identity') }}</div>
 
-                  <!-- Display name -->
-                  <div class="q-mb-md">
-                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.displayName') }}</div>
-                    <q-input
-                      v-model="projectForm.displayName"
-                      dense
-                      dark
-                      outlined
-                      :placeholder="$t('settings.displayNamePlaceholder')"
-                      class="settings-input"
-                    />
-                  </div>
-
-                  <!-- Color -->
-                  <div class="q-mb-md">
-                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">
-                      {{ $t('settings.projectColor') }}
+                    <div class="q-mb-md">
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.projectPath') }}</div>
+                      <q-input
+                        v-model="projectForm.path"
+                        dense
+                        dark
+                        outlined
+                        :readonly="!isNewProject"
+                        :placeholder="$t('settings.projectPathPlaceholder')"
+                        class="settings-input"
+                        :class="{ 'readonly-input': !isNewProject }"
+                      >
+                        <template v-if="isNewProject" #append>
+                          <q-btn
+                            flat
+                            dense
+                            round
+                            size="sm"
+                            icon="folder_open"
+                            color="grey-5"
+                            @click="folderPickerOpen = true"
+                          >
+                            <q-tooltip>{{ $t('folderPicker.title') }}</q-tooltip>
+                          </q-btn>
+                        </template>
+                      </q-input>
                     </div>
-                    <div class="row items-center q-gutter-xs">
-                      <q-chip
-                        v-for="c in PROJECT_COLOR_PALETTE"
-                        :key="c"
+
+                    <div class="q-mb-md">
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.displayName') }}</div>
+                      <q-input
+                        v-model="projectForm.displayName"
                         dense
-                        clickable
-                        :color="c"
-                        :icon="projectForm.color === c ? 'check' : undefined"
-                        text-color="white"
-                        @click="projectForm.color = c"
-                      />
-                      <q-btn
-                        flat
-                        dense
-                        no-caps
-                        size="xs"
-                        :label="$t('settings.projectColorClear')"
-                        color="grey-5"
-                        :disable="!projectForm.color"
-                        @click="projectForm.color = null"
+                        dark
+                        outlined
+                        :placeholder="$t('settings.displayNamePlaceholder')"
+                        class="settings-input"
                       />
                     </div>
-                    <div class="text-caption text-grey-6 q-mt-xs">
-                      {{ projectForm.color ?? $t('settings.projectColorDefault') }}
+
+                    <div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">
+                        {{ $t('settings.projectColor') }}
+                      </div>
+                      <div class="row items-center q-gutter-xs">
+                        <q-chip
+                          v-for="c in PROJECT_COLOR_PALETTE"
+                          :key="c"
+                          dense
+                          clickable
+                          :color="c"
+                          :icon="projectForm.color === c ? 'check' : undefined"
+                          text-color="white"
+                          @click="projectForm.color = c"
+                        />
+                        <q-btn
+                          flat
+                          dense
+                          no-caps
+                          size="xs"
+                          :label="$t('settings.projectColorClear')"
+                          color="grey-5"
+                          :disable="!projectForm.color"
+                          @click="projectForm.color = null"
+                        />
+                      </div>
+                      <div class="text-caption text-grey-6 q-mt-xs">
+                        {{ projectForm.color ?? $t('settings.projectColorDefault') }}
+                      </div>
                     </div>
                   </div>
 
-                  <!-- Default source branch -->
-                  <div class="q-mb-md">
-                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.defaultSourceBranch') }}</div>
-                    <q-select
-                      v-model="projectForm.defaultSourceBranch"
-                      :options="branchFilterOptions"
-                      dense
-                      dark
-                      outlined
-                      use-input
-                      emit-value
-                      :loading="loadingBranches"
-                      class="settings-input"
-                      placeholder="main"
-                      @filter="filterBranches"
-                    >
-                      <template #no-option>
-                        <q-item>
-                          <q-item-section class="text-grey-6 text-caption">
-                            {{ projectForm.path.trim() ? $t('createPage.noBranches') : $t('createPage.enterPath') }}
-                          </q-item-section>
-                        </q-item>
-                      </template>
-                    </q-select>
+                  <!-- Defaults -->
+                  <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+                    <div class="text-subtitle2 q-mb-md">{{ $t('settings.projectGroup.defaults') }}</div>
+
+                    <div class="q-mb-md">
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.defaultSourceBranch') }}</div>
+                      <q-select
+                        v-model="projectForm.defaultSourceBranch"
+                        :options="branchFilterOptions"
+                        dense
+                        dark
+                        outlined
+                        use-input
+                        emit-value
+                        :loading="loadingBranches"
+                        class="settings-input"
+                        placeholder="main"
+                        @filter="filterBranches"
+                      >
+                        <template #no-option>
+                          <q-item>
+                            <q-item-section class="text-grey-6 text-caption">
+                              {{ projectForm.path.trim() ? $t('createPage.noBranches') : $t('createPage.enterPath') }}
+                            </q-item-section>
+                          </q-item>
+                        </template>
+                      </q-select>
+                    </div>
+
+                    <div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.defaultModel.project') }}</div>
+                      <q-select
+                        v-model="projectForm.defaultModel"
+                        :options="projectModelOptions"
+                        emit-value
+                        map-options
+                        option-value="value"
+                        option-label="label"
+                        dense
+                        dark
+                        outlined
+                        class="settings-input"
+                      />
+                    </div>
                   </div>
 
-                  <!-- Default model -->
-                  <div class="q-mb-md">
-                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.defaultModel.project') }}</div>
-                    <q-select
-                      v-model="projectForm.defaultModel"
-                      :options="projectModelOptions"
-                      emit-value
-                      map-options
-                      option-value="value"
-                      option-label="label"
-                      dense
-                      dark
-                      outlined
-                      class="settings-input"
-                    />
+                  <!-- Prompts -->
+                  <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+                    <div class="text-subtitle2 q-mb-md">{{ $t('settings.projectGroup.prompts') }}</div>
+
+                    <div class="q-mb-md">
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.prPromptTemplate.project') }}</div>
+                      <div class="text-caption text-grey-7 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <q-input
+                        v-model="projectForm.prPromptTemplate"
+                        type="textarea"
+                        outlined
+                        autogrow
+                        :input-style="{ minHeight: '100px' }"
+                        :placeholder="$t('settings.prPromptPlaceholder.project')"
+                        class="settings-input mono-textarea"
+                      />
+                    </div>
+
+                    <div class="q-mb-md">
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.reviewPromptTemplate.project') }}</div>
+                      <div class="text-caption text-grey-7 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <q-input
+                        v-model="projectForm.reviewPromptTemplate"
+                        type="textarea"
+                        outlined
+                        autogrow
+                        :input-style="{ minHeight: '100px' }"
+                        :placeholder="$t('settings.reviewPromptPlaceholder')"
+                        class="settings-input mono-textarea"
+                      />
+                    </div>
+
+                    <div class="q-mb-md">
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ t('settings.notionInitialPrompt.project') }}</div>
+                      <div class="text-caption text-grey-7 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <q-input
+                        v-model="projectForm.notionInitialPromptTemplate"
+                        type="textarea"
+                        outlined
+                        autogrow
+                        class="settings-input mono-textarea"
+                      />
+                    </div>
+
+                    <div class="q-mb-md">
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ t('settings.sentryInitialPrompt.project') }}</div>
+                      <div class="text-caption text-grey-7 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <q-input
+                        v-model="projectForm.sentryInitialPromptTemplate"
+                        type="textarea"
+                        outlined
+                        autogrow
+                        class="settings-input mono-textarea"
+                      />
+                    </div>
+
+                    <div class="q-mb-md">
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.gitConventions.project') }}</div>
+                      <div class="text-caption text-grey-7 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <q-input
+                        v-model="projectForm.gitConventions"
+                        type="textarea"
+                        outlined
+                        autogrow
+                        :input-style="{ minHeight: '140px' }"
+                        :placeholder="$t('settings.gitConventionsEmpty')"
+                        class="settings-input mono-textarea"
+                      />
+                    </div>
+
+                    <div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.taskPromptTemplate') }}</div>
+                      <q-input
+                        v-model="projectForm.taskPromptTemplate"
+                        type="textarea"
+                        outlined
+                        autogrow
+                        :input-style="{ minHeight: '100px' }"
+                        :placeholder="$t('settings.taskPromptTemplatePlaceholder')"
+                        class="settings-input"
+                      />
+                      <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.taskPromptTemplateHint') }}</div>
+                    </div>
                   </div>
 
-                  <!-- PR prompt template -->
-                  <div class="q-mb-md">
-                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.prPromptTemplate.project') }}</div>
-                    <q-input
-                      v-model="projectForm.prPromptTemplate"
-                      type="textarea"
-                      outlined
-                      autogrow
-                      :input-style="{ minHeight: '100px' }"
-                      :placeholder="$t('settings.prPromptPlaceholder.project')"
-                      class="settings-input mono-textarea"
-                    />
-                  </div>
+                  <!-- Scripts -->
+                  <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+                    <div class="text-subtitle2 q-mb-md">{{ $t('settings.projectGroup.scripts') }}</div>
 
-                  <!-- Review prompt template -->
-                  <div class="q-mb-md">
-                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.reviewPromptTemplate.project') }}</div>
-                    <q-input
-                      v-model="projectForm.reviewPromptTemplate"
-                      type="textarea"
-                      outlined
-                      autogrow
-                      :input-style="{ minHeight: '100px' }"
-                      :placeholder="$t('settings.reviewPromptPlaceholder')"
-                      class="settings-input mono-textarea"
-                    />
-                  </div>
+                    <div class="q-mb-md">
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.setupScript') }}</div>
+                      <div class="text-caption text-grey-7 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <q-input
+                        v-model="projectForm.setupScript"
+                        type="textarea"
+                        outlined
+                        autogrow
+                        :input-style="{ minHeight: '100px' }"
+                        :placeholder="$t('settings.setupScriptPlaceholder')"
+                        class="settings-input mono-textarea"
+                      />
+                      <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.setupScriptHint') }}</div>
+                    </div>
 
-                  <!-- Notion initial prompt template (project override) -->
-                  <div class="q-mb-md">
-                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ t('settings.notionInitialPrompt.project') }}</div>
-                    <div class="text-caption text-grey-7 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
-                    <q-input
-                      v-model="projectForm.notionInitialPromptTemplate"
-                      type="textarea"
-                      outlined
-                      autogrow
-                      class="settings-input mono-textarea"
-                    />
-                  </div>
+                    <div class="q-mb-md">
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.cleanupScript') }}</div>
+                      <div class="text-caption text-grey-7 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <q-input
+                        v-model="projectForm.cleanupScript"
+                        type="textarea"
+                        outlined
+                        autogrow
+                        :input-style="{ minHeight: '100px' }"
+                        :placeholder="$t('settings.cleanupScriptPlaceholder')"
+                        class="settings-input mono-textarea"
+                      />
+                      <div class="field-label-sub text-caption q-mt-sm q-mb-xs text-grey-7">{{ $t('settings.cleanupScriptMode') }}</div>
+                      <q-select
+                        v-model="projectForm.cleanupScriptMode"
+                        :options="cleanupModeProjectOptions"
+                        emit-value
+                        map-options
+                        dense
+                        outlined
+                        class="settings-input"
+                      />
+                    </div>
 
-                  <!-- Sentry initial prompt template (project override) -->
-                  <div class="q-mb-md">
-                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ t('settings.sentryInitialPrompt.project') }}</div>
-                    <div class="text-caption text-grey-7 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
-                    <q-input
-                      v-model="projectForm.sentryInitialPromptTemplate"
-                      type="textarea"
-                      outlined
-                      autogrow
-                      class="settings-input mono-textarea"
-                    />
-                  </div>
-
-                  <!-- Git conventions (project override) -->
-                  <div class="q-mb-md">
-                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.gitConventions.project') }}</div>
-                    <q-input
-                      v-model="projectForm.gitConventions"
-                      type="textarea"
-                      outlined
-                      autogrow
-                      :input-style="{ minHeight: '140px' }"
-                      :placeholder="$t('settings.gitConventionsEmpty')"
-                      class="settings-input mono-textarea"
-                    />
-                    <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.gitConventionsEmpty') }}</div>
-                  </div>
-
-                  <!-- Setup Script -->
-                  <div class="q-mb-lg">
-                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.setupScript') }}</div>
-                    <q-input
-                      v-model="projectForm.setupScript"
-                      type="textarea"
-                      outlined
-                      autogrow
-                      :input-style="{ minHeight: '100px' }"
-                      :placeholder="$t('settings.setupScriptPlaceholder')"
-                      class="settings-input mono-textarea"
-                    />
-                    <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.setupScriptHint') }}</div>
+                    <div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.archiveScript') }}</div>
+                      <div class="text-caption text-grey-7 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <q-input
+                        v-model="projectForm.archiveScript"
+                        type="textarea"
+                        outlined
+                        autogrow
+                        :input-style="{ minHeight: '100px' }"
+                        :placeholder="$t('settings.archiveScriptPlaceholder')"
+                        class="settings-input mono-textarea"
+                      />
+                    </div>
                   </div>
 
                   <!-- Dev Server -->
-                  <div class="q-mb-lg">
-                    <div class="field-label text-body2 text-weight-medium q-mb-sm text-grey-6">{{ $t('settings.devServer') }}</div>
+                  <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+                    <div class="text-subtitle2 q-mb-md">{{ $t('settings.devServer') }}</div>
                     <div class="q-mb-md">
                       <div class="field-label-sub text-caption q-mb-xs text-grey-7">{{ $t('settings.devServerStart') }}</div>
                       <q-input
@@ -1319,8 +1631,8 @@ where ffmpeg</pre>
                   </div>
 
                   <!-- E2E tests -->
-                  <div class="q-mb-lg">
-                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.e2e.title') }}</div>
+                  <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+                    <div class="text-subtitle2 q-mb-xs">{{ $t('settings.e2e.title') }}</div>
                     <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.e2e.helpText') }}</div>
 
                     <q-select
@@ -1375,10 +1687,8 @@ where ffmpeg</pre>
                   </div>
 
                   <!-- Auto-loop finalization -->
-                  <div class="q-mb-lg">
-                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">
-                      {{ $t('settings.finalization.title') }}
-                    </div>
+                  <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+                    <div class="text-subtitle2 q-mb-xs">{{ $t('settings.finalization.title') }}</div>
                     <div class="text-caption text-grey-7 q-mb-sm">
                       {{ $t('settings.finalization.helpText') }}
                     </div>
@@ -1396,18 +1706,9 @@ where ffmpeg</pre>
                     />
                   </div>
 
-                  <!-- Actions -->
+                  <!-- Actions — kept hidden (display:none); save is driven by the
+                       floating settings-savebar, delete moved to the panel header. -->
                   <div class="row items-center q-gutter-sm settings-sticky-actions">
-                    <q-btn
-                      v-if="!isNewProject"
-                      :label="$t('common.delete')"
-                      no-caps
-                      flat
-                      size="sm"
-                      color="red-5"
-                      :loading="deletingProject"
-                      @click="deleteProject"
-                    />
                     <q-space />
                     <q-btn
                       :label="$t('common.save')"
@@ -1437,7 +1738,7 @@ where ffmpeg</pre>
         </div>
         <!-- Templates panel -->
         <div v-show="activeTab === 'templates'" class="q-pa-none">
-          <div class="settings-card rounded-borders q-pa-lg">
+          <div data-tour="settings-card-templates" class="settings-card rounded-borders q-pa-lg">
             <div class="row items-center justify-between q-mb-md">
               <div class="text-subtitle1 text-weight-medium text-grey-3">
                 {{ $t('templates.title') }}
@@ -1596,11 +1897,19 @@ where ffmpeg</pre>
         </q-card-actions>
       </q-card>
     </q-dialog>
+
+    <FolderPickerDialog
+      v-model="folderPickerOpen"
+      :initial-path="projectForm.path"
+      @select="onFolderPicked"
+    />
   </q-page>
 </template>
 
 <script setup lang="ts">
 import { type QInput, useQuasar } from 'quasar'
+import FolderPickerDialog from 'src/components/FolderPickerDialog.vue'
+import { useOnboarding } from 'src/composables/use-onboarding'
 import { CODEX_MODEL_OPTION_DEFS, MODEL_OPTION_DEFS } from 'src/constants/models'
 import { type AgentPermissionMode, PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
 import type { ProjectSettings } from 'src/stores/settings'
@@ -1625,6 +1934,7 @@ const $q = useQuasar()
 const store = useSettingsStore()
 const templatesStore = useTemplatesStore()
 const { t, locale } = useI18n()
+const { startTour } = useOnboarding()
 
 // Tab state
 const activeTab = ref('general')
@@ -1634,6 +1944,7 @@ const navItems = computed(() => [
   { value: 'agents', icon: 'smart_toy', label: t('settings.nav.agents') },
   { value: 'skills', icon: 'extension', label: t('settings.nav.skills') },
   { value: 'prompts', icon: 'text_snippet', label: t('settings.nav.prompts') },
+  { value: 'scripts', icon: 'terminal', label: t('settings.nav.scripts') },
   { value: 'notion', icon: 'integration_instructions', label: t('settings.nav.notion') },
   { value: 'sentry', icon: 'bug_report', label: t('settings.nav.sentry') },
   { value: 'voice', icon: 'mic', label: t('settings.nav.voice') },
@@ -1651,6 +1962,7 @@ const isGlobalSection = computed(() =>
     'agents',
     'skills',
     'prompts',
+    'scripts',
     'notion',
     'sentry',
     'voice',
@@ -1726,9 +2038,66 @@ const globalCodexPermissionMode = ref<AgentPermissionMode>('bypass')
 const globalNotionMcpKey = ref('')
 const globalSentryMcpKey = ref('')
 const globalTags = ref<string[]>([])
+const globalBranchPrefixes = ref<string[]>([])
+const newBranchPrefix = ref('')
+const globalSetupScript = ref('')
+const globalCleanupScript = ref('')
+const globalCleanupScriptMode = ref<'idle' | 'no-tasks'>('no-tasks')
+const globalCleanupScriptOnlyOnChanges = ref(false)
+const globalArchiveScript = ref('')
+
+// Folder picker dialog for the new-project path field.
+const folderPickerOpen = ref(false)
+function onFolderPicked(picked: string) {
+  projectForm.value.path = picked
+}
+
+// Project-level cleanup mode select — includes an 'inherit global' entry.
+const cleanupModeProjectOptions = computed(() => [
+  { label: t('settings.cleanupScriptMode.inherit'), value: '' },
+  { label: t('settings.cleanupScriptMode.idle'), value: 'idle' },
+  { label: t('settings.cleanupScriptMode.noTasks'), value: 'no-tasks' },
+])
 const globalWorktreesPath = ref<string>(WORKTREES_PATH)
 const globalWorktreesPathInput = ref<QInput | null>(null)
 const globalWorktreesPrefixByProject = ref(true)
+
+// ── Branch prefix CRUD ──────────────────────────────────────────────────────
+// Mirror of the server-side `sanitizeBranchPrefixes` rules so invalid input is
+// rejected before it reaches the API. Returns '' when the value is unusable.
+function normalizeBranchPrefix(raw: string): string {
+  const value = raw.trim().replace(/^\/+|\/+$/g, '')
+  if (value.length === 0 || value.length > 50) return ''
+  if (!/^[A-Za-z0-9._/-]+$/.test(value) || value.includes('..')) return ''
+  return value
+}
+
+function addBranchPrefix() {
+  const value = normalizeBranchPrefix(newBranchPrefix.value)
+  if (!value || globalBranchPrefixes.value.includes(value)) return
+  globalBranchPrefixes.value.push(value)
+  newBranchPrefix.value = ''
+}
+
+function removeBranchPrefix(index: number) {
+  globalBranchPrefixes.value.splice(index, 1)
+}
+
+function updateBranchPrefix(index: number, raw: string) {
+  const value = normalizeBranchPrefix(raw)
+  if (!value) return
+  // Reject a rename that would collide with another existing prefix.
+  const existing = globalBranchPrefixes.value.indexOf(value)
+  if (existing !== -1 && existing !== index) return
+  globalBranchPrefixes.value[index] = value
+}
+
+function moveBranchPrefix(index: number, direction: -1 | 1) {
+  const target = index + direction
+  if (target < 0 || target >= globalBranchPrefixes.value.length) return
+  const list = globalBranchPrefixes.value
+  ;[list[index], list[target]] = [list[target], list[index]]
+}
 const globalFlattenWorkspaceList = ref(false)
 const globalSkillSuite = ref<SkillSuite>('superpowers')
 const skillSuiteHintKey = computed(() => {
@@ -1801,6 +2170,10 @@ const projectForm = ref({
   sentryInitialPromptTemplate: '',
   gitConventions: '',
   setupScript: '',
+  taskPromptTemplate: '',
+  cleanupScript: '',
+  cleanupScriptMode: '' as '' | 'idle' | 'no-tasks',
+  archiveScript: '',
   devServer: { startCommand: '', stopCommand: '' },
   e2e: { framework: '' as 'cypress' | 'playwright' | 'jest' | 'vitest' | 'other' | '', skill: '', prompt: '' },
   finalization: { prompt: '' },
@@ -1817,6 +2190,10 @@ const COPYABLE_FIELDS = [
   'sentryInitialPromptTemplate',
   'gitConventions',
   'setupScript',
+  'taskPromptTemplate',
+  'cleanupScript',
+  'cleanupScriptMode',
+  'archiveScript',
   'devServer',
   'e2e',
   'finalization',
@@ -1871,6 +2248,10 @@ function isFormPristine(): boolean {
     sentryInitialPromptTemplate: '',
     gitConventions: '',
     setupScript: '',
+    taskPromptTemplate: '',
+    cleanupScript: '',
+    cleanupScriptMode: '',
+    archiveScript: '',
     devServer: { startCommand: '', stopCommand: '' },
     e2e: { framework: '', skill: '', prompt: '' },
     finalization: { prompt: '' },
@@ -2219,6 +2600,12 @@ function captureGlobalSnapshot(): string {
     notionMcpKey: globalNotionMcpKey.value,
     sentryMcpKey: globalSentryMcpKey.value,
     tags: globalTags.value,
+    branchPrefixes: globalBranchPrefixes.value,
+    setupScript: globalSetupScript.value,
+    cleanupScript: globalCleanupScript.value,
+    cleanupScriptMode: globalCleanupScriptMode.value,
+    cleanupScriptOnlyOnChanges: globalCleanupScriptOnlyOnChanges.value,
+    archiveScript: globalArchiveScript.value,
     worktreesPath: globalWorktreesPath.value,
     worktreesPrefixByProject: globalWorktreesPrefixByProject.value,
     flattenWorkspaceList: globalFlattenWorkspaceList.value,
@@ -2294,6 +2681,12 @@ function syncGlobalForm() {
   globalNotionMcpKey.value = store.global.notionMcpKey ?? ''
   globalSentryMcpKey.value = store.global.sentryMcpKey ?? ''
   globalTags.value = Array.isArray(store.global.tags) ? [...store.global.tags] : []
+  globalBranchPrefixes.value = Array.isArray(store.global.branchPrefixes) ? [...store.global.branchPrefixes] : []
+  globalSetupScript.value = store.global.setupScript ?? ''
+  globalCleanupScript.value = store.global.cleanupScript ?? ''
+  globalCleanupScriptMode.value = store.global.cleanupScriptMode === 'idle' ? 'idle' : 'no-tasks'
+  globalCleanupScriptOnlyOnChanges.value = store.global.cleanupScriptOnlyOnChanges ?? false
+  globalArchiveScript.value = store.global.archiveScript ?? ''
   globalWorktreesPath.value = store.global.worktreesPath ?? WORKTREES_PATH
   globalWorktreesPrefixByProject.value = store.global.worktreesPrefixByProject ?? false
   globalFlattenWorkspaceList.value = store.global.flattenWorkspaceList ?? false
@@ -2341,6 +2734,10 @@ function syncProjectForm(project: ProjectSettings | null) {
       sentryInitialPromptTemplate: '',
       gitConventions: '',
       setupScript: '',
+      taskPromptTemplate: '',
+      cleanupScript: '',
+      cleanupScriptMode: '',
+      archiveScript: '',
       devServer: { startCommand: '', stopCommand: '' },
       e2e: { framework: '', skill: '', prompt: '' },
       finalization: { prompt: '' },
@@ -2361,6 +2758,10 @@ function syncProjectForm(project: ProjectSettings | null) {
     sentryInitialPromptTemplate: project.sentryInitialPromptTemplate ?? '',
     gitConventions: project.gitConventions ?? '',
     setupScript: project.setupScript ?? '',
+    taskPromptTemplate: project.taskPromptTemplate ?? '',
+    cleanupScript: project.cleanupScript ?? '',
+    cleanupScriptMode: project.cleanupScriptMode ?? '',
+    archiveScript: project.archiveScript ?? '',
     devServer: {
       startCommand: project.devServer?.startCommand ?? '',
       stopCommand: project.devServer?.stopCommand ?? '',
@@ -2531,6 +2932,12 @@ async function saveGlobal() {
       notionMcpKey: globalNotionMcpKey.value,
       sentryMcpKey: globalSentryMcpKey.value,
       tags: globalTags.value,
+      branchPrefixes: globalBranchPrefixes.value,
+      setupScript: globalSetupScript.value,
+      cleanupScript: globalCleanupScript.value,
+      cleanupScriptMode: globalCleanupScriptMode.value,
+      cleanupScriptOnlyOnChanges: globalCleanupScriptOnlyOnChanges.value,
+      archiveScript: globalArchiveScript.value,
       worktreesPath: globalWorktreesPath.value,
       worktreesPrefixByProject: globalWorktreesPrefixByProject.value,
       flattenWorkspaceList: globalFlattenWorkspaceList.value,
@@ -2648,6 +3055,10 @@ async function saveProject() {
       sentryInitialPromptTemplate: projectForm.value.sentryInitialPromptTemplate,
       gitConventions: projectForm.value.gitConventions,
       setupScript: projectForm.value.setupScript,
+      taskPromptTemplate: projectForm.value.taskPromptTemplate,
+      cleanupScript: projectForm.value.cleanupScript,
+      cleanupScriptMode: projectForm.value.cleanupScriptMode,
+      archiveScript: projectForm.value.archiveScript,
       devServer: projectForm.value.devServer,
       e2e: projectForm.value.e2e,
       finalization: projectForm.value.finalization,
@@ -2666,20 +3077,30 @@ async function saveProject() {
 }
 
 // Delete project
-async function deleteProject() {
+function deleteProject() {
   if (!selectedProject.value) return
-  deletingProject.value = true
-  try {
-    await store.deleteProject(selectedProject.value.path)
-    selectedProjectIndex.value = -1
-    isNewProject.value = false
-    syncProjectForm(null)
-    $q.notify({ type: 'positive', message: t('settings.projectDeleted'), position: 'top' })
-  } catch {
-    $q.notify({ type: 'negative', message: t('settings.projectDeleteError'), position: 'top' })
-  } finally {
-    deletingProject.value = false
-  }
+  const projectName = selectedProject.value.displayName || selectedProject.value.path
+  $q.dialog({
+    title: t('settings.deleteProjectConfirmTitle'),
+    message: t('settings.deleteProjectConfirmMessage', { name: projectName }),
+    dark: true,
+    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    ok: { flat: true, label: t('common.delete'), color: 'red-5' },
+  }).onOk(async () => {
+    if (!selectedProject.value) return
+    deletingProject.value = true
+    try {
+      await store.deleteProject(selectedProject.value.path)
+      selectedProjectIndex.value = -1
+      isNewProject.value = false
+      syncProjectForm(null)
+      $q.notify({ type: 'positive', message: t('settings.projectDeleted'), position: 'top' })
+    } catch {
+      $q.notify({ type: 'negative', message: t('settings.projectDeleteError'), position: 'top' })
+    } finally {
+      deletingProject.value = false
+    }
+  })
 }
 
 // Add new project

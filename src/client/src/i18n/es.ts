@@ -4,12 +4,18 @@ export default {
   'common.cancel': 'Cancelar',
   'common.delete': 'Eliminar',
   'common.close': 'Cerrar',
+  'whatsNew.title': 'Novedades',
   'common.loading': 'Cargando...',
   'common.search': 'Buscar...',
   'common.refresh': 'Actualizar',
   'common.copy': 'Copiar',
   'common.copied': 'Copiado al portapapeles',
   'common.copyFailed': 'Error al copiar',
+  'common.add': 'Añadir',
+  'folderPicker.title': 'Elegir una carpeta',
+  'folderPicker.parent': 'Carpeta superior',
+  'folderPicker.empty': 'Sin subcarpetas',
+  'folderPicker.select': 'Elegir esta carpeta',
   'common.start': 'Iniciar',
   'common.stop': 'Detener',
   'common.archive': 'Archivar',
@@ -94,6 +100,10 @@ export default {
   'workspaceList.deleteDialog.deleteLocal': 'Eliminar rama local',
   'workspaceList.deleteDialog.deleteRemote': 'Eliminar rama remota',
   'workspaceList.deleteDialog.warning': 'Advertencia: esta acción es irreversible en el remoto.',
+  'workspaceList.deleteArchivedDialog.tooltip': 'Eliminar todos los workspaces archivados',
+  'workspaceList.deleteArchivedDialog.title': '¿Eliminar todos los workspaces archivados?',
+  'workspaceList.deleteArchivedDialog.message':
+    'Esto eliminará permanentemente los {count} workspaces archivados. Esta acción no se puede deshacer.',
 
   // Workspace Page
   'workspacePage.selectWorkspace': 'Selecciona un workspace para comenzar',
@@ -154,6 +164,7 @@ export default {
 
   // Chat Input
   'chatInput.placeholder': 'Mensaje... (/ para skills)',
+  'chatInput.fileSearchHint': 'buscar un archivo',
   'chatInput.skills': 'Skills',
   'chatInput.attachImage': 'Adjuntar imagen',
   'chatInput.queueBanner': 'Mensaje en cola — se enviará cuando el agente termine',
@@ -367,6 +378,23 @@ export default {
   'settings.gitConventionsHint':
     'Estas convenciones se escriben en .ai/.git-conventions.md en cada nuevo workspace y deben ser seguidas por el agente antes de cualquier operación Git. Se anulan con convenciones por proyecto si están definidas.',
   'settings.setupScript': 'Script de setup',
+  'settings.cleanupScript': 'Script de limpieza',
+  'settings.archiveScript': 'Script de archivado',
+  'settings.archiveScriptHint':
+    'Script de shell ejecutado en el servidor en el worktree cuando se archiva un workspace. Dejar vacío para desactivar.',
+  'settings.archiveScriptPlaceholder': 'p. ej. limpiar contenedores, liberar espacio en disco…',
+  'settings.cleanupScriptHint':
+    'Script de shell ejecutado en el worktree después de cada sesión del agente. En modo auto-loop solo se ejecuta cuando todas las tareas están terminadas. Dejar vacío para desactivar.',
+  'settings.cleanupScriptPlaceholder': 'p. ej. eliminar archivos temporales, detener contenedores…',
+  'settings.cleanupScriptMode': 'Cuándo ejecutar',
+  'settings.cleanupScriptMode.idle': 'Después de cada sesión — aunque queden tareas',
+  'settings.cleanupScriptMode.noTasks': 'Solo cuando no queda ninguna tarea de Kōbō',
+  'settings.cleanupScriptOnlyOnChanges': 'Ejecutar solo si se modificaron, añadieron o eliminaron archivos',
+  'settings.cleanupScriptMode.inherit': 'Heredar la configuración global',
+  'settings.taskPromptTemplate': 'Prompt de tarea',
+  'settings.taskPromptTemplatePlaceholder': 'Prompt insertado automáticamente en la descripción de la tarea…',
+  'settings.taskPromptTemplateHint':
+    'Se inyecta automáticamente en la descripción de la tarea en la página de creación cuando este proyecto está seleccionado. Si no se modifica, se reemplaza al cambiar de proyecto; en cuanto lo editas, se conserva tu texto.',
   'settings.setupScriptPlaceholder': 'npm install',
   'settings.setupScriptHint':
     'Se ejecuta con bash en el worktree después de su creación, antes de que el agente inicie. No necesita shebang. Si falla, el workspace se establece en error. Timeout: 5 minutos.',
@@ -407,6 +435,68 @@ export default {
     'Se sobrescribirán los valores del formulario con los ajustes de «{project}». ¿Continuar?',
   'settings.newProject': 'Nuevo proyecto',
   'settings.editProject': 'Editar proyecto',
+  'settings.onboardingTitle': 'Visita guiada',
+  'settings.onboardingHint': 'Vuelve a ver la presentación de los elementos principales de la interfaz.',
+  'settings.onboardingReplay': 'Volver a ver la visita guiada',
+  'onboarding.list.title': 'Espacios de trabajo',
+  'onboarding.list.description':
+    'Cada misión vive en su propio espacio — un git worktree, una rama y una sesión de agente dedicados. Todos aparecen aquí.',
+  'onboarding.create.title': 'Crear un espacio de trabajo',
+  'onboarding.create.description':
+    'Haz clic en + para iniciar una nueva misión — desde un ticket de Notion, una incidencia de Sentry o desde cero.',
+  'onboarding.search.title': 'Búsqueda',
+  'onboarding.search.description':
+    'Filtra tus espacios de trabajo por nombre, o busca en el historial de conversaciones de los agentes.',
+  'onboarding.health.title': 'Estado',
+  'onboarding.health.description':
+    'Comprueba el estado de Kōbō: base de datos, agentes activos, integraciones, copias de seguridad.',
+  'onboarding.settings.title': 'Ajustes',
+  'onboarding.settings.description':
+    'Modelos, scripts de ciclo de vida, integraciones, voz — toda la configuración de Kōbō está aquí. Haz clic en Siguiente para recorrer cada sección.',
+  'onboarding.settings-general.title': 'General',
+  'onboarding.settings-general.description':
+    'Idioma de la interfaz, proyecto por defecto y comportamiento global aplicado a cada nuevo workspace.',
+  'onboarding.settings-agents.title': 'Agentes y modelos',
+  'onboarding.settings-agents.description':
+    'Elige el motor por defecto — Claude Code o Codex —, el modelo y el modo de permisos de los agentes.',
+  'onboarding.settings-skills.title': 'Skills',
+  'onboarding.settings-skills.description':
+    'Elige la suite de skills que cargan los agentes: el preajuste recomendado o tu selección personalizada.',
+  'onboarding.settings-prompts.title': 'Prompts',
+  'onboarding.settings-prompts.description':
+    'Plantilla de descripción de PR y otros textos de prompt reutilizables por los agentes.',
+  'onboarding.settings-scripts.title': 'Scripts',
+  'onboarding.settings-scripts.description':
+    'Scripts de ciclo de vida ejecutados en cleanup, archivado y setup del workspace — globales o por proyecto.',
+  'onboarding.settings-notion.title': 'Notion',
+  'onboarding.settings-notion.description':
+    'Conecta tu token de integración de Notion para importar tickets como misiones de workspace.',
+  'onboarding.settings-voice.title': 'Voz',
+  'onboarding.settings-voice.description':
+    'Dictado por voz: actívalo, elige el modelo Whisper y gestiona el runtime de reconocimiento de voz local.',
+  'onboarding.settings-notifications.title': 'Notificaciones',
+  'onboarding.settings-notifications.description':
+    'Notificaciones de sonido y de navegador para eventos y cambios de estado de los agentes.',
+  'onboarding.settings-worktrees.title': 'Worktrees',
+  'onboarding.settings-worktrees.description':
+    'Prefijos de rama Git y la carpeta donde se crean los worktrees de los workspaces.',
+  'onboarding.settings-projects.title': 'Proyectos',
+  'onboarding.settings-projects.description':
+    'Registra los repositorios en los que trabajas. Haz clic en «Añadir un proyecto» para apuntar Kōbō a un repositorio local — cada workspace se dirige a uno de estos proyectos.',
+  'onboarding.settings-templates.title': 'Plantillas',
+  'onboarding.settings-templates.description':
+    'Tu biblioteca de plantillas de prompt reutilizables — elige una para rellenar el brief al crear un workspace.',
+  'onboarding.settings-export.title': 'Importar / Exportar',
+  'onboarding.settings-export.description':
+    'Respalda o comparte tu configuración de Kōbō, y exporta los datos de los workspaces a un archivo.',
+  'onboarding.next': 'Siguiente',
+  'onboarding.prev': 'Atrás',
+  'onboarding.done': 'Hecho',
+  'onboarding.exitConfirm': '¿Salir del recorrido guiado? Puedes repetirlo en cualquier momento desde Ajustes.',
+  'settings.projectGroup.identity': 'Identidad',
+  'settings.projectGroup.defaults': 'Valores predeterminados',
+  'settings.projectGroup.prompts': 'Prompts',
+  'settings.projectGroup.scripts': 'Scripts',
   'settings.projectPath': 'Ruta del proyecto',
   'settings.projectPathPlaceholder': '/ruta/al/proyecto',
   'settings.displayName': 'Nombre para mostrar',
@@ -453,6 +543,7 @@ export default {
   'settings.nav.agents': 'Agentes',
   'settings.nav.skills': 'Skills',
   'settings.nav.prompts': 'Prompts',
+  'settings.nav.scripts': 'Scripts',
   'settings.nav.notion': 'Notion',
   'settings.nav.sentry': 'Sentry',
   'settings.nav.voice': 'Voz',
@@ -463,6 +554,9 @@ export default {
   'settings.projectSaved': 'Proyecto guardado.',
   'settings.projectSaveError': 'Error al guardar el proyecto.',
   'settings.projectDeleted': 'Proyecto eliminado.',
+  'settings.deleteProjectConfirmTitle': '¿Eliminar proyecto?',
+  'settings.deleteProjectConfirmMessage':
+    '¿Quitar «{name}» de tus proyectos? Esto solo elimina sus ajustes de Kōbō — tu código y tus worktrees no se modifican.',
   'settings.projectDeleteError': 'Error al eliminar el proyecto.',
 
   // Templates
@@ -786,6 +880,9 @@ export default {
   'contextMenu.copyPath': 'Copiar ruta del worktree',
   'contextMenu.openEditor': 'Abrir en editor',
   'contextMenu.runSetup': 'Ejecutar script de setup',
+  'contextMenu.exportEvents': 'Exportar eventos (CSV)',
+  'contextMenu.exportingEvents': 'Preparando la exportación…',
+  'contextMenu.exportEventsError': 'Error al exportar los eventos',
   'contextMenu.openNotion': 'Abrir en Notion',
   'contextMenu.openSentry': 'Abrir en Sentry',
   'contextMenu.openPr': 'Abrir PR',
@@ -809,6 +906,14 @@ export default {
   'settings.tagsHint':
     'Define las etiquetas asignables a los workspaces. Escribe para añadir, clic en la cruz para quitar.',
   'settings.tagsLabel': 'Etiquetas disponibles',
+  'settings.branchPrefixesTitle': 'Prefijos de rama',
+  'settings.branchPrefixesHint':
+    'Gestiona los prefijos de rama de Git disponibles en la página de creación de workspaces. El primero se preselecciona por defecto.',
+  'settings.branchPrefixesEmpty': 'No hay ningún prefijo de rama definido. Añade al menos uno abajo.',
+  'settings.branchPrefixesAddLabel': 'Nuevo prefijo',
+  'settings.branchPrefixesEditHint': 'Haz clic para renombrar',
+  'settings.branchPrefixesMoveUp': 'Subir',
+  'settings.branchPrefixesMoveDown': 'Bajar',
   'settings.worktreesTitle': 'Worktrees Git',
   'settings.worktreesHint':
     'Elige dónde se crean los worktrees de nuevos workspaces. Las rutas relativas se resuelven desde el proyecto; se admiten rutas absolutas Linux/macOS y Windows, $HOME, ~ y %USERPROFILE%.',
@@ -836,6 +941,7 @@ export default {
   'health.dbPath': 'Ruta',
   'health.dbSize': 'Tamaño',
   'health.schemaVersion': 'Versión del esquema',
+  'health.settingsSchemaVersion': 'Esquema de ajustes',
   'health.runtimesTitle': 'Motores de agente',
   'health.claudeCliTitle': 'Claude Code',
   'health.claudeCliMissing': 'claude no encontrado en PATH',
@@ -873,6 +979,10 @@ export default {
   'activity.scroll_to_bottom': 'Desplazar al final',
   'chat.systemPrompt': 'Prompt del sistema',
   'chat.agent': 'Agente',
+  'chat.cleanupScript': 'Script de limpieza',
+  'chat.archiveScript': 'Script de archivado',
+  'chat.setupScript': 'Script de setup',
+  'chat.scriptDone': 'Hecho',
   'chat.you': 'Tú',
   'chat.session': 'Sesión',
   'chat.nActions': '{n} acción | {n} acciones',

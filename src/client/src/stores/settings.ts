@@ -33,6 +33,17 @@ interface ProjectSettings {
   sentryInitialPromptTemplate: string
   gitConventions: string
   setupScript: string
+  /**
+   * Custom prompt auto-injected into the task-description textarea on the
+   * workspace creation page when this project is selected.
+   */
+  taskPromptTemplate: string
+  /** Per-project override of the global cleanup script. Empty = inherit global. */
+  cleanupScript: string
+  /** Per-project override of the cleanup trigger mode. Empty = inherit global. */
+  cleanupScriptMode: '' | 'idle' | 'no-tasks'
+  /** Per-project override of the global archive script. Empty = inherit global. */
+  archiveScript: string
   devServer: DevServerConfig
   e2e: E2eSettings
   finalization: FinalizationSettings
@@ -53,6 +64,16 @@ interface GlobalSettings {
   notionInitialPromptTemplate: string
   sentryInitialPromptTemplate: string
   gitConventions: string
+  /** Shell script run in a worktree after it is created (empty = disabled). */
+  setupScript: string
+  /** Shell script run after a session completes (empty = disabled). */
+  cleanupScript: string
+  /** When the cleanup script fires: every session, or only when no task remains. */
+  cleanupScriptMode: 'idle' | 'no-tasks'
+  /** When true, the cleanup script runs only if the worktree has uncommitted changes. */
+  cleanupScriptOnlyOnChanges: boolean
+  /** Shell script run server-side when a workspace is archived (empty = disabled). */
+  archiveScript: string
   editorCommand: string
   browserNotifications: boolean
   audioNotifications: boolean
@@ -72,6 +93,11 @@ interface GlobalSettings {
   notionMcpKey: string
   sentryMcpKey: string
   tags: string[]
+  /**
+   * User-managed git branch prefixes for the workspace creation page. Stored
+   * without the trailing `/`; the first entry is the default pre-selection.
+   */
+  branchPrefixes: string[]
   worktreesPath: string
   worktreesPrefixByProject: boolean
   voiceEnabled: boolean
@@ -152,6 +178,12 @@ export const useSettingsStore = defineStore('settings', {
       notionMcpKey: '',
       sentryMcpKey: '',
       tags: [],
+      branchPrefixes: [],
+      setupScript: '',
+      cleanupScript: '',
+      cleanupScriptMode: 'no-tasks',
+      cleanupScriptOnlyOnChanges: false,
+      archiveScript: '',
       worktreesPath: WORKTREES_PATH,
       worktreesPrefixByProject: false,
       voiceEnabled: false,
