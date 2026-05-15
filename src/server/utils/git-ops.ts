@@ -658,6 +658,35 @@ export interface DiffFile {
 }
 
 /** List files changed between base and HEAD (committed), plus working tree changes. */
+/**
+ * List the worktree's files — tracked plus untracked-but-not-git-ignored.
+ * Excludes `.git`, `node_modules`, and anything covered by `.gitignore`.
+ * Capped at `limit` entries to stay responsive on large monorepos.
+ * Returns [] on error (e.g. not a git repo).
+ */
+export function listWorktreeFiles(worktreePath: string, limit = 5000): string[] {
+  try {
+    const out = git(worktreePath, ['ls-files', '--cached', '--others', '--exclude-standard'])
+    if (!out) return []
+    const files = out.split('\n').filter((line) => line.length > 0)
+    return files.length > limit ? files.slice(0, limit) : files
+  } catch {
+    return []
+  }
+}
+
+/**
+ * True when the worktree has any uncommitted change — modified, added, deleted
+ * or untracked files. Returns false on error (e.g. not a git repo).
+ */
+export function worktreeHasChanges(worktreePath: string): boolean {
+  try {
+    return git(worktreePath, ['status', '--porcelain']).length > 0
+  } catch {
+    return false
+  }
+}
+
 export function getChangedFiles(repoPath: string, base: string, includeUntracked = false): DiffFile[] {
   const ref = resolveBase(repoPath, base)
   const files: DiffFile[] = []

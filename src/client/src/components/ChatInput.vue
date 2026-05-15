@@ -50,6 +50,26 @@
       @select="selectDropdownItem"
     />
 
+    <!-- @file mention autocomplete popup -->
+    <div v-if="showFiles && fileMatches.length > 0" class="chat-slash-popup chat-file-popup">
+      <q-list dark dense>
+        <q-item
+          v-for="(file, i) in fileMatches"
+          :key="file"
+          v-ripple
+          clickable
+          :active="i === selectedFileIndex"
+          active-class="chat-file-item--active"
+          @click="selectFile(file)"
+        >
+          <q-item-section avatar>
+            <q-icon name="insert_drive_file" size="xs" color="grey-6" />
+          </q-item-section>
+          <q-item-section class="chat-file-path">{{ file }}</q-item-section>
+        </q-item>
+      </q-list>
+    </div>
+
     <!-- Queued message banner -->
     <div
       v-if="isQueued"
@@ -177,7 +197,7 @@
     </div>
     <div class="chat-hint row items-center text-caption text-grey-8">
       <div>
-        <kbd>Enter</kbd> {{ $t('common.send') }} <span class="q-mx-xs">&middot;</span> <kbd>Shift+Enter</kbd> {{ $t('common.newLine') }} <span class="q-mx-xs">&middot;</span> <kbd>↑↓</kbd> {{ $t('common.history') }}
+        <kbd>Enter</kbd> {{ $t('common.send') }} <span class="q-mx-xs">&middot;</span> <kbd>Shift+Enter</kbd> {{ $t('common.newLine') }} <span class="q-mx-xs">&middot;</span> <kbd>↑↓</kbd> {{ $t('common.history') }} <span class="q-mx-xs">&middot;</span> <kbd>@</kbd> {{ $t('chatInput.fileSearchHint') }}
       </div>
       <q-space />
       <div v-if="isTranscribing" class="row items-center text-caption text-amber-6 q-mr-sm">
@@ -209,6 +229,7 @@ import type { QInput } from 'quasar'
 import { useQuasar } from 'quasar'
 import QuotaFooter from 'src/components/QuotaFooter.vue'
 import SlashSuggestionsPopup from 'src/components/SlashSuggestionsPopup.vue'
+import { useFileMention } from 'src/composables/use-file-mention'
 import { type SlashDropdownItem, useSlashAutocomplete } from 'src/composables/use-slash-autocomplete'
 import { supportsQuotaStatus } from 'src/constants/engineFeatures'
 import { useSettingsStore } from 'src/stores/settings'
@@ -290,6 +311,26 @@ const {
   replaceFragmentWith,
   closeDropdown,
 } = useSlashAutocomplete(message, () => getChatInputEl())
+
+// `@<file>` mention autocomplete — fuzzy-ranked over the worktree's files.
+const {
+  showFiles,
+  fileMatches,
+  selectedFileIndex,
+  detectMentionFragment,
+  replaceFragmentWith: replaceMentionWith,
+  closeDropdown: closeFileDropdown,
+} = useFileMention(
+  message,
+  () => getChatInputEl(),
+  () => store.workspaces.find((w) => w.id === props.workspaceId)?.worktreePath ?? null,
+)
+
+function selectFile(file: string | undefined) {
+  if (!file) return
+  replaceMentionWith(file)
+  void nextTick(() => getChatInputEl()?.focus())
+}
 
 // Image upload
 interface PendingImage {
@@ -503,6 +544,7 @@ watch(
 watch(message, async () => {
   await nextTick()
   await detectSlashFragment()
+  await detectMentionFragment()
 
   // Detect placeholders removed by the user and delete the corresponding image.
   // Snapshot tempIds first to avoid mutating the list while iterating.
@@ -883,6 +925,29 @@ function onVisibilityChange() {
 }
 
 function onKeydown(event: KeyboardEvent) {
+  if (showFiles.value && fileMatches.value.length > 0) {
+    if (event.key === 'ArrowDown') {
+      event.preventDefault()
+      selectedFileIndex.value = Math.min(selectedFileIndex.value + 1, fileMatches.value.length - 1)
+      return
+    }
+    if (event.key === 'ArrowUp') {
+      event.preventDefault()
+      selectedFileIndex.value = Math.max(selectedFileIndex.value - 1, 0)
+      return
+    }
+    if (event.key === 'Tab' || (event.key === 'Enter' && !event.shiftKey)) {
+      event.preventDefault()
+      selectFile(fileMatches.value[selectedFileIndex.value])
+      return
+    }
+    if (event.key === 'Escape') {
+      event.preventDefault()
+      closeFileDropdown()
+      return
+    }
+  }
+
   if (showSkills.value && flatDropdown.value.length > 0) {
     if (event.key === 'ArrowDown') {
       event.preventDefault()
@@ -974,6 +1039,23 @@ function onKeydown(event: KeyboardEvent) {
   left: 8px;
   right: 48px;
   z-index: 9999;
+}
+
+/* `@file` popup — slash popup owns positioning; this owns the surface. */
+.chat-file-popup {
+  max-height: 300px;
+  overflow-y: auto;
+  background-color: #1e1e3a;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+}
+.chat-file-popup .chat-file-path {
+  font-family: 'Roboto Mono', monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+.chat-file-popup .chat-file-item--active {
+  background-color: rgba(108, 99, 255, 0.15);
 }
 
 .image-tag {

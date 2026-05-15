@@ -1,7 +1,7 @@
 import { Hono } from 'hono'
 import { getDb } from '../db/index.js'
 import { listOrphanWorktrees } from '../services/worktree-service.js'
-import { listBranches, listRemoteBranches } from '../utils/git-ops.js'
+import { listBranches, listRemoteBranches, listWorktreeFiles } from '../utils/git-ops.js'
 
 /** Hono sub-router for git-related endpoints (branch listing). */
 const app = new Hono()
@@ -19,6 +19,21 @@ app.get('/branches', (c) => {
     const remote = listRemoteBranches(repoPath)
 
     return c.json({ local, remote })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// GET /api/git/files?path=<worktreePath> — list a worktree's files (tracked +
+// untracked-but-not-ignored) for the chat's `@file` autocomplete.
+app.get('/files', (c) => {
+  try {
+    const repoPath = c.req.query('path')
+    if (!repoPath) {
+      return c.json({ error: 'Missing required query parameter: path' }, 400)
+    }
+    return c.json({ files: listWorktreeFiles(repoPath) })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
