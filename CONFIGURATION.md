@@ -11,6 +11,7 @@ Complete reference for every Kōbō setting, environment variable, and external 
   - [Claude Code](#claude-code)
   - [OpenAI Codex](#openai-codex)
   - [Permission modes](#permission-modes)
+- [Dev server](#dev-server)
 - [Notion integration](#notion-integration)
 - [Sentry integration](#sentry-integration)
 - [Voice transcription](#voice-transcription)
@@ -135,7 +136,7 @@ Projects override a subset of global settings — anything you set here takes pr
 | `setupScript`, `cleanupScript`, `archiveScript` | `string` | Per-project versions of the global lifecycle scripts. Empty inherits the global value. |
 | `cleanupScriptMode` | `'' \| 'idle' \| 'no-tasks'` | Per-project override of the cleanup trigger mode. Empty inherits the global mode. |
 | `taskPromptTemplate` | `string` | Prompt auto-injected into the task-description textarea on the creation page when this project is selected. Empty disables. |
-| `devServer.startCommand` / `stopCommand` | `string` | Per-workspace dev server commands. Docker, npm, or any shell-startable process. |
+| `devServer.startCommand` / `stopCommand` | `string` | Per-workspace dev server commands. Docker, npm, or any shell-startable process. See [Dev server](#dev-server) for the status/URL contract. |
 | `e2e.framework` | `'cypress' \| 'playwright' \| 'jest' \| 'vitest' \| 'other' \| ''` | E2E framework auto-loop grooming should target. |
 | `e2e.skill` | `string` | Optional skill name injected into the E2E grooming prompt. |
 | `e2e.prompt` | `string` | Free-form prompt appended to every `[E2E] ` sub-task. |
@@ -196,6 +197,169 @@ Each engine maps Kōbō's four modes onto its own sandbox + approval flags. The 
 | `interactive` | `workspace-write` | `unless-trusted` | `default` |
 
 Interactive Q&A (`request_user_input`) is only available in `plan` for Codex — this is a constraint of Codex itself.
+
+## Dev server
+
+Each workspace can run its own dev server. The **Tools** panel shows its status, a clickable URL, the live container count, and a logs button. None of that is magic — it works only when your project follows a small contract. This section documents that contract so the panel lights up for *your* project, not just Docker-instance projects.
+
+### What the panel actually does
+
+Kōbō treats the dev server in two independent layers:
+
+| Layer | Driven by | Works for any project? |
+|---|---|---|
+| **Start / Stop** | The shell commands you configure | ✅ Yes — any shell-startable process |
+| **Status badge, URL, container count, logs** | The `.container/instances/*.env` convention + Docker | ❌ No — requires the convention below |
+
+So you can always start and stop a server. But the green **Running** badge, the `http://localhost:…` link, and the logs viewer only appear when Kōbō can *resolve an instance* for the workspace. If it can't, the status stays `unknown` and no URL is shown — Start/Stop still work, just blind.
+
+> **Known limitation — Docker-coupled, for now.** Status detection, the URL, the container count, and the logs viewer are currently hard-wired to Docker and to the `.container/instances/*.env` convention described below. This is a deliberate, temporary state: it works today for Docker-instance projects, and the convention is documented here so you can adopt it. An **evolution is planned** to abstract this layer — making the URL/port configurable and the running-detection engine-agnostic (e.g. a TCP probe) so the panel works for any project, Docker or not, without imposing this file layout. Until that lands, follow the contract below.
+
+### 1. Configure start / stop commands
+
+In **Settings → (project) → Dev server**, set:
+
+| Field | Purpose |
+|---|---|
+| `devServer.startCommand` | Shell command (or multi-line script) run to start the server. **Required.** |
+| `devServer.stopCommand` | Shell command run to stop it. Optional. |
+
+How Kōbō runs them:
+
+- `startCommand` runs as `bash -c "<command>"`, detached, with the working directory set to the workspace **worktree** (falling back to the project root).
+- It runs with two extra environment variables injected:
+  - `INSTANCE` — the workspace branch name, sanitized: lowercased, with `/` and `_` replaced by `-`. Example: branch `feature/My_Thing` → `INSTANCE=feature-my-thing`.
+  - `DEV_DOCKER_NO_FOLLOW=1` — a hint that your script must **not** block tailing logs. Start the server, then exit. If your start command stays in the foreground (e.g. `docker compose logs -f`), Kōbō's process never returns and the status stays stuck on `starting`.
+- `stopCommand` runs with `INSTANCE` and `PROJECT_NAME` in the environment. After it, Kōbō also unconditionally runs `docker compose -p <PROJECT_NAME> down` if a `PROJECT_NAME` was resolved — so a Docker project does not strictly need a `stopCommand` at all.
+
+### 2. Make the status panel light up — the `.container/instances` contract
+
+For the **Running** badge, the URL, the container count, and the logs button to appear, your **start command must create an instance file**:
+
+```
+<project-root>/.container/instances/<any-name>.env
+```
+
+Notes:
+
+- The path is relative to the **project root** Kōbō knows (the main repo path), not the per-workspace worktree.
+- The file name is free — Kōbō scans *every* `*.env` file in that directory.
+- The file must contain these keys (`KEY=value`, `#` comments and surrounding quotes are tolerated):
+
+| Key | Used for |
+|---|---|
+| `INSTANCE_NAME` | **Matching.** Must equal the sanitized branch name — i.e. the value of the `INSTANCE` env var Kōbō passed you. This is how Kōbō finds *this workspace's* instance among all the `.env` files. |
+| `HTTP_PORT` | The URL. Kōbō shows `http://localhost:<HTTP_PORT>`. |
+| `PROJECT_NAME` | **Running detection.** Kōbō lists running Docker containers (`docker ps`) and counts those whose name *contains* `PROJECT_NAME` (case-insensitive). One or more match → status `running`. Zero → `stopped`. |
+
+The simplest correct start script therefore: read `$INSTANCE`, start your containers, then write the `.env` file with `INSTANCE_NAME=$INSTANCE`.
+
+### 3. Running detection and logs
+
+- **Status** — `running` if at least one Docker container's name contains `PROJECT_NAME`; `starting` while the start process is still in flight; `stopped` otherwise; `unknown` if no instance file matched.
+- **Logs** — the logs button runs `docker logs` on those same matched containers.
+
+Both are **Docker-only**. A project that runs a plain Node process (`npm run dev`) and writes an instance file will get a URL, but the badge will read `stopped` and the logs button will be empty, because there is no matching Docker container. If you don't use Docker, treat the URL as the useful signal and ignore the badge.
+
+### Minimal setups
+
+**Docker project** — full panel support. Follow the contract: start command creates the `.env`, containers are named after `PROJECT_NAME`.
+
+**Non-Docker project (e.g. Vite/Node)** — partial support. You can still get a clickable URL:
+
+1. Set `startCommand` to something like `PORT=$((3000)) npm run dev & echo started`.
+2. Have it (or a wrapper) write `.container/instances/<branch>.env` with `INSTANCE_NAME=$INSTANCE` and `HTTP_PORT=3000`. `PROJECT_NAME` can be anything.
+3. The URL appears; the status badge will say `stopped` (no Docker container) — that's expected.
+
+**No instance file at all** — Start/Stop run your commands; the panel shows `unknown` with no URL. Perfectly fine if you just want the buttons.
+
+### Example: the full convention end-to-end
+
+The reference implementation is the `sekur` project. Its Kōbō `startCommand` is effectively `make dev-docker`, where the `Makefile` calls `./sh/dev-docker.sh $(INSTANCE)` and `$(INSTANCE)` reads the `INSTANCE` env var Kōbō injects. The script:
+
+1. Picks free ports starting at `8700`.
+2. Names the Docker Compose project `sekur-<instance>` and runs `docker compose -p sekur-<instance> up -d`.
+3. Writes `<project-root>/.container/instances/sekur-<instance>.env`:
+
+```env
+# Instance: feature-my-thing
+PROJECT_NAME=sekur-feature-my-thing
+INSTANCE_NAME=feature-my-thing
+HTTP_PORT=8700
+HTTPS_PORT=8701
+DB_PORT=8702
+```
+
+4. Honors `DEV_DOCKER_NO_FOLLOW=1` by exiting instead of tailing logs.
+
+Kōbō then resolves the workspace (branch `feature/my-thing` → sanitized `feature-my-thing` → matches `INSTANCE_NAME`), shows `http://localhost:8700`, and detects the `sekur-feature-my-thing-*` containers as `running`.
+
+### A minimal, copy-pasteable start script
+
+Drop this in your project as `sh/dev-docker.sh`, make it executable (`chmod +x`), and set the Kōbō `startCommand` to `bash sh/dev-docker.sh`. It is a trimmed-down version of the `sekur` script, keeping only what the convention requires.
+
+```bash
+#!/usr/bin/env bash
+# Starts an isolated Docker instance for the current Kōbō workspace and
+# writes the .container/instances/<project>.env file Kōbō reads for status.
+set -e
+
+# Kōbō injects INSTANCE (sanitized branch name). Fall back to the git branch
+# so the script also works when run by hand.
+INSTANCE_NAME="${INSTANCE:-$(git branch --show-current | tr '/_' '-' | tr '[:upper:]' '[:lower:]')}"
+
+# Docker Compose project name — must appear in the container names so Kōbō's
+# `docker ps` matching detects the instance as running.
+APP_NAME="${APP_NAME:-myapp}"
+PROJECT_NAME="${APP_NAME}-${INSTANCE_NAME}"
+
+# Pick the first free HTTP port starting at 8700 (10-port stride per instance).
+HTTP_PORT=8700
+while nc -zw1 localhost "$HTTP_PORT" 2>/dev/null; do
+  HTTP_PORT=$((HTTP_PORT + 10))
+done
+
+# The instance file MUST live under the project root, in .container/instances/.
+INSTANCE_DIR="$(git rev-parse --show-toplevel)/.container/instances"
+mkdir -p "$INSTANCE_DIR"
+cat > "${INSTANCE_DIR}/${PROJECT_NAME}.env" <<EOF
+# Instance: ${INSTANCE_NAME}
+PROJECT_NAME=${PROJECT_NAME}
+INSTANCE_NAME=${INSTANCE_NAME}
+HTTP_PORT=${HTTP_PORT}
+EOF
+
+# Start the containers. `-p "$PROJECT_NAME"` names them so detection works;
+# export HTTP_PORT so compose.yaml can bind it.
+HTTP_PORT="$HTTP_PORT" docker compose -p "$PROJECT_NAME" up -d
+
+echo "Started ${PROJECT_NAME} on http://localhost:${HTTP_PORT}"
+
+# Kōbō runs this detached and sets DEV_DOCKER_NO_FOLLOW=1 — exit instead of
+# tailing logs, otherwise the status stays stuck on `starting`.
+if [ "${DEV_DOCKER_NO_FOLLOW:-0}" = "1" ]; then
+  exit 0
+fi
+docker compose -p "$PROJECT_NAME" logs -f
+```
+
+Matching `stopCommand` (optional — Kōbō also runs `docker compose -p <PROJECT_NAME> down` itself):
+
+```bash
+docker compose -p "${APP_NAME:-myapp}-${INSTANCE}" down
+```
+
+Adapt the port stride, the `APP_NAME`, and any extra `*_PORT` keys to your stack. The three keys Kōbō actually reads stay fixed: `INSTANCE_NAME`, `PROJECT_NAME`, `HTTP_PORT`.
+
+### Troubleshooting
+
+| Symptom | Likely cause |
+|---|---|
+| Status stuck on `starting` | Start command never exits — it's tailing logs. Make it return; honor `DEV_DOCKER_NO_FOLLOW`. |
+| Status `unknown`, no URL | No `.env` in `.container/instances/`, or its `INSTANCE_NAME` doesn't match the sanitized branch. Check `INSTANCE_NAME` equals `$INSTANCE`. |
+| URL shown but badge says `stopped` | No running Docker container whose name contains `PROJECT_NAME` (normal for non-Docker projects). |
+| Logs button empty | Same cause — `docker logs` has no matching container. |
+| Wrong port in URL | `HTTP_PORT` in the `.env` doesn't match the port the server actually bound. |
 
 ## Notion integration
 

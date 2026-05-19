@@ -104,6 +104,14 @@ export interface MapperState {
    * arm the backoff multiple times.
    */
   quotaErrorEmitted: boolean
+  /**
+   * Set by the engine's `interrupt()` when the user soft-interrupts the run.
+   * The SDK ends an interrupted run by emitting a `result` with subtype
+   * `error_during_execution` through the *normal* iterator (no throw), so
+   * the catch-block abort guard never sees it. This flag lets the result
+   * handler recognise that subtype as a clean stop instead of a failure.
+   */
+  userInterrupted: boolean
 }
 
 export function createMapperState(): MapperState {
@@ -112,6 +120,7 @@ export function createMapperState(): MapperState {
     openMessages: new Map(),
     sawErrorResult: false,
     quotaErrorEmitted: false,
+    userInterrupted: false,
   }
 }
 
@@ -333,7 +342,12 @@ export function mapSdkMessage(msg: SDKMessage, state: MapperState): AgentEvent[]
     // the orchestrator can transition the workspace to `error` instead of
     // `completed`. The flag on `state` lets the engine override the
     // post-loop session:ended reason.
-    if (isErrorResultSubtype(subtype)) {
+    // A user soft-interrupt ends the run with `error_during_execution`
+    // through this normal iterator path. That is a clean stop, not a
+    // failure — skip the error event so the UI shows no red banner and the
+    // workspace is not pushed into `error`.
+    const isInterruptedStop = state.userInterrupted && subtype === 'error_during_execution'
+    if (isErrorResultSubtype(subtype) && !isInterruptedStop) {
       state.sawErrorResult = true
       const detail =
         (typeof parsed.error === 'string' && parsed.error) || (typeof parsed.result === 'string' && parsed.result) || ''

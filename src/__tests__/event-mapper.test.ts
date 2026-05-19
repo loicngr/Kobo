@@ -382,6 +382,42 @@ describe('event-mapper', () => {
       expect(state.sawErrorResult).toBe(true)
     })
 
+    it('treats error_during_execution as a clean stop when userInterrupted is set', () => {
+      // A user-initiated interrupt makes the SDK end the run with a
+      // `result` whose subtype is `error_during_execution`. That is not an
+      // agent failure — it must not surface an `error` event or flag
+      // `sawErrorResult` (which would push the workspace into `error`).
+      const state = createMapperState()
+      state.userInterrupted = true
+      const events = mapSdkMessage(
+        asMsg({
+          type: 'result',
+          subtype: 'error_during_execution',
+          session_id: 's',
+          usage: { input_tokens: 1, output_tokens: 2 },
+        }),
+        state,
+      )
+      expect(events.find((e) => e.kind === 'error')).toBeUndefined()
+      expect(state.sawErrorResult).toBe(false)
+      // usage is still reported for the interrupted run
+      expect(events.find((e) => e.kind === 'usage')).toBeDefined()
+    })
+
+    it('still surfaces error_during_execution as an error when not interrupted', () => {
+      const state = createMapperState()
+      const events = mapSdkMessage(
+        asMsg({
+          type: 'result',
+          subtype: 'error_during_execution',
+          session_id: 's',
+        }),
+        state,
+      )
+      expect(events.find((e) => e.kind === 'error')).toBeDefined()
+      expect(state.sawErrorResult).toBe(true)
+    })
+
     it('does not flag sawErrorResult on success subtype', () => {
       const state = createMapperState()
       mapSdkMessage(

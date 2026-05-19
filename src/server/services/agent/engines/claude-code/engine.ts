@@ -183,10 +183,14 @@ export function createClaudeCodeEngine(): AgentEngine {
           // event-mapper already surfaced an `error` event but the iterator
           // still terminated naturally. Reflect that in the session:ended
           // reason so the orchestrator transitions the workspace to `error`.
+          // A user soft-interrupt also drains naturally (the SDK emits
+          // `error_during_execution`, which the mapper suppresses) — report
+          // it as `killed`, consistent with the catch-block abort path.
+          const endReason = userInterrupted ? 'killed' : mapperState.sawErrorResult ? 'error' : 'completed'
           safeEmit({
             kind: 'session:ended',
-            reason: mapperState.sawErrorResult ? 'error' : 'completed',
-            exitCode: mapperState.sawErrorResult ? null : 0,
+            reason: endReason,
+            exitCode: endReason === 'completed' ? 0 : null,
           })
         } catch (err) {
           // Treat any abort we triggered (stop() → abortController.abort()) as
@@ -239,6 +243,10 @@ export function createClaudeCodeEngine(): AgentEngine {
         },
         interrupt() {
           userInterrupted = true
+          // The SDK ends an interrupted run by emitting a `result` with
+          // subtype `error_during_execution` through the normal iterator —
+          // the mapper needs this flag to treat it as a clean stop.
+          mapperState.userInterrupted = true
           const qq = q as unknown as { interrupt?: () => unknown }
           if (typeof qq.interrupt === 'function') {
             try {

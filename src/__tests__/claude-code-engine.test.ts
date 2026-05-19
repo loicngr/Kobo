@@ -248,3 +248,69 @@ describe('claude-code engine — canUseTool abort tagging', () => {
     vi.resetModules()
   })
 })
+
+describe('claude-code engine — user interrupt', () => {
+  it('interrupt yields session:ended/killed and no error event when the SDK ends with error_during_execution', async () => {
+    // A user interrupt makes the SDK end the run by emitting a `result`
+    // with subtype `error_during_execution` through the *normal* iterator
+    // (no throw). That must be treated as a clean stop, not an agent error.
+    vi.resetModules()
+    let releaseResult: () => void = () => {}
+    const resultGate = new Promise<void>((resolve) => {
+      releaseResult = resolve
+    })
+    vi.doMock('@anthropic-ai/claude-agent-sdk', () => {
+      return {
+        query: vi.fn(() => {
+          const iter = {
+            async *[Symbol.asyncIterator]() {
+              yield { type: 'system', subtype: 'init', session_id: 's', model: 'm', slash_commands: [] }
+              // Wait for the user interrupt before emitting the terminal result.
+              await resultGate
+              yield {
+                type: 'result',
+                subtype: 'error_during_execution',
+                usage: { input_tokens: 1, output_tokens: 1 },
+              }
+            },
+            interrupt: vi.fn(() => {
+              releaseResult()
+            }),
+          }
+          return iter
+        }),
+      }
+    })
+
+    const engineMod = await import('../server/services/agent/engines/claude-code/engine.js')
+    const engine = engineMod.createClaudeCodeEngine()
+    const events: AgentEvent[] = []
+    const proc = await engine.start(
+      {
+        workspaceId: 'w-interrupt',
+        workingDir: '/tmp',
+        prompt: 'go',
+        backendUrl: 'http://localhost:3000',
+        koboHome: '/tmp/kobo',
+        settings: { dangerouslySkipPermissions: true } as any,
+      },
+      (ev) => events.push(ev),
+    )
+
+    // Let the iterator emit session:started, then interrupt.
+    await new Promise((r) => setTimeout(r, 10))
+    proc.interrupt()
+    // Let the terminal result drain through the mapper.
+    await new Promise((r) => setTimeout(r, 20))
+
+    expect(events.find((e) => e.kind === 'error')).toBeUndefined()
+    const ended = events.find((e) => e.kind === 'session:ended')
+    expect(ended).toBeDefined()
+    if (ended && ended.kind === 'session:ended') {
+      expect(ended.reason).toBe('killed')
+    }
+
+    vi.doUnmock('@anthropic-ai/claude-agent-sdk')
+    vi.resetModules()
+  })
+})
