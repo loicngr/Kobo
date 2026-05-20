@@ -23,7 +23,7 @@
     v-if="prSnapshot?.state === 'OPEN'"
     name="merge_type"
     size="14px"
-    :color="prIconColor"
+    color="green-5"
     class="cursor-pointer"
     @click.stop="openPr"
   >
@@ -46,7 +46,7 @@
 import { useDevServerStore } from 'src/stores/dev-server'
 import type { Workspace } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
-import { isChangesRequestedBlocking } from 'src/utils/pr-status'
+import { isChangesRequestedBlocking, isCiFailed } from 'src/utils/pr-status'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -59,14 +59,13 @@ const { t } = useI18n()
 const cronCount = computed(() => workspaceStore.autoLoopStates[props.workspace.id]?.crons_count ?? 0)
 
 const prSnapshot = computed(() => workspaceStore.prSnapshots[props.workspace.id])
-const prIconColor = computed(() => {
-  const s = prSnapshot.value
-  if (!s) return 'green-5'
-  return isChangesRequestedBlocking(s) ? 'red-5' : 'green-5'
-})
+// The PR icon stays green at all times — it only signals "this workspace has
+// an open PR". Attention states (CI failed / changes requested) surface via
+// the card's attention lines and border, not this icon.
 const prTooltip = computed(() => {
   const s = prSnapshot.value
   if (!s) return ''
+  if (isCiFailed(s)) return t('workspaceList.attentionCiFailed')
   if (isChangesRequestedBlocking(s)) {
     return t('workspaceList.prChangesRequested', { n: s.number })
   }

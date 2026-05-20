@@ -148,7 +148,7 @@
                 class="wl-item cursor-pointer q-pa-sm q-mx-xs rounded-borders"
                 :class="{ 'wl-item--selected': ws.id === store.selectedWorkspaceId }"
                 :style="[
-                  { borderLeft: `3px solid ${ws.status === 'awaiting-user' ? '#f59e0b' : '#ef4444'}` },
+                  { borderLeft: `3px solid ${attentionBorderColor(ws)}` },
                   ws.favoritedAt ? { borderBottom: '2px solid #f59e0b' } : {},
                 ]"
                 @click="selectWorkspace(ws.id)"
@@ -183,16 +183,7 @@
                     {{ ws.agentDescription || ws.description }}
                   </div>
                   <AutoLoopChip :workspace="ws" class="q-mt-xs" />
-                  <div class="text-caption q-mt-xs">
-                    <q-icon
-                      :name="ws.status === 'awaiting-user' ? 'help' : 'warning'"
-                      size="xs"
-                      :color="ws.status === 'awaiting-user' ? 'amber-5' : 'red-5'"
-                      class="q-mr-xs"
-                    />
-                    <span :class="ws.status === 'awaiting-user' ? 'text-amber-5' : 'text-red-5'">{{ statusLabel(ws.status) }}</span>
-                    <span class="q-ml-xs text-grey-8">&middot; {{ timeAgo(ws.updatedAt) }}</span>
-                  </div>
+                  <WorkspaceAttentionLabels :workspace="ws" />
                   <div v-if="ws.tags.length > 0" class="row q-gutter-xs q-mt-xs">
                     <q-chip v-for="tag in ws.tags" :key="tag" dense size="sm" color="grey-8" text-color="grey-3" :label="tag" />
                   </div>
@@ -207,7 +198,7 @@
               class="wl-item cursor-pointer q-pa-sm q-mx-xs rounded-borders"
               :class="{ 'wl-item--selected': ws.id === store.selectedWorkspaceId }"
               :style="[
-                { borderLeft: `3px solid ${ws.status === 'awaiting-user' ? '#f59e0b' : '#ef4444'}` },
+                { borderLeft: `3px solid ${attentionBorderColor(ws)}` },
                 ws.favoritedAt ? { borderBottom: '2px solid #f59e0b' } : {},
               ]"
               @click="selectWorkspace(ws.id)"
@@ -242,16 +233,7 @@
                   {{ ws.agentDescription || ws.description }}
                 </div>
                 <AutoLoopChip :workspace="ws" class="q-mt-xs" />
-                <div class="text-caption q-mt-xs">
-                  <q-icon
-                    :name="ws.status === 'awaiting-user' ? 'help' : 'warning'"
-                    size="xs"
-                    :color="ws.status === 'awaiting-user' ? 'amber-5' : 'red-5'"
-                    class="q-mr-xs"
-                  />
-                  <span :class="ws.status === 'awaiting-user' ? 'text-amber-5' : 'text-red-5'">{{ statusLabel(ws.status) }}</span>
-                  <span class="q-ml-xs text-grey-8">&middot; {{ timeAgo(ws.updatedAt) }}</span>
-                </div>
+                <WorkspaceAttentionLabels :workspace="ws" />
                 <div v-if="flatten || ws.tags.length > 0" class="row q-gutter-xs q-mt-xs">
                   <q-chip
                     v-if="flatten"
@@ -789,6 +771,7 @@
 import { useQuasar } from 'quasar'
 import AutoLoopChip from 'src/components/AutoLoopChip.vue'
 import ManageTagsDialog from 'src/components/ManageTagsDialog.vue'
+import WorkspaceAttentionLabels from 'src/components/WorkspaceAttentionLabels.vue'
 import WorkspaceContextMenu from 'src/components/WorkspaceContextMenu.vue'
 import WorkspaceDrawerIndicators from 'src/components/WorkspaceDrawerIndicators.vue'
 import { useDevServerStore } from 'src/stores/dev-server'
@@ -799,8 +782,9 @@ import { useWorkspaceStore } from 'src/stores/workspace'
 import { useTimeAgo } from 'src/utils/formatters'
 import type { ProjectColor } from 'src/utils/project-color'
 import { projectColorFor, projectNameFor, projectNameForPath, projectTextColorFor } from 'src/utils/project-color'
+import { getAttentionReasons } from 'src/utils/workspace-attention'
 import { isBusyStatus } from 'src/utils/workspace-status'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 
@@ -813,10 +797,12 @@ const devServerStore = useDevServerStore()
 const settingsStore = useSettingsStore()
 const router = useRouter()
 
-function statusLabel(status: string): string {
-  if (status === 'awaiting-user') return t('workspaceStatus.awaitingUser')
-  return status
+function attentionBorderColor(ws: Workspace): string {
+  const reasons = getAttentionReasons(ws, store.prSnapshots[ws.id])
+  return reasons.some((r) => r.color === 'red-5') ? '#ef4444' : '#f59e0b'
 }
+
+let workspaceInfoInterval: ReturnType<typeof setInterval> | null = null
 
 const searchQuery = ref('')
 const favoritesOnly = ref<boolean>(localStorage.getItem('kobo:favorites-filter') === '1')
@@ -1208,6 +1194,18 @@ onMounted(async () => {
     if (project?.devServer?.startCommand) {
       devServerStore.fetchStatus(ws.id)
     }
+  }
+  // Keep every non-archived workspace ≤30s fresh (status + PR + git stats)
+  // by polling the server-cached bulk endpoint.
+  workspaceInfoInterval = setInterval(() => {
+    void store.fetchWorkspacesInfo()
+  }, 30_000)
+})
+
+onBeforeUnmount(() => {
+  if (workspaceInfoInterval) {
+    clearInterval(workspaceInfoInterval)
+    workspaceInfoInterval = null
   }
 })
 </script>

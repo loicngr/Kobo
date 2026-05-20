@@ -44,10 +44,14 @@ interface ProjectSettings {
   cleanupScriptMode: '' | 'idle' | 'no-tasks'
   /** Per-project override of the global archive script. Empty = inherit global. */
   archiveScript: string
+  /** Per-project override of the global change-source-branch script. Empty = inherit global. */
+  changeSourceBranchScript: string
   devServer: DevServerConfig
   e2e: E2eSettings
   finalization: FinalizationSettings
   color: ProjectColor | null
+  /** Which forge provides PR/MR features for this project. `auto` = auto-detect. */
+  forge?: 'auto' | 'github' | 'gitlab' | 'none'
 }
 
 interface GlobalSettings {
@@ -74,6 +78,8 @@ interface GlobalSettings {
   cleanupScriptOnlyOnChanges: boolean
   /** Shell script run server-side when a workspace is archived (empty = disabled). */
   archiveScript: string
+  /** Shell script run in place of the built-in cherry-pick when the source branch changes (empty = disabled). */
+  changeSourceBranchScript: string
   editorCommand: string
   browserNotifications: boolean
   audioNotifications: boolean
@@ -184,6 +190,7 @@ export const useSettingsStore = defineStore('settings', {
       cleanupScriptMode: 'no-tasks',
       cleanupScriptOnlyOnChanges: false,
       archiveScript: '',
+      changeSourceBranchScript: '',
       worktreesPath: WORKTREES_PATH,
       worktreesPrefixByProject: false,
       voiceEnabled: false,
@@ -253,6 +260,7 @@ export const useSettingsStore = defineStore('settings', {
       gitConventions: string
       notionInitialPromptTemplate: string
       sentryInitialPromptTemplate: string
+      changeSourceBranchScript: string
     }> {
       const res = await fetch('/api/settings/defaults')
       if (!res.ok) throw new Error(`HTTP ${res.status}`)

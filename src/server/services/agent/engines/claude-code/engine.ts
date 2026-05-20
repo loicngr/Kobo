@@ -16,6 +16,15 @@ import { resolveClaudeBinaryPath } from './resolve-binary.js'
 
 type McpStdioServerConfigWithAlwaysLoad = McpStdioServerConfig & { alwaysLoad: boolean }
 
+/**
+ * Grace window between the SDK's terminal `result` message and the generator
+ * reaching `done`. A healthy run closes within milliseconds; if the generator
+ * stays parked past this (a hung subagent task or stuck MCP/teardown), the
+ * post-result drain watchdog force-emits `session:ended` so the orchestrator
+ * and auto-loop are not frozen forever.
+ */
+const RESULT_DRAIN_TIMEOUT_MS = 15_000
+
 function toMcpServersMap(specs: StartOptions['mcpServers']): Options['mcpServers'] | undefined {
   if (!specs || specs.length === 0) return undefined
   const map: Record<string, McpStdioServerConfigWithAlwaysLoad> = {}
@@ -169,6 +178,39 @@ export function createClaudeCodeEngine(): AgentEngine {
       let iteratorRunning = false
       let userInterrupted = false
 
+      // Guard so the post-result drain watchdog and the natural loop exit (or
+      // catch block) never both emit `session:ended` for the same run.
+      let sessionEndedEmitted = false
+      const emitSessionEnded = (reason: 'completed' | 'error' | 'killed', exitCode: number | null): void => {
+        if (sessionEndedEmitted) return
+        sessionEndedEmitted = true
+        safeEmit({ kind: 'session:ended', reason, exitCode })
+      }
+
+      // Post-result drain watchdog. The SDK emits a terminal `result` message
+      // when the turn completes; the generator should then reach `done`
+      // near-instantly. If it stays parked (a hung subagent task or stuck
+      // teardown), the `for await` below would wait forever — `session:ended`
+      // would never fire, freezing the orchestrator and the auto-loop. Once a
+      // `result` is observed we arm a timer that force-emits `session:ended`
+      // with the result's own outcome, then aborts the generator best-effort.
+      let resultDrainTimer: ReturnType<typeof setTimeout> | undefined
+      const armResultDrainWatchdog = (): void => {
+        if (resultDrainTimer) return
+        resultDrainTimer = setTimeout(() => {
+          console.warn(
+            `[claude-engine] SDK generator still open ${RESULT_DRAIN_TIMEOUT_MS}ms after 'result' — forcing session:ended`,
+          )
+          const reason = userInterrupted ? 'killed' : mapperState.sawErrorResult ? 'error' : 'completed'
+          emitSessionEnded(reason, reason === 'completed' ? 0 : null)
+          // Best-effort: unstick the SDK so its subprocesses / MCP children
+          // tear down. The session is reported ended regardless of whether
+          // the abort actually propagates through the parked generator.
+          abortController.abort()
+        }, RESULT_DRAIN_TIMEOUT_MS)
+        resultDrainTimer.unref?.()
+      }
+
       const iteratorPromise = (async () => {
         iteratorRunning = true
         try {
@@ -178,6 +220,7 @@ export function createClaudeCodeEngine(): AgentEngine {
               if (ev.kind === 'session:started') discoveredSessionId = ev.engineSessionId
               safeEmit(ev)
             }
+            if ((msg as { type?: string }).type === 'result') armResultDrainWatchdog()
           }
           // If the SDK ended with a `result.subtype === 'error_*'`, the
           // event-mapper already surfaced an `error` event but the iterator
@@ -187,11 +230,7 @@ export function createClaudeCodeEngine(): AgentEngine {
           // `error_during_execution`, which the mapper suppresses) — report
           // it as `killed`, consistent with the catch-block abort path.
           const endReason = userInterrupted ? 'killed' : mapperState.sawErrorResult ? 'error' : 'completed'
-          safeEmit({
-            kind: 'session:ended',
-            reason: endReason,
-            exitCode: endReason === 'completed' ? 0 : null,
-          })
+          emitSessionEnded(endReason, endReason === 'completed' ? 0 : null)
         } catch (err) {
           // Treat any abort we triggered (stop() → abortController.abort()) as
           // a clean kill. The SDK sometimes throws a generic Error with message
@@ -203,16 +242,23 @@ export function createClaudeCodeEngine(): AgentEngine {
             abortController.signal.aborted ||
             /aborted by user|process aborted|abortError|ede_diagnostic/i.test(error.message ?? '')
           if (isAbort) {
-            safeEmit({ kind: 'session:ended', reason: 'killed', exitCode: null })
+            emitSessionEnded('killed', null)
           } else {
             safeEmit({
               kind: 'error',
               category: 'spawn_failed',
               message: error.message,
             })
-            safeEmit({ kind: 'session:ended', reason: 'error', exitCode: null })
+            emitSessionEnded('error', null)
           }
         } finally {
+          // The post-result drain watchdog (if armed) is moot once the
+          // iterator has exited — clear it so a healthy run never triggers a
+          // stray abort after it already ended.
+          if (resultDrainTimer) {
+            clearTimeout(resultDrainTimer)
+            resultDrainTimer = undefined
+          }
           // Drain any callback still pending (SDK terminated while awaiting an
           // answer). canUseTool's abort path covers signalled stops; this
           // covers natural iterator completion.

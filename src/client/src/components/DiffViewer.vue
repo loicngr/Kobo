@@ -142,9 +142,25 @@
         class="diff-file-list-wrapper"
         :style="{ width: `${fileListWidth}px`, minWidth: `${FILE_LIST_MIN}px` }"
       >
-      <q-scroll-area class="diff-file-list q-pa-xs" style="width: 100%; height: 100%; border-right: 1px solid #2a2a4a;">
+      <q-input
+        v-if="!loading && files.length > 0"
+        v-model="fileFilter"
+        dense
+        dark
+        outlined
+        clearable
+        :debounce="150"
+        :placeholder="$t('diff.searchFiles')"
+        class="diff-file-search q-ma-xs"
+      >
+        <template #prepend>
+          <q-icon name="search" size="16px" />
+        </template>
+      </q-input>
+      <q-scroll-area class="diff-file-list q-pa-xs" style="width: 100%; border-right: 1px solid #2a2a4a;">
         <q-spinner-dots v-if="loading" size="24px" color="grey-6" class="q-ma-md" />
         <div v-else-if="files.length === 0" class="text-caption text-grey-8 q-pa-sm">{{ $t('diff.noChanges') }}</div>
+        <div v-else-if="noFilterMatch" class="text-caption text-grey-8 q-pa-sm">{{ $t('diff.noFileMatch') }}</div>
         <q-tree
           v-else
           :nodes="tree"
@@ -156,6 +172,8 @@
           default-expand-all
           no-selection-unset
           :selected="selectedNodeKey"
+          :filter="fileFilter"
+          :filter-method="filterTreeNode"
           class="diff-tree"
           @update:selected="
             (key) => {
@@ -293,7 +311,7 @@ import { useQuasar } from 'quasar'
 import { type ReviewComment, useReviewDraft } from 'src/composables/use-review-draft'
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
-import { buildPathTree, countLeaves } from 'src/utils/build-path-tree'
+import { buildPathTree, countLeaves, type PathTreeNode } from 'src/utils/build-path-tree'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ReviewCommentBlock from './ReviewCommentBlock.vue'
@@ -701,6 +719,24 @@ function disposeEditor() {
 const tree = computed(() => buildPathTree(files.value))
 const selectedNodeKey = computed(() => (selectedFile.value ? `file:${selectedFile.value}` : ''))
 
+// ── File tree search ─────────────────────────────────────────────────────────
+
+const fileFilter = ref('')
+
+/** q-tree filter-method: keep a file node when its full path matches (case-insensitive).
+ *  Folders return false — q-tree keeps them automatically when a descendant matches. */
+function filterTreeNode(node: PathTreeNode<DiffFile>, filter: string): boolean {
+  if (!node.file) return false
+  return node.file.path.toLowerCase().includes(filter.toLowerCase())
+}
+
+/** True when a filter is typed but no file path matches it. */
+const noFilterMatch = computed(() => {
+  const q = fileFilter.value.trim().toLowerCase()
+  if (q === '') return false
+  return !files.value.some((f) => f.path.toLowerCase().includes(q))
+})
+
 // ── Data loading ─────────────────────────────────────────────────────────────
 
 async function loadFiles() {
@@ -1040,6 +1076,11 @@ onUnmounted(() => {
   position: relative;
   height: 100%;
   flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+}
+.diff-file-search {
+  flex-shrink: 0;
 }
 .diff-file-list-resize-handle {
   position: absolute;
@@ -1060,6 +1101,8 @@ onUnmounted(() => {
 .diff-file-list {
   background-color: #16162a;
   border-color: #2a2a4a;
+  flex: 1;
+  min-height: 0;
 }
 
 .diff-tree {

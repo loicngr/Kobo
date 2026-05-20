@@ -62,7 +62,11 @@ src/
 │   │   │   ├── orchestrator.ts     # per-workspace engine map, retry/quota handling, watchdog, public API
 │   │   │   ├── session-controller.ts # lifecycle wrapper around an AgentEngine instance
 │   │   │   ├── event-router.ts     # maps engine AgentEvent stream to WS emit + DB side-effects
-│   │   │   └── engines/claude-code/ # Claude Code engine (spawn + stream-parser + args-builder + mcp-config + capabilities)
+│   │   │   └── engines/{claude-code,codex}/ # per-engine adapters implementing the AgentEngine contract
+│   │   ├── forge/                  # ForgeProvider abstraction — github / gitlab / none, with registry + auto-resolve
+│   │   ├── change-source-branch-service.ts # re-target a workspace onto a new source branch (built-in cherry-pick or custom bash)
+│   │   ├── git-stats-service.ts    # pure compute of commit/ahead-behind/diff stats + forge availability for a workspace
+│   │   ├── settings-defaults.ts    # DEFAULT_* constants for opt-in settings (e.g. change-source-branch script)
 │   │   ├── content-migration-service.ts # runtime legacy ws_events → normalised AgentEvent migration
 │   │   ├── templates-service.ts    # prompt templates CRUD (JSON file persistence, seeding)
 │   │   ├── dev-server-service.ts   # per-workspace dev server lifecycle (docker or npm process)
@@ -82,8 +86,8 @@ src/
 ├── client/                         # Vue 3 + Quasar SPA
 │   └── src/
 │       ├── stores/                 # pinia: workspace, websocket, settings, dev-server, templates
-│       ├── components/             # WorkspaceList, NotionPanel, AcceptancePanel, ChatInput, GitPanel, PlansPanel…
-│       ├── utils/                  # expand-template (template variable substitution), formatters…
+│       ├── components/             # WorkspaceList, NotionPanel, AcceptancePanel, ChatInput, GitPanel, PlansPanel, WorkspaceAttentionLabels…
+│       ├── utils/                  # expand-template, formatters, workspace-attention (CI failure / changes-requested derivation)…
 │       ├── pages/                  # WorkspacePage, CreatePage, SettingsPage
 │       └── router/
 ├── mcp-server/                     # standalone MCP server spawned per workspace
@@ -157,6 +161,10 @@ Two emit flavors in `websocket-service.ts`:
 
 ## External integrations
 
+### Forge providers
+
+`src/server/services/forge/` implements a `ForgeProvider` interface with three concrete providers: `github` (wraps the `gh` CLI), `gitlab` (wraps the `glab` CLI), and `none` (no-op — disables PR/MR features cleanly). The public surface is two functions: `getForgeProvider(name)` in `registry.ts` (returns the provider for a named forge) and `resolveForge(projectPath)` in `resolve.ts` (reads the per-project `forge` setting, then falls back to auto-detection from the `origin` remote URL — host contains `github.com` → GitHub, host contains `gitlab` → GitLab, otherwise `none`). The per-project `forge` setting (`'auto' | 'github' | 'gitlab' | 'none'`, default `'auto'`) is stored in `settings.json` and seeded by settings migration v32. PR routes (`open-pr`, `change-pr-base`) and the pr-watcher go through the resolved provider. **Kōbō ships no forge credentials** — the user must install and authenticate `gh` or `glab` themselves; when the CLI is absent or unauthenticated, PR/MR actions are disabled with a tooltip rather than a raw error.
+
 ### Notion (opt-in, user-provided credentials)
 
 `notion-service.ts` spawns the official [`@notionhq/notion-mcp-server`](https://github.com/makenotion/notion-mcp-server) as a child process (`npx -y @notionhq/notion-mcp-server`) and talks to it over stdio using JSON-RPC / MCP. **Kōbō ships no Notion credentials** — the feature only works if the user has configured their own integration token. The token is resolved in this order:
@@ -175,7 +183,7 @@ See the "Notion integration" section of the README for the end-user setup guide.
 
 Two engines live under `src/server/services/agent/engines/`, both implementing the `AgentEngine` contract in `types.ts`:
 
-**Claude Code** (`claude-code/`) — uses `@anthropic-ai/claude-agent-sdk` (in-process async iterator). Spawns no subprocess. Auth via `~/.claude.json` or `ANTHROPIC_API_KEY` env var.
+**Claude Code** (`claude-code/`) — uses `@anthropic-ai/claude-agent-sdk` (in-process async iterator). Spawns no subprocess. Auth via `~/.claude.json` or `ANTHROPIC_API_KEY` env var. The engine arms a **15 s result-drain watchdog** when the SDK emits its `result` message: if the async iterator does not close cleanly within the window, `session:ended` is force-emitted so the orchestrator and auto-loop never hang on a stuck generator. The watchdog is idempotent via a `sessionEndedEmitted` guard and the timer is cleared in `finally`.
 
 **OpenAI Codex** (`codex/`) — uses the **`codex app-server` JSON-RPC protocol** (line-delimited JSON over stdio with a long-lived `codex` subprocess). The engine layers are:
 - `jsonrpc/transport.ts` + `jsonrpc/peer.ts` — generic JSON-RPC 2.0 stdio peer (request correlation, notifications, server-initiated requests)
@@ -199,6 +207,24 @@ Background: the engine was migrated from `@openai/codex-sdk` (one-shot `codex ex
 - **`fileChange` items carry a unified-diff blob.** The protocol shape is `{ path, kind: PatchChangeKind, diff: string }` per change; `kind` is a discriminated union, not a string. The mapper flattens the first change into a Claude-style Edit input (`{ file_path, diff, change_kind, move_path? }`) so the existing `ToolCallItem` renderer picks it up. The client parses the unified diff into `DiffLine[]` via `parseUnifiedDiff` in `inline-diff.ts`.
 - **Streaming bursts trip auto-scroll.** Codex emits one `message:text` event per token-delta (50-200 per message), versus Claude which emits ~1 per content block. The naive `eventCount` watcher in `ActivityFeed.vue` triggered an animated `scrollToBottom(180)` per event, causing stacked animations and visible jank. The fix coalesces requests through `requestAnimationFrame` and only animates the *first* scroll after a quiet period — subsequent scrolls during a burst snap instantly.
 - **`MCP tools` need `default_tools_approval_mode: 'auto'` in `config.mcp_servers`.** Without it Codex flags every MCP tool call as needing user approval ("user cancelled MCP tool call"). Kōbō trusts every tool it spawns, so the options-builder pre-approves the namespace.
+
+## Workspace operations
+
+### Change source branch
+
+`change-source-branch-service.ts` re-targets a workspace onto a new source branch. The default path is a cherry-pick of the branch-proper commits (commits in the working branch but in **neither** the old nor the new base), inspired by the sekur `deploy-preprod-rebase.yml` workflow. The route is `POST /api/workspaces/:id/change-source-branch` and returns a discriminated status: `done | aligned | conflict | too-many | dirty`.
+
+- **Built-in cherry-pick** — `fetchAllBranches` → `listProperCommits` → `stashPush` (if dirty + aligned) → backup branch (`kobo-backup/<branch>-<unix-ts>`) → `reset --hard origin/<new>` → cherry-pick replay → optional force-push prompt → forge PR-base update via `provider.changePrBase`. Conflicts leave the worktree in a cherry-pick state for the user/agent to resolve via `POST /:id/git/resolve-with-agent`. `GitConflictError` carries an `operation: 'rebase' | 'merge' | 'cherry-pick'` discriminator.
+- **Custom bash override** — if `effective.changeSourceBranchScript` is non-empty (per-project override or global default), the script **replaces** the built-in flow. Spawned with `bash -c`, cwd = worktree, 5 min timeout, stderr captured (last 8 KB). Exit 0 → Kōbō updates the source-branch metadata; any non-zero exit → the stderr tail is propagated as a clean error. The user-facing menu item only shows when the resolved script is non-empty — empty = feature disabled (opt-in).
+- **Custom-script env vars** — `KOBO_NEW_BASE`, `KOBO_OLD_BASE`, `KOBO_WORKING_BRANCH`, `KOBO_WORKTREE_PATH`, `KOBO_PROJECT_PATH`, `KOBO_PROJECT_NAME`, `KOBO_WORKSPACE_ID`, `KOBO_WORKSPACE_NAME`, `KOBO_FORGE`, `KOBO_PR_NUMBER` (empty when no PR/MR is open). The default script lives in `settings-defaults.ts` and is seeded into `global.changeSourceBranchScript` by settings migration v33; the client reads it through `GET /api/settings/defaults` for the "Reset to Kōbō default" button. See [CONFIGURATION.md → Custom change-source-branch script](CONFIGURATION.md#custom-change-source-branch-script).
+
+### Workspace attention indicators
+
+`src/client/src/utils/workspace-attention.ts` derives a small set of badges (CI failure, changes-requested) from the PR snapshot + git stats stored on each workspace. `WorkspaceAttentionLabels.vue` renders them inline on the workspace cards in the left drawer. The derivation is a pure function — easy to unit-test, no IO. Drawer cards therefore stay reactive to whatever the pr-watcher / bulk-info refresh writes back into the store.
+
+### Bulk workspace info refresh
+
+`GET /api/workspaces/info` returns `{ workspaces, prSnapshots, gitStats }` in one shot. The client polls this endpoint every 30 s so every non-archived workspace stays ≤ 30 s fresh without a per-card stats request. The server-side pr-watcher feeds the same caches (`lastKnownGitStats` map, PR snapshots) so the work is shared between the polling client and the watchdog loop.
 
 ## Code conventions
 

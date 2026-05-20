@@ -4,7 +4,7 @@
       {{ $t('diff.reviewDraft') }}
     </div>
 
-    <q-scroll-area class="comments-scroll" style="height: calc(100% - 220px);">
+    <q-scroll-area class="comments-scroll">
       <div v-if="grouped.length === 0" class="text-caption text-grey-7 q-pa-sm">
         {{ $t('diff.reviewEmpty') }}
       </div>
@@ -101,6 +101,13 @@ function snippet(content: string): string {
   flex-direction: column;
   background: #1a1a2e;
   border-right: 1px solid #2a2a4a;
+}
+/* Absorbs the space between the header and the pinned message box, so the
+   textarea + submit button sit flush at the bottom — robust to the autogrow
+   textarea changing height (unlike a hardcoded height). */
+.comments-scroll {
+  flex: 1;
+  min-height: 0;
 }
 .file-group-header {
   font-weight: 500;

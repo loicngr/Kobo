@@ -376,6 +376,52 @@ export function listWorkspaceImagesHandler(worktreePath: string): WorkspaceImage
   })
 }
 
+/** One imported ticket, normalised across origins. */
+export interface TicketSource {
+  type: 'notion' | 'sentry'
+  /** Origin URL parsed from the file's `## Source` block; null if absent. */
+  url: string | null
+  content: string
+}
+
+/**
+ * `## Source` block markers written by the workspace creation route — a
+ * `- Notion: <url>` line for Notion imports, `- Sentry: <url>` for Sentry.
+ * The marker is the discriminator: it is what tells a ticket file apart from
+ * an agent note, and Notion apart from Sentry.
+ */
+const SOURCE_MARKER = /^- (Notion|Sentry): (.+)$/m
+
+/**
+ * Read the mission's source-of-truth ticket(s). Both the Notion and Sentry
+ * importers write their extracted brief into `.ai/thoughts/` at workspace
+ * creation; this returns one entry per ticket file, typed by origin.
+ *
+ * Only `.md` files at the *root* of `.ai/thoughts/` are considered — agent
+ * notes live under `.ai/thoughts/logs/` and are deliberately skipped. Files
+ * with no recognised `## Source` marker (stray notes) are skipped too.
+ * Sorted by `type` for a deterministic order. Empty array when nothing matches.
+ */
+export function getTicketSourcesHandler(worktreePath: string): TicketSource[] {
+  const thoughtsDir = path.join(worktreePath, '.ai', 'thoughts')
+  if (!fs.existsSync(thoughtsDir)) return []
+
+  const sources: TicketSource[] = []
+  for (const entry of fs.readdirSync(thoughtsDir, { withFileTypes: true })) {
+    if (!entry.isFile() || !entry.name.endsWith('.md')) continue
+    const content = fs.readFileSync(path.join(thoughtsDir, entry.name), 'utf-8')
+    const match = content.match(SOURCE_MARKER)
+    if (!match) continue
+    sources.push({
+      type: match[1].toLowerCase() as TicketSource['type'],
+      url: match[2].trim() || null,
+      content: content.trim(),
+    })
+  }
+  sources.sort((a, b) => a.type.localeCompare(b.type))
+  return sources
+}
+
 // ── Documents ────────────────────────────────────────────────────────────────
 
 /** Directories (relative to the worktree root) scanned for AI-generated docs. */
@@ -463,9 +509,14 @@ export function readDocumentHandler(worktreePath: string, relPath: string): Docu
 }
 
 /**
- * Append a thought / decision / note to `.ai/thoughts/<YYYY-MM-DD>-<slug>.md`.
- * Creates the directory if missing. Returns the path (worktree-relative) of
- * the file actually written — useful for the agent to reference it in chat.
+ * Append a thought / decision / note to
+ * `.ai/thoughts/logs/<YYYY-MM-DD>-<slug>.md`. Creates the directory if missing.
+ * Returns the path (worktree-relative) of the file actually written — useful
+ * for the agent to reference it in chat.
+ *
+ * Notes live in the `logs/` sub-directory so they stay separate from the
+ * mission's source-of-truth ticket files at the root of `.ai/thoughts/` —
+ * `get_ticket` reads only the root and therefore never picks up agent notes.
  */
 export function logThoughtHandler(
   worktreePath: string,
@@ -476,7 +527,7 @@ export function logThoughtHandler(
   const content = data.content?.trim()
   if (!content) throw new Error('content is required')
 
-  const thoughtsDir = path.join(worktreePath, '.ai', 'thoughts')
+  const thoughtsDir = path.join(worktreePath, '.ai', 'thoughts', 'logs')
   fs.mkdirSync(thoughtsDir, { recursive: true })
 
   const date = new Date().toISOString().slice(0, 10)
@@ -491,7 +542,7 @@ export function logThoughtHandler(
   const tagSuffix = data.tag ? `-${data.tag.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}` : ''
   const filename = `${date}-${slug}${tagSuffix}.md`
   const abs = path.join(thoughtsDir, filename)
-  const relPath = `.ai/thoughts/${filename}`
+  const relPath = `.ai/thoughts/logs/${filename}`
 
   const header = `# ${title}\n\n_${new Date().toISOString()}_${data.tag ? ` · tag: \`${data.tag}\`` : ''}\n\n`
   fs.writeFileSync(abs, header + content + (content.endsWith('\n') ? '' : '\n'), 'utf-8')

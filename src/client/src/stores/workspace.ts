@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import type { ProviderId, UsageSnapshot } from '../types/usage'
+import { hasPrAttention } from '../utils/pr-status'
 import { isBusyStatus } from '../utils/workspace-status'
 import { useWebSocketStore } from './websocket'
 
@@ -139,6 +140,12 @@ export function isSubagentTerminalEvent(subtype: string | undefined, status?: st
   return TERMINAL_TASK_NOTIFICATION_STATUSES.has(status)
 }
 
+export interface ForgeInfo {
+  id: 'github' | 'gitlab' | 'none'
+  capabilities: { canCreatePr: boolean; canChangePrBase: boolean; requestTermShort: 'PR' | 'MR' }
+  availability: { available: boolean; reason?: 'cli_missing' | 'not_authenticated' }
+}
+
 export interface GitStats {
   commitCount: number
   behindCount: number
@@ -149,6 +156,7 @@ export interface GitStats {
   prState: 'OPEN' | 'CLOSED' | 'MERGED' | null
   unpushedCount: number // -1 = no upstream
   workingTree: { staged: number; modified: number; untracked: number }
+  forge?: ForgeInfo
 }
 
 export interface BranchCommit {
@@ -302,11 +310,21 @@ export const useWorkspaceStore = defineStore('workspace', {
   getters: {
     selectedWorkspace: (state) => state.workspaces.find((w) => w.id === state.selectedWorkspaceId) ?? null,
 
-    needsAttention: (state) => state.workspaces.filter((w) => ['error', 'quota', 'awaiting-user'].includes(w.status)),
+    needsAttention(state): Workspace[] {
+      return state.workspaces.filter(
+        (w) => ['error', 'quota', 'awaiting-user'].includes(w.status) || hasPrAttention(state.prSnapshots[w.id]),
+      )
+    },
 
-    running: (state) => state.workspaces.filter((w) => isBusyStatus(w.status)),
+    running(state): Workspace[] {
+      return state.workspaces.filter((w) => isBusyStatus(w.status) && !hasPrAttention(state.prSnapshots[w.id]))
+    },
 
-    idle: (state) => state.workspaces.filter((w) => ['completed', 'idle', 'created'].includes(w.status)),
+    idle(state): Workspace[] {
+      return state.workspaces.filter(
+        (w) => ['completed', 'idle', 'created'].includes(w.status) && !hasPrAttention(state.prSnapshots[w.id]),
+      )
+    },
 
     favorites(state): Workspace[] {
       return state.workspaces.filter((w) => w.favoritedAt !== null)
@@ -1166,6 +1184,33 @@ export const useWorkspaceStore = defineStore('workspace', {
         this.prSnapshots = data
       } catch (err) {
         console.error('[workspace-store] fetchPrSnapshots failed:', err)
+      }
+    },
+
+    /**
+     * Bulk 30s refresh — pulls `/api/workspaces/info` (server-cached, cheap)
+     * and updates the workspace list, PR snapshots and git-stats cache in one
+     * shot so every non-archived workspace stays ≤30s fresh.
+     */
+    async fetchWorkspacesInfo(): Promise<void> {
+      try {
+        const res = await fetch('/api/workspaces/info', { cache: 'no-store' })
+        if (!res.ok) return
+        const data = (await res.json()) as {
+          workspaces: Workspace[]
+          prSnapshots: Record<string, PrSnapshot>
+          gitStats: Record<string, GitStats>
+        }
+        this.workspaces = data.workspaces
+        for (const ws of this.workspaces) {
+          if (['completed', 'idle', 'error', 'quota'].includes(ws.status)) {
+            this.finalizeRunningSubagents(ws.id)
+          }
+        }
+        this.prSnapshots = data.prSnapshots
+        this.gitStatsCache = { ...this.gitStatsCache, ...data.gitStats }
+      } catch (err) {
+        console.error('[workspace-store] fetchWorkspacesInfo failed:', err)
       }
     },
 

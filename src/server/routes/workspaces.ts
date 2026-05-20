@@ -13,8 +13,13 @@ import { listEngines } from '../services/agent/engines/registry.js'
 import * as agentManager from '../services/agent/orchestrator.js'
 import * as archiveScriptService from '../services/archive-script-service.js'
 import * as autoLoopService from '../services/auto-loop-service.js'
+import { changeSourceBranch } from '../services/change-source-branch-service.js'
 import * as cronService from '../services/cron-service.js'
 import * as devServerService from '../services/dev-server-service.js'
+import { getForgeProvider } from '../services/forge/registry.js'
+import { resolveForge } from '../services/forge/resolve.js'
+import { ForgeUnavailableError } from '../services/forge/types.js'
+import { computeGitStats } from '../services/git-stats-service.js'
 import {
   DEFAULT_NOTION_INITIAL_PROMPT,
   DEFAULT_SENTRY_INITIAL_PROMPT,
@@ -23,7 +28,7 @@ import {
 } from '../services/initial-prompt-template-service.js'
 import * as notionService from '../services/notion-service.js'
 import { renderPrTemplate } from '../services/pr-template-service.js'
-import { getAllPrSnapshots, refreshPrSnapshot } from '../services/pr-watcher-service.js'
+import { getAllGitStats, getAllPrSnapshots, refreshPrSnapshot } from '../services/pr-watcher-service.js'
 import * as quotaBackoffService from '../services/quota-backoff-service.js'
 import { getActiveReviewTemplate, renderReviewTemplate } from '../services/review-template-service.js'
 import * as sentryService from '../services/sentry-service.js'
@@ -718,8 +723,8 @@ app.post('/', migrationGuard, async (c) => {
         brainstormPrompt += `- mark_task_done(task_id) — mark a task or criterion as done\n`
         brainstormPrompt += `\nAs you work, keep the task list up to date: call mark_task_done(task_id) as soon as you complete a task or validate a criterion — don't wait until the end. Call list_tasks() first to see the current IDs.\n`
       }
-      if (body.notionUrl) {
-        brainstormPrompt += `- get_notion_ticket() — retrieve the Notion ticket info (URL, ticket ID, extracted content)\n`
+      if (body.notionUrl || body.sentryUrl) {
+        brainstormPrompt += `- get_ticket() — retrieve the mission's source-of-truth (source URL + extracted ticket/issue content), whether it comes from Notion or Sentry\n`
       }
       brainstormPrompt += `- kobo__set_workspace_agent_description(description) — keep the workspace's agent_description up to date as a short one-line summary of what you're currently doing or have just accomplished. The user sees this in the sidebar without opening the workspace. Update it whenever your focus shifts (e.g. "Investigating SERVICE-1600 → enriching local Notion file", then "Writing failing test for FacturX validator"). Plain text, max 200 chars. The current value is in kobo__get_workspace_info.\nThere is also a separate user-controlled \`description\` field on the workspace — DO NOT touch it. Only set_workspace_agent_description is yours to write; the user owns the other one.\n`
       brainstormPrompt += `- kobo__cron_create(expression, prompt, label?, mode?, oneShot?) — schedule a (recurring or one-shot) trigger on THIS workspace. At each fire Kōbō waits for the workspace to be idle and then injects \`prompt\` as the next user message. \`expression\` is a standard 5-field cron (\`min hour dom month dow\`) or a helper (\`@hourly\`, \`@daily\`, \`@weekly\`, \`@monthly\`, \`@yearly\`). Examples: \`*/30 * * * *\` = every 30 min; \`0 9 * * 1\` = every Monday at 9am; \`0 14 7 6 *\` = 7 June at 14:00. \`mode\` is \`'resume'\` (default — every fire continues the SAME conversation that scheduled the cron, so you can chain follow-ups) or \`'fresh'\` (every fire starts a brand-new session with a clean context, ideal for periodic checks like CI watch). \`oneShot\` (default false): when true, the cron cancels itself after the first real fire — use this to trigger once at a specific time without recurring. Skip-if-active: occurrences fired while a session is running are skipped, the next is computed, and the cron continues. Persists across restarts. Returns a cron \`id\`.\n`
@@ -882,6 +887,23 @@ app.get('/:id/sessions', (c) => {
 app.get('/pr-states', (c) => {
   try {
     return c.json(getAllPrSnapshots())
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// GET /api/workspaces/info — bulk snapshot for the 30s client refresh:
+// non-archived workspace rows + cached PR snapshots + cached git stats.
+// Pure read — no git/forge calls on the request path. Static route: must
+// stay before GET /:id.
+app.get('/info', (c) => {
+  try {
+    return c.json({
+      workspaces: workspaceService.listWorkspaces(false),
+      prSnapshots: getAllPrSnapshots(),
+      gitStats: getAllGitStats(),
+    })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
@@ -2166,39 +2188,18 @@ app.get('/:id/git-stats', async (c) => {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
     }
 
-    const worktreePath = workspace.worktreePath
     const freshFetch = c.req.query('freshFetch') === '1'
-
     if (freshFetch) {
-      await gitOps.fetchSourceBranchAsync(worktreePath, workspace.sourceBranch)
+      await gitOps.fetchSourceBranchAsync(workspace.worktreePath, workspace.sourceBranch)
     } else {
-      // Fire-and-forget: explicitly catch to avoid unhandled rejection if the
-      // helper ever changes contract and starts rejecting.
-      void gitOps.fetchSourceBranchAsync(worktreePath, workspace.sourceBranch).catch(() => {})
+      // Fire-and-forget: explicitly catch to avoid unhandled rejection.
+      void gitOps.fetchSourceBranchAsync(workspace.worktreePath, workspace.sourceBranch).catch(() => {})
     }
 
-    const commitCount = gitOps.getCommitCount(worktreePath, workspace.sourceBranch, workspace.workingBranch)
-    const behindCount = gitOps.getCommitsBehind(worktreePath, workspace.sourceBranch, workspace.workingBranch)
-    const diffStats = gitOps.getStructuredDiffStatsBetween(
-      worktreePath,
-      workspace.sourceBranch,
-      workspace.workingBranch,
-    )
-    const pr = await gitOps.getPrStatusAsync(workspace.projectPath, workspace.workingBranch)
-    const unpushedCount = await gitOps.getUnpushedCountAsync(worktreePath, workspace.workingBranch)
-    const workingTree = gitOps.getWorkingTreeStatus(worktreePath)
-
-    return c.json({
-      commitCount,
-      behindCount,
-      filesChanged: diffStats.filesChanged,
-      insertions: diffStats.insertions,
-      deletions: diffStats.deletions,
-      prUrl: pr?.url ?? null,
-      prState: pr?.state ?? null,
-      unpushedCount,
-      workingTree,
-    })
+    const forgeProvider = getForgeProvider(resolveForge(workspace.projectPath))
+    const pr = await forgeProvider.getPrStatus(workspace.worktreePath, workspace.workingBranch)
+    const stats = await computeGitStats(workspace, pr)
+    return c.json(stats)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
@@ -2646,8 +2647,10 @@ app.post('/:id/git/resolve-with-agent', migrationGuard, async (c) => {
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
 
-    const body = (await c.req.json<{ operation?: 'merge' | 'rebase'; files?: string[] }>().catch(() => ({}))) as {
-      operation?: 'merge' | 'rebase'
+    const body = (await c.req
+      .json<{ operation?: 'merge' | 'rebase' | 'cherry-pick'; files?: string[] }>()
+      .catch(() => ({}))) as {
+      operation?: 'merge' | 'rebase' | 'cherry-pick'
       files?: string[]
     }
     const worktreePath = workspace.worktreePath
@@ -2659,7 +2662,18 @@ app.post('/:id/git/resolve-with-agent', migrationGuard, async (c) => {
     }
 
     const fileList = files.map((f) => `- ${f}`).join('\n')
-    const continueCmd = operation === 'merge' ? 'git merge --continue' : 'git rebase --continue'
+    const continueCmd =
+      operation === 'merge'
+        ? 'git merge --continue'
+        : operation === 'cherry-pick'
+          ? 'git cherry-pick --continue'
+          : 'git rebase --continue'
+    // During a cherry-pick the conflict sides are inverted vs a rebase:
+    // `ours` = the new base, `theirs` = the feature commit being applied.
+    const cherryPickNote =
+      operation === 'cherry-pick'
+        ? '\n\n**Cherry-pick note:** during a cherry-pick, `ours` is the new base branch and `theirs` is our feature commit being replayed — the inverse of a rebase. `git checkout --theirs <file>` takes OUR feature version.'
+        : ''
     const prompt = `I started a \`git ${operation}\` of \`origin/${workspace.sourceBranch}\` into our working branch \`${workspace.workingBranch}\` and it produced conflicts that I need your help to resolve INTELLIGENTLY.
 
 Conflicted files (${files.length}):
@@ -2681,7 +2695,7 @@ ${fileList}
 3. Edit the file to the correct merged state and remove the conflict markers.
 4. Run the test suite to verify no regression (\`npm test\` or the project's equivalent).
 5. \`git add <resolved-files>\` then \`${continueCmd}\`.
-6. Report the summary: which files you touched, the key decisions you made, and the final test result.
+6. Report the summary: which files you touched, the key decisions you made, and the final test result.${cherryPickNote}
 
 Start now.`
 
@@ -2724,7 +2738,7 @@ Start now.`
   }
 })
 
-/** Change the base branch of an existing PR via gh CLI. */
+/** Change the base branch of an existing PR via the resolved forge provider. */
 app.post('/:id/change-pr-base', async (c) => {
   try {
     const id = c.req.param('id')
@@ -2734,10 +2748,102 @@ app.post('/:id/change-pr-base', async (c) => {
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
 
-    const worktreePath = workspace.worktreePath
+    const provider = getForgeProvider(resolveForge(workspace.projectPath))
+    if (!provider.capabilities.canChangePrBase) {
+      return c.json(
+        { error: 'This project has no forge that supports changing the PR base', code: 'forge_unsupported' },
+        409,
+      )
+    }
+    const availability = await provider.isAvailable(workspace.worktreePath)
+    if (!availability.available) {
+      return c.json(
+        {
+          error: `Forge CLI unavailable (${availability.reason ?? 'unknown'})`,
+          code: `forge_${availability.reason ?? 'unavailable'}`,
+        },
+        409,
+      )
+    }
 
-    await execFileAsync('gh', ['pr', 'edit', '--base', body.base], { cwd: worktreePath })
+    await provider.changePrBase(workspace.worktreePath, body.base)
+    return c.json({ success: true })
+  } catch (err) {
+    if (err instanceof ForgeUnavailableError) {
+      return c.json({ error: err.message, code: 'forge_unavailable' }, 409)
+    }
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
 
+/** Re-target a workspace onto a new source branch (metadata + worktree + PR base). */
+app.post('/:id/change-source-branch', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const body = await c.req.json<{ newBase: string }>()
+    if (!body.newBase) return c.json({ error: 'Missing newBase parameter' }, 400)
+
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const result = await changeSourceBranch(id, body.newBase)
+    if (result.status === 'too-many') {
+      return c.json(
+        { error: 'The branch has too many own commits — rebase it manually', code: 'too_many_commits', ...result },
+        409,
+      )
+    }
+    if (result.status === 'dirty') {
+      return c.json(
+        { error: 'Commit or stash your changes before changing the source branch', code: 'dirty_worktree', ...result },
+        409,
+      )
+    }
+    return c.json(result)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    if (/agent is running/i.test(message)) {
+      return c.json({ error: message, code: 'agent_running' }, 409)
+    }
+    if (/does not exist|already '|is required/i.test(message)) {
+      return c.json({ error: message }, 400)
+    }
+    return c.json({ error: message }, 500)
+  }
+})
+
+/** Cancel an in-flight source-branch change: abort the cherry-pick, restore the
+ *  working branch from its latest backup branch, revert the source metadata. */
+app.post('/:id/cancel-source-change', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const body = await c.req.json<{ previousBase: string }>()
+    if (!body.previousBase) return c.json({ error: 'Missing previousBase parameter' }, 400)
+
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const backups = gitOps.listBackupBranches(workspace.worktreePath, workspace.workingBranch)
+    if (backups.length === 0) {
+      return c.json({ error: 'No backup branch found — cannot auto-restore', code: 'no_backup' }, 409)
+    }
+    gitOps.restoreBranchFromBackup(workspace.worktreePath, workspace.workingBranch, backups[0])
+    workspaceService.updateWorkspaceSourceBranch(id, body.previousBase)
+    return c.json({ success: true, restoredFrom: backups[0] })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+/** Force-push the working branch with --force-with-lease (after a history rewrite). */
+app.post('/:id/force-push', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    gitOps.pushBranch(workspace.worktreePath, workspace.workingBranch, { force: true })
     return c.json({ success: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -2788,40 +2894,42 @@ app.post('/:id/open-pr', async (c) => {
       return c.json({ error: `Failed to check branch state: ${message}` }, 500)
     }
 
-    // Create PR via GitHub CLI
-    let ghOutput: string
-    try {
-      const placeholderBody = 'Automated PR — description will be updated by the agent.'
-      const { stdout } = await execFileAsync(
-        'gh',
-        [
-          'pr',
-          'create',
-          '--base',
-          workspace.sourceBranch,
-          '--head',
-          workspace.workingBranch,
-          '--title',
-          workspace.name,
-          '--body',
-          placeholderBody,
-        ],
-        { cwd: worktreePath },
+    // Create the PR/MR via the resolved forge provider.
+    const provider = getForgeProvider(resolveForge(workspace.projectPath))
+    if (!provider.capabilities.canCreatePr) {
+      return c.json({ error: 'This project has no forge that can open a PR', code: 'forge_unsupported' }, 409)
+    }
+    const availability = await provider.isAvailable(worktreePath)
+    if (!availability.available) {
+      return c.json(
+        {
+          error: `Forge CLI unavailable (${availability.reason ?? 'unknown'})`,
+          code: `forge_${availability.reason ?? 'unavailable'}`,
+        },
+        409,
       )
-      ghOutput = stdout
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      const stderr = (err as { stderr?: string | Buffer }).stderr?.toString() ?? ''
-      return c.json({ error: `gh pr create failed: ${message} ${stderr}`.trim() }, 500)
     }
 
-    // Parse PR URL and number from gh output
-    const urlMatch = ghOutput.match(/https:\/\/github\.com\/[^\s]+\/pull\/(\d+)/)
-    if (!urlMatch) {
-      return c.json({ error: 'Could not parse PR URL from gh output' }, 500)
+    let prUrl: string
+    let prNumber: number
+    try {
+      const placeholderBody = 'Automated PR — description will be updated by the agent.'
+      const created = await provider.createPr(worktreePath, {
+        base: workspace.sourceBranch,
+        head: workspace.workingBranch,
+        title: workspace.name,
+        body: placeholderBody,
+      })
+      prUrl = created.url
+      prNumber = created.number
+    } catch (err) {
+      if (err instanceof ForgeUnavailableError) {
+        return c.json({ error: err.message, code: 'forge_unavailable' }, 409)
+      }
+      const message = err instanceof Error ? err.message : String(err)
+      const stderr = (err as { stderr?: string | Buffer }).stderr?.toString() ?? ''
+      return c.json({ error: `Failed to open PR: ${message} ${stderr}`.trim() }, 500)
     }
-    const prUrl = urlMatch[0]
-    const prNumber = parseInt(urlMatch[1], 10)
 
     // ── From here on, PR exists. No more 5xx responses. ──
 

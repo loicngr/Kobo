@@ -7,11 +7,13 @@ Complete reference for every Kōbō setting, environment variable, and external 
 - [Storage layout](#storage-layout)
 - [Environment variables](#environment-variables)
 - [Settings UI](#settings-ui)
+- [Custom change-source-branch script](#custom-change-source-branch-script)
 - [Agent runtimes](#agent-runtimes)
   - [Claude Code](#claude-code)
   - [OpenAI Codex](#openai-codex)
   - [Permission modes](#permission-modes)
 - [Dev server](#dev-server)
+- [Forge integration](#forge-integration)
 - [Notion integration](#notion-integration)
 - [Sentry integration](#sentry-integration)
 - [Voice transcription](#voice-transcription)
@@ -96,6 +98,7 @@ Settings are managed live from the **Settings** page in the UI and persisted to 
 | `cleanupScriptMode` | `'idle' \| 'no-tasks'` | When the cleanup script fires: after every session (`idle`) or only when no Kōbō task remains (`no-tasks`). In auto-loop it runs only once every task is done. |
 | `cleanupScriptOnlyOnChanges` | `boolean` | Run the cleanup script only when the worktree has uncommitted changes (modified / added / deleted / untracked files). |
 | `archiveScript` | `string` | Shell script run server-side when a workspace is archived. Empty disables. |
+| `changeSourceBranchScript` | `string` | Shell script that **replaces** the built-in change-source-branch logic. See [Custom change-source-branch script](#custom-change-source-branch-script). Empty uses the built-in cherry-pick flow. |
 | `editorCommand` | `string` | Command used by the "Open in editor" action (e.g. `code`, `phpstorm`, `cursor`). The worktree path is appended as the last argument. |
 | `browserNotifications` | `boolean` | Trigger Web Notifications when an agent finishes a turn. |
 | `audioNotifications` | `boolean` | Play a sound when an agent finishes a turn. |
@@ -134,13 +137,110 @@ Projects override a subset of global settings — anything you set here takes pr
 | `dangerouslySkipPermissions` | `boolean` | Project-scoped override. |
 | `prPromptTemplate`, `reviewPromptTemplate`, `notionInitialPromptTemplate`, `sentryInitialPromptTemplate`, `gitConventions` | `string` | Per-project versions of the global templates. Empty inherits the global value. |
 | `setupScript`, `cleanupScript`, `archiveScript` | `string` | Per-project versions of the global lifecycle scripts. Empty inherits the global value. |
+| `changeSourceBranchScript` | `string` | Per-project version of the custom change-source-branch script. Empty inherits the global value. See [Custom change-source-branch script](#custom-change-source-branch-script). |
 | `cleanupScriptMode` | `'' \| 'idle' \| 'no-tasks'` | Per-project override of the cleanup trigger mode. Empty inherits the global mode. |
 | `taskPromptTemplate` | `string` | Prompt auto-injected into the task-description textarea on the creation page when this project is selected. Empty disables. |
+| `forge` | `'auto' \| 'github' \| 'gitlab' \| 'none'` | Which forge provides PR/MR features. `auto` detects from the git remote URL. See [Forge integration](#forge-integration). |
 | `devServer.startCommand` / `stopCommand` | `string` | Per-workspace dev server commands. Docker, npm, or any shell-startable process. See [Dev server](#dev-server) for the status/URL contract. |
 | `e2e.framework` | `'cypress' \| 'playwright' \| 'jest' \| 'vitest' \| 'other' \| ''` | E2E framework auto-loop grooming should target. |
 | `e2e.skill` | `string` | Optional skill name injected into the E2E grooming prompt. |
 | `e2e.prompt` | `string` | Free-form prompt appended to every `[E2E] ` sub-task. |
 | `finalization.prompt` | `string` | Runs as the very last auto-loop iteration (`[FINAL]`-prefixed task). Empty disables. |
+
+## Custom change-source-branch script
+
+The **Change source branch** action defaults to Kōbō's built-in cherry-pick of
+the branch-proper commits. If a project (or the global default) sets
+`changeSourceBranchScript`, that script **replaces** the built-in logic.
+
+### Contract
+
+When the script is set, Kōbō:
+
+- still refuses if the agent is running (corruption risk — non-negotiable);
+- spawns `bash -c "<your script>"` from the worktree as cwd;
+- waits up to 5 minutes;
+- on exit `0` → updates the workspace's `source_branch` metadata to the new
+  base the user typed, and refreshes the UI;
+- on non-zero exit (or timeout) → surfaces the script's stderr as the toast.
+
+The script owns everything else: the git reconstruction (cherry-pick, rebase,
+reset — your choice), the conflict resolution, the PR base change (`gh pr edit`
+/ `glab mr update`), and the force-push (`git push --force-with-lease`). The
+built-in features that only apply to the cherry-pick path — the backup branch,
+the `cancel-source-change` recovery, the force-push confirmation prompt, the
+agent-driven conflict resolution — are **not active** on the custom path.
+
+### Environment variables
+
+| Variable | Value |
+|---|---|
+| `KOBO_NEW_BASE` | the new source branch the user typed in the dialog |
+| `KOBO_OLD_BASE` | the workspace's previous `sourceBranch` |
+| `KOBO_WORKING_BRANCH` | the workspace's working branch |
+| `KOBO_WORKTREE_PATH` | absolute path of the worktree (also the script's cwd) |
+| `KOBO_PROJECT_PATH` | absolute path of the main project repo |
+| `KOBO_PROJECT_NAME` | project directory name (basename of `KOBO_PROJECT_PATH`) — handy for log lines or notifications |
+| `KOBO_WORKSPACE_ID` | Kōbō workspace id (stable across renames) — useful for backup branch naming, idempotency keys, etc. |
+| `KOBO_WORKSPACE_NAME` | workspace display name as shown in the Kōbō UI |
+| `KOBO_FORGE` | resolved forge id for this project (`github`, `gitlab` or `none`) — use it to pick `gh` vs `glab` cleanly instead of probing both |
+| `KOBO_PR_NUMBER` | number of the PR / MR open on the resolved forge for the working branch — empty when none is open, when the forge is `none`, or when the CLI (`gh` / `glab`) cannot resolve it. Use it to target the request explicitly: `gh pr edit "$KOBO_PR_NUMBER" --base "$KOBO_NEW_BASE"` |
+
+The standard process env (`PATH`, `HOME`, etc.) is forwarded unchanged.
+
+### Example — sekur-style cherry-pick + PR re-target + force-push
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+
+git fetch origin
+COMMITS=$(git log --reverse --format=%H "$KOBO_WORKING_BRANCH" \
+  --not "origin/$KOBO_NEW_BASE" "origin/$KOBO_OLD_BASE")
+COUNT=$(printf '%s\n' "$COMMITS" | grep -c '^[0-9a-f]' || true)
+
+if [ "$COUNT" -eq 0 ]; then
+  git reset --hard "origin/$KOBO_NEW_BASE"
+elif [ "$COUNT" -gt 50 ]; then
+  echo "Too many proper commits ($COUNT) — rebase manually" >&2
+  exit 1
+else
+  git branch "kobo-backup/${KOBO_WORKING_BRANCH}-$(date +%s)" "$KOBO_WORKING_BRANCH"
+  git reset --hard "origin/$KOBO_NEW_BASE"
+  printf '%s\n' "$COMMITS" | xargs git cherry-pick
+fi
+
+# Re-target the PR / MR — use the forge Kōbō resolved for this project.
+# `command -v` makes the script degrade gracefully if `gh` / `glab` is missing.
+case "${KOBO_FORGE:-none}" in
+  github)
+    if command -v gh >/dev/null 2>&1; then
+      gh pr edit --base "$KOBO_NEW_BASE" 2>/dev/null || true
+    else
+      echo "warn: 'gh' CLI not installed — skipping PR base update" >&2
+    fi
+    ;;
+  gitlab)
+    if command -v glab >/dev/null 2>&1; then
+      glab mr update --target-branch "$KOBO_NEW_BASE" 2>/dev/null || true
+    else
+      echo "warn: 'glab' CLI not installed — skipping MR base update" >&2
+    fi
+    ;;
+  *) : ;; # no forge configured — skip
+esac
+
+# Force-push if the branch is tracked upstream.
+if git rev-parse --abbrev-ref "@{upstream}" >/dev/null 2>&1; then
+  git push --force-with-lease origin "$KOBO_WORKING_BRANCH"
+fi
+```
+
+### Trust model
+
+The script can do anything — `git reset --hard`, force-push, delete files. The
+trust model is identical to `setupScript` / `cleanupScript` / `archiveScript`:
+Kōbō is a local single-user dev tool and the script is your own code.
 
 ## Agent runtimes
 
@@ -360,6 +460,61 @@ Adapt the port stride, the `APP_NAME`, and any extra `*_PORT` keys to your stack
 | URL shown but badge says `stopped` | No running Docker container whose name contains `PROJECT_NAME` (normal for non-Docker projects). |
 | Logs button empty | Same cause — `docker logs` has no matching container. |
 | Wrong port in URL | `HTTP_PORT` in the `.env` doesn't match the port the server actually bound. |
+
+## Forge integration
+
+Kōbō can open pull requests (GitHub) or merge requests (GitLab) directly from the Git panel. The **forge** setting controls which service is used for a given project.
+
+### Modes
+
+| Value | Behaviour |
+|---|---|
+| `auto` (default) | Kōbō reads the `origin` remote URL: host contains `github.com` → GitHub; host contains `gitlab` → GitLab; anything else → `none`. |
+| `github` | Always use GitHub, regardless of the remote URL. |
+| `gitlab` | Always use GitLab, regardless of the remote URL. |
+| `none` | PR/MR features are disabled. The PR block is hidden in the Git panel. |
+
+Set the per-project value in **Settings → (project) → Forge**.
+
+### Auto-detection
+
+`auto` is designed to work without any configuration for the common cases:
+
+- GitHub.com repositories: the remote URL contains `github.com` → GitHub detected automatically.
+- GitLab.com repositories: the remote URL contains `gitlab` → GitLab detected automatically.
+- Self-hosted GitLab on a custom hostname (e.g. `git.mycompany.com`): the hostname does not contain `gitlab`, so `auto` falls back to `none`. Set `forge: gitlab` explicitly for these projects.
+
+### CLI prerequisites
+
+Kōbō delegates PR/MR operations to the forge CLI — it ships no credentials of its own. You must install and authenticate the relevant CLI before the PR actions become available:
+
+**GitHub:**
+
+```bash
+# Install: https://cli.github.com
+gh auth login
+```
+
+**GitLab (GitLab.com):**
+
+```bash
+# Install: https://gitlab.com/gitlab-org/cli
+glab auth login
+```
+
+**GitLab (self-hosted):**
+
+```bash
+glab auth login --hostname git.mycompany.com
+```
+
+Kōbō only invokes the CLI binary. If the CLI is missing from `PATH` or not authenticated, PR/MR actions are disabled with an explanatory tooltip in the Git panel — Kōbō keeps working normally, only the PR/MR features are affected.
+
+### UI behaviour
+
+- The Git panel label adapts per forge: **Create PR** on GitHub, **Create MR** on GitLab.
+- When `forge` is `none` (or auto-resolves to `none`), the PR/MR block is hidden entirely — no errors, no placeholders.
+- When the CLI is absent or unauthenticated, the button is disabled with a tooltip explaining the issue instead of surfacing a raw error.
 
 ## Notion integration
 

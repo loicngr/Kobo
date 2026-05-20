@@ -17,7 +17,8 @@ Kōbō runs multiple coding agents in parallel, each isolated in its own git wor
 - **Two agent engines** — Claude Code (via `@anthropic-ai/claude-agent-sdk`) and OpenAI Codex (via `codex app-server`), chosen per workspace.
 - **Live chat** — streaming text, reasoning blocks, inline Edit/Write diffs, per-turn cards, infinite scrollback; `/` autocompletes skills & commands and `@` fuzzy-autocompletes worktree file paths; every workspace's session events are exportable to CSV.
 - **Task tracking** — per-workspace MCP server (`kobo-tasks`) lets the agent manage its own tasks, acceptance criteria, and live status.
-- **Git panel** — Monaco-based diff viewer, inline conflict resolution, `Sync` / `Push` / `Open PR` wired to the `gh` CLI.
+- **Git panel** — Monaco-based diff viewer, inline conflict resolution, `Sync` / `Push` / `Open PR` / `Change PR base` / `Change source branch` (cherry-pick of the branch-proper commits, with an optional custom bash script). Multi-forge: GitHub (`gh`), GitLab (`glab`), or no forge — auto-detected from the remote, overridable per project.
+- **Attention indicators** — workspace cards in the drawer surface CI failures and review-requested-changes inline, so failing PRs/MRs stand out at a glance.
 - **Auto-loop** — opt-in mode that walks the task list, spawning a fresh session per task and stopping on completion, stall, or error.
 - **Quota-aware** — 5-hour / 7-day Claude usage and Codex rate-limit buckets in the footer; sessions auto-resume after a rate-limit reset.
 - **Scheduled wakeups** — the agent schedules a one-shot wake-up via the `ScheduleWakeup` tool; Kōbō persists it across restarts, shows a live countdown, and re-invokes the agent with the stored prompt at the chosen time.

@@ -32,6 +32,7 @@ import {
   getDevServerStatusHandler,
   getSessionUsageHandler,
   getSettingsHandler,
+  getTicketSourcesHandler,
   getWorkspaceInfoHandler,
   listDocumentsHandler,
   listTasksHandler,
@@ -406,6 +407,70 @@ describe('MCP tasks server handlers', () => {
     })
   })
 
+  describe('getTicketSourcesHandler', () => {
+    let worktreePath: string
+    let thoughtsDir: string
+
+    const notionMd = (url: string) => `# A Notion ticket\n\n## Source\n\n- Notion: ${url}\n- Retrieved: 2026-05-19\n`
+    const sentryMd = (url: string) => `# Fix: a Sentry issue\n\n## Source\n- Sentry: ${url}\n- Retrieved: 2026-05-19\n`
+
+    beforeEach(() => {
+      worktreePath = path.join(tmpDir, 'ticket-wt')
+      thoughtsDir = path.join(worktreePath, '.ai', 'thoughts')
+      fs.mkdirSync(thoughtsDir, { recursive: true })
+    })
+
+    it('retourne [] si le dossier .ai/thoughts est absent', () => {
+      expect(getTicketSourcesHandler(path.join(tmpDir, 'no-such-wt'))).toEqual([])
+    })
+
+    it('retourne [] si aucun fichier .md', () => {
+      fs.writeFileSync(path.join(thoughtsDir, 'notes.txt'), 'ignored')
+      expect(getTicketSourcesHandler(worktreePath)).toEqual([])
+    })
+
+    it('classe un fichier ticket Notion via le marqueur ## Source', () => {
+      fs.writeFileSync(path.join(thoughtsDir, 'TK-1190.md'), notionMd('https://www.notion.so/abc'))
+      const sources = getTicketSourcesHandler(worktreePath)
+      expect(sources).toHaveLength(1)
+      expect(sources[0].type).toBe('notion')
+      expect(sources[0].url).toBe('https://www.notion.so/abc')
+      expect(sources[0].content).toContain('# A Notion ticket')
+    })
+
+    it('classe un fichier ticket Sentry via le marqueur ## Source', () => {
+      fs.writeFileSync(path.join(thoughtsDir, 'SENTRY-ACME-3.md'), sentryMd('https://acme.sentry.io/issues/42'))
+      const sources = getTicketSourcesHandler(worktreePath)
+      expect(sources).toHaveLength(1)
+      expect(sources[0].type).toBe('sentry')
+      expect(sources[0].url).toBe('https://acme.sentry.io/issues/42')
+      expect(sources[0].content).toContain('# Fix: a Sentry issue')
+    })
+
+    it('retourne les deux sources typées pour un workspace mixte Notion+Sentry', () => {
+      fs.writeFileSync(path.join(thoughtsDir, 'TK-1190.md'), notionMd('https://www.notion.so/abc'))
+      fs.writeFileSync(path.join(thoughtsDir, 'SENTRY-ACME-3.md'), sentryMd('https://acme.sentry.io/issues/42'))
+      const sources = getTicketSourcesHandler(worktreePath)
+      expect(sources).toHaveLength(2)
+      expect(sources.map((s) => s.type).sort()).toEqual(['notion', 'sentry'])
+    })
+
+    it('ignore les fichiers .md sans marqueur de source (notes log_thought)', () => {
+      fs.writeFileSync(path.join(thoughtsDir, 'TK-1190.md'), notionMd('https://www.notion.so/abc'))
+      fs.writeFileSync(path.join(thoughtsDir, '2026-05-19-a-decision.md'), '# A decision\n\nSome reasoning.\n')
+      const sources = getTicketSourcesHandler(worktreePath)
+      expect(sources).toHaveLength(1)
+      expect(sources[0].type).toBe('notion')
+    })
+
+    it('ne descend pas dans le sous-dossier logs/ (lecture non récursive)', () => {
+      const logsDir = path.join(thoughtsDir, 'logs')
+      fs.mkdirSync(logsDir, { recursive: true })
+      fs.writeFileSync(path.join(logsDir, 'SENTRY-NESTED.md'), sentryMd('https://acme.sentry.io/issues/99'))
+      expect(getTicketSourcesHandler(worktreePath)).toEqual([])
+    })
+  })
+
   describe('listDocumentsHandler', () => {
     let worktreePath: string
 
@@ -486,14 +551,20 @@ describe('MCP tasks server handlers', () => {
       fs.mkdirSync(worktreePath, { recursive: true })
     })
 
-    it('crée un fichier dans .ai/thoughts/ avec un slug depuis le titre', () => {
+    it('crée un fichier dans .ai/thoughts/logs/ avec un slug depuis le titre', () => {
       const res = logThoughtHandler(worktreePath, { title: 'Decision: use pinia', content: 'Reason is X.' })
-      expect(res.path).toMatch(/^\.ai\/thoughts\/\d{4}-\d{2}-\d{2}-decision-use-pinia\.md$/)
+      expect(res.path).toMatch(/^\.ai\/thoughts\/logs\/\d{4}-\d{2}-\d{2}-decision-use-pinia\.md$/)
       const absolutePath = path.join(worktreePath, res.path)
       expect(fs.existsSync(absolutePath)).toBe(true)
       const content = fs.readFileSync(absolutePath, 'utf-8')
       expect(content).toContain('# Decision: use pinia')
       expect(content).toContain('Reason is X.')
+    })
+
+    it('isole les notes de la source-of-truth (sous-dossier logs/)', () => {
+      const res = logThoughtHandler(worktreePath, { title: 'Note', content: 'body' })
+      // The ticket files live directly in .ai/thoughts/ — notes must not.
+      expect(res.path.startsWith('.ai/thoughts/logs/')).toBe(true)
     })
 
     it('ajoute le tag en suffixe quand fourni', () => {
@@ -710,5 +781,22 @@ describe('MCP server tool registration — cron family', () => {
     )
     // cron_list is read-only — no timer involvement, fine to dispatch locally.
     expect(serverSource).toMatch(/name === 'cron_list'[\s\S]*?cronListHandler\s*\(/)
+  })
+})
+
+describe('MCP server tool registration — get_ticket', () => {
+  const readServerSource = () =>
+    fs.readFileSync(path.join(__dirname, '..', 'mcp-server', 'kobo-tasks-server.ts'), 'utf-8')
+
+  it('exposes the source-agnostic get_ticket tool', () => {
+    expect(readServerSource()).toMatch(/name:\s*['"]get_ticket['"]/)
+  })
+
+  it('does not register get_notion_ticket as a separate tool entry', () => {
+    expect(readServerSource()).not.toMatch(/name:\s*['"]get_notion_ticket['"]/)
+  })
+
+  it('keeps get_notion_ticket as a back-compat alias in the dispatch', () => {
+    expect(readServerSource()).toMatch(/name === 'get_ticket' \|\| name === 'get_notion_ticket'/)
   })
 })

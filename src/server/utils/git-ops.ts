@@ -160,6 +160,20 @@ export function fetchSourceBranch(repoPath: string, sourceBranch: string, remote
   }
 }
 
+/**
+ * Fetch every branch from the remote (`git fetch <remote>` with no refspec).
+ * Throws if the fetch fails. Call this before computing branch divergence so
+ * all `origin/*` refs are current.
+ */
+export function fetchAllBranches(repoPath: string, remote = 'origin'): void {
+  try {
+    git(repoPath, ['fetch', remote])
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`Failed to fetch from '${remote}': ${message}`)
+  }
+}
+
 /** Pull the current branch from the remote using fast-forward only. */
 export function pullBranch(repoPath: string, branchName: string, remote = 'origin'): void {
   try {
@@ -170,12 +184,12 @@ export function pullBranch(repoPath: string, branchName: string, remote = 'origi
   }
 }
 
-/** Thrown when a rebase or merge produces conflicts. Leaves the repo in the mid-operation state
- *  so the caller can decide between abort and agent-assisted resolution. */
+/** Thrown when a rebase, merge or cherry-pick produces conflicts. Leaves the repo in the
+ *  mid-operation state so the caller can decide between abort and agent-assisted resolution. */
 export class GitConflictError extends Error {
-  readonly operation: 'rebase' | 'merge'
+  readonly operation: 'rebase' | 'merge' | 'cherry-pick'
   readonly files: string[]
-  constructor(operation: 'rebase' | 'merge', files: string[]) {
+  constructor(operation: 'rebase' | 'merge' | 'cherry-pick', files: string[]) {
     super(`${operation} produced ${files.length} conflicted file(s)`)
     this.name = 'GitConflictError'
     this.operation = operation
@@ -196,13 +210,14 @@ export function getConflictedFiles(repoPath: string): string[] {
   }
 }
 
-/** Detect whether a merge or rebase is currently in progress in the worktree. */
-export function getOngoingGitOperation(repoPath: string): 'merge' | 'rebase' | null {
+/** Detect whether a merge, rebase or cherry-pick is currently in progress in the worktree. */
+export function getOngoingGitOperation(repoPath: string): 'merge' | 'rebase' | 'cherry-pick' | null {
   try {
     const gitDir = git(repoPath, ['rev-parse', '--git-dir'])
     const dir = gitDir.startsWith('/') ? gitDir : join(repoPath, gitDir)
     if (existsSync(join(dir, 'MERGE_HEAD'))) return 'merge'
     if (existsSync(join(dir, 'rebase-merge')) || existsSync(join(dir, 'rebase-apply'))) return 'rebase'
+    if (existsSync(join(dir, 'CHERRY_PICK_HEAD')) || existsSync(join(dir, 'sequencer'))) return 'cherry-pick'
     return null
   } catch {
     return null
@@ -248,13 +263,15 @@ export function mergeBranch(repoPath: string, baseBranch: string): void {
   }
 }
 
-/** Abort an in-progress merge or rebase. No-op if nothing is in progress. */
-export function abortOngoingGitOperation(repoPath: string): 'merge' | 'rebase' | null {
+/** Abort an in-progress merge, rebase or cherry-pick. No-op if nothing is in progress. */
+export function abortOngoingGitOperation(repoPath: string): 'merge' | 'rebase' | 'cherry-pick' | null {
   const op = getOngoingGitOperation(repoPath)
   if (op === 'merge') {
     git(repoPath, ['merge', '--abort'])
   } else if (op === 'rebase') {
     git(repoPath, ['rebase', '--abort'])
+  } else if (op === 'cherry-pick') {
+    git(repoPath, ['cherry-pick', '--abort'])
   }
   return op
 }
@@ -305,6 +322,96 @@ export function getCommitsBehind(repoPath: string, base: string, head: string): 
   } catch {
     return 0
   }
+}
+
+/**
+ * List the commits that belong to `workingBranch` itself — reachable from it
+ * but present in neither `newBase` nor `oldBase`. This is the set to replay
+ * onto the new base. Returned oldest-first (ready for sequential cherry-pick).
+ *
+ * Both `origin/<base>` and the bare `<base>` are excluded when they exist, so
+ * the result is correct whether the caller fetched the base or not.
+ */
+export function listProperCommits(repoPath: string, workingBranch: string, newBase: string, oldBase: string): string[] {
+  const excludes: string[] = []
+  for (const base of [newBase, oldBase]) {
+    for (const ref of [`origin/${base}`, base]) {
+      try {
+        git(repoPath, ['rev-parse', '--verify', '--quiet', ref])
+        excludes.push(`^${ref}`)
+      } catch {
+        // ref absent — skip
+      }
+    }
+  }
+  const output = git(repoPath, ['log', '--reverse', '--format=%H', workingBranch, ...excludes])
+  return output
+    .split('\n')
+    .map((s) => s.trim())
+    .filter(Boolean)
+}
+
+/**
+ * Rebuild `workingBranch` on top of the new base by cherry-picking the given
+ * commits (oldest-first). Creates a backup branch at the current tip first and
+ * returns its name. On a cherry-pick conflict, leaves the operation in progress
+ * and throws `GitConflictError`.
+ *
+ * The base is resolved as `origin/<newBase>` when that ref exists, else the
+ * bare `<newBase>` (so it works both with a fetched remote and a local-only
+ * base). The caller must ensure the worktree is clean for the conflict path.
+ * An empty `commits` array performs the reset only — the "already aligned"
+ * fast path.
+ *
+ * IMPORTANT: this function resets the branch CURRENTLY checked out in
+ * `repoPath`. The caller (and the Kōbō worktree orchestrator) must ensure
+ * `workingBranch` is the active branch — do NOT add a `git checkout` here.
+ */
+export function reconstructBranchOnto(
+  repoPath: string,
+  workingBranch: string,
+  newBase: string,
+  commits: readonly string[],
+): string {
+  const baseRef = resolveBase(repoPath, newBase)
+  const backupBranch = `kobo-backup/${workingBranch}-${Date.now()}`
+  git(repoPath, ['branch', backupBranch, workingBranch])
+  git(repoPath, ['reset', '--hard', baseRef])
+  if (commits.length > 0) {
+    try {
+      git(repoPath, ['cherry-pick', ...commits])
+    } catch (err) {
+      const conflicted = getConflictedFiles(repoPath)
+      if (conflicted.length > 0 || getOngoingGitOperation(repoPath) === 'cherry-pick') {
+        throw new GitConflictError('cherry-pick', conflicted)
+      }
+      const message = err instanceof Error ? err.message : String(err)
+      throw new Error(`Cherry-pick onto '${newBase}' failed: ${message}`)
+    }
+  }
+  return backupBranch
+}
+
+/** List `kobo-backup/<workingBranch>-<ts>` branches, newest timestamp first. */
+export function listBackupBranches(repoPath: string, workingBranch: string): string[] {
+  try {
+    const prefix = `kobo-backup/${workingBranch}-`
+    const out = git(repoPath, ['branch', '--list', `${prefix}*`, '--format=%(refname:short)'])
+    return out
+      .split('\n')
+      .map((s) => s.trim())
+      .filter((b) => b.startsWith(prefix) && /^\d+$/.test(b.slice(prefix.length)))
+      .sort((a, b) => Number(b.slice(prefix.length)) - Number(a.slice(prefix.length)))
+  } catch {
+    return []
+  }
+}
+
+/** Abort any in-progress operation, then hard-reset `workingBranch` to a backup branch. */
+export function restoreBranchFromBackup(repoPath: string, workingBranch: string, backupBranch: string): void {
+  abortOngoingGitOperation(repoPath)
+  git(repoPath, ['checkout', '-q', workingBranch])
+  git(repoPath, ['reset', '--hard', backupBranch])
 }
 
 /** Return structured diff shortstat between two refs (three-dot merge base). */
@@ -443,170 +550,6 @@ export function listCommitsBehind(repoPath: string, sourceBranch: string, workin
     })
   }
   return commits
-}
-
-/** Get the GitHub PR URL for a branch using `gh pr view`. Returns null if no PR exists. */
-export function getPrUrl(repoPath: string, branchName: string): string | null {
-  try {
-    return (
-      execFileSync('gh', ['pr', 'view', branchName, '--json', 'url', '--jq', '.url'], {
-        cwd: repoPath,
-        encoding: 'utf-8',
-      }).trim() || null
-    )
-  } catch {
-    return null
-  }
-}
-
-/** Per-reviewer state in a PR. Pending = requested but no review yet. */
-export interface PrReviewer {
-  login: string
-  state: 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED' | 'DISMISSED' | 'PENDING'
-}
-
-/** Per-check entry from the PR's status check rollup. */
-export interface PrCiCheck {
-  name: string
-  conclusion: string | null
-  status: string
-  detailsUrl: string | null
-}
-
-/** Rich snapshot of a GitHub pull request, captured from a single `gh pr view`. */
-export interface PrSnapshot {
-  number: number
-  title: string
-  url: string
-  state: 'OPEN' | 'CLOSED' | 'MERGED'
-  base: string
-  reviewDecision: 'APPROVED' | 'CHANGES_REQUESTED' | 'REVIEW_REQUIRED' | null
-  author: { login: string }
-  assignees: Array<{ login: string }>
-  reviewers: PrReviewer[]
-  labels: Array<{ name: string; color: string }>
-  ci: {
-    // 'CANCELLED' and 'NEUTRAL' are reserved for future gh check conclusions;
-    // the current mapper only emits null|FAILURE|PENDING|SUCCESS.
-    rollup: 'SUCCESS' | 'FAILURE' | 'PENDING' | 'CANCELLED' | 'NEUTRAL' | null
-    checks: PrCiCheck[]
-  }
-  updatedAt: string
-  /**
-   * Number of review threads that are still unresolved on the PR. GitHub keeps
-   * `reviewDecision` at `CHANGES_REQUESTED` until the reviewer re-reviews or
-   * dismisses, even after the author resolves every comment thread. The UI
-   * uses this counter (combined with `reviewDecision`) to decide whether the
-   * PR is truly blocked or merely flagged stale.
-   */
-  unresolvedReviewThreadsCount: number
-}
-
-/** Back-compat alias for old callers that imported the previous name.
- *  Remove once all imports are switched. */
-export type PrStatus = PrSnapshot
-
-// NOTE: `reviewThreads` is intentionally NOT in this list.
-// As of `gh` CLI 2.92 (latest at time of writing) the `--json reviewThreads`
-// flag is rejected with `Unknown JSON field: "reviewThreads"` — there is no
-// stable `gh` version that exposes it via `pr view --json`. Until upstream
-// adds it, `unresolvedReviewThreadsCount` stays at 0 and the
-// "hide changes-requested badge when all threads are resolved" feature
-// degrades to "badge stays visible". To restore that feature later, either
-// (a) re-add the field here once `gh` supports it, or (b) make a separate
-// `gh api graphql` call for `pullRequest.reviewThreads.nodes`.
-const GH_PR_FIELDS = [
-  'number',
-  'title',
-  'url',
-  'state',
-  'baseRefName',
-  'reviewDecision',
-  'author',
-  'assignees',
-  'labels',
-  'latestReviews',
-  'reviewRequests',
-  'statusCheckRollup',
-  'updatedAt',
-].join(',')
-
-interface RawGhPr {
-  number: number
-  title: string
-  url: string
-  state: string
-  baseRefName?: string
-  reviewDecision?: string | null
-  author?: { login?: string } | null
-  assignees?: Array<{ login: string }>
-  labels?: Array<{ name: string; color: string }>
-  latestReviews?: Array<{ author: { login: string }; state: string }>
-  reviewRequests?: Array<{ login: string }>
-  reviewThreads?: Array<{ isResolved: boolean }>
-  statusCheckRollup?: Array<{ name: string; conclusion: string | null; status: string; detailsUrl: string | null }>
-  updatedAt?: string
-}
-
-function mapGhPrToSnapshot(raw: RawGhPr): PrSnapshot {
-  const reviewers: PrReviewer[] = []
-  const seen = new Set<string>()
-  for (const r of raw.latestReviews ?? []) {
-    const login = r.author?.login
-    if (!login || seen.has(login)) continue
-    seen.add(login)
-    reviewers.push({ login, state: (r.state as PrReviewer['state']) ?? 'COMMENTED' })
-  }
-  for (const r of raw.reviewRequests ?? []) {
-    if (!r.login || seen.has(r.login)) continue
-    seen.add(r.login)
-    reviewers.push({ login: r.login, state: 'PENDING' })
-  }
-
-  const checks: PrCiCheck[] = (raw.statusCheckRollup ?? []).map((c) => ({
-    name: c.name,
-    conclusion: c.conclusion ?? null,
-    status: c.status,
-    detailsUrl: c.detailsUrl ?? null,
-  }))
-  let rollup: PrSnapshot['ci']['rollup'] = null
-  if (checks.length > 0) {
-    if (checks.some((c) => c.conclusion === 'FAILURE')) rollup = 'FAILURE'
-    else if (checks.some((c) => c.status !== 'COMPLETED')) rollup = 'PENDING'
-    else rollup = 'SUCCESS'
-  }
-
-  const unresolvedReviewThreadsCount = (raw.reviewThreads ?? []).reduce((acc, t) => acc + (t.isResolved ? 0 : 1), 0)
-
-  return {
-    number: raw.number,
-    title: raw.title,
-    url: raw.url,
-    state: raw.state as PrSnapshot['state'],
-    base: raw.baseRefName ?? '',
-    reviewDecision: (raw.reviewDecision as PrSnapshot['reviewDecision']) ?? null,
-    author: { login: raw.author?.login ?? '' },
-    assignees: (raw.assignees ?? []).map((a) => ({ login: a.login })),
-    reviewers,
-    labels: (raw.labels ?? []).map((l) => ({ name: l.name, color: l.color })),
-    ci: { rollup, checks },
-    updatedAt: raw.updatedAt ?? '',
-    unresolvedReviewThreadsCount,
-  }
-}
-
-/** Get a rich snapshot of the PR for a branch. Returns null if no PR exists. */
-export function getPrStatus(repoPath: string, branchName: string): PrSnapshot | null {
-  try {
-    const raw = execFileSync('gh', ['pr', 'view', branchName, '--json', GH_PR_FIELDS], {
-      cwd: repoPath,
-      encoding: 'utf-8',
-    }).trim()
-    if (!raw) return null
-    return mapGhPrToSnapshot(JSON.parse(raw) as RawGhPr)
-  } catch {
-    return null
-  }
 }
 
 /**
@@ -964,35 +907,7 @@ export function getWorkingTreeDiffStats(repoPath: string): string {
 }
 
 // ── Async versions ───────────────────────────────────────────────────────────
-// Non-blocking alternatives for hot paths (pr-watcher, route handlers).
-
-/** Async version of getPrUrl. Returns null if no PR exists. */
-export async function getPrUrlAsync(repoPath: string, branchName: string): Promise<string | null> {
-  try {
-    const { stdout } = await execFileAsync('gh', ['pr', 'view', branchName, '--json', 'url', '--jq', '.url'], {
-      cwd: repoPath,
-      encoding: 'utf-8',
-    })
-    return stdout.trim() || null
-  } catch {
-    return null
-  }
-}
-
-/** Async version of getPrStatus. Returns null if no PR exists. */
-export async function getPrStatusAsync(repoPath: string, branchName: string): Promise<PrSnapshot | null> {
-  try {
-    const { stdout } = await execFileAsync('gh', ['pr', 'view', branchName, '--json', GH_PR_FIELDS], {
-      cwd: repoPath,
-      encoding: 'utf-8',
-    })
-    const raw = stdout.trim()
-    if (!raw) return null
-    return mapGhPrToSnapshot(JSON.parse(raw) as RawGhPr)
-  } catch {
-    return null
-  }
-}
+// Non-blocking alternatives for hot paths (route handlers).
 
 /**
  * Async version of `getUnpushedCount`. Same `origin/<workingBranch>` semantic:
@@ -1032,4 +947,14 @@ export async function fetchSourceBranchAsync(repoPath: string, branch: string, r
     const msg = err instanceof Error ? err.message : String(err)
     console.warn(`[git-ops] fetchSourceBranchAsync(${remote}/${branch}) failed: ${msg}`)
   }
+}
+
+/** Stash all changes (including untracked). */
+export function stashPush(repoPath: string, label: string): void {
+  git(repoPath, ['stash', 'push', '--include-untracked', '-m', label])
+}
+
+/** Pop the most recent stash entry. */
+export function stashPop(repoPath: string): void {
+  git(repoPath, ['stash', 'pop'])
 }

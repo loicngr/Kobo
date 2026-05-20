@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import type { Settings } from '../server/services/settings-service.js'
+import type { GlobalSettings, ProjectSettings, Settings } from '../server/services/settings-service.js'
 import {
   _setSettingsPath,
   DEFAULT_BRANCH_PREFIXES,
@@ -1729,5 +1729,58 @@ describe('migration v22 — add-skill-suite-selector', () => {
     expect(s.global.customAutoLoopReviewGate).toBe('CG')
     expect(s.global.customAutoLoopGroomingIntro).toBe('CI')
     expect(s.global.customQaPromptTemplate).toBe('CQ')
+  })
+})
+
+describe('forge project setting', () => {
+  it('migration v32 backfills forge="auto" on existing projects', () => {
+    const migrated = runSettingsMigrations({
+      schemaVersion: 31,
+      global: {},
+      projects: [{ path: '/p1' }],
+    })
+    expect((migrated.projects[0] as { forge?: string }).forge).toBe('auto')
+  })
+
+  it('migration v32 leaves an explicit forge value untouched', () => {
+    const migrated = runSettingsMigrations({
+      schemaVersion: 31,
+      global: {},
+      projects: [{ path: '/p1', forge: 'gitlab' }],
+    })
+    expect((migrated.projects[0] as { forge?: string }).forge).toBe('gitlab')
+  })
+})
+
+describe('changeSourceBranchScript setting', () => {
+  it('migration v33 seeds global with the Kōbō default script and leaves projects empty (inherit)', () => {
+    const migrated = runSettingsMigrations({
+      schemaVersion: 32,
+      global: {},
+      projects: [{ path: '/p1' }, { path: '/p2', changeSourceBranchScript: 'echo custom' }],
+    })
+    // Match a stable marker rather than the full bash body.
+    const seededGlobal = (migrated.global as Record<string, unknown>).changeSourceBranchScript as string
+    expect(typeof seededGlobal).toBe('string')
+    expect(seededGlobal.length).toBeGreaterThan(0)
+    expect(seededGlobal).toContain('Kōbō default change-source-branch script')
+    expect((migrated.projects[0] as Record<string, unknown>).changeSourceBranchScript).toBe('')
+    expect((migrated.projects[1] as Record<string, unknown>).changeSourceBranchScript).toBe('echo custom')
+  })
+
+  it('getEffectiveSettings cascades project override over global default', () => {
+    // Per-test isolated settings path (mirrors existing tests in this file)
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kobo-settings-csbs-'))
+    _setSettingsPath(path.join(tmp, 'settings.json'))
+    try {
+      updateGlobalSettings({ changeSourceBranchScript: 'global.sh' } as Partial<GlobalSettings>)
+      upsertProject('/p1', { changeSourceBranchScript: 'project.sh' } as Partial<ProjectSettings>)
+      expect(getEffectiveSettings('/p1').changeSourceBranchScript).toBe('project.sh')
+      // Empty project override falls back to global
+      upsertProject('/p2', { changeSourceBranchScript: '' } as Partial<ProjectSettings>)
+      expect(getEffectiveSettings('/p2').changeSourceBranchScript).toBe('global.sh')
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true })
+    }
   })
 })

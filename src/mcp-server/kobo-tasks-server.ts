@@ -1,6 +1,4 @@
 #!/usr/bin/env node
-import fs from 'node:fs'
-import path from 'node:path'
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
@@ -14,6 +12,7 @@ import {
   getDevServerStatusHandler,
   getSessionUsageHandler,
   getSettingsHandler,
+  getTicketSourcesHandler,
   getWorkspaceInfoHandler,
   listDocumentsHandler,
   listTasksHandler,
@@ -326,9 +325,9 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       annotations: { destructiveHint: false, openWorldHint: false },
     },
     {
-      name: 'get_notion_ticket',
+      name: 'get_ticket',
       description:
-        'CALL when the user references "the ticket", "the Notion page", or when you need the source-of-truth text for the mission. Returns the Notion URL + locally-extracted ticket content from .ai/thoughts/.',
+        'CALL when the user references "the ticket", "the issue", "the Notion page", or when you need the source-of-truth text for the mission. Works for any source — a Notion ticket or a Sentry issue. Returns `{ sources: [{ type, url, content }] }`, one entry per imported ticket (type is "notion" or "sentry"). Usually one source; empty when none was imported.',
       inputSchema: { type: 'object', properties: {}, required: [] },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -416,7 +415,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
     {
       name: 'log_thought',
       description:
-        'CALL WHEN you make a decision worth remembering — architecture choice, trade-off taken, dead-end avoided, pattern discovered. Appends a dated markdown file to .ai/thoughts/. Keep entries short and focused; one decision per call. Use create_task for actionable follow-ups instead.',
+        'CALL WHEN you make a decision worth remembering — architecture choice, trade-off taken, dead-end avoided, pattern discovered. Appends a dated markdown file to .ai/thoughts/logs/. Keep entries short and focused; one decision per call. Use create_task for actionable follow-ups instead.',
       inputSchema: {
         type: 'object',
         properties: {
@@ -658,21 +657,11 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       return ok(listWorkspaceImagesHandler(info.worktreePath))
     }
 
-    if (name === 'get_notion_ticket') {
+    // `get_notion_ticket` is the pre-1.7 name, kept as a back-compat alias so
+    // sessions resumed against an older tool list still resolve.
+    if (name === 'get_ticket' || name === 'get_notion_ticket') {
       const info = getWorkspaceInfoHandler(db, workspaceId!)
-      const thoughtsDir = path.join(info.worktreePath, '.ai', 'thoughts')
-      let ticketContent = ''
-      if (fs.existsSync(thoughtsDir)) {
-        const files = fs.readdirSync(thoughtsDir).filter((f) => f.endsWith('.md'))
-        for (const file of files) {
-          ticketContent += `${fs.readFileSync(path.join(thoughtsDir, file), 'utf-8')}\n`
-        }
-      }
-      return ok({
-        notionUrl: info.notionUrl,
-        notionPageId: info.notionPageId,
-        ticketContent: ticketContent.trim() || null,
-      })
+      return ok({ sources: getTicketSourcesHandler(info.worktreePath) })
     }
 
     if (name === 'get_git_info') {

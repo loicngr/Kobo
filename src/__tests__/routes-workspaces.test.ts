@@ -36,6 +36,7 @@ vi.mock('../server/services/workspace-service.js', () => ({
   setFavorite: vi.fn(),
   unsetFavorite: vi.fn(),
   setWorkspaceTags: vi.fn(),
+  updateWorkspaceSourceBranch: vi.fn(),
 }))
 
 vi.mock('../server/services/worktree-service.js', () => ({
@@ -109,11 +110,7 @@ vi.mock('../server/utils/git-ops.js', () => ({
   getCommitCount: vi.fn().mockReturnValue(0),
   getCommitsBehind: vi.fn().mockReturnValue(0),
   getStructuredDiffStatsBetween: vi.fn().mockReturnValue({ filesChanged: 0, insertions: 0, deletions: 0 }),
-  getPrUrl: vi.fn().mockReturnValue(null),
-  getPrStatus: vi.fn().mockReturnValue(null),
   getUnpushedCount: vi.fn().mockReturnValue(0),
-  getPrStatusAsync: vi.fn().mockResolvedValue(null),
-  getPrUrlAsync: vi.fn().mockResolvedValue(null),
   getUnpushedCountAsync: vi.fn().mockResolvedValue(0),
   getWorkingTreeStatus: vi.fn().mockReturnValue({ staged: 0, modified: 0, untracked: 0 }),
   getChangedFiles: vi.fn().mockReturnValue([]),
@@ -125,6 +122,8 @@ vi.mock('../server/utils/git-ops.js', () => ({
   moveWorktree: vi.fn(),
   renameBranch: vi.fn(),
   branchExists: vi.fn().mockReturnValue(false),
+  listBackupBranches: vi.fn().mockReturnValue([]),
+  restoreBranchFromBackup: vi.fn(),
 }))
 
 vi.mock('../server/services/wakeup-service.js', () => ({
@@ -143,9 +142,31 @@ vi.mock('../server/services/cron-service.js', () => ({
 
 vi.mock('../server/services/pr-watcher-service.js', () => ({
   getAllPrSnapshots: vi.fn(),
+  getAllGitStats: vi.fn(() => ({})),
   refreshPrSnapshot: vi.fn(),
   startPrWatcher: vi.fn(),
   stopPrWatcher: vi.fn(),
+}))
+
+vi.mock('../server/services/forge/resolve.js', () => ({
+  resolveForge: vi.fn(() => 'github'),
+}))
+const changePrBaseMock = vi.fn()
+const createPrMock = vi.fn()
+const getPrStatusMock = vi.fn().mockResolvedValue(null)
+const changeSourceBranchMock = vi.fn()
+vi.mock('../server/services/change-source-branch-service.js', () => ({
+  changeSourceBranch: (...args: unknown[]) => changeSourceBranchMock(...args),
+}))
+vi.mock('../server/services/forge/registry.js', () => ({
+  getForgeProvider: vi.fn(() => ({
+    id: 'github',
+    capabilities: { canCreatePr: true, canChangePrBase: true, requestTermShort: 'PR' },
+    isAvailable: vi.fn(async () => ({ available: true })),
+    changePrBase: changePrBaseMock,
+    createPr: createPrMock,
+    getPrStatus: getPrStatusMock,
+  })),
 }))
 
 vi.mock('../server/services/websocket-service.js', () => ({
@@ -205,6 +226,7 @@ import router from '../server/routes/workspaces.js'
 import * as agentManager from '../server/services/agent/orchestrator.js'
 import * as cronService from '../server/services/cron-service.js'
 import * as devServerService from '../server/services/dev-server-service.js'
+import { getForgeProvider } from '../server/services/forge/registry.js'
 import * as notionService from '../server/services/notion-service.js'
 import * as settingsService from '../server/services/settings-service.js'
 import * as setupScriptService from '../server/services/setup-script-service.js'
@@ -2153,6 +2175,7 @@ describe('POST /api/workspaces/:id/open-pr', () => {
     vi.clearAllMocks()
     vi.mocked(agentManager.sendMessage).mockReset()
     execFilePromiseMock.mockReset()
+    createPrMock.mockReset()
     vi.mocked(workspaceService.getWorkspace).mockReturnValue({
       ...fakeWorkspace,
       workingBranch: 'feature/test',
@@ -2164,6 +2187,12 @@ describe('POST /api/workspaces/:id/open-pr', () => {
       id: 's-1',
       engineSessionId: 'sess-uuid',
     } as never)
+    // Default: branch is on remote and up-to-date
+    execFilePromiseMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args.includes('ls-remote')) return Promise.resolve({ stdout: 'abc refs/heads/feature/test\n' })
+      if (args.includes('rev-list')) return Promise.resolve({ stdout: '0\n' })
+      return Promise.resolve({ stdout: '' })
+    })
   })
 
   it('returns 404 when workspace not found', async () => {
@@ -2214,6 +2243,20 @@ describe('POST /api/workspaces/:id/open-pr', () => {
     expect(data.code).toBe('unpushed_commits')
   })
 
+  it('open-pr creates the PR via the resolved forge provider', async () => {
+    createPrMock.mockResolvedValueOnce({ url: 'https://github.com/o/r/pull/5', number: 5 })
+
+    const res = await app.request('/api/workspaces/ws-1/open-pr', { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect(createPrMock).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ base: expect.any(String), head: expect.any(String) }),
+    )
+    const data = await res.json()
+    expect(data.prNumber).toBe(5)
+    expect(data.prUrl).toBe('https://github.com/o/r/pull/5')
+  })
+
   it('creates PR, renders template, sends message on happy path', async () => {
     vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
       model: 'auto',
@@ -2227,15 +2270,7 @@ describe('POST /api/workspaces/:id/open-pr', () => {
       notionInProgressStatus: '',
     })
 
-    execFilePromiseMock.mockImplementation((cmd: string, args: string[]) => {
-      if (cmd === 'git' && args.includes('ls-remote'))
-        return Promise.resolve({ stdout: 'abc refs/heads/feature/test\n' })
-      if (cmd === 'git' && args.includes('rev-list')) return Promise.resolve({ stdout: '0\n' })
-      if (cmd === 'gh' && args.includes('pr') && args.includes('create')) {
-        return Promise.resolve({ stdout: 'https://github.com/org/repo/pull/42\n' })
-      }
-      return Promise.resolve({ stdout: '' })
-    })
+    createPrMock.mockResolvedValueOnce({ url: 'https://github.com/org/repo/pull/42', number: 42 })
 
     const prTemplateService = await import('../server/services/pr-template-service.js')
     vi.mocked(prTemplateService.renderPrTemplate).mockReturnValue('RENDERED PROMPT')
@@ -2272,13 +2307,7 @@ describe('POST /api/workspaces/:id/open-pr', () => {
       notionInProgressStatus: '',
     })
 
-    execFilePromiseMock.mockImplementation((cmd: string, args: string[]) => {
-      if (cmd === 'git' && args.includes('ls-remote'))
-        return Promise.resolve({ stdout: 'abc refs/heads/feature/test\n' })
-      if (cmd === 'git' && args.includes('rev-list')) return Promise.resolve({ stdout: '0\n' })
-      if (cmd === 'gh') return Promise.resolve({ stdout: 'https://github.com/org/repo/pull/42\n' })
-      return Promise.resolve({ stdout: '' })
-    })
+    createPrMock.mockResolvedValueOnce({ url: 'https://github.com/org/repo/pull/42', number: 42 })
 
     const res = await app.request('/api/workspaces/ws-1/open-pr', { method: 'POST' })
 
@@ -2289,7 +2318,7 @@ describe('POST /api/workspaces/:id/open-pr', () => {
     expect(vi.mocked(agentManager.sendMessage)).not.toHaveBeenCalled()
   })
 
-  it('returns 500 when gh pr create fails', async () => {
+  it('returns 500 when createPr fails', async () => {
     vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
       model: 'auto',
       dangerouslySkipPermissions: true,
@@ -2302,13 +2331,7 @@ describe('POST /api/workspaces/:id/open-pr', () => {
       notionInProgressStatus: '',
     })
 
-    execFilePromiseMock.mockImplementation((cmd: string, args: string[]) => {
-      if (cmd === 'git' && args.includes('ls-remote'))
-        return Promise.resolve({ stdout: 'abc refs/heads/feature/test\n' })
-      if (cmd === 'git' && args.includes('rev-list')) return Promise.resolve({ stdout: '0\n' })
-      if (cmd === 'gh') return Promise.reject(new Error('gh: auth required'))
-      return Promise.resolve({ stdout: '' })
-    })
+    createPrMock.mockRejectedValueOnce(new Error('auth required'))
 
     const res = await app.request('/api/workspaces/ws-1/open-pr', { method: 'POST' })
 
@@ -2317,32 +2340,20 @@ describe('POST /api/workspaces/:id/open-pr', () => {
     expect(data.error).toContain('auth required')
   })
 
-  it('returns 500 when gh output cannot be parsed', async () => {
-    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-      model: 'auto',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      gitConventions: '',
-      sourceBranch: 'main',
-      devServer: null,
-      setupScript: '',
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-    })
-
-    execFilePromiseMock.mockImplementation((cmd: string, args: string[]) => {
-      if (cmd === 'git' && args.includes('ls-remote'))
-        return Promise.resolve({ stdout: 'abc refs/heads/feature/test\n' })
-      if (cmd === 'git' && args.includes('rev-list')) return Promise.resolve({ stdout: '0\n' })
-      if (cmd === 'gh') return Promise.resolve({ stdout: 'some unexpected output\n' })
-      return Promise.resolve({ stdout: '' })
-    })
+  it('returns 409 forge_unsupported when canCreatePr is false', async () => {
+    vi.mocked(getForgeProvider).mockReturnValueOnce({
+      id: 'github',
+      capabilities: { canCreatePr: false, canChangePrBase: true, requestTermShort: 'PR' },
+      isAvailable: vi.fn(async () => ({ available: true })),
+      changePrBase: changePrBaseMock,
+      createPr: createPrMock,
+    } as never)
 
     const res = await app.request('/api/workspaces/ws-1/open-pr', { method: 'POST' })
 
-    expect(res.status).toBe(500)
+    expect(res.status).toBe(409)
     const data = await res.json()
-    expect(data.error).toContain('parse')
+    expect(data.code).toBe('forge_unsupported')
   })
 
   it('resumes agent when sendMessage fails (PR already created)', async () => {
@@ -2358,13 +2369,7 @@ describe('POST /api/workspaces/:id/open-pr', () => {
       notionInProgressStatus: '',
     })
 
-    execFilePromiseMock.mockImplementation((cmd: string, args: string[]) => {
-      if (cmd === 'git' && args.includes('ls-remote'))
-        return Promise.resolve({ stdout: 'abc refs/heads/feature/test\n' })
-      if (cmd === 'git' && args.includes('rev-list')) return Promise.resolve({ stdout: '0\n' })
-      if (cmd === 'gh') return Promise.resolve({ stdout: 'https://github.com/org/repo/pull/42\n' })
-      return Promise.resolve({ stdout: '' })
-    })
+    createPrMock.mockResolvedValueOnce({ url: 'https://github.com/org/repo/pull/42', number: 42 })
 
     vi.mocked(agentManager.sendMessage).mockImplementation(() => {
       throw new Error('No active agent session')
@@ -2527,6 +2532,21 @@ describe('GET /api/workspaces/pr-states', () => {
     expect(prWatcher.getAllPrSnapshots).toHaveBeenCalled()
     expect(workspaceService.getWorkspaceWithTasks).not.toHaveBeenCalled()
   })
+
+  it('GET /info returns workspaces, prSnapshots and gitStats', async () => {
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(workspaceService.listWorkspaces).mockReturnValue([{ id: 'ws-1', name: 'w' }] as never)
+    vi.mocked(prWatcher.getAllPrSnapshots).mockReturnValue({ 'ws-1': { number: 1 } } as never)
+    vi.mocked(prWatcher.getAllGitStats).mockReturnValue({ 'ws-1': { commitCount: 4 } } as never)
+
+    const res = await app.request('/api/workspaces/info')
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.workspaces).toEqual([{ id: 'ws-1', name: 'w' }])
+    expect(body.prSnapshots).toEqual({ 'ws-1': { number: 1 } })
+    expect(body.gitStats).toEqual({ 'ws-1': { commitCount: 4 } })
+  })
 })
 
 describe('GET /api/workspaces/:id/git-stats', () => {
@@ -2545,7 +2565,7 @@ describe('GET /api/workspaces/:id/git-stats', () => {
       insertions: 42,
       deletions: 7,
     })
-    vi.mocked(gitOps.getPrStatusAsync).mockResolvedValue({ state: 'OPEN', url: 'https://github.com/org/repo/pull/1' })
+    getPrStatusMock.mockResolvedValue({ state: 'OPEN', url: 'https://github.com/org/repo/pull/1' })
 
     const res = await app.request('/api/workspaces/ws-1/git-stats')
     expect(res.status).toBe(200)
@@ -2634,6 +2654,31 @@ describe('GET /:id/git-stats — extended', () => {
     } finally {
       process.off('unhandledRejection', handler)
     }
+  })
+})
+
+describe('GET /api/workspaces/:id/git-stats — forge block', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('git-stats response includes the resolved forge block', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(gitOps.getCommitCount).mockReturnValue(0)
+    vi.mocked(gitOps.getCommitsBehind).mockReturnValue(0)
+    vi.mocked(gitOps.getStructuredDiffStatsBetween).mockReturnValue({
+      filesChanged: 0,
+      insertions: 0,
+      deletions: 0,
+    })
+    getPrStatusMock.mockResolvedValue(null)
+
+    const res = await app.request('/api/workspaces/ws-1/git-stats')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.forge).toMatchObject({
+      id: 'github',
+      capabilities: { requestTermShort: 'PR' },
+      availability: { available: true },
+    })
   })
 })
 
@@ -4375,5 +4420,210 @@ describe('POST /api/workspaces/pr-snapshot/refresh/:id', () => {
     const res = await app.request('/pr-snapshot/refresh/ws-1', { method: 'POST' })
     expect(res.status).toBe(500)
     expect(((await res.json()) as { error: string }).error).toMatch(/gh exploded/)
+  })
+})
+
+describe('POST /api/workspaces/:id/change-pr-base', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    changePrBaseMock.mockReset()
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
+  })
+
+  it('change-pr-base calls the resolved forge provider', async () => {
+    changePrBaseMock.mockResolvedValueOnce(undefined)
+    const res = await app.request('/api/workspaces/ws-1/change-pr-base', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ base: 'develop' }),
+    })
+    expect(res.status).toBe(200)
+    expect(changePrBaseMock).toHaveBeenCalledWith(expect.any(String), 'develop')
+  })
+
+  it('returns 404 when workspace not found', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
+    const res = await app.request('/api/workspaces/ws-1/change-pr-base', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ base: 'develop' }),
+    })
+    expect(res.status).toBe(404)
+  })
+
+  it('returns 400 when base parameter is missing', async () => {
+    const res = await app.request('/api/workspaces/ws-1/change-pr-base', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('returns 409 forge_unsupported when canChangePrBase is false', async () => {
+    vi.mocked(getForgeProvider).mockReturnValueOnce({
+      id: 'github',
+      capabilities: { canCreatePr: true, canChangePrBase: false, requestTermShort: 'PR' },
+      isAvailable: vi.fn(async () => ({ available: true })),
+      changePrBase: changePrBaseMock,
+    } as never)
+    const res = await app.request('/api/workspaces/ws-1/change-pr-base', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ base: 'develop' }),
+    })
+    expect(res.status).toBe(409)
+    expect(((await res.json()) as { code: string }).code).toBe('forge_unsupported')
+  })
+
+  it('returns 409 forge_cli_missing when CLI is unavailable with reason cli_missing', async () => {
+    vi.mocked(getForgeProvider).mockReturnValueOnce({
+      id: 'github',
+      capabilities: { canCreatePr: true, canChangePrBase: true, requestTermShort: 'PR' },
+      isAvailable: vi.fn(async () => ({ available: false, reason: 'cli_missing' })),
+      changePrBase: changePrBaseMock,
+    } as never)
+    const res = await app.request('/api/workspaces/ws-1/change-pr-base', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ base: 'develop' }),
+    })
+    expect(res.status).toBe(409)
+    expect(((await res.json()) as { code: string }).code).toBe('forge_cli_missing')
+  })
+
+  it('returns 409 forge_not_authenticated when CLI is unavailable with reason not_authenticated', async () => {
+    vi.mocked(getForgeProvider).mockReturnValueOnce({
+      id: 'github',
+      capabilities: { canCreatePr: true, canChangePrBase: true, requestTermShort: 'PR' },
+      isAvailable: vi.fn(async () => ({ available: false, reason: 'not_authenticated' })),
+      changePrBase: changePrBaseMock,
+    } as never)
+    const res = await app.request('/api/workspaces/ws-1/change-pr-base', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ base: 'develop' }),
+    })
+    expect(res.status).toBe(409)
+    expect(((await res.json()) as { code: string }).code).toBe('forge_not_authenticated')
+  })
+
+  it('returns 500 when changePrBase throws a generic Error', async () => {
+    changePrBaseMock.mockRejectedValueOnce(new Error('boom'))
+    const res = await app.request('/api/workspaces/ws-1/change-pr-base', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ base: 'develop' }),
+    })
+    expect(res.status).toBe(500)
+  })
+})
+
+describe('POST /api/workspaces/:id/change-source-branch', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    changeSourceBranchMock.mockReset()
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
+  })
+
+  it('change-source-branch calls the service and returns its status', async () => {
+    changeSourceBranchMock.mockResolvedValueOnce({ status: 'done', forcePushNeeded: true, commitCount: 2 })
+    const res = await app.request('/api/workspaces/ws-1/change-source-branch', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ newBase: 'develop' }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body).toMatchObject({ status: 'done', forcePushNeeded: true })
+    expect(changeSourceBranchMock).toHaveBeenCalledWith(expect.any(String), 'develop')
+  })
+
+  it('change-source-branch maps too-many to a 409', async () => {
+    changeSourceBranchMock.mockResolvedValueOnce({ status: 'too-many', forcePushNeeded: false, commitCount: 80 })
+    const res = await app.request('/api/workspaces/ws-1/change-source-branch', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ newBase: 'develop' }),
+    })
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect((body as { code: string }).code).toBe('too_many_commits')
+  })
+})
+
+describe('POST /api/workspaces/:id/cancel-source-change', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
+  })
+
+  it('happy path — restores branch and updates source branch', async () => {
+    vi.mocked(gitOps.listBackupBranches).mockReturnValue(['kobo-backup/feature-test-123'])
+    const res = await app.request('/api/workspaces/ws-1/cancel-source-change', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ previousBase: 'main' }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body).toMatchObject({ success: true, restoredFrom: 'kobo-backup/feature-test-123' })
+    expect(gitOps.restoreBranchFromBackup).toHaveBeenCalled()
+    expect(workspaceService.updateWorkspaceSourceBranch).toHaveBeenCalledWith('ws-1', 'main')
+  })
+
+  it('no backup — returns 409 with code no_backup', async () => {
+    vi.mocked(gitOps.listBackupBranches).mockReturnValue([])
+    const res = await app.request('/api/workspaces/ws-1/cancel-source-change', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ previousBase: 'main' }),
+    })
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect((body as { code: string }).code).toBe('no_backup')
+    expect(gitOps.restoreBranchFromBackup).not.toHaveBeenCalled()
+  })
+
+  it('missing previousBase — returns 400', async () => {
+    const res = await app.request('/api/workspaces/ws-1/cancel-source-change', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+    expect(res.status).toBe(400)
+  })
+})
+
+describe('POST /api/workspaces/:id/force-push', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
+  })
+
+  it('calls pushBranch with force:true and returns success', async () => {
+    const res = await app.request('/api/workspaces/ws-1/force-push', { method: 'POST' })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body).toMatchObject({ success: true })
+    expect(gitOps.pushBranch).toHaveBeenCalledWith(fakeWorkspace.worktreePath, fakeWorkspace.workingBranch, {
+      force: true,
+    })
+  })
+
+  it('returns 404 when workspace not found', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(undefined as never)
+    const res = await app.request('/api/workspaces/does-not-exist/force-push', { method: 'POST' })
+    expect(res.status).toBe(404)
+  })
+
+  it('returns 500 when pushBranch throws', async () => {
+    vi.mocked(gitOps.pushBranch).mockImplementation(() => {
+      throw new Error('remote rejected')
+    })
+    const res = await app.request('/api/workspaces/ws-1/force-push', { method: 'POST' })
+    expect(res.status).toBe(500)
+    const body = await res.json()
+    expect((body as { error: string }).error).toContain('remote rejected')
   })
 })

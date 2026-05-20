@@ -1,5 +1,9 @@
-import { getPrStatusAsync, type PrSnapshot } from '../utils/git-ops.js'
+import { fetchSourceBranchAsync } from '../utils/git-ops.js'
 import { stopDevServer } from './dev-server-service.js'
+import { getForgeProvider } from './forge/registry.js'
+import { resolveForge } from './forge/resolve.js'
+import type { PrSnapshot } from './forge/types.js'
+import { computeGitStats, type GitStatsResult } from './git-stats-service.js'
 import { destroyTerminal } from './terminal-service.js'
 import { emitEphemeral } from './websocket-service.js'
 import { archiveWorkspace, getWorkspace, listWorkspaces, updateWorkspaceSourceBranch } from './workspace-service.js'
@@ -22,6 +26,9 @@ let checking = false
  *  (state, base, reviewDecision). */
 const lastKnownPr = new Map<string, PrSnapshot>()
 
+/** Latest git-stats snapshot per workspace, refreshed each watcher tick. */
+const lastKnownGitStats = new Map<string, GitStatsResult>()
+
 /**
  * Read-only snapshot map, keyed by workspace id. Used by the drawer indicator
  * AND the Git panel. Workspaces without a known PR are absent.
@@ -34,12 +41,23 @@ export function getAllPrSnapshots(): Record<string, PrSnapshot> {
   return out
 }
 
+/** Read-only git-stats map, keyed by workspace id. Used by the bulk
+ *  `/api/workspaces/info` endpoint. */
+export function getAllGitStats(): Record<string, GitStatsResult> {
+  const out: Record<string, GitStatsResult> = {}
+  for (const [id, s] of lastKnownGitStats) {
+    out[id] = s
+  }
+  return out
+}
+
 /**
  * Test-only escape hatch — drops the in-memory cache so each test starts
  * from a clean slate. Not part of the public API.
  */
 export function _resetForTest(): void {
   lastKnownPr.clear()
+  lastKnownGitStats.clear()
 }
 
 export async function checkPrStatuses(): Promise<void> {
@@ -51,10 +69,26 @@ export async function checkPrStatuses(): Promise<void> {
       lastKnownPr.delete(id)
     }
   }
+  for (const id of lastKnownGitStats.keys()) {
+    if (!workspaces.some((ws) => ws.id === id)) {
+      lastKnownGitStats.delete(id)
+    }
+  }
 
   for (const ws of workspaces) {
     try {
-      const pr = await getPrStatusAsync(ws.projectPath, ws.workingBranch)
+      const pr = await getForgeProvider(resolveForge(ws.projectPath)).getPrStatus(ws.worktreePath, ws.workingBranch)
+
+      // Git stats — best-effort, cached independently of the PR-transition
+      // logic below. Its own try/catch so a git failure neither skips PR
+      // transitions nor poisons other workspaces.
+      try {
+        void fetchSourceBranchAsync(ws.worktreePath, ws.sourceBranch).catch(() => {})
+        lastKnownGitStats.set(ws.id, await computeGitStats(ws, pr))
+      } catch (err) {
+        console.error(`[pr-watcher] computeGitStats failed for '${ws.name}':`, err instanceof Error ? err.message : err)
+      }
+
       if (!pr) continue
 
       const prev = lastKnownPr.get(ws.id)
@@ -181,7 +215,7 @@ export async function refreshPrSnapshot(workspaceId: string): Promise<PrSnapshot
   const ws = getWorkspace(workspaceId)
   if (!ws) throw new Error(`Workspace '${workspaceId}' not found`)
 
-  const snap = await getPrStatusAsync(ws.projectPath, ws.workingBranch)
+  const snap = await getForgeProvider(resolveForge(ws.projectPath)).getPrStatus(ws.worktreePath, ws.workingBranch)
   if (snap === null) {
     lastKnownPr.delete(workspaceId)
     return null

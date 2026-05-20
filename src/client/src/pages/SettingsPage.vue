@@ -1144,6 +1144,34 @@ where ffmpeg</pre>
               />
             </div>
 
+            <!-- Change-source-branch script -->
+            <div v-show="activeTab === 'scripts'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="row items-center justify-between q-mb-sm">
+                <div class="text-subtitle2">{{ $t('settings.changeSourceBranchScript') }}</div>
+                <q-btn
+                  flat
+                  dense
+                  no-caps
+                  size="sm"
+                  color="primary"
+                  icon="restart_alt"
+                  :label="$t('settings.changeSourceBranchScript.resetDefault')"
+                  @click="insertDefaultChangeSourceBranchScript('global')"
+                />
+              </div>
+              <div class="text-caption text-grey-7 q-mb-xs">{{ $t('settings.changeSourceBranchScript.help') }}</div>
+              <pre class="text-caption text-grey-6 mono-guide q-mb-sm">{{ $t('settings.changeSourceBranchScript.envHelp') }}</pre>
+              <q-input
+                v-model="globalChangeSourceBranchScript"
+                type="textarea"
+                dark
+                outlined
+                :input-style="{ minHeight: '400px', maxHeight: '600px' }"
+                :placeholder="$t('settings.changeSourceBranchScript.placeholder')"
+                class="settings-input mono-textarea"
+              />
+            </div>
+
             <div
               v-show="activeTab === 'worktrees'"
               data-tour="settings-card-worktrees"
@@ -1441,11 +1469,27 @@ where ffmpeg</pre>
                       </q-select>
                     </div>
 
-                    <div>
+                    <div class="q-mb-md">
                       <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.defaultModel.project') }}</div>
                       <q-select
                         v-model="projectForm.defaultModel"
                         :options="projectModelOptions"
+                        emit-value
+                        map-options
+                        option-value="value"
+                        option-label="label"
+                        dense
+                        dark
+                        outlined
+                        class="settings-input"
+                      />
+                    </div>
+
+                    <div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.forge') }}</div>
+                      <q-select
+                        v-model="projectForm.forge"
+                        :options="forgeOptions"
                         emit-value
                         map-options
                         option-value="value"
@@ -1596,6 +1640,32 @@ where ffmpeg</pre>
                         autogrow
                         :input-style="{ minHeight: '100px' }"
                         :placeholder="$t('settings.archiveScriptPlaceholder')"
+                        class="settings-input mono-textarea"
+                      />
+                    </div>
+
+                    <div>
+                      <div class="row items-center justify-between q-mb-xs">
+                        <div class="field-label text-body2 text-weight-medium text-grey-6">{{ $t('settings.changeSourceBranchScript') }}</div>
+                        <q-btn
+                          flat
+                          dense
+                          no-caps
+                          size="sm"
+                          color="primary"
+                          icon="restart_alt"
+                          :label="$t('settings.changeSourceBranchScript.resetDefault')"
+                          @click="insertDefaultChangeSourceBranchScript('project')"
+                        />
+                      </div>
+                      <div class="text-caption text-grey-7 q-mb-xs">{{ $t('settings.changeSourceBranchScript.help') }}</div>
+                      <pre class="text-caption text-grey-6 mono-guide q-mb-sm">{{ $t('settings.changeSourceBranchScript.envHelp') }}</pre>
+                      <q-input
+                        v-model="projectForm.changeSourceBranchScript"
+                        type="textarea"
+                        outlined
+                        :input-style="{ minHeight: '400px', maxHeight: '600px' }"
+                        :placeholder="$t('settings.changeSourceBranchScript.placeholder')"
                         class="settings-input mono-textarea"
                       />
                     </div>
@@ -2045,6 +2115,9 @@ const globalCleanupScript = ref('')
 const globalCleanupScriptMode = ref<'idle' | 'no-tasks'>('no-tasks')
 const globalCleanupScriptOnlyOnChanges = ref(false)
 const globalArchiveScript = ref('')
+const globalChangeSourceBranchScript = ref('')
+// Hydrated at mount from GET /api/settings/defaults.
+const defaultChangeSourceBranchScript = ref('')
 
 // Folder picker dialog for the new-project path field.
 const folderPickerOpen = ref(false)
@@ -2146,6 +2219,35 @@ function confirmReloadCustomPrompts(): void {
   })
 }
 
+/**
+ * Reset a change-source-branch-script textarea to Kōbō's default. Used when
+ * the user has edited the pre-filled default and wants to start over.
+ * Confirms before overwriting a customised script; no-ops silently when the
+ * field is already at the default (or empty).
+ */
+function insertDefaultChangeSourceBranchScript(target: 'global' | 'project'): void {
+  const current =
+    target === 'global' ? globalChangeSourceBranchScript.value : projectForm.value.changeSourceBranchScript
+  const apply = (): void => {
+    if (target === 'global') {
+      globalChangeSourceBranchScript.value = defaultChangeSourceBranchScript.value
+    } else {
+      projectForm.value.changeSourceBranchScript = defaultChangeSourceBranchScript.value
+    }
+  }
+  if (!current.trim() || current === defaultChangeSourceBranchScript.value) {
+    apply()
+    return
+  }
+  $q.dialog({
+    title: t('settings.changeSourceBranchScript.replaceConfirmTitle'),
+    message: t('settings.changeSourceBranchScript.replaceConfirm'),
+    cancel: true,
+    persistent: true,
+    dark: true,
+  }).onOk(apply)
+}
+
 function recommendedTemperatureForModel(modelName: string | null): number {
   if (!modelName) return 0.1
   if (modelName === 'tiny' || modelName === 'base') return 0.1
@@ -2164,6 +2266,7 @@ const projectForm = ref({
   color: null as ProjectColor | null,
   defaultSourceBranch: '',
   defaultModel: '',
+  forge: 'auto' as 'auto' | 'github' | 'gitlab' | 'none',
   prPromptTemplate: '',
   reviewPromptTemplate: '',
   notionInitialPromptTemplate: '',
@@ -2174,6 +2277,8 @@ const projectForm = ref({
   cleanupScript: '',
   cleanupScriptMode: '' as '' | 'idle' | 'no-tasks',
   archiveScript: '',
+  // Empty = inherit `global.changeSourceBranchScript`.
+  changeSourceBranchScript: '',
   devServer: { startCommand: '', stopCommand: '' },
   e2e: { framework: '' as 'cypress' | 'playwright' | 'jest' | 'vitest' | 'other' | '', skill: '', prompt: '' },
   finalization: { prompt: '' },
@@ -2184,6 +2289,7 @@ const projectForm = ref({
 // Excludes path/displayName/defaultSourceBranch — those stay user-filled.
 const COPYABLE_FIELDS = [
   'defaultModel',
+  'forge',
   'prPromptTemplate',
   'reviewPromptTemplate',
   'notionInitialPromptTemplate',
@@ -2194,6 +2300,7 @@ const COPYABLE_FIELDS = [
   'cleanupScript',
   'cleanupScriptMode',
   'archiveScript',
+  'changeSourceBranchScript',
   'devServer',
   'e2e',
   'finalization',
@@ -2217,6 +2324,7 @@ function applyCopyFrom(sourcePath: string) {
   // schema), so always coalesce to a defined default. New nested objects also
   // ensure no reference is shared with the source project.
   projectForm.value.defaultModel = source.defaultModel ?? ''
+  projectForm.value.forge = source.forge ?? 'auto'
   projectForm.value.prPromptTemplate = source.prPromptTemplate ?? ''
   projectForm.value.reviewPromptTemplate = source.reviewPromptTemplate ?? ''
   projectForm.value.notionInitialPromptTemplate = source.notionInitialPromptTemplate ?? ''
@@ -2242,6 +2350,7 @@ function isFormPristine(): boolean {
   // Defaults are inlined to match exactly what `syncProjectForm(null)` produces.
   const defaults: Record<string, unknown> = {
     defaultModel: '',
+    forge: 'auto',
     prPromptTemplate: '',
     reviewPromptTemplate: '',
     notionInitialPromptTemplate: '',
@@ -2252,6 +2361,7 @@ function isFormPristine(): boolean {
     cleanupScript: '',
     cleanupScriptMode: '',
     archiveScript: '',
+    changeSourceBranchScript: '',
     devServer: { startCommand: '', stopCommand: '' },
     e2e: { framework: '', skill: '', prompt: '' },
     finalization: { prompt: '' },
@@ -2487,6 +2597,13 @@ const codexModelOptions = computed(() => [
 
 const projectModelOptions = computed(() => [{ label: t('settings.useGlobal'), value: '' }, ...modelOptions.value])
 
+const forgeOptions = computed(() => [
+  { label: t('settings.forge.auto'), value: 'auto' },
+  { label: t('settings.forge.github'), value: 'github' },
+  { label: t('settings.forge.gitlab'), value: 'gitlab' },
+  { label: t('settings.forge.none'), value: 'none' },
+])
+
 // Permission-mode lists per engine — single source of truth in
 // `constants/permissionModes.ts`, mirrored in backend capabilities. Codex
 // supports `interactive` since the app-server migration (item/tool/requestUserInput
@@ -2606,6 +2723,7 @@ function captureGlobalSnapshot(): string {
     cleanupScriptMode: globalCleanupScriptMode.value,
     cleanupScriptOnlyOnChanges: globalCleanupScriptOnlyOnChanges.value,
     archiveScript: globalArchiveScript.value,
+    changeSourceBranchScript: globalChangeSourceBranchScript.value,
     worktreesPath: globalWorktreesPath.value,
     worktreesPrefixByProject: globalWorktreesPrefixByProject.value,
     flattenWorkspaceList: globalFlattenWorkspaceList.value,
@@ -2687,6 +2805,7 @@ function syncGlobalForm() {
   globalCleanupScriptMode.value = store.global.cleanupScriptMode === 'idle' ? 'idle' : 'no-tasks'
   globalCleanupScriptOnlyOnChanges.value = store.global.cleanupScriptOnlyOnChanges ?? false
   globalArchiveScript.value = store.global.archiveScript ?? ''
+  globalChangeSourceBranchScript.value = store.global.changeSourceBranchScript ?? ''
   globalWorktreesPath.value = store.global.worktreesPath ?? WORKTREES_PATH
   globalWorktreesPrefixByProject.value = store.global.worktreesPrefixByProject ?? false
   globalFlattenWorkspaceList.value = store.global.flattenWorkspaceList ?? false
@@ -2728,6 +2847,7 @@ function syncProjectForm(project: ProjectSettings | null) {
       color: null,
       defaultSourceBranch: '',
       defaultModel: '',
+      forge: 'auto',
       prPromptTemplate: '',
       reviewPromptTemplate: '',
       notionInitialPromptTemplate: '',
@@ -2738,6 +2858,7 @@ function syncProjectForm(project: ProjectSettings | null) {
       cleanupScript: '',
       cleanupScriptMode: '',
       archiveScript: '',
+      changeSourceBranchScript: '',
       devServer: { startCommand: '', stopCommand: '' },
       e2e: { framework: '', skill: '', prompt: '' },
       finalization: { prompt: '' },
@@ -2752,6 +2873,7 @@ function syncProjectForm(project: ProjectSettings | null) {
     color: project.color ?? null,
     defaultSourceBranch: project.defaultSourceBranch,
     defaultModel: project.defaultModel,
+    forge: project.forge ?? 'auto',
     prPromptTemplate: project.prPromptTemplate,
     reviewPromptTemplate: project.reviewPromptTemplate ?? '',
     notionInitialPromptTemplate: project.notionInitialPromptTemplate ?? '',
@@ -2762,6 +2884,7 @@ function syncProjectForm(project: ProjectSettings | null) {
     cleanupScript: project.cleanupScript ?? '',
     cleanupScriptMode: project.cleanupScriptMode ?? '',
     archiveScript: project.archiveScript ?? '',
+    changeSourceBranchScript: project.changeSourceBranchScript ?? '',
     devServer: {
       startCommand: project.devServer?.startCommand ?? '',
       stopCommand: project.devServer?.stopCommand ?? '',
@@ -2938,6 +3061,7 @@ async function saveGlobal() {
       cleanupScriptMode: globalCleanupScriptMode.value,
       cleanupScriptOnlyOnChanges: globalCleanupScriptOnlyOnChanges.value,
       archiveScript: globalArchiveScript.value,
+      changeSourceBranchScript: globalChangeSourceBranchScript.value,
       worktreesPath: globalWorktreesPath.value,
       worktreesPrefixByProject: globalWorktreesPrefixByProject.value,
       flattenWorkspaceList: globalFlattenWorkspaceList.value,
@@ -3049,6 +3173,7 @@ async function saveProject() {
       color: projectForm.value.color,
       defaultSourceBranch: projectForm.value.defaultSourceBranch,
       defaultModel: projectForm.value.defaultModel,
+      forge: projectForm.value.forge,
       prPromptTemplate: projectForm.value.prPromptTemplate,
       reviewPromptTemplate: projectForm.value.reviewPromptTemplate,
       notionInitialPromptTemplate: projectForm.value.notionInitialPromptTemplate,
@@ -3059,6 +3184,7 @@ async function saveProject() {
       cleanupScript: projectForm.value.cleanupScript,
       cleanupScriptMode: projectForm.value.cleanupScriptMode,
       archiveScript: projectForm.value.archiveScript,
+      changeSourceBranchScript: projectForm.value.changeSourceBranchScript,
       devServer: projectForm.value.devServer,
       e2e: projectForm.value.e2e,
       finalization: projectForm.value.finalization,
@@ -3141,6 +3267,12 @@ function filterBranches(val: string, update: (fn: () => void) => void) {
 // Init
 onMounted(async () => {
   await Promise.all([store.fetchSettings(), store.fetchActiveMcpServers(), fetchAvailableSkills()])
+  try {
+    const defaults = await store.fetchGlobalDefaults()
+    defaultChangeSourceBranchScript.value = defaults.changeSourceBranchScript ?? ''
+  } catch (err) {
+    console.error('[SettingsPage] fetchGlobalDefaults failed:', err)
+  }
   await store.fetchVoiceModels()
   await store.fetchVoiceRuntime()
   syncGlobalForm()

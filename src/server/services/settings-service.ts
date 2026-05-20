@@ -13,6 +13,7 @@ import {
 } from '../utils/worktree-paths.js'
 import { DEFAULT_NOTION_INITIAL_PROMPT, DEFAULT_SENTRY_INITIAL_PROMPT } from './initial-prompt-template-service.js'
 import { DEFAULT_REVIEW_PROMPT_TEMPLATE } from './review-template-service.js'
+import { DEFAULT_CHANGE_SOURCE_BRANCH_SCRIPT } from './settings-defaults.js'
 import { AGNOSTIC_PROMPTS } from './skill-suite-prompts.js'
 
 export const DEFAULT_GIT_CONVENTIONS = `# Git conventions
@@ -145,10 +146,21 @@ export interface ProjectSettings {
    * the global value (`global.archiveScript`). Seeded by migration v29.
    */
   archiveScript: string
+  /**
+   * Per-project override. Empty inherits `global.changeSourceBranchScript`.
+   * Seeded by settings migration v33.
+   */
+  changeSourceBranchScript: string
   devServer: DevServerConfig
   e2e: E2eSettings
   finalization: FinalizationSettings
   color: ProjectColor | null
+  /**
+   * Which forge provides PR/MR features for this project. `auto` detects
+   * from the git remote URL; the others force a specific provider.
+   * Seeded by settings migration v32.
+   */
+  forge: 'auto' | 'github' | 'gitlab' | 'none'
 }
 
 /** Global settings that apply as defaults when no project override is set. */
@@ -188,6 +200,13 @@ export interface GlobalSettings {
    * Projects may override it; see `ProjectSettings.archiveScript`.
    */
   archiveScript: string
+  /**
+   * Default custom change-source-branch script — when non-empty, replaces
+   * Kōbō's built-in cherry-pick. The script owns git + PR base + force-push
+   * + conflicts. Projects may override via `ProjectSettings.changeSourceBranchScript`.
+   * Seeded by settings migration v33.
+   */
+  changeSourceBranchScript: string
   editorCommand: string
   browserNotifications: boolean
   audioNotifications: boolean
@@ -678,6 +697,29 @@ const settingsMigrations: SettingsMigration[] = [
       }
     },
   },
+  {
+    version: 32,
+    name: 'add-project-forge',
+    migrate: ({ projects }) => {
+      for (const p of projects) {
+        if (typeof p.forge !== 'string') p.forge = 'auto'
+      }
+    },
+  },
+  {
+    version: 33,
+    name: 'add-change-source-branch-script',
+    migrate: ({ global, projects }) => {
+      // Seed global with the default so the feature is enabled out-of-the-box;
+      // projects stay empty (= inherit global).
+      if (typeof global.changeSourceBranchScript !== 'string') {
+        global.changeSourceBranchScript = DEFAULT_CHANGE_SOURCE_BRANCH_SCRIPT
+      }
+      for (const p of projects) {
+        if (typeof p.changeSourceBranchScript !== 'string') p.changeSourceBranchScript = ''
+      }
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -700,6 +742,7 @@ export interface EffectiveSettings {
   cleanupScriptMode: CleanupScriptMode
   cleanupScriptOnlyOnChanges: boolean
   archiveScript: string
+  changeSourceBranchScript: string
   notionStatusProperty: string
   notionInProgressStatus: string
 }
@@ -745,6 +788,7 @@ function defaultSettings(): Settings {
       cleanupScriptMode: 'no-tasks',
       cleanupScriptOnlyOnChanges: false,
       archiveScript: '',
+      changeSourceBranchScript: DEFAULT_CHANGE_SOURCE_BRANCH_SCRIPT,
       editorCommand: '',
       browserNotifications: true,
       audioNotifications: true,
@@ -800,6 +844,7 @@ function defaultProjectSettings(projectPath: string): ProjectSettings {
     cleanupScript: '',
     cleanupScriptMode: '',
     archiveScript: '',
+    changeSourceBranchScript: '',
     devServer: {
       startCommand: '',
       stopCommand: '',
@@ -813,6 +858,7 @@ function defaultProjectSettings(projectPath: string): ProjectSettings {
       prompt: DEFAULT_FINALIZATION_PROMPT,
     },
     color: null,
+    forge: 'auto',
   }
 }
 
@@ -1049,6 +1095,7 @@ export function getEffectiveSettings(projectPath: string): EffectiveSettings {
       cleanupScriptMode: settings.global.cleanupScriptMode,
       cleanupScriptOnlyOnChanges: settings.global.cleanupScriptOnlyOnChanges,
       archiveScript: settings.global.archiveScript,
+      changeSourceBranchScript: settings.global.changeSourceBranchScript,
       notionStatusProperty: settings.global.notionStatusProperty,
       notionInProgressStatus: settings.global.notionInProgressStatus,
     }
@@ -1075,6 +1122,7 @@ export function getEffectiveSettings(projectPath: string): EffectiveSettings {
     cleanupScriptMode: (project.cleanupScriptMode || settings.global.cleanupScriptMode) as CleanupScriptMode,
     cleanupScriptOnlyOnChanges: settings.global.cleanupScriptOnlyOnChanges,
     archiveScript: project.archiveScript || settings.global.archiveScript,
+    changeSourceBranchScript: project.changeSourceBranchScript || settings.global.changeSourceBranchScript,
     notionStatusProperty: settings.global.notionStatusProperty,
     notionInProgressStatus: settings.global.notionInProgressStatus,
   }
@@ -1111,6 +1159,7 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'cleanupScriptMode',
     'cleanupScriptOnlyOnChanges',
     'archiveScript',
+    'changeSourceBranchScript',
     'editorCommand',
     'browserNotifications',
     'audioNotifications',
@@ -1233,10 +1282,12 @@ export function upsertProject(projectPath: string, data: Partial<Omit<ProjectSet
     'cleanupScript',
     'cleanupScriptMode',
     'archiveScript',
+    'changeSourceBranchScript',
     'devServer',
     'e2e',
     'finalization',
     'color',
+    'forge',
   ]
   const allowedDevServerKeys = ['startCommand', 'stopCommand']
   const allowedE2eKeys: Array<keyof E2eSettings> = ['framework', 'skill', 'prompt']

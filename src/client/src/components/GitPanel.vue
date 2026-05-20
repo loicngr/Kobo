@@ -38,7 +38,7 @@
           <span class="text-caption text-grey-3">{{ repoName }}</span>
         </div>
 
-        <!-- Branch (click the pencil to rename in-place) -->
+        <!-- Branch -->
         <div class="row items-center q-mb-xs">
           <span
             style="width: 8px; height: 8px; border-radius: 50%; background-color: #4ade80; display: inline-block;"
@@ -47,29 +47,6 @@
           <span class="text-caption text-grey-4" style="font-family: 'Roboto Mono', monospace; font-size: 11px;">
             {{ workspace.workingBranch }}
           </span>
-          <q-btn
-            v-if="workspace?.worktreeOwned !== false"
-            flat
-            round
-            dense
-            size="xs"
-            icon="edit"
-            color="grey-6"
-            class="q-ml-xs"
-            :loading="renamingBranch"
-            @click="openRenameBranchDialog"
-          >
-            <q-tooltip>{{ $t('git.renameBranch') }}</q-tooltip>
-          </q-btn>
-          <q-icon
-            v-if="workspace?.worktreeOwned === false"
-            name="info"
-            size="14px"
-            color="grey-6"
-            class="q-ml-xs"
-          >
-            <q-tooltip>{{ $t('git.renameDisabledForExternal') }}</q-tooltip>
-          </q-icon>
         </div>
 
         <!-- Source branch info — 1 line, no "from" prefix (section title is enough) -->
@@ -181,29 +158,32 @@
       <div v-if="workspace && gitStats" class="git-subcard">
         <div class="git-subcard-title">{{ $t('git.section.actions') }}</div>
 
-        <!-- Primary action: View PR (green) when PR open, else Create PR (indigo) -->
-        <q-btn
-          v-if="gitStats?.prUrl && gitStats.prState === 'OPEN'"
-          no-caps unelevated dense size="sm"
-          color="green-7"
-          icon="open_in_new"
-          :label="$t('git.viewPr')"
-          class="full-width q-mb-xs"
-          @click="viewPr"
-        />
-        <q-btn
-          v-else
-          no-caps unelevated dense size="sm"
-          color="indigo-5"
-          icon="open_in_new"
-          :label="$t('git.createPr')"
-          class="full-width q-mb-xs"
-          :loading="openingPr"
-          :disable="!workspace || pushing || !canOpenPr"
-          @click="handleOpenPr"
-        >
-          <q-tooltip v-if="!canOpenPr && createPrDisabledReason">{{ createPrDisabledReason }}</q-tooltip>
-        </q-btn>
+        <!-- Primary action: View PR/MR (green) when PR open, else Create PR/MR (indigo).
+             Hidden entirely when no supported forge is detected. -->
+        <template v-if="forge.id !== 'none'">
+          <q-btn
+            v-if="gitStats?.prUrl && gitStats.prState === 'OPEN'"
+            no-caps unelevated dense size="sm"
+            color="green-7"
+            icon="open_in_new"
+            :label="$t('git.viewRequest', { request: forge.capabilities.requestTermShort })"
+            class="full-width q-mb-xs"
+            @click="viewPr"
+          />
+          <q-btn
+            v-else
+            no-caps unelevated dense size="sm"
+            color="indigo-5"
+            icon="open_in_new"
+            :label="$t('git.createRequest', { request: forge.capabilities.requestTermShort })"
+            class="full-width q-mb-xs"
+            :loading="openingPr"
+            :disable="!workspace || pushing || !canOpenPr"
+            @click="handleOpenPr"
+          >
+            <q-tooltip v-if="!canOpenPr && createPrDisabledReason">{{ createPrDisabledReason }}</q-tooltip>
+          </q-btn>
+        </template>
 
         <!-- Secondary row: Sync dropdown + Push + Diff Review + overflow.
              Each action lives in its own `col` so the four share space evenly
@@ -283,6 +263,17 @@
               <q-menu>
                 <q-list dark dense style="min-width: 160px;">
                   <q-item
+                    v-if="canRenameBranch"
+                    clickable v-close-popup
+                    :disable="renamingBranch"
+                    @click="openRenameBranchDialog"
+                  >
+                    <q-item-section avatar style="min-width: 28px;">
+                      <q-icon name="edit" size="16px" color="grey-5" />
+                    </q-item-section>
+                    <q-item-section>{{ $t('git.renameBranch') }}</q-item-section>
+                  </q-item>
+                  <q-item
                     v-if="gitStats?.prUrl && gitStats.prState === 'OPEN'"
                     clickable v-close-popup
                     :disable="changingBase"
@@ -291,7 +282,18 @@
                     <q-item-section avatar style="min-width: 28px;">
                       <q-icon name="swap_horiz" size="16px" color="grey-5" />
                     </q-item-section>
-                    <q-item-section>{{ $t('git.changePrBase') }}</q-item-section>
+                    <q-item-section>{{ $t('git.changeRequestBase', { request: forge.capabilities.requestTermShort }) }}</q-item-section>
+                  </q-item>
+                  <q-item
+                    v-if="changeSourceBranchEnabled"
+                    clickable v-close-popup
+                    :disable="changingSource"
+                    @click="handleChangeSourceBranch"
+                  >
+                    <q-item-section avatar style="min-width: 28px;">
+                      <q-icon name="alt_route" size="16px" color="grey-5" />
+                    </q-item-section>
+                    <q-item-section>{{ $t('git.changeSourceBranch') }}</q-item-section>
                   </q-item>
                 </q-list>
               </q-menu>
@@ -437,9 +439,10 @@ const DiffViewer = defineAsyncComponent(() => import('./DiffViewer.vue'))
 
 import BranchDivergenceDialog from 'src/components/BranchDivergenceDialog.vue'
 import PrPanel from 'src/components/PrPanel.vue'
-import type { BranchCommit, GitStats, Workspace } from 'src/stores/workspace'
+import { useSettingsStore } from 'src/stores/settings'
+import type { BranchCommit, ForgeInfo, GitStats, Workspace } from 'src/stores/workspace'
 import { useWorkspaceStore, WorkspaceActionError } from 'src/stores/workspace'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 
 const props = defineProps<{
   workspace: Workspace | null
@@ -448,6 +451,17 @@ const props = defineProps<{
 const { t } = useI18n()
 const $q = useQuasar()
 const store = useWorkspaceStore()
+const settingsStore = useSettingsStore()
+
+/** The change-source-branch action is hidden unless a script is configured
+ *  (per-project override or global default). Empty script = feature off. */
+const changeSourceBranchEnabled = computed<boolean>(() => {
+  if (!props.workspace) return false
+  const project = settingsStore.getProjectByPath(props.workspace.projectPath)
+  const effective =
+    (project?.changeSourceBranchScript ?? '').trim() || (settingsStore.global.changeSourceBranchScript ?? '').trim()
+  return effective.length > 0
+})
 
 const pushing = ref(false)
 const pulling = ref(false)
@@ -512,9 +526,9 @@ function formatCommitDate(iso: string): string {
   return d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })
 }
 
-// Conflict state for the shared merge/rebase resolution dialog
+// Conflict state for the shared merge/rebase/cherry-pick resolution dialog
 const conflictDialog = ref(false)
-const conflictOperation = ref<'merge' | 'rebase' | null>(null)
+const conflictOperation = ref<'merge' | 'rebase' | 'cherry-pick' | null>(null)
 const conflictFiles = ref<string[]>([])
 const conflictAborting = ref(false)
 const conflictResolving = ref(false)
@@ -538,25 +552,57 @@ const prSnapshot = computed(() => {
   return store.prSnapshots[id]
 })
 
+/** Fallback when the backend hasn't returned a forge block yet (old cached response). */
+const FORGE_FALLBACK: ForgeInfo = {
+  id: 'none',
+  capabilities: { canCreatePr: false, canChangePrBase: false, requestTermShort: 'PR' },
+  availability: { available: false },
+}
+
+/** Derived forge info — uses the backend response when available, falls back to none. */
+const forge = computed<ForgeInfo>(() => gitStats.value?.forge ?? FORGE_FALLBACK)
+
+/** CLI name used in tooltip messages ('gh' for GitHub, 'glab' for GitLab). */
+const forgeCli = computed(() => (forge.value.id === 'gitlab' ? 'glab' : 'gh'))
+
 // Gate the "Create PR" button: the branch must exist on the remote, otherwise
 // `gh pr create` fails downstream. Once it's pushed, let the user open a PR
 // even if the commit count is zero — the server will surface a clear error.
 const canOpenPr = computed(() => {
   if (!gitStats.value) return false
+  if (forge.value.id === 'none') return false
+  if (!forge.value.availability.available) return false
   if (gitStats.value.unpushedCount === -1) return false
   return true
 })
 
 const createPrDisabledReason = computed(() => {
   if (!gitStats.value) return ''
+  // Branch-not-pushed takes priority (most actionable for the user)
   if (gitStats.value.unpushedCount === -1) return t('git.createPrNoRemote')
+  // Forge availability gates
+  if (!forge.value.availability.available) {
+    const reason = forge.value.availability.reason
+    if (reason === 'cli_missing') {
+      return t('git.forgeCliMissing', { cli: forgeCli.value, request: forge.value.capabilities.requestTermShort })
+    }
+    if (reason === 'not_authenticated') {
+      return t('git.forgeNotAuthenticated', { cli: forgeCli.value })
+    }
+    // Generic fallback for unknown unavailability reasons
+    return t('git.forgeCliMissing', { cli: forgeCli.value, request: forge.value.capabilities.requestTermShort })
+  }
   return ''
 })
 
-// Push has been promoted from the overflow menu to a first-class secondary
-// button (visible whenever `unpushedCount !== 0`). The overflow `⋯` now only
-// surfaces "Change PR base", which itself is gated on an open PR.
-const hasOverflowActions = computed(() => !!(gitStats.value?.prUrl && gitStats.value.prState === 'OPEN'))
+// Overflow `⋯` surfaces rename + change-PR-base + change-source-branch;
+// Push is a first-class secondary button.
+const canRenameBranch = computed<boolean>(() => props.workspace?.worktreeOwned !== false)
+const hasOverflowActions = computed(() => {
+  if (!props.workspace) return false
+  const hasChangePrBase = !!(gitStats.value?.prUrl && gitStats.value.prState === 'OPEN')
+  return canRenameBranch.value || hasChangePrBase || changeSourceBranchEnabled.value
+})
 
 // Branch divergence dialog state
 const divergenceDialogOpen = ref(false)
@@ -568,7 +614,6 @@ function openDivergence(tab: 'ahead' | 'behind') {
 }
 
 let inflightController: AbortController | null = null
-let intervalId: ReturnType<typeof setInterval> | null = null
 
 async function loadGitStats(opts: { freshFetch?: boolean } = {}) {
   if (!props.workspace) {
@@ -633,15 +678,23 @@ watch(
   },
 )
 
-onMounted(() => {
-  intervalId = setInterval(() => loadGitStats(), 60_000)
-})
+// Sync the panel from the global gitStatsCache — kept ≤30s fresh by
+// WorkspaceList's `fetchWorkspacesInfo` poll. Lets the open GitPanel reflect
+// background watcher updates without its own self-poll. Guarded against an
+// in-flight manual refresh so the freshFetch result wins when it lands.
+watch(
+  () => {
+    const id = props.workspace?.id
+    return id ? store.gitStatsCache[id] : null
+  },
+  (cached) => {
+    if (!cached) return
+    if (loadingStats.value) return
+    gitStats.value = cached
+  },
+)
 
 onBeforeUnmount(() => {
-  if (intervalId) {
-    clearInterval(intervalId)
-    intervalId = null
-  }
   if (gitRefreshTimeout) {
     clearTimeout(gitRefreshTimeout)
     gitRefreshTimeout = null
@@ -764,7 +817,7 @@ function handleMerge() {
   })
 }
 
-function openConflictDialog(op: 'merge' | 'rebase', files: string[]) {
+function openConflictDialog(op: 'merge' | 'rebase' | 'cherry-pick', files: string[]) {
   conflictOperation.value = op
   conflictFiles.value = files
   conflictDialog.value = true
@@ -882,7 +935,7 @@ function handleChangePrBase() {
   if (!props.workspace) return
   $q.dialog({
     title: t('git.changePrBaseTitle'),
-    message: t('git.changePrBaseMessage'),
+    message: t('git.changePrBaseMessage', { request: forge.value.capabilities.requestTermShort }),
     prompt: {
       model: props.workspace.sourceBranch,
       type: 'text',
@@ -903,13 +956,111 @@ function handleChangePrBase() {
         const data = await res.json()
         throw new Error(data.error ?? 'Failed')
       }
-      $q.notify({ type: 'positive', message: t('git.changePrBaseSuccess'), position: 'top' })
+      $q.notify({
+        type: 'positive',
+        message: t('git.changePrBaseSuccess', { request: forge.value.capabilities.requestTermShort }),
+        position: 'top',
+      })
       loadGitStats()
     } catch (e) {
-      const msg = e instanceof Error ? e.message : t('git.changePrBaseFailed')
+      const msg =
+        e instanceof Error
+          ? e.message
+          : t('git.changePrBaseFailed', { request: forge.value.capabilities.requestTermShort })
       $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
     } finally {
       changingBase.value = false
+    }
+  })
+}
+
+const changingSource = ref(false)
+
+function promptForcePush() {
+  if (!props.workspace) return
+  $q.dialog({
+    title: t('git.changeSourceForcePushTitle'),
+    message: t('git.changeSourceForcePushMessage'),
+    dark: true,
+    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    ok: { flat: true, label: t('git.forcePush'), color: 'primary' },
+  }).onOk(async () => {
+    if (!props.workspace) return
+    try {
+      const res = await fetch(`/api/workspaces/${props.workspace.id}/force-push`, { method: 'POST' })
+      if (!res.ok) {
+        const data = await res.json()
+        throw new Error(data.error ?? 'Failed')
+      }
+      $q.notify({ type: 'positive', message: t('git.changeSourceForcePushDone'), position: 'top' })
+      loadGitStats()
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed'
+      $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    }
+  })
+}
+
+async function handleChangeSourceBranch() {
+  if (!props.workspace) return
+  $q.dialog({
+    title: t('git.changeSourceBranchTitle'),
+    message: t('git.changeSourceBranchMessage'),
+    prompt: { model: '', type: 'text' },
+    dark: true,
+    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    ok: { flat: true, label: t('common.save'), color: 'primary' },
+  }).onOk(async (newBase: string) => {
+    if (!newBase.trim() || !props.workspace) return
+    changingSource.value = true
+    // Persistent spinner toast — the operation (full fetch + cherry-pick) can
+    // take several seconds; dismissed in `finally` once it resolves.
+    const dismissLoader = $q.notify({
+      group: false,
+      spinner: true,
+      message: t('git.changeSourceBranchLoading'),
+      position: 'top',
+      timeout: 0,
+    })
+    try {
+      const res = await fetch(`/api/workspaces/${props.workspace.id}/change-source-branch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ newBase: newBase.trim() }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        const msg =
+          data.code === 'too_many_commits'
+            ? t('git.changeSourceBranchTooMany', { n: data.commitCount ?? 0 })
+            : data.code === 'dirty_worktree'
+              ? t('git.changeSourceBranchDirty')
+              : data.code === 'agent_running'
+                ? t('git.changeSourceBranchAgentRunning')
+                : (data.error ?? 'Failed')
+        $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+        return
+      }
+      // The server updated source_branch for every ok status (done / aligned /
+      // conflict). Mirror it into the store so the GitPanel header reflects the
+      // new source branch immediately — without waiting for the pr-watcher poll.
+      if (props.workspace) {
+        store.updateWorkspaceFromEvent(props.workspace.id, { sourceBranch: newBase.trim() })
+      }
+      if (data.status === 'conflict') {
+        openConflictDialog('cherry-pick', [])
+      } else {
+        const key = data.status === 'aligned' ? 'git.changeSourceBranchAligned' : 'git.changeSourceBranchDone'
+        $q.notify({ type: 'positive', message: t(key, { branch: newBase.trim() }), position: 'top' })
+        if (data.forcePushNeeded) promptForcePush()
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Failed'
+      $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    } finally {
+      dismissLoader()
+      changingSource.value = false
+      loadGitStats()
     }
   })
 }
@@ -921,7 +1072,7 @@ async function handleOpenPr() {
     const result = await store.openPullRequest(props.workspace.id)
     $q.notify({
       type: 'positive',
-      message: t('git.prCreated', { n: result.prNumber }),
+      message: t('git.prCreated', { n: result.prNumber, request: forge.value.capabilities.requestTermShort }),
       caption: result.prUrl,
       position: 'top',
       timeout: 5000,

@@ -1,7 +1,7 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useWebSocketStore } from '../stores/websocket'
-import { isSubagentTerminalEvent, useWorkspaceStore, type Workspace } from '../stores/workspace'
+import { isSubagentTerminalEvent, type PrSnapshot, useWorkspaceStore, type Workspace } from '../stores/workspace'
 
 /** Build a fully-typed Workspace fixture, overrides take precedence. */
 function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
@@ -929,6 +929,70 @@ describe('workspace store', () => {
     })
   })
 
+  describe('workspace grouping with PR attention', () => {
+    beforeEach(() => {
+      setActivePinia(createPinia())
+    })
+
+    function failingCiSnapshot(): PrSnapshot {
+      return {
+        number: 1,
+        title: 't',
+        url: 'u',
+        state: 'OPEN',
+        base: 'main',
+        reviewDecision: null,
+        author: { login: 'a' },
+        assignees: [],
+        reviewers: [],
+        labels: [],
+        ci: { rollup: 'FAILURE', checks: [] },
+        updatedAt: '',
+        unresolvedReviewThreadsCount: 0,
+      }
+    }
+
+    it('moves an executing workspace with failing CI into needsAttention, not running', () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1', status: 'executing' })]
+      store.prSnapshots = { w1: failingCiSnapshot() }
+      expect(store.needsAttention.map((w) => w.id)).toEqual(['w1'])
+      expect(store.running.map((w) => w.id)).toEqual([])
+    })
+
+    it('moves an idle workspace with failing CI out of idle into needsAttention', () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1', status: 'idle' })]
+      store.prSnapshots = { w1: failingCiSnapshot() }
+      expect(store.needsAttention.map((w) => w.id)).toEqual(['w1'])
+      expect(store.idle.map((w) => w.id)).toEqual([])
+    })
+
+    it('moves an idle workspace with blocking changes-requested into needsAttention', () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1', status: 'idle' })]
+      store.prSnapshots = {
+        w1: {
+          ...failingCiSnapshot(),
+          ci: { rollup: 'SUCCESS', checks: [] },
+          reviewDecision: 'CHANGES_REQUESTED',
+          reviewers: [{ login: 'reviewer', state: 'CHANGES_REQUESTED' }],
+          unresolvedReviewThreadsCount: 1,
+        },
+      }
+      expect(store.needsAttention.map((w) => w.id)).toEqual(['w1'])
+      expect(store.idle.map((w) => w.id)).toEqual([])
+    })
+
+    it('leaves grouping unchanged for a clean snapshot', () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1', status: 'executing' })]
+      store.prSnapshots = { w1: { ...failingCiSnapshot(), ci: { rollup: 'SUCCESS', checks: [] } } }
+      expect(store.running.map((w) => w.id)).toEqual(['w1'])
+      expect(store.needsAttention.map((w) => w.id)).toEqual([])
+    })
+  })
+
   describe('prSnapshots', () => {
     beforeEach(() => {
       setActivePinia(createPinia())
@@ -994,6 +1058,27 @@ describe('workspace store', () => {
 
       expect(store.prSnapshots['ws-1']).toMatchObject({ number: 99, reviewDecision: 'APPROVED' })
       expect(fetchMock).toHaveBeenCalledWith('/api/workspaces/pr-snapshot/refresh/ws-1', { method: 'POST' })
+    })
+
+    it('fetchWorkspacesInfo populates workspaces, prSnapshots and gitStatsCache', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            workspaces: [makeWorkspace({ id: 'ws-1', status: 'idle' })],
+            prSnapshots: { 'ws-1': { number: 7, state: 'OPEN' } },
+            gitStats: { 'ws-1': { commitCount: 9 } },
+          }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      const store = useWorkspaceStore()
+      await store.fetchWorkspacesInfo()
+
+      expect(store.workspaces.map((w) => w.id)).toEqual(['ws-1'])
+      expect(store.prSnapshots['ws-1']).toMatchObject({ number: 7 })
+      expect(store.gitStatsCache['ws-1']).toEqual({ commitCount: 9 })
+      expect(fetchMock).toHaveBeenCalledWith('/api/workspaces/info', expect.anything())
     })
 
     it('refreshPrSnapshot clears the entry when the server returns 404', async () => {

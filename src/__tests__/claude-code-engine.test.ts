@@ -249,6 +249,76 @@ describe('claude-code engine — canUseTool abort tagging', () => {
   })
 })
 
+describe('claude-code engine — hung SDK generator after result', () => {
+  it('forces session:ended/completed when the generator never closes after a result message', async () => {
+    // Repro of the stuck-auto-loop bug: the SDK emits its terminal `result`
+    // message (turn done, `usage` event observed) but the async generator
+    // never reaches `done` — a hung subagent task / stuck teardown keeps it
+    // parked. Without a guard the engine's `for await` loop waits forever and
+    // `session:ended` is never emitted, freezing the orchestrator + auto-loop.
+    vi.resetModules()
+    vi.useFakeTimers()
+    vi.doMock('@anthropic-ai/claude-agent-sdk', () => {
+      return {
+        query: vi.fn(() => {
+          const iter = {
+            async *[Symbol.asyncIterator]() {
+              yield { type: 'system', subtype: 'init', session_id: 's', model: 'm', slash_commands: [] }
+              yield {
+                type: 'result',
+                subtype: 'success',
+                usage: { input_tokens: 1, output_tokens: 1 },
+              }
+              // Generator parks forever — never returns `done`.
+              await new Promise<void>(() => {})
+            },
+            interrupt: vi.fn(),
+          }
+          return iter
+        }),
+      }
+    })
+
+    try {
+      const engineMod = await import('../server/services/agent/engines/claude-code/engine.js')
+      const engine = engineMod.createClaudeCodeEngine()
+      const events: AgentEvent[] = []
+      await engine.start(
+        {
+          workspaceId: 'w-hung',
+          workingDir: '/tmp',
+          prompt: 'go',
+          backendUrl: 'http://localhost:3000',
+          koboHome: '/tmp/kobo',
+          settings: { dangerouslySkipPermissions: true } as any,
+        },
+        (ev) => events.push(ev),
+      )
+
+      // Drain the init + result messages through the parked generator.
+      await vi.advanceTimersByTimeAsync(5)
+      expect(events.find((e) => e.kind === 'usage')).toBeDefined()
+      // Generator is parked — session:ended must NOT have fired yet.
+      expect(events.find((e) => e.kind === 'session:ended')).toBeUndefined()
+
+      // Advance past the post-result grace window — the guard must fire.
+      await vi.advanceTimersByTimeAsync(30_000)
+
+      const ended = events.find((e) => e.kind === 'session:ended')
+      expect(ended, 'session:ended must be forced after a hung post-result generator').toBeDefined()
+      if (ended && ended.kind === 'session:ended') {
+        expect(ended.reason).toBe('completed')
+      }
+      // A clean (non-error) result must not surface a spurious error event.
+      expect(events.find((e) => e.kind === 'error')).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+      vi.doUnmock('@anthropic-ai/claude-agent-sdk')
+      vi.resetModules()
+    }
+  })
+})
+
 describe('claude-code engine — user interrupt', () => {
   it('interrupt yields session:ended/killed and no error event when the SDK ends with error_during_execution', async () => {
     // A user interrupt makes the SDK end the run by emitting a `result`

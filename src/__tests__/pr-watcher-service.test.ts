@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Mock collaborators BEFORE importing the service.
-vi.mock('../server/utils/git-ops.js', () => ({ getPrStatusAsync: vi.fn() }))
+const getPrStatusMock = vi.fn()
+vi.mock('../server/services/forge/resolve.js', () => ({ resolveForge: vi.fn(() => 'github') }))
+vi.mock('../server/services/forge/registry.js', () => ({
+  getForgeProvider: vi.fn(() => ({ id: 'github', getPrStatus: getPrStatusMock })),
+}))
 vi.mock('../server/services/dev-server-service.js', () => ({ stopDevServer: vi.fn() }))
 vi.mock('../server/services/terminal-service.js', () => ({ destroyTerminal: vi.fn() }))
 vi.mock('../server/services/websocket-service.js', () => ({ emitEphemeral: vi.fn() }))
@@ -11,11 +15,13 @@ vi.mock('../server/services/workspace-service.js', () => ({
   listWorkspaces: vi.fn(),
   updateWorkspaceSourceBranch: vi.fn(),
 }))
+vi.mock('../server/services/git-stats-service.js', () => ({ computeGitStats: vi.fn() }))
+vi.mock('../server/utils/git-ops.js', () => ({ fetchSourceBranchAsync: vi.fn(() => Promise.resolve()) }))
 
-import { _resetForTest, checkPrStatuses } from '../server/services/pr-watcher-service.js'
+import { computeGitStats } from '../server/services/git-stats-service.js'
+import { _resetForTest, checkPrStatuses, getAllGitStats } from '../server/services/pr-watcher-service.js'
 import * as wsSvc from '../server/services/websocket-service.js'
 import * as wsService from '../server/services/workspace-service.js'
-import * as gitOps from '../server/utils/git-ops.js'
 
 function makeWorkspace(overrides: Partial<{ id: string; name: string; sourceBranch: string; status: string }> = {}) {
   return {
@@ -50,8 +56,8 @@ function makeWorkspace(overrides: Partial<{ id: string; name: string; sourceBran
 }
 
 function makePrSnapshot(
-  overrides: Partial<import('../server/utils/git-ops.js').PrSnapshot> = {},
-): import('../server/utils/git-ops.js').PrSnapshot {
+  overrides: Partial<import('../server/services/forge/types.js').PrSnapshot> = {},
+): import('../server/services/forge/types.js').PrSnapshot {
   return {
     number: 1,
     title: 't',
@@ -82,9 +88,7 @@ describe('checkPrStatuses — base change detection', () => {
   it('first-sight: workspace.sourceBranch differs from PR base → emits pr:base-changed and updates DB', async () => {
     const ws = makeWorkspace({ sourceBranch: 'develop' })
     vi.mocked(wsService.listWorkspaces).mockReturnValue([ws as never])
-    vi.mocked(gitOps.getPrStatusAsync).mockResolvedValue(
-      makePrSnapshot({ base: 'main', url: 'https://github.com/x/y/pull/1' }),
-    )
+    getPrStatusMock.mockResolvedValue(makePrSnapshot({ base: 'main', url: 'https://github.com/x/y/pull/1' }))
 
     await checkPrStatuses()
 
@@ -99,9 +103,7 @@ describe('checkPrStatuses — base change detection', () => {
   it('first-sight: workspace.sourceBranch matches PR base → silent, no event, no DB write', async () => {
     const ws = makeWorkspace({ sourceBranch: 'develop' })
     vi.mocked(wsService.listWorkspaces).mockReturnValue([ws as never])
-    vi.mocked(gitOps.getPrStatusAsync).mockResolvedValue(
-      makePrSnapshot({ base: 'develop', url: 'https://github.com/x/y/pull/1' }),
-    )
+    getPrStatusMock.mockResolvedValue(makePrSnapshot({ base: 'develop', url: 'https://github.com/x/y/pull/1' }))
 
     await checkPrStatuses()
 
@@ -113,16 +115,12 @@ describe('checkPrStatuses — base change detection', () => {
     const ws = makeWorkspace({ sourceBranch: 'develop' })
     vi.mocked(wsService.listWorkspaces).mockReturnValue([ws as never])
     // First check: silent populate (sourceBranch === base)
-    vi.mocked(gitOps.getPrStatusAsync).mockResolvedValue(
-      makePrSnapshot({ base: 'develop', url: 'https://github.com/x/y/pull/1' }),
-    )
+    getPrStatusMock.mockResolvedValue(makePrSnapshot({ base: 'develop', url: 'https://github.com/x/y/pull/1' }))
     await checkPrStatuses()
     vi.clearAllMocks()
     vi.mocked(wsService.listWorkspaces).mockReturnValue([ws as never])
     // Second check: base flipped to main
-    vi.mocked(gitOps.getPrStatusAsync).mockResolvedValue(
-      makePrSnapshot({ base: 'main', url: 'https://github.com/x/y/pull/1' }),
-    )
+    getPrStatusMock.mockResolvedValue(makePrSnapshot({ base: 'main', url: 'https://github.com/x/y/pull/1' }))
 
     await checkPrStatuses()
 
@@ -137,7 +135,7 @@ describe('checkPrStatuses — base change detection', () => {
   it('closed PR is skipped — no base-change event regardless of baseRefName', async () => {
     const ws = makeWorkspace({ sourceBranch: 'develop' })
     vi.mocked(wsService.listWorkspaces).mockReturnValue([ws as never])
-    vi.mocked(gitOps.getPrStatusAsync).mockResolvedValue(
+    getPrStatusMock.mockResolvedValue(
       makePrSnapshot({ state: 'CLOSED', base: 'main', url: 'https://github.com/x/y/pull/1' }),
     )
 
@@ -150,9 +148,7 @@ describe('checkPrStatuses — base change detection', () => {
   it('PR without base field (defensive) — no event, populates lastKnownPr', async () => {
     const ws = makeWorkspace({ sourceBranch: 'develop' })
     vi.mocked(wsService.listWorkspaces).mockReturnValue([ws as never])
-    vi.mocked(gitOps.getPrStatusAsync).mockResolvedValue(
-      makePrSnapshot({ base: '', url: 'https://github.com/x/y/pull/1' }),
-    )
+    getPrStatusMock.mockResolvedValue(makePrSnapshot({ base: '', url: 'https://github.com/x/y/pull/1' }))
 
     await checkPrStatuses()
 
@@ -171,9 +167,7 @@ describe('getAllPrSnapshots', () => {
     const { getAllPrSnapshots } = await import('../server/services/pr-watcher-service.js')
     const ws = makeWorkspace({ sourceBranch: 'main' })
     vi.mocked(wsService.listWorkspaces).mockReturnValue([ws as never])
-    vi.mocked(gitOps.getPrStatusAsync).mockResolvedValue(
-      makePrSnapshot({ number: 99, base: 'main', reviewDecision: 'APPROVED' }),
-    )
+    getPrStatusMock.mockResolvedValue(makePrSnapshot({ number: 99, base: 'main', reviewDecision: 'APPROVED' }))
     await checkPrStatuses()
 
     expect(getAllPrSnapshots()).toEqual({
@@ -191,7 +185,7 @@ describe('checkPrStatuses — active-agent guard', () => {
   it('still fetches and caches the snapshot for an executing workspace', async () => {
     const ws = makeWorkspace({ status: 'executing', sourceBranch: 'main' })
     vi.mocked(wsService.listWorkspaces).mockReturnValue([ws as never])
-    vi.mocked(gitOps.getPrStatusAsync).mockResolvedValue(makePrSnapshot({ number: 7, base: 'main' }))
+    getPrStatusMock.mockResolvedValue(makePrSnapshot({ number: 7, base: 'main' }))
 
     await checkPrStatuses()
 
@@ -204,12 +198,12 @@ describe('checkPrStatuses — active-agent guard', () => {
     vi.mocked(wsService.listWorkspaces).mockReturnValue([ws as never])
 
     // First tick: OPEN, baseline.
-    vi.mocked(gitOps.getPrStatusAsync).mockResolvedValueOnce(makePrSnapshot({ state: 'OPEN', base: 'main' }))
+    getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ state: 'OPEN', base: 'main' }))
     await checkPrStatuses()
     expect(wsService.archiveWorkspace).not.toHaveBeenCalled()
 
     // Second tick: MERGED, agent still executing — must not archive.
-    vi.mocked(gitOps.getPrStatusAsync).mockResolvedValueOnce(makePrSnapshot({ state: 'MERGED', base: 'main' }))
+    getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ state: 'MERGED', base: 'main' }))
     await checkPrStatuses()
     expect(wsService.archiveWorkspace).not.toHaveBeenCalled()
   })
@@ -218,9 +212,9 @@ describe('checkPrStatuses — active-agent guard', () => {
     const ws = makeWorkspace({ status: 'idle', sourceBranch: 'main' })
     vi.mocked(wsService.listWorkspaces).mockReturnValue([ws as never])
 
-    vi.mocked(gitOps.getPrStatusAsync).mockResolvedValueOnce(makePrSnapshot({ state: 'OPEN', base: 'main' }))
+    getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ state: 'OPEN', base: 'main' }))
     await checkPrStatuses()
-    vi.mocked(gitOps.getPrStatusAsync).mockResolvedValueOnce(makePrSnapshot({ state: 'MERGED', base: 'main' }))
+    getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ state: 'MERGED', base: 'main' }))
     await checkPrStatuses()
 
     expect(wsService.archiveWorkspace).toHaveBeenCalledWith('ws-1')
@@ -237,13 +231,9 @@ describe('checkPrStatuses — review-decision transitions', () => {
     const ws = makeWorkspace({ sourceBranch: 'main' })
     vi.mocked(wsService.listWorkspaces).mockReturnValue([ws as never])
 
-    vi.mocked(gitOps.getPrStatusAsync).mockResolvedValueOnce(
-      makePrSnapshot({ base: 'main', reviewDecision: 'REVIEW_REQUIRED' }),
-    )
+    getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ base: 'main', reviewDecision: 'REVIEW_REQUIRED' }))
     await checkPrStatuses()
-    vi.mocked(gitOps.getPrStatusAsync).mockResolvedValueOnce(
-      makePrSnapshot({ base: 'main', reviewDecision: 'CHANGES_REQUESTED' }),
-    )
+    getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ base: 'main', reviewDecision: 'CHANGES_REQUESTED' }))
     await checkPrStatuses()
 
     expect(wsSvc.emitEphemeral).toHaveBeenCalledWith('ws-1', 'pr:changes-requested', {
@@ -256,13 +246,9 @@ describe('checkPrStatuses — review-decision transitions', () => {
     const ws = makeWorkspace({ sourceBranch: 'main' })
     vi.mocked(wsService.listWorkspaces).mockReturnValue([ws as never])
 
-    vi.mocked(gitOps.getPrStatusAsync).mockResolvedValueOnce(
-      makePrSnapshot({ base: 'main', reviewDecision: 'CHANGES_REQUESTED' }),
-    )
+    getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ base: 'main', reviewDecision: 'CHANGES_REQUESTED' }))
     await checkPrStatuses()
-    vi.mocked(gitOps.getPrStatusAsync).mockResolvedValueOnce(
-      makePrSnapshot({ base: 'main', reviewDecision: 'APPROVED' }),
-    )
+    getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ base: 'main', reviewDecision: 'APPROVED' }))
     await checkPrStatuses()
 
     expect(wsSvc.emitEphemeral).toHaveBeenCalledWith('ws-1', 'pr:approved', {
@@ -274,9 +260,7 @@ describe('checkPrStatuses — review-decision transitions', () => {
   it('first-sight CHANGES_REQUESTED does NOT emit pr:changes-requested', async () => {
     const ws = makeWorkspace({ sourceBranch: 'main' })
     vi.mocked(wsService.listWorkspaces).mockReturnValue([ws as never])
-    vi.mocked(gitOps.getPrStatusAsync).mockResolvedValue(
-      makePrSnapshot({ base: 'main', reviewDecision: 'CHANGES_REQUESTED' }),
-    )
+    getPrStatusMock.mockResolvedValue(makePrSnapshot({ base: 'main', reviewDecision: 'CHANGES_REQUESTED' }))
 
     await checkPrStatuses()
 
@@ -287,11 +271,11 @@ describe('checkPrStatuses — review-decision transitions', () => {
     const ws = makeWorkspace({ sourceBranch: 'main' })
     vi.mocked(wsService.listWorkspaces).mockReturnValue([ws as never])
 
-    vi.mocked(gitOps.getPrStatusAsync).mockResolvedValueOnce(
+    getPrStatusMock.mockResolvedValueOnce(
       makePrSnapshot({ state: 'OPEN', base: 'main', reviewDecision: 'REVIEW_REQUIRED' }),
     )
     await checkPrStatuses()
-    vi.mocked(gitOps.getPrStatusAsync).mockResolvedValueOnce(
+    getPrStatusMock.mockResolvedValueOnce(
       makePrSnapshot({ state: 'CLOSED', base: 'main', reviewDecision: 'CHANGES_REQUESTED' }),
     )
     await checkPrStatuses()
@@ -310,7 +294,7 @@ describe('refreshPrSnapshot', () => {
     const ws = makeWorkspace({ sourceBranch: 'main' })
     vi.mocked(wsService.listWorkspaces).mockReturnValue([ws as never])
     vi.mocked(wsService.getWorkspace).mockReturnValue(ws as never)
-    vi.mocked(gitOps.getPrStatusAsync).mockResolvedValue(makePrSnapshot({ number: 99, base: 'main' }))
+    getPrStatusMock.mockResolvedValue(makePrSnapshot({ number: 99, base: 'main' }))
 
     const { refreshPrSnapshot, getAllPrSnapshots } = await import('../server/services/pr-watcher-service.js')
     const snap = await refreshPrSnapshot('ws-1')
@@ -325,11 +309,11 @@ describe('refreshPrSnapshot', () => {
     vi.mocked(wsService.getWorkspace).mockReturnValue(ws as never)
 
     // Seed cache via a normal tick.
-    vi.mocked(gitOps.getPrStatusAsync).mockResolvedValueOnce(makePrSnapshot({ base: 'main' }))
+    getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ base: 'main' }))
     await checkPrStatuses()
 
     // Manual refresh after PR deletion.
-    vi.mocked(gitOps.getPrStatusAsync).mockResolvedValueOnce(null)
+    getPrStatusMock.mockResolvedValueOnce(null)
     const { refreshPrSnapshot, getAllPrSnapshots } = await import('../server/services/pr-watcher-service.js')
     const snap = await refreshPrSnapshot('ws-1')
 
@@ -349,17 +333,52 @@ describe('refreshPrSnapshot', () => {
     vi.mocked(wsService.listWorkspaces).mockReturnValue([ws as never])
     vi.mocked(wsService.getWorkspace).mockReturnValue(ws as never)
 
-    vi.mocked(gitOps.getPrStatusAsync).mockResolvedValueOnce(
-      makePrSnapshot({ base: 'main', reviewDecision: 'REVIEW_REQUIRED' }),
-    )
+    getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ base: 'main', reviewDecision: 'REVIEW_REQUIRED' }))
     await checkPrStatuses()
 
-    vi.mocked(gitOps.getPrStatusAsync).mockResolvedValueOnce(
-      makePrSnapshot({ base: 'main', reviewDecision: 'CHANGES_REQUESTED' }),
-    )
+    getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ base: 'main', reviewDecision: 'CHANGES_REQUESTED' }))
     const { refreshPrSnapshot } = await import('../server/services/pr-watcher-service.js')
     await refreshPrSnapshot('ws-1')
 
     expect(wsSvc.emitEphemeral).not.toHaveBeenCalledWith('ws-1', 'pr:changes-requested', expect.anything())
+  })
+})
+
+describe('checkPrStatuses — git stats caching', () => {
+  beforeEach(() => {
+    _resetForTest()
+    vi.clearAllMocks()
+  })
+
+  it('caches git stats for every non-archived workspace, including PR-less ones', async () => {
+    const wsWithPr = makeWorkspace({ id: 'ws-pr' })
+    const wsNoPr = makeWorkspace({ id: 'ws-nopr' })
+    vi.mocked(wsService.listWorkspaces).mockReturnValue([wsWithPr, wsNoPr] as never)
+    getPrStatusMock.mockImplementation((_path: string, branch: string) =>
+      branch === wsWithPr.workingBranch ? Promise.resolve({ state: 'OPEN', url: 'u' }) : Promise.resolve(null),
+    )
+    vi.mocked(computeGitStats).mockResolvedValue({ commitCount: 7 } as never)
+
+    await checkPrStatuses()
+
+    const stats = getAllGitStats()
+    expect(stats['ws-pr']).toEqual({ commitCount: 7 })
+    expect(stats['ws-nopr']).toEqual({ commitCount: 7 })
+  })
+
+  it('a git-stats computation failure does not block other workspaces', async () => {
+    const wsA = makeWorkspace({ id: 'ws-a' })
+    const wsB = makeWorkspace({ id: 'ws-b' })
+    vi.mocked(wsService.listWorkspaces).mockReturnValue([wsA, wsB] as never)
+    getPrStatusMock.mockResolvedValue(null)
+    vi.mocked(computeGitStats)
+      .mockRejectedValueOnce(new Error('git boom'))
+      .mockResolvedValueOnce({ commitCount: 2 } as never)
+
+    await checkPrStatuses()
+
+    const stats = getAllGitStats()
+    expect(stats['ws-a']).toBeUndefined()
+    expect(stats['ws-b']).toEqual({ commitCount: 2 })
   })
 })

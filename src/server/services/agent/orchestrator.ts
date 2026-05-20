@@ -371,6 +371,7 @@ function readEffectiveSettingsSafe(projectPath: string): ReturnType<typeof getEf
       cleanupScriptMode: 'no-tasks',
       cleanupScriptOnlyOnChanges: false,
       archiveScript: '',
+      changeSourceBranchScript: '',
       notionStatusProperty: '',
       notionInProgressStatus: '',
     }

@@ -4,6 +4,7 @@ import {
   DEFAULT_SENTRY_INITIAL_PROMPT,
 } from '../services/initial-prompt-template-service.js'
 import { DEFAULT_REVIEW_PROMPT_TEMPLATE } from '../services/review-template-service.js'
+import { DEFAULT_CHANGE_SOURCE_BRANCH_SCRIPT } from '../services/settings-defaults.js'
 import * as settingsService from '../services/settings-service.js'
 import {
   type ConfigBundle,
@@ -50,6 +51,7 @@ app.get('/defaults', (c) => {
     gitConventions: DEFAULT_GIT_CONVENTIONS,
     notionInitialPromptTemplate: DEFAULT_NOTION_INITIAL_PROMPT,
     sentryInitialPromptTemplate: DEFAULT_SENTRY_INITIAL_PROMPT,
+    changeSourceBranchScript: DEFAULT_CHANGE_SOURCE_BRANCH_SCRIPT,
   })
 })
 
