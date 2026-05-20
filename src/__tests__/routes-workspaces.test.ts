@@ -201,6 +201,16 @@ vi.mock('../server/services/setup-script-service.js', () => ({
   runSetupScript: vi.fn(),
 }))
 
+vi.mock('../server/services/chat-history-service.js', () => ({
+  listChatHistory: vi.fn().mockReturnValue([]),
+  pushChatHistory: vi.fn(),
+}))
+
+vi.mock('../server/services/file-editor-service.js', () => ({
+  saveWorkspaceFile: vi.fn(),
+  shaOf: vi.fn((s: string) => `sha-${s.length}`),
+}))
+
 vi.mock('node:fs', async () => {
   const actual = await vi.importActual<typeof import('node:fs')>('node:fs')
   const mocked = {
@@ -224,8 +234,10 @@ import * as fs from 'node:fs'
 import { getDb } from '../server/db/index.js'
 import router from '../server/routes/workspaces.js'
 import * as agentManager from '../server/services/agent/orchestrator.js'
+import * as chatHistoryService from '../server/services/chat-history-service.js'
 import * as cronService from '../server/services/cron-service.js'
 import * as devServerService from '../server/services/dev-server-service.js'
+import * as fileEditorService from '../server/services/file-editor-service.js'
 import { getForgeProvider } from '../server/services/forge/registry.js'
 import * as notionService from '../server/services/notion-service.js'
 import * as settingsService from '../server/services/settings-service.js'
@@ -3179,6 +3191,7 @@ describe('GET /api/workspaces/:id/diff-file', () => {
     expect(body.mode).toBe('branch')
     expect(body.original).toBe('branch original')
     expect(body.modified).toBe('modified content')
+    expect(body.modifiedSha).toBe(`sha-${body.modified.length}`)
     expect(gitOps.getFileAtRef).toHaveBeenCalledWith(expect.any(String), 'develop', 'a.ts')
   })
 
@@ -4625,5 +4638,190 @@ describe('POST /api/workspaces/:id/force-push', () => {
     expect(res.status).toBe(500)
     const body = await res.json()
     expect((body as { error: string }).error).toContain('remote rejected')
+  })
+})
+
+describe('chat history routes', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(chatHistoryService.listChatHistory).mockReturnValue([])
+  })
+
+  it('GET /:id/chat-history returns { history: [] } for a workspace with no history', async () => {
+    const res = await app.request('/api/workspaces/ws-1/chat-history')
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ history: [] })
+    expect(chatHistoryService.listChatHistory).toHaveBeenCalledWith('ws-1')
+  })
+
+  it('GET /:id/chat-history returns 404 for an unknown workspace', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+    const res = await app.request('/api/workspaces/does-not-exist/chat-history')
+    expect(res.status).toBe(404)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toMatch(/not found/i)
+    expect(chatHistoryService.listChatHistory).not.toHaveBeenCalled()
+  })
+
+  it('POST /:id/chat-history adds a message and GET returns it', async () => {
+    // Simulate the service appending to history: after POST, listChatHistory returns the message.
+    vi.mocked(chatHistoryService.listChatHistory).mockReturnValue(['hello world'])
+    const postRes = await app.request('/api/workspaces/ws-1/chat-history', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'hello world' }),
+    })
+    expect(postRes.status).toBe(204)
+    expect(chatHistoryService.pushChatHistory).toHaveBeenCalledWith('ws-1', 'hello world')
+
+    const getRes = await app.request('/api/workspaces/ws-1/chat-history')
+    expect(getRes.status).toBe(200)
+    expect(await getRes.json()).toEqual({ history: ['hello world'] })
+  })
+
+  it('POST /:id/chat-history rejects an empty body with 400', async () => {
+    const res = await app.request('/api/workspaces/ws-1/chat-history', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+    expect(res.status).toBe(400)
+    expect(chatHistoryService.pushChatHistory).not.toHaveBeenCalled()
+  })
+
+  it('POST /:id/chat-history returns 404 for an unknown workspace', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+    const res = await app.request('/api/workspaces/does-not-exist/chat-history', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'x' }),
+    })
+    expect(res.status).toBe(404)
+    expect(chatHistoryService.pushChatHistory).not.toHaveBeenCalled()
+  })
+
+  it('POST /:id/chat-history returns 400 when workspace is archived', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      archivedAt: '2026-04-05T10:00:00.000Z',
+    })
+    const res = await app.request('/api/workspaces/ws-1/chat-history', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: 'hello' }),
+    })
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toMatch(/archived/i)
+    expect(chatHistoryService.pushChatHistory).not.toHaveBeenCalled()
+  })
+})
+
+describe('save-file', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(agentManager.getAgentStatus).mockReturnValue(null)
+  })
+
+  it('POST /:id/save-file returns 404 for an unknown workspace', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValueOnce(null)
+    const res = await app.request('/api/workspaces/no-such/save-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'a.txt', content: 'hi', baseSha: 'abc' }),
+    })
+    expect(res.status).toBe(404)
+  })
+
+  it('POST /:id/save-file returns 400 when the workspace is archived', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValueOnce({
+      ...fakeWorkspace,
+      archivedAt: '2025-01-01T00:00:00Z',
+    })
+    const res = await app.request('/api/workspaces/ws-1/save-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'a.txt', content: 'hi', baseSha: 'abc' }),
+    })
+    expect(res.status).toBe(400)
+    const body = (await res.json()) as { error: string }
+    expect(body.error).toMatch(/archived/i)
+  })
+
+  it('POST /:id/save-file returns 409 when the agent is running', async () => {
+    vi.mocked(agentManager.getAgentStatus).mockReturnValueOnce('running')
+    const res = await app.request('/api/workspaces/ws-1/save-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'a.txt', content: 'hi', baseSha: 'abc' }),
+    })
+    expect(res.status).toBe(409)
+  })
+
+  it('POST /:id/save-file returns 400 when path is missing or empty', async () => {
+    const res = await app.request('/api/workspaces/ws-1/save-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: 'hi', baseSha: 'abc' }),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('POST /:id/save-file returns 400 when content is not a string', async () => {
+    const res = await app.request('/api/workspaces/ws-1/save-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'a.txt', content: 42, baseSha: 'abc' }),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('POST /:id/save-file returns 400 when baseSha is missing', async () => {
+    const res = await app.request('/api/workspaces/ws-1/save-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'a.txt', content: 'hi' }),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('POST /:id/save-file returns 204 on a successful save', async () => {
+    vi.mocked(fileEditorService.saveWorkspaceFile).mockReturnValueOnce({ status: 'saved' })
+    const res = await app.request('/api/workspaces/ws-1/save-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'a.txt', content: 'hi', baseSha: 'abc' }),
+    })
+    expect(res.status).toBe(204)
+  })
+
+  it('POST /:id/save-file returns 412 with currentSha on conflict', async () => {
+    vi.mocked(fileEditorService.saveWorkspaceFile).mockReturnValueOnce({
+      status: 'conflict',
+      currentSha: 'fresh-sha',
+    })
+    const res = await app.request('/api/workspaces/ws-1/save-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: 'a.txt', content: 'hi', baseSha: 'stale-sha' }),
+    })
+    expect(res.status).toBe(412)
+    const body = (await res.json()) as { error: string; currentSha: string }
+    expect(body.error).toMatch(/changed on disk/i)
+    expect(body.currentSha).toBe('fresh-sha')
+  })
+
+  it('POST /:id/save-file returns 500 when the service throws (e.g. path traversal)', async () => {
+    vi.mocked(fileEditorService.saveWorkspaceFile).mockImplementationOnce(() => {
+      throw new Error("Path '../etc/passwd' escapes the worktree")
+    })
+    const res = await app.request('/api/workspaces/ws-1/save-file', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: '../etc/passwd', content: 'x', baseSha: 'abc' }),
+    })
+    expect(res.status).toBe(500)
   })
 })

@@ -30,6 +30,19 @@
       >
         {{ selectedFile }}
       </span>
+      <q-btn
+        v-if="canEdit && dirty"
+        dense
+        flat
+        size="sm"
+        no-caps
+        icon="save"
+        :label="$t('diffViewer.save')"
+        color="indigo-4"
+        :loading="savingFile"
+        class="q-ml-sm"
+        @click="onSaveClicked"
+      />
       <q-space />
       <q-btn-toggle
         v-model="diffMode"
@@ -218,6 +231,7 @@
                 class="text-grey-3 ellipsis"
                 style="font-family: 'Roboto Mono', monospace; font-size: 11px;"
               >{{ node.label }}</span>
+              <span v-if="dirty && node.file.path === selectedFile" class="dirty-dot">●</span>
               <q-badge
                 v-if="reviewMode === 'review' && (commentsByFile.get(node.file.path) ?? 0) > 0"
                 :label="String(commentsByFile.get(node.file.path))"
@@ -312,6 +326,7 @@ import { type ReviewComment, useReviewDraft } from 'src/composables/use-review-d
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { buildPathTree, countLeaves, type PathTreeNode } from 'src/utils/build-path-tree'
+import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ReviewCommentBlock from './ReviewCommentBlock.vue'
@@ -697,7 +712,33 @@ function addCommentOnLine(filePath: string, line: number) {
   mountCommentZone(line, existing, true)
 }
 
+// ── Inline editing ───────────────────────────────────────────────────────────
+const baseSha = ref<string>('')
+const baseContent = ref<string>('')
+const dirty = ref<boolean>(false)
+const savingFile = ref<boolean>(false)
+let modifiedModelDispose: (() => void) | null = null
+
+const canEdit = computed<boolean>(() => {
+  if (reviewMode.value !== 'inspect') return false
+  const ws = workspaceStore.workspaces.find((w) => w.id === props.workspaceId)
+  if (!ws) return false
+  if (ws.archivedAt) return false
+  if (isBusyStatus(ws.status)) return false
+  const currentFile = selectedFile.value
+  const fileMeta = currentFile ? files.value.find((f) => f.path === currentFile) : null
+  if (fileMeta?.status === 'deleted') return false
+  return true
+})
+
+// Sync Monaco read-only with canEdit. Lives at setup-time, not per-load.
+watch(canEdit, (allowed) => {
+  diffEditor?.updateOptions({ readOnly: !allowed })
+})
+
 function disposeEditor() {
+  modifiedModelDispose?.()
+  modifiedModelDispose = null
   // View zones must be disposed BEFORE the editor instance — disposeAllZones
   // calls into diffEditor.getModifiedEditor() which is invalid post-dispose.
   disposeAllZones()
@@ -842,7 +883,8 @@ async function loadFileDiff(filePath: string) {
 
     diffEditor = monaco.editor.createDiffEditor(editorContainer.value, {
       theme: 'kobo-dark',
-      readOnly: true,
+      readOnly: !canEdit.value,
+      originalEditable: false,
       renderSideBySide: viewMode.value === 'side',
       automaticLayout: true,
       minimap: { enabled: false },
@@ -857,7 +899,29 @@ async function loadFileDiff(filePath: string) {
       },
     })
 
+    diffEditor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
+      if (canEdit.value && dirty.value && !savingFile.value) onSaveClicked()
+    })
+
     diffEditor.setModel({ original: originalModel, modified: modifiedModel })
+
+    // Snapshot for dirty + 412 conflict guard
+    baseSha.value = data.modifiedSha ?? ''
+    baseContent.value = data.modified ?? ''
+    dirty.value = false
+
+    // Preserve EOL: if the loaded content uses CRLF, configure the model so
+    // edits round-trip without LF normalisation.
+    if (monaco && (data.modified ?? '').includes('\r\n')) {
+      modifiedModel.setEOL(monaco.editor.EndOfLineSequence.CRLF)
+    }
+
+    modifiedModelDispose?.()
+    const changeSub = modifiedModel.onDidChangeContent(() => {
+      dirty.value = modifiedModel.getValue() !== baseContent.value
+    })
+    modifiedModelDispose = () => changeSub.dispose()
+
     setupSelectionTracking()
     if (reviewMode.value === 'review') {
       setupGutterAddButton()
@@ -868,6 +932,76 @@ async function loadFileDiff(filePath: string) {
   } finally {
     loadingFile.value = false
   }
+}
+
+async function saveCurrentFile(): Promise<{ ok: true } | { ok: false; status: number; currentSha?: string }> {
+  if (!diffEditor) return { ok: false, status: 0 }
+  const modifiedModel = diffEditor.getModel()?.modified
+  if (!modifiedModel || !selectedFile.value) return { ok: false, status: 0 }
+  const content = modifiedModel.getValue()
+  const wsId = props.workspaceId
+  const filePath = selectedFile.value
+  const sha = baseSha.value
+  savingFile.value = true
+  try {
+    const res = await fetch(`/api/workspaces/${wsId}/save-file`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: filePath, content, baseSha: sha }),
+    })
+    if (res.status === 204) {
+      // Refetch the diff so baseSha + baseContent reflect the new on-disk truth.
+      const refresh = await fetch(
+        `/api/workspaces/${wsId}/diff-file?path=${encodeURIComponent(filePath)}&mode=${diffMode.value}`,
+        { cache: 'no-store' },
+      )
+      if (refresh.ok) {
+        const data = await refresh.json()
+        baseSha.value = data.modifiedSha ?? ''
+        baseContent.value = data.modified ?? ''
+        dirty.value = modifiedModel.getValue() !== baseContent.value
+      }
+      $q.notify({ type: 'positive', message: t('diffViewer.savedAt'), position: 'top', timeout: 1200 })
+      return { ok: true }
+    }
+    if (res.status === 412) {
+      const body = (await res.json().catch(() => ({}))) as { currentSha?: string }
+      return { ok: false, status: 412, currentSha: body.currentSha }
+    }
+    return { ok: false, status: res.status }
+  } catch (err) {
+    console.error('[DiffViewer] save failed:', err)
+    return { ok: false, status: 0 }
+  } finally {
+    savingFile.value = false
+  }
+}
+
+async function onSaveClicked(): Promise<void> {
+  const result = await saveCurrentFile()
+  if (result.ok) return
+  if (result.status === 412) {
+    showConflictDialog()
+    return
+  }
+  $q.notify({
+    type: 'negative',
+    message: result.status === 409 ? t('diffViewer.agentRunning') : t('diffViewer.saveFailed'),
+    position: 'top',
+  })
+}
+
+function showConflictDialog(): void {
+  $q.dialog({
+    title: t('diffViewer.conflict.title'),
+    message: t('diffViewer.conflict.message'),
+    dark: true,
+    persistent: true,
+    ok: { flat: true, label: t('diffViewer.conflict.reload'), color: 'indigo-4' },
+    cancel: { flat: true, label: t('diffViewer.conflict.keep'), color: 'grey-5' },
+  }).onOk(async () => {
+    if (selectedFile.value) await loadFileDiff(selectedFile.value)
+  })
 }
 
 // Right-click → rollback. Destructive: warns the user. The exact action
@@ -974,7 +1108,37 @@ function sendSelectionToChat() {
 
 // ── Watchers ─────────────────────────────────────────────────────────────────
 
-watch(selectedFile, (filePath) => {
+watch(selectedFile, async (filePath, previousPath) => {
+  if (dirty.value && previousPath) {
+    const proceed = await new Promise<'save' | 'cancel'>((resolve) => {
+      $q.dialog({
+        title: t('diffViewer.unsavedChanges.title'),
+        message: t('diffViewer.unsavedChanges.message'),
+        dark: true,
+        persistent: true,
+        ok: { flat: true, label: t('diffViewer.unsavedChanges.save'), color: 'indigo-4' },
+        cancel: { flat: true, label: t('diffViewer.unsavedChanges.cancel'), color: 'grey-5' },
+      })
+        .onOk(() => resolve('save'))
+        .onCancel(() => resolve('cancel'))
+    })
+    if (proceed === 'save') {
+      const result = await saveCurrentFile()
+      if (!result.ok) {
+        selectedFile.value = previousPath
+        if (result.status === 412) {
+          showConflictDialog()
+        } else {
+          $q.notify({ type: 'negative', message: t('diffViewer.saveFailed'), position: 'top' })
+        }
+        return
+      }
+    } else if (proceed === 'cancel') {
+      selectedFile.value = previousPath
+      return
+    }
+  }
+
   if (filePath) {
     loadFileDiff(filePath)
   } else {
@@ -1163,5 +1327,11 @@ onUnmounted(() => {
   box-sizing: border-box;
   overflow: auto;
   border-left: 3px solid rgba(99, 102, 241, 0.6);
+}
+
+.dirty-dot {
+  color: var(--kobo-accent, #6c63ff);
+  margin-left: 4px;
+  font-size: 10px;
 }
 </style>

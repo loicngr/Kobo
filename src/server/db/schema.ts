@@ -108,8 +108,17 @@ export function initSchema(db: Database.Database): void {
       fetched_at    TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS workspace_chat_history (
+      id            INTEGER PRIMARY KEY AUTOINCREMENT,
+      workspace_id  TEXT    NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      message       TEXT    NOT NULL,
+      created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
+    );
+
     CREATE INDEX IF NOT EXISTS idx_tasks_workspace_id ON tasks(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_agent_sessions_workspace_id ON agent_sessions(workspace_id);
     CREATE INDEX IF NOT EXISTS idx_ws_events_workspace_id ON ws_events(workspace_id);
+    CREATE INDEX IF NOT EXISTS idx_workspace_chat_history_workspace_id_id
+      ON workspace_chat_history(workspace_id, id DESC);
   `)
 }

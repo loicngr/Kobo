@@ -105,6 +105,7 @@ src/
 | `agent_sessions` | Claude Code CLI invocations — pid, `claude_session_id`, status, started_at, ended_at, `name` |
 | `ws_events` | persisted WebSocket events for replay on reconnect — type, payload, session_id, created_at |
 | `pending_wakeups` | one-row-per-workspace scheduler for the `ScheduleWakeup` tool — target_at (ISO UTC), prompt, reason; CASCADE DELETE on workspace |
+| `workspace_chat_history` | chat-input history per workspace — message text + `created_at`, ordered by autoincrement id, capped at 200 entries by the service; CASCADE DELETE on workspace |
 
 `status` enum: `created | extracting | brainstorming | executing | completed | idle | error | quota`. Transitions are validated in `updateWorkspaceStatus` against `VALID_TRANSITIONS`.
 
@@ -225,6 +226,10 @@ Background: the engine was migrated from `@openai/codex-sdk` (one-shot `codex ex
 ### Bulk workspace info refresh
 
 `GET /api/workspaces/info` returns `{ workspaces, prSnapshots, gitStats }` in one shot. The client polls this endpoint every 30 s so every non-archived workspace stays ≤ 30 s fresh without a per-card stats request. The server-side pr-watcher feeds the same caches (`lastKnownGitStats` map, PR snapshots) so the work is shared between the polling client and the watchdog loop.
+
+### File editing in the diff viewer
+
+The right panel of `DiffViewer.vue` is editable when the workspace agent is stopped and the file is not in `deleted` status. `Ctrl/Cmd+S` or the explicit Save button persists the file via `POST /api/workspaces/:id/save-file`, sending `{ path, content, baseSha }` where `baseSha` is the sha256 captured at `GET /diff-file` time. The route refuses with **412 Precondition Failed** + `{ currentSha }` if the on-disk content has changed; the client shows a Reload / Keep mine dialog. Worktree-traversal guards (including parent-symlink escapes) and a 1 MB size cap live in `file-editor-service.ts`. Changing files in the tree while dirty pops an "Unsaved changes" prompt.
 
 ## Code conventions
 

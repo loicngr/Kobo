@@ -239,7 +239,7 @@ import { useWorkspaceStore } from 'src/stores/workspace'
 import { buildTemplateVars, expandTemplate } from 'src/utils/expand-template'
 import { KOBO_COMMANDS } from 'src/utils/kobo-commands'
 import { isBusyStatus } from 'src/utils/workspace-status'
-import { computed, nextTick, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{
@@ -681,24 +681,62 @@ async function stopAutoLoopFromChat() {
   }
 }
 
-// Message history (arrow up/down to cycle through previous messages)
-const messageHistory = ref<string[]>(JSON.parse(localStorage.getItem('kobo:chatHistory') ?? '[]'))
+// Message history (arrow up/down to cycle through previous messages).
+// Per-workspace, persisted server-side via /api/workspaces/:id/chat-history.
+const MAX_HISTORY_ENTRIES = 200
+const messageHistory = ref<string[]>([])
 const historyIndex = ref(-1)
 const savedDraft = ref('')
 
-function pushToHistory(text: string) {
+async function loadHistory() {
+  const wsId = props.workspaceId
+  try {
+    const res = await fetch(`/api/workspaces/${wsId}/chat-history`)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const { history } = (await res.json()) as { history: string[] }
+    // Drop stale responses: if the user switched workspaces during the
+    // fetch, this is no longer the active history.
+    if (wsId !== props.workspaceId) return
+    messageHistory.value = Array.isArray(history) ? history : []
+  } catch (err) {
+    if (wsId !== props.workspaceId) return
+    console.error('[ChatInput] loadHistory failed:', err)
+    messageHistory.value = []
+  }
+  if (wsId !== props.workspaceId) return
+  historyIndex.value = -1
+}
+
+async function pushToHistory(text: string) {
   if (!text) return
-  // Avoid consecutive duplicates
   if (messageHistory.value[0] === text) return
+  // Capture the workspace id synchronously so a mid-await workspace switch
+  // doesn't redirect the POST to a different workspace's history.
+  const wsId = props.workspaceId
   messageHistory.value.unshift(text)
-  if (messageHistory.value.length > 50) messageHistory.value.pop()
-  localStorage.setItem('kobo:chatHistory', JSON.stringify(messageHistory.value))
+  if (messageHistory.value.length > MAX_HISTORY_ENTRIES) messageHistory.value.pop()
+  try {
+    const res = await fetch(`/api/workspaces/${wsId}/chat-history`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text }),
+    })
+    if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`)
+  } catch (err) {
+    console.error('[ChatInput] pushToHistory failed:', err)
+  }
 }
 
 function resetHistoryNav() {
   historyIndex.value = -1
   savedDraft.value = ''
 }
+
+// One-time cleanup of the pre-migration global blob.
+localStorage.removeItem('kobo:chatHistory')
+
+onMounted(loadHistory)
+watch(() => props.workspaceId, loadHistory)
 
 async function sendMessage() {
   const text = message.value.trim()

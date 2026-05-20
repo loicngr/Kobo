@@ -14,8 +14,10 @@ import * as agentManager from '../services/agent/orchestrator.js'
 import * as archiveScriptService from '../services/archive-script-service.js'
 import * as autoLoopService from '../services/auto-loop-service.js'
 import { changeSourceBranch } from '../services/change-source-branch-service.js'
+import { listChatHistory, pushChatHistory } from '../services/chat-history-service.js'
 import * as cronService from '../services/cron-service.js'
 import * as devServerService from '../services/dev-server-service.js'
+import { saveWorkspaceFile, shaOf } from '../services/file-editor-service.js'
 import { getForgeProvider } from '../services/forge/registry.js'
 import { resolveForge } from '../services/forge/resolve.js'
 import { ForgeUnavailableError } from '../services/forge/types.js'
@@ -1634,6 +1636,84 @@ ${AUTO_LOOP_HARD_RULES}`
   }
 })
 
+// GET /:id/chat-history — list up to 200 most recent chat-input messages
+// for this workspace, ordered newest-first. Placed BEFORE `app.get('/:id', …)`
+// so the more-specific path wins.
+app.get('/:id/chat-history', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    return c.json({ history: listChatHistory(id) })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// POST /:id/chat-history — append a message to this workspace's history.
+// Body: { message: string }. 204 on success.
+app.post('/:id/chat-history', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    if (workspace.archivedAt) {
+      return c.json({ error: `Workspace '${id}' is archived` }, 400)
+    }
+    const body = (await c.req.json().catch(() => ({}))) as { message?: unknown }
+    if (typeof body.message !== 'string' || body.message.trim().length === 0) {
+      return c.json({ error: 'message is required' }, 400)
+    }
+    pushChatHistory(id, body.message)
+    return c.body(null, 204)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// POST /:id/save-file — persist edited file content from the diff viewer.
+// Body: { path, content, baseSha }. Refuses while the agent runs (409). When
+// the file's current sha differs from baseSha, returns 412 with `currentSha`.
+app.post('/:id/save-file', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    if (workspace.archivedAt) {
+      return c.json({ error: `Workspace '${id}' is archived` }, 400)
+    }
+    if (agentManager.getAgentStatus(id) !== null) {
+      return c.json({ error: 'Cannot save while the agent is running — stop it first' }, 409)
+    }
+
+    const body = (await c.req.json().catch(() => ({}))) as {
+      path?: unknown
+      content?: unknown
+      baseSha?: unknown
+    }
+    if (typeof body.path !== 'string' || body.path.trim().length === 0) {
+      return c.json({ error: 'path is required' }, 400)
+    }
+    if (typeof body.content !== 'string') {
+      return c.json({ error: 'content is required (string)' }, 400)
+    }
+    if (typeof body.baseSha !== 'string' || body.baseSha.length === 0) {
+      return c.json({ error: 'baseSha is required' }, 400)
+    }
+
+    const result = saveWorkspaceFile(workspace.worktreePath, body.path, body.content, body.baseSha)
+    if (result.status === 'conflict') {
+      return c.json({ error: 'File changed on disk', currentSha: result.currentSha }, 412)
+    }
+    return c.body(null, 204)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
 // GET /api/workspaces/:id — get workspace details with tasks
 app.get('/:id', (c) => {
   try {
@@ -2267,7 +2347,13 @@ app.get('/:id/diff-file', (c) => {
     const modified = gitOps.getFileContent(worktreePath, filePath)
 
     c.header('Cache-Control', 'no-store')
-    return c.json({ original: original ?? '', modified: modified ?? '', filePath, mode })
+    return c.json({
+      original: original ?? '',
+      modified: modified ?? '',
+      filePath,
+      mode,
+      modifiedSha: shaOf(modified ?? ''),
+    })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)

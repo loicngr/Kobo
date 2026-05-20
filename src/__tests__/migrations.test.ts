@@ -41,8 +41,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 23', () => {
-    expect(SCHEMA_VERSION).toBe(23)
+  it('exporte SCHEMA_VERSION = 24', () => {
+    expect(SCHEMA_VERSION).toBe(24)
   })
 
   it('migration v17 unifies legacy permission_mode + permission_profile into agent_permission_mode', () => {
@@ -1555,6 +1555,87 @@ describe('runMigrations(db) — soft downgrade guard', () => {
     warnSpy.mockRestore()
 
     expect(warned).toBe(false)
+    db.close()
+  })
+})
+
+describe('migration v24: add-workspace-chat-history-table', () => {
+  it('adds workspace_chat_history table with expected columns after runMigrations', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+
+    const table = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='workspace_chat_history'")
+      .get()
+    expect(table).toBeTruthy()
+
+    const cols = db.prepare('PRAGMA table_info(workspace_chat_history)').all() as Array<{
+      name: string
+      pk: number
+      notnull: number
+    }>
+    expect(cols.map((c) => c.name).sort()).toEqual(['created_at', 'id', 'message', 'workspace_id'].sort())
+    expect(cols.find((c) => c.name === 'id')?.pk).toBe(1)
+    expect(cols.find((c) => c.name === 'workspace_id')?.notnull).toBe(1)
+    expect(cols.find((c) => c.name === 'message')?.notnull).toBe(1)
+
+    const index = db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_workspace_chat_history_workspace_id_id'",
+      )
+      .get()
+    expect(index).toBeTruthy()
+
+    db.close()
+  })
+
+  it('fresh install via initSchema produces the same workspace_chat_history shape as runMigrations', () => {
+    const freshDb = new Database(':memory:')
+    initSchema(freshDb)
+    const freshCols = freshDb.prepare('PRAGMA table_info(workspace_chat_history)').all()
+
+    const upgradedDb = new Database(':memory:')
+    runMigrations(upgradedDb)
+    const upgradedCols = upgradedDb.prepare('PRAGMA table_info(workspace_chat_history)').all()
+
+    expect(freshCols).toEqual(upgradedCols)
+    freshDb.close()
+    upgradedDb.close()
+  })
+
+  it('v23 → v24 upgrade preserves existing workspace data', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run('w1', 'legacy', '/tmp/p', 'main', 'feat', '2025-01-01', '2025-01-01')
+
+    const ws = db.prepare('SELECT id, name FROM workspaces WHERE id = ?').get('w1') as
+      | { id: string; name: string }
+      | undefined
+    expect(ws).toEqual({ id: 'w1', name: 'legacy' })
+
+    const countRow = db.prepare('SELECT COUNT(*) as c FROM workspace_chat_history').get() as { c: number }
+    expect(countRow.c).toBe(0)
+    db.close()
+  })
+
+  it('ON DELETE CASCADE removes history rows when workspace is deleted', () => {
+    const db = new Database(':memory:')
+    db.pragma('foreign_keys=ON')
+    runMigrations(db)
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run('w1', 'ws', '/tmp/p', 'main', 'feat', '2025-01-01', '2025-01-01')
+    db.prepare('INSERT INTO workspace_chat_history (workspace_id, message) VALUES (?, ?)').run('w1', 'hello')
+
+    expect((db.prepare('SELECT COUNT(*) as c FROM workspace_chat_history').get() as { c: number }).c).toBe(1)
+
+    db.prepare('DELETE FROM workspaces WHERE id = ?').run('w1')
+    expect((db.prepare('SELECT COUNT(*) as c FROM workspace_chat_history').get() as { c: number }).c).toBe(0)
+
     db.close()
   })
 })

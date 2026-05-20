@@ -1,5 +1,5 @@
 import { execFile as execFileCb, execFileSync } from 'node:child_process'
-import { existsSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
 
@@ -816,6 +816,11 @@ export function getFileContent(repoPath: string, filePath: string): string | nul
   } catch {
     return null
   }
+}
+
+/** Write content to an absolute path inside a worktree. Caller validates the path. */
+export function writeFileInWorktree(absPath: string, content: string): void {
+  writeFileSync(absPath, content, 'utf-8')
 }
 
 /** Summary counts of staged, modified, and untracked files in a working tree. */
