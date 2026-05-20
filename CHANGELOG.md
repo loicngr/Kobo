@@ -4,6 +4,11 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.7.17
+
+- feat: per-workspace chat history + inline file editing in the diff viewer
+- feat: multi-forge, change source branch, pr-watcher
+
 ## 1.7.16
 
 - feat(engine): handle user interruptions as clean stops
