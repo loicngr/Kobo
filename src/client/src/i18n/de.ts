@@ -1076,6 +1076,8 @@ export default {
   'askUserQuestion.previous': 'Zurück',
   'askUserQuestion.cancel': 'Abbrechen',
   'askUserQuestion.cancelTooltip': 'Diese Frage überspringen — der Agent macht ohne Antwort weiter',
+  'askUserQuestion.collapse': 'Fragebereich einklappen',
+  'askUserQuestion.expand': 'Fragebereich ausklappen',
 
   // Interactive permission request panel
   'permissionRequest.title': 'Der Agent möchte ein Tool verwenden',

@@ -1073,6 +1073,8 @@ export default {
   'askUserQuestion.previous': 'Indietro',
   'askUserQuestion.cancel': 'Annulla',
   'askUserQuestion.cancelTooltip': "Salta questa domanda — l'agente proseguirà senza risposta",
+  'askUserQuestion.collapse': 'Riduci il pannello della domanda',
+  'askUserQuestion.expand': 'Espandi il pannello della domanda',
 
   // Interactive permission request panel
   'permissionRequest.title': "L'agente vuole usare uno strumento",

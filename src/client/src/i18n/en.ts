@@ -1063,6 +1063,8 @@ export default {
   'askUserQuestion.previous': 'Previous',
   'askUserQuestion.cancel': 'Cancel',
   'askUserQuestion.cancelTooltip': 'Skip this question — the agent will proceed without an answer',
+  'askUserQuestion.collapse': 'Collapse the question panel',
+  'askUserQuestion.expand': 'Expand the question panel',
 
   // Interactive permission request panel
   'permissionRequest.title': 'The agent wants to use a tool',

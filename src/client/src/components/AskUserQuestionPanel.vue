@@ -1,18 +1,30 @@
 <template>
-  <div v-if="pending" class="ask-user-question-panel q-pa-sm bg-dark text-grey-3">
+  <div v-if="pending" class="ask-user-question-panel q-pa-sm bg-dark text-grey-3" :class="{ collapsed }">
     <div class="row items-center q-mb-xs">
       <q-icon name="question_answer" size="16px" color="amber-4" class="q-mr-sm" />
       <div class="text-caption text-uppercase text-weight-bold text-amber-4" style="letter-spacing: 0.05em;">
         {{ t('askUserQuestion.title') }}
       </div>
       <q-space />
-      <span v-if="questions.length > 1" class="text-caption text-grey-6">
+      <span v-if="questions.length > 1" class="text-caption text-grey-6 q-mr-sm">
         {{ stepIndex + 1 }} / {{ questions.length }}
       </span>
+      <q-btn
+        :icon="collapsed ? 'expand_more' : 'expand_less'"
+        flat
+        dense
+        size="sm"
+        color="grey-4"
+        :aria-label="t(collapsed ? 'askUserQuestion.expand' : 'askUserQuestion.collapse')"
+        @click="collapsed = !collapsed"
+      >
+        <q-tooltip>{{ t(collapsed ? 'askUserQuestion.expand' : 'askUserQuestion.collapse') }}</q-tooltip>
+      </q-btn>
     </div>
 
     <q-stepper
       v-if="currentQuestion"
+      v-show="!collapsed"
       ref="stepperRef"
       v-model="stepIndex"
       flat
@@ -173,6 +185,7 @@ const singleAnswers = ref<Record<string, string>>({})
 const submitting = ref(false)
 const error = ref<string | null>(null)
 const stepIndex = ref(0)
+const collapsed = ref(false)
 
 watch(
   questions,
@@ -182,6 +195,7 @@ watch(
     error.value = null
     stepIndex.value = 0
     submitting.value = false
+    collapsed.value = false
   },
   { immediate: true },
 )
@@ -263,6 +277,13 @@ async function cancel(): Promise<void> {
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   max-height: 38vh;
   overflow-y: auto;
+}
+.ask-user-question-panel.collapsed {
+  max-height: none;
+  overflow-y: visible;
+}
+.ask-user-question-panel.collapsed .row {
+  margin-bottom: 0;
 }
 .aukq-stepper :deep(.q-stepper__header) {
   min-height: 56px;
