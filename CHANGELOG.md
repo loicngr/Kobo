@@ -8,8 +8,6 @@ section — the in-app "What's new" dialog reads this file.
 
 - chore(audit): fix npm audit
 - feat(client): collapsible ask-user-question panel
-- feat: per-workspace chat history + inline file editing in the diff viewer
-- feat: multi-forge, change source branch, workspace attention
 
 ## 1.7.17
 
