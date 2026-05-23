@@ -663,9 +663,10 @@ const isAutoLoopRunning = computed(() => {
 })
 
 const isAwaitingUser = computed(() => store.selectedWorkspace?.status === 'awaiting-user')
+const isArchived = computed(() => Boolean(store.selectedWorkspace?.archivedAt))
 
 const isDisabled = computed(() => {
-  return !props.workspaceId || isAutoLoopRunning.value || isAwaitingUser.value
+  return !props.workspaceId || isAutoLoopRunning.value || isAwaitingUser.value || isArchived.value
 })
 
 const voiceEnabled = computed(() => settingsStore.global.voiceEnabled && !isDisabled.value)

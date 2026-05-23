@@ -178,7 +178,7 @@
             :label="$t('git.createRequest', { request: forge.capabilities.requestTermShort })"
             class="full-width q-mb-xs"
             :loading="openingPr"
-            :disable="!workspace || pushing || !canOpenPr"
+            :disable="!workspace || pushing || !canOpenPr || isArchived"
             @click="handleOpenPr"
           >
             <q-tooltip v-if="!canOpenPr && createPrDisabledReason">{{ createPrDisabledReason }}</q-tooltip>
@@ -196,13 +196,13 @@
               :label="$t('git.sync')"
               class="full-width git-btn"
               :loading="pulling || rebasing || merging"
-              :disable="!workspace || pushing"
+              :disable="!workspace || pushing || isArchived"
               @click="gitStats.unpushedCount === -1 ? handleRebase() : handlePull()"
             >
               <q-list dark dense style="min-width: 140px;">
                 <q-item
                   clickable v-close-popup
-                  :disable="pulling || rebasing || merging || gitStats.unpushedCount === -1"
+                  :disable="pulling || rebasing || merging || gitStats.unpushedCount === -1 || isArchived"
                   @click="handlePull"
                 >
                   <q-item-section avatar style="min-width: 28px;">
@@ -211,13 +211,13 @@
                   <q-item-section>{{ $t('git.pull') }}</q-item-section>
                   <q-tooltip v-if="gitStats.unpushedCount === -1">{{ $t('git.pullNoUpstream') }}</q-tooltip>
                 </q-item>
-                <q-item clickable v-close-popup :disable="pulling || rebasing || merging" @click="handleRebase">
+                <q-item clickable v-close-popup :disable="pulling || rebasing || merging || isArchived" @click="handleRebase">
                   <q-item-section avatar style="min-width: 28px;">
                     <q-icon name="replay" size="16px" color="orange-4" />
                   </q-item-section>
                   <q-item-section>{{ $t('git.rebase') }}</q-item-section>
                 </q-item>
-                <q-item clickable v-close-popup :disable="pulling || rebasing || merging" @click="handleMerge">
+                <q-item clickable v-close-popup :disable="pulling || rebasing || merging || isArchived" @click="handleMerge">
                   <q-item-section avatar style="min-width: 28px;">
                     <q-icon name="merge" size="16px" color="purple-4" />
                   </q-item-section>
@@ -234,7 +234,7 @@
               :label="$t('git.push')"
               class="full-width git-btn"
               :loading="pushing"
-              :disable="!workspace || openingPr || pulling || rebasing"
+              :disable="!workspace || openingPr || pulling || rebasing || isArchived"
               @click="handlePush"
             >
               <q-tooltip anchor="bottom middle" self="top middle" :delay="400">{{ $t('git.push') }}</q-tooltip>
@@ -265,7 +265,7 @@
                   <q-item
                     v-if="canRenameBranch"
                     clickable v-close-popup
-                    :disable="renamingBranch"
+                    :disable="renamingBranch || isArchived"
                     @click="openRenameBranchDialog"
                   >
                     <q-item-section avatar style="min-width: 28px;">
@@ -276,7 +276,7 @@
                   <q-item
                     v-if="gitStats?.prUrl && gitStats.prState === 'OPEN'"
                     clickable v-close-popup
-                    :disable="changingBase"
+                    :disable="changingBase || isArchived"
                     @click="handleChangePrBase"
                   >
                     <q-item-section avatar style="min-width: 28px;">
@@ -287,7 +287,7 @@
                   <q-item
                     v-if="changeSourceBranchEnabled"
                     clickable v-close-popup
-                    :disable="changingSource"
+                    :disable="changingSource || isArchived"
                     @click="handleChangeSourceBranch"
                   >
                     <q-item-section avatar style="min-width: 28px;">
@@ -452,6 +452,8 @@ const { t } = useI18n()
 const $q = useQuasar()
 const store = useWorkspaceStore()
 const settingsStore = useSettingsStore()
+
+const isArchived = computed<boolean>(() => Boolean(props.workspace?.archivedAt))
 
 /** The change-source-branch action is hidden unless a script is configured
  *  (per-project override or global default). Empty script = feature off. */

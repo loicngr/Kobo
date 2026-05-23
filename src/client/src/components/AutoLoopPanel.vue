@@ -7,6 +7,7 @@
       color="negative"
       icon="stop"
       :label="t('autoLoop.stop')"
+      :disable="isArchived"
       @click="onStop"
     />
 
@@ -31,7 +32,7 @@
       color="indigo-4"
       icon="build"
       :label="isReady ? t('autoLoop.reprepare') : t('autoLoop.prepare')"
-      :disable="isAgentBusy"
+      :disable="isAgentBusy || isArchived"
       @click="onPrepare"
     >
       <q-tooltip v-if="isAgentBusy">{{ t('autoLoop.prepareBusy') }}</q-tooltip>
@@ -46,7 +47,7 @@
       size="sm"
       color="grey-5"
       :label="t('autoLoop.forceReady')"
-      :disable="isAgentBusy"
+      :disable="isAgentBusy || isArchived"
       @click="onForceReady"
     >
       <q-tooltip v-if="isAgentBusy">{{ t('autoLoop.prepareBusy') }}</q-tooltip>
@@ -75,8 +76,9 @@ const isReady = computed(() => !!status.value?.auto_loop_ready)
 const isOn = computed(() => !!status.value?.auto_loop)
 const canEnable = computed(() => isReady.value && hasTasks.value)
 const isAgentBusy = computed(() => isBusyStatus(ws.value?.status))
+const isArchived = computed(() => Boolean(ws.value?.archivedAt))
 
-const startDisabled = computed(() => !canEnable.value)
+const startDisabled = computed(() => !canEnable.value || isArchived.value)
 const startTooltip = computed(() => {
   if (!isReady.value) return t('autoLoop.notReady')
   if (!hasTasks.value) return t('autoLoop.noTasks')

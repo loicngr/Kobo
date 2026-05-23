@@ -63,7 +63,7 @@ import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{
-  workspace: { id: string; projectPath: string } | null
+  workspace: { id: string; projectPath: string; archivedAt?: string | null } | null
 }>()
 
 const { t } = useI18n()
@@ -120,12 +120,16 @@ const statusLabel = computed(() => {
   }
 })
 
+const isArchived = computed(() => Boolean(props.workspace?.archivedAt))
+
 const canStart = computed(() => {
+  if (isArchived.value) return false
   const s = status.value?.status
   return !s || s === 'stopped' || s === 'unknown' || s === 'error'
 })
 
 const canStop = computed(() => {
+  if (isArchived.value) return false
   const s = status.value?.status
   return s === 'running' || s === 'starting'
 })
