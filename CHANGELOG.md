@@ -4,6 +4,15 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.7.19
+
+- feat(client): archived banner, Fix-CI button, changelog page, prompt-retry banner (Open archived workspace)
+- feat(server): workspace lifecycle, CI failure UX, collision-safe creation (error in setup script)
+- feat(client): disable mutating actions on archived workspaces
+- feat(pr-watcher): mark workspace unread on attention transitions (ci request changes)
+- chore(deps): npm audit fix
+- chore(CHANGELOG): update
+
 ## 1.7.18
 
 - chore(audit): fix npm audit
