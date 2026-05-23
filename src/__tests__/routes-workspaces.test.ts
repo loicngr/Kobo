@@ -37,6 +37,8 @@ vi.mock('../server/services/workspace-service.js', () => ({
   unsetFavorite: vi.fn(),
   setWorkspaceTags: vi.fn(),
   updateWorkspaceSourceBranch: vi.fn(),
+  setInitialPrompt: vi.fn(),
+  clearInitialPrompt: vi.fn(),
 }))
 
 vi.mock('../server/services/worktree-service.js', () => ({
@@ -307,6 +309,10 @@ beforeEach(() => {
   vi.clearAllMocks()
   // fetchSourceBranch succeeds by default; individual tests can override.
   vi.mocked(gitOps.fetchSourceBranch).mockReturnValue(undefined)
+  // Reset the async-fetch default (clearAllMocks wipes call history but some
+  // tests below override with mockResolvedValueOnce — re-pin the baseline so
+  // every test sees a resolved promise unless it explicitly opts in).
+  vi.mocked(gitOps.fetchSourceBranchAsync).mockResolvedValue(undefined)
   vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
     model: 'auto',
     dangerouslySkipPermissions: true,
@@ -1679,6 +1685,49 @@ describe('POST /api/workspaces/:id/start', () => {
       undefined,
       'auto',
     )
+  })
+
+  it('falls back to pending initial_prompt when no body.prompt is provided', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      initialPrompt: 'Pending brainstorm prompt after setup-script crash',
+    } as never)
+    vi.mocked(workspaceService.updateWorkspaceStatus).mockReturnValue({
+      ...fakeWorkspace,
+      status: 'executing',
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/start', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    const [, , promptArg] = vi.mocked(agentManager.startAgent).mock.calls[0]
+    expect(promptArg).toBe('Pending brainstorm prompt after setup-script crash')
+    // Cleared after the agent has been handed the prompt.
+    expect(workspaceService.clearInitialPrompt).toHaveBeenCalledWith('ws-1')
+  })
+
+  it('body.prompt wins over pending initial_prompt', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      initialPrompt: 'should be ignored',
+    } as never)
+    vi.mocked(workspaceService.updateWorkspaceStatus).mockReturnValue({
+      ...fakeWorkspace,
+      status: 'executing',
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: 'explicit user prompt' }),
+    })
+
+    expect(res.status).toBe(200)
+    const [, , promptArg] = vi.mocked(agentManager.startAgent).mock.calls[0]
+    expect(promptArg).toBe('explicit user prompt')
+    // Even when an explicit prompt wins, the pending initial_prompt is still
+    // cleared so the next /:id/start without body.prompt doesn't replay it.
+    expect(workspaceService.clearInitialPrompt).toHaveBeenCalledWith('ws-1')
   })
 
   it('returns 404 for unknown workspace', async () => {
@@ -4069,9 +4118,45 @@ describe('GET /api/workspaces/:id/prep-autoloop-prompt', () => {
 })
 
 describe('POST /api/workspaces — worktree path collision', () => {
-  it('returns 409 when the prospective worktree path already exists, no DB write', async () => {
-    // Make fs.existsSync return true for paths containing the working branch
-    // (simulating a pre-existing worktree directory on disk).
+  it('appends a hash suffix when the prospective worktree path already exists and surfaces the flag via header', async () => {
+    // First call (base path) → taken. Subsequent calls (suffixed) → free.
+    let existsCalls = 0
+    vi.mocked(fs.existsSync).mockImplementation((p) => {
+      if (typeof p !== 'string') return false
+      // Only collide on the exact base path; the suffixed variants are free.
+      if (p.endsWith('/feature/test')) {
+        existsCalls++
+        return true
+      }
+      return false
+    })
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktree).mockImplementation((_p, branch) => `/tmp/project/.worktrees/${branch}`)
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(res.headers.get('X-Kobo-Branch-Adjusted')).toBe('1')
+    expect(existsCalls).toBeGreaterThanOrEqual(1)
+    // The workspace must have been created with the suffixed branch name.
+    const createCall = vi.mocked(workspaceService.createWorkspace).mock.calls[0][0]
+    expect(createCall.workingBranch).toMatch(/^feature\/test-[A-Z0-9]{4}$/)
+    expect(createCall.worktreePath).toContain(createCall.workingBranch)
+  })
+
+  it('returns 409 with a clear error after exhausting all retries', async () => {
+    // Every candidate path is taken — resolver exhausts retries.
     vi.mocked(fs.existsSync).mockImplementation((p) => {
       return typeof p === 'string' && p.includes('feature/test')
     })
@@ -4089,7 +4174,7 @@ describe('POST /api/workspaces — worktree path collision', () => {
 
     expect(res.status).toBe(409)
     const data = await res.json()
-    expect(data.error).toMatch(/already exists/i)
+    expect(data.error).toMatch(/unique branch/i)
     expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
   })
 
@@ -4823,5 +4908,164 @@ describe('save-file', () => {
       body: JSON.stringify({ path: '../etc/passwd', content: 'x', baseSha: 'abc' }),
     })
     expect(res.status).toBe(500)
+  })
+})
+
+describe('POST /api/workspaces/:id/start-ci-fix', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  function mockFailingCiSnapshot(overrides: Record<string, unknown> = {}) {
+    return {
+      number: 42,
+      title: 'fix something',
+      url: 'https://github.com/org/repo/pull/42',
+      state: 'OPEN',
+      base: 'develop',
+      reviewDecision: null,
+      author: { login: 'me' },
+      assignees: [],
+      reviewers: [],
+      labels: [],
+      ci: {
+        rollup: 'FAILURE',
+        checks: [
+          { name: 'lint', conclusion: 'FAILURE', status: 'COMPLETED', detailsUrl: 'https://ci/1' },
+          { name: 'tests', conclusion: 'FAILURE', status: 'COMPLETED', detailsUrl: null },
+          { name: 'fast', conclusion: 'SUCCESS', status: 'COMPLETED', detailsUrl: null },
+        ],
+      },
+      updatedAt: '2026-05-01T00:00:00.000Z',
+      unresolvedReviewThreadsCount: 0,
+      ...overrides,
+    }
+  }
+
+  it('returns 404 when workspace is unknown', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+    const res = await app.request('/api/workspaces/ghost/start-ci-fix', { method: 'POST' })
+    expect(res.status).toBe(404)
+  })
+
+  it('returns 400 when workspace is archived', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      archivedAt: '2026-04-01T00:00:00.000Z',
+    } as never)
+    const res = await app.request('/api/workspaces/ws-1/start-ci-fix', { method: 'POST' })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toMatch(/archived/i)
+  })
+
+  it('returns 400 when no failing CI is detected', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.refreshPrSnapshot).mockResolvedValueOnce(null)
+    vi.mocked(prWatcher.getAllPrSnapshots).mockReturnValue({})
+
+    const res = await app.request('/api/workspaces/ws-1/start-ci-fix', { method: 'POST' })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toMatch(/no failing ci/i)
+  })
+
+  it('returns 400 when CI is not in FAILURE state', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.refreshPrSnapshot).mockResolvedValueOnce(
+      mockFailingCiSnapshot({ ci: { rollup: 'SUCCESS', checks: [] } }) as never,
+    )
+
+    const res = await app.request('/api/workspaces/ws-1/start-ci-fix', { method: 'POST' })
+    expect(res.status).toBe(400)
+  })
+
+  it('returns 400 when no ciFixPromptTemplate is configured', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.refreshPrSnapshot).mockResolvedValueOnce(mockFailingCiSnapshot() as never)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
+      model: 'auto',
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      ciFixPromptTemplate: '',
+      gitConventions: '',
+      sourceBranch: 'main',
+      devServer: null,
+      setupScript: '',
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
+    } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/start-ci-fix', { method: 'POST' })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toMatch(/no ci-fix prompt template/i)
+  })
+
+  it('sends the rendered template to the active agent and returns ok', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
+    vi.mocked(workspaceService.getActiveSession).mockReturnValue({
+      id: 'sess-1',
+      workspaceId: 'ws-1',
+      pid: null,
+      claudeSessionId: null,
+      status: 'idle',
+      startedAt: null,
+      endedAt: null,
+      name: null,
+    } as never)
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.refreshPrSnapshot).mockResolvedValueOnce(mockFailingCiSnapshot() as never)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
+      model: 'auto',
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      ciFixPromptTemplate: 'Fix CI on PR {{pr_url}}\n{{failed_jobs}}',
+      gitConventions: '',
+      sourceBranch: 'main',
+      devServer: null,
+      setupScript: '',
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
+    } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/start-ci-fix', { method: 'POST' })
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as { ok: boolean; failedChecksCount: number }
+    expect(body.ok).toBe(true)
+    expect(body.failedChecksCount).toBe(2)
+
+    expect(agentManager.sendMessage).toHaveBeenCalledTimes(1)
+    const [, prompt] = vi.mocked(agentManager.sendMessage).mock.calls[0]
+    expect(prompt).toContain('https://github.com/org/repo/pull/42')
+    expect(prompt).toContain('- lint')
+    expect(prompt).toContain('- tests')
+    expect(prompt).not.toContain('- fast')
+  })
+
+  it('starts a fresh resume session when sendMessage throws (no live agent)', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
+    vi.mocked(workspaceService.getActiveSession).mockReturnValue(null)
+    vi.mocked(agentManager.sendMessage).mockImplementationOnce(() => {
+      throw new Error('no live agent')
+    })
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.refreshPrSnapshot).mockResolvedValueOnce(mockFailingCiSnapshot() as never)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
+      model: 'auto',
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      ciFixPromptTemplate: 'fix it',
+      gitConventions: '',
+      sourceBranch: 'main',
+      devServer: null,
+      setupScript: '',
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
+    } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/start-ci-fix', { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect(agentManager.startAgent).toHaveBeenCalledTimes(1)
+    // resume=true → 5th positional arg
+    expect(vi.mocked(agentManager.startAgent).mock.calls[0][4]).toBe(true)
   })
 })

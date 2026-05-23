@@ -58,6 +58,25 @@ export function isValidCleanupScriptMode(value: unknown): value is CleanupScript
   return typeof value === 'string' && (CLEANUP_SCRIPT_MODES as string[]).includes(value)
 }
 
+export const DEFAULT_CI_FIX_PROMPT_TEMPLATE = `The CI pipeline is failing on this branch. Investigate and fix every failing job.
+
+Context:
+- Workspace: {{workspace_name}}
+- Project: {{project_name}}
+- Branch: \`{{branch_name}}\` → \`{{source_branch}}\`
+- PR: {{pr_url}} (#{{pr_number}})
+
+Failing jobs:
+{{failed_jobs}}
+
+Steps:
+1. For each failing job, fetch its logs from the forge and pinpoint the root cause.
+2. Fix the underlying issue locally — never disable a check or skip a test to "fix" CI.
+3. Run the relevant lint / type-check / test commands locally to verify the fix.
+4. Commit with a clear, conventional message and push to the same branch.
+5. Wait for CI to re-run and confirm every job now passes.
+`
+
 export const DEFAULT_PR_PROMPT_TEMPLATE = `A pull request has been opened: {{pr_url}} (#{{pr_number}})
 
 Context:
@@ -121,6 +140,11 @@ export interface ProjectSettings {
   dangerouslySkipPermissions: boolean
   prPromptTemplate: string
   reviewPromptTemplate: string
+  /**
+   * Per-project override of the global CI-fix prompt. Empty inherits the
+   * global value. Seeded by settings migration v34.
+   */
+  ciFixPromptTemplate: string
   notionInitialPromptTemplate: string
   sentryInitialPromptTemplate: string
   gitConventions: string
@@ -174,6 +198,12 @@ export interface GlobalSettings {
   dangerouslySkipPermissions: boolean
   prPromptTemplate: string
   reviewPromptTemplate: string
+  /**
+   * Template rendered and dispatched to the agent by the "Fix CI" action when
+   * a workspace's PR has failing CI. Empty disables the feature. Seeded with
+   * DEFAULT_CI_FIX_PROMPT_TEMPLATE by settings migration v34.
+   */
+  ciFixPromptTemplate: string
   notionInitialPromptTemplate: string
   sentryInitialPromptTemplate: string
   gitConventions: string
@@ -720,6 +750,18 @@ const settingsMigrations: SettingsMigration[] = [
       }
     },
   },
+  {
+    version: 34,
+    name: 'add-ci-fix-prompt-template',
+    migrate: ({ global, projects }) => {
+      if (typeof global.ciFixPromptTemplate !== 'string') {
+        global.ciFixPromptTemplate = DEFAULT_CI_FIX_PROMPT_TEMPLATE
+      }
+      for (const p of projects) {
+        if (typeof p.ciFixPromptTemplate !== 'string') p.ciFixPromptTemplate = ''
+      }
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -732,6 +774,7 @@ export interface EffectiveSettings {
   dangerouslySkipPermissions: boolean
   prPromptTemplate: string
   reviewPromptTemplate: string
+  ciFixPromptTemplate: string
   notionInitialPromptTemplate: string
   sentryInitialPromptTemplate: string
   gitConventions: string
@@ -780,6 +823,7 @@ function defaultSettings(): Settings {
       dangerouslySkipPermissions: true,
       prPromptTemplate: DEFAULT_PR_PROMPT_TEMPLATE,
       reviewPromptTemplate: DEFAULT_REVIEW_PROMPT_TEMPLATE,
+      ciFixPromptTemplate: DEFAULT_CI_FIX_PROMPT_TEMPLATE,
       notionInitialPromptTemplate: DEFAULT_NOTION_INITIAL_PROMPT,
       sentryInitialPromptTemplate: DEFAULT_SENTRY_INITIAL_PROMPT,
       gitConventions: DEFAULT_GIT_CONVENTIONS,
@@ -836,6 +880,7 @@ function defaultProjectSettings(projectPath: string): ProjectSettings {
     dangerouslySkipPermissions: true,
     prPromptTemplate: '',
     reviewPromptTemplate: '',
+    ciFixPromptTemplate: '',
     notionInitialPromptTemplate: '',
     sentryInitialPromptTemplate: '',
     gitConventions: '',
@@ -1085,6 +1130,7 @@ export function getEffectiveSettings(projectPath: string): EffectiveSettings {
       dangerouslySkipPermissions: settings.global.dangerouslySkipPermissions,
       prPromptTemplate: settings.global.prPromptTemplate,
       reviewPromptTemplate: settings.global.reviewPromptTemplate,
+      ciFixPromptTemplate: settings.global.ciFixPromptTemplate,
       notionInitialPromptTemplate: settings.global.notionInitialPromptTemplate,
       sentryInitialPromptTemplate: settings.global.sentryInitialPromptTemplate,
       gitConventions: settings.global.gitConventions,
@@ -1112,6 +1158,7 @@ export function getEffectiveSettings(projectPath: string): EffectiveSettings {
     dangerouslySkipPermissions: project.dangerouslySkipPermissions ?? settings.global.dangerouslySkipPermissions,
     prPromptTemplate: project.prPromptTemplate || settings.global.prPromptTemplate,
     reviewPromptTemplate: project.reviewPromptTemplate || settings.global.reviewPromptTemplate,
+    ciFixPromptTemplate: project.ciFixPromptTemplate || settings.global.ciFixPromptTemplate,
     notionInitialPromptTemplate: project.notionInitialPromptTemplate || settings.global.notionInitialPromptTemplate,
     sentryInitialPromptTemplate: project.sentryInitialPromptTemplate || settings.global.sentryInitialPromptTemplate,
     gitConventions: project.gitConventions || settings.global.gitConventions,
@@ -1151,6 +1198,7 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'dangerouslySkipPermissions',
     'prPromptTemplate',
     'reviewPromptTemplate',
+    'ciFixPromptTemplate',
     'notionInitialPromptTemplate',
     'sentryInitialPromptTemplate',
     'gitConventions',
@@ -1274,6 +1322,7 @@ export function upsertProject(projectPath: string, data: Partial<Omit<ProjectSet
     'dangerouslySkipPermissions',
     'prPromptTemplate',
     'reviewPromptTemplate',
+    'ciFixPromptTemplate',
     'notionInitialPromptTemplate',
     'sentryInitialPromptTemplate',
     'gitConventions',

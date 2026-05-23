@@ -41,8 +41,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 24', () => {
-    expect(SCHEMA_VERSION).toBe(24)
+  it('exporte SCHEMA_VERSION = 25', () => {
+    expect(SCHEMA_VERSION).toBe(25)
   })
 
   it('migration v17 unifies legacy permission_mode + permission_profile into agent_permission_mode', () => {
@@ -1636,6 +1636,65 @@ describe('migration v24: add-workspace-chat-history-table', () => {
     db.prepare('DELETE FROM workspaces WHERE id = ?').run('w1')
     expect((db.prepare('SELECT COUNT(*) as c FROM workspace_chat_history').get() as { c: number }).c).toBe(0)
 
+    db.close()
+  })
+})
+
+describe('migration v25: add-workspace-initial-prompt', () => {
+  it('adds the nullable initial_prompt column to workspaces after runMigrations', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{
+      name: string
+      notnull: number
+      dflt_value: unknown
+    }>
+    const col = cols.find((c) => c.name === 'initial_prompt')
+    expect(col).toBeTruthy()
+    expect(col?.notnull).toBe(0)
+    expect(col?.dflt_value).toBeNull()
+    db.close()
+  })
+
+  it('fresh install via initSchema produces the same initial_prompt column as runMigrations', () => {
+    const freshDb = new Database(':memory:')
+    initSchema(freshDb)
+    const freshCol = (freshDb.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>).find(
+      (c) => c.name === 'initial_prompt',
+    )
+
+    const upgradedDb = new Database(':memory:')
+    runMigrations(upgradedDb)
+    const upgradedCol = (upgradedDb.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>).find(
+      (c) => c.name === 'initial_prompt',
+    )
+
+    expect(freshCol).toEqual(upgradedCol)
+    freshDb.close()
+    upgradedDb.close()
+  })
+
+  it('v24 → v25 upgrade preserves existing workspace data and defaults initial_prompt to NULL', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run('w1', 'legacy', '/tmp/p', 'main', 'feat', '2025-01-01', '2025-01-01')
+
+    const row = db.prepare('SELECT id, name, initial_prompt FROM workspaces WHERE id = ?').get('w1') as
+      | { id: string; name: string; initial_prompt: string | null }
+      | undefined
+    expect(row).toEqual({ id: 'w1', name: 'legacy', initial_prompt: null })
+    db.close()
+  })
+
+  it('is idempotent — re-running runMigrations does not re-add the column', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    runMigrations(db) // second pass should be a no-op
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
+    expect(cols.filter((c) => c.name === 'initial_prompt')).toHaveLength(1)
     db.close()
   })
 })

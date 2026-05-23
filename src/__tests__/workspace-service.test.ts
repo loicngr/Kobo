@@ -1413,6 +1413,51 @@ describe('updateWorkspaceAgentDescription()', () => {
   })
 })
 
+describe('setInitialPrompt() / clearInitialPrompt()', () => {
+  it('defaults initialPrompt to null on a fresh workspace', async () => {
+    const { createWorkspace, getWorkspace } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'W',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'feature/x',
+    })
+    expect(getWorkspace(ws.id)?.initialPrompt).toBeNull()
+  })
+
+  it('persists the prompt and reads it back via getWorkspace()', async () => {
+    const { createWorkspace, getWorkspace, setInitialPrompt } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'W',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'feature/x',
+    })
+    setInitialPrompt(ws.id, 'a long brainstorm prompt')
+    expect(getWorkspace(ws.id)?.initialPrompt).toBe('a long brainstorm prompt')
+  })
+
+  it('clearInitialPrompt() resets the column to null', async () => {
+    const { createWorkspace, getWorkspace, setInitialPrompt, clearInitialPrompt } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const ws = createWorkspace({
+      name: 'W',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'feature/x',
+    })
+    setInitialPrompt(ws.id, 'pending')
+    clearInitialPrompt(ws.id)
+    expect(getWorkspace(ws.id)?.initialPrompt).toBeNull()
+  })
+
+  it('throws when workspace not found', async () => {
+    const { setInitialPrompt } = await import('../server/services/workspace-service.js')
+    expect(() => setInitialPrompt('does-not-exist', 'x')).toThrowError(/not found/)
+  })
+})
+
 describe('archiveWorkspace + deleteWorkspace — cron cascade', () => {
   it('cancels all crons of a workspace on archive', async () => {
     const { createWorkspace, archiveWorkspace } = await import('../server/services/workspace-service.js')

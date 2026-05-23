@@ -15,6 +15,7 @@ import * as archiveScriptService from '../services/archive-script-service.js'
 import * as autoLoopService from '../services/auto-loop-service.js'
 import { changeSourceBranch } from '../services/change-source-branch-service.js'
 import { listChatHistory, pushChatHistory } from '../services/chat-history-service.js'
+import { type CiFixCheck, renderCiFixTemplate } from '../services/ci-fix-template-service.js'
 import * as cronService from '../services/cron-service.js'
 import * as devServerService from '../services/dev-server-service.js'
 import { saveWorkspaceFile, shaOf } from '../services/file-editor-service.js'
@@ -43,9 +44,10 @@ import * as wsService from '../services/websocket-service.js'
 import type { AgentPermissionMode, WorkspaceStatus } from '../services/workspace-service.js'
 import * as workspaceService from '../services/workspace-service.js'
 import * as worktreeService from '../services/worktree-service.js'
+import { resolveUniqueBranchAndPath } from '../utils/branch-resolver.js'
 import * as gitOps from '../utils/git-ops.js'
 import { slugifyProjectName } from '../utils/project-slug.js'
-import { resolveSiblingWorkspaceWorktreePath, resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
+import { resolveSiblingWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 
 /** Hono sub-router for workspace CRUD, tasks, agent lifecycle, git operations, and PR creation. */
 const app = new Hono()
@@ -286,21 +288,31 @@ app.post('/', migrationGuard, async (c) => {
       : undefined
 
     // Resolve the prospective worktree path unconditionally so that:
-    //   1. We can refuse the request before any DB write when the path exists.
-    //   2. createWorkspace always receives the correct slug-prefixed path and
+    //   1. createWorkspace always receives the correct slug-prefixed path and
     //      never falls back to the no-slug resolver inside workspace-service.
+    //   2. When the requested branch / on-disk path is already taken we append
+    //      a short hash (e.g. `feature/foo-A45C`) instead of rejecting the
+    //      request — keeps the user's flow smooth at the cost of a longer
+    //      branch name. The same hash is applied to BOTH the branch and the
+    //      worktree path so they stay aligned.
     let prospectiveWorktreePath: string
+    let workingBranchAdjusted = false
     if (useReusedWorktree) {
       prospectiveWorktreePath = body.worktreePath as string
     } else {
-      prospectiveWorktreePath = resolveWorkspaceWorktreePath(
-        body.projectPath,
-        workingBranch,
-        globalSettings.worktreesPath,
-        projectSlug,
-      )
-      if (fs.existsSync(prospectiveWorktreePath)) {
-        return c.json({ error: `Worktree path already exists: ${prospectiveWorktreePath}` }, 409)
+      try {
+        const resolved = resolveUniqueBranchAndPath({
+          projectPath: body.projectPath,
+          baseBranch: workingBranch,
+          worktreesPath: globalSettings.worktreesPath,
+          projectSlug,
+        })
+        workingBranch = resolved.workingBranch
+        prospectiveWorktreePath = resolved.worktreePath
+        workingBranchAdjusted = resolved.adjusted
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        return c.json({ error: message }, 409)
       }
     }
 
@@ -479,32 +491,10 @@ app.post('/', migrationGuard, async (c) => {
       }
     }
 
-    // Run setup script if configured and not skipped
+    // The setup script runs LATER (after the brainstorm prompt is built and
+    // persisted via setInitialPrompt). This guarantees the prompt survives a
+    // setup-script crash and can be replayed by /:id/start.
     let setupScriptFailed = false
-    // Skip the setup script when reusing an existing worktree — the user
-    // already has the environment set up there and rerunning it could be
-    // destructive (drop a node_modules they curated, etc.).
-    if (effectiveSettings.setupScript && !body.skipSetupScript && !useReusedWorktree) {
-      workspaceService.updateWorkspaceStatus(workspace.id, 'extracting')
-      wsService.emit(workspace.id, 'setup:output', { text: '[kobo] Running setup script...' })
-      try {
-        const result = await runSetupScript(workspace.id, worktreePath, effectiveSettings.setupScript, {
-          workspaceName: workspace.name,
-          branchName: workingBranch,
-          sourceBranch: body.sourceBranch,
-          projectPath: body.projectPath,
-        })
-        if (result.exitCode !== 0) {
-          workspaceService.updateWorkspaceStatus(workspace.id, 'error')
-          setupScriptFailed = true
-        }
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        console.error(`[workspaces] Setup script error: ${message}`)
-        workspaceService.updateWorkspaceStatus(workspace.id, 'error')
-        setupScriptFailed = true
-      }
-    }
 
     // Save Notion content as markdown in worktree
     let notionFilePath: string | null = null
@@ -635,11 +625,15 @@ app.post('/', migrationGuard, async (c) => {
       })
     }
 
-    // Skip agent launch if setup script failed — workspace stays in 'error' status
-    if (!setupScriptFailed) {
-      // Transition to brainstorming and build the initial agent prompt
-      workspaceService.updateWorkspaceStatus(workspace.id, 'brainstorming')
-
+    // Build the initial agent prompt BEFORE the setup script runs so a crash
+    // there cannot lose user input (description, Notion/Sentry context, tasks).
+    // The prompt is persisted to workspace.initial_prompt; the agent-start path
+    // clears it once successfully consumed. The workspace status is moved to
+    // `brainstorming` LATER — either after a successful setup script, or
+    // directly if no setup script is configured. This keeps the
+    // VALID_TRANSITIONS contract intact (`created → extracting → brainstorming`
+    // vs `created → brainstorming` when setup is skipped).
+    {
       // Resolve the per-feature initial-prompt templates with single-fallback
       // semantics: project || global is already handled inside getEffectiveSettings,
       // and a whitespace-only string acts as a user escape hatch (skip injection).
@@ -785,32 +779,88 @@ ${AUTO_LOOP_HARD_RULES}`
 Once the brainstorming + planning steps above are complete and you have a saved plan file, output [BRAINSTORM_COMPLETE] on its own line BEFORE starting implementation. Kōbō uses that marker to transition the workspace from \`brainstorming\` to \`executing\`. Then proceed with implementation.`
       }
 
+      // Persist the assembled prompt so a setup-script crash (or any later
+      // failure) doesn't lose the user's input. Cleared once the agent
+      // successfully ingests it below or by POST /:id/start on retry.
       try {
-        const agent = agentManager.startAgent(
-          workspace.id,
-          worktreePath,
-          brainstormPrompt,
-          workspace.model,
-          false,
-          workspace.agentPermissionMode,
-          undefined,
-          workspace.reasoningEffort,
-        )
-        // Persist the initial prompt in the feed so it's visible in the chat,
-        // tagged with the freshly created session id so the strict session filter shows it.
-        wsService.emit(
-          workspace.id,
-          'user:message',
-          { content: brainstormPrompt, sender: 'system-prompt' },
-          agent.agentSessionId,
-        )
+        workspaceService.setInitialPrompt(workspace.id, brainstormPrompt)
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        console.error(`[workspaces] Failed to start agent: ${message}`)
+        console.error('[workspaces] setInitialPrompt failed:', err)
+      }
+
+      // Setup script — runs AFTER the prompt is persisted so a crash here
+      // leaves the workspace in `error` state with `initial_prompt` ready for
+      // a retry via POST /:id/start. Skipped when reusing an existing worktree
+      // (rerunning could be destructive — drop a curated node_modules, etc.).
+      const setupScriptConfigured = effectiveSettings.setupScript && !body.skipSetupScript && !useReusedWorktree
+      if (setupScriptConfigured) {
+        workspaceService.updateWorkspaceStatus(workspace.id, 'extracting')
+        wsService.emit(workspace.id, 'setup:output', { text: '[kobo] Running setup script...' })
         try {
+          const result = await runSetupScript(workspace.id, worktreePath, effectiveSettings.setupScript, {
+            workspaceName: workspace.name,
+            branchName: workingBranch,
+            sourceBranch: body.sourceBranch,
+            projectPath: body.projectPath,
+          })
+          if (result.exitCode !== 0) {
+            workspaceService.updateWorkspaceStatus(workspace.id, 'error')
+            setupScriptFailed = true
+          } else {
+            workspaceService.updateWorkspaceStatus(workspace.id, 'brainstorming')
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          console.error(`[workspaces] Setup script error: ${message}`)
           workspaceService.updateWorkspaceStatus(workspace.id, 'error')
-        } catch {
-          /* already logged */
+          setupScriptFailed = true
+        }
+      } else {
+        // No setup step → go straight from `created` to `brainstorming`.
+        workspaceService.updateWorkspaceStatus(workspace.id, 'brainstorming')
+      }
+
+      if (setupScriptFailed) {
+        wsService.emit(workspace.id, 'setup:output', {
+          text:
+            '[kobo] Setup script failed — the agent was NOT started. Your initial prompt has been saved. ' +
+            'Fix the setup script (Settings → Scripts) and click Start to retry with the original prompt.',
+        })
+      } else {
+        try {
+          const agent = agentManager.startAgent(
+            workspace.id,
+            worktreePath,
+            brainstormPrompt,
+            workspace.model,
+            false,
+            workspace.agentPermissionMode,
+            undefined,
+            workspace.reasoningEffort,
+          )
+          // Persist the initial prompt in the feed so it's visible in the chat,
+          // tagged with the freshly created session id so the strict session filter shows it.
+          wsService.emit(
+            workspace.id,
+            'user:message',
+            { content: brainstormPrompt, sender: 'system-prompt' },
+            agent.agentSessionId,
+          )
+          // Agent successfully ingested the prompt — clear it so /:id/start
+          // doesn't replay it on a future restart.
+          try {
+            workspaceService.clearInitialPrompt(workspace.id)
+          } catch (err) {
+            console.error('[workspaces] clearInitialPrompt failed:', err)
+          }
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          console.error(`[workspaces] Failed to start agent: ${message}`)
+          try {
+            workspaceService.updateWorkspaceStatus(workspace.id, 'error')
+          } catch {
+            /* already logged */
+          }
         }
       }
     }
@@ -838,6 +888,12 @@ Once the brainstorming + planning steps above are complete and you have a saved 
 
     // Return created workspace with tasks
     const workspaceWithTasks = workspaceService.getWorkspaceWithTasks(workspace.id)
+    if (workingBranchAdjusted) {
+      // Surface the auto-suffix via a custom header so the client can toast
+      // "Branch already existed — created <new-branch> instead". The actual
+      // resolved branch is on the returned workspace already.
+      c.header('X-Kobo-Branch-Adjusted', '1')
+    }
     return c.json(workspaceWithTasks, 201)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -2220,7 +2276,14 @@ app.post('/:id/start', migrationGuard, async (c) => {
     const body = await c.req
       .json<{ prompt?: string; agentSessionId?: string; resume?: boolean }>()
       .catch(() => ({ prompt: undefined, agentSessionId: undefined, resume: undefined }))
-    const prompt = body.prompt ?? 'Continue the previous task where you left off.'
+    // Prompt resolution order:
+    //  1. Explicit body.prompt (user-typed in the chat input)
+    //  2. Pending workspace.initial_prompt — set by workspace creation when
+    //     a setup-script crash prevented the original agent launch
+    //  3. Generic resume fallback
+    const pendingInitialPrompt =
+      workspace.initialPrompt && workspace.initialPrompt.length > 0 ? workspace.initialPrompt : null
+    const prompt = body.prompt ?? pendingInitialPrompt ?? 'Continue the previous task where you left off.'
     const agentSessionId = body.agentSessionId
     const resume = body.resume === true
 
@@ -2250,6 +2313,25 @@ app.post('/:id/start', migrationGuard, async (c) => {
     // by the user in the chat input; otherwise it's the workspace start prompt.
     if (body.prompt) {
       wsService.emit(id, 'user:message', { content: body.prompt, sender: 'user' }, agent.agentSessionId)
+    } else if (pendingInitialPrompt) {
+      // Pending brainstorm prompt — surface it in the feed so the user sees
+      // what the agent just received, mirroring the workspace-creation flow.
+      wsService.emit(
+        id,
+        'user:message',
+        { content: pendingInitialPrompt, sender: 'system-prompt' },
+        agent.agentSessionId,
+      )
+    }
+
+    // Clear the pending prompt once the agent has been handed it — subsequent
+    // /:id/start calls fall back to the generic "Continue…" string.
+    if (pendingInitialPrompt) {
+      try {
+        workspaceService.clearInitialPrompt(id)
+      } catch (err) {
+        console.error('[workspaces] clearInitialPrompt after start failed:', err)
+      }
     }
 
     return c.json({ status: 'started' })
@@ -2287,11 +2369,13 @@ app.get('/:id/git-stats', async (c) => {
 })
 
 // GET /api/workspaces/:id/diff?mode=branch|unpushed — list changed files
-// - `branch` (default): committed + working tree changes vs sourceBranch,
-//   i.e. what the PR will contain.
+// - `branch` (default): committed + working tree changes vs
+//   `origin/<sourceBranch>` (which can be ahead of the local ref when
+//   upstream landed merges Kōbō hasn't pulled). The handler refreshes
+//   `origin/<sourceBranch>` synchronously so the diff is never stale.
 // - `unpushed`: committed-only changes vs `origin/<workingBranch>`,
 //   i.e. what the next `git push` will send.
-app.get('/:id/diff', (c) => {
+app.get('/:id/diff', async (c) => {
   try {
     const id = c.req.param('id')
     const mode = c.req.query('mode') === 'unpushed' ? 'unpushed' : 'branch'
@@ -2304,6 +2388,13 @@ app.get('/:id/diff', (c) => {
     }
 
     const worktreePath = workspace.worktreePath
+    // Sync fetch in `branch` mode so the diff reflects upstream's HEAD, not a
+    // stale local copy of the source branch. Best-effort: a failed fetch
+    // (offline, no remote configured) still returns the diff against whatever
+    // `origin/<source>` we have in cache.
+    if (mode === 'branch') {
+      await gitOps.fetchSourceBranchAsync(worktreePath, workspace.sourceBranch)
+    }
     const files =
       mode === 'unpushed'
         ? gitOps.getUnpushedChangedFiles(worktreePath, workspace.workingBranch)
@@ -2395,10 +2486,11 @@ app.post('/:id/rollback-file', async (c) => {
 })
 
 // GET /api/workspaces/:id/branch-divergence?limit=50
-// Returns commits on the working branch ahead of source (`ahead`) and
-// commits on source not yet on the working branch (`behind`). One round-trip
-// for the BranchDivergenceDialog.
-app.get('/:id/branch-divergence', (c) => {
+// Returns commits on the working branch ahead of `origin/<sourceBranch>`
+// (`ahead`) and commits on `origin/<sourceBranch>` not yet on the working
+// branch (`behind`). Refreshes `origin/<sourceBranch>` synchronously so the
+// counts and lists are never computed against a stale local source ref.
+app.get('/:id/branch-divergence', async (c) => {
   try {
     const id = c.req.param('id')
     const workspace = workspaceService.getWorkspace(id)
@@ -2410,6 +2502,7 @@ app.get('/:id/branch-divergence', (c) => {
     const limit = Math.min(Math.max(1, Number.isNaN(parsed) ? 50 : parsed), 200)
     const worktreePath = workspace.worktreePath
 
+    await gitOps.fetchSourceBranchAsync(worktreePath, workspace.sourceBranch)
     const ahead = gitOps.listBranchCommits(worktreePath, workspace.sourceBranch, workspace.workingBranch, limit)
     const behind = gitOps.listCommitsBehind(worktreePath, workspace.sourceBranch, workspace.workingBranch, limit)
 
@@ -2426,9 +2519,11 @@ app.get('/:id/branch-divergence', (c) => {
   }
 })
 
-// GET /api/workspaces/:id/commits?limit=50 — list commits between sourceBranch
-// and HEAD, each tagged with whether it's already pushed to origin/<branch>.
-app.get('/:id/commits', (c) => {
+// GET /api/workspaces/:id/commits?limit=50 — list commits between
+// `origin/<sourceBranch>` and HEAD, each tagged with whether it's already
+// pushed to origin/<branch>. Refreshes `origin/<sourceBranch>` synchronously
+// so the list is not computed against a stale local source ref.
+app.get('/:id/commits', async (c) => {
   try {
     const id = c.req.param('id')
     const workspace = workspaceService.getWorkspace(id)
@@ -2438,6 +2533,7 @@ app.get('/:id/commits', (c) => {
     const limitRaw = c.req.query('limit')
     const limit = Math.min(Math.max(1, parseInt(limitRaw ?? '50', 10) || 50), 200)
     const worktreePath = workspace.worktreePath
+    await gitOps.fetchSourceBranchAsync(worktreePath, workspace.sourceBranch)
     const commits = gitOps.listBranchCommits(worktreePath, workspace.sourceBranch, workspace.workingBranch, limit)
     c.header('Cache-Control', 'no-store')
     return c.json({ commits, sourceBranch: workspace.sourceBranch, workingBranch: workspace.workingBranch })
@@ -3204,6 +3300,93 @@ app.post('/:id/start-review', async (c) => {
     wsService.emit(workspace.id, 'user:message', { content: rendered, sender: 'user' }, emitSessionId)
 
     return c.json({ ok: true, messageSent, newSession })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// POST /api/workspaces/:id/start-ci-fix — dispatch the configured CI-fix
+// prompt to the agent when the workspace's PR has failing CI.
+// Resumes the current session (or starts a fresh one if none is alive).
+app.post('/:id/start-ci-fix', migrationGuard, async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+    if (workspace.archivedAt) {
+      return c.json({ error: `Workspace '${id}' is archived` }, 400)
+    }
+
+    // Refresh the PR snapshot best-effort so the action operates on the
+    // freshest CI rollup; fall back to the cache if the refresh fails.
+    let snapshot = await refreshPrSnapshot(id).catch(() => null)
+    if (!snapshot) {
+      snapshot = getAllPrSnapshots()[id] ?? null
+    }
+    if (!snapshot || snapshot.state !== 'OPEN' || snapshot.ci.rollup !== 'FAILURE') {
+      return c.json({ error: 'No failing CI detected on this workspace' }, 400)
+    }
+
+    const effective = settingsService.getEffectiveSettings(workspace.projectPath)
+    const template = effective.ciFixPromptTemplate
+    if (!template || template.trim().length === 0) {
+      return c.json({ error: 'No CI-fix prompt template configured. Set one in Settings → Prompts.' }, 400)
+    }
+
+    const failedChecks: CiFixCheck[] = snapshot.ci.checks
+      .filter((check) => check.conclusion === 'FAILURE')
+      .map((check) => ({ name: check.name, detailsUrl: check.detailsUrl }))
+
+    // Best-effort first details URL as a stand-in for `ci_run_url` — the
+    // forge providers don't expose a top-level run URL, but the first failed
+    // check's `detailsUrl` reliably points back at the failing run.
+    const ciRunUrl = failedChecks.find((c) => c.detailsUrl)?.detailsUrl ?? null
+
+    const rendered = renderCiFixTemplate(template, {
+      workspace,
+      prNumber: snapshot.number,
+      prUrl: snapshot.url,
+      prTitle: snapshot.title,
+      failedChecks,
+      ciRunUrl,
+    })
+
+    try {
+      wakeupService.cancel(workspace.id, 'user-message')
+    } catch {
+      /* swallow */
+    }
+
+    const session = workspaceService.getActiveSession(workspace.id)
+    let emitSessionId: string | undefined = session?.id
+    try {
+      agentManager.sendMessage(workspace.id, rendered)
+    } catch {
+      try {
+        const agent = agentManager.startAgent(
+          workspace.id,
+          workspace.worktreePath,
+          rendered,
+          workspace.model,
+          true /* resume */,
+          workspace.agentPermissionMode,
+          undefined,
+          workspace.reasoningEffort,
+        )
+        workspaceService.updateWorkspaceStatus(workspace.id, 'executing')
+        emitSessionId = agent?.agentSessionId ?? emitSessionId
+      } catch (resumeErr) {
+        const msg = resumeErr instanceof Error ? resumeErr.message : String(resumeErr)
+        return c.json({ error: `Failed to dispatch CI-fix prompt: ${msg}` }, 500)
+      }
+    }
+
+    wsService.emit(workspace.id, 'user:message', { content: rendered, sender: 'user' }, emitSessionId)
+
+    return c.json({ ok: true, failedChecksCount: failedChecks.length })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)

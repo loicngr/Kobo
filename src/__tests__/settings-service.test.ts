@@ -1783,4 +1783,33 @@ describe('changeSourceBranchScript setting', () => {
       fs.rmSync(tmp, { recursive: true, force: true })
     }
   })
+
+  it('migration v34 seeds global ciFixPromptTemplate and leaves projects empty (inherit)', () => {
+    const migrated = runSettingsMigrations({
+      schemaVersion: 33,
+      global: {},
+      projects: [{ path: '/p1' }, { path: '/p2', ciFixPromptTemplate: 'custom fix prompt' }],
+    })
+    const seededGlobal = (migrated.global as Record<string, unknown>).ciFixPromptTemplate as string
+    expect(typeof seededGlobal).toBe('string')
+    expect(seededGlobal.length).toBeGreaterThan(0)
+    expect(seededGlobal).toContain('{{pr_url}}')
+    expect(seededGlobal).toContain('{{failed_jobs}}')
+    expect((migrated.projects[0] as Record<string, unknown>).ciFixPromptTemplate).toBe('')
+    expect((migrated.projects[1] as Record<string, unknown>).ciFixPromptTemplate).toBe('custom fix prompt')
+  })
+
+  it('getEffectiveSettings cascades project ciFixPromptTemplate over global default', () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'kobo-settings-cifix-'))
+    _setSettingsPath(path.join(tmp, 'settings.json'))
+    try {
+      updateGlobalSettings({ ciFixPromptTemplate: 'global ci fix' } as Partial<GlobalSettings>)
+      upsertProject('/p1', { ciFixPromptTemplate: 'project ci fix' } as Partial<ProjectSettings>)
+      expect(getEffectiveSettings('/p1').ciFixPromptTemplate).toBe('project ci fix')
+      upsertProject('/p2', { ciFixPromptTemplate: '' } as Partial<ProjectSettings>)
+      expect(getEffectiveSettings('/p2').ciFixPromptTemplate).toBe('global ci fix')
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true })
+    }
+  })
 })

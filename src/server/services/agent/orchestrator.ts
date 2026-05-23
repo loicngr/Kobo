@@ -361,6 +361,7 @@ function readEffectiveSettingsSafe(projectPath: string): ReturnType<typeof getEf
       dangerouslySkipPermissions: true,
       prPromptTemplate: '',
       reviewPromptTemplate: '',
+      ciFixPromptTemplate: '',
       notionInitialPromptTemplate: '',
       sentryInitialPromptTemplate: '',
       gitConventions: '',

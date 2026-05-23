@@ -31,6 +31,7 @@ export function initSchema(db: Database.Database): void {
       agent_permission_mode TEXT NOT NULL DEFAULT 'bypass',
       description TEXT,
       agent_description TEXT,
+      initial_prompt TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );

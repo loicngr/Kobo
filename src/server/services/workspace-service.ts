@@ -58,6 +58,12 @@ export interface Workspace {
   tags: string[]
   description: string | null
   agentDescription: string | null
+  /**
+   * Brainstorm prompt assembled at workspace-creation time and held in the DB
+   * so it survives a setup-script crash. Cleared by the agent-start path once
+   * successfully consumed; null otherwise (= nothing pending or already used).
+   */
+  initialPrompt: string | null
   engine: string
   autoLoop: boolean
   autoLoopReady: boolean
@@ -151,6 +157,7 @@ interface WorkspaceRow {
   worktree_owned: number
   description: string | null
   agent_description: string | null
+  initial_prompt: string | null
   created_at: string
   updated_at: string
 }
@@ -204,6 +211,7 @@ function mapWorkspace(row: WorkspaceRow): Workspace {
     tags: parseTags(row.tags),
     description: row.description,
     agentDescription: row.agent_description,
+    initialPrompt: row.initial_prompt,
     engine: row.engine ?? 'claude-code',
     autoLoop: row.auto_loop === 1,
     autoLoopReady: row.auto_loop_ready === 1,
@@ -529,6 +537,25 @@ export function updateWorkspaceAgentDescription(id: string, description: string 
   }
   emitEphemeral(id, 'workspace:agent-description-updated', { agentDescription: stored })
   return getWorkspace(id) as Workspace
+}
+
+/**
+ * Persist the brainstorm prompt for a workspace so it survives across restarts
+ * and a failed setup script. Pass `null` to clear it after consumption.
+ */
+export function setInitialPrompt(id: string, prompt: string | null): void {
+  const db = getDb()
+  const result = db
+    .prepare('UPDATE workspaces SET initial_prompt = ?, updated_at = ? WHERE id = ?')
+    .run(prompt, new Date().toISOString(), id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+}
+
+/** Shortcut for `setInitialPrompt(id, null)`. */
+export function clearInitialPrompt(id: string): void {
+  setInitialPrompt(id, null)
 }
 
 /** Update the dev-server status column for a workspace. */

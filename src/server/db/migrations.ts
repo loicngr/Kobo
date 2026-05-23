@@ -323,6 +323,24 @@ export const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 25,
+    name: 'add-workspace-initial-prompt',
+    migrate: (db) => {
+      // Stores the initial agent prompt assembled at workspace-creation time so
+      // it survives a setup-script crash. Cleared after the agent successfully
+      // ingests it; null otherwise (= nothing pending or already consumed).
+      // Defensive: skip if the workspaces table doesn't exist yet — covers
+      // synthetic test DBs that seed only a subset of tables before running
+      // migrations.
+      const table = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='workspaces'").get()
+      if (!table) return
+      const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
+      if (!cols.some((c) => c.name === 'initial_prompt')) {
+        db.prepare('ALTER TABLE workspaces ADD COLUMN initial_prompt TEXT').run()
+      }
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */
