@@ -6,7 +6,13 @@ import type { PrSnapshot } from './forge/types.js'
 import { computeGitStats, type GitStatsResult } from './git-stats-service.js'
 import { destroyTerminal } from './terminal-service.js'
 import { emitEphemeral } from './websocket-service.js'
-import { archiveWorkspace, getWorkspace, listWorkspaces, updateWorkspaceSourceBranch } from './workspace-service.js'
+import {
+  archiveWorkspace,
+  getWorkspace,
+  listWorkspaces,
+  markWorkspaceUnread,
+  updateWorkspaceSourceBranch,
+} from './workspace-service.js'
 
 // ── PR Watcher ────────────────────────────────────────────────────────────────
 // Polls GitHub every POLL_INTERVAL_MS to detect merged/closed PRs and
@@ -58,6 +64,19 @@ export function getAllGitStats(): Record<string, GitStatsResult> {
 export function _resetForTest(): void {
   lastKnownPr.clear()
   lastKnownGitStats.clear()
+}
+
+/**
+ * Flip a workspace to unread (DB + WS event) on a PR-attention transition.
+ * Best-effort: a failure here must never break the watcher loop.
+ */
+function markUnread(workspaceId: string): void {
+  try {
+    markWorkspaceUnread(workspaceId)
+    emitEphemeral(workspaceId, 'workspace:unread', { hasUnread: true })
+  } catch (err) {
+    console.error('[pr-watcher] markUnread failed:', err instanceof Error ? err.message : err)
+  }
 }
 
 export async function checkPrStatuses(): Promise<void> {
@@ -132,20 +151,28 @@ export async function checkPrStatuses(): Promise<void> {
         continue // do not run base-change detection on a workspace we just archived
       }
 
-      // Review-decision transitions (only on OPEN PRs; first-sight is silent).
-      // Reuses the baseline rule from base-change detection: emits only when we
-      // observe an actual transition between two known states.
+      // Review-decision and CI transitions (only on OPEN PRs; first-sight is
+      // silent). Reuses the baseline rule from base-change detection: act only
+      // on an actual transition between two known states. Each notable
+      // transition (changes-requested newly raised, CI newly failing) flips
+      // `hasUnread` so the workspace card stands out as "something new to
+      // look at" in the drawer — the unread bit persists until the user opens
+      // the workspace, matching the existing read/unread UX.
       if (pr.state === 'OPEN' && prev) {
         if (prev.reviewDecision !== 'CHANGES_REQUESTED' && pr.reviewDecision === 'CHANGES_REQUESTED') {
           emitEphemeral(ws.id, 'pr:changes-requested', {
             prNumber: pr.number,
             prUrl: pr.url,
           })
+          markUnread(ws.id)
         } else if (prev.reviewDecision === 'CHANGES_REQUESTED' && pr.reviewDecision === 'APPROVED') {
           emitEphemeral(ws.id, 'pr:approved', {
             prNumber: pr.number,
             prUrl: pr.url,
           })
+        }
+        if (prev.ci.rollup !== 'FAILURE' && pr.ci.rollup === 'FAILURE') {
+          markUnread(ws.id)
         }
       }
 

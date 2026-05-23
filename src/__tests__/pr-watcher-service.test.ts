@@ -13,6 +13,7 @@ vi.mock('../server/services/workspace-service.js', () => ({
   archiveWorkspace: vi.fn(),
   getWorkspace: vi.fn(),
   listWorkspaces: vi.fn(),
+  markWorkspaceUnread: vi.fn(),
   updateWorkspaceSourceBranch: vi.fn(),
 }))
 vi.mock('../server/services/git-stats-service.js', () => ({ computeGitStats: vi.fn() }))
@@ -281,6 +282,81 @@ describe('checkPrStatuses — review-decision transitions', () => {
     await checkPrStatuses()
 
     expect(wsSvc.emitEphemeral).not.toHaveBeenCalledWith('ws-1', 'pr:changes-requested', expect.anything())
+  })
+})
+
+describe('checkPrStatuses — unread on attention transitions', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    _resetForTest()
+  })
+
+  it('marks unread on REVIEW_REQUIRED → CHANGES_REQUESTED', async () => {
+    const ws = makeWorkspace({ sourceBranch: 'main' })
+    vi.mocked(wsService.listWorkspaces).mockReturnValue([ws as never])
+
+    getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ base: 'main', reviewDecision: 'REVIEW_REQUIRED' }))
+    await checkPrStatuses()
+    getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ base: 'main', reviewDecision: 'CHANGES_REQUESTED' }))
+    await checkPrStatuses()
+
+    expect(wsService.markWorkspaceUnread).toHaveBeenCalledWith('ws-1')
+    expect(wsSvc.emitEphemeral).toHaveBeenCalledWith('ws-1', 'workspace:unread', { hasUnread: true })
+  })
+
+  it('marks unread on CI rollup SUCCESS → FAILURE', async () => {
+    const ws = makeWorkspace({ sourceBranch: 'main' })
+    vi.mocked(wsService.listWorkspaces).mockReturnValue([ws as never])
+
+    getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ base: 'main', ci: { rollup: 'SUCCESS', checks: [] } }))
+    await checkPrStatuses()
+    getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ base: 'main', ci: { rollup: 'FAILURE', checks: [] } }))
+    await checkPrStatuses()
+
+    expect(wsService.markWorkspaceUnread).toHaveBeenCalledWith('ws-1')
+    expect(wsSvc.emitEphemeral).toHaveBeenCalledWith('ws-1', 'workspace:unread', { hasUnread: true })
+  })
+
+  it('does NOT re-mark unread when CI stays FAILURE across ticks', async () => {
+    const ws = makeWorkspace({ sourceBranch: 'main' })
+    vi.mocked(wsService.listWorkspaces).mockReturnValue([ws as never])
+
+    getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ base: 'main', ci: { rollup: 'FAILURE', checks: [] } }))
+    await checkPrStatuses()
+    // First sight is silent (no prev).
+    expect(wsService.markWorkspaceUnread).not.toHaveBeenCalled()
+
+    getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ base: 'main', ci: { rollup: 'FAILURE', checks: [] } }))
+    await checkPrStatuses()
+    expect(wsService.markWorkspaceUnread).not.toHaveBeenCalled()
+  })
+
+  it('first-sight CHANGES_REQUESTED + FAILURE does NOT mark unread', async () => {
+    const ws = makeWorkspace({ sourceBranch: 'main' })
+    vi.mocked(wsService.listWorkspaces).mockReturnValue([ws as never])
+    getPrStatusMock.mockResolvedValue(
+      makePrSnapshot({ base: 'main', reviewDecision: 'CHANGES_REQUESTED', ci: { rollup: 'FAILURE', checks: [] } }),
+    )
+
+    await checkPrStatuses()
+
+    expect(wsService.markWorkspaceUnread).not.toHaveBeenCalled()
+  })
+
+  it('does not mark unread when PR is not OPEN', async () => {
+    const ws = makeWorkspace({ sourceBranch: 'main' })
+    vi.mocked(wsService.listWorkspaces).mockReturnValue([ws as never])
+
+    getPrStatusMock.mockResolvedValueOnce(
+      makePrSnapshot({ state: 'OPEN', base: 'main', ci: { rollup: 'SUCCESS', checks: [] } }),
+    )
+    await checkPrStatuses()
+    getPrStatusMock.mockResolvedValueOnce(
+      makePrSnapshot({ state: 'CLOSED', base: 'main', ci: { rollup: 'FAILURE', checks: [] } }),
+    )
+    await checkPrStatuses()
+
+    expect(wsService.markWorkspaceUnread).not.toHaveBeenCalled()
   })
 })
 
