@@ -29,6 +29,7 @@ interface ProjectSettings {
   agentPermissionMode?: 'plan' | 'bypass' | 'strict' | 'interactive'
   prPromptTemplate: string
   reviewPromptTemplate: string
+  ciFixPromptTemplate: string
   notionInitialPromptTemplate: string
   sentryInitialPromptTemplate: string
   gitConventions: string
@@ -65,6 +66,7 @@ interface GlobalSettings {
   dangerouslySkipPermissions: boolean
   prPromptTemplate: string
   reviewPromptTemplate: string
+  ciFixPromptTemplate: string
   notionInitialPromptTemplate: string
   sentryInitialPromptTemplate: string
   gitConventions: string
@@ -168,6 +170,7 @@ export const useSettingsStore = defineStore('settings', {
       dangerouslySkipPermissions: true,
       prPromptTemplate: '',
       reviewPromptTemplate: '',
+      ciFixPromptTemplate: '',
       notionInitialPromptTemplate: '',
       sentryInitialPromptTemplate: '',
       gitConventions: '',
@@ -257,6 +260,7 @@ export const useSettingsStore = defineStore('settings', {
     async fetchGlobalDefaults(): Promise<{
       prPromptTemplate: string
       reviewPromptTemplate: string
+      ciFixPromptTemplate: string
       gitConventions: string
       notionInitialPromptTemplate: string
       sentryInitialPromptTemplate: string

@@ -1486,6 +1486,18 @@ async function handleCreate() {
 
     const workspace = await store.createWorkspace(payload)
 
+    // The server appends a `-<HASH>` suffix when the requested branch / path
+    // collides with an existing one. Surface that so the user knows why the
+    // sidebar shows a slightly different branch name.
+    if ((workspace as { _branchAdjusted?: boolean })._branchAdjusted) {
+      $q.notify({
+        type: 'info',
+        message: t('createPage.branchAdjusted', { branch: workspace.workingBranch }),
+        position: 'top',
+        timeout: 6000,
+      })
+    }
+
     // Persist last-used inputs so the next Create-workspace visit pre-fills
     // them. Run only after a successful create — failures keep the previous
     // saved values intact.

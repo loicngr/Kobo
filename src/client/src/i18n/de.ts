@@ -119,6 +119,11 @@ export default {
   'workspacePage.stopFailed': 'Stopp fehlgeschlagen',
   'workspacePage.interrupt': 'Unterbrechen',
   'workspacePage.interrupted': 'Agent unterbrochen — wartet auf Ihre nächste Nachricht',
+  'workspacePage.archivedBanner': 'Archivierter Workspace — schreibgeschützt',
+  'workspacePage.pendingInitialPromptBanner':
+    'Ein anfänglicher Prompt ist ausstehend — der Agent hat ihn nie erhalten (Setup-Script abgestürzt oder Workspace nie gestartet). Klicke auf Start, um ihn jetzt zu senden.',
+  'workspacePage.unarchived': 'Workspace dearchiviert',
+  'workspacePage.unarchiveFailed': 'Dearchivierung fehlgeschlagen',
   'workspacePage.interruptFailed': 'Unterbrechung fehlgeschlagen',
   'workspacePage.interruptTooltip':
     'Sanfte Unterbrechung (wie Escape) — stoppt das aktuelle Tool, hält die Sitzung aktiv',
@@ -279,6 +284,8 @@ export default {
   'createPage.notionImportHint':
     'Klicken Sie auf „Aus Notion importieren", um Unteraufgaben automatisch aus einem Ticket zu extrahieren.',
   'createPage.errorCreating': 'Fehler beim Erstellen des Arbeitsbereichs.',
+  'createPage.branchAdjusted':
+    'Branch existierte bereits — stattdessen `{branch}` erstellt. Der zugehörige Worktree-Ordner verwendet das gleiche Suffix.',
   'createPage.validationNotionUrl': 'Bitte eine gültige Notion-URL einfügen (https://www.notion.so/...).',
   'createPage.validationDescription': 'Bitte beschreiben Sie die Aufgabe.',
   'createPage.validationName': 'Bitte geben Sie einen Arbeitsbereichnamen an.',
@@ -351,6 +358,11 @@ export default {
   'settings.prPromptHint': 'Verwenden Sie die oben aufgeführten Platzhalter (doppelte geschweifte Klammern).',
   'settings.reviewPromptTemplate': 'Review-Prompt-Vorlage',
   'settings.reviewPromptPlaceholder': 'Anweisungen für den Agenten bei der Review von Branch-Änderungen...',
+  'settings.ciFixPromptTemplate': 'CI-Fix-Prompt-Vorlage',
+  'settings.ciFixPromptHint':
+    'Wird an den Agenten gesendet, wenn die CI eines Workspaces fehlschlägt. Variablen (doppelte geschweifte Klammern): pr_url, pr_number, pr_title, branch_name, source_branch, workspace_name, workspace_id, project_name, failed_jobs, ci_run_url.',
+  'settings.ciFixPromptPlaceholder':
+    'Den Agenten bitten, die fehlschlagenden CI-Jobs zu diagnostizieren und zu beheben...',
   'settings.notionInitialPrompt': 'Notion-Initial-Prompt',
   'settings.notionInitialPrompt.help':
     'Wird an den Workspace-Erstellungsprompt angehängt, wenn der Workspace ein Notion-Ticket hat. Variablen: {variables}.',
@@ -519,6 +531,7 @@ export default {
   'settings.prPromptTemplate.project': 'PR-Prompt-Vorlage',
   'settings.prPromptPlaceholder.project': 'Projektspezifische Anweisungen für PR-Erstellung...',
   'settings.reviewPromptTemplate.project': 'Review-Prompt-Vorlage',
+  'settings.ciFixPromptTemplate.project': 'CI-Fix-Prompt-Vorlage',
   'settings.gitConventions.project': 'Git-Konventionen (Projekt)',
   'settings.gitConventionsEmpty': 'Leer lassen, um die globalen Konventionen zu verwenden.',
   'settings.notionStatus': 'Notion-Ticket-Status',
@@ -840,6 +853,10 @@ export default {
   'tools.review': 'Änderungen prüfen',
   'tools.reviewTooltip': 'Den Agenten bitten, die Änderungen auf diesem Branch zu prüfen',
   'tools.reviewBusy': 'Agent ist beschäftigt — warte, bis er inaktiv ist',
+  'tools.fixCi': 'CI reparieren',
+  'tools.fixCiTooltip': 'Den Agenten bitten, die fehlschlagenden CI-Jobs zu diagnostizieren und zu beheben',
+  'tools.fixCiLaunched': 'CI-Fix-Aktion an den Agenten gesendet',
+  'tools.fixCiFailed': 'CI-Fix-Aktion konnte nicht gestartet werden',
 
   // Review dialog
   'review.title': 'Review starten',
@@ -980,6 +997,11 @@ export default {
     'Dies ersetzt deine aktuellen Einstellungen, Templates und Tags. MCP-Keys bleiben erhalten. Fortfahren?',
   'health.title': 'Status',
   'health.tooltip': 'Systemstatus',
+  'changelog.title': 'Änderungsprotokoll',
+  'changelog.tooltip': 'Was ist neu in Kōbō',
+  'changelog.empty': 'Kein Änderungsprotokoll verfügbar.',
+  'changelog.current': 'aktuell',
+  'changelog.currentVersion': 'Aktuelle Version: v{version}',
   'health.envTitle': 'Umgebung',
   'health.version': 'Version',
   'health.koboHome': 'Kōbō home',

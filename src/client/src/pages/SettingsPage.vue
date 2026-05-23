@@ -710,6 +710,34 @@ where ffmpeg</pre>
               />
 
               <div class="row items-center q-mb-sm q-mt-md">
+                <div class="text-subtitle2">{{ $t('settings.ciFixPromptTemplate') }}</div>
+                <q-space />
+                <q-btn
+                  flat
+                  dense
+                  no-caps
+                  size="sm"
+                  color="grey-5"
+                  icon="restart_alt"
+                  :label="t('settings.resetToDefault')"
+                  :loading="resettingField === 'ciFixPromptTemplate'"
+                  :disable="resettingField !== null && resettingField !== 'ciFixPromptTemplate'"
+                  @click="resetFieldToDefault('ciFixPromptTemplate')"
+                />
+              </div>
+              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.ciFixPromptHint') }}</div>
+              <q-input
+                v-model="globalCiFixPrompt"
+                type="textarea"
+                dense
+                dark
+                outlined
+                :rows="8"
+                :placeholder="$t('settings.ciFixPromptPlaceholder')"
+                class="settings-input mono-textarea q-mb-md"
+              />
+
+              <div class="row items-center q-mb-sm q-mt-md">
                 <div class="text-subtitle2">{{ $t('settings.gitConventions') }}</div>
                 <q-space />
                 <q-btn
@@ -1535,6 +1563,20 @@ where ffmpeg</pre>
                     </div>
 
                     <div class="q-mb-md">
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.ciFixPromptTemplate.project') }}</div>
+                      <div class="text-caption text-grey-7 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <q-input
+                        v-model="projectForm.ciFixPromptTemplate"
+                        type="textarea"
+                        outlined
+                        autogrow
+                        :input-style="{ minHeight: '100px' }"
+                        :placeholder="$t('settings.ciFixPromptPlaceholder')"
+                        class="settings-input mono-textarea"
+                      />
+                    </div>
+
+                    <div class="q-mb-md">
                       <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ t('settings.notionInitialPrompt.project') }}</div>
                       <div class="text-caption text-grey-7 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
                       <q-input
@@ -2047,6 +2089,7 @@ const globalClaudeModel = ref('auto')
 const globalCodexModel = ref('auto')
 const globalPrPrompt = ref('')
 const globalReviewPrompt = ref('')
+const globalCiFixPrompt = ref('')
 const globalGitConventions = ref('')
 const globalEditorCommand = ref('')
 const globalBrowserNotifications = ref(true)
@@ -2099,6 +2142,7 @@ const globalSentryInitialPrompt = ref('')
 type ResettableField =
   | 'prPromptTemplate'
   | 'reviewPromptTemplate'
+  | 'ciFixPromptTemplate'
   | 'gitConventions'
   | 'notionInitialPromptTemplate'
   | 'sentryInitialPromptTemplate'
@@ -2269,6 +2313,7 @@ const projectForm = ref({
   forge: 'auto' as 'auto' | 'github' | 'gitlab' | 'none',
   prPromptTemplate: '',
   reviewPromptTemplate: '',
+  ciFixPromptTemplate: '',
   notionInitialPromptTemplate: '',
   sentryInitialPromptTemplate: '',
   gitConventions: '',
@@ -2292,6 +2337,7 @@ const COPYABLE_FIELDS = [
   'forge',
   'prPromptTemplate',
   'reviewPromptTemplate',
+  'ciFixPromptTemplate',
   'notionInitialPromptTemplate',
   'sentryInitialPromptTemplate',
   'gitConventions',
@@ -2327,6 +2373,7 @@ function applyCopyFrom(sourcePath: string) {
   projectForm.value.forge = source.forge ?? 'auto'
   projectForm.value.prPromptTemplate = source.prPromptTemplate ?? ''
   projectForm.value.reviewPromptTemplate = source.reviewPromptTemplate ?? ''
+  projectForm.value.ciFixPromptTemplate = source.ciFixPromptTemplate ?? ''
   projectForm.value.notionInitialPromptTemplate = source.notionInitialPromptTemplate ?? ''
   projectForm.value.sentryInitialPromptTemplate = source.sentryInitialPromptTemplate ?? ''
   projectForm.value.gitConventions = source.gitConventions ?? ''
@@ -2700,6 +2747,7 @@ function captureGlobalSnapshot(): string {
     codexModel: globalCodexModel.value,
     prPrompt: globalPrPrompt.value,
     reviewPrompt: globalReviewPrompt.value,
+    ciFixPrompt: globalCiFixPrompt.value,
     gitConventions: globalGitConventions.value,
     editorCommand: globalEditorCommand.value,
     browserNotifications: globalBrowserNotifications.value,
@@ -2773,6 +2821,7 @@ function syncGlobalForm() {
   globalCodexModel.value = modelMap.codex ?? 'auto'
   globalPrPrompt.value = store.global.prPromptTemplate
   globalReviewPrompt.value = store.global.reviewPromptTemplate ?? ''
+  globalCiFixPrompt.value = store.global.ciFixPromptTemplate ?? ''
   globalGitConventions.value = store.global.gitConventions
   globalEditorCommand.value = store.global.editorCommand ?? ''
   globalBrowserNotifications.value = store.global.browserNotifications ?? true
@@ -2850,6 +2899,7 @@ function syncProjectForm(project: ProjectSettings | null) {
       forge: 'auto',
       prPromptTemplate: '',
       reviewPromptTemplate: '',
+      ciFixPromptTemplate: '',
       notionInitialPromptTemplate: '',
       sentryInitialPromptTemplate: '',
       gitConventions: '',
@@ -2876,6 +2926,7 @@ function syncProjectForm(project: ProjectSettings | null) {
     forge: project.forge ?? 'auto',
     prPromptTemplate: project.prPromptTemplate,
     reviewPromptTemplate: project.reviewPromptTemplate ?? '',
+    ciFixPromptTemplate: project.ciFixPromptTemplate ?? '',
     notionInitialPromptTemplate: project.notionInitialPromptTemplate ?? '',
     sentryInitialPromptTemplate: project.sentryInitialPromptTemplate ?? '',
     gitConventions: project.gitConventions ?? '',
@@ -3010,6 +3061,7 @@ async function resetFieldToDefault(field: ResettableField) {
     const target: Record<ResettableField, typeof globalPrPrompt> = {
       prPromptTemplate: globalPrPrompt,
       reviewPromptTemplate: globalReviewPrompt,
+      ciFixPromptTemplate: globalCiFixPrompt,
       gitConventions: globalGitConventions,
       notionInitialPromptTemplate: globalNotionInitialPrompt,
       sentryInitialPromptTemplate: globalSentryInitialPrompt,
@@ -3036,6 +3088,7 @@ async function saveGlobal() {
       },
       prPromptTemplate: globalPrPrompt.value,
       reviewPromptTemplate: globalReviewPrompt.value,
+      ciFixPromptTemplate: globalCiFixPrompt.value,
       gitConventions: globalGitConventions.value,
       editorCommand: globalEditorCommand.value,
       browserNotifications: globalBrowserNotifications.value,
@@ -3176,6 +3229,7 @@ async function saveProject() {
       forge: projectForm.value.forge,
       prPromptTemplate: projectForm.value.prPromptTemplate,
       reviewPromptTemplate: projectForm.value.reviewPromptTemplate,
+      ciFixPromptTemplate: projectForm.value.ciFixPromptTemplate,
       notionInitialPromptTemplate: projectForm.value.notionInitialPromptTemplate,
       sentryInitialPromptTemplate: projectForm.value.sentryInitialPromptTemplate,
       gitConventions: projectForm.value.gitConventions,

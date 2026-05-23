@@ -119,6 +119,11 @@ export default {
   'workspacePage.stopFailed': "Échec de l'arrêt",
   'workspacePage.interrupt': 'Interrompre',
   'workspacePage.interrupted': 'Agent interrompu — en attente de votre prochain message',
+  'workspacePage.archivedBanner': 'Workspace archivé — lecture seule',
+  'workspacePage.pendingInitialPromptBanner':
+    "Un prompt initial est en attente — l'agent ne l'a jamais reçu (le script de setup a planté ou le workspace n'a jamais été démarré). Cliquez sur Démarrer pour l'envoyer.",
+  'workspacePage.unarchived': 'Workspace désarchivé',
+  'workspacePage.unarchiveFailed': 'Échec du désarchivage',
   'workspacePage.interruptFailed': "Échec de l'interruption",
   'workspacePage.interruptTooltip':
     'Interruption douce (comme Escape) — arrête le tool en cours mais garde la session active',
@@ -279,6 +284,8 @@ export default {
   'createPage.notionImportHint':
     "Cliquez sur « Importer depuis Notion » pour extraire automatiquement les sous-tâches d'un ticket.",
   'createPage.errorCreating': "Erreur lors de la création de l'espace de travail.",
+  'createPage.branchAdjusted':
+    'Branche déjà existante — création de `{branch}` à la place. Le dossier worktree correspondant utilise le même suffixe.',
   'createPage.validationNotionUrl': 'Veuillez coller une URL Notion valide (https://www.notion.so/...).',
   'createPage.validationDescription': 'Veuillez décrire la tâche.',
   'createPage.validationName': "Veuillez fournir un nom d'espace de travail.",
@@ -350,6 +357,10 @@ export default {
   'settings.prPromptHint': 'Utilisez les variables listées ci-dessus (syntaxe doubles accolades).',
   'settings.reviewPromptTemplate': 'Modèle de prompt de review',
   'settings.reviewPromptPlaceholder': "Instructions pour l'agent lors de la review des changes de la branche...",
+  'settings.ciFixPromptTemplate': 'Modèle de prompt « Fix CI »',
+  'settings.ciFixPromptHint':
+    "Envoyé à l'agent quand un workspace voit sa CI échouer. Variables (syntaxe double-accolades) : pr_url, pr_number, pr_title, branch_name, source_branch, workspace_name, workspace_id, project_name, failed_jobs, ci_run_url.",
+  'settings.ciFixPromptPlaceholder': "Demande à l'agent de diagnostiquer et de corriger les jobs CI en échec...",
   'settings.notionInitialPrompt': 'Prompt initial Notion',
   'settings.notionInitialPrompt.help':
     'Ajouté au prompt de création de workspace quand le workspace a un ticket Notion. Variables : {variables}.',
@@ -518,6 +529,7 @@ export default {
   'settings.prPromptTemplate.project': 'Modèle de prompt PR',
   'settings.prPromptPlaceholder.project': 'Instructions spécifiques au projet pour la création de PR...',
   'settings.reviewPromptTemplate.project': 'Modèle de prompt de review',
+  'settings.ciFixPromptTemplate.project': 'Modèle de prompt « Fix CI »',
   'settings.gitConventions.project': 'Conventions Git (projet)',
   'settings.gitConventionsEmpty': 'Laisser vide pour utiliser les conventions globales.',
   'settings.notionStatus': 'Statut ticket Notion',
@@ -840,6 +852,10 @@ export default {
   'tools.review': 'Reviewer les changes',
   'tools.reviewTooltip': "Demander à l'agent de reviewer les changes de cette branche",
   'tools.reviewBusy': "Agent occupé — attends qu'il soit idle",
+  'tools.fixCi': 'Réparer la CI',
+  'tools.fixCiTooltip': "Demander à l'agent de diagnostiquer et corriger les jobs CI en échec",
+  'tools.fixCiLaunched': "Action « Fix CI » envoyée à l'agent",
+  'tools.fixCiFailed': "Échec du lancement de l'action « Fix CI »",
 
   // Review dialog
   'review.title': 'Lancer une review',
@@ -978,6 +994,11 @@ export default {
     'Cela remplacera tes paramètres, templates et tags actuels. Tes clés MCP seront conservées. Continuer ?',
   'health.title': 'Santé',
   'health.tooltip': 'Santé du système',
+  'changelog.title': 'Journal des changements',
+  'changelog.tooltip': 'Quoi de neuf dans Kōbō',
+  'changelog.empty': 'Aucun changelog disponible.',
+  'changelog.current': 'actuelle',
+  'changelog.currentVersion': 'Version actuelle : v{version}',
   'health.envTitle': 'Environnement',
   'health.version': 'Version',
   'health.koboHome': 'Kōbō home',

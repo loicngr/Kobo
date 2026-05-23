@@ -27,7 +27,7 @@
         icon="replay"
         :label="$t('tools.runSetupScript')"
         :loading="running"
-        :disable="!hasSetupScript || running || isAgentBusy"
+        :disable="!hasSetupScript || running || isAgentBusy || isArchived"
         class="full-width q-mb-xs"
         @click="runSetupScript"
       >
@@ -57,11 +57,27 @@
         icon="rate_review"
         :label="$t('tools.review')"
         :loading="startingReview"
-        :disable="!workspace || isAgentBusy"
+        :disable="!workspace || isAgentBusy || isArchived"
         class="full-width q-mb-xs"
         @click="reviewDialogOpen = true"
       >
         <q-tooltip>{{ isAgentBusy ? $t('tools.reviewBusy') : $t('tools.reviewTooltip') }}</q-tooltip>
+      </q-btn>
+
+      <q-btn
+        v-if="hasCiFailure"
+        no-caps
+        dense
+        unelevated
+        color="red-7"
+        icon="build_circle"
+        :label="$t('tools.fixCi')"
+        :loading="fixingCi"
+        :disable="!workspace || isArchived || fixingCi"
+        class="full-width q-mb-xs"
+        @click="startCiFix"
+      >
+        <q-tooltip>{{ $t('tools.fixCiTooltip') }}</q-tooltip>
       </q-btn>
 
       <q-btn
@@ -109,7 +125,8 @@ import AutoLoopPanel from 'src/components/AutoLoopPanel.vue'
 import DevServerPanel from 'src/components/DevServerPanel.vue'
 import StartReviewDialog from 'src/components/StartReviewDialog.vue'
 import { useSettingsStore } from 'src/stores/settings'
-import type { Workspace } from 'src/stores/workspace'
+import { useWorkspaceStore, type Workspace } from 'src/stores/workspace'
+import { isCiFailed } from 'src/utils/pr-status'
 import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -121,11 +138,19 @@ const props = defineProps<{
 const { t } = useI18n()
 const $q = useQuasar()
 const settingsStore = useSettingsStore()
+const workspaceStore = useWorkspaceStore()
 
 const running = ref(false)
 const openingEditor = ref(false)
 const reviewDialogOpen = ref(false)
 const startingReview = ref(false)
+const fixingCi = ref(false)
+
+const hasCiFailure = computed(() => {
+  if (!props.workspace) return false
+  const snapshot = workspaceStore.prSnapshots[props.workspace.id]
+  return snapshot ? isCiFailed(snapshot) : false
+})
 
 const workspaceId = computed(() => props.workspace?.id ?? '')
 
@@ -138,6 +163,7 @@ const hasSetupScript = computed(() => {
 const hasEditorCommand = computed(() => !!settingsStore.global.editorCommand)
 
 const isAgentBusy = computed(() => isBusyStatus(props.workspace?.status))
+const isArchived = computed(() => Boolean(props.workspace?.archivedAt))
 
 function runSetupScript() {
   if (!workspaceId.value) return
@@ -190,6 +216,30 @@ async function openEditor() {
 
 function openExternal(url: string) {
   window.open(url, '_blank', 'noopener,noreferrer')
+}
+
+async function startCiFix() {
+  if (!workspaceId.value || fixingCi.value) return
+  fixingCi.value = true
+  try {
+    const res = await fetch(`/api/workspaces/${workspaceId.value}/start-ci-fix`, { method: 'POST' })
+    const data = await res.json()
+    if (!res.ok) {
+      $q.notify({
+        type: 'negative',
+        message: data.error ?? t('tools.fixCiFailed'),
+        position: 'top',
+        timeout: 6000,
+      })
+      return
+    }
+    $q.notify({ type: 'positive', message: t('tools.fixCiLaunched'), position: 'top', timeout: 3000 })
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : t('tools.fixCiFailed')
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+  } finally {
+    fixingCi.value = false
+  }
 }
 
 async function startReview(payload: { additionalInstructions: string; newSession: boolean }) {

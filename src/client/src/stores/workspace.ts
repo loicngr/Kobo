@@ -26,6 +26,12 @@ export interface Workspace {
   tags: string[]
   description: string | null
   agentDescription: string | null
+  /**
+   * Brainstorm prompt persisted at workspace-creation time so a setup-script
+   * crash doesn't lose the user's input. Non-null until the agent successfully
+   * ingests it via POST /:id/start (server clears it then).
+   */
+  initialPrompt: string | null
   autoLoop: boolean
   autoLoopReady: boolean
   noProgressStreak: number
@@ -308,7 +314,10 @@ export const useWorkspaceStore = defineStore('workspace', {
   }),
 
   getters: {
-    selectedWorkspace: (state) => state.workspaces.find((w) => w.id === state.selectedWorkspaceId) ?? null,
+    selectedWorkspace: (state) =>
+      state.workspaces.find((w) => w.id === state.selectedWorkspaceId) ??
+      state.archivedWorkspaces.find((w) => w.id === state.selectedWorkspaceId) ??
+      null,
 
     needsAttention(state): Workspace[] {
       return state.workspaces.filter(
@@ -482,10 +491,18 @@ export const useWorkspaceStore = defineStore('workspace', {
         // this request was in flight.
         if (this.selectedWorkspaceId !== id) return
 
-        // Update workspace in list
+        // Update workspace in whichever list it lives in (active or archived).
+        const incoming = data.workspace ?? data
         const idx = this.workspaces.findIndex((w) => w.id === id)
         if (idx >= 0) {
-          this.workspaces[idx] = { ...this.workspaces[idx], ...(data.workspace ?? data) }
+          this.workspaces[idx] = { ...this.workspaces[idx], ...incoming }
+        } else {
+          const aIdx = this.archivedWorkspaces.findIndex((w) => w.id === id)
+          if (aIdx >= 0) {
+            this.archivedWorkspaces[aIdx] = { ...this.archivedWorkspaces[aIdx], ...incoming }
+          } else if (incoming?.archivedAt) {
+            this.archivedWorkspaces.unshift(incoming)
+          }
         }
 
         // Update tasks
@@ -505,6 +522,11 @@ export const useWorkspaceStore = defineStore('workspace', {
           body: JSON.stringify(input),
         })
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        // The server appends a `-<HASH>` suffix to the working branch (and
+        // matching worktree path) when the requested name was already taken.
+        // The header is the cheapest way to signal that without changing the
+        // JSON shape — the resolved branch is already on the returned workspace.
+        const branchAdjusted = res.headers.get('X-Kobo-Branch-Adjusted') === '1'
         const data = await res.json()
         const workspace = data.workspace ?? data
         // Dedup against a concurrent fetchWorkspaces() that may have already
@@ -524,6 +546,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         if (input.autoLoop) {
           void this.fetchAutoLoopStates()
         }
+        ;(workspace as Workspace & { _branchAdjusted?: boolean })._branchAdjusted = branchAdjusted
         return workspace as Workspace
       } catch (err) {
         console.error('[workspace store] createWorkspace failed:', err)

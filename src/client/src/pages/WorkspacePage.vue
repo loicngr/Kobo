@@ -125,7 +125,7 @@
           </template>
         </q-select>
         <q-btn
-          v-if="isBusyStatus(selectedWs.status)"
+          v-if="isBusyStatus(selectedWs.status) && !selectedWs.archivedAt"
           dense
           no-caps
           size="sm"
@@ -171,6 +171,52 @@
     </div>
 
     <q-separator dark />
+
+    <div
+      v-if="selectedWs?.archivedAt"
+      class="wp-archived-banner row items-center q-px-md q-py-sm"
+    >
+      <q-icon name="inventory_2" size="16px" color="grey-5" class="q-mr-sm" />
+      <span class="text-caption text-grey-4">
+        {{ $t('workspacePage.archivedBanner') }}
+      </span>
+      <q-space />
+      <q-btn
+        flat
+        dense
+        size="sm"
+        no-caps
+        color="indigo-4"
+        icon="unarchive"
+        :label="$t('common.unarchive')"
+        :loading="unarchiving"
+        :disable="unarchiving"
+        @click="handleUnarchive"
+      />
+    </div>
+
+    <div
+      v-if="hasPendingInitialPrompt"
+      class="wp-pending-prompt-banner row items-center q-px-md q-py-sm"
+    >
+      <q-icon name="warning" size="16px" color="amber-5" class="q-mr-sm" />
+      <span class="text-caption text-grey-3">
+        {{ $t('workspacePage.pendingInitialPromptBanner') }}
+      </span>
+      <q-space />
+      <q-btn
+        unelevated
+        dense
+        size="sm"
+        no-caps
+        color="indigo-5"
+        icon="play_arrow"
+        :label="$t('common.start')"
+        :loading="starting"
+        :disable="starting"
+        @click="handleStart"
+      />
+    </div>
 
     <AgentErrorBanner v-if="selectedId" :workspace-id="selectedId" />
     <StaleSessionBanner v-if="selectedId" :workspace-id="selectedId" />
@@ -270,6 +316,18 @@ const starting = ref(false)
 const stopping = ref(false)
 const pendingWorkspaceUpdates = new Set<Promise<unknown>>()
 
+// True when the workspace has a brainstorm prompt waiting to be replayed —
+// happens when the setup script crashed at creation time and the agent
+// never received the original instructions. Surfacing the banner gives the
+// user a one-click path to retry with the saved prompt.
+const hasPendingInitialPrompt = computed(
+  () =>
+    !!store.selectedWorkspace?.initialPrompt &&
+    store.selectedWorkspace.initialPrompt.length > 0 &&
+    !isAgentRunning.value &&
+    !store.selectedWorkspace?.archivedAt,
+)
+
 const descriptionDraft = ref<string>('')
 
 watch(
@@ -354,6 +412,22 @@ async function handleStart() {
 }
 
 const interrupting = ref(false)
+const unarchiving = ref(false)
+
+async function handleUnarchive() {
+  if (!store.selectedWorkspaceId || unarchiving.value) return
+  const id = store.selectedWorkspaceId
+  unarchiving.value = true
+  try {
+    await store.unarchiveWorkspace(id)
+    $q.notify({ type: 'positive', message: t('workspacePage.unarchived'), position: 'top', timeout: 3000 })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : t('workspacePage.unarchiveFailed')
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+  } finally {
+    unarchiving.value = false
+  }
+}
 
 async function handleInterrupt() {
   if (!store.selectedWorkspaceId) return
@@ -576,5 +650,15 @@ watch(
   min-height: 48px;
   background-color: #16162a;
   border-bottom: 1px solid #2a2a4a;
+}
+
+.wp-archived-banner {
+  background-color: rgba(255, 255, 255, 0.03);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.wp-pending-prompt-banner {
+  background-color: rgba(245, 158, 11, 0.08);
+  border-bottom: 1px solid rgba(245, 158, 11, 0.15);
 }
 </style>

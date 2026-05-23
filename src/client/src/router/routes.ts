@@ -34,6 +34,11 @@ const routes: RouteRecordRaw[] = [
         name: 'health',
         component: () => import('../pages/HealthPage.vue'),
       },
+      {
+        path: 'changelog',
+        name: 'changelog',
+        component: () => import('../pages/ChangelogPage.vue'),
+      },
     ],
   },
   // Always leave this as last

@@ -119,6 +119,11 @@ export default {
   'workspacePage.stopFailed': 'Stop failed',
   'workspacePage.interrupt': 'Interrupt',
   'workspacePage.interrupted': 'Agent interrupted — waiting for your next message',
+  'workspacePage.archivedBanner': 'Archived workspace — read-only',
+  'workspacePage.pendingInitialPromptBanner':
+    'An initial prompt is pending — the agent never received it (setup script crashed or the workspace was never started). Click Start to send it now.',
+  'workspacePage.unarchived': 'Workspace unarchived',
+  'workspacePage.unarchiveFailed': 'Unarchive failed',
   'workspacePage.interruptFailed': 'Interrupt failed',
   'workspacePage.interruptTooltip': 'Soft interrupt (like Escape) — stops the current tool but keeps the session alive',
   'workspacePage.pendingNextRun': 'Applied on next start',
@@ -276,6 +281,8 @@ export default {
   'createPage.notionExtractHint': 'Subtasks and acceptance criteria will be extracted from the Notion page.',
   'createPage.notionImportHint': 'Click "Import from Notion" to automatically extract subtasks from a ticket.',
   'createPage.errorCreating': 'Error creating workspace.',
+  'createPage.branchAdjusted':
+    'Branch already existed — created `{branch}` instead. The matching worktree folder uses the same suffix.',
   'createPage.validationNotionUrl': 'Please paste a valid Notion URL (https://www.notion.so/...).',
   'createPage.validationDescription': 'Please describe the task.',
   'createPage.validationName': 'Please provide a workspace name.',
@@ -346,6 +353,10 @@ export default {
   'settings.prPromptHint': 'Use the template variables listed above (double curly brace syntax).',
   'settings.reviewPromptTemplate': 'Review prompt template',
   'settings.reviewPromptPlaceholder': 'Instructions for the agent when reviewing branch changes...',
+  'settings.ciFixPromptTemplate': 'CI fix prompt template',
+  'settings.ciFixPromptHint':
+    'Sent to the agent when a workspace has failing CI. Variables (double-brace syntax): pr_url, pr_number, pr_title, branch_name, source_branch, workspace_name, workspace_id, project_name, failed_jobs, ci_run_url.',
+  'settings.ciFixPromptPlaceholder': 'Ask the agent to diagnose and fix the failing CI jobs...',
   'settings.notionInitialPrompt': 'Notion initial prompt',
   'settings.notionInitialPrompt.help':
     'Appended to the workspace creation prompt when the workspace has a Notion ticket. Variables: {variables}.',
@@ -510,6 +521,7 @@ export default {
   'settings.prPromptTemplate.project': 'PR prompt template',
   'settings.prPromptPlaceholder.project': 'Project-specific instructions for PR creation...',
   'settings.reviewPromptTemplate.project': 'Review prompt template',
+  'settings.ciFixPromptTemplate.project': 'CI fix prompt template',
   'settings.gitConventions.project': 'Git conventions (project override)',
   'settings.gitConventionsEmpty': 'Leave empty to use the global conventions.',
   'settings.notionStatus': 'Notion ticket status',
@@ -831,6 +843,10 @@ export default {
   'tools.review': 'Review changes',
   'tools.reviewTooltip': 'Ask the agent to review the changes on this branch',
   'tools.reviewBusy': "Agent is busy — wait until it's idle",
+  'tools.fixCi': 'Fix CI',
+  'tools.fixCiTooltip': 'Ask the agent to diagnose and fix the failing CI jobs',
+  'tools.fixCiLaunched': 'Fix-CI action dispatched to the agent',
+  'tools.fixCiFailed': 'Failed to launch the Fix-CI action',
 
   // Review dialog
   'review.title': 'Start review',
@@ -967,6 +983,11 @@ export default {
     'This will replace your current settings, templates and tags. Your MCP keys are preserved. Continue?',
   'health.title': 'Health',
   'health.tooltip': 'System health',
+  'changelog.title': 'Changelog',
+  'changelog.tooltip': "What's new in Kōbō",
+  'changelog.empty': 'No changelog available.',
+  'changelog.current': 'current',
+  'changelog.currentVersion': 'Current version: v{version}',
   'health.envTitle': 'Environment',
   'health.version': 'Version',
   'health.koboHome': 'Kōbō home',

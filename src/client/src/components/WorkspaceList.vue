@@ -47,6 +47,19 @@
             flat
             round
             dense
+            icon="history_edu"
+            class="q-ml-xs"
+            size="sm"
+            color="grey-5"
+            data-tour="changelog"
+            @click="goToChangelog"
+        >
+          <q-tooltip>{{ $t('changelog.tooltip') }}</q-tooltip>
+        </q-btn>
+        <q-btn
+            flat
+            round
+            dense
             icon="settings"
             class="q-ml-xs"
             size="sm"
@@ -1174,6 +1187,10 @@ function goToSearch() {
 
 function goToHealth() {
   router.push({ name: 'health' })
+}
+
+function goToChangelog() {
+  router.push({ name: 'changelog' })
 }
 
 onMounted(async () => {

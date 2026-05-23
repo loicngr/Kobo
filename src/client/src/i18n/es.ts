@@ -119,6 +119,11 @@ export default {
   'workspacePage.stopFailed': 'Error al detener',
   'workspacePage.interrupt': 'Interrumpir',
   'workspacePage.interrupted': 'Agente interrumpido — esperando tu próximo mensaje',
+  'workspacePage.archivedBanner': 'Workspace archivado — solo lectura',
+  'workspacePage.pendingInitialPromptBanner':
+    'Hay un prompt inicial pendiente — el agente nunca lo recibió (el script de setup falló o el workspace nunca se inició). Haz clic en Iniciar para enviarlo ahora.',
+  'workspacePage.unarchived': 'Workspace desarchivado',
+  'workspacePage.unarchiveFailed': 'Error al desarchivar',
   'workspacePage.interruptFailed': 'Error al interrumpir',
   'workspacePage.interruptTooltip':
     'Interrupción suave (como Escape) — detiene la herramienta actual pero mantiene la sesión activa',
@@ -278,6 +283,8 @@ export default {
   'createPage.notionImportHint':
     'Haz clic en "Importar desde Notion" para extraer automáticamente las subtareas de un ticket.',
   'createPage.errorCreating': 'Error al crear el workspace.',
+  'createPage.branchAdjusted':
+    'La rama ya existía — se creó `{branch}` en su lugar. La carpeta worktree correspondiente usa el mismo sufijo.',
   'createPage.validationNotionUrl': 'Introduce una URL de Notion válida (https://www.notion.so/...).',
   'createPage.validationDescription': 'Describe la tarea.',
   'createPage.validationName': 'Indica un nombre para el workspace.',
@@ -349,6 +356,10 @@ export default {
   'settings.prPromptHint': 'Usa las variables listadas arriba (sintaxis de dobles llaves).',
   'settings.reviewPromptTemplate': 'Plantilla de prompt de revisión',
   'settings.reviewPromptPlaceholder': 'Instrucciones para el agente al revisar los cambios de la rama...',
+  'settings.ciFixPromptTemplate': 'Plantilla de prompt «Reparar CI»',
+  'settings.ciFixPromptHint':
+    'Se envía al agente cuando un workspace tiene la CI fallando. Variables (sintaxis con dobles llaves): pr_url, pr_number, pr_title, branch_name, source_branch, workspace_name, workspace_id, project_name, failed_jobs, ci_run_url.',
+  'settings.ciFixPromptPlaceholder': 'Pedir al agente que diagnostique y arregle los jobs de CI que fallan...',
   'settings.notionInitialPrompt': 'Prompt inicial de Notion',
   'settings.notionInitialPrompt.help':
     'Se añade al prompt de creación del workspace cuando el workspace tiene un ticket de Notion. Variables: {variables}.',
@@ -518,6 +529,7 @@ export default {
   'settings.prPromptTemplate.project': 'Plantilla de prompt PR',
   'settings.prPromptPlaceholder.project': 'Instrucciones específicas del proyecto para la creación de PRs...',
   'settings.reviewPromptTemplate.project': 'Plantilla de prompt de revisión',
+  'settings.ciFixPromptTemplate.project': 'Plantilla de prompt «Reparar CI»',
   'settings.gitConventions.project': 'Convenciones Git (por proyecto)',
   'settings.gitConventionsEmpty': 'Dejar vacío para usar las convenciones globales.',
   'settings.notionStatus': 'Estado ticket Notion',
@@ -839,6 +851,10 @@ export default {
   'tools.review': 'Revisar cambios',
   'tools.reviewTooltip': 'Pedir al agente que revise los cambios de esta rama',
   'tools.reviewBusy': 'Agente ocupado — espera a que esté libre',
+  'tools.fixCi': 'Reparar CI',
+  'tools.fixCiTooltip': 'Pedir al agente que diagnostique y arregle los jobs de CI que fallan',
+  'tools.fixCiLaunched': 'Acción «Reparar CI» enviada al agente',
+  'tools.fixCiFailed': 'No se pudo lanzar la acción «Reparar CI»',
 
   // Review dialog
   'review.title': 'Iniciar revisión',
@@ -979,6 +995,11 @@ export default {
     'Esto reemplazará tus ajustes, plantillas y etiquetas actuales. Las claves MCP se conservan. ¿Continuar?',
   'health.title': 'Salud',
   'health.tooltip': 'Estado del sistema',
+  'changelog.title': 'Changelog',
+  'changelog.tooltip': 'Novedades de Kōbō',
+  'changelog.empty': 'Ningún changelog disponible.',
+  'changelog.current': 'actual',
+  'changelog.currentVersion': 'Versión actual: v{version}',
   'health.envTitle': 'Entorno',
   'health.version': 'Versión',
   'health.koboHome': 'Kōbō home',

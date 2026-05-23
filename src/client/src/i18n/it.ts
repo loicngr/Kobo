@@ -119,6 +119,11 @@ export default {
   'workspacePage.stopFailed': 'Arresto fallito',
   'workspacePage.interrupt': 'Interrompi',
   'workspacePage.interrupted': 'Agente interrotto — in attesa del tuo prossimo messaggio',
+  'workspacePage.archivedBanner': 'Workspace archiviato — sola lettura',
+  'workspacePage.pendingInitialPromptBanner':
+    "C'è un prompt iniziale in attesa — l'agente non l'ha mai ricevuto (lo script di setup è crashato o il workspace non è mai stato avviato). Clicca Avvia per inviarlo ora.",
+  'workspacePage.unarchived': 'Workspace ripristinato',
+  'workspacePage.unarchiveFailed': 'Ripristino fallito',
   'workspacePage.interruptFailed': 'Interruzione fallita',
   'workspacePage.interruptTooltip':
     'Interruzione leggera (come Escape) — ferma lo strumento corrente ma mantiene la sessione attiva',
@@ -279,6 +284,8 @@ export default {
   'createPage.notionImportHint':
     'Clicca su "Importa da Notion" per estrarre automaticamente le sottotask da un ticket.',
   'createPage.errorCreating': 'Errore durante la creazione del workspace.',
+  'createPage.branchAdjusted':
+    'Il branch esisteva già — creato `{branch}` al suo posto. La cartella worktree corrispondente usa lo stesso suffisso.',
   'createPage.validationNotionUrl': 'Inserisci un URL Notion valido (https://www.notion.so/...).',
   'createPage.validationDescription': 'Descrivi il task.',
   'createPage.validationName': 'Indica un nome per il workspace.',
@@ -350,6 +357,10 @@ export default {
   'settings.prPromptHint': 'Usa le variabili elencate sopra (sintassi doppia parentesi graffa).',
   'settings.reviewPromptTemplate': 'Template del prompt di revisione',
   'settings.reviewPromptPlaceholder': "Istruzioni per l'agente durante la revisione delle modifiche del branch...",
+  'settings.ciFixPromptTemplate': 'Template del prompt «Ripara CI»',
+  'settings.ciFixPromptHint':
+    "Inviato all'agente quando un workspace ha la CI in errore. Variabili (sintassi doppie graffe): pr_url, pr_number, pr_title, branch_name, source_branch, workspace_name, workspace_id, project_name, failed_jobs, ci_run_url.",
+  'settings.ciFixPromptPlaceholder': "Chiedi all'agente di diagnosticare e correggere i job di CI in errore...",
   'settings.notionInitialPrompt': 'Prompt iniziale Notion',
   'settings.notionInitialPrompt.help':
     'Aggiunto al prompt di creazione del workspace quando il workspace ha un ticket Notion. Variabili: {variables}.',
@@ -516,6 +527,7 @@ export default {
   'settings.prPromptTemplate.project': 'Template del prompt PR',
   'settings.prPromptPlaceholder.project': 'Istruzioni specifiche del progetto per la creazione di PR...',
   'settings.reviewPromptTemplate.project': 'Template del prompt di revisione',
+  'settings.ciFixPromptTemplate.project': 'Template del prompt «Ripara CI»',
   'settings.gitConventions.project': 'Convenzioni Git (per progetto)',
   'settings.gitConventionsEmpty': 'Lascia vuoto per usare le convenzioni globali.',
   'settings.notionStatus': 'Stato ticket Notion',
@@ -838,6 +850,10 @@ export default {
   'tools.review': 'Revisiona modifiche',
   'tools.reviewTooltip': "Chiedi all'agente di rivedere le modifiche di questo branch",
   'tools.reviewBusy': 'Agente occupato — attendi che sia libero',
+  'tools.fixCi': 'Ripara CI',
+  'tools.fixCiTooltip': "Chiedi all'agente di diagnosticare e correggere i job di CI in errore",
+  'tools.fixCiLaunched': "Azione «Ripara CI» inviata all'agente",
+  'tools.fixCiFailed': "Impossibile avviare l'azione «Ripara CI»",
 
   // Review dialog
   'review.title': 'Avvia revisione',
@@ -977,6 +993,11 @@ export default {
     'Questo sostituirà le tue impostazioni, template e tag attuali. Le chiavi MCP vengono preservate. Continuare?',
   'health.title': 'Stato',
   'health.tooltip': 'Stato del sistema',
+  'changelog.title': 'Changelog',
+  'changelog.tooltip': 'Novità di Kōbō',
+  'changelog.empty': 'Nessun changelog disponibile.',
+  'changelog.current': 'corrente',
+  'changelog.currentVersion': 'Versione corrente: v{version}',
   'health.envTitle': 'Ambiente',
   'health.version': 'Versione',
   'health.koboHome': 'Kōbō home',
