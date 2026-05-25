@@ -436,6 +436,10 @@ export default {
   'settings.editorCommandPlaceholder': 'code, phpstorm, subl, vim...',
   'settings.editorCommandHint':
     'Command used to open the worktree in your editor. The worktree path is passed as argument.',
+  'settings.fileManagerCommand': 'File manager command',
+  'settings.fileManagerCommandPlaceholder': 'xdg-open, open, nautilus, dolphin, explorer...',
+  'settings.fileManagerCommandHint':
+    'Command used to open the worktree in your file manager. The worktree path is passed as argument. Leave empty to hide the button.',
   'settings.mcpSelection': 'Claude MCP selection',
   'settings.mcpAutoSelect': 'Auto (first matching active MCP)',
   'settings.notionMcp': 'Notion MCP key',
@@ -847,6 +851,9 @@ export default {
   'tools.fixCiTooltip': 'Ask the agent to diagnose and fix the failing CI jobs',
   'tools.fixCiLaunched': 'Fix-CI action dispatched to the agent',
   'tools.fixCiFailed': 'Failed to launch the Fix-CI action',
+  'tools.openFileManager': 'Open in file manager',
+  'tools.openFileManagerTooltip': 'Open the worktree folder in your configured file manager',
+  'tools.openFileManagerFailed': 'Failed to open the file manager',
 
   // Review dialog
   'review.title': 'Start review',

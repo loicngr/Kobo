@@ -443,6 +443,10 @@ export default {
   'settings.editorCommandPlaceholder': 'code, phpstorm, subl, vim...',
   'settings.editorCommandHint':
     'Befehl zum Öffnen des Worktrees in Ihrem Editor. Der Worktree-Pfad wird als Argument übergeben.',
+  'settings.fileManagerCommand': 'Dateimanager-Befehl',
+  'settings.fileManagerCommandPlaceholder': 'xdg-open, open, nautilus, dolphin, explorer...',
+  'settings.fileManagerCommandHint':
+    'Befehl zum Öffnen des Worktrees in Ihrem Dateimanager. Der Worktree-Pfad wird als Argument übergeben. Leer lassen, um den Button auszublenden.',
   'settings.mcpSelection': 'Claude-MCP-Auswahl',
   'settings.mcpAutoSelect': 'Auto (erster passender aktiver MCP)',
   'settings.notionMcp': 'Notion-MCP-Schlüssel',
@@ -857,6 +861,9 @@ export default {
   'tools.fixCiTooltip': 'Den Agenten bitten, die fehlschlagenden CI-Jobs zu diagnostizieren und zu beheben',
   'tools.fixCiLaunched': 'CI-Fix-Aktion an den Agenten gesendet',
   'tools.fixCiFailed': 'CI-Fix-Aktion konnte nicht gestartet werden',
+  'tools.openFileManager': 'Im Dateimanager öffnen',
+  'tools.openFileManagerTooltip': 'Worktree-Ordner im konfigurierten Dateimanager öffnen',
+  'tools.openFileManagerFailed': 'Dateimanager konnte nicht geöffnet werden',
 
   // Review dialog
   'review.title': 'Review starten',

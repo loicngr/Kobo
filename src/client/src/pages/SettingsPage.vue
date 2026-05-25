@@ -780,6 +780,20 @@ where ffmpeg</pre>
               />
             </div>
 
+            <!-- File manager -->
+            <div v-show="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.fileManagerCommand') }}</div>
+              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.fileManagerCommandHint') }}</div>
+              <q-input
+                v-model="globalFileManagerCommand"
+                dense
+                dark
+                outlined
+                :placeholder="$t('settings.fileManagerCommandPlaceholder')"
+                class="settings-input"
+              />
+            </div>
+
             <div
               v-show="activeTab === 'notion' || activeTab === 'sentry'"
               data-tour="settings-card-notion"
@@ -2092,6 +2106,7 @@ const globalReviewPrompt = ref('')
 const globalCiFixPrompt = ref('')
 const globalGitConventions = ref('')
 const globalEditorCommand = ref('')
+const globalFileManagerCommand = ref('')
 const globalBrowserNotifications = ref(true)
 const globalAudioNotifications = ref(true)
 const globalAudioNotificationSound = ref(DEFAULT_NOTIFICATION_SOUND)
@@ -2750,6 +2765,7 @@ function captureGlobalSnapshot(): string {
     ciFixPrompt: globalCiFixPrompt.value,
     gitConventions: globalGitConventions.value,
     editorCommand: globalEditorCommand.value,
+    fileManagerCommand: globalFileManagerCommand.value,
     browserNotifications: globalBrowserNotifications.value,
     audioNotifications: globalAudioNotifications.value,
     audioNotificationSound: globalAudioNotificationSound.value,
@@ -2824,6 +2840,7 @@ function syncGlobalForm() {
   globalCiFixPrompt.value = store.global.ciFixPromptTemplate ?? ''
   globalGitConventions.value = store.global.gitConventions
   globalEditorCommand.value = store.global.editorCommand ?? ''
+  globalFileManagerCommand.value = store.global.fileManagerCommand ?? ''
   globalBrowserNotifications.value = store.global.browserNotifications ?? true
   globalAudioNotifications.value = store.global.audioNotifications ?? true
   globalAudioNotificationSound.value = resolveSoundId(store.global.audioNotificationSound)
@@ -3091,6 +3108,7 @@ async function saveGlobal() {
       ciFixPromptTemplate: globalCiFixPrompt.value,
       gitConventions: globalGitConventions.value,
       editorCommand: globalEditorCommand.value,
+      fileManagerCommand: globalFileManagerCommand.value,
       browserNotifications: globalBrowserNotifications.value,
       audioNotifications: globalAudioNotifications.value,
       audioNotificationSound: globalAudioNotificationSound.value,

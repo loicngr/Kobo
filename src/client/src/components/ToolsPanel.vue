@@ -50,6 +50,21 @@
       />
 
       <q-btn
+        v-if="hasFileManagerCommand"
+        no-caps
+        dense
+        outline
+        color="indigo-4"
+        icon="folder_open"
+        :label="$t('tools.openFileManager')"
+        :loading="openingFileManager"
+        class="full-width q-mb-xs"
+        @click="openFileManager"
+      >
+        <q-tooltip>{{ $t('tools.openFileManagerTooltip') }}</q-tooltip>
+      </q-btn>
+
+      <q-btn
         no-caps
         dense
         outline
@@ -142,6 +157,7 @@ const workspaceStore = useWorkspaceStore()
 
 const running = ref(false)
 const openingEditor = ref(false)
+const openingFileManager = ref(false)
 const reviewDialogOpen = ref(false)
 const startingReview = ref(false)
 const fixingCi = ref(false)
@@ -161,6 +177,7 @@ const hasSetupScript = computed(() => {
 })
 
 const hasEditorCommand = computed(() => !!settingsStore.global.editorCommand)
+const hasFileManagerCommand = computed(() => !!settingsStore.global.fileManagerCommand)
 
 const isAgentBusy = computed(() => isBusyStatus(props.workspace?.status))
 const isArchived = computed(() => Boolean(props.workspace?.archivedAt))
@@ -211,6 +228,28 @@ async function openEditor() {
     $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
   } finally {
     openingEditor.value = false
+  }
+}
+
+async function openFileManager() {
+  if (!workspaceId.value) return
+  openingFileManager.value = true
+  try {
+    const res = await fetch(`/api/workspaces/${workspaceId.value}/open-file-manager`, { method: 'POST' })
+    if (!res.ok) {
+      const data = await res.json()
+      $q.notify({
+        type: 'negative',
+        message: data.error ?? t('tools.openFileManagerFailed'),
+        position: 'top',
+        timeout: 6000,
+      })
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : t('tools.openFileManagerFailed')
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+  } finally {
+    openingFileManager.value = false
   }
 }
 

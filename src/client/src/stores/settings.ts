@@ -83,6 +83,12 @@ interface GlobalSettings {
   /** Shell script run in place of the built-in cherry-pick when the source branch changes (empty = disabled). */
   changeSourceBranchScript: string
   editorCommand: string
+  /**
+   * Shell command spawned with the worktree path as first arg to open it in
+   * the user's file manager (xdg-open, open, nautilus, dolphin, explorer…).
+   * Empty disables the "Open in file manager" button.
+   */
+  fileManagerCommand: string
   browserNotifications: boolean
   audioNotifications: boolean
   audioNotificationSound: string
@@ -175,6 +181,7 @@ export const useSettingsStore = defineStore('settings', {
       sentryInitialPromptTemplate: '',
       gitConventions: '',
       editorCommand: '',
+      fileManagerCommand: '',
       browserNotifications: true,
       audioNotifications: true,
       audioNotificationSound: 'hey.mp3',

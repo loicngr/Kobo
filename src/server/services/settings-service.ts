@@ -238,6 +238,13 @@ export interface GlobalSettings {
    */
   changeSourceBranchScript: string
   editorCommand: string
+  /**
+   * Optional shell command spawned with the worktree path as the first
+   * argument to open it in the user's file manager (e.g. `xdg-open`, `open`,
+   * `nautilus`, `dolphin`, `explorer`). Empty = feature off.
+   * Seeded by settings migration v35.
+   */
+  fileManagerCommand: string
   browserNotifications: boolean
   audioNotifications: boolean
   audioNotificationSound: string
@@ -762,6 +769,17 @@ const settingsMigrations: SettingsMigration[] = [
       }
     },
   },
+  {
+    version: 35,
+    name: 'add-file-manager-command',
+    migrate: ({ global }) => {
+      // Empty by default — the "Open in file manager" button only shows
+      // when the user explicitly fills it (`xdg-open`, `open`, `nautilus`…).
+      if (typeof global.fileManagerCommand !== 'string') {
+        global.fileManagerCommand = ''
+      }
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -834,6 +852,7 @@ function defaultSettings(): Settings {
       archiveScript: '',
       changeSourceBranchScript: DEFAULT_CHANGE_SOURCE_BRANCH_SCRIPT,
       editorCommand: '',
+      fileManagerCommand: '',
       browserNotifications: true,
       audioNotifications: true,
       audioNotificationSound: 'hey.mp3',
@@ -1209,6 +1228,7 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'archiveScript',
     'changeSourceBranchScript',
     'editorCommand',
+    'fileManagerCommand',
     'browserNotifications',
     'audioNotifications',
     'audioNotificationSound',

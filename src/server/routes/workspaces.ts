@@ -1970,6 +1970,61 @@ app.post('/:id/open-editor', (c) => {
   }
 })
 
+/** Open the workspace worktree in the user's configured file manager. */
+app.post('/:id/open-file-manager', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const globalSettings = settingsService.getGlobalSettings()
+    if (!globalSettings.fileManagerCommand) {
+      return c.json({ error: 'No file manager command configured' }, 400)
+    }
+
+    const worktreePath = workspace.worktreePath
+    if (!fs.existsSync(worktreePath)) {
+      return c.json({ error: `Worktree path does not exist: ${worktreePath}` }, 400)
+    }
+
+    // Spawn + await either 'spawn' (process started OK → detach and respond)
+    // or 'error' (ENOENT, permission denied → fail synchronously with a
+    // clear 400 so the client toast shows a useful message instead of a
+    // silent server log).
+    try {
+      await waitForSpawn(globalSettings.fileManagerCommand, [worktreePath])
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return c.json({ error: `Failed to launch '${globalSettings.fileManagerCommand}': ${msg}` }, 400)
+    }
+
+    return c.json({ success: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+/** Spawn a detached process and resolve as soon as it has started (or reject
+ *  on launch failure). Caller doesn't await process completion. */
+function waitForSpawn(command: string, args: string[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(command, args, { detached: true, stdio: 'ignore' })
+    let settled = false
+    child.once('spawn', () => {
+      if (settled) return
+      settled = true
+      child.unref()
+      resolve()
+    })
+    child.once('error', (err) => {
+      if (settled) return
+      settled = true
+      reject(err)
+    })
+  })
+}
+
 /** Re-run the project setup script in the workspace worktree. */
 app.post('/:id/run-setup-script', async (c) => {
   try {
