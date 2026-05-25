@@ -598,11 +598,13 @@
           <div
             v-for="ws in filteredArchived"
             :key="ws.id"
-            class="wl-item wl-item--archived q-pa-sm q-mx-xs rounded-borders"
+            class="wl-item wl-item--archived cursor-pointer q-pa-sm q-mx-xs rounded-borders"
+            :class="{ 'wl-item--selected': ws.id === store.selectedWorkspaceId }"
             :style="[
               { borderLeft: '3px solid #555' },
               ws.favoritedAt ? { borderBottom: '2px solid #f59e0b' } : {},
             ]"
+            @click="selectWorkspace(ws.id)"
             @contextmenu.prevent
           >
             <WorkspaceContextMenu
