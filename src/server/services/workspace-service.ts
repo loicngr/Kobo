@@ -64,6 +64,16 @@ export interface Workspace {
    * successfully consumed; null otherwise (= nothing pending or already used).
    */
   initialPrompt: string | null
+  /**
+   * pr.updatedAt snapshot stored when the user clicked "Marquer comme vu" on
+   * the changes-requested badge. The badge stays hidden as long as the
+   * latest pr-watcher snapshot's updatedAt <= this value; any newer
+   * activity on the PR (commit, comment, re-review) invalidates the
+   * dismiss and surfaces the badge again. Null = never dismissed.
+   */
+  prChangesDismissedAt: string | null
+  /** Same as `prChangesDismissedAt` but for the CI failure badge. */
+  prCiFailureDismissedAt: string | null
   engine: string
   autoLoop: boolean
   autoLoopReady: boolean
@@ -158,6 +168,8 @@ interface WorkspaceRow {
   description: string | null
   agent_description: string | null
   initial_prompt: string | null
+  pr_changes_dismissed_at: string | null
+  pr_ci_failure_dismissed_at: string | null
   created_at: string
   updated_at: string
 }
@@ -212,6 +224,8 @@ function mapWorkspace(row: WorkspaceRow): Workspace {
     description: row.description,
     agentDescription: row.agent_description,
     initialPrompt: row.initial_prompt,
+    prChangesDismissedAt: row.pr_changes_dismissed_at,
+    prCiFailureDismissedAt: row.pr_ci_failure_dismissed_at,
     engine: row.engine ?? 'claude-code',
     autoLoop: row.auto_loop === 1,
     autoLoopReady: row.auto_loop_ready === 1,
@@ -556,6 +570,25 @@ export function setInitialPrompt(id: string, prompt: string | null): void {
 /** Shortcut for `setInitialPrompt(id, null)`. */
 export function clearInitialPrompt(id: string): void {
   setInitialPrompt(id, null)
+}
+
+/**
+ * Record that the user dismissed a PR attention badge ("changes requested"
+ * or "CI failure"). `prUpdatedAt` is the timestamp of the PR snapshot at the
+ * moment of the click — the badge stays hidden until the watcher observes a
+ * fresher updatedAt.
+ */
+export type PrAttentionKind = 'changes-requested' | 'ci-failed'
+
+export function dismissPrAttention(id: string, kind: PrAttentionKind, prUpdatedAt: string): void {
+  const column = kind === 'changes-requested' ? 'pr_changes_dismissed_at' : 'pr_ci_failure_dismissed_at'
+  const db = getDb()
+  const result = db
+    .prepare(`UPDATE workspaces SET ${column} = ?, updated_at = ? WHERE id = ?`)
+    .run(prUpdatedAt, new Date().toISOString(), id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
 }
 
 /** Update the dev-server status column for a workspace. */

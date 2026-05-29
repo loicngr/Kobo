@@ -26,11 +26,18 @@ export function getAttentionReasons(workspace: Workspace, snapshot: PrSnapshot |
   const reasons: AttentionReason[] = []
   const statusReason = STATUS_REASONS[workspace.status]
   if (statusReason) reasons.push(statusReason)
-  if (snapshot && isCiFailed(snapshot)) {
+  if (snapshot && isCiFailed(snapshot) && !isDismissed(workspace.prCiFailureDismissedAt, snapshot)) {
     reasons.push({ kind: 'ci-failed', icon: 'cancel', color: 'red-5' })
   }
-  if (snapshot && isChangesRequestedBlocking(snapshot)) {
+  if (snapshot && isChangesRequestedBlocking(snapshot) && !isDismissed(workspace.prChangesDismissedAt, snapshot)) {
     reasons.push({ kind: 'changes-requested', icon: 'rate_review', color: 'red-5' })
   }
   return reasons
+}
+
+/** True when the user dismissed this attention reason and the PR has had
+ *  no fresher activity since (= `snapshot.updatedAt <= dismissedAt`). */
+function isDismissed(dismissedAt: string | null, snapshot: PrSnapshot): boolean {
+  if (!dismissedAt) return false
+  return snapshot.updatedAt <= dismissedAt
 }

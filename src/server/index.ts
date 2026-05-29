@@ -305,18 +305,17 @@ setMessageHandler((type, payload) => {
   } | null
 
   if (type === 'chat:message' && p?.workspaceId && p?.content) {
-    // Auto-loop owns the agent's turns — a stray user message would land in
-    // the middle of an iteration (or in a freshly spawned next one) and break
-    // the deterministic loop contract. Reject server-side so direct WS clients
-    // can't bypass the frontend's input lock. Grooming phase (ready=0) is
-    // skipped — the user must stay free to answer the agent's questions.
+    // Auto-loop owns the agent's turns. A user message means the user wants
+    // to redirect the conversation, so disable the loop (idempotent — the
+    // `autoloop:disabled` event is emitted with reason='user-action' so the
+    // frontend chip updates) and let the message through to the running
+    // session. The user can re-enable auto-loop manually once their
+    // intervention is done. Grooming phase (ready=0) is skipped — the loop
+    // hasn't started yet, so chat messages during grooming pass through
+    // untouched (the user can still answer the agent's questions).
     const autoLoopStatus = autoLoopService.getStatus(p.workspaceId)
     if (autoLoopStatus.auto_loop && autoLoopStatus.auto_loop_ready) {
-      emitEphemeral(p.workspaceId, 'chat:rejected', {
-        reason: 'auto-loop-active',
-        message: 'Auto-loop is running — disable it before sending a message',
-      })
-      return
+      autoLoopService.disable(p.workspaceId, 'user-action')
     }
 
     // Reject chat input while paused on canUseTool — sending here would spawn

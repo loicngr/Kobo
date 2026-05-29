@@ -719,6 +719,10 @@ export default {
   'git.changeSourceBranchTooMany': 'Der Branch hat zu viele eigene Commits ({n}) — bitte manuell rebasen',
   'git.changeSourceBranchDirty': 'Committe oder stashe deine Änderungen, bevor du den Quellbranch änderst',
   'git.changeSourceBranchAgentRunning': 'Stoppe den Agenten, bevor du den Quellbranch änderst',
+  'git.changeSourceBranchErrorTitle': 'Quellbranch-Wechsel fehlgeschlagen',
+  'git.changeSourceBranchErrorOngoing':
+    'Eine {op}-Operation läuft noch im Worktree. Brich sie ab, um zu einem sauberen Zustand zurückzukehren.',
+  'git.changeSourceBranchErrorAbort': 'Operation abbrechen',
   'git.changeSourceBranchLoading': 'Quellbranch wird geändert…',
   'git.changeSourceForcePushTitle': 'Neu geschriebenen Branch force-pushen?',
   'git.changeSourceForcePushMessage':
@@ -949,8 +953,11 @@ export default {
   'contextMenu.editDescription': 'Beschreibung bearbeiten',
   'contextMenu.copyPath': 'Worktree-Pfad kopieren',
   'contextMenu.openEditor': 'Im Editor öffnen',
+  'contextMenu.openFileManager': 'Im Dateimanager öffnen',
   'contextMenu.runSetup': 'Setup-Skript ausführen',
   'contextMenu.exportEvents': 'Events exportieren (CSV)',
+  'contextMenu.dismissChangesRequested': 'Änderungen angefragt als gesehen markieren',
+  'contextMenu.dismissCiFailure': 'CI-Fehler als gesehen markieren',
   'contextMenu.exportingEvents': 'Export wird vorbereitet…',
   'contextMenu.exportEventsError': 'Event-Export fehlgeschlagen',
   'contextMenu.openNotion': 'In Notion öffnen',

@@ -718,6 +718,10 @@ export default {
   'git.changeSourceBranchTooMany': 'La branche a trop de commits propres ({n}) — rebase-la manuellement',
   'git.changeSourceBranchDirty': 'Commit ou stash tes changements avant de changer la branche source',
   'git.changeSourceBranchAgentRunning': "Arrête l'agent avant de changer la branche source",
+  'git.changeSourceBranchErrorTitle': 'Échec du changement de branche source',
+  'git.changeSourceBranchErrorOngoing':
+    'Une opération {op} est encore en cours sur le worktree. Annule-la pour revenir à un état propre.',
+  'git.changeSourceBranchErrorAbort': "Annuler l'opération",
   'git.changeSourceBranchLoading': 'Changement de la branche source…',
   'git.changeSourceForcePushTitle': 'Force-push de la branche réécrite ?',
   'git.changeSourceForcePushMessage':
@@ -947,8 +951,11 @@ export default {
   'contextMenu.editDescription': 'Modifier la description',
   'contextMenu.copyPath': 'Copier le chemin du worktree',
   'contextMenu.openEditor': "Ouvrir dans l'éditeur",
+  'contextMenu.openFileManager': "Ouvrir dans l'explorateur de fichiers",
   'contextMenu.runSetup': 'Lancer le script de setup',
   'contextMenu.exportEvents': 'Exporter les events (CSV)',
+  'contextMenu.dismissChangesRequested': 'Marquer « Modifications demandées » comme vu',
+  'contextMenu.dismissCiFailure': 'Marquer « CI en échec » comme vu',
   'contextMenu.exportingEvents': "Préparation de l'export…",
   'contextMenu.exportEventsError': "Échec de l'export des events",
   'contextMenu.openNotion': 'Ouvrir dans Notion',

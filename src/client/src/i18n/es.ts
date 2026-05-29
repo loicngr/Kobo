@@ -717,6 +717,10 @@ export default {
   'git.changeSourceBranchTooMany': 'La rama tiene demasiados commits propios ({n}) — rebásala manualmente',
   'git.changeSourceBranchDirty': 'Haz commit o stash de tus cambios antes de cambiar la rama de origen',
   'git.changeSourceBranchAgentRunning': 'Detén el agente antes de cambiar la rama de origen',
+  'git.changeSourceBranchErrorTitle': 'Error al cambiar la rama de origen',
+  'git.changeSourceBranchErrorOngoing':
+    'Una operación {op} sigue en curso en el worktree. Cancélala para volver a un estado limpio.',
+  'git.changeSourceBranchErrorAbort': 'Cancelar la operación',
   'git.changeSourceBranchLoading': 'Cambiando la rama de origen…',
   'git.changeSourceForcePushTitle': '¿Forzar el push de la rama reescrita?',
   'git.changeSourceForcePushMessage':
@@ -947,8 +951,11 @@ export default {
   'contextMenu.editDescription': 'Editar la descripción',
   'contextMenu.copyPath': 'Copiar ruta del worktree',
   'contextMenu.openEditor': 'Abrir en editor',
+  'contextMenu.openFileManager': 'Abrir en el explorador de archivos',
   'contextMenu.runSetup': 'Ejecutar script de setup',
   'contextMenu.exportEvents': 'Exportar eventos (CSV)',
+  'contextMenu.dismissChangesRequested': 'Marcar «Cambios solicitados» como visto',
+  'contextMenu.dismissCiFailure': 'Marcar «CI en error» como visto',
   'contextMenu.exportingEvents': 'Preparando la exportación…',
   'contextMenu.exportEventsError': 'Error al exportar los eventos',
   'contextMenu.openNotion': 'Abrir en Notion',

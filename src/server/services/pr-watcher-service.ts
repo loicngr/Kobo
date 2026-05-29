@@ -98,6 +98,32 @@ export async function checkPrStatuses(): Promise<void> {
     try {
       const pr = await getForgeProvider(resolveForge(ws.projectPath)).getPrStatus(ws.worktreePath, ws.workingBranch)
 
+      // Detect a PR base change BEFORE computing git stats so the new base
+      // is used in commitCount / behindCount / diffStats. Otherwise the
+      // user keeps seeing stale ahead/behind counts vs the OLD base until
+      // the next tick (30s later) — when the user re-targeted the PR via
+      // `gh pr edit --base …`, the lag was painful and confusing.
+      let baseTransitionedFrom: string | null = null
+      if (pr?.state === 'OPEN' && pr.base) {
+        const prevBase = lastKnownPr.get(ws.id)?.base ?? ws.sourceBranch
+        if (prevBase !== pr.base) {
+          try {
+            updateWorkspaceSourceBranch(ws.id, pr.base)
+            ws.sourceBranch = pr.base
+            baseTransitionedFrom = prevBase
+            console.log(`[pr-watcher] PR base changed for workspace '${ws.name}': ${prevBase} → ${pr.base}`)
+          } catch (err) {
+            console.error(
+              `[pr-watcher] updateWorkspaceSourceBranch failed for '${ws.name}':`,
+              err instanceof Error ? err.message : err,
+            )
+            // Leave the cache untouched so the next tick retries — and skip
+            // stats too, since they'd be computed against the stale base.
+            continue
+          }
+        }
+      }
+
       // Git stats — best-effort, cached independently of the PR-transition
       // logic below. Its own try/catch so a git failure neither skips PR
       // transitions nor poisons other workspaces.
@@ -176,50 +202,27 @@ export async function checkPrStatuses(): Promise<void> {
         }
       }
 
-      // Base-branch change detection. Only relevant for OPEN PRs — closed/
-      // merged PRs don't accept base changes. Skip if the GitHub response
-      // didn't include a baseRefName (defensive against malformed data).
+      // Cache the snapshot for the next tick. For non-OPEN PRs (closed /
+      // merged) we preserve the previous `base` if the fresh snapshot is
+      // missing one — keeps the OPEN→CLOSED/MERGED archiving logic stable.
       if (pr.state !== 'OPEN' || !pr.base) {
-        // Still update the cache for the state — keeps the OPEN→CLOSED/MERGED
-        // archiving logic working on the next tick. Preserve the previous
-        // `base` if the fresh snapshot is missing one (defensive).
         const next: PrSnapshot = pr.base ? pr : { ...pr, base: prev?.base ?? pr.base }
         lastKnownPr.set(ws.id, next)
         continue
       }
-
-      // Comparison baseline:
-      //  - If we've seen this workspace before, use the previous `base`.
-      //  - Otherwise (first sight after boot/unarchive), compare with the
-      //    `sourceBranch` recorded in the database — that catches base changes
-      //    that happened while Kobo was offline.
-      const previousBase = prev?.base ?? ws.sourceBranch
-      if (previousBase === pr.base) {
-        // No-op path: still record the snapshot so subsequent ticks have a baseline.
-        lastKnownPr.set(ws.id, pr)
-        continue
-      }
-
-      console.log(`[pr-watcher] PR base changed for workspace '${ws.name}': ${previousBase} → ${pr.base}`)
-      try {
-        updateWorkspaceSourceBranch(ws.id, pr.base)
-      } catch (err) {
-        console.error(
-          `[pr-watcher] updateWorkspaceSourceBranch failed for '${ws.name}':`,
-          err instanceof Error ? err.message : err,
-        )
-        // Don't poison the cache: leave the previous entry (or absence) so
-        // the next tick retries the detection.
-        continue
-      }
-      // Both the persistence and the emit are part of "we successfully
-      // observed a base change" — only NOW commit the new state to the cache.
       lastKnownPr.set(ws.id, pr)
-      emitEphemeral(ws.id, 'pr:base-changed', {
-        oldBase: previousBase,
-        newBase: pr.base,
-        prUrl: pr.url,
-      })
+
+      // Emit the base-change event AFTER the snapshot is committed so a
+      // sync:response replay on reconnect sees a consistent state. The
+      // DB update + ws.sourceBranch mutation already happened above
+      // (before computeGitStats).
+      if (baseTransitionedFrom !== null) {
+        emitEphemeral(ws.id, 'pr:base-changed', {
+          oldBase: baseTransitionedFrom,
+          newBase: pr.base,
+          prUrl: pr.url,
+        })
+      }
     } catch (err) {
       console.error(
         `[pr-watcher] Failed to check PR for workspace '${ws.name}':`,
@@ -246,6 +249,26 @@ export async function refreshPrSnapshot(workspaceId: string): Promise<PrSnapshot
   if (snap === null) {
     lastKnownPr.delete(workspaceId)
     return null
+  }
+  // Mirror the watcher's base-change detection so a manual refresh fixes a
+  // stale `sourceBranch` (typical scenario: user ran `gh pr edit --base …`
+  // and clicks the GitPanel refresh button instead of waiting for the next
+  // 30s tick). Best-effort: a DB write failure here leaves the snapshot
+  // cached but the metadata stale — the watcher will retry on its own.
+  if (snap.state === 'OPEN' && snap.base && snap.base !== ws.sourceBranch) {
+    try {
+      updateWorkspaceSourceBranch(workspaceId, snap.base)
+      emitEphemeral(workspaceId, 'pr:base-changed', {
+        oldBase: ws.sourceBranch,
+        newBase: snap.base,
+        prUrl: snap.url,
+      })
+    } catch (err) {
+      console.error(
+        `[pr-watcher] updateWorkspaceSourceBranch (refresh) failed for '${ws.name}':`,
+        err instanceof Error ? err.message : err,
+      )
+    }
   }
   lastKnownPr.set(workspaceId, snap)
   return snap

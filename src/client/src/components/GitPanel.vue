@@ -404,6 +404,47 @@
       </q-card>
     </q-dialog>
 
+    <!-- Change-source-branch error with abort option. Opens when the server
+         reports an `ongoingOperation` after a failed change (typically a
+         custom script that crashed mid-cherry-pick). -->
+    <q-dialog v-model="sourceChangeErrorDialog" persistent>
+      <q-card dark style="min-width: 420px; max-width: 600px;">
+        <q-card-section>
+          <div class="text-subtitle1 text-negative">
+            <q-icon name="error" class="q-mr-xs" />
+            {{ $t('git.changeSourceBranchErrorTitle') }}
+          </div>
+          <div class="text-caption text-grey-6 q-mt-xs">
+            {{ $t('git.changeSourceBranchErrorOngoing', { op: sourceChangeErrorOperation }) }}
+          </div>
+        </q-card-section>
+        <q-card-section class="q-pt-none">
+          <div class="text-body2 text-grey-3" style="white-space: pre-wrap; word-break: break-word;">
+            {{ sourceChangeErrorMessage }}
+          </div>
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn
+            flat
+            no-caps
+            :label="$t('common.close')"
+            color="grey-5"
+            :disable="sourceChangeAborting"
+            @click="sourceChangeErrorDialog = false"
+          />
+          <q-btn
+            unelevated
+            no-caps
+            color="red-5"
+            icon="undo"
+            :label="$t('git.changeSourceBranchErrorAbort')"
+            :loading="sourceChangeAborting"
+            @click="abortSourceChange"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+
     <!-- Diff viewer dialog (fullscreen). `diffInitialReview` selects which
          mode the viewer opens in — set to true by the "Diff v2" button. -->
     <q-dialog v-model="showDiff" maximized>
@@ -534,6 +575,40 @@ const conflictOperation = ref<'merge' | 'rebase' | 'cherry-pick' | null>(null)
 const conflictFiles = ref<string[]>([])
 const conflictAborting = ref(false)
 const conflictResolving = ref(false)
+
+// Dialog opened when /change-source-branch fails with a partial git state
+// (custom script crashed mid-cherry-pick / mid-rebase). The "Abort" button
+// runs `/git/abort` to clean up and leaves the user back in a sane state.
+const sourceChangeErrorDialog = ref(false)
+const sourceChangeErrorMessage = ref('')
+const sourceChangeErrorOperation = ref<'cherry-pick' | 'merge' | 'rebase' | null>(null)
+const sourceChangeAborting = ref(false)
+
+function openSourceChangeErrorDialog(msg: string, op: 'cherry-pick' | 'merge' | 'rebase') {
+  sourceChangeErrorMessage.value = msg
+  sourceChangeErrorOperation.value = op
+  sourceChangeErrorDialog.value = true
+}
+
+async function abortSourceChange() {
+  if (!props.workspace) return
+  sourceChangeAborting.value = true
+  try {
+    const res = await fetch(`/api/workspaces/${props.workspace.id}/git/abort`, { method: 'POST' })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error ?? 'Abort failed')
+    }
+    $q.notify({ type: 'positive', message: t('git.conflictAborted'), position: 'top' })
+    sourceChangeErrorDialog.value = false
+    loadGitStats()
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'Abort failed'
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+  } finally {
+    sourceChangeAborting.value = false
+  }
+}
 
 function onSendToChat(text: string) {
   store.chatDraft = text
@@ -1040,7 +1115,19 @@ async function handleChangeSourceBranch() {
               : data.code === 'agent_running'
                 ? t('git.changeSourceBranchAgentRunning')
                 : (data.error ?? 'Failed')
-        $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+        // The server attaches `ongoingOperation` (cherry-pick / merge / rebase)
+        // when a partial git state was left behind (typically a custom script
+        // that crashed mid-flight). Route to the abort-aware dialog so the
+        // user can clean up in one click instead of dropping to a terminal.
+        if (
+          data.ongoingOperation === 'cherry-pick' ||
+          data.ongoingOperation === 'merge' ||
+          data.ongoingOperation === 'rebase'
+        ) {
+          openSourceChangeErrorDialog(msg, data.ongoingOperation)
+        } else {
+          $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+        }
         return
       }
       // The server updated source_branch for every ok status (done / aligned /

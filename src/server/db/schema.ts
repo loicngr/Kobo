@@ -32,6 +32,8 @@ export function initSchema(db: Database.Database): void {
       description TEXT,
       agent_description TEXT,
       initial_prompt TEXT,
+      pr_changes_dismissed_at TEXT,
+      pr_ci_failure_dismissed_at TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );

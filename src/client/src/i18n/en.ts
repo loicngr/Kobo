@@ -710,6 +710,10 @@ export default {
   'git.changeSourceBranchTooMany': 'The branch has too many own commits ({n}) — rebase it manually',
   'git.changeSourceBranchDirty': 'Commit or stash your changes before changing the source branch',
   'git.changeSourceBranchAgentRunning': 'Stop the agent before changing the source branch',
+  'git.changeSourceBranchErrorTitle': 'Source branch change failed',
+  'git.changeSourceBranchErrorOngoing':
+    'A {op} operation is still in progress on the worktree. Abort it to return to a clean state.',
+  'git.changeSourceBranchErrorAbort': 'Abort the operation',
   'git.changeSourceBranchLoading': 'Changing source branch…',
   'git.changeSourceForcePushTitle': 'Force-push the rewritten branch?',
   'git.changeSourceForcePushMessage':
@@ -936,8 +940,11 @@ export default {
   'contextMenu.editDescription': 'Edit description',
   'contextMenu.copyPath': 'Copy worktree path',
   'contextMenu.openEditor': 'Open in editor',
+  'contextMenu.openFileManager': 'Open in file manager',
   'contextMenu.runSetup': 'Run setup script',
   'contextMenu.exportEvents': 'Export events (CSV)',
+  'contextMenu.dismissChangesRequested': "Mark 'Changes requested' as seen",
+  'contextMenu.dismissCiFailure': "Mark 'CI failure' as seen",
   'contextMenu.exportingEvents': 'Preparing export…',
   'contextMenu.exportEventsError': 'Event export failed',
   'contextMenu.openNotion': 'Open in Notion',

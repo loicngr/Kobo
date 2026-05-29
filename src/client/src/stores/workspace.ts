@@ -32,6 +32,12 @@ export interface Workspace {
    * ingests it via POST /:id/start (server clears it then).
    */
   initialPrompt: string | null
+  /** pr.updatedAt at the time the user clicked "Marquer comme vu" on the
+   *  changes-requested badge. Null = never dismissed. The badge is hidden
+   *  until the watcher observes a fresher pr.updatedAt. */
+  prChangesDismissedAt: string | null
+  /** Same as `prChangesDismissedAt` but for the CI failure badge. */
+  prCiFailureDismissedAt: string | null
   autoLoop: boolean
   autoLoopReady: boolean
   noProgressStreak: number
@@ -1644,6 +1650,30 @@ export const useWorkspaceStore = defineStore('workspace', {
         }
       } catch (err) {
         console.error('[workspace store] markRead failed:', err)
+      }
+    },
+
+    /** Dismiss a PR attention badge (changes-requested or CI failure). The
+     *  badge stays hidden until the watcher observes a fresher pr.updatedAt. */
+    async dismissPrAttention(workspaceId: string, kind: 'changes-requested' | 'ci-failed') {
+      const snapshot = this.prSnapshots[workspaceId]
+      if (!snapshot) return
+      try {
+        const res = await fetch(`/api/workspaces/${workspaceId}/dismiss-pr-attention`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind, prUpdatedAt: snapshot.updatedAt }),
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        // Optimistic store update — the WS event will arrive shortly but the
+        // sidebar should flip immediately on click.
+        const patch =
+          kind === 'changes-requested'
+            ? { prChangesDismissedAt: snapshot.updatedAt }
+            : { prCiFailureDismissedAt: snapshot.updatedAt }
+        this.updateWorkspaceFromEvent(workspaceId, patch)
+      } catch (err) {
+        console.error('[workspace store] dismissPrAttention failed:', err)
       }
     },
 

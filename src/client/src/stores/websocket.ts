@@ -735,6 +735,20 @@ export const useWebSocketStore = defineStore('websocket', {
           break
         }
 
+        case 'workspace:pr-attention-dismissed': {
+          if (wid) {
+            const kind = payload.kind as 'changes-requested' | 'ci-failed' | undefined
+            const ts = payload.prUpdatedAt as string | undefined
+            if (kind && ts) {
+              workspaceStore.updateWorkspaceFromEvent(
+                wid,
+                kind === 'changes-requested' ? { prChangesDismissedAt: ts } : { prCiFailureDismissedAt: ts },
+              )
+            }
+          }
+          break
+        }
+
         case 'workspace:description-updated': {
           if (!wid) break
           const desc = (payload.description as string | null | undefined) ?? null

@@ -17,6 +17,15 @@
         <q-item-section side><q-icon name="open_in_new" size="xs" /></q-item-section>
         <q-item-section>{{ $t('contextMenu.openEditor') }}</q-item-section>
       </q-item>
+      <q-item
+        v-if="settingsStore.global.fileManagerCommand"
+        clickable
+        v-close-popup
+        @click="emit('openFileManager', workspace)"
+      >
+        <q-item-section side><q-icon name="folder_open" size="xs" /></q-item-section>
+        <q-item-section>{{ $t('contextMenu.openFileManager') }}</q-item-section>
+      </q-item>
       <q-item clickable v-close-popup @click="emit('runSetup', workspace)">
         <q-item-section side><q-icon name="replay" size="xs" /></q-item-section>
         <q-item-section>{{ $t('contextMenu.runSetup') }}</q-item-section>
@@ -49,6 +58,24 @@
         <q-item-section side><q-icon name="download" size="xs" /></q-item-section>
         <q-item-section>{{ $t('contextMenu.exportEvents') }}</q-item-section>
       </q-item>
+      <q-item
+        v-if="showDismissChangesRequested"
+        clickable
+        v-close-popup
+        @click="dismissPrAttention('changes-requested')"
+      >
+        <q-item-section side><q-icon name="visibility_off" size="xs" color="amber-5" /></q-item-section>
+        <q-item-section>{{ $t('contextMenu.dismissChangesRequested') }}</q-item-section>
+      </q-item>
+      <q-item
+        v-if="showDismissCiFailure"
+        clickable
+        v-close-popup
+        @click="dismissPrAttention('ci-failed')"
+      >
+        <q-item-section side><q-icon name="visibility_off" size="xs" color="amber-5" /></q-item-section>
+        <q-item-section>{{ $t('contextMenu.dismissCiFailure') }}</q-item-section>
+      </q-item>
       <q-separator dark />
       <q-item v-if="archived" clickable v-close-popup @click="(e) => emit('unarchive', workspace, e)">
         <q-item-section side><q-icon name="unarchive" size="xs" /></q-item-section>
@@ -70,6 +97,7 @@
 import { useQuasar } from 'quasar'
 import { useSettingsStore } from 'src/stores/settings'
 import { useWorkspaceStore, type Workspace } from 'src/stores/workspace'
+import { isChangesRequestedBlocking, isCiFailed } from 'src/utils/pr-status'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -86,6 +114,7 @@ const emit = defineEmits<{
   editDescription: [ws: Workspace]
   copyPath: [ws: Workspace]
   openEditor: [ws: Workspace]
+  openFileManager: [ws: Workspace]
   runSetup: [ws: Workspace]
   toggleFavorite: [ws: Workspace]
   manageTags: [ws: Workspace]
@@ -145,4 +174,25 @@ const workspaceStore = useWorkspaceStore()
 // when the user right-clicks before ever opening the workspace, in which
 // case the menu item is hidden.
 const prUrl = computed(() => workspaceStore.gitStatsCache[props.workspace.id]?.prUrl ?? null)
+
+const prSnapshot = computed(() => workspaceStore.prSnapshots[props.workspace.id])
+
+// Dismiss menu items only surface when the corresponding attention reason is
+// currently active AND not already dismissed for the latest pr.updatedAt.
+const showDismissChangesRequested = computed(() => {
+  const snap = prSnapshot.value
+  if (!snap || !isChangesRequestedBlocking(snap)) return false
+  const dismissed = props.workspace.prChangesDismissedAt
+  return !dismissed || snap.updatedAt > dismissed
+})
+const showDismissCiFailure = computed(() => {
+  const snap = prSnapshot.value
+  if (!snap || !isCiFailed(snap)) return false
+  const dismissed = props.workspace.prCiFailureDismissedAt
+  return !dismissed || snap.updatedAt > dismissed
+})
+
+function dismissPrAttention(kind: 'changes-requested' | 'ci-failed') {
+  void workspaceStore.dismissPrAttention(props.workspace.id, kind)
+}
 </script>

@@ -173,6 +173,7 @@
                   @edit-description="editDescription"
                   @copy-path="copyWorktreePath"
                   @open-editor="openInEditor"
+              @open-file-manager="openInFileManager"
                   @run-setup="runSetupScript"
                   @toggle-favorite="onToggleFavorite"
                   @manage-tags="onManageTags"
@@ -223,6 +224,7 @@
                 @edit-description="editDescription"
                 @copy-path="copyWorktreePath"
                 @open-editor="openInEditor"
+              @open-file-manager="openInFileManager"
                 @run-setup="runSetupScript"
                 @toggle-favorite="onToggleFavorite"
                 @manage-tags="onManageTags"
@@ -314,6 +316,7 @@
                   @edit-description="editDescription"
                   @copy-path="copyWorktreePath"
                   @open-editor="openInEditor"
+              @open-file-manager="openInFileManager"
                   @run-setup="runSetupScript"
                   @toggle-favorite="onToggleFavorite"
                   @manage-tags="onManageTags"
@@ -367,6 +370,7 @@
                 @edit-description="editDescription"
                 @copy-path="copyWorktreePath"
                 @open-editor="openInEditor"
+              @open-file-manager="openInFileManager"
                 @run-setup="runSetupScript"
                 @toggle-favorite="onToggleFavorite"
                 @manage-tags="onManageTags"
@@ -461,6 +465,7 @@
                   @edit-description="editDescription"
                   @copy-path="copyWorktreePath"
                   @open-editor="openInEditor"
+              @open-file-manager="openInFileManager"
                   @run-setup="runSetupScript"
                   @toggle-favorite="onToggleFavorite"
                   @manage-tags="onManageTags"
@@ -513,6 +518,7 @@
                 @edit-description="editDescription"
                 @copy-path="copyWorktreePath"
                 @open-editor="openInEditor"
+              @open-file-manager="openInFileManager"
                 @run-setup="runSetupScript"
                 @toggle-favorite="onToggleFavorite"
                 @manage-tags="onManageTags"
@@ -614,6 +620,7 @@
               @edit-description="editDescription"
               @copy-path="copyWorktreePath"
               @open-editor="openInEditor"
+              @open-file-manager="openInFileManager"
               @run-setup="runSetupScript"
               @toggle-favorite="onToggleFavorite"
               @manage-tags="onManageTags"
@@ -1140,6 +1147,24 @@ async function openInEditor(ws: Workspace) {
     }
   } catch (err) {
     console.error('[workspace-list] open-editor failed:', err)
+  }
+}
+
+async function openInFileManager(ws: Workspace) {
+  try {
+    const res = await fetch(`/api/workspaces/${ws.id}/open-file-manager`, { method: 'POST' })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      $q.notify({
+        type: 'negative',
+        message: data.error ?? t('tools.openFileManagerFailed'),
+        position: 'top',
+        timeout: 6000,
+      })
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : t('tools.openFileManagerFailed')
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
   }
 }
 

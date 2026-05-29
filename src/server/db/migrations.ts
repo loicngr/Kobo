@@ -341,6 +341,25 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 26,
+    name: 'add-pr-attention-dismiss',
+    migrate: (db) => {
+      // Per-workspace "I've seen this" snapshot for the PR attention badges
+      // (changes-requested + CI failure). Stores the pr.updatedAt at the
+      // moment the user clicked "Marquer comme vu". The badge stays hidden
+      // until a fresher pr.updatedAt is observed by the watcher.
+      const table = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='workspaces'").get()
+      if (!table) return
+      const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
+      if (!cols.some((c) => c.name === 'pr_changes_dismissed_at')) {
+        db.prepare('ALTER TABLE workspaces ADD COLUMN pr_changes_dismissed_at TEXT').run()
+      }
+      if (!cols.some((c) => c.name === 'pr_ci_failure_dismissed_at')) {
+        db.prepare('ALTER TABLE workspaces ADD COLUMN pr_ci_failure_dismissed_at TEXT').run()
+      }
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

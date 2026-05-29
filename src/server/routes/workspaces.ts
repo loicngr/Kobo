@@ -3016,12 +3016,12 @@ app.post('/:id/change-pr-base', async (c) => {
 
 /** Re-target a workspace onto a new source branch (metadata + worktree + PR base). */
 app.post('/:id/change-source-branch', async (c) => {
+  const id = c.req.param('id')
+  const workspace = workspaceService.getWorkspace(id)
   try {
-    const id = c.req.param('id')
     const body = await c.req.json<{ newBase: string }>()
     if (!body.newBase) return c.json({ error: 'Missing newBase parameter' }, 400)
 
-    const workspace = workspaceService.getWorkspace(id)
     if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
 
     const result = await changeSourceBranch(id, body.newBase)
@@ -3046,7 +3046,10 @@ app.post('/:id/change-source-branch', async (c) => {
     if (/does not exist|already '|is required/i.test(message)) {
       return c.json({ error: message }, 400)
     }
-    return c.json({ error: message }, 500)
+    // A custom script (or the built-in reconstruct) may have left a partial
+    // git operation behind — surface it so the UI can offer a one-click abort.
+    const ongoingOperation = workspace ? gitOps.getOngoingGitOperation(workspace.worktreePath) : null
+    return c.json({ error: message, ongoingOperation }, 500)
   }
 })
 
@@ -3442,6 +3445,36 @@ app.post('/:id/start-ci-fix', migrationGuard, async (c) => {
     wsService.emit(workspace.id, 'user:message', { content: rendered, sender: 'user' }, emitSessionId)
 
     return c.json({ ok: true, failedChecksCount: failedChecks.length })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+/**
+ * POST /api/workspaces/:id/dismiss-pr-attention — record the user's
+ * "I've seen this" on the changes-requested or CI-failure badge. The
+ * badge stays hidden until the pr-watcher observes a fresher pr.updatedAt.
+ */
+app.post('/:id/dismiss-pr-attention', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+    const body = await c.req.json<{ kind?: string; prUpdatedAt?: string }>().catch(() => ({}) as Record<string, never>)
+    const kind = body.kind === 'changes-requested' || body.kind === 'ci-failed' ? body.kind : null
+    if (!kind) {
+      return c.json({ error: "Field 'kind' must be 'changes-requested' or 'ci-failed'" }, 400)
+    }
+    const prUpdatedAt = typeof body.prUpdatedAt === 'string' ? body.prUpdatedAt : null
+    if (!prUpdatedAt) {
+      return c.json({ error: "Field 'prUpdatedAt' (ISO timestamp) is required" }, 400)
+    }
+    workspaceService.dismissPrAttention(id, kind, prUpdatedAt)
+    wsService.emitEphemeral(id, 'workspace:pr-attention-dismissed', { kind, prUpdatedAt })
+    return c.json({ success: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
