@@ -1070,7 +1070,15 @@ const reasoningOptions = computed(() => {
 })
 
 // Validate Notion URL
-const isValidNotionUrl = computed(() => notionUrl.value.trim().startsWith('https://www.notion.so/'))
+// Notion has two URL flavours in the wild — keep both:
+//   - legacy  https://www.notion.so/...
+//   - new     https://app.notion.com/p/<workspace>/<title>-<32hex>
+// Backend `parseNotionUrl` already handles both shapes (it just looks for the
+// trailing 32-hex chunk), so we only need to widen the client-side prefix check.
+const isValidNotionUrl = computed(() => {
+  const u = notionUrl.value.trim()
+  return u.startsWith('https://www.notion.so/') || u.startsWith('https://app.notion.com/')
+})
 
 // Notion side-peek: when the URL embeds `?p=<32hex>`, the path component is a
 // parent page / database and the actual page being viewed sits in the query.

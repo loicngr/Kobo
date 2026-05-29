@@ -243,7 +243,7 @@ export default {
   'createPage.notionEnabled': 'Notion enabled',
   'createPage.importNotion': 'Import from Notion',
   'createPage.notionPlaceholder': 'https://www.notion.so/workspace/Page-title-abc123...',
-  'createPage.notionValidation': 'URL must start with https://www.notion.so/',
+  'createPage.notionValidation': 'URL must start with https://www.notion.so/ or https://app.notion.com/',
   'createPage.notionAutoExtract': 'Subtasks and acceptance criteria will be extracted automatically.',
   'createPage.notionPanelChoiceLabel': 'This URL points to a sub-page (?p=). Which one do you want to work on?',
   'createPage.notionPanelOption': 'Sub-page (panel)',
@@ -283,7 +283,8 @@ export default {
   'createPage.errorCreating': 'Error creating workspace.',
   'createPage.branchAdjusted':
     'Branch already existed — created `{branch}` instead. The matching worktree folder uses the same suffix.',
-  'createPage.validationNotionUrl': 'Please paste a valid Notion URL (https://www.notion.so/...).',
+  'createPage.validationNotionUrl':
+    'Please paste a valid Notion URL (https://www.notion.so/... or https://app.notion.com/...).',
   'createPage.validationDescription': 'Please describe the task.',
   'createPage.validationName': 'Please provide a workspace name.',
   'createPage.validationPath': 'Please enter the project path.',
