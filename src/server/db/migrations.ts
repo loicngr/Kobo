@@ -364,13 +364,6 @@ export const migrations: Migration[] = [
     version: 27,
     name: 'add-workspace-worktree-purge',
     migrate: (db) => {
-      // Worktree purge: deletes the worktree from disk to reclaim space while
-      // keeping the chat/session history queryable. `worktree_purged_at` is the
-      // ISO timestamp of the purge (null = not purged). `worktree_purge_restore_data`
-      // is a JSON blob with the metadata needed to restore the worktree later
-      // (PR number, forge, merge commit sha, original paths). Restoration is
-      // not implemented yet, but the data is captured at purge time so future
-      // versions can rebuild the worktree from the merged PR.
       const table = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='workspaces'").get()
       if (!table) return
       const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>

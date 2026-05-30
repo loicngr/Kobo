@@ -245,13 +245,6 @@ export interface GlobalSettings {
    * Seeded by settings migration v35.
    */
   fileManagerCommand: string
-  /**
-   * When true, the pr-watcher purges the worktree from disk (via the same
-   * helper as the manual "Purger le worktree" action) immediately after
-   * auto-archiving on a PR-merged transition. Reclaims disk space without
-   * losing the chat/session history.
-   * Seeded by settings migration v36.
-   */
   autoPurgeOnPrMerged: boolean
   browserNotifications: boolean
   audioNotifications: boolean
@@ -792,10 +785,6 @@ const settingsMigrations: SettingsMigration[] = [
     version: 36,
     name: 'add-auto-purge-on-pr-merged',
     migrate: ({ global }) => {
-      // Opt-in: when true, the pr-watcher purges the worktree from disk
-      // immediately after auto-archiving on a PR merge transition. The
-      // workspace stays consultable (chat history, sessions) but reclaims
-      // the disk space. Default false — feature is silent until enabled.
       if (typeof global.autoPurgeOnPrMerged !== 'boolean') {
         global.autoPurgeOnPrMerged = false
       }

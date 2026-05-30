@@ -2124,11 +2124,7 @@ app.post('/:id/archive', migrationGuard, (c) => {
   }
 })
 
-// POST /api/workspaces/:id/purge-worktree — delete the worktree from disk
-// to reclaim space while keeping the chat / session history queryable. Auto-
-// archives the workspace, stops the agent / dev server / terminal, and
-// records restore metadata so a future feature can rebuild the worktree
-// from the merged PR.
+// POST /api/workspaces/:id/purge-worktree
 app.post('/:id/purge-worktree', migrationGuard, async (c) => {
   try {
     const id = c.req.param('id')
@@ -2164,11 +2160,8 @@ app.post('/:id/unarchive', migrationGuard, (c) => {
     if (!workspace.archivedAt) {
       return c.json({ error: 'Not archived' }, 400)
     }
-    // A workspace whose worktree was purged from disk can't be safely
-    // unarchived — its worktreePath points to nothing, every git/forge call
-    // would fail, and the agent has no working tree. Force the user to
-    // restore the worktree first (manual `gh pr checkout` / `git worktree
-    // add`); the pr-watcher then auto-clears the purge flag + unarchives.
+    // Refuse unarchive while the worktree is missing — the pr-watcher
+    // auto-restores once the user recreates the folder.
     if (workspace.worktreePurgedAt) {
       return c.json({ error: 'worktree-purged' }, 409)
     }
@@ -2223,14 +2216,9 @@ function deleteWorkspaceWithSideEffects(
   // remove fails with EACCES.
   const warnings: string[] = []
 
-  // Remove worktree (only if owned — for attached external worktrees we
-  // never created the dir, so we must not delete it on the user's behalf).
+  // Owned worktrees only — attached external worktrees aren't ours to remove.
   const worktreePath = workspace.worktreePath
   if (workspace.worktreePurgedAt) {
-    // Already purged earlier: the worktree folder is gone AND `git worktree
-    // remove` already cleaned the `.git/worktrees/<name>/` entry. Retrying
-    // here just fails with "fatal: <path> does not exist" and pushes a noisy
-    // warning. Skip cleanly.
     console.log(`[workspaces] skipping worktree removal on delete (already purged): ${worktreePath}`)
   } else if (workspace.worktreeOwned) {
     try {

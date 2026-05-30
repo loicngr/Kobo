@@ -1091,8 +1091,6 @@ function onPurgeWorktreeClick(ws: Workspace, event: Event) {
     if (result.warnings.length === 0) {
       $q.notify({ type: 'positive', message: t('contextMenu.purgeWorktreeSuccess'), position: 'top' })
     } else {
-      // Sticky toasts for warnings (typically Docker permission issues) —
-      // same pattern as delete, so the user can copy the recovery command.
       for (const message of result.warnings) {
         $q.notify({
           type: 'warning',

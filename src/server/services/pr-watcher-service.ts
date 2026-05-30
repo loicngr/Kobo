@@ -84,12 +84,6 @@ function markUnread(workspaceId: string): void {
   }
 }
 
-/**
- * Detect manually-restored worktrees: if a purged workspace's worktreePath
- * has reappeared on disk (user ran `gh pr checkout` or `git worktree add`
- * themselves), clear the purge metadata + unarchive it. Best-effort, runs
- * once per watcher tick before the PR-status pass.
- */
 function autoRestoreManuallyRecreatedWorktrees(): void {
   for (const ws of listArchivedWorkspaces()) {
     if (!ws.worktreePurgedAt) continue
@@ -121,9 +115,8 @@ export async function checkPrStatuses(): Promise<void> {
   }
 
   for (const ws of workspaces) {
-    // Skip workspaces whose worktree directory has disappeared (purged
-    // externally, manually deleted). Without this guard, every git/forge
-    // spawn below fails with ENOENT and floods the logs.
+    // Without this guard, every git/forge spawn below fails with ENOENT and
+    // floods the logs when a worktree was deleted externally.
     if (!fs.existsSync(ws.worktreePath)) continue
 
     try {
@@ -206,11 +199,8 @@ export async function checkPrStatuses(): Promise<void> {
           prUrl: pr.url,
         })
 
-        // Auto-purge the worktree on MERGED + opt-in setting. The purge
-        // service is idempotent + best-effort: any failure surfaces as
-        // warnings on the next listing instead of crashing the watcher.
-        // Only acts on MERGED — closed-without-merge keeps the worktree
-        // around so the user can inspect / push fixes.
+        // Only MERGED — closed-without-merge keeps the worktree so the user
+        // can inspect / push fixes.
         if (pr.state === 'MERGED') {
           try {
             const { autoPurgeOnPrMerged } = getGlobalSettings()

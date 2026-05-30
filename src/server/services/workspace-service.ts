@@ -614,12 +614,6 @@ export interface WorktreePurgeRestoreData {
   originalWorkingBranch: string
 }
 
-/**
- * Mark a workspace's worktree as purged from disk. Persists the supplied
- * restore data as JSON so a future "unpurge" feature can recreate the
- * worktree from the merged PR. Idempotent: re-purging a workspace just
- * overwrites the timestamp + data.
- */
 export function markWorktreePurged(id: string, restoreData: WorktreePurgeRestoreData): void {
   const db = getDb()
   const now = new Date().toISOString()
@@ -633,12 +627,6 @@ export function markWorktreePurged(id: string, restoreData: WorktreePurgeRestore
   }
 }
 
-/**
- * Reverse of `markWorktreePurged` + `archiveWorkspace`: clears the purge
- * metadata and unarchives the workspace in a single transaction. Used by the
- * auto-restore watcher when the user manually recreates the worktree folder
- * on disk. Idempotent: no-op if already restored.
- */
 export function restoreWorktreeFromDisk(id: string): Workspace {
   const db = getDb()
   const workspace = getWorkspace(id)

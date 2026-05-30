@@ -127,9 +127,6 @@ export function useOnboarding() {
       }
     })
 
-    // Sub-step inside the Worktrees section that highlights the auto-purge
-    // toggle. Inserted right after the worktrees card step so the tour stays
-    // on the same tab — no navigation needed.
     const worktreesIdx = SETTINGS_SECTIONS.indexOf('worktrees')
     if (worktreesIdx !== -1) {
       const nextSection = SETTINGS_SECTIONS[worktreesIdx + 1]
@@ -148,8 +145,6 @@ export function useOnboarding() {
             : {}),
         },
       }
-      // Rewire the previous step (the worktrees card) so its "Next" lands on
-      // the purge toggle instead of jumping straight to the next section.
       const worktreesStep = settingsSteps[worktreesIdx]
       if (worktreesStep?.popover) {
         worktreesStep.popover = {

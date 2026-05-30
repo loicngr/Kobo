@@ -892,9 +892,6 @@ export const useWorkspaceStore = defineStore('workspace', {
       try {
         const res = await fetch(`/api/workspaces/${id}/unarchive`, { method: 'POST' })
         if (!res.ok) {
-          // 409 worktree-purged: the worktree was removed from disk; the
-          // user must recreate it manually (the watcher then auto-restores).
-          // Surface a tagged error so the caller can show the right toast.
           if (res.status === 409) {
             const body = (await res.json().catch(() => ({}))) as { error?: string }
             const err = new Error(body.error ?? 'worktree-purged') as Error & { code?: string }
@@ -905,7 +902,6 @@ export const useWorkspaceStore = defineStore('workspace', {
         }
         const updated = (await res.json()) as Workspace
         this.archivedWorkspaces = this.archivedWorkspaces.filter((w) => w.id !== id)
-        // unshift because updatedAt is fresh and list is sorted DESC
         this.workspaces.unshift(updated)
         return updated
       } catch (err) {
