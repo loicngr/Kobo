@@ -8,6 +8,7 @@ Complete reference for every Kōbō setting, environment variable, and external 
 - [Environment variables](#environment-variables)
 - [Settings UI](#settings-ui)
 - [Custom change-source-branch script](#custom-change-source-branch-script)
+- [Auto-purge worktree on PR merged](#auto-purge-worktree-on-pr-merged)
 - [Agent runtimes](#agent-runtimes)
   - [Claude Code](#claude-code)
   - [OpenAI Codex](#openai-codex)
@@ -114,6 +115,7 @@ Settings are managed live from the **Settings** page in the UI and persisted to 
 | `branchPrefixes` | `string[]` | Git branch prefixes offered on the workspace creation page (stored without the trailing `/`). The first entry is the default selection. |
 | `worktreesPath` | `string` | Root directory where new worktrees are created. Defaults to `.worktrees` (resolved relative to the project). Absolute, `$HOME`, `~`, and `%USERPROFILE%` are accepted; `..` and drive-relative Windows paths (`C:foo`) are rejected. |
 | `worktreesPrefixByProject` | `boolean` | Nest each worktree under a project-named subfolder, preventing collisions when multiple projects share the same `worktreesPath`. |
+| `autoPurgeOnPrMerged` | `boolean` | When a PR transitions to MERGED, also remove the worktree from disk (in addition to archiving). Chat history and PR metadata are preserved. Default `false`. See [Auto-purge worktree on PR merged](#auto-purge-worktree-on-pr-merged). |
 | `voiceEnabled` | `boolean` | Enable local push-to-talk transcription. |
 | `voicePttKey` | `'alt' \| 'ctrl+space'` | Hotkey held to record. |
 | `voiceLanguage` | `string` | `auto` or a 2-letter language code. |
@@ -241,6 +243,67 @@ fi
 The script can do anything — `git reset --hard`, force-push, delete files. The
 trust model is identical to `setupScript` / `cleanupScript` / `archiveScript`:
 Kōbō is a local single-user dev tool and the script is your own code.
+
+## Auto-purge worktree on PR merged
+
+Purging a worktree frees its disk space (often hundreds of MB or GB worth of
+`node_modules`, `vendor`, build artefacts, etc.) while keeping the workspace
+discoverable: chat history and PR metadata are retained in the database, the
+workspace is archived, and the worktree folder is removed from disk.
+
+**Manual trigger** — workspace context menu → **Libérer l'espace disque**. A
+confirmation dialog warns you before any destructive action.
+
+**Automatic trigger** — Settings → Worktrees → **Purger le worktree quand la PR
+est mergée**. When enabled, the pr-watcher fires `purgeWorktree(id)` on the
+OPEN → MERGED transition, in addition to the existing auto-archive. Disabled by
+default — opt in once you trust the restore flow on your machine.
+
+### Restoring a purged workspace
+
+Kōbō captures restore metadata (`prNumber`, `prUrl`, `forge`, `mergeCommitSha`,
+`originalSourceBranch`, `originalWorkingBranch`) at purge time. Recreate the
+worktree manually with either:
+
+```bash
+# GitHub (via gh CLI)
+gh pr checkout <pr-number> --recurse-submodules
+
+# Or directly via git — works on GitHub even after branch deletion
+git fetch origin pull/<pr-number>/head:<branch-name>
+git worktree add <path> <branch-name>
+```
+
+The pr-watcher detects the worktree folder reappearing on its next 30 s tick
+and automatically:
+
+1. Clears `worktree_purged_at` + `worktree_purge_restore_data`
+2. Clears `archived_at` (workspace becomes active again)
+3. Emits `workspace:worktree-restored` (client refreshes both lists)
+
+No UI action needed. The reactivated workspace recovers its prior status, chat
+history, tasks, and cron schedules.
+
+### Permission errors during purge
+
+Docker often leaves root-owned files in `node_modules` / `vendor` inside the
+worktree (containers run as `root` by default). When Kōbō tries to remove them
+it hits `EACCES` / `EPERM`. The purge service detects these errors via regex
+and returns a warning toast with a copy-pasteable `sudo rm -rf` recovery
+command plus prevention tips. See Settings → Worktrees → **Comment ça marche**
+expansion in the UI for the full guide (manual recovery commands for already-
+broken worktrees, including `setfacl` and `chown -R` alternatives).
+
+**Prevention summary**:
+
+- **Best** — configure your container to run as the host user (`USER`
+  directive in `Dockerfile`, or `user: "${UID}:${GID}"` in `docker-compose.yml`
+  with `UID`/`GID` exported).
+- **Fallback** — pose a default ACL on the worktrees root so future files
+  inherit access for your user: `setfacl -d -m u:$(whoami):rwX <worktrees-root>`.
+  Works on ext4 / btrfs / xfs with standard Docker bind mounts; does NOT work
+  on named Docker volumes, NTFS / exFAT / tmpfs, strict SELinux with `:Z`, or
+  `userns-remap`.
 
 ## Agent runtimes
 

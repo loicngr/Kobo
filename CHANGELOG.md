@@ -4,6 +4,13 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## Unreleased
+
+- feat(workspace): disk-space purge — remove a workspace's worktree from disk while preserving chat history and PR metadata. Manual trigger from the workspace menu ("Libérer l'espace disque") or auto-purge on PR merged via Settings → Worktrees toggle.
+- feat(workspace): auto-detect manual worktree restoration — when the user recreates a purged worktree folder (`gh pr checkout` or `git worktree add`), the pr-watcher detects it within 30 s and unarchives the workspace automatically.
+- feat(client): dedicated banner for purged workspaces on the workspace page, with the restoration commands and `setfacl` / `chown` recovery guide for Docker-induced permission errors.
+- fix(pr-watcher): skip workspaces whose worktree directory no longer exists, stopping the `spawn git ENOENT` log spam.
+
 ## 1.7.22
 
 - feat(client): accept the new app.notion.com URL format

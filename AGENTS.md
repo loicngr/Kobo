@@ -100,7 +100,7 @@ src/
 
 | Table | Purpose |
 |---|---|
-| `workspaces` | the unit of work — id, name, project_path, source_branch, working_branch, status, notion_url, model, dev_server_status, `archived_at`, `auto_loop`, `auto_loop_ready`, `no_progress_streak`, timestamps |
+| `workspaces` | the unit of work — id, name, project_path, source_branch, working_branch, status, notion_url, model, dev_server_status, `archived_at`, `worktree_purged_at`, `worktree_purge_restore_data` (JSON), `auto_loop`, `auto_loop_ready`, `no_progress_streak`, timestamps |
 | `tasks` | workspace sub-items — title, status, `is_acceptance_criterion`, sort_order; CASCADE DELETE on workspace |
 | `agent_sessions` | Claude Code CLI invocations — pid, `claude_session_id`, status, started_at, ended_at, `name` |
 | `ws_events` | persisted WebSocket events for replay on reconnect — type, payload, session_id, created_at |
@@ -110,6 +110,8 @@ src/
 `status` enum: `created | extracting | brainstorming | executing | completed | idle | error | quota`. Transitions are validated in `updateWorkspaceStatus` against `VALID_TRANSITIONS`.
 
 `archived_at` is **orthogonal** to `status` — archiving is a visibility flag, not a lifecycle state. Unarchive restores the exact pre-archive `status`.
+
+`worktree_purged_at` + `worktree_purge_restore_data` drive the disk-space purge feature (see [Worktree purge](#worktree-purge) below): when set, the workspace's worktree folder has been removed from disk but the chat history is preserved. `worktree_purge_restore_data` is a JSON blob (`{ prNumber, prUrl, forge, mergeCommitSha, originalWorktreePath, originalSourceBranch, originalWorkingBranch }`) captured at purge time for future "Restore" UX. Both fields are cleared automatically by the pr-watcher when the worktree folder reappears on disk.
 
 `auto_loop` (bool, default 0), `auto_loop_ready` (bool, default 0) and `no_progress_streak` (int, default 0) drive the auto-loop feature: when `auto_loop=1`, `session:ended` triggers `auto-loop-service.onSessionEnded` which either spawns the next iteration via a fresh `startAgent(resume=false)`, disables with `reason='completed'` (no pending tasks), or disables with `reason='stall'` (3 consecutive sessions without a task completed). Archive + delete both auto-disable.
 
@@ -218,6 +220,14 @@ Background: the engine was migrated from `@openai/codex-sdk` (one-shot `codex ex
 - **Built-in cherry-pick** — `fetchAllBranches` → `listProperCommits` → `stashPush` (if dirty + aligned) → backup branch (`kobo-backup/<branch>-<unix-ts>`) → `reset --hard origin/<new>` → cherry-pick replay → optional force-push prompt → forge PR-base update via `provider.changePrBase`. Conflicts leave the worktree in a cherry-pick state for the user/agent to resolve via `POST /:id/git/resolve-with-agent`. `GitConflictError` carries an `operation: 'rebase' | 'merge' | 'cherry-pick'` discriminator.
 - **Custom bash override** — if `effective.changeSourceBranchScript` is non-empty (per-project override or global default), the script **replaces** the built-in flow. Spawned with `bash -c`, cwd = worktree, 5 min timeout, stderr captured (last 8 KB). Exit 0 → Kōbō updates the source-branch metadata; any non-zero exit → the stderr tail is propagated as a clean error. The user-facing menu item only shows when the resolved script is non-empty — empty = feature disabled (opt-in).
 - **Custom-script env vars** — `KOBO_NEW_BASE`, `KOBO_OLD_BASE`, `KOBO_WORKING_BRANCH`, `KOBO_WORKTREE_PATH`, `KOBO_PROJECT_PATH`, `KOBO_PROJECT_NAME`, `KOBO_WORKSPACE_ID`, `KOBO_WORKSPACE_NAME`, `KOBO_FORGE`, `KOBO_PR_NUMBER` (empty when no PR/MR is open). The default script lives in `settings-defaults.ts` and is seeded into `global.changeSourceBranchScript` by settings migration v33; the client reads it through `GET /api/settings/defaults` for the "Reset to Kōbō default" button. See [CONFIGURATION.md → Custom change-source-branch script](CONFIGURATION.md#custom-change-source-branch-script).
+
+### Worktree purge
+
+`src/server/services/worktree-purge-service.ts` removes a workspace's worktree from disk while preserving the chat history and PR metadata. Triggered manually via `POST /api/workspaces/:id/purge-worktree` from the workspace context menu, or automatically by the pr-watcher when a PR transitions to MERGED **and** `global.autoPurgeOnPrMerged` is enabled (Settings → Worktrees toggle, settings migration v36).
+
+Sequence: `captureRestoreData` (best-effort forge lookup for PR number / URL / merge SHA) → stop agent + dev server + terminal → `archiveWorkspace` → `removeWorktree` → `markWorktreePurged(restoreData)` → emit `workspace:worktree-purged`. Permission errors on removal (EACCES / EPERM — typically Docker-owned files in `node_modules` / `vendor`) are detected via regex on the error message and the warning toast carries a copy-pasteable `sudo rm -rf` + `git worktree prune` recovery command plus prevention tips (Docker `USER` directive, `setfacl` default ACL). See [CONFIGURATION.md → Auto-purge worktree on PR merged](CONFIGURATION.md#auto-purge-worktree-on-pr-merged).
+
+**Auto-restore on manual recreation.** When the user manually recreates the worktree folder (`gh pr checkout <pr-number>` or `git worktree add <path> <branch>`), the pr-watcher detects the folder reappearing on its next 30 s tick via `autoRestoreManuallyRecreatedWorktrees()`: it iterates archived workspaces with `worktreePurgedAt`, checks `fs.existsSync(worktreePath)`, and on a hit calls `restoreWorktreeFromDisk(id)` which clears `worktree_purged_at` + `worktree_purge_restore_data` + `archived_at` in one transaction, then emits `workspace:worktree-restored`. The client websocket store reuses the same handler as `workspace:archived`/`unarchived` to refresh both the active and archived workspace lists. No UI action needed.
 
 ### Workspace attention indicators
 

@@ -24,6 +24,7 @@ Kōbō runs multiple coding agents in parallel, each isolated in its own git wor
 - **Scheduled wakeups** — the agent schedules a one-shot wake-up via the `ScheduleWakeup` tool; Kōbō persists it across restarts, shows a live countdown, and re-invokes the agent with the stored prompt at the chosen time.
 - **Cron schedules** — recurring per-workspace triggers the agent registers through MCP tools (`cron_create` / `cron_delete` / `cron_list`); each tick resumes the workspace session (skipped if already active), and schedules are re-armed at boot with skip-missed semantics.
 - **Lifecycle scripts** — shell scripts run automatically at key moments: **setup** (worktree created), **cleanup** (session ended), **archive** (workspace archived). Configured globally or per project, with their output streamed into the chat.
+- **Disk-space purge** — free a merged workspace's disk space without losing its chat history: the worktree folder is removed (PR metadata is captured for later restore), the workspace is archived, and the chat log stays queryable. Trigger manually from the workspace menu or enable **auto-purge on PR merged** in Settings → Worktrees. Recreate the worktree later with `gh pr checkout <pr-number>` and Kōbō auto-detects the folder reappearing within 30 seconds — workspace is unarchived and reactivated, no UI action needed.
 - **Optional integrations** — Notion (import missions), Sentry (fix from issue URL), local voice transcription (whisper.cpp).
 
 ## Quick start
@@ -76,6 +77,36 @@ The full reference — every env var, every setting key, MCP server registration
 - **OpenAI Codex** (experimental). Run `codex login` or export `OPENAI_API_KEY`. Kōbō spawns a long-lived `codex app-server` subprocess per workspace and bridges its JSON-RPC stream to the same UI.
 
 Engine selection happens at workspace creation. Both share the same task tracking, permission modes, sub-agent panel, and quota footer. The mapping of Kōbō's four permission modes (`plan` / `bypass` / `strict` / `interactive`) to each engine's native sandbox + approval semantics is in [`CONFIGURATION.md`](./CONFIGURATION.md#permission-modes).
+
+## Disk-space purge
+
+A merged workspace is automatically archived but its worktree folder usually carries a lot of weight (`node_modules`, `vendor`, build artefacts…). Kōbō can free that space without losing anything queryable:
+
+- **Manual** — workspace context menu → *Libérer l'espace disque*. The worktree is removed, the chat history and PR metadata stay in the database.
+- **Automatic** — **Settings → Worktrees → Purger le worktree quand la PR est mergée**. When the pr-watcher sees the OPEN → MERGED transition, it archives **and** purges.
+- **Restore** — recreate the folder yourself (`gh pr checkout <pr>` or `git worktree add <path> <branch>`). The pr-watcher detects the directory reappearing within 30 seconds and re-activates the workspace automatically (clears purge flag + unarchives). No UI action needed.
+
+### Avoiding permission errors during purge
+
+Docker containers usually write as `root`, so files in `node_modules` / `vendor` end up root-owned on the host. Plain `rm -rf` (which Kōbō uses under the hood) then fails with `EACCES` / `EPERM`. Pick one of these strategies depending on your setup:
+
+1. **Best — run your container as the host user.** Add a `USER` directive in your `Dockerfile`, or set `user: "${UID}:${GID}"` in `docker-compose.yml` with `UID`/`GID` exported in your shell. No more root-owned files; nothing extra to do.
+2. **Preventive ACL on the worktrees root.** On ext4 / btrfs / xfs with a regular Docker bind mount, a default ACL grants your user access to every file created later:
+   ```bash
+   setfacl -d -m u:$(whoami):rwX <worktrees-root>   # e.g. ~/.worktrees
+   ```
+   Caveats: does **not** work on named Docker volumes (use a bind mount), filesystems without ACL support (NTFS, exFAT, tmpfs), strict SELinux with `:Z`, or with Docker `userns-remap`.
+3. **Unblock an already-broken worktree** (existing root-owned files):
+   ```bash
+   # Option A — recursive ACL (keeps ownership intact, just adds your user)
+   sudo setfacl -Rd -m u:$(whoami):rwX . && sudo setfacl -R -m u:$(whoami):rwX .
+
+   # Option B — take ownership outright (simpler, loses the "root-from-container" trace)
+   sudo chown -R $(whoami):$(whoami) .
+   ```
+   Run from inside the worktree folder, or directly on your worktrees root (e.g. `~/.worktrees/`) to cover all existing and future workspaces at once.
+
+When a purge does fail, Kōbō surfaces a toast with a copy-pasteable recovery command and a `git worktree prune` follow-up. The same guide is wired into **Settings → Worktrees → Comment ça marche** for in-app reference.
 
 ## Optional integrations
 
