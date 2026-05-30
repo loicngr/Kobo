@@ -178,6 +178,7 @@
                   @toggle-favorite="onToggleFavorite"
                   @manage-tags="onManageTags"
                   @archive="onArchiveClick"
+              @purge-worktree="onPurgeWorktreeClick"
                   @delete="openDeleteDialog"
                 />
                 <div class="col" style="min-width: 0;">
@@ -229,6 +230,7 @@
                 @toggle-favorite="onToggleFavorite"
                 @manage-tags="onManageTags"
                 @archive="onArchiveClick"
+              @purge-worktree="onPurgeWorktreeClick"
                 @delete="openDeleteDialog"
               />
               <div class="col" style="min-width: 0;">
@@ -321,6 +323,7 @@
                   @toggle-favorite="onToggleFavorite"
                   @manage-tags="onManageTags"
                   @archive="onArchiveClick"
+              @purge-worktree="onPurgeWorktreeClick"
                   @delete="openDeleteDialog"
                 />
                 <div class="col" style="min-width: 0;">
@@ -375,6 +378,7 @@
                 @toggle-favorite="onToggleFavorite"
                 @manage-tags="onManageTags"
                 @archive="onArchiveClick"
+              @purge-worktree="onPurgeWorktreeClick"
                 @delete="openDeleteDialog"
               />
               <div class="col" style="min-width: 0;">
@@ -470,6 +474,7 @@
                   @toggle-favorite="onToggleFavorite"
                   @manage-tags="onManageTags"
                   @archive="onArchiveClick"
+              @purge-worktree="onPurgeWorktreeClick"
                   @delete="openDeleteDialog"
                 />
                 <div class="col" style="min-width: 0;">
@@ -523,6 +528,7 @@
                 @toggle-favorite="onToggleFavorite"
                 @manage-tags="onManageTags"
                 @archive="onArchiveClick"
+              @purge-worktree="onPurgeWorktreeClick"
                 @delete="openDeleteDialog"
               />
               <div class="col" style="min-width: 0;">
@@ -625,6 +631,7 @@
               @toggle-favorite="onToggleFavorite"
               @manage-tags="onManageTags"
               @archive="onArchiveClick"
+              @purge-worktree="onPurgeWorktreeClick"
               @unarchive="onUnarchiveClick"
               @delete="openDeleteDialog"
             />
@@ -1066,6 +1073,54 @@ async function onArchiveClick(ws: Workspace, event: Event) {
   }
 }
 
+function onPurgeWorktreeClick(ws: Workspace, event: Event) {
+  event.stopPropagation()
+  $q.dialog({
+    title: t('contextMenu.purgeWorktreeDialogTitle'),
+    message: t('contextMenu.purgeWorktreeDialogMessage', { name: ws.name }),
+    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    ok: { unelevated: true, label: t('contextMenu.purgeWorktreeDialogConfirm'), color: 'orange-7' },
+    persistent: true,
+    dark: true,
+  }).onOk(async () => {
+    const result = await store.purgeWorktree(ws.id)
+    if (!result.ok) {
+      $q.notify({ type: 'negative', message: result.error, position: 'top', timeout: 6000 })
+      return
+    }
+    if (result.warnings.length === 0) {
+      $q.notify({ type: 'positive', message: t('contextMenu.purgeWorktreeSuccess'), position: 'top' })
+    } else {
+      // Sticky toasts for warnings (typically Docker permission issues) —
+      // same pattern as delete, so the user can copy the recovery command.
+      for (const message of result.warnings) {
+        $q.notify({
+          type: 'warning',
+          message,
+          position: 'top',
+          timeout: 0,
+          multiLine: true,
+          classes: 'workspace-delete-warning',
+          actions: [
+            {
+              icon: 'content_copy',
+              color: 'white',
+              round: true,
+              handler: () => {
+                void navigator.clipboard.writeText(message)
+              },
+            },
+            { label: 'OK', color: 'white', handler: () => undefined },
+          ],
+        })
+      }
+    }
+    if (store.selectedWorkspaceId === null) {
+      router.push({ name: 'workspace' })
+    }
+  })
+}
+
 async function onUnarchiveClick(ws: Workspace, event: Event) {
   event.stopPropagation()
   try {
@@ -1078,6 +1133,16 @@ async function onUnarchiveClick(ws: Workspace, event: Event) {
     }
   } catch (err) {
     console.error('Unarchive failed:', err)
+    const code = (err as { code?: string })?.code
+    if (code === 'worktree-purged') {
+      $q.notify({
+        type: 'warning',
+        message: t('workspaceList.unarchiveBlockedPurged'),
+        position: 'top',
+        timeout: 6000,
+        multiLine: true,
+      })
+    }
   }
 }
 

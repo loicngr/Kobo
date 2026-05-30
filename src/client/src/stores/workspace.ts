@@ -38,6 +38,10 @@ export interface Workspace {
   prChangesDismissedAt: string | null
   /** Same as `prChangesDismissedAt` but for the CI failure badge. */
   prCiFailureDismissedAt: string | null
+  /** ISO timestamp when the worktree was purged from disk. Null = present. */
+  worktreePurgedAt: string | null
+  /** JSON blob (string) with restore metadata captured at purge time. */
+  worktreePurgeRestoreData: string | null
   autoLoop: boolean
   autoLoopReady: boolean
   noProgressStreak: number
@@ -887,7 +891,18 @@ export const useWorkspaceStore = defineStore('workspace', {
     async unarchiveWorkspace(id: string) {
       try {
         const res = await fetch(`/api/workspaces/${id}/unarchive`, { method: 'POST' })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        if (!res.ok) {
+          // 409 worktree-purged: the worktree was removed from disk; the
+          // user must recreate it manually (the watcher then auto-restores).
+          // Surface a tagged error so the caller can show the right toast.
+          if (res.status === 409) {
+            const body = (await res.json().catch(() => ({}))) as { error?: string }
+            const err = new Error(body.error ?? 'worktree-purged') as Error & { code?: string }
+            err.code = 'worktree-purged'
+            throw err
+          }
+          throw new Error(`HTTP ${res.status}`)
+        }
         const updated = (await res.json()) as Workspace
         this.archivedWorkspaces = this.archivedWorkspaces.filter((w) => w.id !== id)
         // unshift because updatedAt is fresh and list is sorted DESC
@@ -1650,6 +1665,40 @@ export const useWorkspaceStore = defineStore('workspace', {
         }
       } catch (err) {
         console.error('[workspace store] markRead failed:', err)
+      }
+    },
+
+    /** Purge a workspace's worktree from disk (auto-archives) while keeping
+     *  the chat/session history queryable. Returns the warnings list so the
+     *  caller can toast them. */
+    async purgeWorktree(workspaceId: string): Promise<{ ok: true; warnings: string[] } | { ok: false; error: string }> {
+      try {
+        const res = await fetch(`/api/workspaces/${workspaceId}/purge-worktree`, { method: 'POST' })
+        const data = await res.json()
+        if (!res.ok) {
+          return { ok: false, error: data.error ?? `HTTP ${res.status}` }
+        }
+        const updated = data.workspace as Workspace
+        if (updated) {
+          this.updateWorkspaceFromEvent(workspaceId, {
+            archivedAt: updated.archivedAt,
+            worktreePurgedAt: updated.worktreePurgedAt,
+            worktreePurgeRestoreData: updated.worktreePurgeRestoreData,
+          })
+          if (updated.archivedAt && this.archivedLoaded) {
+            const exists = this.archivedWorkspaces.some((w) => w.id === workspaceId)
+            if (!exists) this.archivedWorkspaces.unshift(updated)
+            this.workspaces = this.workspaces.filter((w) => w.id !== workspaceId)
+            if (this.selectedWorkspaceId === workspaceId) {
+              this.selectedWorkspaceId = null
+              this.tasks = []
+            }
+          }
+        }
+        return { ok: true, warnings: (data.warnings as string[]) ?? [] }
+      } catch (err) {
+        const error = err instanceof Error ? err.message : String(err)
+        return { ok: false, error }
       }
     },
 

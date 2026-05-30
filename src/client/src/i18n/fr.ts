@@ -4,6 +4,7 @@ export default {
   'common.cancel': 'Annuler',
   'common.delete': 'Supprimer',
   'common.close': 'Fermer',
+  'common.details': 'Détails',
   'whatsNew.title': 'Quoi de neuf',
   'common.loading': 'Chargement...',
   'common.search': 'Rechercher...',
@@ -120,6 +121,10 @@ export default {
   'workspacePage.interrupt': 'Interrompre',
   'workspacePage.interrupted': 'Agent interrompu — en attente de votre prochain message',
   'workspacePage.archivedBanner': 'Workspace archivé — lecture seule',
+  'workspacePage.worktreePurgedBanner':
+    'Worktree supprimé — historique conservé, restauration indisponible dans cette version',
+  'workspacePage.worktreePurgedTooltip':
+    "Le dossier worktree a été supprimé du disque pour libérer de l'espace. L'historique des messages, sessions et métadonnées PR reste consultable ici, mais le répertoire de travail n'existe plus localement. Une future version de Kōbō pourra reconstruire le worktree à partir de la PR mergée — pour l'instant, recrée-le manuellement via `gh pr checkout` ou `git worktree add`.",
   'workspacePage.pendingInitialPromptBanner':
     "Un prompt initial est en attente — l'agent ne l'a jamais reçu (le script de setup a planté ou le workspace n'a jamais été démarré). Cliquez sur Démarrer pour l'envoyer.",
   'workspacePage.unarchived': 'Workspace désarchivé',
@@ -477,6 +482,9 @@ export default {
   'onboarding.health.title': 'Santé',
   'onboarding.health.description':
     'Vérifie l’état de Kōbō : base de données, agents actifs, intégrations, sauvegardes.',
+  'onboarding.changelog.title': 'Nouveautés',
+  'onboarding.changelog.description':
+    "Consulte les dernières évolutions de Kōbō : nouvelles fonctionnalités, correctifs, changements de comportement. Une pastille apparaît lorsqu'une release n'a pas encore été lue.",
   'onboarding.settings.title': 'Paramètres',
   'onboarding.settings.description':
     'Modèles, scripts de cycle de vie, intégrations, voix — toute la configuration de Kōbō est ici. Cliquez sur Suivant pour parcourir chaque section.',
@@ -507,6 +515,9 @@ export default {
   'onboarding.settings-worktrees.title': 'Worktrees',
   'onboarding.settings-worktrees.description':
     'Préfixes de branche Git et dossier où sont créés les worktrees des workspaces.',
+  'onboarding.settings-worktrees-purge.title': "Libérer l'espace disque automatiquement",
+  'onboarding.settings-worktrees-purge.description':
+    "Active ce toggle pour que Kōbō supprime le dossier worktree (souvent plusieurs centaines de Mo de node_modules / vendor) dès qu'une PR est mergée. L'historique de chat et les métadonnées PR sont conservés. Tu peux recréer le worktree plus tard avec `gh pr checkout <pr>` — Kōbō détecte automatiquement la restauration dans les 30 secondes et réactive le workspace.",
   'onboarding.settings-projects.title': 'Projets',
   'onboarding.settings-projects.description':
     'Enregistrez les dépôts sur lesquels vous travaillez. Cliquez sur « Ajouter un projet » pour pointer Kōbō vers un dépôt local — chaque workspace cible l’un de ces projets.',
@@ -953,6 +964,51 @@ export default {
   'contextMenu.copyPath': 'Copier le chemin du worktree',
   'contextMenu.openEditor': "Ouvrir dans l'éditeur",
   'contextMenu.openFileManager': "Ouvrir dans l'explorateur de fichiers",
+  'contextMenu.unarchiveDisabledPurged':
+    'Le worktree a été supprimé du disque. Recrée-le manuellement (`gh pr checkout` ou `git worktree add`) — Kōbō détecte la restauration dans les 30 s et réactive le workspace automatiquement.',
+  'workspaceList.unarchiveBlockedPurged':
+    "Impossible de désarchiver : le worktree n'existe plus sur le disque. Recrée-le manuellement (`gh pr checkout` ou `git worktree add`) — Kōbō le détecte dans les 30 s et réactive le workspace.",
+  'contextMenu.purgeWorktree': "Libérer l'espace disque (supprimer le worktree)",
+  'contextMenu.purgeWorktreeTooltip':
+    "Supprime le worktree du disque pour récupérer de l'espace — l'historique des messages et sessions est conservé. Archive automatiquement le workspace.",
+  'contextMenu.purgeWorktreeDialogTitle': "Libérer l'espace disque ?",
+  'contextMenu.purgeWorktreeDialogMessage':
+    "Le dossier worktree de « {name} » va être supprimé du disque. L'historique des messages et sessions est conservé. Le workspace sera archivé automatiquement. Cette action ne peut pas être annulée dans la version actuelle.",
+  'contextMenu.purgeWorktreeDialogConfirm': 'Supprimer le worktree',
+  'contextMenu.purgeWorktreeSuccess': 'Worktree supprimé — espace disque récupéré.',
+  'settings.autoPurgeOnPrMerged': 'Purger le worktree quand la PR est mergée',
+  'settings.autoPurgeOnPrMergedHint':
+    "Quand activé, le worktree est supprimé du disque dès que la PR est mergée (en plus de l'archivage auto). L'historique des messages est conservé.",
+  'settings.purgeDocsTitle': 'Comment ça marche — restauration & permissions',
+  'settings.purgeDocsRestoreTitle': 'Restaurer un worktree purgé (détection automatique)',
+  'settings.purgeDocsRestoreIntro':
+    "Un workspace purgé conserve son historique de chat et les métadonnées de la PR, mais le dossier worktree n'existe plus. Recrée-le manuellement avec l'une de ces commandes — Kōbō détecte la réapparition du dossier dans les 30 secondes et réactive automatiquement le workspace (désarchive + clear flag purge) :",
+  'settings.purgeDocsRestoreCommands':
+    '# GitHub (via le CLI gh) :\n  gh pr checkout [numéro-pr] --recurse-submodules\n\n# Ou directement via git (fonctionne sur GitHub même après suppression de la branche) :\n  git fetch origin pull/[numéro-pr]/head:[nom-branche]\n  git worktree add [chemin] [nom-branche]',
+  'settings.purgeDocsRestoreFootnote':
+    "GitHub conserve la ref HEAD de la PR bien après la suppression de la branche source (mois / années). L'auto-détection tourne dans le watcher 30s — pas besoin d'action dans l'UI une fois le dossier recréé.",
+  'settings.purgeDocsPermissionsTitle': 'Éviter les erreurs de permissions pendant la suppression',
+  'settings.purgeDocsPermissionsIntro':
+    "Docker laisse souvent des fichiers root-owned dans node_modules / vendor à l'intérieur du worktree. Quand Kōbō essaie de les supprimer, tu tombes sur EACCES / EPERM et la purge échoue. Deux moyens de prévenir :",
+  'settings.purgeDocsPermissionsDocker':
+    'Configurer ton conteneur pour qu\'il tourne sous ton utilisateur hôte — directive USER dans le Dockerfile, ou `user: "${UID}:${GID}"` dans docker-compose (avec UID/GID exportés dans ton shell).',
+  'settings.purgeDocsPermissionsAcl':
+    "Pré-définir un ACL par défaut sur la racine des worktrees — filet de sécurité qui marche dans la PLUPART des cas (ext4/btrfs/xfs + bind mount Docker classique). Chaque nouveau fichier hérite alors d'une entrée d'accès pour ton user, en plus du propriétaire nominal :",
+  'settings.purgeDocsPermissionsAclCommand': '  setfacl -d -m u:$(whoami):rwX [racine-worktrees]',
+  'settings.purgeDocsPermissionsFootnote':
+    "Limites des ACL : ne marchent PAS sur les volumes Docker nommés (utilise un bind mount), filesystems sans support ACL (NTFS, exFAT, tmpfs), SELinux strict avec `:Z`, ou `userns-remap` Docker activé. La solution la plus fiable reste de configurer le user dans le conteneur (option 1). Astuce : `rwX` (X majuscule) n'ajoute le bit exécutable qu'aux dossiers et fichiers déjà exécutables — plus propre que `rwx` qui rendrait exécutables tous les fichiers texte.",
+  'settings.purgeDocsPermissionsRecoverTitle': 'Débloquer un worktree déjà cassé (fichiers root-owned existants)',
+  'settings.purgeDocsPermissionsRecoverIntro':
+    'Si tu te retrouves avec un worktree déjà rempli de fichiers root-owned (Docker a déjà tourné, vendor / node_modules sont coincés), les ACL préventives ci-dessus ne suffisent pas — il faut traiter les fichiers EXISTANTS. Deux approches, à exécuter dans le dossier du worktree :',
+  'settings.purgeDocsPermissionsRecoverAclIntro':
+    "Option A — ACL récursive (préserve l'ownership root pour audit, t'ajoute juste un accès en parallèle) :",
+  'settings.purgeDocsPermissionsRecoverAclCommand':
+    "# pose l'ACL par défaut pour les futurs fichiers ET donne accès à tout l'existant\n  sudo setfacl -Rd -m u:$(whoami):rwX . && sudo setfacl -R -m u:$(whoami):rwX .",
+  'settings.purgeDocsPermissionsRecoverChownIntro':
+    'Option B — Reprendre la propriété (plus simple, perd l\'info "créé par root dans le conteneur" mais osef en pratique) :',
+  'settings.purgeDocsPermissionsRecoverChownCommand': '  sudo chown -R $(whoami):$(whoami) .',
+  'settings.purgeDocsPermissionsRecoverFootnote':
+    "Astuce : tu peux exécuter ces commandes directement sur la racine de tes worktrees (ex. `~/.worktrees/`) pour couvrir tous les workspaces existants ET futurs d'un seul coup. Une fois fait, la purge Kōbō fonctionnera sans erreur de permission.",
   'contextMenu.runSetup': 'Lancer le script de setup',
   'contextMenu.exportEvents': 'Exporter les events (CSV)',
   'contextMenu.dismissChangesRequested': 'Marquer « Modifications demandées » comme vu',

@@ -4,6 +4,7 @@ export default {
   'common.cancel': 'Cancel',
   'common.delete': 'Delete',
   'common.close': 'Close',
+  'common.details': 'Details',
   'whatsNew.title': "What's new",
   'common.loading': 'Loading...',
   'common.search': 'Search...',
@@ -120,6 +121,9 @@ export default {
   'workspacePage.interrupt': 'Interrupt',
   'workspacePage.interrupted': 'Agent interrupted — waiting for your next message',
   'workspacePage.archivedBanner': 'Archived workspace — read-only',
+  'workspacePage.worktreePurgedBanner': 'Worktree deleted — history kept, no restore available in this version',
+  'workspacePage.worktreePurgedTooltip':
+    'The worktree folder was deleted from disk to reclaim space. Chat history, sessions and PR metadata remain queryable here, but the working directory no longer exists locally. A future Kōbō version will rebuild the worktree from the merged PR — for now you would need to recreate it manually via `gh pr checkout` or `git worktree add`.',
   'workspacePage.pendingInitialPromptBanner':
     'An initial prompt is pending — the agent never received it (setup script crashed or the workspace was never started). Click Start to send it now.',
   'workspacePage.unarchived': 'Workspace unarchived',
@@ -470,6 +474,9 @@ export default {
   'onboarding.search.description': 'Filter your workspaces by name, or search across agent conversation history.',
   'onboarding.health.title': 'Health',
   'onboarding.health.description': "Check Kōbō's status: database, active agents, integrations, backups.",
+  'onboarding.changelog.title': "What's new",
+  'onboarding.changelog.description':
+    "Browse Kōbō's latest releases: new features, fixes, behaviour changes. A badge appears when an unread release is available.",
   'onboarding.settings.title': 'Settings',
   'onboarding.settings.description':
     'Models, lifecycle scripts, integrations, voice — all of Kōbō’s configuration lives here. Click Next for a tour of each section.',
@@ -499,6 +506,9 @@ export default {
   'onboarding.settings-worktrees.title': 'Worktrees',
   'onboarding.settings-worktrees.description':
     'Git branch prefixes and the folder where workspace worktrees are created.',
+  'onboarding.settings-worktrees-purge.title': 'Free disk space automatically',
+  'onboarding.settings-worktrees-purge.description':
+    'Enable this toggle so Kōbō removes the worktree folder (often hundreds of MB of node_modules / vendor) as soon as a PR is merged. Chat history and PR metadata are kept. You can recreate the worktree later with `gh pr checkout <pr>` — Kōbō auto-detects the restoration within 30 seconds and reactivates the workspace.',
   'onboarding.settings-projects.title': 'Projects',
   'onboarding.settings-projects.description':
     'Register the repositories you work on. Click “Add a project” to point Kōbō at a local codebase — every workspace targets one of these.',
@@ -942,6 +952,51 @@ export default {
   'contextMenu.copyPath': 'Copy worktree path',
   'contextMenu.openEditor': 'Open in editor',
   'contextMenu.openFileManager': 'Open in file manager',
+  'contextMenu.unarchiveDisabledPurged':
+    'The worktree was removed from disk. Recreate it manually (`gh pr checkout` or `git worktree add`) — Kōbō auto-detects the restoration within 30s and reactivates the workspace.',
+  'workspaceList.unarchiveBlockedPurged':
+    "Can't unarchive: the worktree no longer exists on disk. Recreate it manually (`gh pr checkout` or `git worktree add`) — Kōbō detects it within 30s and reactivates the workspace.",
+  'contextMenu.purgeWorktree': 'Free disk space (delete worktree)',
+  'contextMenu.purgeWorktreeTooltip':
+    'Deletes the worktree from disk to reclaim space — chat / session history is preserved. Auto-archives the workspace.',
+  'contextMenu.purgeWorktreeDialogTitle': 'Free disk space?',
+  'contextMenu.purgeWorktreeDialogMessage':
+    'The worktree folder for «{name}» will be deleted from disk. Chat and session history are kept. The workspace is auto-archived. This cannot be undone in the current version.',
+  'contextMenu.purgeWorktreeDialogConfirm': 'Delete the worktree',
+  'contextMenu.purgeWorktreeSuccess': 'Worktree deleted — disk space reclaimed.',
+  'settings.autoPurgeOnPrMerged': 'Auto-purge worktree on PR merged',
+  'settings.autoPurgeOnPrMergedHint':
+    'When ON, the worktree is deleted from disk as soon as the PR is merged (in addition to the auto-archive). Chat history is kept.',
+  'settings.purgeDocsTitle': 'How purge works — restore & permissions',
+  'settings.purgeDocsRestoreTitle': 'Restoring a purged worktree (auto-detected)',
+  'settings.purgeDocsRestoreIntro':
+    'A purged workspace keeps its chat history and PR metadata but the worktree folder is gone. Rebuild it manually with one of these commands — Kōbō detects the folder reappearing within 30 seconds and automatically reactivates the workspace (unarchive + clear purge flag):',
+  'settings.purgeDocsRestoreCommands':
+    '# GitHub (using gh CLI):\n  gh pr checkout [pr-number] --recurse-submodules\n\n# Or directly via git (works on GitHub even after branch deletion):\n  git fetch origin pull/[pr-number]/head:[branch-name]\n  git worktree add [path] [branch-name]',
+  'settings.purgeDocsRestoreFootnote':
+    'GitHub keeps the PR head ref accessible long after the source branch is deleted (months / years). Auto-detection runs in the 30s watcher — no UI action needed once the folder is back.',
+  'settings.purgeDocsPermissionsTitle': 'Avoiding permission errors during purge',
+  'settings.purgeDocsPermissionsIntro':
+    'Docker often leaves root-owned files in node_modules / vendor inside the worktree. When Kōbō tries to remove them, you hit EACCES / EPERM and the purge fails. Two ways to prevent it:',
+  'settings.purgeDocsPermissionsDocker':
+    'Configure your container to run as your host user — USER directive in the Dockerfile, or `user: "${UID}:${GID}"` in docker-compose (with UID/GID exported in your shell).',
+  'settings.purgeDocsPermissionsAcl':
+    'Pre-seed the worktrees root with a default ACL — safety net that works in MOST cases (ext4/btrfs/xfs + standard Docker bind mount). Each new file then inherits an access entry for your user, on top of the nominal owner:',
+  'settings.purgeDocsPermissionsAclCommand': '  setfacl -d -m u:$(whoami):rwX [worktrees-root]',
+  'settings.purgeDocsPermissionsFootnote':
+    'ACL limitations: do NOT work on named Docker volumes (use a bind mount), filesystems without ACL support (NTFS, exFAT, tmpfs), strict SELinux with `:Z`, or when Docker `userns-remap` is enabled. The most reliable solution remains configuring the user inside the container (option 1). Tip: `rwX` (capital X) only adds the executable bit on directories and already-executable files — cleaner than `rwx` which would make every text file executable.',
+  'settings.purgeDocsPermissionsRecoverTitle': 'Unblock an already-broken worktree (existing root-owned files)',
+  'settings.purgeDocsPermissionsRecoverIntro':
+    'If you end up with a worktree already full of root-owned files (Docker has run, vendor / node_modules are stuck), the preventive ACL above is not enough — you need to fix EXISTING files. Two approaches, both run from inside the worktree folder:',
+  'settings.purgeDocsPermissionsRecoverAclIntro':
+    'Option A — Recursive ACL (preserves root ownership for audit, just adds access for your user alongside):',
+  'settings.purgeDocsPermissionsRecoverAclCommand':
+    '# set default ACL for future files AND grant access to everything existing\n  sudo setfacl -Rd -m u:$(whoami):rwX . && sudo setfacl -R -m u:$(whoami):rwX .',
+  'settings.purgeDocsPermissionsRecoverChownIntro':
+    'Option B — Take ownership (simpler, loses the "created by root in container" trace but rarely matters):',
+  'settings.purgeDocsPermissionsRecoverChownCommand': '  sudo chown -R $(whoami):$(whoami) .',
+  'settings.purgeDocsPermissionsRecoverFootnote':
+    'Tip: you can run these commands directly on the worktrees root (e.g. `~/.worktrees/`) to cover all existing AND future workspaces at once. Once done, Kōbō purge will work without permission errors.',
   'contextMenu.runSetup': 'Run setup script',
   'contextMenu.exportEvents': 'Export events (CSV)',
   'contextMenu.dismissChangesRequested': "Mark 'Changes requested' as seen",

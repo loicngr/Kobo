@@ -74,6 +74,13 @@ export interface Workspace {
   prChangesDismissedAt: string | null
   /** Same as `prChangesDismissedAt` but for the CI failure badge. */
   prCiFailureDismissedAt: string | null
+  /** ISO timestamp at which the worktree was purged from disk (history kept
+   *  in DB). Null = worktree still present. Orthogonal to `archivedAt`. */
+  worktreePurgedAt: string | null
+  /** JSON blob with restore metadata captured at purge time (PR number,
+   *  forge, merge commit sha, original paths). Reserved for a future
+   *  unpurge feature — read but never modified by V1. */
+  worktreePurgeRestoreData: string | null
   engine: string
   autoLoop: boolean
   autoLoopReady: boolean
@@ -170,6 +177,8 @@ interface WorkspaceRow {
   initial_prompt: string | null
   pr_changes_dismissed_at: string | null
   pr_ci_failure_dismissed_at: string | null
+  worktree_purged_at: string | null
+  worktree_purge_restore_data: string | null
   created_at: string
   updated_at: string
 }
@@ -226,6 +235,8 @@ function mapWorkspace(row: WorkspaceRow): Workspace {
     initialPrompt: row.initial_prompt,
     prChangesDismissedAt: row.pr_changes_dismissed_at,
     prCiFailureDismissedAt: row.pr_ci_failure_dismissed_at,
+    worktreePurgedAt: row.worktree_purged_at,
+    worktreePurgeRestoreData: row.worktree_purge_restore_data,
     engine: row.engine ?? 'claude-code',
     autoLoop: row.auto_loop === 1,
     autoLoopReady: row.auto_loop_ready === 1,
@@ -589,6 +600,56 @@ export function dismissPrAttention(id: string, kind: PrAttentionKind, prUpdatedA
   if (result.changes === 0) {
     throw new Error(`Workspace '${id}' not found`)
   }
+}
+
+/** Restore metadata captured at purge time, useful when (later) we want to
+ *  rebuild the worktree from the merged PR / GitLab MR. Read-only field. */
+export interface WorktreePurgeRestoreData {
+  prNumber: number | null
+  prUrl: string | null
+  forge: 'github' | 'gitlab' | 'none' | null
+  mergeCommitSha: string | null
+  originalWorktreePath: string
+  originalSourceBranch: string
+  originalWorkingBranch: string
+}
+
+/**
+ * Mark a workspace's worktree as purged from disk. Persists the supplied
+ * restore data as JSON so a future "unpurge" feature can recreate the
+ * worktree from the merged PR. Idempotent: re-purging a workspace just
+ * overwrites the timestamp + data.
+ */
+export function markWorktreePurged(id: string, restoreData: WorktreePurgeRestoreData): void {
+  const db = getDb()
+  const now = new Date().toISOString()
+  const result = db
+    .prepare(
+      'UPDATE workspaces SET worktree_purged_at = ?, worktree_purge_restore_data = ?, updated_at = ? WHERE id = ?',
+    )
+    .run(now, JSON.stringify(restoreData), now, id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+}
+
+/**
+ * Reverse of `markWorktreePurged` + `archiveWorkspace`: clears the purge
+ * metadata and unarchives the workspace in a single transaction. Used by the
+ * auto-restore watcher when the user manually recreates the worktree folder
+ * on disk. Idempotent: no-op if already restored.
+ */
+export function restoreWorktreeFromDisk(id: string): Workspace {
+  const db = getDb()
+  const workspace = getWorkspace(id)
+  if (!workspace) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+  const now = new Date().toISOString()
+  db.prepare(
+    'UPDATE workspaces SET worktree_purged_at = NULL, worktree_purge_restore_data = NULL, archived_at = NULL, updated_at = ? WHERE id = ?',
+  ).run(now, id)
+  return getWorkspace(id) as Workspace
 }
 
 /** Update the dev-server status column for a workspace. */

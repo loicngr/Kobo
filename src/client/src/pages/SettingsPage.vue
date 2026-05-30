@@ -1242,6 +1242,58 @@ where ffmpeg</pre>
                 class="text-grey-5 text-caption q-mt-sm"
               />
               <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.worktreesPrefixByProjectHint') }}</div>
+
+              <q-separator dark class="q-my-md" />
+
+              <div data-tour="settings-card-worktrees-purge">
+                <q-toggle
+                  v-model="globalAutoPurgeOnPrMerged"
+                  :label="$t('settings.autoPurgeOnPrMerged')"
+                  dark
+                  dense
+                  color="indigo-4"
+                  class="text-grey-5 text-caption"
+                />
+                <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.autoPurgeOnPrMergedHint') }}</div>
+              </div>
+
+              <q-expansion-item
+                dense
+                dark
+                icon="help_outline"
+                :label="$t('settings.purgeDocsTitle')"
+                class="purge-docs q-mt-md rounded-borders"
+              >
+                <div class="q-pa-sm text-caption text-grey-5" style="line-height: 1.55;">
+                  <div class="text-weight-medium text-grey-3 q-mb-xs">
+                    {{ $t('settings.purgeDocsRestoreTitle') }}
+                  </div>
+                  <div class="q-mb-xs">{{ $t('settings.purgeDocsRestoreIntro') }}</div>
+                  <pre class="purge-docs-code">{{ $t('settings.purgeDocsRestoreCommands') }}</pre>
+                  <div class="text-grey-7 q-mb-md">{{ $t('settings.purgeDocsRestoreFootnote') }}</div>
+
+                  <div class="text-weight-medium text-grey-3 q-mb-xs">
+                    {{ $t('settings.purgeDocsPermissionsTitle') }}
+                  </div>
+                  <div class="q-mb-xs">{{ $t('settings.purgeDocsPermissionsIntro') }}</div>
+                  <ul class="q-pl-md q-my-xs">
+                    <li>{{ $t('settings.purgeDocsPermissionsDocker') }}</li>
+                    <li>{{ $t('settings.purgeDocsPermissionsAcl') }}</li>
+                  </ul>
+                  <pre class="purge-docs-code">{{ $t('settings.purgeDocsPermissionsAclCommand') }}</pre>
+                  <div class="text-grey-7 q-mb-md">{{ $t('settings.purgeDocsPermissionsFootnote') }}</div>
+
+                  <div class="text-weight-medium text-grey-3 q-mb-xs">
+                    {{ $t('settings.purgeDocsPermissionsRecoverTitle') }}
+                  </div>
+                  <div class="q-mb-xs">{{ $t('settings.purgeDocsPermissionsRecoverIntro') }}</div>
+                  <div class="q-mb-xs text-grey-6">{{ $t('settings.purgeDocsPermissionsRecoverAclIntro') }}</div>
+                  <pre class="purge-docs-code">{{ $t('settings.purgeDocsPermissionsRecoverAclCommand') }}</pre>
+                  <div class="q-mb-xs text-grey-6">{{ $t('settings.purgeDocsPermissionsRecoverChownIntro') }}</div>
+                  <pre class="purge-docs-code">{{ $t('settings.purgeDocsPermissionsRecoverChownCommand') }}</pre>
+                  <div class="text-grey-7">{{ $t('settings.purgeDocsPermissionsRecoverFootnote') }}</div>
+                </div>
+              </q-expansion-item>
             </div>
 
             <!-- Import / Export config -->
@@ -2107,6 +2159,7 @@ const globalCiFixPrompt = ref('')
 const globalGitConventions = ref('')
 const globalEditorCommand = ref('')
 const globalFileManagerCommand = ref('')
+const globalAutoPurgeOnPrMerged = ref(false)
 const globalBrowserNotifications = ref(true)
 const globalAudioNotifications = ref(true)
 const globalAudioNotificationSound = ref(DEFAULT_NOTIFICATION_SOUND)
@@ -2766,6 +2819,7 @@ function captureGlobalSnapshot(): string {
     gitConventions: globalGitConventions.value,
     editorCommand: globalEditorCommand.value,
     fileManagerCommand: globalFileManagerCommand.value,
+    autoPurgeOnPrMerged: globalAutoPurgeOnPrMerged.value,
     browserNotifications: globalBrowserNotifications.value,
     audioNotifications: globalAudioNotifications.value,
     audioNotificationSound: globalAudioNotificationSound.value,
@@ -2841,6 +2895,7 @@ function syncGlobalForm() {
   globalGitConventions.value = store.global.gitConventions
   globalEditorCommand.value = store.global.editorCommand ?? ''
   globalFileManagerCommand.value = store.global.fileManagerCommand ?? ''
+  globalAutoPurgeOnPrMerged.value = store.global.autoPurgeOnPrMerged ?? false
   globalBrowserNotifications.value = store.global.browserNotifications ?? true
   globalAudioNotifications.value = store.global.audioNotifications ?? true
   globalAudioNotificationSound.value = resolveSoundId(store.global.audioNotificationSound)
@@ -3109,6 +3164,7 @@ async function saveGlobal() {
       gitConventions: globalGitConventions.value,
       editorCommand: globalEditorCommand.value,
       fileManagerCommand: globalFileManagerCommand.value,
+      autoPurgeOnPrMerged: globalAutoPurgeOnPrMerged.value,
       browserNotifications: globalBrowserNotifications.value,
       audioNotifications: globalAudioNotifications.value,
       audioNotificationSound: globalAudioNotificationSound.value,
@@ -3364,6 +3420,23 @@ onUnmounted(() => {
   position: relative;
   padding: 0;
   min-height: 100vh;
+}
+
+.purge-docs {
+  background-color: rgba(255, 255, 255, 0.02);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+}
+.purge-docs-code {
+  background-color: rgba(0, 0, 0, 0.35);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  padding: 8px 10px;
+  margin: 6px 0;
+  font-family: var(--kobo-font-mono, monospace);
+  font-size: 11px;
+  color: #cfcfe0;
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 .settings-layout {

@@ -34,6 +34,8 @@ export function initSchema(db: Database.Database): void {
       initial_prompt TEXT,
       pr_changes_dismissed_at TEXT,
       pr_ci_failure_dismissed_at TEXT,
+      worktree_purged_at TEXT,
+      worktree_purge_restore_data TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );

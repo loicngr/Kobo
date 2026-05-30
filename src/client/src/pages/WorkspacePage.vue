@@ -173,7 +173,23 @@
     <q-separator dark />
 
     <div
-      v-if="selectedWs?.archivedAt"
+      v-if="selectedWs?.worktreePurgedAt"
+      class="wp-purged-banner row items-center q-px-md q-py-sm"
+    >
+      <q-icon name="cleaning_services" size="16px" color="orange-5" class="q-mr-sm" />
+      <span class="text-caption text-grey-3">
+        {{ $t('workspacePage.worktreePurgedBanner') }}
+      </span>
+      <q-space />
+      <q-btn flat dense size="sm" no-caps color="grey-5" icon="info_outline" :label="$t('common.details')">
+        <q-tooltip max-width="320px" anchor="bottom right" self="top right">
+          {{ $t('workspacePage.worktreePurgedTooltip') }}
+        </q-tooltip>
+      </q-btn>
+    </div>
+
+    <div
+      v-else-if="selectedWs?.archivedAt"
       class="wp-archived-banner row items-center q-px-md q-py-sm"
     >
       <q-icon name="inventory_2" size="16px" color="grey-5" class="q-mr-sm" />
@@ -655,6 +671,11 @@ watch(
 .wp-archived-banner {
   background-color: rgba(255, 255, 255, 0.03);
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.wp-purged-banner {
+  background-color: rgba(245, 158, 11, 0.08);
+  border-bottom: 1px solid rgba(245, 158, 11, 0.18);
 }
 
 .wp-pending-prompt-banner {

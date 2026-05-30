@@ -77,13 +77,33 @@
         <q-item-section>{{ $t('contextMenu.dismissCiFailure') }}</q-item-section>
       </q-item>
       <q-separator dark />
-      <q-item v-if="archived" clickable v-close-popup @click="(e) => emit('unarchive', workspace, e)">
+      <q-item
+        v-if="archived"
+        :clickable="!workspace.worktreePurgedAt"
+        :disable="!!workspace.worktreePurgedAt"
+        v-close-popup="!workspace.worktreePurgedAt"
+        @click="(e) => !workspace.worktreePurgedAt && emit('unarchive', workspace, e)"
+      >
         <q-item-section side><q-icon name="unarchive" size="xs" /></q-item-section>
         <q-item-section>{{ $t('common.unarchive') }}</q-item-section>
+        <q-tooltip v-if="workspace.worktreePurgedAt" anchor="center left" self="center right" max-width="280px">
+          {{ $t('contextMenu.unarchiveDisabledPurged') }}
+        </q-tooltip>
       </q-item>
       <q-item v-else clickable v-close-popup @click="(e) => emit('archive', workspace, e)">
         <q-item-section side><q-icon name="archive" size="xs" /></q-item-section>
         <q-item-section>{{ $t('common.archive') }}</q-item-section>
+      </q-item>
+      <q-item
+        v-if="!workspace.worktreePurgedAt && workspace.worktreeOwned !== false"
+        clickable
+        v-close-popup
+        class="text-orange-5"
+        @click="(e) => emit('purgeWorktree', workspace, e)"
+      >
+        <q-item-section side><q-icon name="cleaning_services" size="xs" color="orange-5" /></q-item-section>
+        <q-item-section>{{ $t('contextMenu.purgeWorktree') }}</q-item-section>
+        <q-tooltip>{{ $t('contextMenu.purgeWorktreeTooltip') }}</q-tooltip>
       </q-item>
       <q-item clickable v-close-popup class="text-red-5" @click="(e) => emit('delete', workspace, e)">
         <q-item-section side><q-icon name="delete_outline" size="xs" color="red-5" /></q-item-section>
@@ -120,6 +140,7 @@ const emit = defineEmits<{
   manageTags: [ws: Workspace]
   archive: [ws: Workspace, event: Event]
   unarchive: [ws: Workspace, event: Event]
+  purgeWorktree: [ws: Workspace, event: Event]
   delete: [ws: Workspace, event: Event]
 }>()
 

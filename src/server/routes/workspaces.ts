@@ -43,6 +43,7 @@ import * as wakeupService from '../services/wakeup-service.js'
 import * as wsService from '../services/websocket-service.js'
 import type { AgentPermissionMode, WorkspaceStatus } from '../services/workspace-service.js'
 import * as workspaceService from '../services/workspace-service.js'
+import * as purgeWorktreeService from '../services/worktree-purge-service.js'
 import * as worktreeService from '../services/worktree-service.js'
 import { resolveUniqueBranchAndPath } from '../utils/branch-resolver.js'
 import * as gitOps from '../utils/git-ops.js'
@@ -2123,6 +2124,35 @@ app.post('/:id/archive', migrationGuard, (c) => {
   }
 })
 
+// POST /api/workspaces/:id/purge-worktree — delete the worktree from disk
+// to reclaim space while keeping the chat / session history queryable. Auto-
+// archives the workspace, stops the agent / dev server / terminal, and
+// records restore metadata so a future feature can rebuild the worktree
+// from the merged PR.
+app.post('/:id/purge-worktree', migrationGuard, async (c) => {
+  try {
+    const id = c.req.param('id')
+    const result = await purgeWorktreeService.purgeWorktree(id)
+    if (result.outcome === 'not-found') {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+    if (result.outcome === 'worktree-not-owned') {
+      return c.json(
+        {
+          error:
+            "This workspace attached to an external worktree (you own it). Kōbō refuses to delete files it didn't create.",
+        },
+        400,
+      )
+    }
+    const workspace = workspaceService.getWorkspace(id)
+    return c.json({ workspace, warnings: result.warnings, outcome: result.outcome })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
 // POST /api/workspaces/:id/unarchive — restore an archived workspace
 app.post('/:id/unarchive', migrationGuard, (c) => {
   try {
@@ -2133,6 +2163,14 @@ app.post('/:id/unarchive', migrationGuard, (c) => {
     }
     if (!workspace.archivedAt) {
       return c.json({ error: 'Not archived' }, 400)
+    }
+    // A workspace whose worktree was purged from disk can't be safely
+    // unarchived — its worktreePath points to nothing, every git/forge call
+    // would fail, and the agent has no working tree. Force the user to
+    // restore the worktree first (manual `gh pr checkout` / `git worktree
+    // add`); the pr-watcher then auto-clears the purge flag + unarchives.
+    if (workspace.worktreePurgedAt) {
+      return c.json({ error: 'worktree-purged' }, 409)
     }
 
     const updated = workspaceService.unarchiveWorkspace(id)
@@ -2163,6 +2201,14 @@ function deleteWorkspaceWithSideEffects(
     // Agent may not be running — ignore
   }
 
+  // Stop dev server if it was running. The processSpawn would otherwise
+  // outlive the workspace (and keep its port + docker containers alive).
+  try {
+    devServerService.stopDevServer(workspace.id)
+  } catch (err) {
+    console.error(`[workspaces] stopDevServer during delete failed for '${workspace.name}':`, err)
+  }
+
   try {
     terminalService.destroyTerminal(workspace.id)
   } catch {
@@ -2180,7 +2226,13 @@ function deleteWorkspaceWithSideEffects(
   // Remove worktree (only if owned — for attached external worktrees we
   // never created the dir, so we must not delete it on the user's behalf).
   const worktreePath = workspace.worktreePath
-  if (workspace.worktreeOwned) {
+  if (workspace.worktreePurgedAt) {
+    // Already purged earlier: the worktree folder is gone AND `git worktree
+    // remove` already cleaned the `.git/worktrees/<name>/` entry. Retrying
+    // here just fails with "fatal: <path> does not exist" and pushes a noisy
+    // warning. Skip cleanly.
+    console.log(`[workspaces] skipping worktree removal on delete (already purged): ${worktreePath}`)
+  } else if (workspace.worktreeOwned) {
     try {
       worktreeService.removeWorktree(workspace.projectPath, worktreePath)
     } catch (err) {
