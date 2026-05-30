@@ -82,8 +82,8 @@ Engine selection happens at workspace creation. Both share the same task trackin
 
 A merged workspace is automatically archived but its worktree folder usually carries a lot of weight (`node_modules`, `vendor`, build artefacts…). Kōbō can free that space without losing anything queryable:
 
-- **Manual** — workspace context menu → *Libérer l'espace disque*. The worktree is removed, the chat history and PR metadata stay in the database.
-- **Automatic** — **Settings → Worktrees → Purger le worktree quand la PR est mergée**. When the pr-watcher sees the OPEN → MERGED transition, it archives **and** purges.
+- **Manual** — workspace context menu → *Free disk space (delete worktree)*. The worktree is removed, the chat history and PR metadata stay in the database.
+- **Automatic** — **Settings → Worktrees → Auto-purge worktree on PR merged**. When the pr-watcher sees the OPEN → MERGED transition, it archives **and** purges.
 - **Restore** — recreate the folder yourself (`gh pr checkout <pr>` or `git worktree add <path> <branch>`). The pr-watcher detects the directory reappearing within 30 seconds and re-activates the workspace automatically (clears purge flag + unarchives). No UI action needed.
 
 ### Avoiding permission errors during purge
@@ -106,7 +106,7 @@ Docker containers usually write as `root`, so files in `node_modules` / `vendor`
    ```
    Run from inside the worktree folder, or directly on your worktrees root (e.g. `~/.worktrees/`) to cover all existing and future workspaces at once.
 
-When a purge does fail, Kōbō surfaces a toast with a copy-pasteable recovery command and a `git worktree prune` follow-up. The same guide is wired into **Settings → Worktrees → Comment ça marche** for in-app reference.
+When a purge does fail, Kōbō surfaces a toast with a copy-pasteable recovery command and a `git worktree prune` follow-up. The same guide is wired into **Settings → Worktrees → How purge works** for in-app reference.
 
 ## Optional integrations
 

@@ -251,11 +251,11 @@ Purging a worktree frees its disk space (often hundreds of MB or GB worth of
 discoverable: chat history and PR metadata are retained in the database, the
 workspace is archived, and the worktree folder is removed from disk.
 
-**Manual trigger** — workspace context menu → **Libérer l'espace disque**. A
-confirmation dialog warns you before any destructive action.
+**Manual trigger** — workspace context menu → **Free disk space (delete worktree)**.
+A confirmation dialog warns you before any destructive action.
 
-**Automatic trigger** — Settings → Worktrees → **Purger le worktree quand la PR
-est mergée**. When enabled, the pr-watcher fires `purgeWorktree(id)` on the
+**Automatic trigger** — Settings → Worktrees → **Auto-purge worktree on PR
+merged**. When enabled, the pr-watcher fires `purgeWorktree(id)` on the
 OPEN → MERGED transition, in addition to the existing auto-archive. Disabled by
 default — opt in once you trust the restore flow on your machine.
 
@@ -290,7 +290,7 @@ Docker often leaves root-owned files in `node_modules` / `vendor` inside the
 worktree (containers run as `root` by default). When Kōbō tries to remove them
 it hits `EACCES` / `EPERM`. The purge service detects these errors via regex
 and returns a warning toast with a copy-pasteable `sudo rm -rf` recovery
-command plus prevention tips. See Settings → Worktrees → **Comment ça marche**
+command plus prevention tips. See Settings → Worktrees → **How purge works**
 expansion in the UI for the full guide (manual recovery commands for already-
 broken worktrees, including `setfacl` and `chown -R` alternatives).
 
