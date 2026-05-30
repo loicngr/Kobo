@@ -80,6 +80,7 @@ export function useOnboarding() {
       { element: '[data-tour="create-workspace"]', popover: popover('create') },
       { element: '[data-tour="search"]', popover: popover('search') },
       { element: '[data-tour="health"]', popover: popover('health') },
+      { element: '[data-tour="changelog"]', popover: popover('changelog') },
       {
         element: '[data-tour="settings"]',
         popover: {
@@ -125,6 +126,39 @@ export function useOnboarding() {
         },
       }
     })
+
+    // Sub-step inside the Worktrees section that highlights the auto-purge
+    // toggle. Inserted right after the worktrees card step so the tour stays
+    // on the same tab — no navigation needed.
+    const worktreesIdx = SETTINGS_SECTIONS.indexOf('worktrees')
+    if (worktreesIdx !== -1) {
+      const nextSection = SETTINGS_SECTIONS[worktreesIdx + 1]
+      const purgeStep: DriveStep = {
+        element: '[data-tour="settings-card-worktrees-purge"]',
+        popover: {
+          ...popover('settings-worktrees-purge'),
+          onPrevClick: () => driverObj?.movePrevious(),
+          ...(nextSection
+            ? {
+                onNextClick: async () => {
+                  await gotoSection(nextSection)
+                  driverObj?.moveNext()
+                },
+              }
+            : {}),
+        },
+      }
+      // Rewire the previous step (the worktrees card) so its "Next" lands on
+      // the purge toggle instead of jumping straight to the next section.
+      const worktreesStep = settingsSteps[worktreesIdx]
+      if (worktreesStep?.popover) {
+        worktreesStep.popover = {
+          ...worktreesStep.popover,
+          onNextClick: () => driverObj?.moveNext(),
+        }
+      }
+      settingsSteps.splice(worktreesIdx + 1, 0, purgeStep)
+    }
 
     return [...homeSteps, ...settingsSteps]
   }
