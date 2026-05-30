@@ -4,6 +4,14 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.7.23
+
+- docs: document worktree purge, auto-restore, and permission recovery
+- feat(client): onboarding highlights changelog and auto-purge toggle
+- feat(pr-watcher): auto-restore manually-recreated worktrees
+- feat(workspace): worktree purge with auto-archive and restore metadata
+- feat(templates): add /kobo-context slash command (you need to re-import default templates)
+
 ## Unreleased
 
 - feat(workspace): disk-space purge — remove a workspace's worktree from disk while preserving chat history and PR metadata. Manual trigger from the workspace menu ("Libérer l'espace disque") or auto-purge on PR merged via Settings → Worktrees toggle.
