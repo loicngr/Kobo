@@ -12,12 +12,18 @@ vi.mock('../server/services/websocket-service.js', () => ({ emitEphemeral: vi.fn
 vi.mock('../server/services/workspace-service.js', () => ({
   archiveWorkspace: vi.fn(),
   getWorkspace: vi.fn(),
+  listArchivedWorkspaces: vi.fn(() => []),
   listWorkspaces: vi.fn(),
   markWorkspaceUnread: vi.fn(),
+  restoreWorktreeFromDisk: vi.fn(),
   updateWorkspaceSourceBranch: vi.fn(),
 }))
 vi.mock('../server/services/git-stats-service.js', () => ({ computeGitStats: vi.fn() }))
 vi.mock('../server/utils/git-ops.js', () => ({ fetchSourceBranchAsync: vi.fn(() => Promise.resolve()) }))
+vi.mock('node:fs', async () => {
+  const actual = await vi.importActual<typeof import('node:fs')>('node:fs')
+  return { ...actual, existsSync: vi.fn(() => true), default: { ...actual, existsSync: vi.fn(() => true) } }
+})
 
 import { computeGitStats } from '../server/services/git-stats-service.js'
 import { _resetForTest, checkPrStatuses, getAllGitStats } from '../server/services/pr-watcher-service.js'

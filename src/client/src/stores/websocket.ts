@@ -816,7 +816,8 @@ export const useWebSocketStore = defineStore('websocket', {
         }
 
         case 'workspace:archived':
-        case 'workspace:unarchived': {
+        case 'workspace:unarchived':
+        case 'workspace:worktree-restored': {
           // If the workspace just archived is the one the user is viewing,
           // clear the selection. WorkspacePage watches `selectedWorkspaceId`
           // and redirects to the home (workspace list) when it goes null
