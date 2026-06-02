@@ -4,6 +4,10 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.7.25
+
+- feat(models): add Claude Opus 4.8 and make it the default
+
 ## 1.7.24
 
 - refactor: prune redundant comments from worktree-purge work
