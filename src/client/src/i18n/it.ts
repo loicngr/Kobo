@@ -35,6 +35,7 @@ export default {
   'model.auto': 'Auto',
   'model.opus': 'Opus 4.6',
   'model.sonnet': 'Sonnet 4.6',
+  'model.opus48': 'Opus 4.8',
   'model.opus47Classic': 'Opus 4.7 (Classic)',
   'model.opus471m': 'Opus 4.7 (1M)',
   'model.opusClassic': 'Opus 4.6 (Classic)',
@@ -43,6 +44,8 @@ export default {
   'model.sonnet1m': 'Sonnet 4.6 (1M)',
   'model.haiku': 'Haiku 4.5',
   'model.autoDescription': 'Claude sceglie il modello ottimale',
+  'model.opus48Description':
+    'Opus più capace — coding agentico long-horizon, contesto 1M di default, effort high di default',
   'model.opus47ClassicDescription': 'Ultimo Opus, il più capace',
   'model.opus471mDescription': 'Ultimo Opus, contesto 1M',
   'model.opusClassicDescription': 'Più potente',

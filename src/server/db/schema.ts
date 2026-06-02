@@ -15,7 +15,7 @@ export function initSchema(db: Database.Database): void {
       sentry_url TEXT,
       worktree_path TEXT,
       worktree_owned INTEGER NOT NULL DEFAULT 1,
-      model TEXT NOT NULL DEFAULT 'claude-opus-4-7',
+      model TEXT NOT NULL DEFAULT 'claude-opus-4-8',
       reasoning_effort TEXT NOT NULL DEFAULT 'auto',
       permission_mode TEXT NOT NULL DEFAULT 'auto-accept',
       dev_server_status TEXT NOT NULL DEFAULT 'stopped',

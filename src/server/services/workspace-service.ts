@@ -306,7 +306,7 @@ export function createWorkspace(data: CreateWorkspaceInput): Workspace {
     data.sentryUrl ?? null,
     computedWorktreePath,
     owned ? 1 : 0,
-    data.model ?? 'claude-opus-4-7',
+    data.model ?? 'claude-opus-4-8',
     data.reasoningEffort ?? 'auto',
     legacyMode,
     legacyProfile,
