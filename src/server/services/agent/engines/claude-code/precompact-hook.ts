@@ -25,3 +25,33 @@ export function buildPreCompactCustomInstructions(workspaceId: string): string {
   }
   return out
 }
+
+/** Output shape for a SessionStart hook callback that re-injects the
+ *  task/criteria reminder after a compaction. `{}` means "inject nothing". */
+export interface CompactionSessionStartOutput {
+  hookSpecificOutput?: {
+    hookEventName: 'SessionStart'
+    additionalContext: string
+  }
+}
+
+/**
+ * Decide what a SessionStart hook should return so the post-compaction segment
+ * keeps the workspace's tasks and acceptance criteria in context.
+ *
+ * The reminder is injected ONLY when the session segment starts because of a
+ * compaction (`source === 'compact'`) — normal startup/resume/clear get
+ * nothing, matching the prior PreCompact-hook semantics.
+ *
+ * This replaces the old PreCompact `hookSpecificOutput` injection: the current
+ * Claude Code hook schema dropped `PreCompactHookSpecificOutput`, so emitting
+ * `{ hookEventName: 'PreCompact', additionalContext }` is rejected at runtime
+ * with a ZodError. `SessionStart` (which fires with `source: 'compact'` after
+ * compaction) does support `additionalContext` and is a valid output.
+ */
+export function buildCompactionSessionStartOutput(workspaceId: string, source: string): CompactionSessionStartOutput {
+  if (source !== 'compact') return {}
+  const reminder = buildPreCompactCustomInstructions(workspaceId)
+  if (!reminder) return {}
+  return { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: reminder } }
+}

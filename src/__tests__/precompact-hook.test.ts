@@ -111,3 +111,57 @@ describe('buildPreCompactCustomInstructions', () => {
     expect(out).toContain('Mixed')
   })
 })
+
+describe('buildCompactionSessionStartOutput', () => {
+  it('returns an empty object for non-compact session sources', async () => {
+    const { createWorkspace, createTask } = await import('../server/services/workspace-service.js')
+    const { buildCompactionSessionStartOutput } = await import(
+      '../server/services/agent/engines/claude-code/precompact-hook.js'
+    )
+    const ws = createWorkspace({
+      name: 'Startup',
+      projectPath: '/tmp/startup',
+      sourceBranch: 'main',
+      workingBranch: 'feature/startup',
+    })
+    createTask(ws.id, { title: 'Do X', isAcceptanceCriterion: false })
+    // Even with tasks, a normal startup/resume/clear must NOT inject the reminder.
+    expect(buildCompactionSessionStartOutput(ws.id, 'startup')).toEqual({})
+    expect(buildCompactionSessionStartOutput(ws.id, 'resume')).toEqual({})
+    expect(buildCompactionSessionStartOutput(ws.id, 'clear')).toEqual({})
+  })
+
+  it('returns an empty object on compact when there are no tasks or criteria', async () => {
+    const { createWorkspace } = await import('../server/services/workspace-service.js')
+    const { buildCompactionSessionStartOutput } = await import(
+      '../server/services/agent/engines/claude-code/precompact-hook.js'
+    )
+    const ws = createWorkspace({
+      name: 'Empty',
+      projectPath: '/tmp/empty-compact',
+      sourceBranch: 'main',
+      workingBranch: 'feature/empty-compact',
+    })
+    expect(buildCompactionSessionStartOutput(ws.id, 'compact')).toEqual({})
+  })
+
+  it('returns a SessionStart hookSpecificOutput with the reminder on compact', async () => {
+    const { createWorkspace, createTask } = await import('../server/services/workspace-service.js')
+    const { buildCompactionSessionStartOutput } = await import(
+      '../server/services/agent/engines/claude-code/precompact-hook.js'
+    )
+    const ws = createWorkspace({
+      name: 'Compacting',
+      projectPath: '/tmp/compacting',
+      sourceBranch: 'main',
+      workingBranch: 'feature/compacting',
+    })
+    createTask(ws.id, { title: 'Write X', isAcceptanceCriterion: false })
+    createTask(ws.id, { title: 'Y passes', isAcceptanceCriterion: true })
+    const out = buildCompactionSessionStartOutput(ws.id, 'compact')
+    expect(out.hookSpecificOutput?.hookEventName).toBe('SessionStart')
+    expect(out.hookSpecificOutput?.additionalContext).toContain('Write X')
+    expect(out.hookSpecificOutput?.additionalContext).toContain('Y passes')
+    expect(out.hookSpecificOutput?.additionalContext).toContain('Compacting')
+  })
+})

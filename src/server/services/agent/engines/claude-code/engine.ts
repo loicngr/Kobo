@@ -11,7 +11,7 @@ import type { AgentEngine, AgentEvent, EngineProcess, StartOptions } from '../ty
 import { CLAUDE_CODE_CAPABILITIES } from './capabilities.js'
 import { createMapperState, mapSdkMessage, QUOTA_PATTERN, tryEmitQuota } from './event-mapper.js'
 import { buildClaudeOptions } from './options-builder.js'
-import { buildPreCompactCustomInstructions } from './precompact-hook.js'
+import { buildCompactionSessionStartOutput } from './precompact-hook.js'
 import { resolveClaudeBinaryPath } from './resolve-binary.js'
 
 type McpStdioServerConfigWithAlwaysLoad = McpStdioServerConfig & { alwaysLoad: boolean }
@@ -100,23 +100,20 @@ export function createClaudeCodeEngine(): AgentEngine {
         })
       }
 
-      // PreCompact's hookSpecificOutput is missing from the SDK type union
-      // (SyncHookJSONOutput omits it), but the runtime accepts
-      // `additionalContext` as custom compaction instructions. Cast through
-      // `unknown` to satisfy the strict union.
+      // Re-inject the workspace's task/criteria reminder after a compaction.
+      // The current Claude Code hook schema dropped PreCompact's
+      // hookSpecificOutput, so the old `{ hookEventName: 'PreCompact', … }`
+      // return is rejected at runtime with a ZodError. We use SessionStart
+      // instead — it fires with `source: 'compact'` after compaction and does
+      // support `additionalContext`. `buildCompactionSessionStartOutput` gates
+      // on the compact source so normal startup/resume/clear inject nothing.
       const hooks: Options['hooks'] = {
-        PreCompact: [
+        SessionStart: [
           {
             hooks: [
-              async () => {
-                const reminder = buildPreCompactCustomInstructions(options.workspaceId)
-                if (!reminder) return {}
-                return {
-                  hookSpecificOutput: {
-                    hookEventName: 'PreCompact',
-                    additionalContext: reminder,
-                  },
-                } as unknown as Record<string, never>
+              async (input) => {
+                const source = (input as { source?: string }).source ?? ''
+                return buildCompactionSessionStartOutput(options.workspaceId, source)
               },
             ],
           },
