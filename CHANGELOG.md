@@ -4,6 +4,10 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.7.28
+
+- feat: commit diff review, workspace rename tool, macOS usage keychain
+
 ## 1.7.27
 
 - feat(git): add dirty-worktree recovery for rebase/merge
