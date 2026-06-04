@@ -404,6 +404,88 @@
       </q-card>
     </q-dialog>
 
+    <!-- Dirty-worktree recovery dialog -->
+    <q-dialog v-model="dirtyDialog" persistent>
+      <q-card dark style="min-width: 420px; max-width: 600px;">
+        <q-card-section>
+          <div class="text-subtitle1 text-warning">
+            <q-icon name="warning" class="q-mr-xs" />
+            {{ dirtyOperation === 'merge' ? $t('git.dirtyTitleMerge') : $t('git.dirtyTitleRebase') }}
+          </div>
+          <div class="text-caption text-grey-6 q-mt-xs">
+            {{ $t('git.dirtySubtitle', {
+              modified: dirtyStatus?.modified ?? 0,
+              staged: dirtyStatus?.staged ?? 0,
+              untracked: dirtyStatus?.untracked ?? 0,
+            }) }}
+          </div>
+        </q-card-section>
+        <q-card-section v-if="dirtyCommitMode" class="q-pt-none">
+          <q-input
+            v-model="dirtyCommitMessage"
+            dark
+            dense
+            autofocus
+            :placeholder="$t('git.dirtyCommitPlaceholder')"
+            :disable="dirtyBusy"
+            @keyup.enter="dirtyCommit"
+          />
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn
+            flat
+            no-caps
+            :label="$t('common.cancel')"
+            color="grey-5"
+            :disable="dirtyBusy"
+            @click="dirtyDialog = false"
+          />
+          <q-btn
+            flat
+            no-caps
+            color="red-4"
+            icon="delete_forever"
+            :label="$t('git.dirtyDiscard')"
+            :loading="dirtyBusy"
+            :disable="dirtyBusy"
+            @click="dirtyDiscard"
+          />
+          <template v-if="dirtyCommitMode">
+            <q-btn
+              unelevated
+              no-caps
+              color="grey-7"
+              icon="check"
+              :label="$t('git.dirtyCommitConfirm')"
+              :loading="dirtyBusy"
+              :disable="!dirtyCommitMessage.trim()"
+              @click="dirtyCommit"
+            />
+          </template>
+          <template v-else>
+            <q-btn
+              flat
+              no-caps
+              color="grey-5"
+              icon="edit"
+              :label="$t('git.dirtyCommit')"
+              :disable="dirtyBusy"
+              @click="dirtyCommitMode = true"
+            />
+            <q-btn
+              unelevated
+              no-caps
+              color="primary"
+              icon="inventory_2"
+              :label="$t('git.dirtyStash')"
+              :disable="dirtyBusy"
+              @click="dirtyStash"
+            />
+          </template>
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+
     <!-- Change-source-branch error with abort option. Opens when the server
          reports an `ongoingOperation` after a failed change (typically a
          custom script that crashed mid-cherry-pick). -->
@@ -575,6 +657,14 @@ const conflictOperation = ref<'merge' | 'rebase' | 'cherry-pick' | null>(null)
 const conflictFiles = ref<string[]>([])
 const conflictAborting = ref(false)
 const conflictResolving = ref(false)
+
+// Dirty-worktree recovery dialog (rebase/merge refused by uncommitted changes)
+const dirtyDialog = ref(false)
+const dirtyOperation = ref<'rebase' | 'merge' | null>(null)
+const dirtyStatus = ref<{ staged: number; modified: number; untracked: number } | null>(null)
+const dirtyBusy = ref(false)
+const dirtyCommitMode = ref(false)
+const dirtyCommitMessage = ref('')
 
 // Dialog opened when /change-source-branch fails with a partial git state
 // (custom script crashed mid-cherry-pick / mid-rebase). The "Abort" button
@@ -824,6 +914,35 @@ function escapeHtml(s: string): string {
     .replace(/'/g, '&#39;')
 }
 
+async function runRebase(opts?: { autostash?: boolean }) {
+  if (!props.workspace) return
+  rebasing.value = true
+  try {
+    const qs = opts?.autostash ? '?autostash=1' : ''
+    const res = await fetch(`/api/workspaces/${props.workspace.id}/rebase${qs}`, { method: 'POST' })
+    if (res.status === 409) {
+      const data = await res.json()
+      if (data.code === 'dirty_worktree') {
+        openDirtyDialog('rebase', data.status)
+        return
+      }
+      openConflictDialog('rebase', Array.isArray(data.files) ? data.files : [])
+      return
+    }
+    if (!res.ok) {
+      const data = await res.json()
+      throw new Error(data.error ?? 'Rebase failed')
+    }
+    $q.notify({ type: 'positive', message: t('git.rebaseSuccess'), position: 'top' })
+    loadGitStats()
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : t('git.rebaseFailed')
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+  } finally {
+    rebasing.value = false
+  }
+}
+
 function handleRebase() {
   if (!props.workspace) return
   $q.dialog({
@@ -835,28 +954,38 @@ function handleRebase() {
     dark: true,
     cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
     ok: { flat: true, label: t('git.rebase'), color: 'orange-4' },
-  }).onOk(async () => {
-    rebasing.value = true
-    try {
-      const res = await fetch(`/api/workspaces/${props.workspace!.id}/rebase`, { method: 'POST' })
-      if (res.status === 409) {
-        const data = await res.json()
-        openConflictDialog('rebase', Array.isArray(data.files) ? data.files : [])
+  }).onOk(() => {
+    void runRebase()
+  })
+}
+
+async function runMerge(opts?: { autostash?: boolean }) {
+  if (!props.workspace) return
+  merging.value = true
+  try {
+    const qs = opts?.autostash ? '?autostash=1' : ''
+    const res = await fetch(`/api/workspaces/${props.workspace.id}/merge${qs}`, { method: 'POST' })
+    if (res.status === 409) {
+      const data = await res.json()
+      if (data.code === 'dirty_worktree') {
+        openDirtyDialog('merge', data.status)
         return
       }
-      if (!res.ok) {
-        const data = await res.json()
-        throw new Error(data.error ?? 'Rebase failed')
-      }
-      $q.notify({ type: 'positive', message: t('git.rebaseSuccess'), position: 'top' })
-      loadGitStats()
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : t('git.rebaseFailed')
-      $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
-    } finally {
-      rebasing.value = false
+      openConflictDialog('merge', Array.isArray(data.files) ? data.files : [])
+      return
     }
-  })
+    if (!res.ok) {
+      const data = await res.json()
+      throw new Error(data.error ?? 'Merge failed')
+    }
+    $q.notify({ type: 'positive', message: t('git.mergeSuccess'), position: 'top' })
+    loadGitStats()
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : t('git.mergeFailed')
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+  } finally {
+    merging.value = false
+  }
 }
 
 function handleMerge() {
@@ -870,27 +999,8 @@ function handleMerge() {
     dark: true,
     cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
     ok: { flat: true, label: t('git.merge'), color: 'purple-4' },
-  }).onOk(async () => {
-    merging.value = true
-    try {
-      const res = await fetch(`/api/workspaces/${props.workspace!.id}/merge`, { method: 'POST' })
-      if (res.status === 409) {
-        const data = await res.json()
-        openConflictDialog('merge', Array.isArray(data.files) ? data.files : [])
-        return
-      }
-      if (!res.ok) {
-        const data = await res.json()
-        throw new Error(data.error ?? 'Merge failed')
-      }
-      $q.notify({ type: 'positive', message: t('git.mergeSuccess'), position: 'top' })
-      loadGitStats()
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : t('git.mergeFailed')
-      $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
-    } finally {
-      merging.value = false
-    }
+  }).onOk(() => {
+    void runMerge()
   })
 }
 
@@ -898,6 +1008,75 @@ function openConflictDialog(op: 'merge' | 'rebase' | 'cherry-pick', files: strin
   conflictOperation.value = op
   conflictFiles.value = files
   conflictDialog.value = true
+}
+
+function openDirtyDialog(op: 'rebase' | 'merge', status: { staged: number; modified: number; untracked: number }) {
+  dirtyOperation.value = op
+  dirtyStatus.value = status
+  dirtyCommitMode.value = false
+  dirtyCommitMessage.value = ''
+  dirtyBusy.value = false
+  dirtyDialog.value = true
+}
+
+// Re-run the original operation after a recovery step succeeded.
+function retryDirtyOperation(opts?: { autostash?: boolean }) {
+  const op = dirtyOperation.value
+  dirtyDialog.value = false
+  if (op === 'rebase') void runRebase(opts)
+  else if (op === 'merge') void runMerge(opts)
+}
+
+function dirtyStash() {
+  retryDirtyOperation({ autostash: true })
+}
+
+async function dirtyCommit() {
+  if (!props.workspace || !dirtyCommitMessage.value.trim()) return
+  dirtyBusy.value = true
+  try {
+    const res = await fetch(`/api/workspaces/${props.workspace.id}/git/commit-all`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: dirtyCommitMessage.value.trim() }),
+    })
+    if (!res.ok) {
+      const data = await res.json()
+      throw new Error(data.error ?? t('git.commitFailed'))
+    }
+    retryDirtyOperation()
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : t('git.commitFailed')
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+  } finally {
+    dirtyBusy.value = false
+  }
+}
+
+function dirtyDiscard() {
+  if (!props.workspace) return
+  $q.dialog({
+    title: t('git.dirtyDiscardConfirmTitle'),
+    message: t('git.dirtyDiscardConfirmMessage'),
+    dark: true,
+    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    ok: { flat: true, label: t('git.dirtyDiscard'), color: 'red-4' },
+  }).onOk(async () => {
+    dirtyBusy.value = true
+    try {
+      const res = await fetch(`/api/workspaces/${props.workspace!.id}/git/discard`, { method: 'POST' })
+      if (!res.ok) {
+        const data = await res.json()
+        throw new Error(data.error ?? t('git.discardFailed'))
+      }
+      retryDirtyOperation()
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : t('git.discardFailed')
+      $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    } finally {
+      dirtyBusy.value = false
+    }
+  })
 }
 
 async function abortGitOperation() {

@@ -37,7 +37,17 @@ export function saveWorkspaceFile(
 
 function resolveSafe(worktreePath: string, relativePath: string): string {
   const abs = path.resolve(worktreePath, relativePath)
-  const root = realpathSync(path.resolve(worktreePath))
+  const lexicalRoot = path.resolve(worktreePath)
+  // Lexical containment check FIRST: a path that escapes the worktree via `..`
+  // (or an absolute path) must be reported as an escape deterministically —
+  // independent of whether the traversal happens to land on a directory that
+  // exists on disk. Without this, `../../etc/passwd` surfaces as "parent
+  // directory does not exist" instead of "escapes the worktree" whenever the
+  // worktree sits deep enough that the `..` chain lands on a missing dir.
+  if (abs !== lexicalRoot && !abs.startsWith(lexicalRoot + path.sep)) {
+    throw new Error(`Path '${relativePath}' escapes the worktree`)
+  }
+  const root = realpathSync(lexicalRoot)
   const rootWithSep = root + path.sep
   // Resolve the parent's realpath (parent must exist; if it doesn't, the path
   // is invalid anyway and we surface that). Then join the lexical basename so

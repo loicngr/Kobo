@@ -1,13 +1,16 @@
 import { execFileSync, execSync } from 'node:child_process'
-import fs, { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import fs, { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os, { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   BranchAlreadyExistsError,
+  commitAllChanges,
   createBranch,
+  DirtyWorktreeError,
   deleteLocalBranch,
   deleteRemoteBranch,
+  discardWorkingTreeChanges,
   fetchSourceBranch,
   fetchSourceBranchAsync,
   getChangedFiles,
@@ -19,12 +22,15 @@ import {
   getDiffStatsBetween,
   getStructuredDiffStatsBetween,
   getWorkingTreeDiffStats,
+  getWorkingTreeStatus,
   listBranchCommits,
   listBranches,
   listCommitsBehind,
   listRemoteBranches,
+  mergeBranch,
   pullBranch,
   pushBranch,
+  rebaseBranch,
   rollbackFile,
 } from '../server/utils/git-ops.js'
 
@@ -994,5 +1000,135 @@ describe('fetchSourceBranchAsync', () => {
 
     rmSync(repo, { recursive: true, force: true })
     rmSync(bare, { recursive: true, force: true })
+  })
+})
+
+describe('rebaseBranch dirty-worktree handling', () => {
+  // Single repo + bare origin, origin/main == HEAD. git refuses a rebase on a
+  // dirty tree even when there is nothing to rebase, which is exactly the block
+  // we want to detect.
+  function setupRepoWithOrigin(): { repo: string; bare: string } {
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-dirty-rebase-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+    writeFileSync(path.join(repo, 'file.txt'), 'committed\n')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: repo })
+    const bare = mkdtempSync(path.join(tmpdir(), 'at-dirty-rebase-bare-'))
+    execFileSync('git', ['init', '--bare'], { cwd: bare })
+    execFileSync('git', ['remote', 'add', 'origin', bare], { cwd: repo })
+    execFileSync('git', ['push', '-u', 'origin', 'main'], { cwd: repo })
+    return { repo, bare }
+  }
+
+  it('throws DirtyWorktreeError (not a generic error) when the tree is dirty', () => {
+    const { repo, bare } = setupRepoWithOrigin()
+    writeFileSync(path.join(repo, 'file.txt'), 'uncommitted edit\n') // dirty tracked file
+    let caught: unknown
+    try {
+      rebaseBranch(repo, 'main')
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(DirtyWorktreeError)
+    expect((caught as DirtyWorktreeError).operation).toBe('rebase')
+    expect((caught as DirtyWorktreeError).status.modified).toBe(1)
+    rmSync(repo, { recursive: true, force: true })
+    rmSync(bare, { recursive: true, force: true })
+  })
+
+  it('succeeds with autostash on a dirty tree and re-applies the changes', () => {
+    const { repo, bare } = setupRepoWithOrigin()
+    writeFileSync(path.join(repo, 'file.txt'), 'uncommitted edit\n')
+    expect(() => rebaseBranch(repo, 'main', { autostash: true })).not.toThrow()
+    // autostash stashed → no-op rebase → popped: the edit is back on disk
+    expect(readFileSync(path.join(repo, 'file.txt'), 'utf-8')).toBe('uncommitted edit\n')
+    rmSync(repo, { recursive: true, force: true })
+    rmSync(bare, { recursive: true, force: true })
+  })
+})
+
+describe('mergeBranch dirty-worktree handling', () => {
+  // origin/main must be AHEAD and touch the same file, otherwise an up-to-date
+  // merge no-ops without checking the tree. We commit C2 on origin, then reset
+  // the local branch back to C1 so origin/main is genuinely ahead.
+  function setupDivergedOrigin(): { repo: string; bare: string } {
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-dirty-merge-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+    writeFileSync(path.join(repo, 'file.txt'), 'v1\n')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'C1'], { cwd: repo })
+    const c1 = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf-8' }).trim()
+    writeFileSync(path.join(repo, 'file.txt'), 'v2\n')
+    execFileSync('git', ['commit', '-am', 'C2'], { cwd: repo })
+    const bare = mkdtempSync(path.join(tmpdir(), 'at-dirty-merge-bare-'))
+    execFileSync('git', ['init', '--bare'], { cwd: bare })
+    execFileSync('git', ['remote', 'add', 'origin', bare], { cwd: repo })
+    execFileSync('git', ['push', '-u', 'origin', 'main'], { cwd: repo }) // origin/main = C2
+    execFileSync('git', ['reset', '--hard', c1], { cwd: repo }) // local main = C1, file = v1
+    return { repo, bare }
+  }
+
+  it('throws DirtyWorktreeError when local changes would be overwritten by merge', () => {
+    const { repo, bare } = setupDivergedOrigin()
+    writeFileSync(path.join(repo, 'file.txt'), 'local edit\n') // dirty, conflicts with C2
+    let caught: unknown
+    try {
+      mergeBranch(repo, 'main')
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(DirtyWorktreeError)
+    expect((caught as DirtyWorktreeError).operation).toBe('merge')
+    expect((caught as DirtyWorktreeError).status.modified).toBe(1)
+    rmSync(repo, { recursive: true, force: true })
+    rmSync(bare, { recursive: true, force: true })
+  })
+})
+
+describe('commitAllChanges', () => {
+  it('stages everything and commits, leaving a clean tree', () => {
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-commit-all-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+    writeFileSync(path.join(repo, 'a.txt'), '1\n')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: repo })
+    writeFileSync(path.join(repo, 'a.txt'), '2\n') // modify tracked
+    writeFileSync(path.join(repo, 'b.txt'), 'new\n') // new untracked
+
+    commitAllChanges(repo, 'chore: snapshot')
+
+    const status = getWorkingTreeStatus(repo)
+    expect(status.modified).toBe(0)
+    expect(status.staged).toBe(0)
+    expect(status.untracked).toBe(0)
+    const log = execFileSync('git', ['log', '--oneline'], { cwd: repo, encoding: 'utf-8' })
+    expect(log).toContain('chore: snapshot')
+    rmSync(repo, { recursive: true, force: true })
+  })
+})
+
+describe('discardWorkingTreeChanges', () => {
+  it('reverts tracked modifications but preserves untracked files', () => {
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-discard-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+    writeFileSync(path.join(repo, 'a.txt'), 'committed\n')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: repo })
+    writeFileSync(path.join(repo, 'a.txt'), 'dirty\n') // tracked modification
+    writeFileSync(path.join(repo, 'untracked.txt'), 'keep me\n') // untracked
+
+    discardWorkingTreeChanges(repo)
+
+    expect(readFileSync(path.join(repo, 'a.txt'), 'utf-8')).toBe('committed\n') // reverted
+    expect(readFileSync(path.join(repo, 'untracked.txt'), 'utf-8')).toBe('keep me\n') // preserved
+    rmSync(repo, { recursive: true, force: true })
   })
 })

@@ -197,6 +197,21 @@ export class GitConflictError extends Error {
   }
 }
 
+/** Thrown when a rebase or merge is refused because the working tree has
+ *  uncommitted changes (staged or modified tracked files). Detected
+ *  locale-independently from the working-tree status, never from git's
+ *  localized error text. */
+export class DirtyWorktreeError extends Error {
+  readonly operation: 'rebase' | 'merge'
+  readonly status: WorkingTreeStatus
+  constructor(operation: 'rebase' | 'merge', status: WorkingTreeStatus) {
+    super(`${operation} blocked by uncommitted changes`)
+    this.name = 'DirtyWorktreeError'
+    this.operation = operation
+    this.status = status
+  }
+}
+
 /** List files currently in a conflicted state (unmerged paths). */
 export function getConflictedFiles(repoPath: string): string[] {
   try {
@@ -224,39 +239,58 @@ export function getOngoingGitOperation(repoPath: string): 'merge' | 'rebase' | '
   }
 }
 
-/** Rebase the current branch onto the given base branch. Fetches origin first. Leaves conflicts in place. */
-export function rebaseBranch(repoPath: string, baseBranch: string): void {
+/** Rebase the current branch onto the given base branch. Fetches origin first.
+ *  With `opts.autostash`, dirty changes are stashed/re-applied automatically.
+ *  Leaves conflicts in place. */
+export function rebaseBranch(repoPath: string, baseBranch: string, opts?: { autostash?: boolean }): void {
   try {
     git(repoPath, ['fetch', 'origin', baseBranch])
   } catch {
     // fetch may fail if offline — continue with local ref
   }
   try {
-    git(repoPath, ['rebase', `origin/${baseBranch}`])
+    const args = ['rebase']
+    if (opts?.autostash) args.push('--autostash')
+    args.push(`origin/${baseBranch}`)
+    git(repoPath, args)
   } catch (err) {
     const conflicted = getConflictedFiles(repoPath)
     if (conflicted.length > 0 || getOngoingGitOperation(repoPath) === 'rebase') {
       // Leave the rebase in progress so the caller can abort or request agent-assisted resolution.
       throw new GitConflictError('rebase', conflicted)
     }
+    const status = getWorkingTreeStatus(repoPath)
+    if (status.staged > 0 || status.modified > 0) {
+      // git refused before touching anything because the tree is dirty.
+      throw new DirtyWorktreeError('rebase', status)
+    }
     const message = err instanceof Error ? err.message : String(err)
     throw new Error(`Rebase onto '${baseBranch}' failed: ${message}`)
   }
 }
 
-/** Merge `origin/<baseBranch>` into the current branch. Fetches first. Leaves conflicts in place. */
-export function mergeBranch(repoPath: string, baseBranch: string): void {
+/** Merge `origin/<baseBranch>` into the current branch. Fetches first.
+ *  With `opts.autostash`, dirty changes are stashed/re-applied automatically.
+ *  Leaves conflicts in place. */
+export function mergeBranch(repoPath: string, baseBranch: string, opts?: { autostash?: boolean }): void {
   try {
     git(repoPath, ['fetch', 'origin', baseBranch])
   } catch {
     // offline — continue with local ref
   }
   try {
-    git(repoPath, ['merge', '--no-ff', '--no-edit', `origin/${baseBranch}`])
+    const args = ['merge', '--no-ff', '--no-edit']
+    if (opts?.autostash) args.push('--autostash')
+    args.push(`origin/${baseBranch}`)
+    git(repoPath, args)
   } catch (err) {
     const conflicted = getConflictedFiles(repoPath)
     if (conflicted.length > 0 || getOngoingGitOperation(repoPath) === 'merge') {
       throw new GitConflictError('merge', conflicted)
+    }
+    const status = getWorkingTreeStatus(repoPath)
+    if (status.staged > 0 || status.modified > 0) {
+      throw new DirtyWorktreeError('merge', status)
     }
     const message = err instanceof Error ? err.message : String(err)
     throw new Error(`Merge of 'origin/${baseBranch}' failed: ${message}`)
@@ -962,4 +996,18 @@ export function stashPush(repoPath: string, label: string): void {
 /** Pop the most recent stash entry. */
 export function stashPop(repoPath: string): void {
   git(repoPath, ['stash', 'pop'])
+}
+
+/** Stage every change (tracked + untracked) and commit it. Hooks run normally
+ *  (no --no-verify), per the project's commit conventions. */
+export function commitAllChanges(repoPath: string, message: string): void {
+  git(repoPath, ['add', '-A'])
+  git(repoPath, ['commit', '-m', message])
+}
+
+/** Discard staged + modified TRACKED changes (`git reset --hard HEAD`).
+ *  Untracked files are intentionally preserved — they don't block a
+ *  rebase/merge, and cleaning them would risk nuking .env / build artefacts. */
+export function discardWorkingTreeChanges(repoPath: string): void {
+  git(repoPath, ['reset', '--hard', 'HEAD'])
 }

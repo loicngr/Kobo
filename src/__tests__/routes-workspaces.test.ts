@@ -105,6 +105,31 @@ vi.mock('../server/utils/git-ops.js', () => ({
   pushBranch: vi.fn(),
   pullBranch: vi.fn(),
   rebaseBranch: vi.fn(),
+  mergeBranch: vi.fn(),
+  commitAllChanges: vi.fn(),
+  discardWorkingTreeChanges: vi.fn(),
+  // Real-enough error classes so `err instanceof gitOps.X` matches what the
+  // tests throw. Self-contained — no importActual needed.
+  GitConflictError: class GitConflictError extends Error {
+    operation: string
+    files: string[]
+    constructor(operation: string, files: string[]) {
+      super(`${operation} conflict`)
+      this.name = 'GitConflictError'
+      this.operation = operation
+      this.files = files
+    }
+  },
+  DirtyWorktreeError: class DirtyWorktreeError extends Error {
+    operation: 'rebase' | 'merge'
+    status: { staged: number; modified: number; untracked: number }
+    constructor(operation: 'rebase' | 'merge', status: { staged: number; modified: number; untracked: number }) {
+      super(`${operation} dirty`)
+      this.name = 'DirtyWorktreeError'
+      this.operation = operation
+      this.status = status
+    }
+  },
   getFileAtRef: vi.fn().mockReturnValue(null),
   getFileContent: vi.fn().mockReturnValue(null),
   getCommitsBetween: vi.fn().mockReturnValue(''),
@@ -5067,5 +5092,128 @@ describe('POST /api/workspaces/:id/start-ci-fix', () => {
     expect(agentManager.startAgent).toHaveBeenCalledTimes(1)
     // resume=true → 5th positional arg
     expect(vi.mocked(agentManager.startAgent).mock.calls[0][4]).toBe(true)
+  })
+})
+
+describe('POST /:id/rebase & /:id/merge dirty-worktree handling', () => {
+  beforeEach(() => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+  })
+
+  it('maps DirtyWorktreeError to 409 with code dirty_worktree on rebase', async () => {
+    vi.mocked(gitOps.rebaseBranch).mockImplementation(() => {
+      throw new gitOps.DirtyWorktreeError('rebase', { staged: 0, modified: 1, untracked: 0 })
+    })
+    const res = await app.request('/api/workspaces/ws-1/rebase', { method: 'POST' })
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.code).toBe('dirty_worktree')
+    expect(body.operation).toBe('rebase')
+    expect(body.status).toEqual({ staged: 0, modified: 1, untracked: 0 })
+  })
+
+  it('maps DirtyWorktreeError to 409 with code dirty_worktree on merge', async () => {
+    vi.mocked(gitOps.mergeBranch).mockImplementation(() => {
+      throw new gitOps.DirtyWorktreeError('merge', { staged: 1, modified: 0, untracked: 0 })
+    })
+    const res = await app.request('/api/workspaces/ws-1/merge', { method: 'POST' })
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.code).toBe('dirty_worktree')
+    expect(body.operation).toBe('merge')
+    expect(body.status).toEqual({ staged: 1, modified: 0, untracked: 0 })
+  })
+
+  it('passes autostash:true to rebaseBranch when ?autostash=1', async () => {
+    vi.mocked(gitOps.rebaseBranch).mockReturnValue(undefined)
+    const res = await app.request('/api/workspaces/ws-1/rebase?autostash=1', { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect(gitOps.rebaseBranch).toHaveBeenCalledWith(fakeWorkspace.worktreePath, fakeWorkspace.sourceBranch, {
+      autostash: true,
+    })
+  })
+
+  it('passes autostash:false to rebaseBranch when no query param', async () => {
+    vi.mocked(gitOps.rebaseBranch).mockReturnValue(undefined)
+    const res = await app.request('/api/workspaces/ws-1/rebase', { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect(gitOps.rebaseBranch).toHaveBeenCalledWith(fakeWorkspace.worktreePath, fakeWorkspace.sourceBranch, {
+      autostash: false,
+    })
+  })
+
+  it('passes autostash:true to mergeBranch when ?autostash=1', async () => {
+    vi.mocked(gitOps.mergeBranch).mockReturnValue(undefined)
+    const res = await app.request('/api/workspaces/ws-1/merge?autostash=1', { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect(gitOps.mergeBranch).toHaveBeenCalledWith(fakeWorkspace.worktreePath, fakeWorkspace.sourceBranch, {
+      autostash: true,
+    })
+  })
+
+  it('passes autostash:false to mergeBranch when no query param', async () => {
+    vi.mocked(gitOps.mergeBranch).mockReturnValue(undefined)
+    const res = await app.request('/api/workspaces/ws-1/merge', { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect(gitOps.mergeBranch).toHaveBeenCalledWith(fakeWorkspace.worktreePath, fakeWorkspace.sourceBranch, {
+      autostash: false,
+    })
+  })
+})
+
+describe('POST /:id/git/commit-all', () => {
+  beforeEach(() => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+  })
+
+  it('commits all changes and returns success', async () => {
+    vi.mocked(gitOps.commitAllChanges).mockReturnValue(undefined)
+    const res = await app.request('/api/workspaces/ws-1/git/commit-all', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'chore: snapshot' }),
+    })
+    expect(res.status).toBe(200)
+    expect(gitOps.commitAllChanges).toHaveBeenCalledWith(fakeWorkspace.worktreePath, 'chore: snapshot')
+  })
+
+  it('rejects a blank commit message with 400', async () => {
+    const res = await app.request('/api/workspaces/ws-1/git/commit-all', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: '   ' }),
+    })
+    expect(res.status).toBe(400)
+    expect(gitOps.commitAllChanges).not.toHaveBeenCalled()
+  })
+
+  it('returns 404 when the workspace does not exist', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(undefined)
+    const res = await app.request('/api/workspaces/nope/git/commit-all', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: 'chore: snapshot' }),
+    })
+    expect(res.status).toBe(404)
+    expect(gitOps.commitAllChanges).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /:id/git/discard', () => {
+  beforeEach(() => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+  })
+
+  it('discards working-tree changes and returns success', async () => {
+    vi.mocked(gitOps.discardWorkingTreeChanges).mockReturnValue(undefined)
+    const res = await app.request('/api/workspaces/ws-1/git/discard', { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect(gitOps.discardWorkingTreeChanges).toHaveBeenCalledWith(fakeWorkspace.worktreePath)
+  })
+
+  it('returns 404 when the workspace does not exist', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(undefined)
+    const res = await app.request('/api/workspaces/nope/git/discard', { method: 'POST' })
+    expect(res.status).toBe(404)
   })
 })

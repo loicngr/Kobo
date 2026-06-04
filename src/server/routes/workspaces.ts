@@ -2868,13 +2868,17 @@ app.post('/:id/rebase', (c) => {
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
 
+    const autostash = c.req.query('autostash') === '1'
     const worktreePath = workspace.worktreePath
-    gitOps.rebaseBranch(worktreePath, workspace.sourceBranch)
+    gitOps.rebaseBranch(worktreePath, workspace.sourceBranch, { autostash })
 
     return c.json({ success: true })
   } catch (err) {
     if (err instanceof gitOps.GitConflictError) {
       return c.json({ error: err.message, conflict: true, operation: err.operation, files: err.files }, 409)
+    }
+    if (err instanceof gitOps.DirtyWorktreeError) {
+      return c.json({ error: err.message, code: 'dirty_worktree', operation: err.operation, status: err.status }, 409)
     }
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
@@ -2888,13 +2892,17 @@ app.post('/:id/merge', (c) => {
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
 
+    const autostash = c.req.query('autostash') === '1'
     const worktreePath = workspace.worktreePath
-    gitOps.mergeBranch(worktreePath, workspace.sourceBranch)
+    gitOps.mergeBranch(worktreePath, workspace.sourceBranch, { autostash })
 
     return c.json({ success: true })
   } catch (err) {
     if (err instanceof gitOps.GitConflictError) {
       return c.json({ error: err.message, conflict: true, operation: err.operation, files: err.files }, 409)
+    }
+    if (err instanceof gitOps.DirtyWorktreeError) {
+      return c.json({ error: err.message, code: 'dirty_worktree', operation: err.operation, status: err.status }, 409)
     }
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
@@ -2911,6 +2919,40 @@ app.post('/:id/git/abort', (c) => {
     const worktreePath = workspace.worktreePath
     const aborted = gitOps.abortOngoingGitOperation(worktreePath)
     return c.json({ success: true, aborted })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+/** Stage + commit all working-tree changes (recovery action for a dirty rebase/merge). */
+app.post('/:id/git/commit-all', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const body = (await c.req.json().catch(() => ({}))) as { message?: unknown }
+    const message = typeof body.message === 'string' ? body.message.trim() : ''
+    if (!message) return c.json({ error: 'Commit message is required' }, 400)
+
+    gitOps.commitAllChanges(workspace.worktreePath, message)
+    return c.json({ success: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+/** Discard working-tree changes (destructive recovery action for a dirty rebase/merge). */
+app.post('/:id/git/discard', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    gitOps.discardWorkingTreeChanges(workspace.worktreePath)
+    return c.json({ success: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)

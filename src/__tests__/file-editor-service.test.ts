@@ -1,6 +1,6 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { saveWorkspaceFile, shaOf } from '../server/services/file-editor-service.js'
 
@@ -50,6 +50,13 @@ describe('saveWorkspaceFile', () => {
 
   it('throws on a path that escapes the worktree via `..`', () => {
     expect(() => saveWorkspaceFile(worktree, '../../etc/passwd', 'x', shaOf(''))).toThrow(/escapes the worktree/i)
+  })
+
+  it('throws on a sibling directory whose name shares the worktree prefix', () => {
+    // `/tmp/wt` must NOT treat `/tmp/wt-evil` as inside it — this is exactly
+    // what the `+ path.sep` boundary in the lexical containment check guards.
+    const escapePath = `../${basename(worktree)}-evil/pwned.txt`
+    expect(() => saveWorkspaceFile(worktree, escapePath, 'x', shaOf(''))).toThrow(/escapes the worktree/i)
   })
 
   it('throws on a symlink that points outside the worktree', () => {
