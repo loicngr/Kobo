@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -7,6 +8,10 @@ import type { UsageBucket, UsageProvider, UsageSnapshot } from '../types.js'
 const API_URL = 'https://api.anthropic.com/api/oauth/usage'
 const BETA_HEADER = 'oauth-2025-04-20'
 const FETCH_TIMEOUT_MS = 10_000
+// macOS stores the Claude Code OAuth credentials in the login Keychain under
+// this service name, as the JSON we'd otherwise read from .credentials.json.
+const KEYCHAIN_SERVICE = 'Claude Code-credentials'
+const KEYCHAIN_TIMEOUT_MS = 5_000
 
 interface ClaudeAiOauthCreds {
   claudeAiOauth?: { accessToken?: unknown }
@@ -27,15 +32,47 @@ function credentialsFilePath(): string {
   return path.join(dir, '.credentials.json')
 }
 
-async function readAccessToken(): Promise<string | null> {
+function parseAccessToken(raw: string): string | null {
   try {
-    const raw = await fs.readFile(credentialsFilePath(), 'utf8')
     const parsed = JSON.parse(raw) as ClaudeAiOauthCreds
     const token = parsed?.claudeAiOauth?.accessToken
     return typeof token === 'string' && token.length > 0 ? token : null
   } catch {
     return null
   }
+}
+
+async function readTokenFromFile(): Promise<string | null> {
+  try {
+    return parseAccessToken(await fs.readFile(credentialsFilePath(), 'utf8'))
+  } catch {
+    return null
+  }
+}
+
+/**
+ * macOS keeps the Claude Code OAuth credentials in the login Keychain instead of
+ * `~/.claude/.credentials.json`. Read them via the `security` CLI. Best-effort:
+ * any failure — item absent, Keychain locked (e.g. a headless SSH session with
+ * no GUI to unlock it), or timeout — resolves to null so the caller falls back
+ * to the unauthenticated state and never hangs the usage poller.
+ */
+async function readTokenFromKeychain(): Promise<string | null> {
+  if (process.platform !== 'darwin') return null
+  return new Promise<string | null>((resolve) => {
+    execFile(
+      'security',
+      ['find-generic-password', '-s', KEYCHAIN_SERVICE, '-w'],
+      { timeout: KEYCHAIN_TIMEOUT_MS },
+      (err, stdout) => {
+        resolve(err ? null : parseAccessToken(stdout))
+      },
+    )
+  })
+}
+
+async function readAccessToken(): Promise<string | null> {
+  return (await readTokenFromFile()) ?? (await readTokenFromKeychain())
 }
 
 function mapBucket(id: 'five_hour' | 'seven_day', raw: UsageBucketResponse | undefined): UsageBucket {

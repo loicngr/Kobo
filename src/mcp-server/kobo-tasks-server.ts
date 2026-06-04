@@ -246,6 +246,22 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       annotations: { destructiveHint: false, openWorldHint: false },
     },
     {
+      name: 'set_workspace_name',
+      description:
+        'Rename THIS workspace — sets the `name` shown in the sidebar and window title. Call this ONLY when the user explicitly asks you to rename the workspace — never rename it on your own initiative. Whitespace is collapsed and trimmed; the name cannot be empty and is capped at the configured max length. Distinct from `agent_description` (the one-line status summary) and from the user-controlled `description`. The current value is in get_workspace_info as `name`.',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          name: {
+            type: 'string',
+            description: 'New workspace name. Non-empty after trimming; control characters are stripped.',
+          },
+        },
+        required: ['name'],
+      },
+      annotations: { destructiveHint: false, openWorldHint: false },
+    },
+    {
       name: 'cron_create',
       description:
         'Schedule a recurring trigger on THIS workspace. At each fire, Kōbō waits for the workspace to be idle (no active session) and then resumes the same conversation by injecting `prompt` as the next user message — same UX as `schedule_wakeup` but recurring. Skip-if-active: if a session is already running when the timer fires, that occurrence is skipped, the next occurrence is computed, and the cron continues. The cron persists across server restarts (skip-missed semantics on boot — no catchup spam). Delete with `cron_delete(id)`. Multiple crons per workspace are allowed.',
@@ -584,6 +600,19 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         void notifyAgentDescriptionUpdated()
       }
       return ok(result)
+    }
+
+    if (name === 'set_workspace_name') {
+      const newName = a.name as string | undefined
+      if (typeof newName !== 'string' || !newName.trim()) return fail('name parameter is required (non-empty)')
+      try {
+        const updated = (await backendRequest('PATCH', `/api/workspaces/${workspaceId}`, { name: newName })) as {
+          name?: string
+        }
+        return ok({ ok: true, name: updated.name ?? newName.trim() })
+      } catch (err) {
+        return fail(err instanceof Error ? err.message : String(err))
+      }
     }
 
     if (name === 'cron_create') {

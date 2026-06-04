@@ -779,6 +779,55 @@ export function getFileAtRef(repoPath: string, ref: string, filePath: string): s
   }
 }
 
+/** Git's canonical empty-tree object. Used as the diff base for a root commit
+ *  (no parent), so it renders as all-added rather than erroring. */
+export const EMPTY_TREE_SHA = '4b825dc642cb6eb9a060e54bf8d69288fbee4904'
+
+/** True if `ref` resolves to a commit in the repo (SHA, `<sha>^`, `origin/<branch>`…). */
+export function commitExists(repoPath: string, ref: string): boolean {
+  try {
+    execFileSync('git', ['rev-parse', '--verify', '--quiet', `${ref}^{commit}`], {
+      cwd: repoPath,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * List files changed between two commits, two-dot `fromRef..toRef` (the patch
+ * that turns `fromRef` into `toRef`). Committed history only — no working-tree
+ * or untracked entries (this is a historical diff). Same `DiffFile` shape as
+ * `getChangedFiles`. Refs are used verbatim (caller resolves/validates them).
+ */
+export function getChangedFilesBetween(repoPath: string, fromRef: string, toRef: string): DiffFile[] {
+  const files: DiffFile[] = []
+  try {
+    const output = git(repoPath, ['diff', '--name-status', `${fromRef}..${toRef}`])
+    for (const line of output.split('\n')) {
+      if (!line) continue
+      const [statusCode, ...pathParts] = line.split('\t')
+      if (!statusCode || pathParts.length === 0) continue
+      const filePath =
+        (statusCode.startsWith('R') || statusCode.startsWith('C')
+          ? pathParts[pathParts.length - 1]
+          : pathParts[0]
+        )?.replace(/\/$/, '') ?? ''
+      if (!filePath) continue
+      let status: DiffFile['status'] = 'modified'
+      if (statusCode.startsWith('A')) status = 'added'
+      else if (statusCode.startsWith('D')) status = 'deleted'
+      else if (statusCode.startsWith('R')) status = 'renamed'
+      files.push({ path: filePath, status })
+    }
+  } catch {
+    // invalid refs / no diff → empty list
+  }
+  return files
+}
+
 /** Which baseline a `rollbackFile` operation reset the file to. */
 export type RollbackTarget = 'remote' | 'head' | 'deleted'
 

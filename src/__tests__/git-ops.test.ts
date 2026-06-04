@@ -6,14 +6,17 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
   BranchAlreadyExistsError,
   commitAllChanges,
+  commitExists,
   createBranch,
   DirtyWorktreeError,
   deleteLocalBranch,
   deleteRemoteBranch,
   discardWorkingTreeChanges,
+  EMPTY_TREE_SHA,
   fetchSourceBranch,
   fetchSourceBranchAsync,
   getChangedFiles,
+  getChangedFilesBetween,
   getCommitCount,
   getCommitsBehind,
   getCommitsBetween,
@@ -1129,6 +1132,69 @@ describe('discardWorkingTreeChanges', () => {
 
     expect(readFileSync(path.join(repo, 'a.txt'), 'utf-8')).toBe('committed\n') // reverted
     expect(readFileSync(path.join(repo, 'untracked.txt'), 'utf-8')).toBe('keep me\n') // preserved
+    rmSync(repo, { recursive: true, force: true })
+  })
+})
+
+describe('getChangedFilesBetween + commitExists', () => {
+  // repo with 3 commits: A=add a.txt; B=modify a.txt + add b.txt; C=delete b.txt
+  function buildRepo(): { repo: string; a: string; b: string; c: string } {
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-between-'))
+    const g = (args: string[]) => execFileSync('git', args, { cwd: repo, encoding: 'utf-8' })
+    g(['init', '-b', 'main'])
+    g(['config', 'user.email', 'test@test.com'])
+    g(['config', 'user.name', 'test'])
+    writeFileSync(path.join(repo, 'a.txt'), 'v1\n')
+    g(['add', '.'])
+    g(['commit', '-m', 'A'])
+    const a = g(['rev-parse', 'HEAD']).trim()
+    writeFileSync(path.join(repo, 'a.txt'), 'v2\n')
+    writeFileSync(path.join(repo, 'b.txt'), 'b\n')
+    g(['add', '.'])
+    g(['commit', '-m', 'B'])
+    const b = g(['rev-parse', 'HEAD']).trim()
+    g(['rm', 'b.txt'])
+    g(['commit', '-m', 'C'])
+    const c = g(['rev-parse', 'HEAD']).trim()
+    return { repo, a, b, c }
+  }
+
+  it('reports added + modified between A and B (two-dot)', () => {
+    const { repo, a, b } = buildRepo()
+    const files = getChangedFilesBetween(repo, a, b)
+    expect(files.find((f) => f.path === 'a.txt')?.status).toBe('modified')
+    expect(files.find((f) => f.path === 'b.txt')?.status).toBe('added')
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('reports deleted between B and C', () => {
+    const { repo, b, c } = buildRepo()
+    const files = getChangedFilesBetween(repo, b, c)
+    expect(files.find((f) => f.path === 'b.txt')?.status).toBe('deleted')
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('A..C nets out the added-then-deleted file (two-dot semantics)', () => {
+    const { repo, a, c } = buildRepo()
+    const files = getChangedFilesBetween(repo, a, c)
+    expect(files.find((f) => f.path === 'a.txt')?.status).toBe('modified')
+    expect(files.find((f) => f.path === 'b.txt')).toBeUndefined()
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('commitExists resolves SHAs and parents, rejects bogus refs', () => {
+    const { repo, a, b } = buildRepo()
+    expect(commitExists(repo, b)).toBe(true)
+    expect(commitExists(repo, `${b}^`)).toBe(true) // parent of B = A
+    expect(commitExists(repo, 'deadbeefdeadbeef')).toBe(false)
+    expect(commitExists(repo, `${a}^`)).toBe(false) // A is the root, no parent
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('EMPTY_TREE_SHA diffs a root commit as all-added', () => {
+    const { repo, a } = buildRepo()
+    const files = getChangedFilesBetween(repo, EMPTY_TREE_SHA, a)
+    expect(files.find((f) => f.path === 'a.txt')?.status).toBe('added')
     rmSync(repo, { recursive: true, force: true })
   })
 })

@@ -714,7 +714,8 @@ app.post('/', migrationGuard, async (c) => {
         brainstormPrompt += `\nAcceptance criteria:\n${criteria.map((t) => `- [${t.status === 'done' ? 'x' : ' '}] ${t.title}`).join('\n')}\n`
       }
 
-      brainstormPrompt += `\nYou have access to MCP tools via the 'kobo-tasks' server:\n`
+      brainstormPrompt += `\nYou have access to MCP tools via the 'kobo-tasks' server. The bullets below are the main ones — your full kobo__ toolset is larger and is listed in your available tools; consult that list for the rest (dev-server control, search_codebase, documents, settings, session usage, …):\n`
+      brainstormPrompt += `- kobo__set_workspace_name(name) — rename THIS workspace (the title shown in the sidebar). Call this ONLY when the user explicitly asks you to rename the workspace — never on your own initiative. Whitespace-trimmed, non-empty; distinct from agent_description.\n`
       if (criteria.length > 0 || todos.length > 0) {
         brainstormPrompt += `- list_tasks() — list all tasks and criteria with their IDs and current status\n`
         brainstormPrompt += `- mark_task_done(task_id) — mark a task or criterion as done\n`
@@ -727,6 +728,9 @@ app.post('/', migrationGuard, async (c) => {
       brainstormPrompt += `- kobo__cron_create(expression, prompt, label?, mode?, oneShot?) — schedule a (recurring or one-shot) trigger on THIS workspace. At each fire Kōbō waits for the workspace to be idle and then injects \`prompt\` as the next user message. \`expression\` is a standard 5-field cron (\`min hour dom month dow\`) or a helper (\`@hourly\`, \`@daily\`, \`@weekly\`, \`@monthly\`, \`@yearly\`). Examples: \`*/30 * * * *\` = every 30 min; \`0 9 * * 1\` = every Monday at 9am; \`0 14 7 6 *\` = 7 June at 14:00. \`mode\` is \`'resume'\` (default — every fire continues the SAME conversation that scheduled the cron, so you can chain follow-ups) or \`'fresh'\` (every fire starts a brand-new session with a clean context, ideal for periodic checks like CI watch). \`oneShot\` (default false): when true, the cron cancels itself after the first real fire — use this to trigger once at a specific time without recurring. Skip-if-active: occurrences fired while a session is running are skipped, the next is computed, and the cron continues. Persists across restarts. Returns a cron \`id\`.\n`
       brainstormPrompt += `- kobo__cron_delete(id) — cancel a previously-armed cron by id (idempotent).\n`
       brainstormPrompt += `- kobo__cron_list() — list every cron currently armed on THIS workspace, with their next/last fire times.\n`
+      brainstormPrompt += `- kobo__schedule_wakeup(delaySeconds, prompt, label?) — schedule a one-off follow-up turn on THIS workspace after a delay. End your turn normally; once the workspace is idle, Kōbō waits delaySeconds (clamped 60..21600 = 1min..6h) then resumes this same conversation by injecting prompt as your next message. Replaces any previously pending wakeup. Prefer this over the built-in ScheduleWakeup tool.\n`
+      brainstormPrompt += `- kobo__cancel_wakeup() — cancel the pending wakeup on this workspace (idempotent).\n`
+      brainstormPrompt += `\nForeground & waking yourself: you run in the FOREGROUND of an interactive session — do your work within the current turn. When a turn ends the workspace goes idle and NOTHING re-invokes you on its own: a background task or detached process finishing does not wake you. To wait for something (CI, a long build/install, a scheduled re-check) and continue later, schedule your own wake-up with kobo__schedule_wakeup (one-off delay) or kobo__cron_create (recurring/scheduled), then end the turn — Kōbō re-invokes you with your prompt when it fires.\n`
 
       if (effectiveSettings.gitConventions) {
         brainstormPrompt += `\n# Git conventions\nIMPORTANT: Before any git operation (commit, branch, rebase, merge, push), read and apply the conventions defined in \`.ai/.git-conventions.md\`. They are project-specific and override any default behavior. Re-read this file if you're unsure or if context was compacted.\n`
@@ -2473,7 +2477,8 @@ app.get('/:id/git-stats', async (c) => {
 app.get('/:id/diff', async (c) => {
   try {
     const id = c.req.param('id')
-    const mode = c.req.query('mode') === 'unpushed' ? 'unpushed' : 'branch'
+    const rawMode = c.req.query('mode')
+    const mode = rawMode === 'unpushed' ? 'unpushed' : rawMode === 'commits' ? 'commits' : 'branch'
     // Opt-in flag from the diff viewer toggle. Only meaningful in `branch`
     // mode — `unpushed` is committed-only by definition.
     const includeUntracked = c.req.query('includeUntracked') === '1'
@@ -2483,6 +2488,27 @@ app.get('/:id/diff', async (c) => {
     }
 
     const worktreePath = workspace.worktreePath
+
+    if (mode === 'commits') {
+      const from = c.req.query('from')
+      const to = c.req.query('to')
+      if (!from || !to) {
+        return c.json({ error: 'mode=commits requires from and to query params' }, 400)
+      }
+      if (!gitOps.commitExists(worktreePath, to)) {
+        return c.json({ error: `Invalid commit ref '${to}'` }, 400)
+      }
+      // `to` is strict (400 above). `from` is intentionally lenient: any ref it
+      // can't resolve falls back to the empty tree (renders as all-added). The
+      // only unresolved `from` the UI ever sends is a root commit's `<sha>^`
+      // (single-commit diff of the first commit); the compare dialog otherwise
+      // only offers refs that resolve.
+      const fromRef = gitOps.commitExists(worktreePath, from) ? from : gitOps.EMPTY_TREE_SHA
+      const files = gitOps.getChangedFilesBetween(worktreePath, fromRef, to)
+      c.header('Cache-Control', 'no-store')
+      return c.json({ files, mode: 'commits', from: fromRef, to })
+    }
+
     // Sync fetch in `branch` mode so the diff reflects upstream's HEAD, not a
     // stale local copy of the source branch. Best-effort: a failed fetch
     // (offline, no remote configured) still returns the diff against whatever
@@ -2528,6 +2554,32 @@ app.get('/:id/diff-file', (c) => {
     }
 
     const worktreePath = workspace.worktreePath
+
+    if (c.req.query('mode') === 'commits') {
+      const from = c.req.query('from')
+      const to = c.req.query('to')
+      if (!from || !to) {
+        return c.json({ error: 'mode=commits requires from and to query params' }, 400)
+      }
+      if (!gitOps.commitExists(worktreePath, to)) {
+        return c.json({ error: `Invalid commit ref '${to}'` }, 400)
+      }
+      // `from` is lenient (empty-tree fallback) for a root commit's `<sha>^` —
+      // see the matching note in the `/diff` commits branch above.
+      const fromRef = gitOps.commitExists(worktreePath, from) ? from : gitOps.EMPTY_TREE_SHA
+      const original = gitOps.getFileAtRef(worktreePath, fromRef, filePath)
+      const modified = gitOps.getFileAtRef(worktreePath, to, filePath)
+      c.header('Cache-Control', 'no-store')
+      return c.json({
+        original: original ?? '',
+        modified: modified ?? '',
+        filePath,
+        mode: 'commits',
+        from: fromRef,
+        to,
+      })
+    }
+
     const baseRef = mode === 'unpushed' ? `origin/${workspace.workingBranch}` : workspace.sourceBranch
     const original = gitOps.getFileAtRef(worktreePath, baseRef, filePath)
     const modified = gitOps.getFileContent(worktreePath, filePath)

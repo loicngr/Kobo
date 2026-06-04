@@ -118,6 +118,18 @@
 
         <!-- Commit list expand — kept inside the sub-card, below the stats row -->
         <div v-if="showCommits" class="commit-list q-mt-sm">
+          <div v-if="commits.length > 0" class="row justify-end q-mb-xs">
+            <q-btn
+              flat
+              dense
+              no-caps
+              size="sm"
+              icon="difference"
+              color="grey-5"
+              :label="$t('git.compareCommits')"
+              @click="showCompareDialog = true"
+            />
+          </div>
           <div v-if="loadingCommits" class="text-caption text-grey-6 q-pa-xs">
             <q-spinner size="xs" class="q-mr-xs" />{{ $t('git.commits.loading') }}
           </div>
@@ -139,6 +151,18 @@
               />
               <span class="commit-sha text-grey-5">{{ commit.shortSha }}</span>
               <span class="commit-subject text-grey-4 ellipsis q-ml-sm">{{ commit.subject }}</span>
+              <q-btn
+                flat
+                dense
+                round
+                size="xs"
+                icon="difference"
+                color="grey-6"
+                class="commit-diff-btn q-ml-xs"
+                @click.stop="openCommitDiff(`${commit.sha}^`, commit.sha)"
+              >
+                <q-tooltip anchor="top middle" self="bottom middle">{{ $t('git.commits.diffThisCommit') }}</q-tooltip>
+              </q-btn>
               <q-tooltip anchor="top middle" self="bottom middle" class="commit-tooltip">
                 <div class="text-caption">
                   <div><code>{{ commit.sha }}</code></div>
@@ -534,10 +558,20 @@
         v-if="workspace"
         :workspace-id="workspace.id"
         :initial-review-mode="diffInitialReview"
+        :compare-from="compareFrom"
+        :compare-to="compareTo"
         @close="showDiff = false"
         @send-to-chat="onSendToChat"
       />
     </q-dialog>
+
+    <CompareCommitsDialog
+      v-if="workspace"
+      v-model="showCompareDialog"
+      :commits="commits"
+      :source-branch="workspace.sourceBranch"
+      @compare="onCompareConfirmed"
+    />
 
     <BranchDivergenceDialog
       v-if="workspace && gitStats"
@@ -566,6 +600,7 @@ import { useSettingsStore } from 'src/stores/settings'
 import type { BranchCommit, ForgeInfo, GitStats, Workspace } from 'src/stores/workspace'
 import { useWorkspaceStore, WorkspaceActionError } from 'src/stores/workspace'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import CompareCommitsDialog from './CompareCommitsDialog.vue'
 
 const props = defineProps<{
   workspace: Workspace | null
@@ -598,9 +633,27 @@ const showDiff = ref(false)
 // Whether to open the DiffViewer directly in Review mode. Set by the "Diff v2"
 // button; the regular "Diff" button keeps the user's persisted preference.
 const diffInitialReview = ref(false)
+const showCompareDialog = ref(false)
+const compareFrom = ref<string | undefined>(undefined)
+const compareTo = ref<string | undefined>(undefined)
+
 function openDiff(asReview: boolean) {
+  compareFrom.value = undefined
+  compareTo.value = undefined
   diffInitialReview.value = asReview
   showDiff.value = true
+}
+
+/** Open the DiffViewer in read-only commits mode for an explicit ref range. */
+function openCommitDiff(from: string, to: string) {
+  compareFrom.value = from
+  compareTo.value = to
+  diffInitialReview.value = false
+  showDiff.value = true
+}
+
+function onCompareConfirmed(payload: { from: string; to: string }) {
+  openCommitDiff(payload.from, payload.to)
 }
 const renamingBranch = ref(false)
 

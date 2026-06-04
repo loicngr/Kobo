@@ -44,7 +44,19 @@
         @click="onSaveClicked"
       />
       <q-space />
+      <q-chip
+        v-if="isCommitsMode"
+        dense
+        square
+        color="grey-9"
+        text-color="grey-4"
+        icon="difference"
+        class="q-mr-sm"
+      >
+        {{ compareLabel }} · {{ $t('diff.commitsReadOnly') }}
+      </q-chip>
       <q-btn-toggle
+        v-else
         v-model="diffMode"
         dense
         no-caps
@@ -240,7 +252,11 @@
                 class="q-ml-xs"
                 style="font-size: 9px;"
               />
-              <q-menu touch-position context-menu>
+              <!-- Rollback mutates the live worktree against the working branch.
+                   It must never be reachable in read-only commits mode (the
+                   displayed A↔B history has no relation to what would be rolled
+                   back) — gate it on canEdit, same guard as inline editing. -->
+              <q-menu v-if="canEdit" touch-position context-menu>
                 <q-list dense dark style="min-width: 220px;">
                   <q-item
                     clickable
@@ -336,6 +352,9 @@ const props = defineProps<{
   workspaceId: string
   /** When true, force-open in Review mode regardless of the persisted preference. */
   initialReviewMode?: boolean
+  /** Commits mode: when both are set, diff `compareFrom..compareTo` read-only. */
+  compareFrom?: string
+  compareTo?: string
 }>()
 
 const emit = defineEmits<{
@@ -345,6 +364,11 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 const $q = useQuasar()
+
+const isCommitsMode = computed(() => !!props.compareFrom && !!props.compareTo)
+const compareLabel = computed(() =>
+  isCommitsMode.value ? `${(props.compareFrom ?? '').slice(0, 7)} ↔ ${(props.compareTo ?? '').slice(0, 7)}` : '',
+)
 
 interface DiffFile {
   path: string
@@ -720,6 +744,7 @@ const savingFile = ref<boolean>(false)
 let modifiedModelDispose: (() => void) | null = null
 
 const canEdit = computed<boolean>(() => {
+  if (isCommitsMode.value) return false
   if (reviewMode.value !== 'inspect') return false
   const ws = workspaceStore.workspaces.find((w) => w.id === props.workspaceId)
   if (!ws) return false
@@ -783,8 +808,12 @@ const noFilterMatch = computed(() => {
 async function loadFiles() {
   loading.value = true
   try {
-    const params = new URLSearchParams({ mode: diffMode.value })
-    if (diffMode.value === 'branch' && includeUntracked.value) params.set('includeUntracked', '1')
+    const params = isCommitsMode.value
+      ? new URLSearchParams({ mode: 'commits', from: props.compareFrom!, to: props.compareTo! })
+      : new URLSearchParams({ mode: diffMode.value })
+    if (!isCommitsMode.value && diffMode.value === 'branch' && includeUntracked.value) {
+      params.set('includeUntracked', '1')
+    }
     const res = await fetch(`/api/workspaces/${props.workspaceId}/diff?${params}`, {
       cache: 'no-store',
     })
@@ -847,10 +876,10 @@ async function loadFileDiff(filePath: string) {
       })
     }
 
-    const res = await fetch(
-      `/api/workspaces/${props.workspaceId}/diff-file?path=${encodeURIComponent(filePath)}&mode=${diffMode.value}`,
-      { cache: 'no-store' },
-    )
+    const fileQuery = isCommitsMode.value
+      ? `path=${encodeURIComponent(filePath)}&mode=commits&from=${encodeURIComponent(props.compareFrom!)}&to=${encodeURIComponent(props.compareTo!)}`
+      : `path=${encodeURIComponent(filePath)}&mode=${diffMode.value}`
+    const res = await fetch(`/api/workspaces/${props.workspaceId}/diff-file?${fileQuery}`, { cache: 'no-store' })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = await res.json()
 
@@ -935,6 +964,11 @@ async function loadFileDiff(filePath: string) {
 }
 
 async function saveCurrentFile(): Promise<{ ok: true } | { ok: false; status: number; currentSha?: string }> {
+  // Belt-and-braces: commits mode is a read-only historical diff (canEdit is
+  // false, so this is already unreachable from the UI). Guard the save path
+  // itself so a future regression can never write a historical commit's
+  // content back into the worktree via the branch/unpushed save endpoint.
+  if (isCommitsMode.value) return { ok: false, status: 0 }
   if (!diffEditor) return { ok: false, status: 0 }
   const modifiedModel = diffEditor.getModel()?.modified
   if (!modifiedModel || !selectedFile.value) return { ok: false, status: 0 }

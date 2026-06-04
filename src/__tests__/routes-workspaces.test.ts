@@ -141,6 +141,9 @@ vi.mock('../server/utils/git-ops.js', () => ({
   getUnpushedCountAsync: vi.fn().mockResolvedValue(0),
   getWorkingTreeStatus: vi.fn().mockReturnValue({ staged: 0, modified: 0, untracked: 0 }),
   getChangedFiles: vi.fn().mockReturnValue([]),
+  getChangedFilesBetween: vi.fn().mockReturnValue([]),
+  commitExists: vi.fn().mockReturnValue(true),
+  EMPTY_TREE_SHA: '4b825dc642cb6eb9a060e54bf8d69288fbee4904',
   getUnpushedChangedFiles: vi.fn().mockReturnValue([]),
   listBranchCommits: vi.fn().mockReturnValue([]),
   listCommitsBehind: vi.fn().mockReturnValue([]),
@@ -5215,5 +5218,90 @@ describe('POST /:id/git/discard', () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(undefined)
     const res = await app.request('/api/workspaces/nope/git/discard', { method: 'POST' })
     expect(res.status).toBe(404)
+  })
+})
+
+describe('GET /:id/diff mode=commits', () => {
+  beforeEach(() => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(gitOps.commitExists).mockReturnValue(true)
+  })
+
+  it('returns the file list between two commits', async () => {
+    vi.mocked(gitOps.getChangedFilesBetween).mockReturnValue([{ path: 'a.txt', status: 'modified' }])
+    const res = await app.request('/api/workspaces/ws-1/diff?mode=commits&from=aaa&to=bbb')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.mode).toBe('commits')
+    expect(body.from).toBe('aaa')
+    expect(body.to).toBe('bbb')
+    expect(body.files).toEqual([{ path: 'a.txt', status: 'modified' }])
+    expect(gitOps.getChangedFilesBetween).toHaveBeenCalledWith(fakeWorkspace.worktreePath, 'aaa', 'bbb')
+  })
+
+  it('400 when from or to is missing', async () => {
+    const res = await app.request('/api/workspaces/ws-1/diff?mode=commits&from=aaa')
+    expect(res.status).toBe(400)
+  })
+
+  it('400 when the to ref is invalid', async () => {
+    vi.mocked(gitOps.commitExists).mockImplementation((_repo, ref) => ref !== 'bad')
+    const res = await app.request('/api/workspaces/ws-1/diff?mode=commits&from=aaa&to=bad')
+    expect(res.status).toBe(400)
+  })
+
+  it('falls back to the empty-tree base when from does not resolve (root commit)', async () => {
+    vi.mocked(gitOps.commitExists).mockImplementation((_repo, ref) => ref !== 'aaa^')
+    vi.mocked(gitOps.getChangedFilesBetween).mockReturnValue([{ path: 'a.txt', status: 'added' }])
+    const res = await app.request('/api/workspaces/ws-1/diff?mode=commits&from=aaa%5E&to=aaa')
+    expect(res.status).toBe(200)
+    expect(gitOps.getChangedFilesBetween).toHaveBeenCalledWith(
+      fakeWorkspace.worktreePath,
+      '4b825dc642cb6eb9a060e54bf8d69288fbee4904',
+      'aaa',
+    )
+  })
+})
+
+describe('GET /:id/diff-file mode=commits', () => {
+  beforeEach(() => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(gitOps.commitExists).mockReturnValue(true)
+  })
+
+  it('returns original/modified from each ref, no modifiedSha', async () => {
+    vi.mocked(gitOps.getFileAtRef).mockImplementation((_repo, ref) => (ref === 'aaa' ? 'old' : 'new'))
+    const res = await app.request('/api/workspaces/ws-1/diff-file?mode=commits&from=aaa&to=bbb&path=a.txt')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.original).toBe('old')
+    expect(body.modified).toBe('new')
+    expect(body.mode).toBe('commits')
+    expect(body.modifiedSha).toBeUndefined()
+    expect(gitOps.getFileAtRef).toHaveBeenCalledWith(fakeWorkspace.worktreePath, 'aaa', 'a.txt')
+    expect(gitOps.getFileAtRef).toHaveBeenCalledWith(fakeWorkspace.worktreePath, 'bbb', 'a.txt')
+  })
+
+  it('400 when from or to is missing', async () => {
+    const res = await app.request('/api/workspaces/ws-1/diff-file?mode=commits&to=bbb&path=a.txt')
+    expect(res.status).toBe(400)
+  })
+
+  it('400 when the to ref is invalid', async () => {
+    vi.mocked(gitOps.commitExists).mockImplementation((_repo, ref) => ref !== 'bad')
+    const res = await app.request('/api/workspaces/ws-1/diff-file?mode=commits&from=aaa&to=bad&path=a.txt')
+    expect(res.status).toBe(400)
+  })
+
+  it('falls back to the empty-tree base when from does not resolve (root commit)', async () => {
+    vi.mocked(gitOps.commitExists).mockImplementation((_repo, ref) => ref !== 'aaa^')
+    vi.mocked(gitOps.getFileAtRef).mockReturnValue('content')
+    const res = await app.request('/api/workspaces/ws-1/diff-file?mode=commits&from=aaa%5E&to=aaa&path=a.txt')
+    expect(res.status).toBe(200)
+    expect(gitOps.getFileAtRef).toHaveBeenCalledWith(
+      fakeWorkspace.worktreePath,
+      '4b825dc642cb6eb9a060e54bf8d69288fbee4904',
+      'a.txt',
+    )
   })
 })

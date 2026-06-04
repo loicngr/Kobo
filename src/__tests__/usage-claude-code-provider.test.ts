@@ -1,9 +1,12 @@
+import { execFile } from 'node:child_process'
 import { promises as fs } from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { createClaudeCodeProvider } from '../server/services/usage/providers/claude-code.js'
+
+vi.mock('node:child_process', () => ({ execFile: vi.fn() }))
 
 describe('claude-code usage provider', () => {
   let tmpDir: string
@@ -101,5 +104,64 @@ describe('claude-code usage provider', () => {
     const snap = await p.fetchSnapshot()
     expect(snap.status).toBe('error')
     expect(snap.errorMessage).toBe('ECONNREFUSED')
+  })
+
+  // macOS keeps the Claude Code OAuth token in the login Keychain, not in
+  // ~/.claude/.credentials.json (the beforeEach tmp dir has no creds file).
+  describe('macOS Keychain fallback', () => {
+    const KEYCHAIN_JSON = JSON.stringify({ claudeAiOauth: { accessToken: 'keychain-tok' } })
+    const originalPlatform = process.platform
+
+    function setPlatform(p: NodeJS.Platform): void {
+      Object.defineProperty(process, 'platform', { value: p, configurable: true })
+    }
+
+    afterEach(() => {
+      Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true })
+      vi.mocked(execFile).mockReset()
+    })
+
+    it('reads the token from the Keychain when the file is absent (darwin)', async () => {
+      setPlatform('darwin')
+      vi.mocked(execFile).mockImplementation(((
+        _cmd: string,
+        _args: readonly string[],
+        _opts: unknown,
+        cb: (e: Error | null, stdout: string) => void,
+      ) => {
+        cb(null, KEYCHAIN_JSON)
+        return {} as never
+      }) as never)
+      const p = createClaudeCodeProvider()
+      expect(await p.isAvailable()).toBe(true)
+      expect(execFile).toHaveBeenCalledWith(
+        'security',
+        ['find-generic-password', '-s', 'Claude Code-credentials', '-w'],
+        expect.objectContaining({ timeout: expect.any(Number) }),
+        expect.any(Function),
+      )
+    })
+
+    it('returns false when the Keychain lookup fails (graceful — locked / SSH / absent)', async () => {
+      setPlatform('darwin')
+      vi.mocked(execFile).mockImplementation(((
+        _cmd: string,
+        _args: readonly string[],
+        _opts: unknown,
+        cb: (e: Error | null, stdout: string) => void,
+      ) => {
+        cb(new Error('SecKeychainSearchCopyNext: item not found'), '')
+        return {} as never
+      }) as never)
+      const p = createClaudeCodeProvider()
+      expect(await p.isAvailable()).toBe(false)
+    })
+
+    it('does not consult the Keychain on non-darwin platforms', async () => {
+      setPlatform('linux')
+      const p = createClaudeCodeProvider()
+      expect(await p.isAvailable()).toBe(false)
+      expect(execFile).not.toHaveBeenCalled()
+    })
   })
 })

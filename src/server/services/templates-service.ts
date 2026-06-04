@@ -175,11 +175,18 @@ export const DEFAULT_TEMPLATES: readonly DefaultTemplate[] = [
       `3. **Auto-loop (opt-in)** — Kōbō re-spawns a fresh session per task; each iteration sees a clean context\n` +
       `4. **Completed / Archived** — the workspace freezes; the worktree stays available read-only\n\n` +
       `# Kōbō MCP tools (always namespaced \`kobo__…\`)\n` +
+      `These are the main tools — the full \`kobo__\` set is larger and is listed in your available tools; consult that list for the rest (dev-server, search_codebase, documents, settings, session usage…).\n` +
       `- \`kobo__list_tasks\` / \`create_task\` / \`update_task\` / \`mark_task_done\` / \`delete_task\` — manage the visible task list\n` +
       `- \`kobo__set_workspace_agent_description\` — short one-line summary shown in the sidebar; keep it current\n` +
+      `- \`kobo__set_workspace_name\` — rename this workspace (the sidebar title); ONLY when the user explicitly asks for a rename, never on your own\n` +
       `- \`kobo__get_workspace_info\` / \`kobo__get_git_info\` — read workspace metadata + git state\n` +
       `- \`kobo__cron_create\` / \`cron_delete\` / \`cron_list\` — schedule recurring or one-shot triggers on THIS workspace\n` +
+      `- \`kobo__schedule_wakeup\` / \`cancel_wakeup\` — pause now and resume this same session after a one-off delay\n` +
       `- \`kobo__mark_auto_loop_ready\` — flip the loop into auto-execution after grooming\n\n` +
+      `# Foreground & waking yourself\n` +
+      `- You run in the FOREGROUND of an interactive session — do your work within the current turn\n` +
+      `- When a turn ends the workspace goes idle; nothing re-invokes you automatically. A background task or detached process finishing does NOT wake you\n` +
+      `- To wait and continue later (CI, long build, scheduled check), schedule your own wake-up: \`kobo__schedule_wakeup\` (one-off delay) or \`kobo__cron_create\` (recurring), then end the turn\n\n` +
       `# Conventions\n` +
       `- \`CLAUDE.md\` / \`AGENTS.md\` at the project root override default behavior — read them first\n` +
       `- \`.ai/.git-conventions.md\` (when present) defines per-project commit / branch rules — apply them on every git op\n` +
