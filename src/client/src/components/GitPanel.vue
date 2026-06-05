@@ -102,12 +102,15 @@
           <!-- Working tree (only if dirty) -->
           <div
             v-if="gitStats.workingTree && (gitStats.workingTree.staged > 0 || gitStats.workingTree.modified > 0 || gitStats.workingTree.untracked > 0)"
-            class="row items-center"
+            class="row items-center cursor-pointer"
+            @click="toggleWorkingTreeFiles"
           >
             <q-icon name="edit_note" size="14px" color="grey-6" class="q-mr-xs" />
             <span v-if="gitStats.workingTree.staged > 0" style="color: #4ade80;">{{ gitStats.workingTree.staged }}s</span>
             <span v-if="gitStats.workingTree.modified > 0" class="q-ml-xs" style="color: #f59e0b;">{{ gitStats.workingTree.modified }}m</span>
             <span v-if="gitStats.workingTree.untracked > 0" class="q-ml-xs text-grey-6">{{ gitStats.workingTree.untracked }}u</span>
+            <q-spinner v-if="loadingWorkingTreeFiles" size="12px" color="indigo-4" class="q-ml-xs" />
+            <q-icon v-else :name="showWorkingTreeFiles ? 'expand_less' : 'expand_more'" size="14px" color="grey-6" class="q-ml-xs" />
             <q-tooltip>
               {{ $t('git.staged', { count: gitStats.workingTree.staged }) }} ·
               {{ $t('git.modified', { count: gitStats.workingTree.modified }) }} ·
@@ -173,6 +176,24 @@
                   </div>
                 </div>
               </q-tooltip>
+            </div>
+          </template>
+        </div>
+
+        <!-- Working-tree file list expand — kept inside the sub-card, below the commit list -->
+        <div v-if="showWorkingTreeFiles" class="commit-list q-mt-sm">
+          <div v-if="loadingWorkingTreeFiles" class="text-caption text-grey-6 q-pa-xs">
+            <q-spinner size="xs" class="q-mr-xs" />{{ $t('git.commits.loading') }}
+          </div>
+          <div v-else-if="workingTreeFiles.length === 0" class="text-caption text-grey-7 q-pa-xs">
+            {{ $t('git.workingTreeEmpty') }}
+          </div>
+          <template v-else>
+            <div v-for="file in workingTreeFiles" :key="file.path" class="commit-item row no-wrap items-center">
+              <span v-if="file.staged" style="color: #4ade80;" class="q-mr-xs">s<q-tooltip>{{ $t('git.fileStaged') }}</q-tooltip></span>
+              <span v-if="file.modified" style="color: #f59e0b;" class="q-mr-xs">m<q-tooltip>{{ $t('git.fileModified') }}</q-tooltip></span>
+              <span v-if="file.untracked" class="text-grey-6 q-mr-xs">u<q-tooltip>{{ $t('git.fileUntracked') }}</q-tooltip></span>
+              <span class="commit-subject text-grey-4 ellipsis" style="font-family: 'Roboto Mono', monospace;">{{ file.path }}</span>
             </div>
           </template>
         </div>
@@ -434,7 +455,11 @@
         <q-card-section>
           <div class="text-subtitle1 text-warning">
             <q-icon name="warning" class="q-mr-xs" />
-            {{ dirtyOperation === 'merge' ? $t('git.dirtyTitleMerge') : $t('git.dirtyTitleRebase') }}
+            {{ dirtyOperation === 'merge'
+              ? $t('git.dirtyTitleMerge')
+              : dirtyOperation === 'pull'
+                ? $t('git.dirtyTitlePull')
+                : $t('git.dirtyTitleRebase') }}
           </div>
           <div class="text-caption text-grey-6 q-mt-xs">
             {{ $t('git.dirtySubtitle', {
@@ -691,6 +716,38 @@ async function toggleCommits() {
   await fetchCommits()
 }
 
+interface WorkingTreeFile {
+  path: string
+  staged: boolean
+  modified: boolean
+  untracked: boolean
+}
+const showWorkingTreeFiles = ref(false)
+const loadingWorkingTreeFiles = ref(false)
+const workingTreeFiles = ref<WorkingTreeFile[]>([])
+
+async function fetchWorkingTreeFiles() {
+  if (!props.workspace) return
+  loadingWorkingTreeFiles.value = true
+  try {
+    const res = await fetch(`/api/workspaces/${props.workspace.id}/working-tree-files`, { cache: 'no-store' })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const body = (await res.json()) as { files: WorkingTreeFile[] }
+    workingTreeFiles.value = body.files
+  } catch (err) {
+    console.error('[GitPanel] fetchWorkingTreeFiles failed:', err)
+    workingTreeFiles.value = []
+  } finally {
+    loadingWorkingTreeFiles.value = false
+  }
+}
+
+function toggleWorkingTreeFiles() {
+  showWorkingTreeFiles.value = !showWorkingTreeFiles.value
+  if (!showWorkingTreeFiles.value) return
+  void fetchWorkingTreeFiles()
+}
+
 function appendCommitToChat(sha: string) {
   // Reuse the existing `chatDraft` mechanism — ChatInput.vue watches it and
   // appends to the textarea (preserving existing content). Reset happens there.
@@ -713,7 +770,7 @@ const conflictResolving = ref(false)
 
 // Dirty-worktree recovery dialog (rebase/merge refused by uncommitted changes)
 const dirtyDialog = ref(false)
-const dirtyOperation = ref<'rebase' | 'merge' | null>(null)
+const dirtyOperation = ref<'rebase' | 'merge' | 'pull' | null>(null)
 const dirtyStatus = ref<{ staged: number; modified: number; untracked: number } | null>(null)
 const dirtyBusy = ref(false)
 const dirtyCommitMode = ref(false)
@@ -882,6 +939,9 @@ watch(
       gitStats.value = null
       commits.value = []
       showCommits.value = false
+      showWorkingTreeFiles.value = false
+      workingTreeFiles.value = []
+      loadingWorkingTreeFiles.value = false
     }
     if (newId) {
       loadGitStats({ freshFetch: true })
@@ -1063,7 +1123,10 @@ function openConflictDialog(op: 'merge' | 'rebase' | 'cherry-pick', files: strin
   conflictDialog.value = true
 }
 
-function openDirtyDialog(op: 'rebase' | 'merge', status: { staged: number; modified: number; untracked: number }) {
+function openDirtyDialog(
+  op: 'rebase' | 'merge' | 'pull',
+  status: { staged: number; modified: number; untracked: number },
+) {
   dirtyOperation.value = op
   dirtyStatus.value = status
   dirtyCommitMode.value = false
@@ -1078,6 +1141,7 @@ function retryDirtyOperation(opts?: { autostash?: boolean }) {
   dirtyDialog.value = false
   if (op === 'rebase') void runRebase(opts)
   else if (op === 'merge') void runMerge(opts)
+  else if (op === 'pull') void runPull(opts)
 }
 
 function dirtyStash() {
@@ -1207,6 +1271,36 @@ async function confirmPush() {
   }
 }
 
+// Fetch directly (not via the store) so we can inspect the 409 `dirty_worktree`
+// body and route it to the recovery dialog — same shape as runRebase/runMerge.
+async function runPull(opts?: { autostash?: boolean }) {
+  if (!props.workspace) return
+  pulling.value = true
+  try {
+    const qs = opts?.autostash ? '?autostash=1' : ''
+    const res = await fetch(`/api/workspaces/${props.workspace.id}/pull${qs}`, { method: 'POST' })
+    if (res.status === 409) {
+      const data = await res.json()
+      if (data.code === 'dirty_worktree') {
+        openDirtyDialog('pull', data.status)
+        return
+      }
+    }
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error ?? t('git.pullFailed'))
+    }
+    $q.notify({ type: 'positive', message: t('git.branchPulled'), position: 'top' })
+    loadGitStats()
+  } catch (e) {
+    console.error('[GitPanel] pull failed:', e)
+    const msg = e instanceof Error ? e.message : t('git.pullFailed')
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+  } finally {
+    pulling.value = false
+  }
+}
+
 function handlePull() {
   if (!props.workspace) return
   $q.dialog({
@@ -1218,19 +1312,8 @@ function handlePull() {
     dark: true,
     cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
     ok: { flat: true, label: t('git.pull'), color: 'grey-5' },
-  }).onOk(async () => {
-    pulling.value = true
-    try {
-      await store.pullBranch(props.workspace!.id)
-      $q.notify({ type: 'positive', message: t('git.branchPulled'), position: 'top' })
-      loadGitStats()
-    } catch (e) {
-      console.error('[GitPanel] pullBranch failed:', e)
-      const msg = e instanceof Error ? e.message : t('git.pullFailed')
-      $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
-    } finally {
-      pulling.value = false
-    }
+  }).onOk(() => {
+    void runPull()
   })
 }
 

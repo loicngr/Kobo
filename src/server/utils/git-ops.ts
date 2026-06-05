@@ -174,10 +174,28 @@ export function fetchAllBranches(repoPath: string, remote = 'origin'): void {
   }
 }
 
-/** Pull the current branch from the remote using fast-forward only. */
-export function pullBranch(repoPath: string, branchName: string, remote = 'origin'): void {
+/** Pull the current branch from the remote using fast-forward only.
+ *  With `opts.autostash`, dirty changes are stashed/re-applied automatically.
+ *  Without it, a dirty tree (staged or modified tracked files) is refused up-front
+ *  with a `DirtyWorktreeError` — same recovery path rebase/merge offer — instead of
+ *  letting git fail with a localized message. Detected locale-independently. */
+export function pullBranch(
+  repoPath: string,
+  branchName: string,
+  remote = 'origin',
+  opts?: { autostash?: boolean },
+): void {
+  if (!opts?.autostash) {
+    const status = getWorkingTreeStatus(repoPath)
+    if (status.staged > 0 || status.modified > 0) {
+      throw new DirtyWorktreeError('pull', status)
+    }
+  }
   try {
-    git(repoPath, ['pull', '--ff-only', remote, branchName])
+    const args = ['pull', '--ff-only']
+    if (opts?.autostash) args.push('--autostash')
+    args.push(remote, branchName)
+    git(repoPath, args)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     throw new Error(`Failed to pull branch '${branchName}' from '${remote}': ${message}`)
@@ -202,9 +220,9 @@ export class GitConflictError extends Error {
  *  locale-independently from the working-tree status, never from git's
  *  localized error text. */
 export class DirtyWorktreeError extends Error {
-  readonly operation: 'rebase' | 'merge'
+  readonly operation: 'rebase' | 'merge' | 'pull'
   readonly status: WorkingTreeStatus
-  constructor(operation: 'rebase' | 'merge', status: WorkingTreeStatus) {
+  constructor(operation: 'rebase' | 'merge' | 'pull', status: WorkingTreeStatus) {
     super(`${operation} blocked by uncommitted changes`)
     this.name = 'DirtyWorktreeError'
     this.operation = operation
@@ -934,6 +952,44 @@ export function getWorkingTreeStatus(repoPath: string): WorkingTreeStatus {
     return { staged, modified, untracked }
   } catch {
     return { staged: 0, modified: 0, untracked: 0 }
+  }
+}
+
+/** A single uncommitted working-tree entry. `staged`/`modified` can both be true (porcelain `MM`). */
+export interface WorkingTreeFile {
+  path: string
+  staged: boolean
+  modified: boolean
+  untracked: boolean
+}
+
+/**
+ * List uncommitted working-tree files with their status, parsed from
+ * `git status --porcelain`. Same classification rule as getWorkingTreeStatus.
+ * For renames (porcelain `old -> new`) the NEW path is kept. Best-effort: [] on error.
+ */
+export function getWorkingTreeFiles(repoPath: string): WorkingTreeFile[] {
+  try {
+    const output = git(repoPath, ['status', '--porcelain'])
+    const files: WorkingTreeFile[] = []
+    for (const line of output.split('\n')) {
+      if (!line) continue
+      const x = line[0]
+      const y = line[1]
+      let filePath = line.slice(3)
+      const arrowIdx = filePath.indexOf(' -> ')
+      if (arrowIdx !== -1) filePath = filePath.slice(arrowIdx + 4)
+      const untracked = x === '?' && y === '?'
+      files.push({
+        path: filePath,
+        staged: !untracked && x !== ' ' && x !== '?',
+        modified: !untracked && y !== ' ' && y !== '?',
+        untracked,
+      })
+    }
+    return files
+  } catch {
+    return []
   }
 }
 

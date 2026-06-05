@@ -135,3 +135,43 @@ describe('useTemplatesStore', () => {
     })
   })
 })
+
+describe('defaultSlugs / isDefault', () => {
+  it('fetchTemplates stores defaultSlugs and isDefault reflects them', async () => {
+    vi.mocked(global.fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ templates: [fakeTemplate], defaultSlugs: ['review-quality'] }),
+    } as Response)
+    const store = useTemplatesStore()
+    await store.fetchTemplates()
+    expect(store.defaultSlugs).toEqual(['review-quality'])
+    expect(store.isDefault('review-quality')).toBe(true)
+    expect(store.isDefault('my-custom')).toBe(false)
+  })
+})
+
+describe('resetToDefault()', () => {
+  it('POSTs to reset-default and replaces the template in state', async () => {
+    const reset = { ...fakeTemplate, content: 'DEFAULT', updatedAt: '2026-06-05T00:00:00.000Z' }
+    const store = useTemplatesStore()
+    store.templates = [{ ...fakeTemplate, content: 'tampered' }]
+    vi.mocked(global.fetch).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ template: reset }),
+    } as Response)
+    const out = await store.resetToDefault('review-quality')
+    expect(global.fetch).toHaveBeenCalledWith('/api/templates/review-quality/reset-default', { method: 'POST' })
+    expect(out.content).toBe('DEFAULT')
+    expect(store.templates[0].content).toBe('DEFAULT')
+  })
+
+  it('throws on a non-ok response', async () => {
+    const store = useTemplatesStore()
+    vi.mocked(global.fetch).mockResolvedValueOnce({
+      ok: false,
+      status: 404,
+      json: async () => ({ error: 'nope' }),
+    } as Response)
+    await expect(store.resetToDefault('x')).rejects.toThrow('nope')
+  })
+})

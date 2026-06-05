@@ -25,6 +25,7 @@ import {
   getDiffStatsBetween,
   getStructuredDiffStatsBetween,
   getWorkingTreeDiffStats,
+  getWorkingTreeFiles,
   getWorkingTreeStatus,
   listBranchCommits,
   listBranches,
@@ -1092,6 +1093,50 @@ describe('mergeBranch dirty-worktree handling', () => {
   })
 })
 
+describe('pullBranch dirty-worktree handling', () => {
+  // origin/main == HEAD, so a bare `git pull --ff-only` is a no-op that would
+  // succeed even on a dirty tree. The block we want is therefore a pre-check on
+  // the working-tree status — same recovery path rebase/merge already offer.
+  function setupRepoWithOrigin(): { repo: string; bare: string } {
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-dirty-pull-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+    writeFileSync(path.join(repo, 'file.txt'), 'committed\n')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: repo })
+    const bare = mkdtempSync(path.join(tmpdir(), 'at-dirty-pull-bare-'))
+    execFileSync('git', ['init', '--bare'], { cwd: bare })
+    execFileSync('git', ['remote', 'add', 'origin', bare], { cwd: repo })
+    execFileSync('git', ['push', '-u', 'origin', 'main'], { cwd: repo })
+    return { repo, bare }
+  }
+
+  it('throws DirtyWorktreeError with operation "pull" when the tree is dirty', () => {
+    const { repo, bare } = setupRepoWithOrigin()
+    writeFileSync(path.join(repo, 'file.txt'), 'uncommitted edit\n') // dirty tracked file
+    let caught: unknown
+    try {
+      pullBranch(repo, 'main')
+    } catch (e) {
+      caught = e
+    }
+    expect(caught).toBeInstanceOf(DirtyWorktreeError)
+    expect((caught as DirtyWorktreeError).operation).toBe('pull')
+    expect((caught as DirtyWorktreeError).status.modified).toBe(1)
+    rmSync(repo, { recursive: true, force: true })
+    rmSync(bare, { recursive: true, force: true })
+  })
+
+  it('does not block on a clean tree with only untracked files', () => {
+    const { repo, bare } = setupRepoWithOrigin()
+    writeFileSync(path.join(repo, 'untracked.txt'), 'new\n') // untracked, never added
+    expect(() => pullBranch(repo, 'main')).not.toThrow()
+    rmSync(repo, { recursive: true, force: true })
+    rmSync(bare, { recursive: true, force: true })
+  })
+})
+
 describe('commitAllChanges', () => {
   it('stages everything and commits, leaving a clean tree', () => {
     const repo = mkdtempSync(path.join(tmpdir(), 'at-commit-all-'))
@@ -1195,6 +1240,66 @@ describe('getChangedFilesBetween + commitExists', () => {
     const { repo, a } = buildRepo()
     const files = getChangedFilesBetween(repo, EMPTY_TREE_SHA, a)
     expect(files.find((f) => f.path === 'a.txt')?.status).toBe('added')
+    rmSync(repo, { recursive: true, force: true })
+  })
+})
+
+describe('getWorkingTreeFiles', () => {
+  it('lists staged-only, modified-only, both (MM), and untracked with correct flags', () => {
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-wt-files-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+    writeFileSync(path.join(repo, 'a.txt'), 'a1\n')
+    writeFileSync(path.join(repo, 'b.txt'), 'b1\n')
+    writeFileSync(path.join(repo, 'c.txt'), 'c1\n')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: repo })
+
+    writeFileSync(path.join(repo, 'a.txt'), 'a2\n')
+    execFileSync('git', ['add', 'a.txt'], { cwd: repo })
+    writeFileSync(path.join(repo, 'b.txt'), 'b2\n')
+    writeFileSync(path.join(repo, 'c.txt'), 'c2\n')
+    execFileSync('git', ['add', 'c.txt'], { cwd: repo })
+    writeFileSync(path.join(repo, 'c.txt'), 'c3\n')
+    writeFileSync(path.join(repo, 'd.txt'), 'd1\n')
+
+    const files = getWorkingTreeFiles(repo)
+    const byPath = Object.fromEntries(files.map((f) => [f.path, f]))
+    expect(byPath['a.txt']).toEqual({ path: 'a.txt', staged: true, modified: false, untracked: false })
+    expect(byPath['b.txt']).toEqual({ path: 'b.txt', staged: false, modified: true, untracked: false })
+    expect(byPath['c.txt']).toEqual({ path: 'c.txt', staged: true, modified: true, untracked: false })
+    expect(byPath['d.txt']).toEqual({ path: 'd.txt', staged: false, modified: false, untracked: true })
+
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('returns the NEW path for a renamed file', () => {
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-wt-rename-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+    writeFileSync(path.join(repo, 'old.txt'), 'content\n')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: repo })
+    execFileSync('git', ['mv', 'old.txt', 'new.txt'], { cwd: repo })
+
+    const paths = getWorkingTreeFiles(repo).map((f) => f.path)
+    expect(paths).toContain('new.txt')
+    expect(paths.some((p) => p.includes(' -> '))).toBe(false)
+
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('returns [] for a clean tree', () => {
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-wt-clean-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+    writeFileSync(path.join(repo, 'a.txt'), 'a\n')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: repo })
+    expect(getWorkingTreeFiles(repo)).toEqual([])
     rmSync(repo, { recursive: true, force: true })
   })
 })

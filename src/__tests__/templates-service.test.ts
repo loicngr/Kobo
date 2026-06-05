@@ -222,6 +222,45 @@ describe('templates-service', () => {
     })
   })
 
+  describe('getDefaultTemplateSlugs()', () => {
+    it('returns the slugs of every default template', async () => {
+      const { getDefaultTemplateSlugs } = await import('../server/services/templates-service.js')
+      const slugs = getDefaultTemplateSlugs()
+      expect(slugs).toContain('kobo-context')
+      expect(slugs).toContain('review-quality')
+      expect(slugs.length).toBe(11)
+    })
+  })
+
+  describe('resetTemplateToDefault()', () => {
+    it('rewrites content + description back to the default, keeping createdAt', async () => {
+      const svc = await import('../server/services/templates-service.js')
+      svc.updateTemplate('kobo-context', { content: 'tampered', description: 'tampered' })
+      const before = svc.listTemplates().find((t) => t.slug === 'kobo-context')!
+      const reset = svc.resetTemplateToDefault('kobo-context')
+      expect(reset).not.toBeNull()
+      expect(reset!.content).not.toBe('tampered')
+      expect(reset!.content).toContain('Kōbō workspace')
+      expect(reset!.description).toBe("Onboard the agent on Kōbō's core concepts and tools")
+      expect(reset!.createdAt).toBe(before.createdAt)
+    })
+
+    it('returns null when the slug is not a default template', async () => {
+      const svc = await import('../server/services/templates-service.js')
+      svc.createTemplate({ slug: 'my-custom', description: 'mine', content: 'hello' })
+      expect(svc.resetTemplateToDefault('my-custom')).toBeNull()
+    })
+
+    it('recreates the template if it had been deleted', async () => {
+      const svc = await import('../server/services/templates-service.js')
+      svc.deleteTemplate('explain')
+      expect(svc.listTemplates().some((t) => t.slug === 'explain')).toBe(false)
+      const reset = svc.resetTemplateToDefault('explain')
+      expect(reset).not.toBeNull()
+      expect(svc.listTemplates().some((t) => t.slug === 'explain')).toBe(true)
+    })
+  })
+
   describe('replaceAllTemplates()', () => {
     it('accepts a valid array and replaces all templates atomically', async () => {
       const { replaceAllTemplates, listTemplates } = await import('../server/services/templates-service.js')

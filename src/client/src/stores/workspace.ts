@@ -824,14 +824,6 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
-    async pullBranch(id: string): Promise<void> {
-      const res = await fetch(`/api/workspaces/${id}/pull`, { method: 'POST' })
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({ error: 'Pull failed' }))
-        throw new WorkspaceActionError(err.error ?? 'Pull failed', err.code)
-      }
-    },
-
     async fetchGitStats(id: string, opts: { freshFetch?: boolean; signal?: AbortSignal } = {}): Promise<GitStats> {
       const url = `/api/workspaces/${id}/git-stats${opts.freshFetch ? '?freshFetch=1' : ''}`
       const res = await fetch(url, { signal: opts.signal })

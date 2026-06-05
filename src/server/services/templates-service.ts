@@ -91,6 +91,34 @@ export function deleteTemplate(slug: string): boolean {
   return true
 }
 
+/** Slugs of every built-in default template (used to show the reset action). */
+export function getDefaultTemplateSlugs(): string[] {
+  return DEFAULT_TEMPLATES.map((t) => t.slug)
+}
+
+/**
+ * Reset a default template back to its built-in content/description. Returns the
+ * updated template, or null if `slug` is not a default template. Recreates the
+ * row if it had been deleted.
+ */
+export function resetTemplateToDefault(slug: string): Template | null {
+  const def = DEFAULT_TEMPLATES.find((d) => d.slug === slug)
+  if (!def) return null
+  const templates = listTemplates()
+  const now = new Date().toISOString()
+  const idx = templates.findIndex((t) => t.slug === slug)
+  let result: Template
+  if (idx >= 0) {
+    result = { ...templates[idx], description: def.description, content: def.content, updatedAt: now }
+    templates[idx] = result
+  } else {
+    result = { ...def, createdAt: now, updatedAt: now }
+    templates.push(result)
+  }
+  writeTemplates(templates)
+  return result
+}
+
 // ── Internals ──────────────────────────────────────────────────────────────
 
 function validateTemplateInput(input: { slug: string; description: string; content: string }): void {

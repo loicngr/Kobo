@@ -2690,6 +2690,20 @@ app.get('/:id/commits', async (c) => {
   }
 })
 
+// GET /:id/working-tree-files — list uncommitted working-tree files (read-only)
+app.get('/:id/working-tree-files', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    const files = gitOps.getWorkingTreeFiles(workspace.worktreePath)
+    return c.json({ files })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
 // POST /api/workspaces/:id/rename-branch { newName }
 // Rename the working branch in git, move the worktree dir to match, and
 // update the DB. Run as one atomic operation from the UI "Rename branch"
@@ -2889,10 +2903,14 @@ app.post('/:id/pull', (c) => {
     }
 
     const worktreePath = workspace.worktreePath
+    const autostash = c.req.query('autostash') === '1'
 
     try {
-      gitOps.pullBranch(worktreePath, workspace.workingBranch)
+      gitOps.pullBranch(worktreePath, workspace.workingBranch, 'origin', { autostash })
     } catch (err) {
+      if (err instanceof gitOps.DirtyWorktreeError) {
+        return c.json({ error: err.message, code: 'dirty_worktree', operation: err.operation, status: err.status }, 409)
+      }
       const message = err instanceof Error ? err.message : String(err)
       return c.json({ error: message }, 500)
     }

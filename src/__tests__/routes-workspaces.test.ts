@@ -121,9 +121,12 @@ vi.mock('../server/utils/git-ops.js', () => ({
     }
   },
   DirtyWorktreeError: class DirtyWorktreeError extends Error {
-    operation: 'rebase' | 'merge'
+    operation: 'rebase' | 'merge' | 'pull'
     status: { staged: number; modified: number; untracked: number }
-    constructor(operation: 'rebase' | 'merge', status: { staged: number; modified: number; untracked: number }) {
+    constructor(
+      operation: 'rebase' | 'merge' | 'pull',
+      status: { staged: number; modified: number; untracked: number },
+    ) {
       super(`${operation} dirty`)
       this.name = 'DirtyWorktreeError'
       this.operation = operation
@@ -154,6 +157,7 @@ vi.mock('../server/utils/git-ops.js', () => ({
   branchExists: vi.fn().mockReturnValue(false),
   listBackupBranches: vi.fn().mockReturnValue([]),
   restoreBranchFromBackup: vi.fn(),
+  getWorkingTreeFiles: vi.fn().mockReturnValue([]),
 }))
 
 vi.mock('../server/services/wakeup-service.js', () => ({
@@ -2210,13 +2214,58 @@ describe('POST /api/workspaces/:id/pull', () => {
     const data = await res.json()
     expect(data.ok).toBe(true)
     expect(data.branch).toBe('feature/test')
-    expect(vi.mocked(gitOps.pullBranch)).toHaveBeenCalledWith(expect.stringContaining('.worktrees'), 'feature/test')
+    expect(vi.mocked(gitOps.pullBranch)).toHaveBeenCalledWith(
+      expect.stringContaining('.worktrees'),
+      'feature/test',
+      'origin',
+      { autostash: false },
+    )
   })
 
   it('returns 404 when workspace not found', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
     const res = await app.request('/api/workspaces/unknown/pull', { method: 'POST' })
     expect(res.status).toBe(404)
+  })
+
+  it('maps DirtyWorktreeError to 409 with code dirty_worktree on pull', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      workingBranch: 'feature/test',
+      projectPath: '/tmp/project',
+    } as never)
+    vi.mocked(gitOps.pullBranch).mockImplementation(() => {
+      throw new gitOps.DirtyWorktreeError('pull', { staged: 0, modified: 2, untracked: 0 })
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/pull', { method: 'POST' })
+
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.code).toBe('dirty_worktree')
+    expect(body.operation).toBe('pull')
+    expect(body.status).toEqual({ staged: 0, modified: 2, untracked: 0 })
+  })
+
+  it('passes autostash:true to pullBranch when ?autostash=1', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      workingBranch: 'feature/test',
+      projectPath: '/tmp/project',
+    } as never)
+    vi.mocked(gitOps.pullBranch).mockReturnValue(undefined)
+
+    const res = await app.request('/api/workspaces/ws-1/pull?autostash=1', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(vi.mocked(gitOps.pullBranch)).toHaveBeenCalledWith(
+      expect.stringContaining('.worktrees'),
+      'feature/test',
+      'origin',
+      {
+        autostash: true,
+      },
+    )
   })
 
   it('returns 500 when git pull fails (non-ff)', async () => {
@@ -5303,5 +5352,30 @@ describe('GET /:id/diff-file mode=commits', () => {
       '4b825dc642cb6eb9a060e54bf8d69288fbee4904',
       'a.txt',
     )
+  })
+})
+
+describe('GET /api/workspaces/:id/working-tree-files', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+  })
+
+  it('returns the working-tree files', async () => {
+    vi.mocked(gitOps.getWorkingTreeFiles).mockReturnValue([
+      { path: 'a.txt', staged: true, modified: false, untracked: false },
+      { path: 'b.txt', staged: false, modified: true, untracked: false },
+    ])
+    const res = await app.request('/api/workspaces/ws-1/working-tree-files')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.files).toHaveLength(2)
+    expect(body.files[0].path).toBe('a.txt')
+  })
+
+  it('returns 404 when workspace not found', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
+    const res = await app.request('/api/workspaces/unknown/working-tree-files')
+    expect(res.status).toBe(404)
   })
 })

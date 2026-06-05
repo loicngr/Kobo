@@ -1968,6 +1968,18 @@ where ffmpeg</pre>
                     <div class="text-caption text-grey-5 q-mt-xs">{{ template.description }}</div>
                   </div>
                   <div class="row no-wrap q-gutter-xs">
+                    <q-btn
+                      v-if="templatesStore.isDefault(template.slug)"
+                      flat
+                      dense
+                      round
+                      size="sm"
+                      icon="settings_backup_restore"
+                      color="grey-5"
+                      @click="confirmResetTemplate(template)"
+                    >
+                      <q-tooltip>{{ $t('templates.resetToDefault') }}</q-tooltip>
+                    </q-btn>
                     <q-btn flat dense round size="sm" icon="edit" color="grey-5" @click="openEditDialog(template)">
                       <q-tooltip>{{ $t('templates.editTemplate') }}</q-tooltip>
                     </q-btn>
@@ -2677,6 +2689,27 @@ async function confirmDeleteTemplate(template: Template) {
       $q.notify({
         type: 'negative',
         message: err instanceof Error ? err.message : t('templates.deleteFailed'),
+        position: 'top',
+      })
+    }
+  })
+}
+
+function confirmResetTemplate(template: Template) {
+  $q.dialog({
+    title: t('templates.resetConfirmTitle'),
+    message: t('templates.resetConfirmMessage', { slug: template.slug }),
+    dark: true,
+    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    ok: { flat: true, label: t('templates.resetToDefault'), color: 'primary' },
+  }).onOk(async () => {
+    try {
+      await templatesStore.resetToDefault(template.slug)
+      $q.notify({ type: 'positive', message: t('templates.resetSuccess', { slug: template.slug }), position: 'top' })
+    } catch (err) {
+      $q.notify({
+        type: 'negative',
+        message: err instanceof Error ? err.message : t('templates.resetFailed'),
         position: 'top',
       })
     }

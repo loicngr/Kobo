@@ -10,6 +10,7 @@ export interface Template {
 
 interface TemplatesState {
   templates: Template[]
+  defaultSlugs: string[]
   loading: boolean
   loaded: boolean
 }
@@ -17,9 +18,14 @@ interface TemplatesState {
 export const useTemplatesStore = defineStore('templates', {
   state: (): TemplatesState => ({
     templates: [],
+    defaultSlugs: [],
     loading: false,
     loaded: false,
   }),
+
+  getters: {
+    isDefault: (state) => (slug: string) => state.defaultSlugs.includes(slug),
+  },
 
   actions: {
     async fetchTemplates() {
@@ -28,8 +34,9 @@ export const useTemplatesStore = defineStore('templates', {
       try {
         const res = await fetch('/api/templates')
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const body = (await res.json()) as { templates: Template[] }
+        const body = (await res.json()) as { templates: Template[]; defaultSlugs?: string[] }
         this.templates = body.templates
+        this.defaultSlugs = body.defaultSlugs ?? []
         this.loaded = true
       } catch (err) {
         console.error('[templates store] fetchTemplates failed:', err)
@@ -89,6 +96,19 @@ export const useTemplatesStore = defineStore('templates', {
         throw new Error(body.error ?? `HTTP ${res.status}`)
       }
       this.templates = this.templates.filter((t) => t.slug !== slug)
+    },
+
+    async resetToDefault(slug: string): Promise<Template> {
+      const res = await fetch(`/api/templates/${encodeURIComponent(slug)}/reset-default`, { method: 'POST' })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Reset failed' }))
+        throw new Error(err.error ?? 'Reset failed')
+      }
+      const { template } = (await res.json()) as { template: Template }
+      const idx = this.templates.findIndex((t) => t.slug === slug)
+      if (idx >= 0) this.templates[idx] = template
+      else this.templates.push(template)
+      return template
     },
   },
 })

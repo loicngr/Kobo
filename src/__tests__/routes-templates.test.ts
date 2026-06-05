@@ -7,6 +7,9 @@ vi.mock('../server/services/templates-service.js', () => ({
   createTemplate: vi.fn(),
   updateTemplate: vi.fn(),
   deleteTemplate: vi.fn(),
+  reloadDefaultTemplates: vi.fn(),
+  getDefaultTemplateSlugs: vi.fn(),
+  resetTemplateToDefault: vi.fn(),
 }))
 
 import templatesRouter from '../server/routes/templates.js'
@@ -182,6 +185,43 @@ describe('DELETE /api/templates/:slug', () => {
   it('returns 404 when not found', async () => {
     vi.mocked(templatesService.deleteTemplate).mockReturnValue(false)
     const res = await app.request('/api/templates/unknown', { method: 'DELETE' })
+    expect(res.status).toBe(404)
+  })
+})
+
+const fakeDefaultTemplate = {
+  slug: 'kobo-context',
+  description: 'Kobo context template',
+  content: 'Context for {workspace_name}',
+  createdAt: '2026-04-10T00:00:00.000Z',
+  updatedAt: '2026-04-10T00:00:00.000Z',
+}
+
+describe('GET /api/templates (defaultSlugs)', () => {
+  it('includes defaultSlugs alongside templates', async () => {
+    vi.mocked(templatesService.listTemplates).mockReturnValue([fakeTemplate])
+    vi.mocked(templatesService.getDefaultTemplateSlugs).mockReturnValue(['kobo-context'])
+    const res = await app.request('/api/templates')
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(Array.isArray(body.templates)).toBe(true)
+    expect(Array.isArray(body.defaultSlugs)).toBe(true)
+    expect(body.defaultSlugs).toContain('kobo-context')
+  })
+})
+
+describe('POST /api/templates/:slug/reset-default', () => {
+  it('returns 200 with the reset template', async () => {
+    vi.mocked(templatesService.resetTemplateToDefault).mockReturnValue(fakeDefaultTemplate)
+    const res = await app.request('/api/templates/kobo-context/reset-default', { method: 'POST' })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.template.slug).toBe('kobo-context')
+  })
+
+  it('returns 404 for a non-default slug', async () => {
+    vi.mocked(templatesService.resetTemplateToDefault).mockReturnValue(null)
+    const res = await app.request('/api/templates/not-a-default/reset-default', { method: 'POST' })
     expect(res.status).toBe(404)
   })
 })

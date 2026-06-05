@@ -7,7 +7,10 @@ const app = new Hono()
 // GET /api/templates — list all templates
 app.get('/', (c) => {
   try {
-    return c.json({ templates: templatesService.listTemplates() })
+    return c.json({
+      templates: templatesService.listTemplates(),
+      defaultSlugs: templatesService.getDefaultTemplateSlugs(),
+    })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
@@ -70,6 +73,21 @@ app.post('/reload-defaults', (c) => {
   try {
     const result = templatesService.reloadDefaultTemplates()
     return c.json(result)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// POST /api/templates/:slug/reset-default — restore a default template to its built-in content
+app.post('/:slug/reset-default', (c) => {
+  try {
+    const slug = c.req.param('slug')
+    const template = templatesService.resetTemplateToDefault(slug)
+    if (!template) {
+      return c.json({ error: `Template '${slug}' is not a default template` }, 404)
+    }
+    return c.json({ template })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
