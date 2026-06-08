@@ -994,6 +994,42 @@ export function getWorkingTreeFiles(repoPath: string): WorkingTreeFile[] {
 }
 
 /**
+ * True if `repoPath` is the root of a valid git work tree — a real repo (`.git`
+ * directory) or a linked worktree (`.git` file). A purge leftover (no `.git`, or
+ * a dead `.git` link pointing at a pruned gitdir) returns false, so it is never
+ * mistaken for a manually recreated worktree. Requires a LOCAL `.git` entry so a
+ * residual directory nested inside a parent repo doesn't resolve to that parent.
+ * Best-effort: false on any error.
+ */
+export function isGitWorktree(repoPath: string): boolean {
+  try {
+    if (!existsSync(join(repoPath, '.git'))) return false
+    return git(repoPath, ['rev-parse', '--is-inside-work-tree']).trim() === 'true'
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Turn an arbitrary string into a git-ref-safe segment, capped to `maxLen`.
+ * Strips accents (é→e), collapses every run of non-alphanumeric characters
+ * (backslashes, colons, spaces, dots… — all unsafe or awkward in a ref/path)
+ * into a single hyphen, and trims leading/trailing hyphens (including one the
+ * length cap may leave). Preserves case — the caller upper/lower-cases as needed.
+ * Used to build the working branch from Notion/Sentry titles + issue IDs so an
+ * over-long or odd-charactered source can never produce an invalid worktree.
+ */
+export function slugifyBranchSegment(input: string, maxLen = 50): string {
+  return input
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^A-Za-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, maxLen)
+    .replace(/-+$/g, '')
+}
+
+/**
  * Count commits ahead of `origin/<workingBranch>`. Returns `-1` when the remote
  * ref does not exist (i.e. the branch has never been pushed).
  *

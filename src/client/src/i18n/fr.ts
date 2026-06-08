@@ -454,6 +454,10 @@ export default {
   'settings.fileManagerCommandPlaceholder': 'xdg-open, open, nautilus, dolphin, explorer...',
   'settings.fileManagerCommandHint':
     'Commande utilisée pour ouvrir le worktree dans votre explorateur de fichiers. Le chemin du worktree est passé en argument. Laissez vide pour masquer le bouton.',
+  'settings.terminalCommand': 'Commande du terminal',
+  'settings.terminalCommandHint':
+    'Commande pour lancer le terminal dans le worktree. Placeholder {path} optionnel pour le répertoire.',
+  'settings.terminalCommandPlaceholder': 'kitty  ·  alacritty  ·  gnome-terminal --working-directory={path}',
   'settings.mcpSelection': 'Sélection MCP Claude',
   'settings.mcpAutoSelect': 'Auto (premier MCP actif correspondant)',
   'settings.notionMcp': 'Clé MCP Notion',
@@ -909,6 +913,9 @@ export default {
   'tools.openFileManager': "Ouvrir dans l'explorateur de fichiers",
   'tools.openFileManagerTooltip': 'Ouvrir le dossier du worktree dans votre explorateur de fichiers configuré',
   'tools.openFileManagerFailed': "Échec de l'ouverture de l'explorateur de fichiers",
+  'tools.openTerminal': 'Ouvrir dans un terminal',
+  'tools.openTerminalTooltip': 'Ouvrir le worktree dans le terminal configuré',
+  'tools.openTerminalFailed': "Échec de l'ouverture du terminal",
 
   // Review dialog
   'review.title': 'Lancer une review',

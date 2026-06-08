@@ -264,7 +264,10 @@ app.post('/', migrationGuard, async (c) => {
       // which is what Sentry auto-close recognises in commit messages.
       const detectedTicketId = notionContent?.ticketId || sentryContent?.issueId || body.name.match(/[A-Z]+-\d+/i)?.[0]
       if (detectedTicketId && !workingBranch.toLowerCase().includes(detectedTicketId.toLowerCase())) {
-        const ticketPrefix = detectedTicketId.toUpperCase()
+        // Sanitize + length-cap the ticket id: a Sentry issue id / title can carry
+        // odd characters (PHP namespace `Foo\Bar\Baz`) or be long, which would
+        // otherwise yield an invalid or too-long branch that fails `git worktree add`.
+        const ticketPrefix = gitOps.slugifyBranchSegment(detectedTicketId, 40).toUpperCase()
         const slashIdx = workingBranch.indexOf('/')
         const typePrefix = slashIdx >= 0 ? workingBranch.slice(0, slashIdx + 1) : 'feature/'
         // Use Notion/Sentry title or body name for the slug — all have proper accented
@@ -277,7 +280,8 @@ app.post('/', migrationGuard, async (c) => {
           .replace(/[^a-z0-9]+/g, '-')
           .replace(/^-|-$/g, '')
           .substring(0, 50)
-        workingBranch = `${typePrefix}${ticketPrefix}--${titleSlug}`
+        const safeSlug = titleSlug || 'task'
+        workingBranch = ticketPrefix ? `${typePrefix}${ticketPrefix}--${safeSlug}` : `${typePrefix}${safeSlug}`
       }
     }
 
@@ -439,7 +443,19 @@ app.post('/', migrationGuard, async (c) => {
         )
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
-        workspaceService.updateWorkspaceStatus(workspace.id, 'error')
+        // Roll back the half-created workspace: a failed worktree creation must NOT
+        // leave an orphan record behind. Best-effort cleanup of any partial worktree
+        // dir git may have produced, then delete the just-inserted workspace row.
+        try {
+          worktreeService.removeWorktree(body.projectPath, prospectiveWorktreePath)
+        } catch {
+          // worktree may never have been registered — ignore
+        }
+        try {
+          workspaceService.deleteWorkspace(workspace.id)
+        } catch (delErr) {
+          console.error('[workspaces] rollback deleteWorkspace failed:', delErr)
+        }
         return c.json({ error: `Failed to create worktree: ${message}` }, 500)
       }
     }
@@ -1975,6 +1991,49 @@ app.post('/:id/open-editor', (c) => {
   }
 })
 
+/** Open the workspace worktree in the user's configured terminal emulator. */
+app.post('/:id/open-terminal', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const globalSettings = settingsService.getGlobalSettings()
+    if (!globalSettings.terminalCommand.trim()) {
+      return c.json({ error: 'No terminal command configured' }, 400)
+    }
+
+    const worktreePath = workspace.worktreePath
+    if (!fs.existsSync(worktreePath)) {
+      return c.json({ error: `Worktree path does not exist: ${worktreePath}` }, 400)
+    }
+
+    // Split on whitespace, then substitute the optional {path} placeholder. The
+    // terminal also gets cwd = worktree, so emulators that inherit the cwd
+    // (kitty, alacritty, wezterm) work with no placeholder, while those that
+    // need an explicit flag use {path} (gnome-terminal --working-directory={path}).
+    const tokens = globalSettings.terminalCommand
+      .trim()
+      .split(/\s+/)
+      .map((t) => t.replace(/\{path\}/g, worktreePath))
+    const [cmd, ...args] = tokens
+
+    // Await the spawn so a bad command (ENOENT) surfaces as a clear 400 instead of
+    // a fire-and-forget "success" — same pattern as open-file-manager.
+    try {
+      await waitForSpawn(cmd, args, { cwd: worktreePath })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      return c.json({ error: `Failed to launch terminal '${globalSettings.terminalCommand}': ${msg}` }, 400)
+    }
+
+    return c.json({ success: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
 /** Open the workspace worktree in the user's configured file manager. */
 app.post('/:id/open-file-manager', async (c) => {
   try {
@@ -2012,9 +2071,9 @@ app.post('/:id/open-file-manager', async (c) => {
 
 /** Spawn a detached process and resolve as soon as it has started (or reject
  *  on launch failure). Caller doesn't await process completion. */
-function waitForSpawn(command: string, args: string[]): Promise<void> {
+function waitForSpawn(command: string, args: string[], options: { cwd?: string } = {}): Promise<void> {
   return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { detached: true, stdio: 'ignore' })
+    const child = spawn(command, args, { detached: true, stdio: 'ignore', ...options })
     let settled = false
     child.once('spawn', () => {
       if (settled) return

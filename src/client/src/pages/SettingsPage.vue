@@ -794,6 +794,20 @@ where ffmpeg</pre>
               />
             </div>
 
+            <!-- Terminal -->
+            <div v-show="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.terminalCommand') }}</div>
+              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.terminalCommandHint') }}</div>
+              <q-input
+                v-model="globalTerminalCommand"
+                dense
+                dark
+                outlined
+                :placeholder="$t('settings.terminalCommandPlaceholder')"
+                class="settings-input"
+              />
+            </div>
+
             <div
               v-show="activeTab === 'notion' || activeTab === 'sentry'"
               data-tour="settings-card-notion"
@@ -2171,6 +2185,7 @@ const globalCiFixPrompt = ref('')
 const globalGitConventions = ref('')
 const globalEditorCommand = ref('')
 const globalFileManagerCommand = ref('')
+const globalTerminalCommand = ref('')
 const globalAutoPurgeOnPrMerged = ref(false)
 const globalBrowserNotifications = ref(true)
 const globalAudioNotifications = ref(true)
@@ -2852,6 +2867,7 @@ function captureGlobalSnapshot(): string {
     gitConventions: globalGitConventions.value,
     editorCommand: globalEditorCommand.value,
     fileManagerCommand: globalFileManagerCommand.value,
+    terminalCommand: globalTerminalCommand.value,
     autoPurgeOnPrMerged: globalAutoPurgeOnPrMerged.value,
     browserNotifications: globalBrowserNotifications.value,
     audioNotifications: globalAudioNotifications.value,
@@ -2928,6 +2944,7 @@ function syncGlobalForm() {
   globalGitConventions.value = store.global.gitConventions
   globalEditorCommand.value = store.global.editorCommand ?? ''
   globalFileManagerCommand.value = store.global.fileManagerCommand ?? ''
+  globalTerminalCommand.value = store.global.terminalCommand ?? ''
   globalAutoPurgeOnPrMerged.value = store.global.autoPurgeOnPrMerged ?? false
   globalBrowserNotifications.value = store.global.browserNotifications ?? true
   globalAudioNotifications.value = store.global.audioNotifications ?? true
@@ -3197,6 +3214,7 @@ async function saveGlobal() {
       gitConventions: globalGitConventions.value,
       editorCommand: globalEditorCommand.value,
       fileManagerCommand: globalFileManagerCommand.value,
+      terminalCommand: globalTerminalCommand.value,
       autoPurgeOnPrMerged: globalAutoPurgeOnPrMerged.value,
       browserNotifications: globalBrowserNotifications.value,
       audioNotifications: globalAudioNotifications.value,

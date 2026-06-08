@@ -65,6 +65,21 @@
       </q-btn>
 
       <q-btn
+        v-if="hasTerminalCommand"
+        no-caps
+        dense
+        outline
+        color="indigo-4"
+        icon="terminal"
+        :label="$t('tools.openTerminal')"
+        :loading="openingTerminal"
+        class="full-width q-mb-xs"
+        @click="openTerminal"
+      >
+        <q-tooltip>{{ $t('tools.openTerminalTooltip') }}</q-tooltip>
+      </q-btn>
+
+      <q-btn
         no-caps
         dense
         outline
@@ -158,6 +173,7 @@ const workspaceStore = useWorkspaceStore()
 const running = ref(false)
 const openingEditor = ref(false)
 const openingFileManager = ref(false)
+const openingTerminal = ref(false)
 const reviewDialogOpen = ref(false)
 const startingReview = ref(false)
 const fixingCi = ref(false)
@@ -178,6 +194,7 @@ const hasSetupScript = computed(() => {
 
 const hasEditorCommand = computed(() => !!settingsStore.global.editorCommand)
 const hasFileManagerCommand = computed(() => !!settingsStore.global.fileManagerCommand)
+const hasTerminalCommand = computed(() => !!settingsStore.global.terminalCommand)
 
 const isAgentBusy = computed(() => isBusyStatus(props.workspace?.status))
 const isArchived = computed(() => Boolean(props.workspace?.archivedAt))
@@ -228,6 +245,28 @@ async function openEditor() {
     $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
   } finally {
     openingEditor.value = false
+  }
+}
+
+async function openTerminal() {
+  if (!workspaceId.value) return
+  openingTerminal.value = true
+  try {
+    const res = await fetch(`/api/workspaces/${workspaceId.value}/open-terminal`, { method: 'POST' })
+    if (!res.ok) {
+      const data = await res.json()
+      $q.notify({
+        type: 'negative',
+        message: data.error ?? t('tools.openTerminalFailed'),
+        position: 'top',
+        timeout: 6000,
+      })
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : t('tools.openTerminalFailed')
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+  } finally {
+    openingTerminal.value = false
   }
 }
 

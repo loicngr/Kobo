@@ -89,6 +89,7 @@ interface GlobalSettings {
    * Empty disables the "Open in file manager" button.
    */
   fileManagerCommand: string
+  terminalCommand: string
   /** Opt-in: pr-watcher auto-purges the worktree on PR-merged transition. */
   autoPurgeOnPrMerged: boolean
   browserNotifications: boolean
@@ -184,6 +185,7 @@ export const useSettingsStore = defineStore('settings', {
       gitConventions: '',
       editorCommand: '',
       fileManagerCommand: '',
+      terminalCommand: '',
       autoPurgeOnPrMerged: false,
       browserNotifications: true,
       audioNotifications: true,

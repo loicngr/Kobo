@@ -1,5 +1,5 @@
 import fs from 'node:fs'
-import { fetchSourceBranchAsync } from '../utils/git-ops.js'
+import { fetchSourceBranchAsync, isGitWorktree } from '../utils/git-ops.js'
 import { stopDevServer } from './dev-server-service.js'
 import { getForgeProvider } from './forge/registry.js'
 import { resolveForge } from './forge/resolve.js'
@@ -88,6 +88,12 @@ function autoRestoreManuallyRecreatedWorktrees(): void {
   for (const ws of listArchivedWorkspaces()) {
     if (!ws.worktreePurgedAt) continue
     if (!fs.existsSync(ws.worktreePath)) continue
+    // Only a genuinely recreated worktree (gh pr checkout / git worktree add)
+    // should trigger restore. A purge that failed to fully remove the folder
+    // (e.g. root-owned Docker files) leaves a residual non-git directory that
+    // satisfies existsSync but is NOT a valid worktree — restoring it would
+    // wrongly un-archive the workspace and flood git fetches with "(null)".
+    if (!isGitWorktree(ws.worktreePath)) continue
     try {
       const restored = restoreWorktreeFromDisk(ws.id)
       emitEphemeral(ws.id, 'workspace:worktree-restored', { workspace: restored })

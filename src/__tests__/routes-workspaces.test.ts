@@ -64,9 +64,29 @@ vi.mock('../server/services/agent/engines/registry.js', () => ({
 
 // I10: workspaces.ts now uses promisify(execFile) instead of execFileSync.
 // We mock execFile with a [util.promisify.custom] property so that promisify returns our mock.
-const { execFilePromiseMock } = vi.hoisted(() => {
+const { execFilePromiseMock, spawnMock } = vi.hoisted(() => {
   const execFilePromiseMock = vi.fn()
-  return { execFilePromiseMock }
+  // Fake ChildProcess: supports both the fire-and-forget `.on('error')` path
+  // (open-editor) and the awaited `.once('spawn'/'error')` path (waitForSpawn,
+  // used by open-file-manager / open-terminal). Emits 'spawn' on next microtask
+  // so waitForSpawn resolves — override with mockImplementationOnce to emit 'error'.
+  const spawnMock = vi.fn(() => {
+    const handlers: Record<string, (...a: unknown[]) => void> = {}
+    const child = {
+      on: (event: string, cb: (...a: unknown[]) => void) => {
+        handlers[event] = cb
+        return child
+      },
+      once: (event: string, cb: (...a: unknown[]) => void) => {
+        handlers[event] = cb
+        return child
+      },
+      unref: () => child,
+    }
+    queueMicrotask(() => handlers.spawn?.())
+    return child
+  })
+  return { execFilePromiseMock, spawnMock }
 })
 vi.mock('node:child_process', async () => {
   const actual = await vi.importActual<typeof import('node:child_process')>('node:child_process')
@@ -77,6 +97,7 @@ vi.mock('node:child_process', async () => {
     ...actual,
     execFile: mock,
     execFileSync: vi.fn(),
+    spawn: spawnMock,
   }
 })
 
@@ -100,6 +121,15 @@ vi.mock('../server/services/sentry-service.js', () => ({
 
 vi.mock('../server/utils/git-ops.js', () => ({
   fetchSourceBranch: vi.fn(),
+  // Mirror the real branch-segment sanitizer so ticket-id branch composition works.
+  slugifyBranchSegment: (input: string, maxLen = 50) =>
+    input
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^A-Za-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, maxLen)
+      .replace(/-+$/g, ''),
   deleteLocalBranch: vi.fn(),
   deleteRemoteBranch: vi.fn(),
   pushBranch: vi.fn(),
@@ -441,6 +471,31 @@ describe('POST /api/workspaces', () => {
     expect(agentManager.startAgent).toHaveBeenCalledOnce()
   })
 
+  it('rolls back the workspace record when worktree creation fails (no orphan)', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktree).mockImplementationOnce(() => {
+      throw new Error('fatal: File name too long')
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    expect(res.status).toBe(500)
+    const data = await res.json()
+    expect(data.error).toContain('Failed to create worktree')
+    // The just-inserted workspace must be deleted, not left as an orphan 'error' record.
+    expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-1')
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+  })
+
   it('creates new workspaces under the configured global worktrees path', async () => {
     vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
       defaultModel: 'auto',
@@ -629,7 +684,8 @@ describe('POST /api/workspaces', () => {
     expect(res.status).toBe(500)
     const data = await res.json()
     expect(data.error).toContain('Failed to create worktree')
-    expect(workspaceService.updateWorkspaceStatus).toHaveBeenCalledWith('ws-1', 'error')
+    // Rollback: the orphan workspace record is deleted, not left in 'error' status.
+    expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-1')
   })
 
   it('crée des tasks et critères manuels quand pas de Notion', async () => {
@@ -5377,5 +5433,70 @@ describe('GET /api/workspaces/:id/working-tree-files', () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
     const res = await app.request('/api/workspaces/unknown/working-tree-files')
     expect(res.status).toBe(404)
+  })
+})
+
+describe('POST /api/workspaces/:id/open-terminal', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+  })
+
+  it('returns 404 when workspace not found', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
+    const res = await app.request('/api/workspaces/unknown/open-terminal', { method: 'POST' })
+    expect(res.status).toBe(404)
+  })
+
+  it('returns 400 when terminalCommand is empty or whitespace-only', async () => {
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
+      defaultModel: 'auto',
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      gitConventions: '',
+      editorCommand: '',
+      browserNotifications: true,
+      audioNotifications: true,
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
+      defaultPermissionMode: 'plan',
+      notionMcpKey: '',
+      sentryMcpKey: '',
+      tags: [],
+      worktreesPath: '.worktrees',
+      worktreesPrefixByProject: false,
+      terminalCommand: '   ', // whitespace-only must be treated as unconfigured (400, not 500)
+    } as never)
+    const res = await app.request('/api/workspaces/ws-1/open-terminal', { method: 'POST' })
+    expect(res.status).toBe(400)
+  })
+
+  it('spawns the terminal with cwd = worktree and substitutes {path}', async () => {
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
+      defaultModel: 'auto',
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      gitConventions: '',
+      editorCommand: '',
+      browserNotifications: true,
+      audioNotifications: true,
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
+      defaultPermissionMode: 'plan',
+      notionMcpKey: '',
+      sentryMcpKey: '',
+      tags: [],
+      worktreesPath: '.worktrees',
+      worktreesPrefixByProject: false,
+      terminalCommand: 'gnome-terminal --working-directory={path}',
+    } as never)
+    vi.mocked(fs.existsSync).mockReturnValue(true)
+    const res = await app.request('/api/workspaces/ws-1/open-terminal', { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect(spawnMock).toHaveBeenCalledWith(
+      'gnome-terminal',
+      [`--working-directory=${fakeWorkspace.worktreePath}`],
+      expect.objectContaining({ cwd: fakeWorkspace.worktreePath, detached: true, stdio: 'ignore' }),
+    )
   })
 })

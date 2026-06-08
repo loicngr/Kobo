@@ -27,6 +27,7 @@ import {
   getWorkingTreeDiffStats,
   getWorkingTreeFiles,
   getWorkingTreeStatus,
+  isGitWorktree,
   listBranchCommits,
   listBranches,
   listCommitsBehind,
@@ -36,6 +37,7 @@ import {
   pushBranch,
   rebaseBranch,
   rollbackFile,
+  slugifyBranchSegment,
 } from '../server/utils/git-ops.js'
 
 let repoDir: string
@@ -1301,5 +1303,78 @@ describe('getWorkingTreeFiles', () => {
     execFileSync('git', ['commit', '-m', 'init'], { cwd: repo })
     expect(getWorkingTreeFiles(repo)).toEqual([])
     rmSync(repo, { recursive: true, force: true })
+  })
+})
+
+describe('isGitWorktree', () => {
+  it('returns true for a real git repo', () => {
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-isgit-repo-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    expect(isGitWorktree(repo)).toBe(true)
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('returns true for a linked worktree (manual recreation case)', () => {
+    const main = mkdtempSync(path.join(tmpdir(), 'at-isgit-main-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: main })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: main })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: main })
+    writeFileSync(path.join(main, 'f.txt'), 'x\n')
+    execFileSync('git', ['add', '.'], { cwd: main })
+    execFileSync('git', ['commit', '-m', 'init'], { cwd: main })
+    const wt = path.join(mkdtempSync(path.join(tmpdir(), 'at-isgit-wt-')), 'linked')
+    execFileSync('git', ['worktree', 'add', '--detach', wt, 'main'], { cwd: main })
+    expect(isGitWorktree(wt)).toBe(true)
+    rmSync(wt, { recursive: true, force: true })
+    rmSync(main, { recursive: true, force: true })
+  })
+
+  it('returns false for an existing non-git directory (purge leftover)', () => {
+    const dir = mkdtempSync(path.join(tmpdir(), 'at-isgit-leftover-'))
+    writeFileSync(path.join(dir, 'leftover.txt'), 'residual\n')
+    expect(isGitWorktree(dir)).toBe(false)
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('returns false for a leftover dir nested inside a parent git repo (no own .git)', () => {
+    const parent = mkdtempSync(path.join(tmpdir(), 'at-isgit-parent-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: parent })
+    const nested = path.join(parent, 'leftover-worktree')
+    fs.mkdirSync(nested)
+    writeFileSync(path.join(nested, 'residual.txt'), 'x\n')
+    expect(isGitWorktree(nested)).toBe(false)
+    rmSync(parent, { recursive: true, force: true })
+  })
+
+  it('returns false for a non-existent path', () => {
+    expect(isGitWorktree(path.join(tmpdir(), 'at-isgit-nope-does-not-exist'))).toBe(false)
+  })
+})
+
+describe('slugifyBranchSegment', () => {
+  it('keeps an already-safe identifier intact', () => {
+    expect(slugifyBranchSegment('SEKUR-API-ED', 40)).toBe('SEKUR-API-ED')
+  })
+
+  it('replaces backslashes, colons and spaces with single hyphens', () => {
+    expect(slugifyBranchSegment('App\\Controller\\Foo::bar baz', 40)).toBe('App-Controller-Foo-bar-baz')
+  })
+
+  it('transliterates accents (é→e)', () => {
+    expect(slugifyBranchSegment('Créé', 40)).toBe('Cree')
+  })
+
+  it('caps the length to maxLen', () => {
+    expect(slugifyBranchSegment('a'.repeat(100), 40).length).toBe(40)
+  })
+
+  it('trims leading/trailing hyphens, including one produced by the length cap', () => {
+    expect(slugifyBranchSegment('--foo--', 40)).toBe('foo')
+    // 'abcde-fghij'.slice(0,6) === 'abcde-' → trailing hyphen re-trimmed
+    expect(slugifyBranchSegment('abcde-fghij', 6)).toBe('abcde')
+  })
+
+  it('returns empty string when nothing safe remains', () => {
+    expect(slugifyBranchSegment('::\\::', 40)).toBe('')
   })
 })

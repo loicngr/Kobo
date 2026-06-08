@@ -245,6 +245,13 @@ export interface GlobalSettings {
    * Seeded by settings migration v35.
    */
   fileManagerCommand: string
+  /**
+   * Optional shell command spawned with the worktree path as the first
+   * argument to open it in the user's terminal emulator (e.g. `xterm`,
+   * `gnome-terminal`, `wt`, `iTerm`). Empty = feature off.
+   * Seeded by settings migration v37.
+   */
+  terminalCommand: string
   autoPurgeOnPrMerged: boolean
   browserNotifications: boolean
   audioNotifications: boolean
@@ -790,6 +797,17 @@ const settingsMigrations: SettingsMigration[] = [
       }
     },
   },
+  {
+    version: 37,
+    name: 'add-terminal-command',
+    migrate: ({ global }) => {
+      // Empty by default — the "Open in terminal" button only shows
+      // when the user explicitly fills it (`xterm`, `gnome-terminal`, `wt`…).
+      if (typeof global.terminalCommand !== 'string') {
+        global.terminalCommand = ''
+      }
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -863,6 +881,7 @@ function defaultSettings(): Settings {
       changeSourceBranchScript: DEFAULT_CHANGE_SOURCE_BRANCH_SCRIPT,
       editorCommand: '',
       fileManagerCommand: '',
+      terminalCommand: '',
       autoPurgeOnPrMerged: false,
       browserNotifications: true,
       audioNotifications: true,
@@ -1240,6 +1259,7 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'changeSourceBranchScript',
     'editorCommand',
     'fileManagerCommand',
+    'terminalCommand',
     'autoPurgeOnPrMerged',
     'browserNotifications',
     'audioNotifications',

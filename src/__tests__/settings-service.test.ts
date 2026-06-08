@@ -132,6 +132,11 @@ describe('getGlobalSettings()', () => {
     expect(global.defaultModelByEngine['claude-code']).toBe('test-model')
     expect(typeof global.prPromptTemplate).toBe('string')
   })
+
+  it('exposes terminalCommand defaulting to empty string', () => {
+    const settings = getGlobalSettings()
+    expect(settings.terminalCommand).toBe('')
+  })
 })
 
 describe('updateGlobalSettings()', () => {
@@ -1811,5 +1816,26 @@ describe('changeSourceBranchScript setting', () => {
     } finally {
       fs.rmSync(tmp, { recursive: true, force: true })
     }
+  })
+})
+
+describe('terminalCommand setting (migration v37)', () => {
+  it('migration v37 seeds terminalCommand to empty string when absent', () => {
+    const migrated = runSettingsMigrations({
+      schemaVersion: 36,
+      global: {},
+      projects: [],
+    })
+    expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+    expect((migrated.global as Record<string, unknown>).terminalCommand).toBe('')
+  })
+
+  it('migration v37 preserves an existing terminalCommand value', () => {
+    const migrated = runSettingsMigrations({
+      schemaVersion: 36,
+      global: { terminalCommand: 'xterm' },
+      projects: [],
+    })
+    expect((migrated.global as Record<string, unknown>).terminalCommand).toBe('xterm')
   })
 })

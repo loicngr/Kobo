@@ -19,7 +19,10 @@ vi.mock('../server/services/workspace-service.js', () => ({
   updateWorkspaceSourceBranch: vi.fn(),
 }))
 vi.mock('../server/services/git-stats-service.js', () => ({ computeGitStats: vi.fn() }))
-vi.mock('../server/utils/git-ops.js', () => ({ fetchSourceBranchAsync: vi.fn(() => Promise.resolve()) }))
+vi.mock('../server/utils/git-ops.js', () => ({
+  fetchSourceBranchAsync: vi.fn(() => Promise.resolve()),
+  isGitWorktree: vi.fn(() => false),
+}))
 vi.mock('node:fs', async () => {
   const actual = await vi.importActual<typeof import('node:fs')>('node:fs')
   return { ...actual, existsSync: vi.fn(() => true), default: { ...actual, existsSync: vi.fn(() => true) } }
@@ -29,6 +32,7 @@ import { computeGitStats } from '../server/services/git-stats-service.js'
 import { _resetForTest, checkPrStatuses, getAllGitStats } from '../server/services/pr-watcher-service.js'
 import * as wsSvc from '../server/services/websocket-service.js'
 import * as wsService from '../server/services/workspace-service.js'
+import * as gitOps from '../server/utils/git-ops.js'
 
 function makeWorkspace(overrides: Partial<{ id: string; name: string; sourceBranch: string; status: string }> = {}) {
   return {
@@ -462,5 +466,44 @@ describe('checkPrStatuses — git stats caching', () => {
     const stats = getAllGitStats()
     expect(stats['ws-a']).toBeUndefined()
     expect(stats['ws-b']).toEqual({ commitCount: 2 })
+  })
+})
+
+describe('checkPrStatuses — auto-restore guards against purge leftovers', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    _resetForTest()
+    vi.mocked(wsService.listWorkspaces).mockReturnValue([])
+  })
+  afterEach(() => {
+    _resetForTest()
+  })
+
+  function makePurged() {
+    return {
+      ...makeWorkspace({ id: 'ws-purged', name: 'purged ws' }),
+      archivedAt: '2026-06-08T00:00:00Z',
+      worktreePurgedAt: '2026-06-08T00:00:00Z',
+    }
+  }
+
+  it('does NOT restore when the worktree path is a leftover (not a valid git worktree)', async () => {
+    vi.mocked(wsService.listArchivedWorkspaces).mockReturnValue([makePurged() as never])
+    vi.mocked(gitOps.isGitWorktree).mockReturnValue(false) // existsSync is true but it is a residual dir
+
+    await checkPrStatuses()
+
+    expect(wsService.restoreWorktreeFromDisk).not.toHaveBeenCalled()
+  })
+
+  it('DOES restore when the worktree path is a valid git worktree (manual recreation)', async () => {
+    const purged = makePurged()
+    vi.mocked(wsService.listArchivedWorkspaces).mockReturnValue([purged as never])
+    vi.mocked(gitOps.isGitWorktree).mockReturnValue(true)
+    vi.mocked(wsService.restoreWorktreeFromDisk).mockReturnValue(purged as never)
+
+    await checkPrStatuses()
+
+    expect(wsService.restoreWorktreeFromDisk).toHaveBeenCalledWith('ws-purged')
   })
 })
