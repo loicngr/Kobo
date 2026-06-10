@@ -4,6 +4,10 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.7.31
+
+- feat: ready-to-merge status, open-pr fix, new models, dep audit
+
 ## 1.7.30
 
 - feat: open-in-terminal button + git creation/purge fixes
