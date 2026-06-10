@@ -260,6 +260,8 @@ export interface PrSnapshot {
    * truly blocking or merely flagged stale.
    */
   unresolvedReviewThreadsCount: number
+  /** Computed in the backend: OPEN + CI all green + not blocked by changes-requested. */
+  readyToMerge: boolean
 }
 
 export interface PendingCron {
@@ -331,7 +333,10 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     needsAttention(state): Workspace[] {
       return state.workspaces.filter(
-        (w) => ['error', 'quota', 'awaiting-user'].includes(w.status) || hasPrAttention(state.prSnapshots[w.id]),
+        (w) =>
+          ['error', 'quota', 'awaiting-user'].includes(w.status) ||
+          hasPrAttention(state.prSnapshots[w.id]) ||
+          (!isBusyStatus(w.status) && !!state.prSnapshots[w.id]?.readyToMerge),
       )
     },
 
@@ -341,7 +346,10 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     idle(state): Workspace[] {
       return state.workspaces.filter(
-        (w) => ['completed', 'idle', 'created'].includes(w.status) && !hasPrAttention(state.prSnapshots[w.id]),
+        (w) =>
+          ['completed', 'idle', 'created'].includes(w.status) &&
+          !hasPrAttention(state.prSnapshots[w.id]) &&
+          !state.prSnapshots[w.id]?.readyToMerge,
       )
     },
 

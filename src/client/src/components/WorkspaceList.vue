@@ -828,7 +828,11 @@ const router = useRouter()
 
 function attentionBorderColor(ws: Workspace): string {
   const reasons = getAttentionReasons(ws, store.prSnapshots[ws.id])
-  return reasons.some((r) => r.color === 'red-5') ? '#ef4444' : '#f59e0b'
+  if (reasons.some((r) => r.color === 'red-5')) return '#ef4444' // a real problem → red
+  // Purely positive state (ready to merge, nothing else pending) → green, so the
+  // border matches the green badge instead of falsely warning with amber.
+  if (reasons.length > 0 && reasons.every((r) => r.kind === 'ready-to-merge')) return '#22c55e'
+  return '#f59e0b' // awaiting-user / other intermediate states → amber
 }
 
 let workspaceInfoInterval: ReturnType<typeof setInterval> | null = null

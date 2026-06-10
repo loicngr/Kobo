@@ -128,4 +128,57 @@ describe('github forge provider', () => {
     expect(snap?.reviewers).toHaveLength(1)
     expect(snap?.reviewers[0]).toEqual({ login: 'sam', state: 'APPROVED' })
   })
+
+  it('readyToMerge is true for an OPEN PR with all-green CI and no blocking review', async () => {
+    const rawPr = {
+      number: 20,
+      title: 'Green PR',
+      url: 'https://github.com/o/r/pull/20',
+      state: 'OPEN',
+      statusCheckRollup: [{ name: 'ci', conclusion: 'SUCCESS', status: 'COMPLETED', detailsUrl: null }],
+    }
+    execFileMock.mockResolvedValueOnce(JSON.stringify(rawPr))
+    const snap = await githubProvider.getPrStatus('/repo', 'feat/x')
+    expect(snap?.readyToMerge).toBe(true)
+  })
+
+  it('readyToMerge is false when a reviewer actively requests changes', async () => {
+    const rawPr = {
+      number: 21,
+      title: 'Blocked PR',
+      url: 'https://github.com/o/r/pull/21',
+      state: 'OPEN',
+      reviewDecision: 'CHANGES_REQUESTED',
+      latestReviews: [{ author: { login: 'rev' }, state: 'CHANGES_REQUESTED' }],
+      statusCheckRollup: [{ name: 'ci', conclusion: 'SUCCESS', status: 'COMPLETED', detailsUrl: null }],
+    }
+    execFileMock.mockResolvedValueOnce(JSON.stringify(rawPr))
+    const snap = await githubProvider.getPrStatus('/repo', 'feat/x')
+    expect(snap?.readyToMerge).toBe(false)
+  })
+
+  it('readyToMerge is true when there are no checks (no CI configured)', async () => {
+    const rawPr = {
+      number: 23,
+      title: 'No CI PR',
+      url: 'https://github.com/o/r/pull/23',
+      state: 'OPEN',
+    }
+    execFileMock.mockResolvedValueOnce(JSON.stringify(rawPr))
+    const snap = await githubProvider.getPrStatus('/repo', 'feat/x')
+    expect(snap?.readyToMerge).toBe(true)
+  })
+
+  it('readyToMerge is false when CI is still pending', async () => {
+    const rawPr = {
+      number: 22,
+      title: 'Pending PR',
+      url: 'https://github.com/o/r/pull/22',
+      state: 'OPEN',
+      statusCheckRollup: [{ name: 'ci', conclusion: null, status: 'IN_PROGRESS', detailsUrl: null }],
+    }
+    execFileMock.mockResolvedValueOnce(JSON.stringify(rawPr))
+    const snap = await githubProvider.getPrStatus('/repo', 'feat/x')
+    expect(snap?.readyToMerge).toBe(false)
+  })
 })

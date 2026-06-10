@@ -2,6 +2,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { CreatePrOptions, ForgeAvailability, ForgeProvider, PrCiCheck, PrSnapshot } from '../types.js'
+import { deriveReadyToMerge } from '../types.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -45,6 +46,7 @@ function mapGlabMrToSnapshot(raw: RawGlabMr): PrSnapshot {
     ci: { rollup: null, checks: [] },
     updatedAt: raw.updated_at ?? '',
     unresolvedReviewThreadsCount: 0,
+    readyToMerge: false,
   }
 }
 
@@ -172,6 +174,7 @@ export const gitlabProvider: ForgeProvider = {
       if (!raw) return null
       const snapshot = mapGlabMrToSnapshot(JSON.parse(raw) as RawGlabMr)
       snapshot.ci = await fetchGlabCi(repoPath, branch)
+      snapshot.readyToMerge = deriveReadyToMerge(snapshot)
       return snapshot
     } catch {
       return null

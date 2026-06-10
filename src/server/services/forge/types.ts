@@ -36,6 +36,22 @@ export interface PrSnapshot {
   updatedAt: string
   /** Unresolved review threads. Stays 0 on forges that don't expose it. */
   unresolvedReviewThreadsCount: number
+  /** Computed: OPEN + CI green or absent (mergeable) + not blocked by changes-requested. */
+  readyToMerge: boolean
+}
+
+/**
+ * True when nothing blocks merging the PR: it is open, CI is not failing or
+ * in-flight (green `SUCCESS` or absent `null` — matching GitHub's "Ready to
+ * merge"), and no reviewer is actively requesting changes. `null` covers repos
+ * or PRs with no CI configured. Pending/failure/cancelled/neutral are NOT ready.
+ * Mirrors the front-end blocking rule — trust a reviewer still in
+ * CHANGES_REQUESTED, not the sticky `reviewDecision` alone.
+ */
+export function deriveReadyToMerge(s: Pick<PrSnapshot, 'state' | 'ci' | 'reviewDecision' | 'reviewers'>): boolean {
+  const blocked = s.reviewDecision === 'CHANGES_REQUESTED' && s.reviewers.some((r) => r.state === 'CHANGES_REQUESTED')
+  const ciOk = s.ci.rollup === 'SUCCESS' || s.ci.rollup === null
+  return s.state === 'OPEN' && ciOk && !blocked
 }
 
 /** Capabilities a provider declares so the UI can adapt without probing. */

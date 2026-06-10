@@ -83,6 +83,7 @@ function makePrSnapshot(
     ci: { rollup: null, checks: [] },
     updatedAt: '2026-05-12T10:00:00Z',
     unresolvedReviewThreadsCount: 0,
+    readyToMerge: false,
     ...overrides,
   }
 }
@@ -466,6 +467,60 @@ describe('checkPrStatuses — git stats caching', () => {
     const stats = getAllGitStats()
     expect(stats['ws-a']).toBeUndefined()
     expect(stats['ws-b']).toEqual({ commitCount: 2 })
+  })
+})
+
+describe('checkPrStatuses — ready-to-merge transition', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    _resetForTest()
+    vi.mocked(computeGitStats).mockResolvedValue({} as never)
+  })
+
+  it('emits pr:ready-to-merge and marks unread on a non-busy false->true transition', async () => {
+    vi.mocked(wsService.listWorkspaces).mockReturnValue([makeWorkspace({ status: 'idle' })] as never)
+    // Tick 1: pending CI — establishes prev, no emit.
+    getPrStatusMock.mockResolvedValueOnce(
+      makePrSnapshot({ ci: { rollup: 'PENDING', checks: [] }, readyToMerge: false }),
+    )
+    await checkPrStatuses()
+    // Tick 2: CI green -> ready.
+    getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ ci: { rollup: 'SUCCESS', checks: [] }, readyToMerge: true }))
+    await checkPrStatuses()
+
+    expect(vi.mocked(wsSvc.emitEphemeral)).toHaveBeenCalledWith('ws-1', 'pr:ready-to-merge', {
+      prNumber: 1,
+      prUrl: 'https://github.com/x/y/pull/1',
+    })
+    expect(vi.mocked(wsService.markWorkspaceUnread)).toHaveBeenCalledWith('ws-1')
+  })
+
+  it('does not emit on first sight (no prev)', async () => {
+    vi.mocked(wsService.listWorkspaces).mockReturnValue([makeWorkspace({ status: 'idle' })] as never)
+    getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ ci: { rollup: 'SUCCESS', checks: [] }, readyToMerge: true }))
+    await checkPrStatuses()
+    expect(vi.mocked(wsSvc.emitEphemeral)).not.toHaveBeenCalledWith('ws-1', 'pr:ready-to-merge', expect.anything())
+  })
+
+  it('does not emit when the workspace is busy', async () => {
+    vi.mocked(wsService.listWorkspaces).mockReturnValue([makeWorkspace({ status: 'executing' })] as never)
+    getPrStatusMock.mockResolvedValueOnce(
+      makePrSnapshot({ ci: { rollup: 'PENDING', checks: [] }, readyToMerge: false }),
+    )
+    await checkPrStatuses()
+    getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ ci: { rollup: 'SUCCESS', checks: [] }, readyToMerge: true }))
+    await checkPrStatuses()
+    expect(vi.mocked(wsSvc.emitEphemeral)).not.toHaveBeenCalledWith('ws-1', 'pr:ready-to-merge', expect.anything())
+  })
+
+  it('does not emit when already ready (no transition)', async () => {
+    vi.mocked(wsService.listWorkspaces).mockReturnValue([makeWorkspace({ status: 'idle' })] as never)
+    getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ ci: { rollup: 'SUCCESS', checks: [] }, readyToMerge: true }))
+    await checkPrStatuses()
+    vi.mocked(wsSvc.emitEphemeral).mockClear()
+    getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ ci: { rollup: 'SUCCESS', checks: [] }, readyToMerge: true }))
+    await checkPrStatuses()
+    expect(vi.mocked(wsSvc.emitEphemeral)).not.toHaveBeenCalledWith('ws-1', 'pr:ready-to-merge', expect.anything())
   })
 })
 

@@ -137,3 +137,53 @@ describe('gitlab forge provider — CI jobs', () => {
     expect(snap?.ci.checks).toEqual([{ name: '', conclusion: 'SUCCESS', status: 'COMPLETED', detailsUrl: null }])
   })
 })
+
+describe('gitlab forge provider — readyToMerge', () => {
+  it('readyToMerge is true for an OPEN MR with a successful pipeline', async () => {
+    execFileMock
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          iid: 7,
+          title: 'MR',
+          web_url: 'https://gl/x/-/merge_requests/7',
+          state: 'opened',
+          target_branch: 'main',
+        }),
+      )
+      .mockResolvedValueOnce(JSON.stringify({ status: 'success', jobs: [{ name: 'build', status: 'success' }] }))
+    const snap = await gitlabProvider.getPrStatus('/repo', 'feat/x')
+    expect(snap?.readyToMerge).toBe(true)
+  })
+
+  it('readyToMerge is false when the pipeline failed', async () => {
+    execFileMock
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          iid: 8,
+          title: 'MR',
+          web_url: 'https://gl/x/-/merge_requests/8',
+          state: 'opened',
+          target_branch: 'main',
+        }),
+      )
+      .mockResolvedValueOnce(JSON.stringify({ status: 'failed', jobs: [{ name: 'build', status: 'failed' }] }))
+    const snap = await gitlabProvider.getPrStatus('/repo', 'feat/x')
+    expect(snap?.readyToMerge).toBe(false)
+  })
+
+  it('readyToMerge is true when the MR has no pipeline (no CI configured)', async () => {
+    execFileMock
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          iid: 9,
+          title: 'MR',
+          web_url: 'https://gl/x/-/merge_requests/9',
+          state: 'opened',
+          target_branch: 'main',
+        }),
+      )
+      .mockResolvedValueOnce('')
+    const snap = await gitlabProvider.getPrStatus('/repo', 'feat/x')
+    expect(snap?.readyToMerge).toBe(true)
+  })
+})

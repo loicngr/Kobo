@@ -33,6 +33,10 @@ export default {
 
   // Models
   'model.auto': 'Auto',
+  'model.fable5': 'Fable 5',
+  'model.mythos5': 'Mythos 5 (Glasswing)',
+  'model.fable5Description': 'El modelo más capaz — sucesor de Opus 4.8, contexto 1M, adaptive thinking',
+  'model.mythos5Description': 'Fable 5 sin clasificadores de seguridad — acceso limitado (Project Glasswing)',
   'model.opus': 'Opus 4.6',
   'model.sonnet': 'Sonnet 4.6',
   'model.opus48': 'Opus 4.8',
@@ -807,6 +811,7 @@ export default {
   'git.pr.ci.hidePassed': 'Ocultar los jobs OK',
   'toast.prChangesRequested': 'Se solicitaron cambios en la PR #{n}',
   'toast.prApproved': 'La PR #{n} ha sido aprobada',
+  'toast.prReadyToMerge': 'La PR #{n} está lista para merge',
 
   // Dev Server Panel
   'devServer.title': 'Servidor de desarrollo',
@@ -1228,6 +1233,7 @@ export default {
   'workspaceList.prChangesRequested': '#{n} — Cambios solicitados',
   'workspaceList.attentionCiFailed': 'CI fallida',
   'workspaceList.attentionChangesRequested': 'Cambios solicitados',
+  'workspaceList.attentionReadyToMerge': 'Listo para merge',
 
   // Auto-loop
   'autoLoop.toggle': 'Auto-loop',

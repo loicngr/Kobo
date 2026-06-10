@@ -16,6 +16,7 @@
   "scripts": {
     "dev": "quasar dev",
     "build": "quasar build",
+    "type-check": "vue-tsc --noEmit",
     "postinstall": "quasar prepare",
     "test": "vitest run",
     "test:watch": "vitest"
@@ -43,6 +44,7 @@
     "happy-dom": "^20.9.0",
     "sass": "^1.99.0",
     "typescript": "^5.9.3",
-    "vitest": "^4.1.5"
+    "vitest": "^4.1.5",
+    "vue-tsc": "^3.3.4"
   }
 }

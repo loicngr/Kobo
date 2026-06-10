@@ -3327,9 +3327,17 @@ app.post('/:id/open-pr', async (c) => {
       return c.json({ error: 'Branch is not on remote', code: 'branch_not_pushed' }, 409)
     }
 
-    // Ensure all local commits are pushed
+    // Ensure all local commits are pushed. Compare against origin/<workingBranch>
+    // explicitly — NOT `@{u}`: the worktree is created from origin/<sourceBranch>
+    // (worktree-service.createWorktree), so the branch's upstream tracks the BASE.
+    // `@{u}..HEAD` would then count the branch's own commits and falsely report
+    // "unpushed" for any branch pushed without -u (e.g. by the agent). This mirrors
+    // getUnpushedCountAsync, the ref the GitPanel's "pushed" label already uses.
     try {
-      const { stdout } = await execFileAsync('git', ['rev-list', '@{u}..HEAD', '--count'], { cwd: worktreePath })
+      const remoteRef = `origin/${workspace.workingBranch}`
+      const { stdout } = await execFileAsync('git', ['rev-list', `${remoteRef}..HEAD`, '--count'], {
+        cwd: worktreePath,
+      })
       const countStr = stdout.trim()
       const count = parseInt(countStr, 10) || 0
       if (count > 0) {

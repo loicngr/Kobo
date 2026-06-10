@@ -17,6 +17,7 @@ function snap(overrides: Partial<PrSnapshot> = {}): PrSnapshot {
     ci: { rollup: null, checks: [] },
     updatedAt: '',
     unresolvedReviewThreadsCount: 0,
+    readyToMerge: false,
     ...overrides,
   }
 }

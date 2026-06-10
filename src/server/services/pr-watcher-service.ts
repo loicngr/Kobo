@@ -251,6 +251,11 @@ export async function checkPrStatuses(): Promise<void> {
         if (prev.ci.rollup !== 'FAILURE' && pr.ci.rollup === 'FAILURE') {
           markUnread(ws.id)
         }
+        const notBusy = !['extracting', 'brainstorming', 'executing'].includes(ws.status)
+        if (notBusy && !prev.readyToMerge && pr.readyToMerge) {
+          emitEphemeral(ws.id, 'pr:ready-to-merge', { prNumber: pr.number, prUrl: pr.url })
+          markUnread(ws.id)
+        }
       }
 
       // Cache the snapshot for the next tick. For non-OPEN PRs (closed /

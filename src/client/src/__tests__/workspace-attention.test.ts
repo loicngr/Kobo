@@ -21,6 +21,7 @@ function snap(overrides: Partial<PrSnapshot> = {}): PrSnapshot {
     ci: { rollup: null, checks: [] },
     updatedAt: '',
     unresolvedReviewThreadsCount: 0,
+    readyToMerge: false,
     ...overrides,
   }
 }
@@ -64,5 +65,25 @@ describe('getAttentionReasons', () => {
     expect(getAttentionReasons(ws('idle'), snap({ state: 'CLOSED', ci: { rollup: 'FAILURE', checks: [] } }))).toEqual(
       [],
     )
+  })
+
+  it('returns the ready-to-merge reason for a non-busy workspace whose PR is ready', () => {
+    const reasons = getAttentionReasons(ws('idle'), snap({ readyToMerge: true }))
+    expect(reasons).toEqual([{ kind: 'ready-to-merge', icon: 'check_circle', color: 'green-5' }])
+  })
+
+  it('does NOT return ready-to-merge when the agent is busy', () => {
+    const reasons = getAttentionReasons(ws('executing'), snap({ readyToMerge: true }))
+    expect(reasons).not.toContainEqual(expect.objectContaining({ kind: 'ready-to-merge' }))
+  })
+
+  it('does NOT return ready-to-merge when readyToMerge is false', () => {
+    const reasons = getAttentionReasons(ws('idle'), snap({ readyToMerge: false }))
+    expect(reasons).toEqual([])
+  })
+
+  it('stacks the status reason before ready-to-merge', () => {
+    const reasons = getAttentionReasons(ws('awaiting-user'), snap({ readyToMerge: true }))
+    expect(reasons.map((r) => r.kind)).toEqual(['awaiting-user', 'ready-to-merge'])
   })
 })

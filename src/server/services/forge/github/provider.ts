@@ -2,6 +2,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import type { CreatePrOptions, ForgeAvailability, ForgeProvider, PrCiCheck, PrReviewer, PrSnapshot } from '../types.js'
+import { deriveReadyToMerge } from '../types.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -70,13 +71,15 @@ function mapGhPrToSnapshot(raw: RawGhPr): PrSnapshot {
     else rollup = 'SUCCESS'
   }
   const unresolvedReviewThreadsCount = (raw.reviewThreads ?? []).reduce((a, t) => a + (t.isResolved ? 0 : 1), 0)
+  const state = raw.state as PrSnapshot['state']
+  const reviewDecision = (raw.reviewDecision as PrSnapshot['reviewDecision']) ?? null
   return {
     number: raw.number,
     title: raw.title,
     url: raw.url,
-    state: raw.state as PrSnapshot['state'],
+    state,
     base: raw.baseRefName ?? '',
-    reviewDecision: (raw.reviewDecision as PrSnapshot['reviewDecision']) ?? null,
+    reviewDecision,
     author: { login: raw.author?.login ?? '' },
     assignees: (raw.assignees ?? []).map((a) => ({ login: a.login })),
     reviewers,
@@ -84,6 +87,7 @@ function mapGhPrToSnapshot(raw: RawGhPr): PrSnapshot {
     ci: { rollup, checks },
     updatedAt: raw.updatedAt ?? '',
     unresolvedReviewThreadsCount,
+    readyToMerge: deriveReadyToMerge({ state, ci: { rollup, checks }, reviewDecision, reviewers }),
   }
 }
 

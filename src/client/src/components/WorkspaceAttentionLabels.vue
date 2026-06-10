@@ -82,6 +82,8 @@ function labelFor(kind: AttentionKind): string {
       return t('workspaceList.attentionCiFailed')
     case 'changes-requested':
       return t('workspaceList.attentionChangesRequested')
+    case 'ready-to-merge':
+      return t('workspaceList.attentionReadyToMerge')
     default:
       return kind // 'error' | 'quota' — raw, matching the prior card behaviour
   }

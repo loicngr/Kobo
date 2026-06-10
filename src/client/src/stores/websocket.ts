@@ -910,6 +910,22 @@ export const useWebSocketStore = defineStore('websocket', {
           break
         }
 
+        case 'pr:ready-to-merge': {
+          if (!wid) break
+          const p = payload as { prNumber?: number; prUrl?: string }
+          const prNumber = p.prNumber ?? 0
+          const message = t('toast.prReadyToMerge', { n: prNumber })
+          Notify.create({
+            type: 'positive',
+            position: 'top',
+            timeout: 5000,
+            message,
+          })
+          notify(message, undefined, wid)
+          void workspaceStore.refreshPrSnapshot(wid)
+          break
+        }
+
         case 'wakeup:scheduled': {
           if (wid) {
             const p = payload as { targetAt?: string; reason?: string }

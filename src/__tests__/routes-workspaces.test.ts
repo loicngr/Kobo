@@ -2437,6 +2437,28 @@ describe('POST /api/workspaces/:id/open-pr', () => {
     expect(data.code).toBe('unpushed_commits')
   })
 
+  it('creates the PR when pushed even if @{u} points at the base branch (agent-pushed without -u)', async () => {
+    // Regression: the worktree is created from origin/<sourceBranch>, so the
+    // branch's upstream @{u} tracks the BASE. Counting `@{u}..HEAD` therefore
+    // returns the branch's own commits (>0) and falsely reports unpushed work,
+    // even though origin/<workingBranch>..HEAD is 0 (everything pushed). open-pr
+    // must measure against origin/<workingBranch>, like the GitPanel does.
+    createPrMock.mockResolvedValueOnce({ url: 'https://github.com/o/r/pull/9', number: 9 })
+    execFilePromiseMock.mockImplementation((_cmd: string, args: string[]) => {
+      if (args.includes('ls-remote')) return Promise.resolve({ stdout: 'abc refs/heads/feature/test\n' })
+      if (args.includes('rev-list')) {
+        const spec = args.find((a) => a.endsWith('..HEAD')) ?? ''
+        if (spec.includes('@{u}')) return Promise.resolve({ stdout: '2\n' }) // upstream = base → false positive
+        return Promise.resolve({ stdout: '0\n' }) // origin/<workingBranch> → aligned
+      }
+      return Promise.resolve({ stdout: '' })
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/open-pr', { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect(createPrMock).toHaveBeenCalled()
+  })
+
   it('open-pr creates the PR via the resolved forge provider', async () => {
     createPrMock.mockResolvedValueOnce({ url: 'https://github.com/o/r/pull/5', number: 5 })
 
@@ -5069,6 +5091,7 @@ describe('POST /api/workspaces/:id/start-ci-fix', () => {
       },
       updatedAt: '2026-05-01T00:00:00.000Z',
       unresolvedReviewThreadsCount: 0,
+      readyToMerge: false,
       ...overrides,
     }
   }

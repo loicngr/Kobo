@@ -949,6 +949,7 @@ describe('workspace store', () => {
         ci: { rollup: 'FAILURE', checks: [] },
         updatedAt: '',
         unresolvedReviewThreadsCount: 0,
+        readyToMerge: false,
       }
     }
 
@@ -984,12 +985,20 @@ describe('workspace store', () => {
       expect(store.idle.map((w) => w.id)).toEqual([])
     })
 
-    it('leaves grouping unchanged for a clean snapshot', () => {
+    it('keeps a busy workspace with a ready PR in running, not needsAttention', () => {
       const store = useWorkspaceStore()
       store.workspaces = [makeWorkspace({ id: 'w1', status: 'executing' })]
-      store.prSnapshots = { w1: { ...failingCiSnapshot(), ci: { rollup: 'SUCCESS', checks: [] } } }
+      store.prSnapshots = { w1: { ...failingCiSnapshot(), ci: { rollup: 'SUCCESS', checks: [] }, readyToMerge: true } }
       expect(store.running.map((w) => w.id)).toEqual(['w1'])
       expect(store.needsAttention.map((w) => w.id)).toEqual([])
+    })
+
+    it('moves an idle workspace with a ready PR into needsAttention, not idle', () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1', status: 'idle' })]
+      store.prSnapshots = { w1: { ...failingCiSnapshot(), ci: { rollup: 'SUCCESS', checks: [] }, readyToMerge: true } }
+      expect(store.needsAttention.map((w) => w.id)).toEqual(['w1'])
+      expect(store.idle.map((w) => w.id)).toEqual([])
     })
   })
 

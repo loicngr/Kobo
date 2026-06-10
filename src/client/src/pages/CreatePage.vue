@@ -443,7 +443,7 @@
                 map-options
                 option-value="value"
                 option-label="label"
-                :option-disable="(opt: { disabled?: boolean }) => opt.disabled === true"
+                :option-disable="isOptionDisabled"
             >
               <template #selected>
               <span class="bottom-select-label row items-center no-wrap">
@@ -703,6 +703,16 @@ import { buildTemplateVars, expandTemplate } from 'src/utils/expand-template'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
+
+/**
+ * QSelect `:option-disable` predicate. Kept in the script (not inline in the
+ * template) because vue-tsc/Volar can't parse an inline object-type annotation
+ * on an arrow function inside a template attribute — it errored at the `{` of
+ * the type literal.
+ */
+function isOptionDisabled(opt: { disabled?: boolean }): boolean {
+  return opt.disabled === true
+}
 
 interface EngineDto {
   id: string
