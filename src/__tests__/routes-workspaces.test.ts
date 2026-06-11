@@ -259,6 +259,7 @@ vi.mock('../server/services/settings-service.js', () => ({
   getEffectiveSettings: vi.fn(),
   getGlobalSettings: vi.fn(),
   getProjectSettings: vi.fn(),
+  getEffectiveFinalization: vi.fn().mockReturnValue({ prompt: '' }),
 }))
 
 vi.mock('../server/services/setup-script-service.js', () => ({

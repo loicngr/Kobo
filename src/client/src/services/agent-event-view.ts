@@ -110,7 +110,10 @@ export function foldEvents(events: AgentEvent[], timestamps?: string[], sessionA
       case 'session:compacted':
         items.push({ type: 'session', kind: 'compacted', ts })
         break
-      // Ignored categories — consumed by dedicated panels
+      // Ignored categories — consumed by dedicated panels (session:compacting
+      // is an ephemeral live indicator handled by the agent-stream store, never
+      // a persisted feed item).
+      case 'session:compacting':
       case 'session:brainstorm-complete':
       case 'session:user-input-requested':
       case 'message:raw':

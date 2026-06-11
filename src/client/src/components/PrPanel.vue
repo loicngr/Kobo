@@ -180,6 +180,7 @@
 
 <script setup lang="ts">
 import type { PrSnapshot } from 'src/stores/workspace'
+import { summarizeCiChecks } from 'src/utils/ci-summary'
 import { pickReadableForeground } from 'src/utils/color'
 import { isChangesRequestedBlocking } from 'src/utils/pr-status'
 import { computed, ref } from 'vue'
@@ -204,32 +205,7 @@ function reviewerColor(state: PrSnapshot['reviewers'][number]['state']): string 
   }
 }
 
-const ciGroups = computed<{ failed: Check[]; pending: Check[]; passed: Check[]; skipped: Check[] }>(() => {
-  const failed: Check[] = []
-  const pending: Check[] = []
-  const passed: Check[] = []
-  const skipped: Check[] = []
-  for (const c of props.snapshot.ci.checks) {
-    if (c.status !== 'COMPLETED') {
-      pending.push(c)
-      continue
-    }
-    if (c.conclusion === 'FAILURE' || c.conclusion === 'CANCELLED' || c.conclusion === 'TIMED_OUT') {
-      failed.push(c)
-    } else if (c.conclusion === 'SUCCESS') {
-      passed.push(c)
-    } else {
-      // SKIPPED / NEUTRAL / unknown
-      skipped.push(c)
-    }
-  }
-  const byName = (a: Check, b: Check) => a.name.localeCompare(b.name)
-  failed.sort(byName)
-  pending.sort(byName)
-  passed.sort(byName)
-  skipped.sort(byName)
-  return { failed, pending, passed, skipped }
-})
+const ciGroups = computed(() => summarizeCiChecks(props.snapshot.ci.checks))
 
 const ciIcon = computed(() => {
   switch (props.snapshot.ci.rollup) {

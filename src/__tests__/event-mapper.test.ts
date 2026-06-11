@@ -60,6 +60,22 @@ describe('event-mapper', () => {
       const events = mapSdkMessage(asMsg({ type: 'system', subtype: 'compact', session_id: 's' }), createMapperState())
       expect(events).toEqual([{ kind: 'session:compacted' }])
     })
+
+    it('emits session:compacting active:true on system status compacting', () => {
+      const events = mapSdkMessage(
+        asMsg({ type: 'system', subtype: 'status', status: 'compacting', session_id: 's' }),
+        createMapperState(),
+      )
+      expect(events).toEqual([{ kind: 'session:compacting', active: true }])
+    })
+
+    it('emits session:compacting active:false when status clears (not compacting)', () => {
+      const events = mapSdkMessage(
+        asMsg({ type: 'system', subtype: 'status', status: null, session_id: 's' }),
+        createMapperState(),
+      )
+      expect(events).toEqual([{ kind: 'session:compacting', active: false }])
+    })
   })
 
   describe('rate_limit_event', () => {

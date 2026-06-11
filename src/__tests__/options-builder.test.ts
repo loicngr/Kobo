@@ -11,7 +11,9 @@ describe('buildClaudeOptions', () => {
     expect(options.cwd).toBe('/tmp/work')
     expect(options.permissionMode).toBe('bypassPermissions')
     expect(options.allowDangerouslySkipPermissions).toBe(true)
-    expect(options.systemPrompt).toEqual({ type: 'preset', preset: 'claude_code' })
+    expect(options.systemPrompt).toMatchObject({ type: 'preset', preset: 'claude_code' })
+    // Appended guidance teaches the agent to survive long waits via schedule_wakeup.
+    expect((options.systemPrompt as { append?: string }).append).toContain('schedule_wakeup')
     // `tools` is intentionally left undefined — see options-builder.ts: the
     // `claude_code` preset excludes MCP tools, breaking bypassPermissions for
     // them. Letting it default gives the agent the full toolbox.

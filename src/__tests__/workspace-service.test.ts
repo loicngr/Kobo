@@ -1484,3 +1484,38 @@ describe('archiveWorkspace + deleteWorkspace — cron cascade', () => {
     expect(cronService.listForWorkspace(ws.id)).toHaveLength(0)
   })
 })
+
+describe('dismissPrAttention() / restorePrAttention()', () => {
+  it('dismiss records the timestamp, restore clears it back to null', async () => {
+    const { createWorkspace, getWorkspace, dismissPrAttention, restorePrAttention } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const ws = createWorkspace({ name: 'W', projectPath: '/tmp/p', sourceBranch: 'main', workingBranch: 'feature/x' })
+    expect(getWorkspace(ws.id)?.prCiFailureDismissedAt).toBeNull()
+
+    dismissPrAttention(ws.id, 'ci-failed', '2026-06-11T10:00:00.000Z')
+    expect(getWorkspace(ws.id)?.prCiFailureDismissedAt).toBe('2026-06-11T10:00:00.000Z')
+
+    restorePrAttention(ws.id, 'ci-failed')
+    expect(getWorkspace(ws.id)?.prCiFailureDismissedAt).toBeNull()
+  })
+
+  it('restore targets the right column per kind', async () => {
+    const { createWorkspace, getWorkspace, dismissPrAttention, restorePrAttention } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const ws = createWorkspace({ name: 'W', projectPath: '/tmp/p', sourceBranch: 'main', workingBranch: 'feature/x' })
+    dismissPrAttention(ws.id, 'changes-requested', '2026-06-11T10:00:00.000Z')
+    dismissPrAttention(ws.id, 'ci-failed', '2026-06-11T10:00:00.000Z')
+
+    restorePrAttention(ws.id, 'changes-requested')
+    expect(getWorkspace(ws.id)?.prChangesDismissedAt).toBeNull()
+    // The other column must be untouched.
+    expect(getWorkspace(ws.id)?.prCiFailureDismissedAt).toBe('2026-06-11T10:00:00.000Z')
+  })
+
+  it('throws when the workspace does not exist', async () => {
+    const { restorePrAttention } = await import('../server/services/workspace-service.js')
+    expect(() => restorePrAttention('nope', 'ci-failed')).toThrow("Workspace 'nope' not found")
+  })
+})

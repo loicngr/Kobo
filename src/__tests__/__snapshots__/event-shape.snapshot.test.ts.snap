@@ -24,6 +24,10 @@ exports[`AgentEvent shape snapshot > matches the snapshot > agent-event-shape 1`
   "session:compacted": {
     "kind": "session:compacted"
   },
+  "session:compacting": {
+    "kind": "session:compacting",
+    "active": true
+  },
   "session:brainstorm-complete": {
     "kind": "session:brainstorm-complete"
   },

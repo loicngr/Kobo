@@ -37,10 +37,21 @@ const KOBO_MCP_BRIEF = [
   'Each tool carries its own "WHEN to use" guidance in its description — follow it.',
 ].join('\n')
 
+/**
+ * Appended to the Claude Code preset system prompt so the rule is always in
+ * context (not just the first turn like KOBO_MCP_BRIEF). Teaches the agent to
+ * survive long-running work via `kobo__schedule_wakeup` instead of stalling the
+ * session — the recurring "tell it how to stay alive" friction.
+ */
+const KOBO_SYSTEM_APPEND = [
+  '[Kōbō] Surviving long waits — when a task takes more than ~1-2 min (test suites, CI, builds, deploys, waiting on external state): never block your turn with sleep/poll loops, and never end a turn merely "waiting" on a background job — the Kōbō session goes idle and will NOT resume itself, so the work stalls.',
+  'Instead: launch it in the background (redirect output to a log file), call `kobo__schedule_wakeup` with `delaySeconds` ≈ the expected duration and a `prompt` telling future-you exactly what to check (the log path + next step), then end the turn. On wakeup: inspect the result, call `kobo__cancel_wakeup` if it finished early, and continue. Do this proactively, without being asked.',
+].join('\n')
+
 export function buildClaudeOptions(input: BuildClaudeOptionsInput): BuildClaudeOptionsResult {
   const options: Options = {
     cwd: input.workingDir,
-    systemPrompt: { type: 'preset', preset: 'claude_code' },
+    systemPrompt: { type: 'preset', preset: 'claude_code', append: KOBO_SYSTEM_APPEND },
     // Leave `tools` undefined: the `claude_code` preset EXCLUDES MCP tools, so
     // under bypassPermissions MCP tools surface as "haven't granted it yet"
     // even when the user chose bypass. Undefined → full toolbox (built-ins +

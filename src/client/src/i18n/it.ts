@@ -374,6 +374,10 @@ export default {
   'settings.ciFixPromptHint':
     "Inviato all'agente quando un workspace ha la CI in errore. Variabili (sintassi doppie graffe): pr_url, pr_number, pr_title, branch_name, source_branch, workspace_name, workspace_id, project_name, failed_jobs, ci_run_url.",
   'settings.ciFixPromptPlaceholder': "Chiedi all'agente di diagnosticare e correggere i job di CI in errore...",
+  'settings.finalizationPromptTemplate': "Prompt di finalizzazione dell'auto-loop",
+  'settings.finalizationPromptHint':
+    "Prompt predefinito per l'ultima iterazione dell'auto-loop (controlli di qualità finali). Usato quando un progetto lascia vuoto il proprio prompt di finalizzazione.",
+  'settings.finalizationPromptPlaceholder': 'Run final quality checks before closing the workspace...',
   'settings.notionInitialPrompt': 'Prompt iniziale Notion',
   'settings.notionInitialPrompt.help':
     'Aggiunto al prompt di creazione del workspace quando il workspace ha un ticket Notion. Variabili: {variables}.',
@@ -1058,6 +1062,8 @@ export default {
   'contextMenu.exportEvents': 'Esporta eventi (CSV)',
   'contextMenu.dismissChangesRequested': 'Segna «Modifiche richieste» come visto',
   'contextMenu.dismissCiFailure': 'Segna «CI in errore» come visto',
+  'contextMenu.restoreChangesRequested': 'Segna «Modifiche richieste» come non visto',
+  'contextMenu.restoreCiFailure': 'Segna «CI in errore» come non visto',
   'contextMenu.exportingEvents': "Preparazione dell'esportazione…",
   'contextMenu.exportEventsError': 'Esportazione degli eventi non riuscita',
   'contextMenu.openNotion': 'Apri in Notion',
@@ -1157,6 +1163,7 @@ export default {
   'tool.running': 'In corso...',
   'activity.raw_lines': 'Righe di output grezze ({n})',
   'activity.loading_older': 'Caricamento messaggi precedenti…',
+  'activity.compacting': 'Compattazione del contesto…',
   'activity.prev_user_message': 'Messaggio utente precedente',
   'activity.scroll_to_bottom': 'Scorri in fondo',
   'chat.systemPrompt': 'Prompt di sistema',

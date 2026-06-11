@@ -14,6 +14,7 @@ const EXAMPLES: Record<string, AgentEvent> = {
     payload: { questions: [] },
   },
   'session:compacted': { kind: 'session:compacted' },
+  'session:compacting': { kind: 'session:compacting', active: true },
   'session:brainstorm-complete': { kind: 'session:brainstorm-complete' },
   'message:text': { kind: 'message:text', messageId: 'm1', text: 'hi', streaming: false },
   'message:thinking': { kind: 'message:thinking', messageId: 'm1', text: 'thinking…' },

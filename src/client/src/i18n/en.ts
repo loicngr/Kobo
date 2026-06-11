@@ -369,6 +369,10 @@ export default {
   'settings.ciFixPromptHint':
     'Sent to the agent when a workspace has failing CI. Variables (double-brace syntax): pr_url, pr_number, pr_title, branch_name, source_branch, workspace_name, workspace_id, project_name, failed_jobs, ci_run_url.',
   'settings.ciFixPromptPlaceholder': 'Ask the agent to diagnose and fix the failing CI jobs...',
+  'settings.finalizationPromptTemplate': 'Auto-loop finalization prompt',
+  'settings.finalizationPromptHint':
+    'Default prompt for the final auto-loop iteration (last quality checks). Used when a project leaves its own finalization prompt empty.',
+  'settings.finalizationPromptPlaceholder': 'Run final quality checks before closing the workspace...',
   'settings.notionInitialPrompt': 'Notion initial prompt',
   'settings.notionInitialPrompt.help':
     'Appended to the workspace creation prompt when the workspace has a Notion ticket. Variables: {variables}.',
@@ -1048,6 +1052,8 @@ export default {
   'contextMenu.exportEvents': 'Export events (CSV)',
   'contextMenu.dismissChangesRequested': "Mark 'Changes requested' as seen",
   'contextMenu.dismissCiFailure': "Mark 'CI failure' as seen",
+  'contextMenu.restoreChangesRequested': "Mark 'Changes requested' as unseen",
+  'contextMenu.restoreCiFailure': "Mark 'CI failure' as unseen",
   'contextMenu.exportingEvents': 'Preparing export…',
   'contextMenu.exportEventsError': 'Event export failed',
   'contextMenu.openNotion': 'Open in Notion',
@@ -1146,6 +1152,7 @@ export default {
   'tool.running': 'Running...',
   'activity.raw_lines': 'Raw output lines ({n})',
   'activity.loading_older': 'Loading older messages…',
+  'activity.compacting': 'Compacting context…',
   'activity.prev_user_message': 'Previous user message',
   'activity.scroll_to_bottom': 'Scroll to bottom',
   'chat.systemPrompt': 'System prompt',

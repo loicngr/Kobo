@@ -376,6 +376,10 @@ export default {
     'Wird an den Agenten gesendet, wenn die CI eines Workspaces fehlschlägt. Variablen (doppelte geschweifte Klammern): pr_url, pr_number, pr_title, branch_name, source_branch, workspace_name, workspace_id, project_name, failed_jobs, ci_run_url.',
   'settings.ciFixPromptPlaceholder':
     'Den Agenten bitten, die fehlschlagenden CI-Jobs zu diagnostizieren und zu beheben...',
+  'settings.finalizationPromptTemplate': 'Auto-Loop-Finalisierungs-Prompt',
+  'settings.finalizationPromptHint':
+    'Standard-Prompt für die letzte Auto-Loop-Iteration (abschließende Qualitätsprüfungen). Wird verwendet, wenn ein Projekt seinen eigenen Finalisierungs-Prompt leer lässt.',
+  'settings.finalizationPromptPlaceholder': 'Run final quality checks before closing the workspace...',
   'settings.notionInitialPrompt': 'Notion-Initial-Prompt',
   'settings.notionInitialPrompt.help':
     'Wird an den Workspace-Erstellungsprompt angehängt, wenn der Workspace ein Notion-Ticket hat. Variablen: {variables}.',
@@ -1064,6 +1068,8 @@ export default {
   'contextMenu.exportEvents': 'Events exportieren (CSV)',
   'contextMenu.dismissChangesRequested': 'Änderungen angefragt als gesehen markieren',
   'contextMenu.dismissCiFailure': 'CI-Fehler als gesehen markieren',
+  'contextMenu.restoreChangesRequested': 'Änderungen angefragt als ungesehen markieren',
+  'contextMenu.restoreCiFailure': 'CI-Fehler als ungesehen markieren',
   'contextMenu.exportingEvents': 'Export wird vorbereitet…',
   'contextMenu.exportEventsError': 'Event-Export fehlgeschlagen',
   'contextMenu.openNotion': 'In Notion öffnen',
@@ -1163,6 +1169,7 @@ export default {
   'tool.running': 'Läuft...',
   'activity.raw_lines': 'Rohausgabezeilen ({n})',
   'activity.loading_older': 'Ältere Nachrichten werden geladen…',
+  'activity.compacting': 'Kontext wird komprimiert…',
   'activity.prev_user_message': 'Vorherige Nachricht des Benutzers',
   'activity.scroll_to_bottom': 'Nach unten scrollen',
   'chat.systemPrompt': 'System-Prompt',

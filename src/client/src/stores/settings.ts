@@ -67,6 +67,8 @@ interface GlobalSettings {
   prPromptTemplate: string
   reviewPromptTemplate: string
   ciFixPromptTemplate: string
+  /** Default auto-loop finalization prompt; used when a project leaves its own empty. */
+  finalizationPrompt: string
   notionInitialPromptTemplate: string
   sentryInitialPromptTemplate: string
   gitConventions: string
@@ -180,6 +182,7 @@ export const useSettingsStore = defineStore('settings', {
       prPromptTemplate: '',
       reviewPromptTemplate: '',
       ciFixPromptTemplate: '',
+      finalizationPrompt: '',
       notionInitialPromptTemplate: '',
       sentryInitialPromptTemplate: '',
       gitConventions: '',
@@ -273,6 +276,7 @@ export const useSettingsStore = defineStore('settings', {
       prPromptTemplate: string
       reviewPromptTemplate: string
       ciFixPromptTemplate: string
+      finalizationPrompt: string
       gitConventions: string
       notionInitialPromptTemplate: string
       sentryInitialPromptTemplate: string

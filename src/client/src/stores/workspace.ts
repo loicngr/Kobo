@@ -131,6 +131,20 @@ export interface AgentTodo {
   content: string
   status: string
   activeForm?: string
+  /** Originating TaskCreate tool-call id (Claude Code ≥ v0.3.142 Task tools). */
+  id?: string
+  /** Sequential `#N` parsed from the TaskCreate result, used to match TaskUpdate. */
+  taskNumber?: number
+}
+
+/**
+ * Normalize a Claude Code Task-tool status (`pending | running | completed |
+ * failed | killed | paused`) to the vocabulary the AgentTodosPanel renders
+ * (`pending | in_progress | completed`). Unknown values pass through.
+ */
+export function normalizeAgentTaskStatus(status: string): string {
+  if (status === 'running') return 'in_progress'
+  return status
 }
 
 /**
@@ -1609,6 +1623,62 @@ export const useWorkspaceStore = defineStore('workspace', {
       this.agentTodos[workspaceId] = todos
     },
 
+    // --- Claude Code ≥ v0.3.142 Task tools (TaskCreate/TaskUpdate) ---
+    // The agent's internal todo list moved from the snapshot-replace `TodoWrite`
+    // tool to accumulating `TaskCreate`/`TaskUpdate` tools. We rebuild the same
+    // `agentTodos` list the panel reads, keyed by the TaskCreate tool-call id.
+
+    /** Append a todo from a `TaskCreate` tool call (status starts `pending`). */
+    agentTaskCreate(
+      workspaceId: string,
+      toolCallId: string,
+      input: { subject?: string; description?: string; activeForm?: string },
+    ) {
+      const list = this.agentTodos[workspaceId] ? [...this.agentTodos[workspaceId]] : []
+      // Idempotent: a replayed event must not duplicate the row.
+      if (list.some((t) => t.id === toolCallId)) return
+      list.push({
+        id: toolCallId,
+        content: input.subject || input.description || '',
+        status: 'pending',
+        activeForm: input.activeForm,
+      })
+      this.agentTodos[workspaceId] = list
+    },
+
+    /** Record the sequential `#N` (from the TaskCreate result) on the row, so a
+     *  later TaskUpdate can target it. Numbering is monotonic per workspace. */
+    agentTaskSetNumber(workspaceId: string, toolCallId: string, taskNumber: number) {
+      const list = this.agentTodos[workspaceId]
+      if (!list) return
+      this.agentTodos[workspaceId] = list.map((t) => (t.id === toolCallId ? { ...t, taskNumber } : t))
+    },
+
+    /** Apply a `TaskUpdate` (matched by `#N`). `status: 'deleted'` removes the
+     *  row; any other status updates it (normalized to the panel vocabulary). */
+    agentTaskUpdate(
+      workspaceId: string,
+      taskNumber: number,
+      patch: { status?: string; content?: string; activeForm?: string },
+    ) {
+      const list = this.agentTodos[workspaceId]
+      if (!list) return
+      if (patch.status === 'deleted') {
+        this.agentTodos[workspaceId] = list.filter((t) => t.taskNumber !== taskNumber)
+        return
+      }
+      this.agentTodos[workspaceId] = list.map((t) =>
+        t.taskNumber !== taskNumber
+          ? t
+          : {
+              ...t,
+              status: patch.status ? normalizeAgentTaskStatus(patch.status) : t.status,
+              content: patch.content ?? t.content,
+              activeForm: patch.activeForm ?? t.activeForm,
+            },
+      )
+    },
+
     /**
      * Mark every subagent still in `running` state as `done`. Called on
      * `session:ended` — the session is the unit that hosts subagents, so when
@@ -1719,6 +1789,23 @@ export const useWorkspaceStore = defineStore('workspace', {
         this.updateWorkspaceFromEvent(workspaceId, patch)
       } catch (err) {
         console.error('[workspace store] dismissPrAttention failed:', err)
+      }
+    },
+
+    async restorePrAttention(workspaceId: string, kind: 'changes-requested' | 'ci-failed') {
+      try {
+        const res = await fetch(`/api/workspaces/${workspaceId}/restore-pr-attention`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ kind }),
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        // Optimistic store update — clear the dismissed-at so the badge
+        // resurfaces immediately on click.
+        const patch = kind === 'changes-requested' ? { prChangesDismissedAt: null } : { prCiFailureDismissedAt: null }
+        this.updateWorkspaceFromEvent(workspaceId, patch)
+      } catch (err) {
+        console.error('[workspace store] restorePrAttention failed:', err)
       }
     },
 

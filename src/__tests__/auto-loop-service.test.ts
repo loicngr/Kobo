@@ -21,6 +21,9 @@ vi.mock('../server/services/settings-service.js', () => ({
     worktreesPath: '',
     worktreesPrefixByProject: false,
   })),
+  // Finalization now resolves through the project||global cascade; default to
+  // empty (inherit) so only the dedicated finalization tests opt into a prompt.
+  getEffectiveFinalization: vi.fn(() => ({ prompt: '' })),
 }))
 
 let tmpDir: string
@@ -693,8 +696,8 @@ describe('auto-loop-service', () => {
 
       vi.mocked(settings.getProjectSettings).mockReturnValueOnce({
         e2e: { framework: '', skill: '', prompt: '' },
-        finalization: { prompt: 'Run lint and tests at the end.' },
       } as never)
+      vi.mocked(settings.getEffectiveFinalization).mockReturnValueOnce({ prompt: 'Run lint and tests at the end.' })
       createTask(wsId, { title: '[FINAL] quality checks', isAcceptanceCriterion: false, sortOrder: 0 })
       svc._test_setAutoLoopReady(wsId, true)
       svc.enable(wsId)
@@ -728,8 +731,8 @@ describe('auto-loop-service', () => {
 
       vi.mocked(settings.getProjectSettings).mockReturnValueOnce({
         e2e: { framework: '', skill: '', prompt: '' },
-        finalization: { prompt: 'Run lint and tests.' },
       } as never)
+      vi.mocked(settings.getEffectiveFinalization).mockReturnValueOnce({ prompt: 'Run lint and tests.' })
       createTask(wsId, { title: '[FINAL]add quality checks', isAcceptanceCriterion: false, sortOrder: 0 })
       svc._test_setAutoLoopReady(wsId, true)
       svc.enable(wsId)

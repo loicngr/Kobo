@@ -602,6 +602,22 @@ export function dismissPrAttention(id: string, kind: PrAttentionKind, prUpdatedA
   }
 }
 
+/**
+ * Undo a PR-attention dismiss — clears the dismissed-at column so the
+ * changes-requested / CI-failure badge surfaces again ("mark as unseen").
+ * The inverse of {@link dismissPrAttention}.
+ */
+export function restorePrAttention(id: string, kind: PrAttentionKind): void {
+  const column = kind === 'changes-requested' ? 'pr_changes_dismissed_at' : 'pr_ci_failure_dismissed_at'
+  const db = getDb()
+  const result = db
+    .prepare(`UPDATE workspaces SET ${column} = NULL, updated_at = ? WHERE id = ?`)
+    .run(new Date().toISOString(), id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+}
+
 /** Restore metadata captured at purge time, useful when (later) we want to
  *  rebuild the worktree from the merged PR / GitLab MR. Read-only field. */
 export interface WorktreePurgeRestoreData {

@@ -69,6 +69,66 @@ function _handleSessionStarted(workspaceId: string, event: AgentEvent, sessionId
 }
 
 /**
+ * Mirror the agent's internal todo-list tool calls into the workspace store's
+ * "Agent todos" panel. Handles the legacy snapshot `TodoWrite` (still emitted by
+ * the Codex engine) and Claude Code ≥ v0.3.142's accumulating Task tools:
+ *   - `TaskCreate` input `{subject, description, activeForm}` (no id);
+ *   - the sequential `#N` arrives in the result `"Task #N created successfully"`;
+ *   - `TaskUpdate` is `{taskId, status}` where `status: 'deleted'` removes the row.
+ * Returns true when the event was a todo-tool event (caller should stop). Shared
+ * by the live dispatcher and the sync:response replay so a reload rebuilds the
+ * panel identically.
+ */
+function applyTodoToolEvent(workspaceId: string, event: AgentEvent): boolean {
+  const store = useWorkspaceStore()
+  if (event.kind === 'tool:call' && event.name === 'TodoWrite') {
+    const input = event.input as Record<string, unknown> | undefined
+    const rawTodos = input?.todos
+    if (Array.isArray(rawTodos)) {
+      store.updateAgentTodos(
+        workspaceId,
+        (rawTodos as Array<Record<string, unknown>>).map((t) => ({
+          content: typeof t.content === 'string' ? t.content : '',
+          status: typeof t.status === 'string' ? t.status : 'pending',
+          activeForm: typeof t.activeForm === 'string' ? t.activeForm : undefined,
+        })),
+      )
+    }
+    return true
+  }
+  if (event.kind === 'tool:call' && event.name === 'TaskCreate') {
+    const input = (event.input ?? {}) as Record<string, unknown>
+    store.agentTaskCreate(workspaceId, event.toolCallId, {
+      subject: typeof input.subject === 'string' ? input.subject : undefined,
+      description: typeof input.description === 'string' ? input.description : undefined,
+      activeForm: typeof input.activeForm === 'string' ? input.activeForm : undefined,
+    })
+    return true
+  }
+  if (event.kind === 'tool:result' && typeof event.output === 'string') {
+    const m = event.output.match(/^Task #(\d+) created successfully/)
+    if (m) {
+      store.agentTaskSetNumber(workspaceId, event.toolCallId, Number(m[1]))
+      return true
+    }
+  }
+  if (event.kind === 'tool:call' && event.name === 'TaskUpdate') {
+    const input = (event.input ?? {}) as Record<string, unknown>
+    const rawId = input.task_id ?? input.taskId ?? input.id
+    const taskNumber = typeof rawId === 'number' ? rawId : typeof rawId === 'string' ? Number(rawId) : Number.NaN
+    if (Number.isFinite(taskNumber)) {
+      store.agentTaskUpdate(workspaceId, taskNumber, {
+        status: typeof input.status === 'string' ? input.status : undefined,
+        content: typeof input.subject === 'string' ? input.subject : undefined,
+        activeForm: typeof input.activeForm === 'string' ? input.activeForm : undefined,
+      })
+    }
+    return true
+  }
+  return false
+}
+
+/**
  * Central dispatcher for normalised `AgentEvent`s received via WebSocket
  * (`agent:event` frames or `sync:response` replays).
  *
@@ -87,7 +147,27 @@ export function dispatchAgentEvent(
   eventId?: string,
   sessionId?: string | null,
 ): void {
-  useAgentStreamStore().append(workspaceId, event, timestamp, eventId, sessionId)
+  const agentStream = useAgentStreamStore()
+
+  // Transient compaction indicator — ephemeral, never enters the persisted feed.
+  if (event.kind === 'session:compacting') {
+    agentStream.setCompacting(workspaceId, event.active)
+    return
+  }
+
+  agentStream.append(workspaceId, event, timestamp, eventId, sessionId)
+
+  // Compaction is over once the boundary lands, the session ends, or the agent
+  // resumes producing output (text / tool calls) — clear the live banner.
+  if (
+    event.kind === 'session:compacted' ||
+    event.kind === 'session:ended' ||
+    event.kind === 'message:text' ||
+    event.kind === 'tool:call'
+  ) {
+    agentStream.setCompacting(workspaceId, false)
+  }
+
   _handleSessionStarted(workspaceId, event, sessionId ?? undefined)
 
   const workspaceStore = useWorkspaceStore()
@@ -138,25 +218,9 @@ export function dispatchAgentEvent(
     return
   }
 
-  // The agent's own internal todo list is carried by the `TodoWrite` tool
-  // call. Mirror its latest snapshot into the workspace store so the
-  // "Agent todos" panel on the right can render it. No ack/ordering logic —
-  // each call fully replaces the previous list, matching the tool's contract.
-  if (event.kind === 'tool:call' && event.name === 'TodoWrite') {
-    const input = event.input as Record<string, unknown> | undefined
-    const rawTodos = input?.todos
-    if (Array.isArray(rawTodos)) {
-      workspaceStore.updateAgentTodos(
-        workspaceId,
-        (rawTodos as Array<Record<string, unknown>>).map((t) => ({
-          content: typeof t.content === 'string' ? t.content : '',
-          status: typeof t.status === 'string' ? t.status : 'pending',
-          activeForm: typeof t.activeForm === 'string' ? t.activeForm : undefined,
-        })),
-      )
-    }
-    return
-  }
+  // Agent todos panel (TodoWrite snapshot / Task* accumulation) — same handling
+  // is replayed on sync:response so a reload rebuilds the panel identically.
+  if (applyTodoToolEvent(workspaceId, event)) return
 
   // Detect Bash tool calls that perform git operations and bump the
   // `gitRefreshTrigger` so GitPanel re-fetches stats a few seconds after
@@ -365,6 +429,15 @@ export const useWebSocketStore = defineStore('websocket', {
         payload: { workspaceId, content, sessionId, agentPermissionModeOverride },
       })
 
+      // The native `/compact` command triggers a context compaction that runs
+      // for a minute or two with NO feed output. Surface the live banner right
+      // away: the SDK's `status:'compacting'` message isn't emitted without
+      // `includePartialMessages`, so the command itself is our reliable signal.
+      // Cleared by the `compact_boundary` (session:compacted) / session end.
+      if (/^\/compact(\s|$)/.test(content.trim())) {
+        useAgentStreamStore().setCompacting(workspaceId, true)
+      }
+
       // Optimistic status update — flip to `executing` instantly if the
       // workspace is in a terminal state so the "Agent busy" banner,
       // typing spinner and stop button show without waiting 1-3s for the
@@ -543,6 +616,10 @@ export const useWebSocketStore = defineStore('websocket', {
                   sessionIds: sList,
                   eventIds: eList,
                 })
+                // The "Agent todos" panel is rebuilt from the replayed tool
+                // calls below — clear it first so deletions/state replay onto a
+                // clean slate (mirrors the stream reset above).
+                useWorkspaceStore().updateAgentTodos(workspaceId, [])
                 // Replay side-effects (usage/rate_limit/subagent/pending) in
                 // order, mirroring live-event semantics. Append was already
                 // handled by reset().
@@ -603,7 +680,12 @@ export const useWebSocketStore = defineStore('websocket', {
                       toolUses: ev.toolUses,
                       durationMs: ev.durationMs,
                     })
+                    continue
                   }
+                  // Rebuild the "Agent todos" panel from the replayed tool calls
+                  // (TodoWrite / Task*), matching live semantics — agentTodos was
+                  // cleared above so the rebuild starts from a clean slate.
+                  applyTodoToolEvent(workspaceId, ev)
                 }
               }
             }

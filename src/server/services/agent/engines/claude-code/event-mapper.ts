@@ -198,6 +198,14 @@ export function mapSdkMessage(msg: SDKMessage, state: MapperState): AgentEvent[]
       events.push({ kind: 'session:compacted' })
       return events
     }
+    // Live status message: the SDK announces it is compacting context before the
+    // (slow) `compact_boundary` lands. Surface it as a transient indicator so the
+    // UI can tell the user "compacting…" instead of looking frozen.
+    if (subtype === 'status') {
+      const sdkStatus = typeof parsed.status === 'string' ? (parsed.status as string) : null
+      events.push({ kind: 'session:compacting', active: sdkStatus === 'compacting' })
+      return events
+    }
     if (subtype === 'task_started' || subtype === 'task_progress' || subtype === 'task_notification') {
       const toolCallId = typeof parsed.tool_use_id === 'string' ? (parsed.tool_use_id as string) : undefined
       if (toolCallId) {

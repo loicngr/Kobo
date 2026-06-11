@@ -76,6 +76,24 @@
         <q-item-section side><q-icon name="visibility_off" size="xs" color="amber-5" /></q-item-section>
         <q-item-section>{{ $t('contextMenu.dismissCiFailure') }}</q-item-section>
       </q-item>
+      <q-item
+        v-if="showRestoreChangesRequested"
+        clickable
+        v-close-popup
+        @click="restorePrAttention('changes-requested')"
+      >
+        <q-item-section side><q-icon name="visibility" size="xs" color="green-5" /></q-item-section>
+        <q-item-section>{{ $t('contextMenu.restoreChangesRequested') }}</q-item-section>
+      </q-item>
+      <q-item
+        v-if="showRestoreCiFailure"
+        clickable
+        v-close-popup
+        @click="restorePrAttention('ci-failed')"
+      >
+        <q-item-section side><q-icon name="visibility" size="xs" color="green-5" /></q-item-section>
+        <q-item-section>{{ $t('contextMenu.restoreCiFailure') }}</q-item-section>
+      </q-item>
       <q-separator dark />
       <q-item
         v-if="archived"
@@ -213,7 +231,27 @@ const showDismissCiFailure = computed(() => {
   return !dismissed || snap.updatedAt > dismissed
 })
 
+// Restore items are the exact inverse of dismiss: the attention reason is
+// still active but the badge is currently hidden by a fresh dismiss — let the
+// user flip it back to "unseen".
+const showRestoreChangesRequested = computed(() => {
+  const snap = prSnapshot.value
+  if (!snap || !isChangesRequestedBlocking(snap)) return false
+  const dismissed = props.workspace.prChangesDismissedAt
+  return !!dismissed && snap.updatedAt <= dismissed
+})
+const showRestoreCiFailure = computed(() => {
+  const snap = prSnapshot.value
+  if (!snap || !isCiFailed(snap)) return false
+  const dismissed = props.workspace.prCiFailureDismissedAt
+  return !!dismissed && snap.updatedAt <= dismissed
+})
+
 function dismissPrAttention(kind: 'changes-requested' | 'ci-failed') {
   void workspaceStore.dismissPrAttention(props.workspace.id, kind)
+}
+
+function restorePrAttention(kind: 'changes-requested' | 'ci-failed') {
+  void workspaceStore.restorePrAttention(props.workspace.id, kind)
 }
 </script>

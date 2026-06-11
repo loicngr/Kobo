@@ -6,8 +6,10 @@ import type { GlobalSettings, ProjectSettings, Settings } from '../server/servic
 import {
   _setSettingsPath,
   DEFAULT_BRANCH_PREFIXES,
+  DEFAULT_FINALIZATION_PROMPT,
   deleteProject,
   exportConfigBundle,
+  getEffectiveFinalization,
   getEffectiveSettings,
   getGlobalSettings,
   getProjectSettings,
@@ -295,12 +297,12 @@ describe('upsertProject()', () => {
     expect(got?.finalization).toEqual({ prompt: 'Run lint, typecheck, tests.' })
   })
 
-  it('returns the default finalization shape (non-empty prompt) when the field is absent', () => {
+  it('defaults the project finalization prompt to empty (inherits global) when absent', () => {
     getSettings()
     upsertProject('/tmp/p-finalization-2', { displayName: 'no finalization' })
     const got = getProjectSettings('/tmp/p-finalization-2')
-    expect(got?.finalization?.prompt).toBeTruthy()
-    expect(got?.finalization?.prompt).toContain('quality checks')
+    // Empty per-project prompt = inherit the global default via the cascade.
+    expect(got?.finalization?.prompt).toBe('')
   })
 
   it('drops unknown sub-keys inside finalization', () => {
@@ -315,6 +317,39 @@ describe('upsertProject()', () => {
     const got = getProjectSettings('/tmp/p-finalization-3')
     expect(got?.finalization).toEqual({ prompt: 'do stuff' })
     expect((got?.finalization as Record<string, unknown>).malicious).toBeUndefined()
+  })
+})
+
+describe('getEffectiveFinalization() — project || global cascade', () => {
+  it('seeds the global finalization prompt with the default (migration v38)', () => {
+    getSettings()
+    expect(getGlobalSettings().finalizationPrompt).toBe(DEFAULT_FINALIZATION_PROMPT)
+  })
+
+  it('falls back to the global default when the project prompt is empty', () => {
+    getSettings()
+    upsertProject('/tmp/p-eff-1', { finalization: { prompt: '' } })
+    expect(getEffectiveFinalization('/tmp/p-eff-1')).toEqual({ prompt: DEFAULT_FINALIZATION_PROMPT })
+  })
+
+  it('uses the per-project prompt when set (overrides global)', () => {
+    getSettings()
+    updateGlobalSettings({ finalizationPrompt: 'GLOBAL' })
+    upsertProject('/tmp/p-eff-2', { finalization: { prompt: 'PROJECT OVERRIDE' } })
+    expect(getEffectiveFinalization('/tmp/p-eff-2')).toEqual({ prompt: 'PROJECT OVERRIDE' })
+  })
+
+  it('falls back to global for an unregistered project', () => {
+    getSettings()
+    updateGlobalSettings({ finalizationPrompt: 'GLOBAL ONLY' })
+    expect(getEffectiveFinalization('/non/existent')).toEqual({ prompt: 'GLOBAL ONLY' })
+  })
+
+  it('treats a whitespace-only project prompt as empty (inherits global)', () => {
+    getSettings()
+    updateGlobalSettings({ finalizationPrompt: 'GLOBAL' })
+    upsertProject('/tmp/p-eff-3', { finalization: { prompt: '   ' } })
+    expect(getEffectiveFinalization('/tmp/p-eff-3')).toEqual({ prompt: 'GLOBAL' })
   })
 })
 

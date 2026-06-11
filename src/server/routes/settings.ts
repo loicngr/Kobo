@@ -9,6 +9,7 @@ import * as settingsService from '../services/settings-service.js'
 import {
   type ConfigBundle,
   DEFAULT_CI_FIX_PROMPT_TEMPLATE,
+  DEFAULT_FINALIZATION_PROMPT,
   DEFAULT_GIT_CONVENTIONS,
   DEFAULT_PR_PROMPT_TEMPLATE,
   type GlobalSettings,
@@ -50,6 +51,7 @@ app.get('/defaults', (c) => {
     prPromptTemplate: DEFAULT_PR_PROMPT_TEMPLATE,
     reviewPromptTemplate: DEFAULT_REVIEW_PROMPT_TEMPLATE,
     ciFixPromptTemplate: DEFAULT_CI_FIX_PROMPT_TEMPLATE,
+    finalizationPrompt: DEFAULT_FINALIZATION_PROMPT,
     gitConventions: DEFAULT_GIT_CONVENTIONS,
     notionInitialPromptTemplate: DEFAULT_NOTION_INITIAL_PROMPT,
     sentryInitialPromptTemplate: DEFAULT_SENTRY_INITIAL_PROMPT,

@@ -6,6 +6,15 @@
     <q-spinner-dots size="40px" color="indigo-4" />
   </div>
   <div v-else class="activity-feed-wrap">
+    <!-- Live, transient indicator while the engine compacts context — the feed
+         looks frozen for a minute or two otherwise. Cleared automatically when
+         compaction ends (boundary / session end). -->
+    <transition name="fade">
+      <div v-if="isCompacting" class="activity-feed-compacting">
+        <q-spinner-dots size="18px" color="indigo-4" />
+        <span class="text-caption text-grey-4">{{ $t('activity.compacting') }}</span>
+      </div>
+    </transition>
     <q-scroll-area ref="scrollRef" class="activity-feed-scroll" @scroll="onScroll">
       <!-- Zero-height origin marker — always at scroll position 0 within the
            scroll content. Used to compute accurate card Y coordinates
@@ -77,6 +86,9 @@ const props = defineProps<{ workspaceId: string }>()
 const stream = useAgentStreamStore()
 const settings = useSettingsStore()
 const workspaceStore = useWorkspaceStore()
+
+// Live "engine is compacting context" banner state (transient, ephemeral).
+const isCompacting = computed(() => stream.isCompacting(props.workspaceId))
 
 // Resolve the engine_session_id of the selected session to also accept legacy
 // events tagged with the engine UUID (before the v6 backfill migration).
@@ -684,6 +696,29 @@ async function handleScrollToBottomClick() {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+.activity-feed-compacting {
+  position: absolute;
+  top: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  background: var(--kobo-surface);
+  border: 1px solid var(--kobo-border);
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+}
+.fade-enter-active,
+.fade-leave-active {
+  transition: opacity 160ms ease;
+}
+.fade-enter-from,
+.fade-leave-to {
+  opacity: 0;
 }
 .activity-feed-nav-btn {
   opacity: 0.8;

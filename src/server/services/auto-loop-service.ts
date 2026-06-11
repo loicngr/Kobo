@@ -312,7 +312,8 @@ function spawnNextIteration(workspaceId: string, opts: { throwOnStartAgentError?
   // branches is purely cosmetic.
   const projectSettings = settingsService.getProjectSettings(row.project_path)
   const e2eSettings = projectSettings?.e2e ?? { framework: '', skill: '', prompt: '' }
-  const finalizationSettings = projectSettings?.finalization ?? { prompt: '' }
+  // Finalization cascades project || global; E2E stays project-only.
+  const finalizationSettings = settingsService.getEffectiveFinalization(row.project_path)
 
   let overrideBlock = ''
   if (task.title.startsWith('[FINAL] ')) {

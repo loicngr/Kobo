@@ -784,7 +784,8 @@ app.post('/', migrationGuard, async (c) => {
         // been registered yet, the empty default below is correct.
         const projectSettingsForE2e = settingsService.getProjectSettings(body.projectPath)
         const e2eSettings = projectSettingsForE2e?.e2e ?? { framework: '', skill: '', prompt: '' }
-        const finalizationSettings = projectSettingsForE2e?.finalization ?? { prompt: '' }
+        // Finalization cascades project || global (E2E stays project-only).
+        const finalizationSettings = settingsService.getEffectiveFinalization(body.projectPath)
         brainstormPrompt += `\n\n${suitePrompts.brainstormingInstruction}
 
 Auto-loop mode is active for this workspace. After the plan is ready, DO NOT implement anything. Instead:
@@ -1695,7 +1696,8 @@ app.get('/:id/prep-autoloop-prompt', (c) => {
 
     const projectSettings = settingsService.getProjectSettings(workspace.projectPath)
     const e2eSettings = projectSettings?.e2e ?? { framework: '', skill: '', prompt: '' }
-    const finalizationSettings = projectSettings?.finalization ?? { prompt: '' }
+    // Finalization cascades project || global (E2E stays project-only).
+    const finalizationSettings = settingsService.getEffectiveFinalization(workspace.projectPath)
 
     const globalSettings = settingsService.getGlobalSettings()
     const intro = buildGroomingIntro(globalSettings.skillSuite, globalSettings.customAutoLoopGroomingIntro)
@@ -3693,6 +3695,32 @@ app.post('/:id/dismiss-pr-attention', async (c) => {
     }
     workspaceService.dismissPrAttention(id, kind, prUpdatedAt)
     wsService.emitEphemeral(id, 'workspace:pr-attention-dismissed', { kind, prUpdatedAt })
+    return c.json({ success: true })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+/**
+ * POST /api/workspaces/:id/restore-pr-attention — undo a dismiss; clears the
+ * dismissed-at column so the changes-requested / CI-failure badge surfaces
+ * again. The inverse of dismiss-pr-attention.
+ */
+app.post('/:id/restore-pr-attention', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) {
+      return c.json({ error: `Workspace '${id}' not found` }, 404)
+    }
+    const body = await c.req.json<{ kind?: string }>().catch(() => ({}) as Record<string, never>)
+    const kind = body.kind === 'changes-requested' || body.kind === 'ci-failed' ? body.kind : null
+    if (!kind) {
+      return c.json({ error: "Field 'kind' must be 'changes-requested' or 'ci-failed'" }, 400)
+    }
+    workspaceService.restorePrAttention(id, kind)
+    wsService.emitEphemeral(id, 'workspace:pr-attention-restored', { kind })
     return c.json({ success: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

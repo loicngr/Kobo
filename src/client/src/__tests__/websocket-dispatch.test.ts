@@ -64,6 +64,176 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
     )
   })
 
+  it('sets the transient compacting flag on session:compacting and clears it on session:compacted', async () => {
+    const { useAgentStreamStore } = await import('../stores/agent-stream.js')
+    const stream = useAgentStreamStore()
+    const { dispatchAgentEvent } = await import('../stores/websocket.js')
+
+    expect(stream.isCompacting('w1')).toBe(false)
+
+    dispatchAgentEvent('w1', { kind: 'session:compacting', active: true })
+    expect(stream.isCompacting('w1')).toBe(true)
+    // Ephemeral: it must NOT enter the persisted event stream.
+    expect(stream.eventsFor('w1')).toHaveLength(0)
+
+    dispatchAgentEvent('w1', { kind: 'session:compacted' })
+    expect(stream.isCompacting('w1')).toBe(false)
+  })
+
+  it('clears the compacting flag when the session ends mid-compaction', async () => {
+    const { useAgentStreamStore } = await import('../stores/agent-stream.js')
+    const stream = useAgentStreamStore()
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const ws = useWorkspaceStore()
+    vi.spyOn(ws, 'fetchWorkspaces').mockResolvedValue()
+    vi.spyOn(ws, 'finalizeRunningSubagents').mockImplementation(() => {})
+    const { dispatchAgentEvent } = await import('../stores/websocket.js')
+
+    dispatchAgentEvent('w1', { kind: 'session:compacting', active: true })
+    expect(stream.isCompacting('w1')).toBe(true)
+
+    dispatchAgentEvent('w1', { kind: 'session:ended', reason: 'completed', exitCode: 0 })
+    expect(stream.isCompacting('w1')).toBe(false)
+  })
+
+  it('sets the compacting flag when a `/compact` command is sent', async () => {
+    const { useAgentStreamStore } = await import('../stores/agent-stream.js')
+    const stream = useAgentStreamStore()
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const wsStore = useWebSocketStore()
+
+    expect(stream.isCompacting('w1')).toBe(false)
+    wsStore.sendChatMessage('w1', '/compact')
+    expect(stream.isCompacting('w1')).toBe(true)
+  })
+
+  it('does not set the compacting flag for a regular message', async () => {
+    const { useAgentStreamStore } = await import('../stores/agent-stream.js')
+    const stream = useAgentStreamStore()
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const wsStore = useWebSocketStore()
+
+    wsStore.sendChatMessage('w1', 'compact the code please')
+    expect(stream.isCompacting('w1')).toBe(false)
+  })
+
+  it('accumulates TaskCreate calls into the agent todos panel (Claude Code ≥ v0.3.142)', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const ws = useWorkspaceStore()
+    const { dispatchAgentEvent } = await import('../stores/websocket.js')
+
+    // Real TaskCreate input shape captured from the SDK (subject/description/activeForm).
+    dispatchAgentEvent('w1', {
+      kind: 'tool:call',
+      messageId: 'm1',
+      toolCallId: 'tc1',
+      name: 'TaskCreate',
+      input: { subject: 'Arroser les plantes', description: 'desc', activeForm: 'Arrosage' },
+    })
+    dispatchAgentEvent('w1', {
+      kind: 'tool:result',
+      toolCallId: 'tc1',
+      output: 'Task #1 created successfully: Arroser les plantes',
+      isError: false,
+    })
+    dispatchAgentEvent('w1', {
+      kind: 'tool:call',
+      messageId: 'm1',
+      toolCallId: 'tc2',
+      name: 'TaskCreate',
+      input: { subject: 'Trier la boîte mail', activeForm: 'Tri' },
+    })
+    dispatchAgentEvent('w1', {
+      kind: 'tool:result',
+      toolCallId: 'tc2',
+      output: 'Task #2 created successfully: Trier la boîte mail',
+      isError: false,
+    })
+
+    const todos = ws.agentTodos.w1 ?? []
+    expect(todos.map((t) => t.content)).toEqual(['Arroser les plantes', 'Trier la boîte mail'])
+    expect(todos.every((t) => t.status === 'pending')).toBe(true)
+    expect(todos.map((t) => t.taskNumber)).toEqual([1, 2])
+  })
+
+  it('applies TaskUpdate by #N and normalizes running → in_progress', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const ws = useWorkspaceStore()
+    const { dispatchAgentEvent } = await import('../stores/websocket.js')
+
+    dispatchAgentEvent('w1', {
+      kind: 'tool:call',
+      messageId: 'm',
+      toolCallId: 'a',
+      name: 'TaskCreate',
+      input: { subject: 'T1' },
+    })
+    dispatchAgentEvent('w1', {
+      kind: 'tool:result',
+      toolCallId: 'a',
+      output: 'Task #1 created successfully: T1',
+      isError: false,
+    })
+    // Real TaskUpdate shape: `{ taskId: '<n>', status }` (camelCase, string id).
+    dispatchAgentEvent('w1', {
+      kind: 'tool:call',
+      messageId: 'm',
+      toolCallId: 'b',
+      name: 'TaskUpdate',
+      input: { taskId: '1', status: 'running' },
+    })
+
+    const todos = ws.agentTodos.w1 ?? []
+    expect(todos[0]?.status).toBe('in_progress')
+
+    dispatchAgentEvent('w1', {
+      kind: 'tool:call',
+      messageId: 'm',
+      toolCallId: 'c',
+      name: 'TaskUpdate',
+      input: { taskId: '1', status: 'completed' },
+    })
+    expect((ws.agentTodos.w1 ?? [])[0]?.status).toBe('completed')
+  })
+
+  it('TaskUpdate with status "deleted" removes the row (real shape)', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const ws = useWorkspaceStore()
+    const { dispatchAgentEvent } = await import('../stores/websocket.js')
+
+    for (const [id, n, subject] of [
+      ['a', 1, 'Plantes'],
+      ['b', 2, 'Mail'],
+      ['c', 3, 'Café'],
+    ] as const) {
+      dispatchAgentEvent('w1', {
+        kind: 'tool:call',
+        messageId: 'm',
+        toolCallId: id,
+        name: 'TaskCreate',
+        input: { subject },
+      })
+      dispatchAgentEvent('w1', {
+        kind: 'tool:result',
+        toolCallId: id,
+        output: `Task #${n} created successfully: ${subject}`,
+        isError: false,
+      })
+    }
+    expect((ws.agentTodos.w1 ?? []).length).toBe(3)
+
+    // Real deletion: TaskUpdate { taskId: '2', status: 'deleted' }.
+    dispatchAgentEvent('w1', {
+      kind: 'tool:call',
+      messageId: 'm',
+      toolCallId: 'd',
+      name: 'TaskUpdate',
+      input: { taskId: '2', status: 'deleted' },
+    })
+
+    expect((ws.agentTodos.w1 ?? []).map((t) => t.content)).toEqual(['Plantes', 'Café'])
+  })
+
   it('triggers a git refresh 3 s after a `gh pr create` Bash tool:call', async () => {
     vi.useFakeTimers()
     try {

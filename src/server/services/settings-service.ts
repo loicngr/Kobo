@@ -204,6 +204,12 @@ export interface GlobalSettings {
    * DEFAULT_CI_FIX_PROMPT_TEMPLATE by settings migration v34.
    */
   ciFixPromptTemplate: string
+  /**
+   * Default auto-loop finalization prompt. Used when a project leaves its own
+   * `finalization.prompt` empty (cascade: project || global). Seeded with
+   * DEFAULT_FINALIZATION_PROMPT by settings migration v38.
+   */
+  finalizationPrompt: string
   notionInitialPromptTemplate: string
   sentryInitialPromptTemplate: string
   gitConventions: string
@@ -808,6 +814,17 @@ const settingsMigrations: SettingsMigration[] = [
       }
     },
   },
+  {
+    version: 38,
+    name: 'add-global-finalization-prompt',
+    migrate: ({ global }) => {
+      // Seed the global default; projects keep their own override (or empty to
+      // inherit this global value — cascade handled by getEffectiveFinalization).
+      if (typeof global.finalizationPrompt !== 'string') {
+        global.finalizationPrompt = DEFAULT_FINALIZATION_PROMPT
+      }
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -870,6 +887,7 @@ function defaultSettings(): Settings {
       prPromptTemplate: DEFAULT_PR_PROMPT_TEMPLATE,
       reviewPromptTemplate: DEFAULT_REVIEW_PROMPT_TEMPLATE,
       ciFixPromptTemplate: DEFAULT_CI_FIX_PROMPT_TEMPLATE,
+      finalizationPrompt: DEFAULT_FINALIZATION_PROMPT,
       notionInitialPromptTemplate: DEFAULT_NOTION_INITIAL_PROMPT,
       sentryInitialPromptTemplate: DEFAULT_SENTRY_INITIAL_PROMPT,
       gitConventions: DEFAULT_GIT_CONVENTIONS,
@@ -949,7 +967,10 @@ function defaultProjectSettings(projectPath: string): ProjectSettings {
       prompt: '',
     },
     finalization: {
-      prompt: DEFAULT_FINALIZATION_PROMPT,
+      // Empty by default — a project inherits the global finalization prompt
+      // (`global.finalizationPrompt`) unless it sets its own override. Cascade
+      // resolved by getEffectiveFinalization (project || global).
+      prompt: '',
     },
     color: null,
     forge: 'auto',
@@ -1167,6 +1188,18 @@ export function getProjectSettings(projectPath: string): ProjectSettings | null 
   return settings.projects.find((p) => p.path === projectPath) ?? null
 }
 
+/**
+ * Effective auto-loop finalization config for a project: the per-project prompt
+ * if the user set one, otherwise the global default (`global.finalizationPrompt`).
+ * Mirrors the project-||-global cascade used for `ciFixPromptTemplate` etc.
+ */
+export function getEffectiveFinalization(projectPath: string): FinalizationSettings {
+  const settings = readSettings()
+  const project = settings.projects.find((p) => p.path === projectPath) ?? null
+  const projectPrompt = project?.finalization?.prompt ?? ''
+  return { prompt: projectPrompt.trim() ? projectPrompt : settings.global.finalizationPrompt }
+}
+
 /** Compute effective settings for a project (project overrides merged with global defaults). */
 export function getEffectiveSettings(projectPath: string): EffectiveSettings {
   const settings = readSettings()
@@ -1248,6 +1281,7 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'prPromptTemplate',
     'reviewPromptTemplate',
     'ciFixPromptTemplate',
+    'finalizationPrompt',
     'notionInitialPromptTemplate',
     'sentryInitialPromptTemplate',
     'gitConventions',

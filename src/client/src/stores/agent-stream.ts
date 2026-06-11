@@ -21,7 +21,22 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
   const eventIds = ref<Map<string, Array<string | null>>>(new Map())
   const oldestIds = ref<Map<string, string>>(new Map())
   const hasMoreOlder = ref<Map<string, boolean>>(new Map())
+  // Transient "engine is compacting context right now" flag per workspace. Not
+  // part of the persisted event stream — driven by ephemeral session:compacting
+  // events and cleared when compaction ends. Reactive via `version`.
+  const compacting = ref<Map<string, boolean>>(new Map())
   const version = ref(0)
+
+  function isCompacting(workspaceId: string): boolean {
+    version.value
+    return compacting.value.get(workspaceId) ?? false
+  }
+
+  function setCompacting(workspaceId: string, value: boolean): void {
+    if ((compacting.value.get(workspaceId) ?? false) === value) return
+    compacting.value.set(workspaceId, value)
+    version.value++
+  }
 
   function eventsFor(workspaceId: string): AgentEvent[] {
     version.value
@@ -160,6 +175,7 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
     eventIds.value.delete(workspaceId)
     oldestIds.value.delete(workspaceId)
     hasMoreOlder.value.delete(workspaceId)
+    compacting.value.delete(workspaceId)
     version.value++
   }
 
@@ -175,6 +191,8 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
     eventIdsFor,
     oldestIdFor,
     hasMoreOlderFor,
+    isCompacting,
+    setCompacting,
     append,
     reset,
     prepend,

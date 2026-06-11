@@ -1,3 +1,11 @@
+// @vitest-environment jsdom
+//
+// DOMPurify 3.4.9 relies on DOM APIs that happy-dom (our default test env)
+// implements incompletely — under happy-dom it silently strips block tags
+// (e.g. <p>) and never fires `afterSanitizeAttributes` hooks, producing false
+// negatives for the sanitization assertions below. jsdom is the reference DOM
+// DOMPurify is built against and matches real-browser behaviour, so this one
+// file opts into it. Production is unaffected (real browser DOM).
 import { describe, expect, it } from 'vitest'
 
 describe('renderChatMarkdown', () => {

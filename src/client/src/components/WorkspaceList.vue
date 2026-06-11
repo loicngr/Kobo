@@ -192,7 +192,7 @@
                   <div
                     v-if="ws.agentDescription || ws.description"
                     class="text-caption text-grey-7 ellipsis q-mt-xs"
-                    :title="ws.agentDescription || ws.description"
+                    :title="ws.agentDescription || ws.description || undefined"
                     style="max-width: 100%; font-size: 11px;"
                   >
                     {{ ws.agentDescription || ws.description }}
@@ -244,7 +244,7 @@
                 <div
                   v-if="ws.agentDescription || ws.description"
                   class="text-caption text-grey-7 ellipsis q-mt-xs"
-                  :title="ws.agentDescription || ws.description"
+                  :title="ws.agentDescription || ws.description || undefined"
                   style="max-width: 100%; font-size: 11px;"
                 >
                   {{ ws.agentDescription || ws.description }}
@@ -337,12 +337,13 @@
                   <div
                     v-if="ws.agentDescription || ws.description"
                     class="text-caption text-grey-7 ellipsis q-mt-xs"
-                    :title="ws.agentDescription || ws.description"
+                    :title="ws.agentDescription || ws.description || undefined"
                     style="max-width: 100%; font-size: 11px;"
                   >
                     {{ ws.agentDescription || ws.description }}
                   </div>
                   <AutoLoopChip :workspace="ws" class="q-mt-xs" />
+                  <WorkspaceAttentionLabels :workspace="ws" :ci-recap-only="true" />
                   <div class="text-caption q-mt-xs">
                     <span class="text-green-4">{{ ws.status }}</span>
                     <span class="q-ml-xs text-grey-8">&middot; {{ timeAgo(ws.updatedAt) }}</span>
@@ -392,12 +393,13 @@
                 <div
                   v-if="ws.agentDescription || ws.description"
                   class="text-caption text-grey-7 ellipsis q-mt-xs"
-                  :title="ws.agentDescription || ws.description"
+                  :title="ws.agentDescription || ws.description || undefined"
                   style="max-width: 100%; font-size: 11px;"
                 >
                   {{ ws.agentDescription || ws.description }}
                 </div>
                 <AutoLoopChip :workspace="ws" class="q-mt-xs" />
+                <WorkspaceAttentionLabels :workspace="ws" :ci-recap-only="true" />
                 <div class="text-caption q-mt-xs">
                   <span class="text-green-4">{{ ws.status }}</span>
                   <span class="q-ml-xs text-grey-8">&middot; {{ timeAgo(ws.updatedAt) }}</span>
@@ -488,12 +490,13 @@
                   <div
                     v-if="ws.agentDescription || ws.description"
                     class="text-caption text-grey-7 ellipsis q-mt-xs"
-                    :title="ws.agentDescription || ws.description"
+                    :title="ws.agentDescription || ws.description || undefined"
                     style="max-width: 100%; font-size: 11px;"
                   >
                     {{ ws.agentDescription || ws.description }}
                   </div>
                   <AutoLoopChip :workspace="ws" class="q-mt-xs" />
+                  <WorkspaceAttentionLabels :workspace="ws" :ci-recap-only="true" />
                   <div class="wl-item-meta text-caption text-grey-8">
                     {{ timeAgo(ws.updatedAt) }}
                   </div>
@@ -542,12 +545,13 @@
                 <div
                   v-if="ws.agentDescription || ws.description"
                   class="text-caption text-grey-7 ellipsis q-mt-xs"
-                  :title="ws.agentDescription || ws.description"
+                  :title="ws.agentDescription || ws.description || undefined"
                   style="max-width: 100%; font-size: 11px;"
                 >
                   {{ ws.agentDescription || ws.description }}
                 </div>
                 <AutoLoopChip :workspace="ws" class="q-mt-xs" />
+                <WorkspaceAttentionLabels :workspace="ws" :ci-recap-only="true" />
                 <div class="wl-item-meta text-caption text-grey-8">
                   {{ timeAgo(ws.updatedAt) }}
                 </div>
@@ -643,7 +647,7 @@
               <div
                 v-if="ws.agentDescription || ws.description"
                 class="text-caption text-grey-7 ellipsis q-mt-xs"
-                :title="ws.agentDescription || ws.description"
+                :title="ws.agentDescription || ws.description || undefined"
                 style="max-width: 100%; font-size: 11px;"
               >
                 {{ ws.agentDescription || ws.description }}
@@ -1306,11 +1310,13 @@ onMounted(async () => {
       devServerStore.fetchStatus(ws.id)
     }
   }
-  // Keep every non-archived workspace ≤30s fresh (status + PR + git stats)
-  // by polling the server-cached bulk endpoint.
+  // Keep every non-archived workspace ≤15s fresh (status + PR + git stats)
+  // by polling the server-cached bulk endpoint. Fetch once immediately so the
+  // git-stats / CI recap are populated at load instead of after the first tick.
+  void store.fetchWorkspacesInfo()
   workspaceInfoInterval = setInterval(() => {
     void store.fetchWorkspacesInfo()
-  }, 30_000)
+  }, 15_000)
 })
 
 onBeforeUnmount(() => {

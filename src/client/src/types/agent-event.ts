@@ -30,6 +30,9 @@ export type AgentEvent =
       payload: unknown
     }
   | { kind: 'session:compacted' }
+  // Transient live signal: the engine is compacting context now (`active: true`)
+  // or has finished (`active: false`). Ephemeral — never persisted/replayed.
+  | { kind: 'session:compacting'; active: boolean }
   | { kind: 'session:brainstorm-complete' }
   // Conversation
   | { kind: 'message:text'; messageId: string; text: string; streaming: boolean }
@@ -74,6 +77,7 @@ export const ALL_AGENT_EVENT_KINDS = [
   'session:ended',
   'session:user-input-requested',
   'session:compacted',
+  'session:compacting',
   'session:brainstorm-complete',
   'message:text',
   'message:thinking',

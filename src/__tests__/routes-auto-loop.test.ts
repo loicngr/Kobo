@@ -51,6 +51,7 @@ vi.mock('../server/services/settings-service.js', () => ({
     worktreesPath: '',
     worktreesPrefixByProject: false,
   })),
+  getEffectiveFinalization: vi.fn(() => ({ prompt: '' })),
 }))
 
 let tmpDir: string

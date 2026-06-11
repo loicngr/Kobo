@@ -738,6 +738,34 @@ where ffmpeg</pre>
               />
 
               <div class="row items-center q-mb-sm q-mt-md">
+                <div class="text-subtitle2">{{ $t('settings.finalizationPromptTemplate') }}</div>
+                <q-space />
+                <q-btn
+                  flat
+                  dense
+                  no-caps
+                  size="sm"
+                  color="grey-5"
+                  icon="restart_alt"
+                  :label="t('settings.resetToDefault')"
+                  :loading="resettingField === 'finalizationPrompt'"
+                  :disable="resettingField !== null && resettingField !== 'finalizationPrompt'"
+                  @click="resetFieldToDefault('finalizationPrompt')"
+                />
+              </div>
+              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.finalizationPromptHint') }}</div>
+              <q-input
+                v-model="globalFinalizationPrompt"
+                type="textarea"
+                dense
+                dark
+                outlined
+                :rows="8"
+                :placeholder="$t('settings.finalizationPromptPlaceholder')"
+                class="settings-input mono-textarea q-mb-md"
+              />
+
+              <div class="row items-center q-mb-sm q-mt-md">
                 <div class="text-subtitle2">{{ $t('settings.gitConventions') }}</div>
                 <q-space />
                 <q-btn
@@ -2182,6 +2210,7 @@ const globalCodexModel = ref('auto')
 const globalPrPrompt = ref('')
 const globalReviewPrompt = ref('')
 const globalCiFixPrompt = ref('')
+const globalFinalizationPrompt = ref('')
 const globalGitConventions = ref('')
 const globalEditorCommand = ref('')
 const globalFileManagerCommand = ref('')
@@ -2238,6 +2267,7 @@ type ResettableField =
   | 'prPromptTemplate'
   | 'reviewPromptTemplate'
   | 'ciFixPromptTemplate'
+  | 'finalizationPrompt'
   | 'gitConventions'
   | 'notionInitialPromptTemplate'
   | 'sentryInitialPromptTemplate'
@@ -2864,6 +2894,7 @@ function captureGlobalSnapshot(): string {
     prPrompt: globalPrPrompt.value,
     reviewPrompt: globalReviewPrompt.value,
     ciFixPrompt: globalCiFixPrompt.value,
+    finalizationPrompt: globalFinalizationPrompt.value,
     gitConventions: globalGitConventions.value,
     editorCommand: globalEditorCommand.value,
     fileManagerCommand: globalFileManagerCommand.value,
@@ -2941,6 +2972,7 @@ function syncGlobalForm() {
   globalPrPrompt.value = store.global.prPromptTemplate
   globalReviewPrompt.value = store.global.reviewPromptTemplate ?? ''
   globalCiFixPrompt.value = store.global.ciFixPromptTemplate ?? ''
+  globalFinalizationPrompt.value = store.global.finalizationPrompt ?? ''
   globalGitConventions.value = store.global.gitConventions
   globalEditorCommand.value = store.global.editorCommand ?? ''
   globalFileManagerCommand.value = store.global.fileManagerCommand ?? ''
@@ -3184,6 +3216,7 @@ async function resetFieldToDefault(field: ResettableField) {
       prPromptTemplate: globalPrPrompt,
       reviewPromptTemplate: globalReviewPrompt,
       ciFixPromptTemplate: globalCiFixPrompt,
+      finalizationPrompt: globalFinalizationPrompt,
       gitConventions: globalGitConventions,
       notionInitialPromptTemplate: globalNotionInitialPrompt,
       sentryInitialPromptTemplate: globalSentryInitialPrompt,
@@ -3211,6 +3244,7 @@ async function saveGlobal() {
       prPromptTemplate: globalPrPrompt.value,
       reviewPromptTemplate: globalReviewPrompt.value,
       ciFixPromptTemplate: globalCiFixPrompt.value,
+      finalizationPrompt: globalFinalizationPrompt.value,
       gitConventions: globalGitConventions.value,
       editorCommand: globalEditorCommand.value,
       fileManagerCommand: globalFileManagerCommand.value,
