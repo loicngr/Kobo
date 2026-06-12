@@ -283,5 +283,24 @@ describe('wakeup-service', () => {
       expect(orch.startAgent).not.toHaveBeenCalled()
       expect(wakeupService.getPending(wsId)).toBeNull()
     })
+
+    describe('isWakeupScheduled', () => {
+      it('returns false when no wakeup is pending for the workspace', async () => {
+        const wakeupService = await import('../server/services/wakeup-service.js')
+        expect(wakeupService.isWakeupScheduled(wsId)).toBe(false)
+      })
+
+      it('returns true once a wakeup is scheduled for the workspace', async () => {
+        const wakeupService = await import('../server/services/wakeup-service.js')
+        wakeupService.schedule(wsId, 120, 'check the CI run', 'test')
+        expect(wakeupService.isWakeupScheduled(wsId)).toBe(true)
+      })
+
+      it('returns false for an unrelated workspace id', async () => {
+        const wakeupService = await import('../server/services/wakeup-service.js')
+        wakeupService.schedule(wsId, 120, 'check the CI run', 'test')
+        expect(wakeupService.isWakeupScheduled('some-other-workspace')).toBe(false)
+      })
+    })
   })
 })

@@ -107,6 +107,16 @@ export function getPending(workspaceId: string): PendingWakeup | null {
   }
 }
 
+/**
+ * Whether a wakeup is currently scheduled for the workspace. Used to decide
+ * that background work the agent left running is intentional (the wakeup will
+ * resume the session to check it) and must NOT be torn down — e.g. the engine's
+ * result-drain watchdog skips its abort when this is true.
+ */
+export function isWakeupScheduled(workspaceId: string): boolean {
+  return getPending(workspaceId) !== null
+}
+
 /** Re-register timers for rows persisted across restart. Skips stale entries. */
 export function rehydrate(): void {
   try {

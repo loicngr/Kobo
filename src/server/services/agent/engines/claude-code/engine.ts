@@ -13,6 +13,7 @@ import { createMapperState, mapSdkMessage, QUOTA_PATTERN, tryEmitQuota } from '.
 import { buildClaudeOptions } from './options-builder.js'
 import { buildCompactionSessionStartOutput } from './precompact-hook.js'
 import { resolveClaudeBinaryPath } from './resolve-binary.js'
+import { buildStopHookOutput } from './stop-hook.js'
 
 type McpStdioServerConfigWithAlwaysLoad = McpStdioServerConfig & { alwaysLoad: boolean }
 
@@ -118,6 +119,20 @@ export function createClaudeCodeEngine(): AgentEngine {
             ],
           },
         ],
+        // Decision-point enforcement of the "schedule a wakeup or the session
+        // stalls" invariant: when the agent tries to end its turn with
+        // background work still in flight and nothing scheduled to resume the
+        // session, inject a reminder so it calls `kobo__schedule_wakeup` instead
+        // of going idle. A passive system-prompt rule isn't enough — see
+        // stop-hook.ts. `additionalContext` continues the turn so the model acts.
+        Stop: [
+          {
+            hooks: [
+              async (input) =>
+                buildStopHookOutput(options.workspaceId, input as Parameters<typeof buildStopHookOutput>[1]),
+            ],
+          },
+        ],
       }
 
       const { options: sdkOptions, effectivePrompt } = buildClaudeOptions({
@@ -200,10 +215,30 @@ export function createClaudeCodeEngine(): AgentEngine {
           )
           const reason = userInterrupted ? 'killed' : mapperState.sawErrorResult ? 'error' : 'completed'
           emitSessionEnded(reason, reason === 'completed' ? 0 : null)
-          // Best-effort: unstick the SDK so its subprocesses / MCP children
-          // tear down. The session is reported ended regardless of whether
-          // the abort actually propagates through the parked generator.
-          abortController.abort()
+          // Normally we abort here to unstick the SDK so its subprocesses / MCP
+          // children tear down. BUT if a wakeup is scheduled for this workspace,
+          // the agent intentionally left background work running for the wakeup
+          // to resume and check — aborting would kill that work. Skip the abort
+          // in that case so the background tasks survive. `session:ended` was
+          // already emitted (so the orchestrator/auto-loop proceed and the
+          // controller is removed, letting the wakeup fire later); the parked
+          // generator drains on its own once the background work finishes.
+          //
+          // The wakeup check is a dynamic import: a static `import` of
+          // wakeup-service here would form an engine → wakeup-service →
+          // orchestrator → engine cycle that breaks module init under the test
+          // SSR transform. Resolving it at call-time (once, 15s after result)
+          // sidesteps the cycle with no hot-path cost.
+          void (async () => {
+            const { isWakeupScheduled } = await import('../../../wakeup-service.js')
+            if (isWakeupScheduled(options.workspaceId)) {
+              console.warn(
+                `[claude-engine] generator still open ${RESULT_DRAIN_TIMEOUT_MS}ms after 'result' but a wakeup is scheduled for ${options.workspaceId} — leaving background work alive (no abort)`,
+              )
+            } else {
+              abortController.abort()
+            }
+          })()
         }, RESULT_DRAIN_TIMEOUT_MS)
         resultDrainTimer.unref?.()
       }
