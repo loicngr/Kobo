@@ -4,6 +4,10 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.7.34/35
+
+- chore(npm): update claude sdk
+
 ## 1.7.33
 
 - chore(npm): update claude sdk
