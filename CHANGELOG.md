@@ -4,6 +4,12 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.8.0
+
+- feat(schedule): manual wakeup & cron management per workspace
+- feat(agent): enforce wakeup at turn-end + keep background work alive
+- feat(workspace): warn when viewing a non-latest session outside auto-loop
+
 ## 1.7.34/35
 
 - chore(npm): update claude sdk
