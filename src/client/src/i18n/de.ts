@@ -1268,5 +1268,8 @@ export default {
   'koboCommand.prepAutoloopDesc': 'Aufgaben für Auto-Schleifen-Modus vorbereiten (auf Atomarität prüfen)',
   'staleSessionBanner.title': 'Auto-Schleife läuft',
   'staleSessionBanner.message': 'Du siehst eine ältere Sitzung — der Agent arbeitet gerade in der neuesten.',
+  'staleSessionBanner.staleTitle': 'Ältere Sitzung',
+  'staleSessionBanner.staleMessage':
+    'Du siehst eine ältere Sitzung — gesendete Nachrichten gehen an diese Sitzung, nicht an die neueste.',
   'staleSessionBanner.switchToCurrent': 'Zur aktuellen wechseln',
 }

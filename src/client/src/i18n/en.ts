@@ -1249,5 +1249,8 @@ export default {
   'koboCommand.prepAutoloopDesc': 'Prepare tasks for auto-loop mode (groom for atomicity)',
   'staleSessionBanner.title': 'Auto-loop running',
   'staleSessionBanner.message': "You're viewing an older session — the agent is currently working in the latest one.",
+  'staleSessionBanner.staleTitle': 'Older session',
+  'staleSessionBanner.staleMessage':
+    "You're viewing an older session — messages you send go to this session, not the latest one.",
   'staleSessionBanner.switchToCurrent': 'Switch to current',
 }

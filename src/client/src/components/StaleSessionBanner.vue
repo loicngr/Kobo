@@ -1,10 +1,14 @@
 <template>
   <q-banner v-if="visible" class="bg-indigo-9 text-white q-ma-sm" rounded>
     <template #avatar>
-      <q-icon name="loop" />
+      <q-icon :name="mode === 'autoloop' ? 'loop' : 'history'" />
     </template>
-    <div class="text-subtitle2">{{ $t('staleSessionBanner.title') }}</div>
-    <div class="text-caption">{{ $t('staleSessionBanner.message') }}</div>
+    <div class="text-subtitle2">
+      {{ mode === 'autoloop' ? $t('staleSessionBanner.title') : $t('staleSessionBanner.staleTitle') }}
+    </div>
+    <div class="text-caption">
+      {{ mode === 'autoloop' ? $t('staleSessionBanner.message') : $t('staleSessionBanner.staleMessage') }}
+    </div>
     <template #action>
       <q-btn flat dense no-caps :label="$t('staleSessionBanner.switchToCurrent')" @click="jumpToLatest" />
     </template>
@@ -19,20 +23,23 @@ import { computed } from 'vue'
 const props = defineProps<{ workspaceId: string }>()
 const store = useWorkspaceStore()
 
-// Auto-loop spawns a fresh session per iteration; if the user lags behind on
-// an older session, the live feed is silently stale. Surface that and offer
-// a one-click jump to the current one.
+// Whatever spawned them, multiple sessions accumulate per workspace and the
+// chat input sends to the *selected* session. Viewing an older one therefore
+// risks resuming the wrong conversation without noticing. Warn on any
+// non-latest session and offer a one-click jump to the current one.
 const visible = computed<boolean>(() => {
   if (!store.selectedSessionId || store.sessions.length < 2) return false
 
   const latest = store.sessions[0]
-  if (!latest || latest.id === store.selectedSessionId) return false
+  return !!latest && latest.id !== store.selectedSessionId
+})
 
+// Auto-loop has its own framing (the agent is actively working in the latest
+// session); the manual case is a plain "you're not on the latest" caution.
+const mode = computed<'autoloop' | 'stale'>(() => {
   const ws = store.workspaces.find((w) => w.id === props.workspaceId)
-  if (!ws) return false
-  if (!isBusyStatus(ws.status)) return false
-
-  return store.autoLoopStates[props.workspaceId]?.auto_loop === true
+  const autoLoopBusy = !!ws && isBusyStatus(ws.status) && store.autoLoopStates[props.workspaceId]?.auto_loop === true
+  return autoLoopBusy ? 'autoloop' : 'stale'
 })
 
 function jumpToLatest(): void {

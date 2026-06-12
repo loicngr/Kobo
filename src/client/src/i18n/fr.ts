@@ -1264,5 +1264,8 @@ export default {
   'staleSessionBanner.title': 'Auto-loop en cours',
   'staleSessionBanner.message':
     "Vous consultez une ancienne session — l'agent travaille actuellement dans la dernière.",
+  'staleSessionBanner.staleTitle': 'Session précédente',
+  'staleSessionBanner.staleMessage':
+    'Vous consultez une ancienne session — les messages envoyés iront dans cette session, pas la dernière.',
   'staleSessionBanner.switchToCurrent': 'Basculer sur la session active',
 }
