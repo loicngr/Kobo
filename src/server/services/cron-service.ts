@@ -102,20 +102,24 @@ function nextAfter(expression: string, from: Date): Date {
 
 /**
  * Validate the expression, persist the row, arm a setTimeout for the next
- * fire, emit `cron:created`. Throws on invalid expression OR when the next
- * fire is < MIN_DELAY_BETWEEN_FIRES_SECONDS seconds in the future.
+ * fire, emit `cron:created`. Throws on an invalid expression. If the first
+ * occurrence falls within MIN_DELAY_BETWEEN_FIRES_SECONDS of now, that imminent
+ * fire is SKIPPED (scheduled to the following occurrence) rather than rejected
+ * — so a valid recurring cron created near a boundary (e.g. a 15-min cron made
+ * 30s before the tick, or a daily cron made shortly before its time) still
+ * arms, and never fires within a minute of creation.
  */
 export function arm(
   workspaceId: string,
   args: { expression: string; prompt: string; label?: string; agentSessionId?: string; oneShot?: boolean },
 ): PendingCron {
   const now = new Date()
-  const next = nextAfter(args.expression, now)
-  const deltaMs = next.getTime() - now.getTime()
-  if (deltaMs < MIN_DELAY_BETWEEN_FIRES_SECONDS * 1000) {
-    throw new Error(
-      `Cron expression resolves too close to now (minimum ${MIN_DELAY_BETWEEN_FIRES_SECONDS}s); use a longer interval`,
-    )
+  let next = nextAfter(args.expression, now)
+  if (next.getTime() - now.getTime() < MIN_DELAY_BETWEEN_FIRES_SECONDS * 1000) {
+    // Skip the imminent occurrence. The one after is guaranteed ≥60s out for
+    // any standard 5-field cron (min granularity is 1 minute), so a single skip
+    // always suffices.
+    next = nextAfter(args.expression, next)
   }
 
   const id = nanoid()

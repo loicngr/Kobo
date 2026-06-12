@@ -40,13 +40,58 @@
         </q-item>
       </q-list>
     </div>
+
+    <q-separator dark />
+
+    <!-- Create cron -->
+    <div>
+      <div class="text-subtitle2 q-mb-sm">{{ $t('schedule.addCronTitle') }}</div>
+      <div class="row items-center q-gutter-sm q-mb-sm">
+        <span class="text-caption text-grey-6">{{ $t('schedule.every') }}</span>
+        <q-input v-model.number="cronN" type="number" dense dark outlined min="1" style="width: 72px" />
+        <q-select
+          v-model="cronUnit"
+          :options="unitOptions"
+          dense dark outlined options-dense emit-value map-options
+          style="min-width: 110px"
+        />
+      </div>
+      <q-input
+        v-model="cronAdvanced"
+        dense dark outlined
+        :label="$t('schedule.advancedExpression')"
+        :hint="$t('schedule.advancedHint')"
+        class="q-mb-sm"
+      />
+      <q-input v-model="cronPrompt" type="textarea" autogrow dense dark outlined :label="$t('schedule.promptLabel')" class="q-mb-sm" />
+      <q-input v-model="cronLabel" dense dark outlined :label="$t('schedule.labelOptional')" class="q-mb-sm" />
+      <div class="row items-center q-gutter-md q-mb-sm">
+        <q-toggle v-model="cronNewSession" dense :label="$t('schedule.modeFresh')" />
+        <q-toggle v-model="cronOneShot" dense :label="$t('schedule.oneShot')" />
+      </div>
+      <q-btn dense no-caps color="indigo-4" :loading="creatingCron" :disable="!cronPrompt.trim()" :label="$t('schedule.addCronBtn')" @click="onCreateCron" />
+    </div>
+
+    <q-separator dark />
+
+    <!-- Schedule wakeup -->
+    <div>
+      <div class="text-subtitle2 q-mb-sm">{{ $t('schedule.addWakeupTitle') }}</div>
+      <q-input v-model.number="wakeupMinutes" type="number" dense dark outlined min="1" :label="$t('schedule.delayMinutes')" style="max-width: 160px" class="q-mb-sm" />
+      <q-input v-model="wakeupPrompt" type="textarea" autogrow dense dark outlined :label="$t('schedule.promptLabel')" class="q-mb-sm" />
+      <q-toggle v-model="wakeupNewSession" dense :label="$t('schedule.modeFresh')" class="q-mb-sm" />
+      <div>
+        <q-btn dense no-caps color="indigo-4" :loading="creatingWakeup" :disable="!wakeupPrompt.trim() || !(wakeupMinutes > 0)" :label="$t('schedule.addWakeupBtn')" @click="onScheduleWakeup" />
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
 import { useWorkspaceStore } from 'src/stores/workspace'
-import { computed, watch } from 'vue'
+import { type CronUnit, cronExpressionFromPicker } from 'src/utils/cron-expression'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{ workspaceId: string }>()
@@ -95,6 +140,78 @@ async function onCancelCron(id: string): Promise<void> {
     await store.cancelCron(props.workspaceId, id)
   } catch (err) {
     $q.notify({ type: 'negative', message: String(err), position: 'top', timeout: 4000 })
+  }
+}
+
+// --- Create cron form ---
+const cronN = ref(15)
+const cronUnit = ref<CronUnit>('minutes')
+const cronAdvanced = ref('')
+const cronPrompt = ref('')
+const cronLabel = ref('')
+const cronNewSession = ref(true) // ON = new session (fresh) — the default
+const cronOneShot = ref(false)
+const creatingCron = ref(false)
+const unitOptions = computed(() => [
+  { label: t('schedule.unitMinutes'), value: 'minutes' },
+  { label: t('schedule.unitHours'), value: 'hours' },
+  { label: t('schedule.unitDays'), value: 'days' },
+])
+
+async function onCreateCron(): Promise<void> {
+  if (!cronPrompt.value.trim() || creatingCron.value) return
+  creatingCron.value = true
+  try {
+    const expression = cronAdvanced.value.trim() || cronExpressionFromPicker(cronUnit.value, cronN.value)
+    await store.createCron(props.workspaceId, {
+      expression,
+      prompt: cronPrompt.value,
+      label: cronLabel.value.trim() || undefined,
+      mode: cronNewSession.value ? 'fresh' : 'resume',
+      oneShot: cronOneShot.value,
+    })
+    cronPrompt.value = ''
+    cronLabel.value = ''
+    cronAdvanced.value = ''
+    $q.notify({ type: 'positive', message: t('schedule.cronCreated'), position: 'top', timeout: 2500 })
+  } catch (err) {
+    $q.notify({
+      type: 'negative',
+      message: String(err instanceof Error ? err.message : err),
+      position: 'top',
+      timeout: 5000,
+    })
+  } finally {
+    creatingCron.value = false
+  }
+}
+
+// --- Schedule wakeup form ---
+const wakeupMinutes = ref(15)
+const wakeupPrompt = ref('')
+const wakeupNewSession = ref(true) // ON = new session (fresh) — the default
+const creatingWakeup = ref(false)
+
+async function onScheduleWakeup(): Promise<void> {
+  if (!wakeupPrompt.value.trim() || !(wakeupMinutes.value > 0) || creatingWakeup.value) return
+  creatingWakeup.value = true
+  try {
+    await store.scheduleManualWakeup(props.workspaceId, {
+      delaySeconds: Math.round(wakeupMinutes.value * 60),
+      prompt: wakeupPrompt.value,
+      mode: wakeupNewSession.value ? 'fresh' : 'resume',
+    })
+    wakeupPrompt.value = ''
+    $q.notify({ type: 'positive', message: t('schedule.wakeupCreated'), position: 'top', timeout: 2500 })
+  } catch (err) {
+    $q.notify({
+      type: 'negative',
+      message: String(err instanceof Error ? err.message : err),
+      position: 'top',
+      timeout: 5000,
+    })
+  } finally {
+    creatingWakeup.value = false
   }
 }
 

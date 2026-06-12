@@ -1366,6 +1366,39 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
+    async createCron(
+      workspaceId: string,
+      input: { expression: string; prompt: string; label?: string; mode: 'fresh' | 'resume'; oneShot: boolean },
+    ): Promise<void> {
+      const res = await fetch(`/api/workspaces/${workspaceId}/crons`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      })
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(body.error ?? `HTTP ${res.status}`)
+      }
+      await this.fetchCrons(workspaceId)
+    },
+
+    async scheduleManualWakeup(
+      workspaceId: string,
+      input: { delaySeconds: number; prompt: string; mode: 'fresh' | 'resume' },
+    ): Promise<void> {
+      const res = await fetch(`/api/workspaces/${workspaceId}/pending-wakeup`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      })
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string }
+        throw new Error(body.error ?? `HTTP ${res.status}`)
+      }
+      const data = (await res.json()) as { ok: boolean; pending: PendingWakeup | null }
+      if (data.pending) this.pendingWakeups[workspaceId] = data.pending
+    },
+
     async fetchPendingWakeup(workspaceId: string): Promise<void> {
       try {
         const res = await fetch(`/api/workspaces/${workspaceId}/pending-wakeup`, { cache: 'no-store' })

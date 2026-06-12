@@ -753,6 +753,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
         delaySeconds,
         prompt,
         reason,
+        // Pin the calling session so the wakeup resumes THIS conversation (keeps
+        // context). The route now defaults to 'fresh' for manual UI scheduling;
+        // the agent must opt into 'resume' explicitly.
+        mode: 'resume',
       })
       return ok(result)
     }

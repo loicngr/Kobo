@@ -1243,8 +1243,9 @@ app.delete('/:id/quota-backoff', (c) => {
   }
 })
 
-// POST /api/workspaces/:id/pending-wakeup — agent-initiated schedule via the
-// `kobo__schedule_wakeup` MCP tool. Replaces any existing pending wakeup.
+// POST /api/workspaces/:id/pending-wakeup — schedule a wakeup, either from
+// the `kobo__schedule_wakeup` MCP tool (agent, mode='resume') or from the UI
+// (manual, mode='fresh', default). Replaces any existing pending wakeup.
 app.post('/:id/pending-wakeup', async (c) => {
   try {
     const id = c.req.param('id')
@@ -1252,6 +1253,7 @@ app.post('/:id/pending-wakeup', async (c) => {
     const delaySeconds = body.delaySeconds
     const prompt = body.prompt
     const reason = body.reason
+    const rawMode = typeof body.mode === 'string' ? body.mode : 'fresh'
     if (typeof delaySeconds !== 'number' || !Number.isFinite(delaySeconds) || delaySeconds <= 0) {
       return c.json({ error: 'delaySeconds must be a positive number' }, 400)
     }
@@ -1261,15 +1263,15 @@ app.post('/:id/pending-wakeup', async (c) => {
     if (reason !== undefined && typeof reason !== 'string') {
       return c.json({ error: 'reason must be a string when provided' }, 400)
     }
-    // Pin the wakeup to the session that scheduled it, so the resume targets
-    // that conversation instead of whichever session happens to be the latest
-    // at fire time. The MCP tool is invoked from inside an active session, so
-    // a missing controller signals misuse — reject explicitly.
-    const agentSessionId = agentManager.getActiveSessionId(id)
-    if (!agentSessionId) {
-      return c.json({ error: 'no active agent session for this workspace' }, 409)
+    if (rawMode !== 'fresh' && rawMode !== 'resume') {
+      return c.json({ error: "mode must be 'fresh' or 'resume'" }, 400)
     }
-    wakeupService.schedule(id, delaySeconds, prompt, reason, agentSessionId)
+    // 'resume' pins the active session so the wakeup resumes that conversation;
+    // 'fresh' (default) — or 'resume' with no active session — leaves it unpinned
+    // so the wakeup fires a brand-new session running `prompt`. This is what makes
+    // manual scheduling on an idle workspace possible (no more hard 409).
+    const agentSessionId = rawMode === 'resume' ? (agentManager.getActiveSessionId(id) ?? undefined) : undefined
+    wakeupService.schedule(id, delaySeconds, prompt as string, reason as string | undefined, agentSessionId)
     const pending = wakeupService.getPending(id)
     return c.json({ ok: true, pending })
   } catch (err) {

@@ -94,10 +94,15 @@ describe('cron-service — arm / cancel / get / list', () => {
     expect(svc.listForWorkspace(wsId)).toHaveLength(0)
   })
 
-  it('arm() rejects an expression whose next fire is < 60s in the future', async () => {
+  it('arm() skips an imminent (<60s) first fire instead of rejecting', async () => {
     const svc = await import('../server/services/cron-service.js')
     vi.setSystemTime(new Date('2026-05-07T10:00:30Z'))
-    expect(() => svc.arm(wsId, { expression: '* * * * *', prompt: 'x' })).toThrowError(/too close to now/i)
+    // First occurrence of `* * * * *` is 10:01:00 (30s away, <60s) → skip it and
+    // schedule the following one (10:02:00) rather than rejecting the cron.
+    const cron = svc.arm(wsId, { expression: '* * * * *', prompt: 'x' })
+    expect(cron.nextFireAt).toBe('2026-05-07T10:02:00.000Z')
+    expect(new Date(cron.nextFireAt).getTime() - Date.now()).toBeGreaterThanOrEqual(60_000)
+    expect(svc.listForWorkspace(wsId)).toHaveLength(1)
   })
 
   it('arm() supports @hourly / @daily helpers via cron-parser', async () => {

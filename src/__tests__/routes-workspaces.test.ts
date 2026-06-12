@@ -3589,21 +3589,45 @@ describe('POST /api/workspaces/:id/pending-wakeup', () => {
     const res = await app.request('/api/workspaces/w1/pending-wakeup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ delaySeconds: 120, prompt: 'check the build', reason: 'CI' }),
+      body: JSON.stringify({ delaySeconds: 120, prompt: 'check the build', reason: 'CI', mode: 'resume' }),
     })
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ ok: true, pending: { targetAt: '2026-04-22T10:00:00Z', reason: 'CI' } })
     expect(wakeupService.schedule).toHaveBeenCalledWith('w1', 120, 'check the build', 'CI', 'sess-42')
   })
 
-  it('rejects with 409 when no active session exists for the workspace', async () => {
+  it('schedules a fresh wakeup (no pinned session) when no active session exists', async () => {
     vi.mocked(agentManager.getActiveSessionId).mockReturnValue(undefined)
+    vi.mocked(wakeupService.getPending).mockReturnValue({ targetAt: '2026-04-22T10:02:00Z' })
     const res = await app.request('/api/workspaces/w1/pending-wakeup', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ delaySeconds: 60, prompt: 'check' }),
+      body: JSON.stringify({ delaySeconds: 120, prompt: 'check' }),
     })
-    expect(res.status).toBe(409)
+    expect(res.status).toBe(200)
+    // default mode is 'fresh' → agentSessionId undefined (fires a new session)
+    expect(wakeupService.schedule).toHaveBeenCalledWith('w1', 120, 'check', undefined, undefined)
+  })
+
+  it("pins the active session when mode is 'resume'", async () => {
+    vi.mocked(agentManager.getActiveSessionId).mockReturnValue('sess-99')
+    vi.mocked(wakeupService.getPending).mockReturnValue({ targetAt: '2026-04-22T10:02:00Z' })
+    const res = await app.request('/api/workspaces/w1/pending-wakeup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ delaySeconds: 120, prompt: 'check', mode: 'resume' }),
+    })
+    expect(res.status).toBe(200)
+    expect(wakeupService.schedule).toHaveBeenCalledWith('w1', 120, 'check', undefined, 'sess-99')
+  })
+
+  it('rejects an invalid mode with 400', async () => {
+    const res = await app.request('/api/workspaces/w1/pending-wakeup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ delaySeconds: 120, prompt: 'check', mode: 'bogus' }),
+    })
+    expect(res.status).toBe(400)
     expect(wakeupService.schedule).not.toHaveBeenCalled()
   })
 
@@ -3627,6 +3651,18 @@ describe('POST /api/workspaces/:id/pending-wakeup', () => {
     })
     expect(res.status).toBe(400)
     expect(wakeupService.schedule).not.toHaveBeenCalled()
+  })
+
+  it("falls back to an unpinned wakeup when mode is 'resume' but no session is active", async () => {
+    vi.mocked(agentManager.getActiveSessionId).mockReturnValue(undefined)
+    vi.mocked(wakeupService.getPending).mockReturnValue({ targetAt: '2026-04-22T10:02:00Z' })
+    const res = await app.request('/api/workspaces/w1/pending-wakeup', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ delaySeconds: 120, prompt: 'check', mode: 'resume' }),
+    })
+    expect(res.status).toBe(200)
+    expect(wakeupService.schedule).toHaveBeenCalledWith('w1', 120, 'check', undefined, undefined)
   })
 })
 

@@ -1002,6 +1002,56 @@ describe('workspace store', () => {
     })
   })
 
+  describe('createCron / scheduleManualWakeup', () => {
+    beforeEach(() => {
+      vi.restoreAllMocks()
+    })
+
+    it('createCron POSTs the cron then refreshes the list', async () => {
+      const ws = useWorkspaceStore()
+      const fetchMock = vi
+        .spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(new Response(JSON.stringify({ cron: { id: 'c1' } }), { status: 201 }))
+        .mockResolvedValueOnce(new Response(JSON.stringify({ crons: [{ id: 'c1' }] }), { status: 200 }))
+      await ws.createCron('w1', { expression: '*/15 * * * *', prompt: 'do x', mode: 'fresh', oneShot: false })
+      expect(fetchMock).toHaveBeenNthCalledWith(
+        1,
+        '/api/workspaces/w1/crons',
+        expect.objectContaining({ method: 'POST' }),
+      )
+      expect(ws.crons.w1).toEqual([{ id: 'c1' }])
+      fetchMock.mockRestore()
+    })
+
+    it('scheduleManualWakeup POSTs and stores the returned pending wakeup', async () => {
+      const ws = useWorkspaceStore()
+      const pending = { targetAt: '2026-04-22T10:05:00Z', reason: 'manual' }
+      const fetchMock = vi
+        .spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(new Response(JSON.stringify({ ok: true, pending }), { status: 200 }))
+      await ws.scheduleManualWakeup('w1', { delaySeconds: 900, prompt: 'check', mode: 'fresh' })
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/workspaces/w1/pending-wakeup',
+        expect.objectContaining({ method: 'POST' }),
+      )
+      expect(ws.pendingWakeups.w1).toEqual(pending)
+      fetchMock.mockRestore()
+    })
+
+    it('createCron throws on a non-OK response', async () => {
+      const ws = useWorkspaceStore()
+      const fetchMock = vi
+        .spyOn(globalThis, 'fetch')
+        .mockResolvedValueOnce(
+          new Response(JSON.stringify({ error: 'expression and prompt are required' }), { status: 400 }),
+        )
+      await expect(ws.createCron('w1', { expression: '', prompt: '', mode: 'fresh', oneShot: false })).rejects.toThrow(
+        'expression and prompt are required',
+      )
+      fetchMock.mockRestore()
+    })
+  })
+
   describe('prSnapshots', () => {
     beforeEach(() => {
       setActivePinia(createPinia())
