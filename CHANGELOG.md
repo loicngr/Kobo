@@ -10,7 +10,7 @@ section — the in-app "What's new" dialog reads this file.
 - feat(agent): enforce wakeup at turn-end + keep background work alive
 - feat(workspace): warn when viewing a non-latest session outside auto-loop
 
-## 1.7.34/35
+## 1.7.34
 
 - chore(npm): update claude sdk
 
