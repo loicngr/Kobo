@@ -6,7 +6,7 @@ export default defineConfig(() => {
   const wsTarget = `ws://localhost:${backendPort}`
 
   return {
-    boot: ['i18n'],
+    boot: ['i18n', 'network-auth'],
 
     css: ['app.scss'],
 

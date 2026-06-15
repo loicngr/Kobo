@@ -39,7 +39,7 @@ export function playNotificationSound(soundId: string, volume?: number | null): 
 }
 
 /** Send a browser notification and/or play a sound based on global settings. */
-export function notify(title: string, body?: string, workspaceId?: string): void {
+export function notify(title: string, body?: string, workspaceId?: string, soundOverride?: string): void {
   const settings = useSettingsStore()
 
   // Browser notification only when the tab is not focused
@@ -62,11 +62,13 @@ export function notify(title: string, body?: string, workspaceId?: string): void
     }
   }
 
-  // Sound plays regardless of focus
+  // Sound plays regardless of focus. A non-empty soundOverride (e.g. the distinct
+  // "agent asked a question" sound) takes precedence over the general sound.
   if (settings.global.audioNotifications) {
-    playNotificationSound(
-      settings.global.audioNotificationSound ?? DEFAULT_NOTIFICATION_SOUND,
-      settings.global.audioNotificationVolume,
-    )
+    const sound =
+      soundOverride && soundOverride.length > 0
+        ? soundOverride
+        : (settings.global.audioNotificationSound ?? DEFAULT_NOTIFICATION_SOUND)
+    playNotificationSound(sound, settings.global.audioNotificationVolume)
   }
 }

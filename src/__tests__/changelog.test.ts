@@ -27,6 +27,28 @@ describe('parseChangelog', () => {
     expect(entries[0].version).toBe('2.0.0')
   })
 
+  it('treats a combined "X.Y.Z/W" heading as its own version section', () => {
+    const md = [
+      '## 1.8.0',
+      '',
+      '- New stuff',
+      '',
+      '## 1.7.34/35',
+      '',
+      '- chore(npm): update claude sdk',
+      '',
+      '## 1.7.33',
+      '',
+      '- Older',
+    ].join('\n')
+
+    const entries = parseChangelog(md)
+    expect(entries.map((e) => e.version)).toEqual(['1.8.0', '1.7.34/35', '1.7.33'])
+    // The combined heading must NOT leak into the previous (1.8.0) entry's notes.
+    expect(entries[0].notes).not.toContain('1.7.34/35')
+    expect(entries[1].notes).toContain('update claude sdk')
+  })
+
   it('ignores headings that are not version numbers', () => {
     const md = '## Unreleased\n\n- WIP\n\n## 1.0.0\n\n- First'
     const entries = parseChangelog(md)

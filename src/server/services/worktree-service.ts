@@ -20,7 +20,47 @@ export interface OrphanWorktreeInfo {
 }
 
 function git(repoPath: string, args: string[]): string {
-  return execFileSync('git', args, { cwd: repoPath, encoding: 'utf-8', stdio: ['pipe', 'pipe', 'pipe'] }).trim()
+  return execFileSync('git', args, {
+    cwd: repoPath,
+    encoding: 'utf-8',
+    stdio: ['pipe', 'pipe', 'pipe'],
+    // Force the C locale so git (and libc strerror) emit English error messages.
+    // Without this, a French host reports "Permission non accordée" instead of
+    // "Permission denied", and permission-failure detection silently misses it.
+    env: { ...process.env, LC_ALL: 'C', LANG: 'C' },
+  }).trim()
+}
+
+/** True when an exec/git error message indicates a filesystem permission failure.
+ * git runs under LC_ALL=C (English), but we also match common localized phrasings
+ * (e.g. French) as a safety net in case the locale override doesn't take effect. */
+export function isPermissionError(message: string): boolean {
+  return /EACCES|EPERM|permission denied|operation not permitted|permission non accordée|opération non permise/i.test(
+    message,
+  )
+}
+
+/** argv for `docker run` that chowns a bind-mounted worktree back to the host user. */
+export function buildDockerChownArgs(worktreePath: string, uid: number, gid: number, image: string): string[] {
+  return ['run', '--rm', '-v', `${worktreePath}:/w`, image, 'chown', '-R', `${uid}:${gid}`, '/w']
+}
+
+const DEFAULT_CLEANUP_IMAGE = 'alpine'
+
+function isDockerAvailable(): boolean {
+  try {
+    execFileSync('docker', ['version'], { stdio: ['ignore', 'ignore', 'ignore'] })
+    return true
+  } catch {
+    return false
+  }
+}
+
+function reclaimWorktreeOwnershipViaDocker(worktreePath: string, uid: number, gid: number, image: string): void {
+  execFileSync('docker', buildDockerChownArgs(worktreePath, uid, gid, image), {
+    encoding: 'utf-8',
+    stdio: ['pipe', 'pipe', 'pipe'],
+  })
 }
 
 function getExcludeFilePath(projectPath: string): string {
@@ -107,12 +147,43 @@ export function createWorktree(
   return worktreePath
 }
 
-/** Remove a git worktree and clean up the .git/info/exclude entry. */
+/** Remove a git worktree and clean up the .git/info/exclude entry.
+ *
+ * If `git worktree remove` fails on a permission error (Docker dev servers leave
+ * root-owned files in node_modules / vendor), and Docker is available, reclaim
+ * ownership with a throwaway container (`chown -R <uid>:<gid>`) and retry once.
+ * Otherwise rethrow so the caller's recovery toast (sudo rm -rf …) fires. */
 export function removeWorktree(projectPath: string, worktreePath: string): void {
   try {
     git(projectPath, ['worktree', 'remove', worktreePath, '--force'])
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
+    const uid = typeof process.getuid === 'function' ? process.getuid() : null
+    const gid = typeof process.getgid === 'function' ? process.getgid() : null
+
+    if (isPermissionError(message) && uid != null && gid != null && isDockerAvailable()) {
+      const image = process.env.KOBO_WORKTREE_CLEANUP_IMAGE || DEFAULT_CLEANUP_IMAGE
+      console.warn(
+        `[worktree] '${worktreePath}' has root-owned files (permission denied); reclaiming ownership via Docker (${image})…`,
+      )
+      try {
+        reclaimWorktreeOwnershipViaDocker(worktreePath, uid, gid, image)
+        // The first `git worktree remove` already de-registered this worktree (it
+        // drops the admin entry even when the directory rm fails on permission), so
+        // retrying it errors with "is not a working tree". Now that we own the files,
+        // delete the directory directly and prune any dangling worktree metadata.
+        fs.rmSync(worktreePath, { recursive: true, force: true })
+        git(projectPath, ['worktree', 'prune'])
+        console.log(`[worktree] Docker cleanup succeeded; removed '${worktreePath}'`)
+        removeFromExclude(projectPath, worktreePath)
+        return
+      } catch (retryErr) {
+        const retryMessage = retryErr instanceof Error ? retryErr.message : String(retryErr)
+        console.error(`[worktree] Docker cleanup failed for '${worktreePath}': ${retryMessage}`)
+        throw new Error(`Failed to remove worktree '${worktreePath}': ${retryMessage}`)
+      }
+    }
+
     throw new Error(`Failed to remove worktree '${worktreePath}': ${message}`)
   }
 

@@ -4,7 +4,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import {
+  buildDockerChownArgs,
   createWorktree,
+  isPermissionError,
   listOrphanWorktrees,
   listWorktrees,
   removeWorktree,
@@ -254,5 +256,41 @@ describe('listOrphanWorktrees(projectPath, attachedPaths)', () => {
     // (real path) — canonicalization on both sides must collapse them.
     const orphans = listOrphanWorktrees(projectPath, new Set([symlink]))
     expect(orphans).toHaveLength(0)
+  })
+})
+
+describe('isPermissionError', () => {
+  it('is true for filesystem permission errors', () => {
+    expect(isPermissionError('rm: cannot remove: Permission denied')).toBe(true)
+    expect(isPermissionError('EACCES: permission denied')).toBe(true)
+    expect(isPermissionError('Error: EPERM operation not permitted')).toBe(true)
+    expect(isPermissionError('operation not permitted')).toBe(true)
+    // French locale (the real-world failure that revealed this): git/libc emit
+    // "Permission non accordée" instead of "Permission denied".
+    expect(isPermissionError("erreur : échec de la suppression de '/x': Permission non accordée")).toBe(true)
+    expect(isPermissionError('opération non permise')).toBe(true)
+  })
+  it('is false for unrelated errors', () => {
+    expect(isPermissionError('fatal: not a git repository')).toBe(false)
+    expect(isPermissionError('merge conflict')).toBe(false)
+  })
+})
+
+describe('buildDockerChownArgs', () => {
+  it('builds a docker run argv that chowns the bind-mounted worktree', () => {
+    expect(buildDockerChownArgs('/home/u/worktrees/ws', 1000, 1000, 'alpine')).toEqual([
+      'run',
+      '--rm',
+      '-v',
+      '/home/u/worktrees/ws:/w',
+      'alpine',
+      'chown',
+      '-R',
+      '1000:1000',
+      '/w',
+    ])
+  })
+  it('uses the provided image', () => {
+    expect(buildDockerChownArgs('/w/x', 501, 20, 'busybox')[4]).toBe('busybox')
   })
 })

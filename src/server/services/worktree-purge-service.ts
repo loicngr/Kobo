@@ -11,7 +11,7 @@ import {
   markWorktreePurged,
   type WorktreePurgeRestoreData,
 } from './workspace-service.js'
-import { removeWorktree } from './worktree-service.js'
+import { isPermissionError, removeWorktree } from './worktree-service.js'
 
 export type PurgeOutcome = 'purged' | 'already-purged' | 'worktree-not-owned' | 'not-found'
 
@@ -84,7 +84,7 @@ export async function purgeWorktree(workspaceId: string): Promise<PurgeResult> {
 }
 
 function buildRemovalFailureMessage(worktreePath: string, projectPath: string, errMsg: string): string {
-  const isPermission = /EACCES|EPERM|permission denied|operation not permitted/i.test(errMsg)
+  const isPermission = isPermissionError(errMsg)
   const baseLine = `Failed to remove worktree '${worktreePath}'.`
   const recovery = ['Recovery:', `  sudo rm -rf '${worktreePath}'`, `  cd '${projectPath}' && git worktree prune`].join(
     '\n',

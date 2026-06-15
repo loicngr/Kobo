@@ -14,9 +14,11 @@ export interface Template {
 interface TemplatesFile {
   version: number
   templates: Template[]
+  /** Default slugs ever seeded into this install. Drives the seed-once migration. */
+  seededDefaultSlugs?: string[]
 }
 
-const CURRENT_FILE_VERSION = 1
+const CURRENT_FILE_VERSION = 2
 const SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{0,63}$/
 const MAX_CONTENT_LENGTH = 4096
 const MAX_DESCRIPTION_LENGTH = 120
@@ -140,10 +142,22 @@ function validateTemplateInput(input: { slug: string; description: string; conte
   }
 }
 
-function writeTemplates(templates: Template[]): void {
+function readSeededSlugs(): string[] | undefined {
+  const filePath = getTemplatesPath()
+  if (!existsSync(filePath)) return undefined
+  try {
+    const parsed = JSON.parse(readFileSync(filePath, 'utf-8')) as TemplatesFile
+    return Array.isArray(parsed.seededDefaultSlugs) ? parsed.seededDefaultSlugs : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function writeTemplates(templates: Template[], seededDefaultSlugs?: string[]): void {
   const filePath = getTemplatesPath()
   mkdirSync(path.dirname(filePath), { recursive: true })
-  const file: TemplatesFile = { version: CURRENT_FILE_VERSION, templates }
+  const seeded = seededDefaultSlugs ?? readSeededSlugs() ?? [...LEGACY_DEFAULT_SLUGS]
+  const file: TemplatesFile = { version: CURRENT_FILE_VERSION, templates, seededDefaultSlugs: seeded }
   writeFileSync(filePath, JSON.stringify(file, null, 2), 'utf-8')
 }
 
@@ -185,6 +199,25 @@ export interface DefaultTemplate {
   content: string
 }
 
+/**
+ * The default slugs that existed BEFORE the seededDefaultSlugs watermark shipped.
+ * Bootstraps the watermark for pre-watermark installs so a default the user deleted
+ * earlier is not re-added on the first boot. Frozen historical snapshot; never change it.
+ */
+const LEGACY_DEFAULT_SLUGS: readonly string[] = [
+  'kobo-context',
+  'review-quality',
+  'add-tests',
+  'explain',
+  'refactor',
+  'plan-tasks',
+  'show-tasks',
+  'mark-done',
+  'sync-tasks',
+  'pr-review-comments',
+  'ci-status',
+]
+
 export const DEFAULT_TEMPLATES: readonly DefaultTemplate[] = [
   {
     slug: 'kobo-context',
@@ -224,7 +257,9 @@ export const DEFAULT_TEMPLATES: readonly DefaultTemplate[] = [
       `# Boundaries\n` +
       `- The user owns the \`description\` field of the workspace — never write it; you only own \`agent_description\`\n` +
       `- The user can interrupt you at any time via the chat; treat their messages as authoritative redirections\n` +
-      `- Auto-loop is automatically disabled if the user sends a chat message during a loop — they'll re-enable it manually after\n`,
+      `- Auto-loop is automatically disabled if the user sends a chat message during a loop — they'll re-enable it manually after\n` +
+      `\n# Decision support\n` +
+      `For a high-stakes engineering decision with no obvious answer (architecture choice, risky refactor, a real tradeoff), run a "council": the \`/council\` template spawns 5 sub-agent advisors with distinct lenses, peer-reviews them, and synthesises a verdict into \`.ai/thoughts/\`. It costs ~11 sub-agent calls, so use it sparingly.\n`,
   },
   {
     slug: 'review-quality',
@@ -285,29 +320,69 @@ export const DEFAULT_TEMPLATES: readonly DefaultTemplate[] = [
     content:
       'Check the CI/CD status for the pull request on branch {working_branch}.\n\nIf a PR exists (PR {pr_url}):\n1. Use the GitHub MCP tools to list the check runs / status checks on the latest commit of the PR\n2. For each check, report:\n   - Check name\n   - Status (queued, in_progress, completed)\n   - Conclusion (success, failure, neutral, skipped, etc.)\n   - Duration if available\n3. If any checks failed, fetch the logs or annotations and summarize what went wrong\n4. Give an overall summary: all green, some failing, or still running\n\nIf no PR exists, say so and suggest creating one first.',
   },
+  {
+    slug: 'council',
+    description: 'Pressure-test a high-stakes decision with 5 sub-agent advisors',
+    content:
+      `Run a "council" to pressure-test a high-stakes decision for this workspace ("{workspace_name}").\n\n` +
+      `The decision: take what the user described in this message. If they gave none, ask for it in one line and stop.\n\n` +
+      `You orchestrate this with your own sub-agents:\n\n` +
+      `1. Spawn 5 sub-agents IN PARALLEL, one per lens. Each answers the decision independently in 150-300 words, fully in its lens, no hedging, no false balance:\n` +
+      `   - Contrarian: hunt the fatal flaw; what fails, what's missing.\n` +
+      `   - First Principles: ignore the surface question; what are we really solving? Is this even the right question?\n` +
+      `   - Expansionist: the upside everyone misses; what if it works better than expected?\n` +
+      `   - Outsider: zero context; react only to what's stated; catch the curse of knowledge.\n` +
+      `   - Executor: can it be done, and what's the fastest first step Monday morning?\n\n` +
+      `2. Anonymise the 5 answers as A-E (randomised). Spawn 5 reviewer sub-agents; each names the strongest answer, the biggest blind spot, and what ALL of them missed. Under 200 words each.\n\n` +
+      `3. Synthesise the verdict yourself:\n` +
+      `   - Where the council agrees (high-confidence signals).\n` +
+      `   - Where it clashes (present both sides honestly).\n` +
+      `   - Blind spots the review caught.\n` +
+      `   - One clear recommendation, not "it depends".\n` +
+      `   - The one thing to do first.\n\n` +
+      `4. Post the verdict in chat, and save the full transcript (decision, 5 answers, 5 reviews, verdict) to \`.ai/thoughts/council-<short-topic-slug>.md\`.\n\n` +
+      `Cost: this runs ~11 sub-agent calls. Use it only for decisions that are expensive to get wrong, not routine choices.\n`,
+  },
 ] as const
 
 function seedTemplates(): void {
   const now = new Date().toISOString()
   const seed: Template[] = DEFAULT_TEMPLATES.map((t) => ({ ...t, createdAt: now, updatedAt: now }))
-  writeTemplates(seed)
+  writeTemplates(
+    seed,
+    DEFAULT_TEMPLATES.map((t) => t.slug),
+  )
 }
 
+/**
+ * Add any default whose slug was never seeded into this install AND is not already
+ * present. Each default seeds at most once (tracked in `seededDefaultSlugs`), so a
+ * default the user deleted does not come back. Never overwrites an existing template.
+ */
 export function reloadDefaultTemplates(): { added: string[]; kept: string[] } {
   const existing = listTemplates()
-  const existingBySlug = new Map(existing.map((t) => [t.slug, t]))
+  const existingBySlug = new Set(existing.map((t) => t.slug))
+  const rawSeeded = readSeededSlugs()
+  const seeded = new Set<string>(rawSeeded ?? LEGACY_DEFAULT_SLUGS)
   const now = new Date().toISOString()
   const added: string[] = []
   const kept: string[] = []
   const next: Template[] = [...existing]
   for (const def of DEFAULT_TEMPLATES) {
-    if (existingBySlug.has(def.slug)) {
+    if (seeded.has(def.slug)) {
       kept.push(def.slug)
       continue
     }
-    next.push({ ...def, createdAt: now, updatedAt: now })
-    added.push(def.slug)
+    if (existingBySlug.has(def.slug)) {
+      kept.push(def.slug)
+    } else {
+      next.push({ ...def, createdAt: now, updatedAt: now })
+      added.push(def.slug)
+    }
+    seeded.add(def.slug)
   }
-  if (added.length > 0) writeTemplates(next)
+  if (added.length > 0 || rawSeeded === undefined) {
+    writeTemplates(next, [...seeded])
+  }
   return { added, kept }
 }

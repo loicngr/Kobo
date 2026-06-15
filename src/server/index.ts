@@ -6,6 +6,7 @@ import { Hono } from 'hono'
 import WebSocket, { WebSocketServer } from 'ws'
 import { closeDb, getDb } from './db/index.js'
 import { getPendingMigrations, runMigrations } from './db/migrations.js'
+import { networkAuthMiddleware } from './middleware/network-auth-middleware.js'
 import changelogRouter from './routes/changelog.js'
 import devServerRouter from './routes/dev-server.js'
 import documentsRouter from './routes/documents.js'
@@ -40,8 +41,11 @@ import { runContentMigrationIfNeeded } from './services/content-migration-servic
 import * as cronService from './services/cron-service.js'
 import { createDailyDbBackupIfNeeded, createPreMigrationBackup } from './services/db-backup-service.js'
 import { startDevServer, stopDevServer } from './services/dev-server-service.js'
+import { authorizeWsUpgrade, getLanUrls, resolveBindHost } from './services/network-access-service.js'
 import { startPrWatcher, stopPrWatcher } from './services/pr-watcher-service.js'
 import * as quotaBackoffService from './services/quota-backoff-service.js'
+import { getGlobalSettings } from './services/settings-service.js'
+import { reloadDefaultTemplates } from './services/templates-service.js'
 import { createTerminal, destroyAllTerminals, getTerminal } from './services/terminal-service.js'
 import { startUsagePoller, stopUsagePoller } from './services/usage/index.js'
 import * as wakeupService from './services/wakeup-service.js'
@@ -94,11 +98,24 @@ autoLoopService.rehydrate()
 restoreRetryCountsFromDb()
 quotaBackoffService.restoreOnBoot((workspaceId) => autoLoopService.onQuotaBackoffExpired(workspaceId))
 cronService.restoreOnBoot()
+// Deliver any new default prompt templates to existing installs (seed-once via the
+// seededDefaultSlugs watermark; never overwrites or re-adds deleted defaults).
+try {
+  const { added } = reloadDefaultTemplates()
+  if (added.length > 0) {
+    console.log(`[templates] Added ${added.length} new default template(s): ${added.join(', ')}`)
+  }
+} catch (err) {
+  console.error('[templates] reloadDefaultTemplates on boot failed:', err)
+}
 startPrWatcher()
 startUsagePoller()
 
 // Create Hono app
 const app = new Hono()
+
+// Gate non-loopback requests behind the network-access token (loopback exempt).
+app.use('/api/*', networkAuthMiddleware)
 
 // Health check (root / is handled by the SPA catch-all below)
 app.get('/api/health', (c) => c.json({ status: 'ok', version: getPackageVersion() }))
@@ -175,14 +192,21 @@ if (clientDistPath) {
 }
 
 // Create HTTP server via @hono/node-server
+const bindHost = resolveBindHost(getGlobalSettings().networkAccessEnabled)
 const server = serve(
   {
     fetch: app.fetch,
     port: PORT,
+    hostname: bindHost,
   },
   (info) => {
     setBackendPort(info.port)
-    console.log(`Server running at http://localhost:${info.port}`)
+    if (getGlobalSettings().networkAccessEnabled) {
+      console.log(`Server running — network access ON (port ${info.port})`)
+      for (const url of getLanUrls(info.port)) console.log(`  LAN: ${url}`)
+    } else {
+      console.log(`Server running at http://localhost:${info.port} (localhost only)`)
+    }
     // Content migration runs AFTER the HTTP listener is up so the frontend
     // can observe progress via WS broadcasts + GET /api/migration/status.
     // Not awaited — the callback returns quickly, the migration runs in the
@@ -428,6 +452,23 @@ setMessageHandler((type, payload) => {
 // Handle WebSocket upgrade requests on /ws path
 server.on('upgrade', (request, socket, head) => {
   const { pathname } = new URL(request.url ?? '/', `http://localhost:${PORT}`)
+
+  const wsGlobal = getGlobalSettings()
+  if (
+    !authorizeWsUpgrade({
+      address: request.socket.remoteAddress,
+      rawUrl: request.url,
+      enabled: wsGlobal.networkAccessEnabled,
+      expectedToken: wsGlobal.networkAccessToken,
+    })
+  ) {
+    console.warn(
+      `[network-auth] WS 401 (missing/invalid token) from ${request.socket.remoteAddress ?? 'unknown'} ${pathname}`,
+    )
+    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n')
+    socket.destroy()
+    return
+  }
 
   if (pathname === '/ws') {
     wss.handleUpgrade(request, socket, head, (ws) => {

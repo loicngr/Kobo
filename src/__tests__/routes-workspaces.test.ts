@@ -134,6 +134,7 @@ vi.mock('../server/utils/git-ops.js', () => ({
   deleteRemoteBranch: vi.fn(),
   pushBranch: vi.fn(),
   pullBranch: vi.fn(),
+  fetchAllBranches: vi.fn(),
   rebaseBranch: vi.fn(),
   mergeBranch: vi.fn(),
   commitAllChanges: vi.fn(),
@@ -2249,6 +2250,37 @@ describe('POST /api/workspaces/:id/push', () => {
       expect.objectContaining({ content: expect.stringContaining('Pushed') }),
       's-1',
     )
+  })
+})
+
+describe('POST /api/workspaces/:id/fetch', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(gitOps.fetchAllBranches).mockReset()
+  })
+
+  it('fetches the workspace repo and returns 200', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace } as never)
+    const res = await app.request('/api/workspaces/ws-1/fetch', { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect((await res.json()).ok).toBe(true)
+    expect(vi.mocked(gitOps.fetchAllBranches)).toHaveBeenCalledWith(expect.stringContaining('.worktrees'))
+  })
+
+  it('returns 404 when workspace not found', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
+    const res = await app.request('/api/workspaces/unknown/fetch', { method: 'POST' })
+    expect(res.status).toBe(404)
+    expect(vi.mocked(gitOps.fetchAllBranches)).not.toHaveBeenCalled()
+  })
+
+  it('returns 500 when the fetch fails', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace } as never)
+    vi.mocked(gitOps.fetchAllBranches).mockImplementation(() => {
+      throw new Error('no remote configured')
+    })
+    const res = await app.request('/api/workspaces/ws-1/fetch', { method: 'POST' })
+    expect(res.status).toBe(500)
   })
 })
 

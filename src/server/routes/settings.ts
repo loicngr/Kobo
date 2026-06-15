@@ -1,8 +1,10 @@
 import { Hono } from 'hono'
+import { getBackendPort } from '../services/agent/orchestrator.js'
 import {
   DEFAULT_NOTION_INITIAL_PROMPT,
   DEFAULT_SENTRY_INITIAL_PROMPT,
 } from '../services/initial-prompt-template-service.js'
+import { generateToken, getLanUrls } from '../services/network-access-service.js'
 import { DEFAULT_REVIEW_PROMPT_TEMPLATE } from '../services/review-template-service.js'
 import { DEFAULT_CHANGE_SOURCE_BRANCH_SCRIPT } from '../services/settings-defaults.js'
 import * as settingsService from '../services/settings-service.js'
@@ -57,6 +59,56 @@ app.get('/defaults', (c) => {
     sentryInitialPromptTemplate: DEFAULT_SENTRY_INITIAL_PROMPT,
     changeSourceBranchScript: DEFAULT_CHANGE_SOURCE_BRANCH_SCRIPT,
   })
+})
+
+// GET /api/settings/network — network access state + LAN URLs
+app.get('/network', (c) => {
+  try {
+    const global = settingsService.getGlobalSettings()
+    return c.json({
+      enabled: global.networkAccessEnabled,
+      token: global.networkAccessToken,
+      urls: getLanUrls(getBackendPort()),
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// GET /api/settings/network/ping — token validation probe (behind the gate)
+app.get('/network/ping', (c) => c.json({ ok: true }))
+
+// POST /api/settings/network — toggle enabled / regenerate token
+app.post('/network', async (c) => {
+  try {
+    const body = await c.req.json<{ enabled?: boolean; regenerate?: boolean }>()
+    const current = settingsService.getGlobalSettings()
+    const patch: { networkAccessEnabled?: boolean; networkAccessToken?: string } = {}
+    let restartRequired = false
+
+    if (typeof body.enabled === 'boolean' && body.enabled !== current.networkAccessEnabled) {
+      patch.networkAccessEnabled = body.enabled
+      restartRequired = true
+      if (body.enabled && !current.networkAccessToken) {
+        patch.networkAccessToken = generateToken()
+      }
+    }
+    if (body.regenerate) {
+      patch.networkAccessToken = generateToken()
+    }
+
+    const updated = settingsService.updateNetworkAccessSettings(patch)
+    return c.json({
+      enabled: updated.networkAccessEnabled,
+      token: updated.networkAccessToken,
+      urls: getLanUrls(getBackendPort()),
+      restartRequired,
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
 })
 
 // GET /api/settings/mcp-servers — list active MCP servers from Claude config

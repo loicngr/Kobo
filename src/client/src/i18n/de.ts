@@ -350,6 +350,8 @@ export default {
   'settings.browserNotifications': 'Browser-Benachrichtigung wenn Agent fertig ist',
   'settings.audioNotifications': 'Ton-Benachrichtigung wenn Agent fertig ist',
   'settings.notificationSound': 'Benachrichtigungston',
+  'settings.questionSound': 'Frageton',
+  'settings.questionSoundHint': 'Wird nur abgespielt, wenn der Agent eine Frage stellt.',
   'settings.notificationSoundPreview': 'Anhören',
   'settings.notificationVolume': 'Lautstärke',
   'settings.notificationSoundHey': 'Hey',
@@ -731,6 +733,9 @@ export default {
   'git.rebaseSuccess': 'Rebase abgeschlossen',
   'git.rebaseFailed': 'Rebase fehlgeschlagen',
   'git.merge': 'Merge',
+  'git.fetch': 'Fetch',
+  'git.fetchSuccess': 'Repository abgerufen',
+  'git.fetchFailed': 'Fetch fehlgeschlagen: {error}',
   'git.mergeConfirmTitle': 'Branch mergen?',
   'git.mergeConfirmMessage': '{branch} in diesen Branch mergen. Konflikte möglich.',
   'git.mergeSuccess': 'Merge abgeschlossen',
@@ -1121,6 +1126,21 @@ export default {
   'settings.importConfirmTitle': 'Konfiguration importieren',
   'settings.importConfirmMessage':
     'Dies ersetzt deine aktuellen Einstellungen, Templates und Tags. MCP-Keys bleiben erhalten. Fortfahren?',
+  'settings.network.title': 'Netzwerkzugriff',
+  'settings.network.hint':
+    'Steuere Kōbō von einem anderen Gerät in deinem vertrauenswürdigen LAN. Aus = nur localhost. An = im Netzwerk erreichbar, per Token geschützt. Starte Kōbō nach dem Umschalten neu.',
+  'settings.network.enable': 'Netzwerkzugriff aktivieren',
+  'settings.network.restartRequired': 'Starte Kōbō neu, um die neue Bind-Adresse anzuwenden.',
+  'settings.network.token': 'Zugriffstoken',
+  'settings.network.copy': 'Kopieren',
+  'settings.network.copied': 'Kopiert',
+  'settings.network.regenerate': 'Neu generieren',
+  'settings.network.regenerateConfirm': 'Token neu generieren? Verbundene Geräte benötigen das neue Token.',
+  'settings.network.urls': 'LAN-URLs',
+  'settings.network.scan': 'Zum Verbinden scannen',
+  'settings.network.noUrls': 'Keine LAN-Adresse erkannt.',
+  'settings.network.loadFailed': 'Netzwerkzugriff-Einstellungen konnten nicht geladen werden.',
+  'settings.network.updateFailed': 'Netzwerkzugriff-Einstellungen konnten nicht aktualisiert werden.',
   'health.title': 'Status',
   'health.tooltip': 'Systemstatus',
   'changelog.title': 'Änderungsprotokoll',
@@ -1290,4 +1310,17 @@ export default {
   'staleSessionBanner.staleMessage':
     'Du siehst eine ältere Sitzung — gesendete Nachrichten gehen an diese Sitzung, nicht an die neueste.',
   'staleSessionBanner.switchToCurrent': 'Zur aktuellen wechseln',
+
+  // Network login
+  'network.login.title': 'Netzwerkzugriff',
+  'network.login.description':
+    'Dieses Kōbō benötigt ein Token, um über das Netzwerk gesteuert zu werden. Füge das in den Einstellungen auf dem Host angezeigte Token ein.',
+  'network.login.tokenLabel': 'Token',
+  'network.login.tokenPlaceholder': 'Token einfügen',
+  'network.login.connect': 'Verbinden',
+  'network.login.invalid': 'Ungültiges Token',
+  'network.login.serverError': 'Serverfehler — bitte erneut versuchen.',
+  'network.login.unreachable': 'Kōbō ist nicht erreichbar — prüfe deine Verbindung.',
+  'layout.toggleWorkspaces': 'Workspaces-Leiste ein-/ausblenden',
+  'layout.togglePanel': 'Seitenleiste ein-/ausblenden',
 }

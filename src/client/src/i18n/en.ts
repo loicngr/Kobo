@@ -344,6 +344,8 @@ export default {
   'settings.browserNotifications': 'Browser notifications when agent finishes',
   'settings.audioNotifications': 'Sound notification when agent finishes',
   'settings.notificationSound': 'Notification sound',
+  'settings.questionSound': 'Question sound',
+  'settings.questionSoundHint': 'Played only when the agent asks you a question.',
   'settings.notificationSoundPreview': 'Preview',
   'settings.notificationVolume': 'Volume',
   'settings.notificationSoundHey': 'Hey',
@@ -721,6 +723,9 @@ export default {
   'git.rebaseSuccess': 'Rebase completed',
   'git.rebaseFailed': 'Rebase failed',
   'git.merge': 'Merge',
+  'git.fetch': 'Fetch',
+  'git.fetchSuccess': 'Repository fetched',
+  'git.fetchFailed': 'Fetch failed: {error}',
   'git.mergeConfirmTitle': 'Merge branch?',
   'git.mergeConfirmMessage': 'Merge {branch} into this branch. This may cause conflicts.',
   'git.mergeSuccess': 'Merge completed',
@@ -1104,6 +1109,21 @@ export default {
   'settings.importConfirmTitle': 'Import configuration',
   'settings.importConfirmMessage':
     'This will replace your current settings, templates and tags. Your MCP keys are preserved. Continue?',
+  'settings.network.title': 'Network access',
+  'settings.network.hint':
+    'Control Kōbō from another device on your trusted LAN. Off = localhost only. On = reachable on your network, protected by a token. Restart Kōbō after toggling.',
+  'settings.network.enable': 'Enable network access',
+  'settings.network.restartRequired': 'Restart Kōbō to apply the new bind address.',
+  'settings.network.token': 'Access token',
+  'settings.network.copy': 'Copy',
+  'settings.network.copied': 'Copied',
+  'settings.network.regenerate': 'Regenerate',
+  'settings.network.regenerateConfirm': 'Regenerate the token? Connected devices will need the new token.',
+  'settings.network.urls': 'LAN URLs',
+  'settings.network.scan': 'Scan to connect',
+  'settings.network.noUrls': 'No LAN address detected.',
+  'settings.network.loadFailed': 'Failed to load network access settings.',
+  'settings.network.updateFailed': 'Failed to update network access settings.',
   'health.title': 'Health',
   'health.tooltip': 'System health',
   'changelog.title': 'Changelog',
@@ -1270,4 +1290,17 @@ export default {
   'staleSessionBanner.staleMessage':
     "You're viewing an older session — messages you send go to this session, not the latest one.",
   'staleSessionBanner.switchToCurrent': 'Switch to current',
+
+  // Network login
+  'network.login.title': 'Network access',
+  'network.login.description':
+    'This Kōbō requires a token to be controlled from the network. Paste the token shown in Settings on the host machine.',
+  'network.login.tokenLabel': 'Token',
+  'network.login.tokenPlaceholder': 'Paste your token',
+  'network.login.connect': 'Connect',
+  'network.login.invalid': 'Invalid token',
+  'network.login.serverError': 'Server error — try again.',
+  'network.login.unreachable': 'Kōbō is unreachable — check your connection.',
+  'layout.toggleWorkspaces': 'Toggle workspaces panel',
+  'layout.togglePanel': 'Toggle side panel',
 }

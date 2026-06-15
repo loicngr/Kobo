@@ -2,8 +2,11 @@ import { defineStore } from 'pinia'
 import { Notify } from 'quasar'
 import i18n from 'src/i18n'
 import { useAgentStreamStore } from 'src/stores/agent-stream'
+import { useSettingsStore } from 'src/stores/settings'
 import type { AgentEvent } from 'src/types/agent-event'
 import type { ProviderId, UsageSnapshot } from 'src/types/usage'
+import { appendTokenToWsUrl, getToken } from 'src/utils/auth-token'
+import { openNetworkLogin } from 'src/utils/network-login-bus'
 import { notify } from 'src/utils/notifications'
 import type { DevServerStatus } from './dev-server'
 import { useDevServerStore } from './dev-server'
@@ -199,7 +202,10 @@ export function dispatchAgentEvent(
         event.requestKind === 'question'
           ? t('notification.agentQuestion', { name: wsName })
           : t('notification.agentPermissionRequest', { name: wsName })
-      notify(title, undefined, workspaceId)
+      // Questions get the dedicated question sound; permission requests keep the
+      // general notification sound.
+      const soundOverride = event.requestKind === 'question' ? useSettingsStore().global.audioQuestionSound : undefined
+      notify(title, undefined, workspaceId, soundOverride)
     }
     return
   }
@@ -342,7 +348,7 @@ export const useWebSocketStore = defineStore('websocket', {
       if (_ws) return
 
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-      const url = `${protocol}//${window.location.host}/ws`
+      const url = appendTokenToWsUrl(`${protocol}//${window.location.host}/ws`, getToken())
 
       const ws = new WebSocket(url)
       _ws = ws
@@ -473,6 +479,16 @@ export const useWebSocketStore = defineStore('websocket', {
       // Exponential backoff: 1s, 2s, 4s, 8s, 16s, max 30s
       const delay = Math.min(1000 * 2 ** _reconnectAttempt, 30000)
       _reconnectAttempt++
+
+      // The browser surfaces a rejected WS upgrade (401 from the network-access
+      // guard) only as a generic close → endless silent reconnect. After a few
+      // consecutive failures while a token is stored, the token is most likely
+      // stale/invalid: surface the login dialog so realtime can recover, mirroring
+      // the HTTP 401 path. Gated on getToken() so a plain localhost server-down
+      // doesn't pop a token prompt. Fires once per failure streak (reset on open).
+      if (_reconnectAttempt === 4 && getToken()) {
+        openNetworkLogin()
+      }
 
       _reconnectTimer = setTimeout(() => {
         _reconnectTimer = null
