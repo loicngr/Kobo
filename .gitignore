@@ -10,3 +10,6 @@ src/client/.quasar/
 .mcp.json
 .vscode/
 .gstack/
+.claude/
+.codex/
+.qwen/
