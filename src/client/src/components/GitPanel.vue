@@ -240,7 +240,7 @@
               icon="sync"
               :label="$t('git.sync')"
               class="full-width git-btn"
-              :loading="pulling || rebasing || merging"
+              :loading="pulling || rebasing || merging || fetching"
               :disable="!workspace || pushing || isArchived"
               @click="gitStats.unpushedCount === -1 ? handleRebase() : handlePull()"
             >
@@ -267,6 +267,12 @@
                     <q-icon name="merge" size="16px" color="purple-4" />
                   </q-item-section>
                   <q-item-section>{{ $t('git.merge') }}</q-item-section>
+                </q-item>
+                <q-item clickable v-close-popup :disable="pulling || rebasing || merging || fetching || isArchived" @click="handleFetchAll">
+                  <q-item-section avatar style="min-width: 28px;">
+                    <q-icon name="cloud_download" size="16px" color="grey-5" />
+                  </q-item-section>
+                  <q-item-section>{{ $t('git.fetch') }}</q-item-section>
                 </q-item>
               </q-list>
             </q-btn-dropdown>
@@ -652,6 +658,7 @@ const pushing = ref(false)
 const pulling = ref(false)
 const rebasing = ref(false)
 const merging = ref(false)
+const fetching = ref(false)
 const openingPr = ref(false)
 const changingBase = ref(false)
 const showDiff = ref(false)
@@ -1315,6 +1322,27 @@ function handlePull() {
   }).onOk(() => {
     void runPull()
   })
+}
+
+// Plain `git fetch` of the workspace repo (all branches of origin). Safe/read-only,
+// so no confirmation dialog; refresh stats afterwards so divergence + branches update.
+async function handleFetchAll() {
+  if (!props.workspace) return
+  fetching.value = true
+  try {
+    const res = await fetch(`/api/workspaces/${props.workspace.id}/fetch`, { method: 'POST' })
+    if (!res.ok) {
+      const data = await res.json()
+      throw new Error(data.error ?? 'Failed')
+    }
+    $q.notify({ type: 'positive', message: t('git.fetchSuccess'), position: 'top' })
+    loadGitStats()
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    $q.notify({ type: 'negative', message: t('git.fetchFailed', { error: msg }), position: 'top' })
+  } finally {
+    fetching.value = false
+  }
 }
 
 function viewPr() {

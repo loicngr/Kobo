@@ -349,6 +349,8 @@ export default {
   'settings.browserNotifications': "Notifica browser quando l'agente termina",
   'settings.audioNotifications': "Notifica sonora quando l'agente termina",
   'settings.notificationSound': 'Suono di notifica',
+  'settings.questionSound': 'Suono delle domande',
+  'settings.questionSoundHint': "Riprodotto solo quando l'agente ti pone una domanda.",
   'settings.notificationSoundPreview': 'Ascolta',
   'settings.notificationVolume': 'Volume',
   'settings.notificationSoundHey': 'Hey',
@@ -726,6 +728,9 @@ export default {
   'git.rebaseSuccess': 'Rebase completato',
   'git.rebaseFailed': 'Rebase fallito',
   'git.merge': 'Merge',
+  'git.fetch': 'Fetch',
+  'git.fetchSuccess': 'Repository aggiornato',
+  'git.fetchFailed': 'Fetch non riuscito: {error}',
   'git.mergeConfirmTitle': 'Fondere il branch?',
   'git.mergeConfirmMessage': 'Fonde {branch} in questo branch. Possibili conflitti.',
   'git.mergeSuccess': 'Merge completato',
@@ -1115,6 +1120,21 @@ export default {
   'settings.importConfirmTitle': 'Importa configurazione',
   'settings.importConfirmMessage':
     'Questo sostituirà le tue impostazioni, template e tag attuali. Le chiavi MCP vengono preservate. Continuare?',
+  'settings.network.title': 'Accesso di rete',
+  'settings.network.hint':
+    'Controlla Kōbō da un altro dispositivo della tua LAN affidabile. Off = solo localhost. On = raggiungibile sulla rete, protetto da un token. Riavvia Kōbō dopo il cambio.',
+  'settings.network.enable': 'Abilita accesso di rete',
+  'settings.network.restartRequired': 'Riavvia Kōbō per applicare il nuovo indirizzo di bind.',
+  'settings.network.token': 'Token di accesso',
+  'settings.network.copy': 'Copia',
+  'settings.network.copied': 'Copiato',
+  'settings.network.regenerate': 'Rigenera',
+  'settings.network.regenerateConfirm': 'Rigenerare il token? I dispositivi connessi avranno bisogno del nuovo token.',
+  'settings.network.urls': 'URL LAN',
+  'settings.network.scan': 'Scansiona per connetterti',
+  'settings.network.noUrls': 'Nessun indirizzo LAN rilevato.',
+  'settings.network.loadFailed': 'Impossibile caricare le impostazioni di accesso di rete.',
+  'settings.network.updateFailed': 'Impossibile aggiornare le impostazioni di accesso di rete.',
   'health.title': 'Stato',
   'health.tooltip': 'Stato del sistema',
   'changelog.title': 'Changelog',
@@ -1285,4 +1305,17 @@ export default {
   'staleSessionBanner.staleMessage':
     'Stai visualizzando una sessione precedente — i messaggi inviati andranno a questa sessione, non alla più recente.',
   'staleSessionBanner.switchToCurrent': 'Passa a quella corrente',
+
+  // Network login
+  'network.login.title': 'Accesso di rete',
+  'network.login.description':
+    'Questo Kōbō richiede un token per essere controllato dalla rete. Incolla il token mostrato nelle Impostazioni sulla macchina host.',
+  'network.login.tokenLabel': 'Token',
+  'network.login.tokenPlaceholder': 'Incolla il tuo token',
+  'network.login.connect': 'Connetti',
+  'network.login.invalid': 'Token non valido',
+  'network.login.serverError': 'Errore del server — riprova.',
+  'network.login.unreachable': 'Kōbō non è raggiungibile — controlla la connessione.',
+  'layout.toggleWorkspaces': 'Mostra/nascondi il pannello degli spazi',
+  'layout.togglePanel': 'Mostra/nascondi il pannello laterale',
 }

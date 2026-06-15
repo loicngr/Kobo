@@ -67,13 +67,13 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.175",
-    "@emnapi/core": "^1.11.0",
-    "@emnapi/runtime": "^1.11.0",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.177",
+    "@emnapi/core": "^1.11.1",
+    "@emnapi/runtime": "^1.11.1",
     "@hono/node-server": "^2.0.4",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@openai/codex": "^0.139.0",
-    "better-sqlite3": "^12.10.0",
+    "better-sqlite3": "^12.10.1",
     "cron-parser": "^5.5.0",
     "hono": "^4.12.25",
     "nanoid": "^5.1.11",
@@ -85,10 +85,10 @@
     "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^25.9.3",
     "@types/ws": "^8.18.1",
-    "@vitest/runner": "^4.1.8",
+    "@vitest/runner": "^4.1.9",
     "concurrently": "^10.0.3",
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.9"
   }
 }

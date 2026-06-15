@@ -259,9 +259,19 @@ export interface GlobalSettings {
    */
   terminalCommand: string
   autoPurgeOnPrMerged: boolean
+  /**
+   * Opt-in LAN network access. When false (default) the server binds
+   * 127.0.0.1 only; when true it binds all interfaces and requires the
+   * token for every non-loopback request. Seeded by settings migration v39.
+   */
+  networkAccessEnabled: boolean
+  /** Shared secret required for non-loopback access. Empty until first enabled. */
+  networkAccessToken: string
   browserNotifications: boolean
   audioNotifications: boolean
   audioNotificationSound: string
+  /** Sound played specifically when the agent asks a question. Seeded by migration v40. */
+  audioQuestionSound: string
   audioNotificationVolume: number
   notionStatusProperty: string
   notionInProgressStatus: string
@@ -825,6 +835,31 @@ const settingsMigrations: SettingsMigration[] = [
       }
     },
   },
+  {
+    version: 39,
+    name: 'add-network-access',
+    migrate: ({ global }) => {
+      // Opt-in LAN access with token auth. Disabled by default (localhost-only
+      // bind). Token is generated lazily on first enable via POST /network.
+      if (typeof global.networkAccessEnabled !== 'boolean') {
+        global.networkAccessEnabled = false
+      }
+      if (typeof global.networkAccessToken !== 'string') {
+        global.networkAccessToken = ''
+      }
+    },
+  },
+  {
+    version: 40,
+    name: 'add-question-notification-sound',
+    migrate: ({ global }) => {
+      // Distinct sound played when the agent asks a question. Defaults to 'hey.mp3'
+      // so questions are audibly distinct from a customised task-done sound.
+      if (typeof global.audioQuestionSound !== 'string' || global.audioQuestionSound.length === 0) {
+        global.audioQuestionSound = 'hey.mp3'
+      }
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -901,9 +936,12 @@ function defaultSettings(): Settings {
       fileManagerCommand: '',
       terminalCommand: '',
       autoPurgeOnPrMerged: false,
+      networkAccessEnabled: false,
+      networkAccessToken: '',
       browserNotifications: true,
       audioNotifications: true,
       audioNotificationSound: 'hey.mp3',
+      audioQuestionSound: 'hey.mp3',
       audioNotificationVolume: 1,
       notionStatusProperty: '',
       notionInProgressStatus: '',
@@ -1114,7 +1152,7 @@ export function getSettings(): Settings {
 }
 
 /** Keys stripped from exports — secrets that should stay on the machine. */
-const SECRET_GLOBAL_KEYS = ['notionMcpKey', 'sentryMcpKey'] as const
+const SECRET_GLOBAL_KEYS = ['notionMcpKey', 'sentryMcpKey', 'networkAccessToken'] as const
 
 export interface ConfigBundle {
   bundleVersion: number
@@ -1298,6 +1336,7 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'browserNotifications',
     'audioNotifications',
     'audioNotificationSound',
+    'audioQuestionSound',
     'audioNotificationVolume',
     'notionStatusProperty',
     'notionInProgressStatus',
@@ -1359,6 +1398,30 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     ensureGlobalWorktreesRootExists(filtered.worktreesPath)
   }
   settings.global = { ...settings.global, ...filtered }
+  writeSettings(settings, { backup: true })
+  return settings.global
+}
+
+/**
+ * Persist network-access settings (enabled flag and/or token) directly.
+ *
+ * Network access is managed exclusively through this path (POST /api/settings/network),
+ * never the generic `updateGlobalSettings` allowlist: `networkAccessToken` is a secret
+ * (kept out of the allowlist so a config import can't inject one) and `networkAccessEnabled`
+ * is kept out too so it can't be flipped on via PUT /global without an accompanying token
+ * (which would leave the server bound wide but unauthenticatable after a restart).
+ */
+export function updateNetworkAccessSettings(patch: {
+  networkAccessEnabled?: boolean
+  networkAccessToken?: string
+}): GlobalSettings {
+  const settings = readSettings()
+  if (typeof patch.networkAccessEnabled === 'boolean') {
+    settings.global.networkAccessEnabled = patch.networkAccessEnabled
+  }
+  if (typeof patch.networkAccessToken === 'string') {
+    settings.global.networkAccessToken = patch.networkAccessToken
+  }
   writeSettings(settings, { backup: true })
   return settings.global
 }

@@ -20,6 +20,7 @@ import {
   SETTINGS_SCHEMA_VERSION,
   sanitizeBranchPrefixes,
   updateGlobalSettings,
+  updateNetworkAccessSettings,
   upsertProject,
 } from '../server/services/settings-service.js'
 
@@ -1034,6 +1035,15 @@ describe('exportConfigBundle()', () => {
     expect(bundle.settings.global.sentryMcpKey).toBe('')
   })
 
+  it('strips networkAccessToken from exported settings', () => {
+    // networkAccessToken is not in the update allowlist — write directly to simulate a stored token
+    const settings = getSettings()
+    settings.global.networkAccessToken = 'secret-lan-token'
+    fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2), 'utf-8')
+    const bundle = exportConfigBundle([])
+    expect(bundle.settings.global.networkAccessToken).toBe('')
+  })
+
   it('tags bundleVersion = 1 and includes the passed templates array', () => {
     const templates = [{ slug: 'hello', description: 'desc', content: 'hi', createdAt: '', updatedAt: '' }]
     const bundle = exportConfigBundle(templates as unknown as Array<Record<string, unknown>>)
@@ -1155,6 +1165,38 @@ describe('importConfigBundle()', () => {
     expect(after.prPromptTemplate).toBe('imported')
     expect(after.tags).toEqual(['imported-tag'])
     expect(after.worktreesPath).toBe('$HOME/kobo/worktress')
+  })
+
+  it('preserves local networkAccessToken when importing', () => {
+    // networkAccessToken is not in the update allowlist — write directly to simulate a stored token
+    const localSettings = getSettings()
+    localSettings.global.networkAccessToken = 'local-lan-token'
+    fs.writeFileSync(settingsPath, JSON.stringify(localSettings, null, 2), 'utf-8')
+    const incoming: Settings = {
+      schemaVersion: SETTINGS_SCHEMA_VERSION,
+      global: {
+        defaultModel: 'claude-opus-4-7',
+        dangerouslySkipPermissions: false,
+        prPromptTemplate: 'imported',
+        gitConventions: '',
+        editorCommand: '',
+        browserNotifications: false,
+        audioNotifications: false,
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+        defaultPermissionMode: 'plan',
+        notionMcpKey: '',
+        sentryMcpKey: '',
+        networkAccessToken: '', // stripped on export
+        tags: [],
+        worktreesPath: '$HOME/kobo/worktrees',
+      },
+      projects: [],
+    }
+    importConfigBundle({ bundleVersion: 1, exportedAt: '', settings: incoming, templates: [] })
+    const after = getGlobalSettings()
+    expect(after.networkAccessToken).toBe('local-lan-token')
+    expect(after.prPromptTemplate).toBe('imported')
   })
 })
 
@@ -1872,5 +1914,96 @@ describe('terminalCommand setting (migration v37)', () => {
       projects: [],
     })
     expect((migrated.global as Record<string, unknown>).terminalCommand).toBe('xterm')
+  })
+})
+
+describe('network access settings (v39)', () => {
+  it('fresh install has network access disabled with empty token', () => {
+    const global = getGlobalSettings()
+    expect(global.networkAccessEnabled).toBe(false)
+    expect(global.networkAccessToken).toBe('')
+  })
+
+  it('SETTINGS_SCHEMA_VERSION is at least 39', () => {
+    expect(SETTINGS_SCHEMA_VERSION).toBeGreaterThanOrEqual(39)
+  })
+
+  it('upgrades a v38 settings file without losing data and adds network fields', () => {
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        schemaVersion: 38,
+        global: { terminalCommand: 'xterm', finalizationPrompt: 'keep me' },
+        projects: [],
+      }),
+    )
+    getSettings()
+    const global = getGlobalSettings()
+    expect(global.terminalCommand).toBe('xterm')
+    expect(global.finalizationPrompt).toBe('keep me')
+    expect(global.networkAccessEnabled).toBe(false)
+    expect(global.networkAccessToken).toBe('')
+  })
+})
+
+describe('question notification sound (v40)', () => {
+  it('fresh install defaults the question sound to hey.mp3', () => {
+    expect(getGlobalSettings().audioQuestionSound).toBe('hey.mp3')
+  })
+
+  it('SETTINGS_SCHEMA_VERSION is at least 40', () => {
+    expect(SETTINGS_SCHEMA_VERSION).toBeGreaterThanOrEqual(40)
+  })
+
+  it('upgrades a v39 settings file without losing data and seeds the question sound', () => {
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        schemaVersion: 39,
+        global: { audioNotificationSound: 'travail_termine.mp3', networkAccessToken: 'keep-me' },
+        projects: [],
+      }),
+    )
+    getSettings()
+    const global = getGlobalSettings()
+    expect(global.audioNotificationSound).toBe('travail_termine.mp3') // preserved
+    expect(global.networkAccessToken).toBe('keep-me') // preserved
+    expect(global.audioQuestionSound).toBe('hey.mp3') // seeded
+  })
+
+  it('updateGlobalSettings can change the question sound (it is in the allowlist)', () => {
+    updateGlobalSettings({ audioQuestionSound: 'faaah.mp3' })
+    expect(getGlobalSettings().audioQuestionSound).toBe('faaah.mp3')
+  })
+})
+
+describe('updateNetworkAccessSettings()', () => {
+  it('persists the token to disk (real write path, not mocked)', () => {
+    updateNetworkAccessSettings({ networkAccessEnabled: true, networkAccessToken: 'lan-secret-123' })
+    // Re-read from disk to prove the write actually landed — this is the path the
+    // generic updateGlobalSettings allowlist silently dropped.
+    const global = getGlobalSettings()
+    expect(global.networkAccessEnabled).toBe(true)
+    expect(global.networkAccessToken).toBe('lan-secret-123')
+  })
+
+  it('updates only the provided fields', () => {
+    updateNetworkAccessSettings({ networkAccessEnabled: true, networkAccessToken: 'first' })
+    updateNetworkAccessSettings({ networkAccessToken: 'rotated' })
+    const global = getGlobalSettings()
+    expect(global.networkAccessEnabled).toBe(true) // unchanged
+    expect(global.networkAccessToken).toBe('rotated')
+  })
+
+  it('updateGlobalSettings cannot flip networkAccessEnabled (kept out of the allowlist)', () => {
+    updateGlobalSettings({ networkAccessEnabled: true } as Partial<GlobalSettings>)
+    // The generic update path must ignore network-access fields so PUT /global
+    // cannot bind the server wide without a token.
+    expect(getGlobalSettings().networkAccessEnabled).toBe(false)
+  })
+
+  it('updateGlobalSettings cannot inject a networkAccessToken', () => {
+    updateGlobalSettings({ networkAccessToken: 'injected' } as Partial<GlobalSettings>)
+    expect(getGlobalSettings().networkAccessToken).toBe('')
   })
 })

@@ -27,14 +27,15 @@ afterEach(() => {
 
 describe('templates-service', () => {
   describe('listTemplates()', () => {
-    it('seeds 11 default templates on first read when file does not exist', async () => {
+    it('seeds 12 default templates on first read when file does not exist', async () => {
       const { listTemplates } = await import('../server/services/templates-service.js')
       const templates = listTemplates()
-      expect(templates.length).toBe(11)
+      expect(templates.length).toBe(12)
       expect(templates.map((t) => t.slug).sort()).toEqual(
         [
           'add-tests',
           'ci-status',
+          'council',
           'explain',
           'kobo-context',
           'mark-done',
@@ -54,7 +55,7 @@ describe('templates-service', () => {
       listTemplates()
       fs.unlinkSync(tmpFile)
       const templates = listTemplates()
-      expect(templates.length).toBe(11)
+      expect(templates.length).toBe(12)
     })
 
     it('does not re-seed when the file exists but is empty', async () => {
@@ -228,7 +229,7 @@ describe('templates-service', () => {
       const slugs = getDefaultTemplateSlugs()
       expect(slugs).toContain('kobo-context')
       expect(slugs).toContain('review-quality')
-      expect(slugs.length).toBe(11)
+      expect(slugs.length).toBe(12)
     })
   })
 
@@ -321,6 +322,135 @@ describe('templates-service', () => {
       ).toThrow('Invalid slug')
       const after = listTemplates()
       expect(after).toEqual(before)
+    })
+  })
+
+  describe('seededDefaultSlugs watermark', () => {
+    it('a fresh install records every default slug as seeded', async () => {
+      const { listTemplates, getDefaultTemplateSlugs } = await import('../server/services/templates-service.js')
+      listTemplates() // triggers seedTemplates on the absent file
+      const raw = JSON.parse(fs.readFileSync(tmpFile, 'utf-8')) as { seededDefaultSlugs?: string[] }
+      expect(Array.isArray(raw.seededDefaultSlugs)).toBe(true)
+      for (const slug of getDefaultTemplateSlugs()) {
+        expect(raw.seededDefaultSlugs).toContain(slug)
+      }
+    })
+
+    it('does NOT re-add a default whose slug is already in the watermark but absent from templates', async () => {
+      const { listTemplates, reloadDefaultTemplates, getDefaultTemplateSlugs } = await import(
+        '../server/services/templates-service.js'
+      )
+      const now = new Date().toISOString()
+      const kept = getDefaultTemplateSlugs().filter((s) => s !== 'explain')
+      fs.writeFileSync(
+        tmpFile,
+        JSON.stringify({
+          version: 1,
+          seededDefaultSlugs: getDefaultTemplateSlugs(),
+          templates: kept.map((slug) => ({ slug, description: 'd', content: 'c', createdAt: now, updatedAt: now })),
+        }),
+      )
+      const res = reloadDefaultTemplates()
+      expect(res.added).not.toContain('explain')
+      expect(listTemplates().find((t) => t.slug === 'explain')).toBeUndefined()
+    })
+
+    it('reload is idempotent on a fully-seeded install', async () => {
+      const { listTemplates, reloadDefaultTemplates } = await import('../server/services/templates-service.js')
+      listTemplates()
+      const first = reloadDefaultTemplates()
+      expect(first.added).toEqual([])
+      const second = reloadDefaultTemplates()
+      expect(second.added).toEqual([])
+    })
+
+    it('never overwrites a user-edited default', async () => {
+      const { listTemplates, reloadDefaultTemplates, updateTemplate } = await import(
+        '../server/services/templates-service.js'
+      )
+      listTemplates()
+      updateTemplate('explain', { content: 'my custom explain' })
+      reloadDefaultTemplates()
+      expect(listTemplates().find((t) => t.slug === 'explain')?.content).toBe('my custom explain')
+    })
+
+    it('a mutation on a pre-watermark install does not lose seed-once (deleted default stays gone after reload)', async () => {
+      const { listTemplates, updateTemplate, reloadDefaultTemplates, getDefaultTemplateSlugs } = await import(
+        '../server/services/templates-service.js'
+      )
+      const now = new Date().toISOString()
+      // Pre-watermark file (NO seededDefaultSlugs), user already deleted `explain`.
+      const kept = getDefaultTemplateSlugs().filter((s) => s !== 'explain')
+      fs.writeFileSync(
+        tmpFile,
+        JSON.stringify({
+          version: 1,
+          templates: kept.map((slug) => ({ slug, description: 'd', content: 'c', createdAt: now, updatedAt: now })),
+        }),
+      )
+      // A mutation runs BEFORE any reload — this used to persist seededDefaultSlugs: [].
+      updateTemplate('refactor', { content: 'edited before reload' })
+      // Now reload: the deleted `explain` must NOT be re-added.
+      const res = reloadDefaultTemplates()
+      expect(res.added).not.toContain('explain')
+      expect(listTemplates().find((t) => t.slug === 'explain')).toBeUndefined()
+    })
+  })
+
+  describe('council default template', () => {
+    it('fresh install includes the council template', async () => {
+      const { listTemplates, getDefaultTemplateSlugs } = await import('../server/services/templates-service.js')
+      const slugs = listTemplates().map((t) => t.slug)
+      expect(slugs).toContain('council')
+      expect(getDefaultTemplateSlugs()).toContain('council')
+    })
+
+    it('upgrade adds council to a pre-watermark install and leaves legacy defaults intact', async () => {
+      const { reloadDefaultTemplates, listTemplates } = await import('../server/services/templates-service.js')
+      const now = new Date().toISOString()
+      const legacy = [
+        'kobo-context',
+        'review-quality',
+        'add-tests',
+        'explain',
+        'refactor',
+        'plan-tasks',
+        'show-tasks',
+        'mark-done',
+        'sync-tasks',
+        'pr-review-comments',
+        'ci-status',
+      ]
+      fs.writeFileSync(
+        tmpFile,
+        JSON.stringify({
+          version: 1,
+          templates: legacy.map((slug) => ({
+            slug,
+            description: 'd',
+            content: 'user content',
+            createdAt: now,
+            updatedAt: now,
+          })),
+        }),
+      )
+      const res = reloadDefaultTemplates()
+      expect(res.added).toEqual(['council'])
+      const after = listTemplates()
+      expect(after.find((t) => t.slug === 'council')).toBeDefined()
+      expect(after.find((t) => t.slug === 'kobo-context')?.content).toBe('user content')
+      const raw = JSON.parse(fs.readFileSync(tmpFile, 'utf-8')) as { seededDefaultSlugs?: string[] }
+      expect(raw.seededDefaultSlugs).toContain('council')
+    })
+
+    it('a user who deletes council after seeding does not get it back', async () => {
+      const { listTemplates, deleteTemplate, reloadDefaultTemplates } = await import(
+        '../server/services/templates-service.js'
+      )
+      listTemplates() // fresh seed (council present + in watermark)
+      deleteTemplate('council')
+      reloadDefaultTemplates()
+      expect(listTemplates().find((t) => t.slug === 'council')).toBeUndefined()
     })
   })
 })

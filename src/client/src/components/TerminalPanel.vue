@@ -80,6 +80,7 @@ import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { appendTokenToWsUrl, getToken } from 'src/utils/auth-token'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -135,7 +136,7 @@ function bumpState() {
 
 function connectWs(wid: string, entry: TerminalEntry) {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-  const ws = new WebSocket(`${protocol}//${window.location.host}/ws/terminal/${wid}`)
+  const ws = new WebSocket(appendTokenToWsUrl(`${protocol}//${window.location.host}/ws/terminal/${wid}`, getToken()))
   ws.binaryType = 'arraybuffer'
   entry.ws = ws
 

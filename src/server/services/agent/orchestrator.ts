@@ -49,6 +49,11 @@ export function setBackendPort(port: number): void {
   backendPort = port
 }
 
+/** Current bound port of the running backend. */
+export function getBackendPort(): number {
+  return backendPort
+}
+
 /** workspaceId -> SessionController */
 const controllers = new Map<string, SessionController>()
 

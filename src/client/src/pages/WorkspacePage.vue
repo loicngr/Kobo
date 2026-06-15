@@ -2,6 +2,17 @@
   <q-page class="column no-wrap" style="height: 100vh;">
     <!-- Header bar -->
     <div class="wp-header row items-center q-px-md q-py-sm no-wrap">
+      <q-btn
+        flat
+        dense
+        round
+        size="sm"
+        :icon="layout.leftDrawerOpen ? 'menu_open' : 'menu'"
+        class="q-mr-sm"
+        @click="layout.toggleLeft()"
+      >
+        <q-tooltip>{{ $t('layout.toggleWorkspaces') }}</q-tooltip>
+      </q-btn>
       <template v-if="selectedWs">
         <span class="text-body1 text-weight-medium text-grey-3 ellipsis" style="max-width: 480px;">
           {{ selectedWs.name }}
@@ -143,6 +154,17 @@
           {{ $t('workspacePage.selectWorkspace') }}
         </span>
       </template>
+      <q-space />
+      <q-btn
+        flat
+        dense
+        round
+        size="sm"
+        icon="view_sidebar"
+        @click="layout.toggleRight()"
+      >
+        <q-tooltip>{{ $t('layout.togglePanel') }}</q-tooltip>
+      </q-btn>
     </div>
 
     <!-- Workspace description (own line under the header) -->
@@ -294,6 +316,7 @@ import { useQuasar } from 'quasar'
 import { EFFORT_OPTION_DEFS_BY_ENGINE } from 'src/constants/efforts'
 import { MODEL_OPTION_DEFS, MODEL_OPTION_DEFS_BY_ENGINE } from 'src/constants/models'
 import { PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
+import { useLayoutStore } from 'src/stores/layout'
 import type { AgentSession } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { useTimeAgo } from 'src/utils/formatters'
@@ -320,6 +343,7 @@ import WakeupBanner from 'src/components/WakeupBanner.vue'
 
 const $q = useQuasar()
 const store = useWorkspaceStore()
+const layout = useLayoutStore()
 const { t } = useI18n()
 const { timeAgo } = useTimeAgo()
 

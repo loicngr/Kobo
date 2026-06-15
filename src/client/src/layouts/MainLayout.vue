@@ -1,27 +1,30 @@
 <template>
   <q-layout view="lHh LpR lFf">
     <q-drawer
-      v-model="leftDrawerOpen"
-      :width="leftDrawerWidth"
-      :breakpoint="0"
-      persistent
+      v-model="layout.leftDrawerOpen"
+      :width="effectiveLeftWidth"
+      :breakpoint="DRAWER_BREAKPOINT"
       bordered
       class="bg-dark"
     >
       <WorkspaceList />
-      <div class="resize-handle" @mousedown="startResize" />
+      <div v-if="!$q.screen.lt.md" class="resize-handle" @mousedown="startResize" />
     </q-drawer>
 
     <q-drawer
-      :model-value="showRightDrawer"
+      :model-value="showRightDrawer && layout.rightDrawerOpen"
       side="right"
-      :width="rightDrawerWidth"
-      :breakpoint="0"
-      persistent
+      :width="effectiveRightWidth"
+      :breakpoint="DRAWER_BREAKPOINT"
       bordered
       class="bg-dark"
+      @update:model-value="layout.setRight"
     >
-      <div class="resize-handle resize-handle--right" @mousedown="startRightResize" />
+      <div
+        v-if="!$q.screen.lt.md"
+        class="resize-handle resize-handle--right"
+        @mousedown="startRightResize"
+      />
       <div class="column no-wrap" style="position: absolute; inset: 0; overflow: hidden;">
         <!-- Upper zone -->
         <div :style="{ flex: `${topPercent} 1 0%` }" class="column no-wrap" style="overflow: hidden;">
@@ -75,7 +78,7 @@
         </div>
 
         <!-- Drag handle -->
-        <div class="vertical-resize-handle" @mousedown="startVerticalResize" />
+        <div v-if="!$q.screen.lt.md" class="vertical-resize-handle" @mousedown="startVerticalResize" />
 
         <!-- Lower zone -->
         <div :style="{ flex: `${100 - topPercent} 1 0%` }" class="column no-wrap" style="overflow: hidden;">
@@ -115,6 +118,7 @@
 </template>
 
 <script setup lang="ts">
+import { useQuasar } from 'quasar'
 import AcceptancePanel from 'src/components/AcceptancePanel.vue'
 import AgentTodosPanel from 'src/components/AgentTodosPanel.vue'
 import DocumentsPanel from 'src/components/DocumentsPanel.vue'
@@ -130,7 +134,9 @@ import { useOnboarding } from 'src/composables/use-onboarding'
 import { useWhatsNew } from 'src/composables/use-whats-new'
 import { supportsSubagents } from 'src/constants/engineFeatures'
 import { useDocumentsStore } from 'src/stores/documents'
+import { useLayoutStore } from 'src/stores/layout'
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { cappedDrawerWidth } from 'src/utils/drawer-width'
 import { computed, onMounted, provide, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
@@ -167,8 +173,19 @@ watch(
 // of whether the user has opened the Documents tab yet — otherwise the
 // in-chat clickable-path detection has no catalogue to match against.
 
-const leftDrawerOpen = ref(true)
-const rightDrawerOpen = ref(true)
+const layout = useLayoutStore()
+const $q = useQuasar()
+
+// Below this width QDrawer switches to dismissible overlay mode (see template).
+const DRAWER_BREAKPOINT = 1023
+
+// Drawers start open on large screens, closed on small ones; re-applied whenever
+// the viewport crosses the breakpoint. Manual toggles persist until the next cross.
+watch(
+  () => $q.screen.lt.md,
+  (isSmall) => layout.applyScreenSize(isSmall),
+  { immediate: true },
+)
 
 const DRAWER_WIDTH_KEY = 'at-left-drawer-width'
 const savedWidth = parseInt(localStorage.getItem(DRAWER_WIDTH_KEY) ?? '260', 10)
@@ -181,6 +198,11 @@ const RIGHT_DRAWER_MAX = 800
 const savedRightWidth = parseInt(localStorage.getItem(RIGHT_DRAWER_WIDTH_KEY) ?? '300', 10)
 const rightDrawerWidth = ref(Math.min(RIGHT_DRAWER_MAX, Math.max(RIGHT_DRAWER_MIN, savedRightWidth)))
 const isResizingRight = ref(false)
+
+// Cap the overlay drawer width to the viewport (minus a safe strip) on small
+// screens so it never covers the whole screen; full saved width on large screens.
+const effectiveLeftWidth = computed(() => cappedDrawerWidth(leftDrawerWidth.value, $q.screen.width, $q.screen.lt.md))
+const effectiveRightWidth = computed(() => cappedDrawerWidth(rightDrawerWidth.value, $q.screen.width, $q.screen.lt.md))
 
 function startResize(event: MouseEvent) {
   event.preventDefault()
@@ -272,7 +294,7 @@ watch(
 const showRightDrawer = computed(() => route.name === 'workspace')
 
 provide('openDrawerTab', (tab: string) => {
-  rightDrawerOpen.value = true
+  layout.setRight(true)
   setRightTab(tab)
 })
 

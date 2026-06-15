@@ -1,10 +1,12 @@
 <template>
   <router-view />
   <MigrationOverlay />
+  <NetworkLoginDialog />
 </template>
 
 <script setup lang="ts">
 import MigrationOverlay from 'src/components/MigrationOverlay.vue'
+import NetworkLoginDialog from 'src/components/NetworkLoginDialog.vue'
 import { useTemplatesStore } from 'src/stores/templates'
 import { useWebSocketStore } from 'src/stores/websocket'
 import { requestNotificationPermission } from 'src/utils/notifications'

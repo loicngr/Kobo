@@ -7,11 +7,21 @@ vi.mock('../server/services/settings-service.js', () => ({
   getSettings: vi.fn(),
   getGlobalSettings: vi.fn(),
   updateGlobalSettings: vi.fn(),
+  updateNetworkAccessSettings: vi.fn(),
   listActiveClaudeMcpServers: vi.fn(),
   listProjects: vi.fn(),
   getProjectSettings: vi.fn(),
   upsertProject: vi.fn(),
   deleteProject: vi.fn(),
+}))
+
+vi.mock('../server/services/network-access-service.js', () => ({
+  generateToken: vi.fn(() => 'fresh-token'),
+  getLanUrls: vi.fn(() => ['http://192.168.1.5:3300']),
+}))
+
+vi.mock('../server/services/agent/orchestrator.js', () => ({
+  getBackendPort: vi.fn(() => 3300),
 }))
 
 // ── Imports (after mocks) ────────────────────────────────────────────────────
@@ -277,5 +287,69 @@ describe('DELETE /api/settings/projects/:encodedPath', () => {
     expect(res.status).toBe(500)
     const data = await res.json()
     expect(data.error).toBe('Delete failed')
+  })
+})
+
+describe('network routes', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('GET /network returns state + urls', async () => {
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
+      networkAccessEnabled: true,
+      networkAccessToken: 'tok',
+    } as never)
+    const res = await app.request('/api/settings/network')
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({
+      enabled: true,
+      token: 'tok',
+      urls: ['http://192.168.1.5:3300'],
+    })
+  })
+
+  it('POST /network enabling generates a token and flags restartRequired', async () => {
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
+      networkAccessEnabled: false,
+      networkAccessToken: '',
+    } as never)
+    vi.mocked(settingsService.updateNetworkAccessSettings).mockImplementation(
+      (patch) => ({ networkAccessEnabled: true, networkAccessToken: 'fresh-token', ...patch }) as never,
+    )
+    const res = await app.request('/api/settings/network', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ enabled: true }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.restartRequired).toBe(true)
+    expect(body.token).toBe('fresh-token')
+    expect(settingsService.updateNetworkAccessSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ networkAccessEnabled: true, networkAccessToken: 'fresh-token' }),
+    )
+  })
+
+  it('POST /network regenerate replaces the token without restart', async () => {
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
+      networkAccessEnabled: true,
+      networkAccessToken: 'old',
+    } as never)
+    vi.mocked(settingsService.updateNetworkAccessSettings).mockImplementation(
+      (patch) => ({ networkAccessEnabled: true, networkAccessToken: 'old', ...patch }) as never,
+    )
+    const res = await app.request('/api/settings/network', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ regenerate: true }),
+    })
+    const body = await res.json()
+    expect(body.restartRequired).toBe(false)
+    expect(body.token).toBe('fresh-token')
+  })
+
+  it('GET /network/ping returns ok', async () => {
+    const res = await app.request('/api/settings/network/ping')
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true })
   })
 })
