@@ -30,9 +30,9 @@ describe('formatRateLimitLabel', () => {
     expect(formatRateLimitLabel('', fakeT)).toBe('')
   })
 
-  it('formats reset timestamps as a 24h local time, not a raw ISO string', () => {
-    const formatted = formatRateLimitResetAt('2026-04-24T06:00:00.000Z', { timeZone: 'Europe/Paris' })
-    expect(formatted).toBe('08:00')
+  it('formats reset timestamps as a 24h local time with date, not a raw ISO string', () => {
+    const formatted = formatRateLimitResetAt('2026-04-24T06:00:00.000Z', { locale: 'fr-FR', timeZone: 'Europe/Paris' })
+    expect(formatted).toBe('08:00 (24/04)')
   })
 
   it('formats text-detected buckets with the reset time in the label', () => {
@@ -46,6 +46,15 @@ describe('formatRateLimitLabel', () => {
       fakeT,
     )
     expect(label.startsWith('Reset ')).toBe(true)
+  })
+
+  it('appends a short DD/MM date in parentheses after the time', () => {
+    const out = formatRateLimitResetAt('2026-06-22T18:59:00.000Z', { locale: 'fr-FR', timeZone: 'UTC' })
+    expect(out).toBe('18:59 (22/06)')
+  })
+
+  it('still returns the raw string unchanged on an invalid date', () => {
+    expect(formatRateLimitResetAt('not-a-date')).toBe('not-a-date')
   })
 })
 

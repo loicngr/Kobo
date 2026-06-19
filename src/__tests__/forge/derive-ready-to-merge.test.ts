@@ -2,9 +2,16 @@ import { describe, expect, it } from 'vitest'
 import type { PrSnapshot } from '../../server/services/forge/types.js'
 import { deriveReadyToMerge } from '../../server/services/forge/types.js'
 
-type Args = Pick<PrSnapshot, 'state' | 'ci' | 'reviewDecision' | 'reviewers'>
+type Args = Pick<PrSnapshot, 'state' | 'ci' | 'reviewDecision' | 'reviewers' | 'mergeable'>
 function args(o: Partial<Args> = {}): Args {
-  return { state: 'OPEN', ci: { rollup: 'SUCCESS', checks: [] }, reviewDecision: null, reviewers: [], ...o }
+  return {
+    state: 'OPEN',
+    ci: { rollup: 'SUCCESS', checks: [] },
+    reviewDecision: null,
+    reviewers: [],
+    mergeable: 'MERGEABLE',
+    ...o,
+  }
 }
 
 describe('deriveReadyToMerge', () => {
@@ -56,5 +63,43 @@ describe('deriveReadyToMerge', () => {
     expect(
       deriveReadyToMerge(args({ reviewDecision: 'CHANGES_REQUESTED', reviewers: [{ login: 'r', state: 'PENDING' }] })),
     ).toBe(true)
+  })
+
+  it('is NOT ready when the branch has merge conflicts even with no CI', () => {
+    expect(
+      deriveReadyToMerge({
+        state: 'OPEN',
+        ci: { rollup: null, checks: [] },
+        reviewDecision: null,
+        reviewers: [],
+        mergeable: 'CONFLICTING',
+      }),
+    ).toBe(false)
+  })
+
+  it('is ready when explicitly mergeable with no CI', () => {
+    expect(
+      deriveReadyToMerge({
+        state: 'OPEN',
+        ci: { rollup: null, checks: [] },
+        reviewDecision: null,
+        reviewers: [],
+        mergeable: 'MERGEABLE',
+      }),
+    ).toBe(true)
+  })
+
+  it('treats null/unknown mergeable as non-blocking (preserves the no-CI case)', () => {
+    for (const mergeable of [null, 'UNKNOWN'] as const) {
+      expect(
+        deriveReadyToMerge({
+          state: 'OPEN',
+          ci: { rollup: null, checks: [] },
+          reviewDecision: null,
+          reviewers: [],
+          mergeable,
+        }),
+      ).toBe(true)
+    }
   })
 })

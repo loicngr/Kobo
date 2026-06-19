@@ -721,6 +721,7 @@ export default {
   'git.diffReviewTooltip': "Apre il visualizzatore diff in modalità Review — commenti inline + invio batch all'agente",
   'pr.baseChanged': 'Base della PR cambiata: {oldBase} → {newBase}',
   'pr.openPr': 'Apri PR',
+  'pr.openWorkspace': 'Apri il workspace',
   'pr.dismiss': 'Chiudi',
   'git.rebase': 'Rebase',
   'git.rebaseConfirmTitle': 'Rebase del branch?',
@@ -1009,6 +1010,7 @@ export default {
   'notification.autoLoopCompleted': '{name} — Auto-loop completato',
   'notification.autoLoopStalled': '{name} — Auto-loop bloccato (nessun progresso)',
   'notification.autoLoopError': '{name} — Auto-loop fermato per errore',
+  'notification.autoLoopAwaitingClarification': '{name} — Auto-loop in pausa, in attesa del tuo chiarimento',
   'notification.autoLoopPermissionOverridden': '{name} — Auto-loop ha forzato la modalità plan a bypass',
   'notification.agentError': '{name} — Errore agente',
 

@@ -29,12 +29,18 @@ export function formatRateLimitResetAt(
   try {
     const parsed = new Date(resetAt)
     if (Number.isNaN(parsed.getTime())) return resetAt
-    return parsed.toLocaleTimeString(options?.locale, {
+    const time = parsed.toLocaleTimeString(options?.locale, {
       hour: '2-digit',
       minute: '2-digit',
       hour12: false,
       timeZone: options?.timeZone,
     })
+    const date = parsed.toLocaleDateString(options?.locale, {
+      day: '2-digit',
+      month: '2-digit',
+      timeZone: options?.timeZone,
+    })
+    return `${time} (${date})`
   } catch {
     return resetAt
   }

@@ -169,6 +169,20 @@ describe('github forge provider', () => {
     expect(snap?.readyToMerge).toBe(true)
   })
 
+  it('maps mergeable CONFLICTING and is not readyToMerge even with no CI', async () => {
+    const rawPr = {
+      number: 24,
+      title: 'Conflicting PR',
+      url: 'https://github.com/o/r/pull/24',
+      state: 'OPEN',
+      mergeable: 'CONFLICTING',
+    }
+    execFileMock.mockResolvedValueOnce(JSON.stringify(rawPr))
+    const snap = await githubProvider.getPrStatus('/repo', 'feat/x')
+    expect(snap?.mergeable).toBe('CONFLICTING')
+    expect(snap?.readyToMerge).toBe(false)
+  })
+
   it('readyToMerge is false when CI is still pending', async () => {
     const rawPr = {
       number: 22,

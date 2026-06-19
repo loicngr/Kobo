@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { expandOtherAnswer, OTHER_INSTRUCTION, OTHER_OPTION_VALUE } from '../utils/expand-other-answer'
+import {
+  expandOtherAnswer,
+  hasOtherSelection,
+  OTHER_INSTRUCTION,
+  OTHER_OPTION_VALUE,
+} from '../utils/expand-other-answer'
 
 describe('expandOtherAnswer()', () => {
   it('returns the literal label for a normal single-select value', () => {
@@ -38,5 +43,17 @@ describe('expandOtherAnswer()', () => {
 
   it('exports the expected sentinel value (regression guard)', () => {
     expect(OTHER_OPTION_VALUE).toBe('__KOBO_OTHER__')
+  })
+})
+
+describe('hasOtherSelection', () => {
+  it('detects Other in a single answer', () => {
+    expect(hasOtherSelection(['Option A', OTHER_OPTION_VALUE])).toBe(true)
+  })
+  it('detects Other inside a multiSelect array', () => {
+    expect(hasOtherSelection([['A', OTHER_OPTION_VALUE]])).toBe(true)
+  })
+  it('is false when no Other is selected', () => {
+    expect(hasOtherSelection(['A', ['B', 'C']])).toBe(false)
   })
 })

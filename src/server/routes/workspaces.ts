@@ -1314,12 +1314,14 @@ app.post('/:id/deferred-tool-use/answer', async (c) => {
   try {
     const id = c.req.param('id')
     const body = await c.req
-      .json<{ answers?: Record<string, string>; toolCallId?: string }>()
-      .catch(() => ({}) as { answers?: Record<string, string>; toolCallId?: string })
+      .json<{ answers?: Record<string, string>; toolCallId?: string; awaitingFreeForm?: boolean }>()
+      .catch(() => ({}) as { answers?: Record<string, string>; toolCallId?: string; awaitingFreeForm?: boolean })
     if (!body?.answers || typeof body.answers !== 'object') {
       return c.json({ error: 'answers payload required' }, 400)
     }
-    await agentManager.answerPendingQuestion(id, body.answers, body.toolCallId)
+    await agentManager.answerPendingQuestion(id, body.answers, body.toolCallId, {
+      awaitingFreeForm: body.awaitingFreeForm === true,
+    })
     return c.json({ ok: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'unknown'

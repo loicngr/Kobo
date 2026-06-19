@@ -211,7 +211,22 @@ describe('POST /api/workspaces/:id/deferred-tool-use/answer', () => {
     expect(res.status).toBe(200)
     const body = (await res.json()) as { ok: boolean }
     expect(body.ok).toBe(true)
-    expect(agentManager.answerPendingQuestion).toHaveBeenCalledWith('abc', { q1: 'react' }, undefined)
+    expect(agentManager.answerPendingQuestion).toHaveBeenCalledWith('abc', { q1: 'react' }, undefined, {
+      awaitingFreeForm: false,
+    })
+  })
+
+  it('forwards awaitingFreeForm=true to answerPendingQuestion', async () => {
+    vi.mocked(agentManager.answerPendingQuestion).mockResolvedValueOnce(undefined)
+    const res = await makeApp().request('/api/workspaces/abc/deferred-tool-use/answer', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ answers: { q1: 'free' }, toolCallId: 'tc1', awaitingFreeForm: true }),
+    })
+    expect(res.status).toBe(200)
+    expect(agentManager.answerPendingQuestion).toHaveBeenCalledWith('abc', { q1: 'free' }, 'tc1', {
+      awaitingFreeForm: true,
+    })
   })
 
   it('returns 400 when answers are missing', async () => {

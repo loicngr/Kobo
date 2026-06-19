@@ -36,8 +36,11 @@ export interface PrSnapshot {
   updatedAt: string
   /** Unresolved review threads. Stays 0 on forges that don't expose it. */
   unresolvedReviewThreadsCount: number
-  /** Computed: OPEN + CI green or absent (mergeable) + not blocked by changes-requested. */
+  /** Computed: OPEN + CI green or absent + no merge conflict + not blocked by changes-requested. */
   readyToMerge: boolean
+  /** Merge conflict state from the forge. `CONFLICTING` blocks readyToMerge.
+   *  `null` = forge didn't report it (treated as non-blocking). */
+  mergeable: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN' | null
 }
 
 /**
@@ -48,10 +51,13 @@ export interface PrSnapshot {
  * Mirrors the front-end blocking rule — trust a reviewer still in
  * CHANGES_REQUESTED, not the sticky `reviewDecision` alone.
  */
-export function deriveReadyToMerge(s: Pick<PrSnapshot, 'state' | 'ci' | 'reviewDecision' | 'reviewers'>): boolean {
+export function deriveReadyToMerge(
+  s: Pick<PrSnapshot, 'state' | 'ci' | 'reviewDecision' | 'reviewers' | 'mergeable'>,
+): boolean {
   const blocked = s.reviewDecision === 'CHANGES_REQUESTED' && s.reviewers.some((r) => r.state === 'CHANGES_REQUESTED')
   const ciOk = s.ci.rollup === 'SUCCESS' || s.ci.rollup === null
-  return s.state === 'OPEN' && ciOk && !blocked
+  const noConflict = s.mergeable !== 'CONFLICTING'
+  return s.state === 'OPEN' && ciOk && !blocked && noConflict
 }
 
 /** Capabilities a provider declares so the UI can adapt without probing. */

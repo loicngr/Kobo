@@ -24,6 +24,7 @@ const GH_PR_FIELDS = [
   'latestReviews',
   'reviewRequests',
   'statusCheckRollup',
+  'mergeable',
   'updatedAt',
 ].join(',')
 
@@ -41,6 +42,7 @@ interface RawGhPr {
   reviewRequests?: Array<{ login: string }>
   reviewThreads?: Array<{ isResolved: boolean }>
   statusCheckRollup?: Array<{ name: string; conclusion: string | null; status: string; detailsUrl: string | null }>
+  mergeable?: string
   updatedAt?: string
 }
 
@@ -73,6 +75,10 @@ function mapGhPrToSnapshot(raw: RawGhPr): PrSnapshot {
   const unresolvedReviewThreadsCount = (raw.reviewThreads ?? []).reduce((a, t) => a + (t.isResolved ? 0 : 1), 0)
   const state = raw.state as PrSnapshot['state']
   const reviewDecision = (raw.reviewDecision as PrSnapshot['reviewDecision']) ?? null
+  const mergeable: PrSnapshot['mergeable'] =
+    raw.mergeable === 'CONFLICTING' || raw.mergeable === 'MERGEABLE' || raw.mergeable === 'UNKNOWN'
+      ? raw.mergeable
+      : null
   return {
     number: raw.number,
     title: raw.title,
@@ -87,7 +93,8 @@ function mapGhPrToSnapshot(raw: RawGhPr): PrSnapshot {
     ci: { rollup, checks },
     updatedAt: raw.updatedAt ?? '',
     unresolvedReviewThreadsCount,
-    readyToMerge: deriveReadyToMerge({ state, ci: { rollup, checks }, reviewDecision, reviewers }),
+    mergeable,
+    readyToMerge: deriveReadyToMerge({ state, ci: { rollup, checks }, reviewDecision, reviewers, mergeable }),
   }
 }
 

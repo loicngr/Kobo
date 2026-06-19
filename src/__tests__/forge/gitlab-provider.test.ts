@@ -171,6 +171,24 @@ describe('gitlab forge provider — readyToMerge', () => {
     expect(snap?.readyToMerge).toBe(false)
   })
 
+  it('maps has_conflicts to mergeable CONFLICTING and is not readyToMerge even with no CI', async () => {
+    execFileMock
+      .mockResolvedValueOnce(
+        JSON.stringify({
+          iid: 14,
+          title: 'Conflicting MR',
+          web_url: 'https://gl/x/-/merge_requests/14',
+          state: 'opened',
+          target_branch: 'main',
+          has_conflicts: true,
+        }),
+      )
+      .mockResolvedValueOnce('') // glab ci get — no pipeline
+    const snap = await gitlabProvider.getPrStatus('/repo', 'feat/x')
+    expect(snap?.mergeable).toBe('CONFLICTING')
+    expect(snap?.readyToMerge).toBe(false)
+  })
+
   it('readyToMerge is true when the MR has no pipeline (no CI configured)', async () => {
     execFileMock
       .mockResolvedValueOnce(

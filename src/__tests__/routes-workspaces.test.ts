@@ -5160,6 +5160,7 @@ describe('POST /api/workspaces/:id/start-ci-fix', () => {
       },
       updatedAt: '2026-05-01T00:00:00.000Z',
       unresolvedReviewThreadsCount: 0,
+      mergeable: null,
       readyToMerge: false,
       ...overrides,
     }

@@ -83,6 +83,7 @@ function makePrSnapshot(
     ci: { rollup: null, checks: [] },
     updatedAt: '2026-05-12T10:00:00Z',
     unresolvedReviewThreadsCount: 0,
+    mergeable: null,
     readyToMerge: false,
     ...overrides,
   }

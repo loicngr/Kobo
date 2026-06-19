@@ -977,6 +977,14 @@ export const useWebSocketStore = defineStore('websocket', {
               handler: () => window.open(p.prUrl, '_blank'),
             })
           }
+          actions.push({
+            label: t('pr.openWorkspace'),
+            color: 'white',
+            noDismiss: true,
+            handler: () => {
+              window.location.hash = `#/workspace/${wid}`
+            },
+          })
           actions.push({ label: t('pr.dismiss'), color: 'white' })
           Notify.create({
             type: 'warning',
@@ -1086,7 +1094,9 @@ export const useWebSocketStore = defineStore('websocket', {
                   ? 'notification.autoLoopStalled'
                   : reason === 'completed'
                     ? 'notification.autoLoopCompleted'
-                    : null // 'manual' → user disabled it themselves, don't notify
+                    : reason === 'awaiting-clarification'
+                      ? 'notification.autoLoopAwaitingClarification'
+                      : null // 'manual'/'user-action' → user disabled it themselves, don't notify
             if (titleKey) notify(t(titleKey, { name: wsName }), undefined, wid)
           }
           break

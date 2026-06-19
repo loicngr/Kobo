@@ -1034,6 +1034,7 @@ export async function answerPendingQuestion(
   workspaceId: string,
   answers: Record<string, string>,
   expectedToolCallId?: string,
+  opts?: { awaitingFreeForm?: boolean },
 ): Promise<void> {
   const head = peekPending(workspaceId)
   if (!head) {
@@ -1088,6 +1089,18 @@ export async function answerPendingQuestion(
     updateWorkspaceStatus(workspaceId, restoreTo)
   } catch (err) {
     console.warn(`[orchestrator] Failed to transition awaiting-user → ${restoreTo}:`, err)
+  }
+
+  // "Other" means the user owes a free-form clarification in their next chat
+  // message. If auto-loop is active, the agent finishing its turn would
+  // otherwise chain the next iteration before that clarification arrives — so
+  // pause the loop. The user re-enables it manually after clarifying.
+  if (opts?.awaitingFreeForm && autoLoopService.getStatus(workspaceId).auto_loop) {
+    try {
+      autoLoopService.disable(workspaceId, 'awaiting-clarification')
+    } catch (err) {
+      console.error('[orchestrator] Failed to disable auto-loop on awaiting-clarification:', err)
+    }
   }
 
   const questions = (head.input as { questions?: unknown } | null)?.questions

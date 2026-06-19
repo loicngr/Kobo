@@ -139,7 +139,7 @@
 <script setup lang="ts">
 import AukqOptionLabel from 'src/components/AukqOptionLabel.vue'
 import { useWorkspaceStore } from 'src/stores/workspace'
-import { expandOtherAnswer, OTHER_OPTION_VALUE } from 'src/utils/expand-other-answer'
+import { expandOtherAnswer, hasOtherSelection, OTHER_OPTION_VALUE } from 'src/utils/expand-other-answer'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -238,14 +238,20 @@ async function submit(): Promise<void> {
   error.value = null
   try {
     const payload: Record<string, string> = {}
+    const rawValues: Array<string | string[]> = []
     for (const q of questions.value) {
       if (q.multiSelect) {
-        payload[q.question] = expandOtherAnswer(answers.value[q.question] ?? [], true)
+        const sel = answers.value[q.question] ?? []
+        rawValues.push(sel)
+        payload[q.question] = expandOtherAnswer(sel, true)
       } else {
-        payload[q.question] = expandOtherAnswer(singleAnswers.value[q.question] ?? '', false)
+        const sel = singleAnswers.value[q.question] ?? ''
+        rawValues.push(sel)
+        payload[q.question] = expandOtherAnswer(sel, false)
       }
     }
-    await store.submitDeferredAnswer(props.workspaceId, payload, pending.value?.toolCallId)
+    const awaitingFreeForm = hasOtherSelection(rawValues)
+    await store.submitDeferredAnswer(props.workspaceId, payload, pending.value?.toolCallId, awaitingFreeForm)
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {

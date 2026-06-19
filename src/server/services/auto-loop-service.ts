@@ -16,7 +16,7 @@ export interface AutoLoopStatus {
   no_progress_streak: number
 }
 
-export type DisableReason = 'user-action' | 'completed' | 'stall' | 'error'
+export type DisableReason = 'user-action' | 'completed' | 'stall' | 'error' | 'awaiting-clarification'
 
 const NO_PROGRESS_STALL_THRESHOLD = 3
 

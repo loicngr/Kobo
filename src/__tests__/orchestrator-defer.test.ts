@@ -143,6 +143,76 @@ describe('Orchestrator — pending question (canUseTool)', () => {
     })
   })
 
+  it('disables auto-loop with reason=awaiting-clarification when awaitingFreeForm is true', async () => {
+    const { createWorkspace, updateWorkspaceStatus } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'WFF',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/wff',
+    })
+    updateWorkspaceStatus(ws.id, 'brainstorming')
+    updateWorkspaceStatus(ws.id, 'executing')
+    // Arm auto-loop directly in the DB (skip the spawn path).
+    const { getDb } = await import('../server/db/index.js')
+    getDb().prepare('UPDATE workspaces SET auto_loop = 1, auto_loop_ready = 1 WHERE id = ?').run(ws.id)
+
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const autoLoopService = await import('../server/services/auto-loop-service.js')
+    const { startAgent, answerPendingQuestion } = orch
+    startAgent(ws.id, '/tmp', 'hi')
+    await Promise.resolve()
+    await Promise.resolve()
+    const cap = captured[0]
+    if (!cap) throw new Error('no capture')
+    cap.onEvent({ kind: 'session:started', engineSessionId: 'engine-sess-1' })
+    cap.onEvent({
+      kind: 'session:user-input-requested',
+      requestKind: 'question',
+      toolCallId: 'toolu_ff',
+      toolName: 'AskUserQuestion',
+      payload: { questions: [{ q: 'a' }] },
+    })
+
+    expect(autoLoopService.getStatus(ws.id).auto_loop).toBe(true)
+    await answerPendingQuestion(ws.id, { 'Q?': 'free text' }, 'toolu_ff', { awaitingFreeForm: true })
+    expect(autoLoopService.getStatus(ws.id).auto_loop).toBe(false)
+  })
+
+  it('leaves auto-loop on when awaitingFreeForm is false', async () => {
+    const { createWorkspace, updateWorkspaceStatus } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'WNF',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/wnf',
+    })
+    updateWorkspaceStatus(ws.id, 'brainstorming')
+    updateWorkspaceStatus(ws.id, 'executing')
+    const { getDb } = await import('../server/db/index.js')
+    getDb().prepare('UPDATE workspaces SET auto_loop = 1, auto_loop_ready = 1 WHERE id = ?').run(ws.id)
+
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const autoLoopService = await import('../server/services/auto-loop-service.js')
+    const { startAgent, answerPendingQuestion } = orch
+    startAgent(ws.id, '/tmp', 'hi')
+    await Promise.resolve()
+    await Promise.resolve()
+    const cap = captured[0]
+    if (!cap) throw new Error('no capture')
+    cap.onEvent({ kind: 'session:started', engineSessionId: 'engine-sess-1' })
+    cap.onEvent({
+      kind: 'session:user-input-requested',
+      requestKind: 'question',
+      toolCallId: 'toolu_nf',
+      toolName: 'AskUserQuestion',
+      payload: { questions: [{ q: 'a' }] },
+    })
+
+    await answerPendingQuestion(ws.id, { 'Q?': 'Option A' }, 'toolu_nf', { awaitingFreeForm: false })
+    expect(autoLoopService.getStatus(ws.id).auto_loop).toBe(true)
+  })
+
   it('throws when no pending question is queued', async () => {
     const { createWorkspace } = await import('../server/services/workspace-service.js')
     const ws = createWorkspace({

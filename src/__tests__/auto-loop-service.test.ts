@@ -144,6 +144,19 @@ describe('auto-loop-service', () => {
     expect(ws.emitEphemeral).toHaveBeenCalledWith(wsId, 'autoloop:disabled', { reason: 'user-action' })
   })
 
+  it('disable(awaiting-clarification) turns auto-loop off and a later session:ended no-ops', async () => {
+    const svc = await import('../server/services/auto-loop-service.js')
+    const { createTask } = await import('../server/services/workspace-service.js')
+    createTask(wsId, { title: 't1', isAcceptanceCriterion: false, sortOrder: 0 })
+    svc._test_setAutoLoopReady(wsId, true)
+    svc.enable(wsId)
+    svc.disable(wsId, 'awaiting-clarification')
+    expect(svc.getStatus(wsId).auto_loop).toBe(false)
+    svc.onSessionEnded(wsId, 'completed', 0)
+    expect(svc.getStatus(wsId).auto_loop).toBe(false)
+    expect(svc.getStatus(wsId).no_progress_streak).toBe(0)
+  })
+
   it('disable is idempotent — second call does not emit again', async () => {
     const svc = await import('../server/services/auto-loop-service.js')
     const ws = await import('../server/services/websocket-service.js')

@@ -17,6 +17,7 @@ interface RawGlabMr {
   assignees?: Array<{ username: string }>
   reviewers?: Array<{ username: string }>
   labels?: string[]
+  has_conflicts?: boolean
   updated_at?: string
 }
 
@@ -46,6 +47,7 @@ function mapGlabMrToSnapshot(raw: RawGlabMr): PrSnapshot {
     ci: { rollup: null, checks: [] },
     updatedAt: raw.updated_at ?? '',
     unresolvedReviewThreadsCount: 0,
+    mergeable: raw.has_conflicts === true ? 'CONFLICTING' : raw.has_conflicts === false ? 'MERGEABLE' : null,
     readyToMerge: false,
   }
 }
