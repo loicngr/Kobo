@@ -38,6 +38,7 @@ describe('computeGitStats', () => {
         capabilities: { canCreatePr: true, canChangePrBase: true, requestTermShort: 'PR' },
         availability: { available: true },
       },
+      computedAt: expect.any(Number),
     })
   })
 

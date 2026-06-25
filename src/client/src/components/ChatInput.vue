@@ -525,6 +525,14 @@ function cancelQueue() {
 watch(isQueued, (queued, wasQueued) => {
   if (wasQueued && !queued && !cancelledManually) {
     message.value = ''
+    // The queued message (including its `[image: …]` tokens) has just been
+    // dispatched to the agent. Drop the pending-image entries WITHOUT firing a
+    // server DELETE — the agent still has to read those files from disk. We
+    // must clear the list in the same tick we clear the textarea: otherwise the
+    // reconcile watcher below sees the placeholder gone while the entry lingers,
+    // treats it as a user deletion, and removes the file before the agent reads
+    // it (mirrors the direct-send path which clears pendingImages at send time).
+    pendingImages.value = []
   }
   cancelledManually = false
 })

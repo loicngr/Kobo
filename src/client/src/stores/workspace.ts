@@ -187,6 +187,9 @@ export interface GitStats {
   unpushedCount: number // -1 = no upstream
   workingTree: { staged: number; modified: number; untracked: number }
   forge?: ForgeInfo
+  /** Epoch ms (server clock) when these stats were computed. Used to merge the
+   *  30s background poll monotonically — see `fetchWorkspacesInfo`. */
+  computedAt?: number
 }
 
 export interface BranchCommit {
@@ -1262,7 +1265,20 @@ export const useWorkspaceStore = defineStore('workspace', {
           }
         }
         this.prSnapshots = data.prSnapshots
-        this.gitStatsCache = { ...this.gitStatsCache, ...data.gitStats }
+        // Monotonic merge: the server's git-stats cache (lastKnownGitStats) lags
+        // up to one pr-watcher tick (~30s) behind a just-completed git op, so a
+        // freshly fetched on-demand snapshot can be newer than what this poll
+        // carries. Never replace fresher local stats with an older poll snapshot
+        // — otherwise the GitPanel reverts to the pre-op state until the user
+        // hits refresh. Entries without `computedAt` are treated as oldest.
+        const mergedStats = { ...this.gitStatsCache }
+        for (const [wsId, incoming] of Object.entries(data.gitStats)) {
+          const existing = mergedStats[wsId]
+          if (!existing || (incoming.computedAt ?? 0) >= (existing.computedAt ?? 0)) {
+            mergedStats[wsId] = incoming
+          }
+        }
+        this.gitStatsCache = mergedStats
       } catch (err) {
         console.error('[workspace-store] fetchWorkspacesInfo failed:', err)
       }

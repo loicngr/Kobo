@@ -17,6 +17,10 @@ export interface GitStatsResult {
   unpushedCount: number
   workingTree: { staged: number; modified: number; untracked: number }
   forge: { id: ForgeId; capabilities: ForgeCapabilities; availability: ForgeAvailability }
+  /** Epoch ms when these stats were computed (server clock). Lets the client
+   *  merge git-stats monotonically and never replace fresher on-demand stats
+   *  with an older background-poll snapshot. */
+  computedAt: number
 }
 
 /** Minimal workspace shape `computeGitStats` needs. */
@@ -56,5 +60,6 @@ export async function computeGitStats(
     unpushedCount,
     workingTree,
     forge: { id: forgeProvider.id, capabilities: forgeProvider.capabilities, availability },
+    computedAt: Date.now(),
   }
 }

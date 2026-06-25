@@ -1140,6 +1140,49 @@ describe('workspace store', () => {
       expect(fetchMock).toHaveBeenCalledWith('/api/workspaces/info', expect.anything())
     })
 
+    it('fetchWorkspacesInfo never replaces fresher local git-stats with an older poll snapshot', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            workspaces: [makeWorkspace({ id: 'ws-1', status: 'idle' })],
+            prSnapshots: {},
+            // Stale server snapshot (older computedAt) — e.g. pre-rebase.
+            gitStats: { 'ws-1': { commitCount: 1, computedAt: 100 } },
+          }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      const store = useWorkspaceStore()
+      // Simulate a fresh on-demand fetch that just landed after a git op.
+      store.gitStatsCache = { 'ws-1': { commitCount: 5, computedAt: 200 } as never }
+
+      await store.fetchWorkspacesInfo()
+
+      // The newer local snapshot must survive — no revert to the stale poll data.
+      expect(store.gitStatsCache['ws-1']).toMatchObject({ commitCount: 5, computedAt: 200 })
+    })
+
+    it('fetchWorkspacesInfo applies a newer poll snapshot over older local git-stats', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            workspaces: [makeWorkspace({ id: 'ws-1', status: 'idle' })],
+            prSnapshots: {},
+            gitStats: { 'ws-1': { commitCount: 8, computedAt: 300 } },
+          }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      const store = useWorkspaceStore()
+      store.gitStatsCache = { 'ws-1': { commitCount: 5, computedAt: 200 } as never }
+
+      await store.fetchWorkspacesInfo()
+
+      expect(store.gitStatsCache['ws-1']).toMatchObject({ commitCount: 8, computedAt: 300 })
+    })
+
     it('refreshPrSnapshot clears the entry when the server returns 404', async () => {
       const fetchMock = vi.fn().mockResolvedValue({
         ok: false,

@@ -533,11 +533,20 @@
                 :input-class="!projectPath ? 'repo-input-empty' : ''"
                 :placeholder="$t('createPage.projectPath')"
                 :behavior="settingsStore.projectPaths.length > 0 ? 'menu' : 'dialog'"
+                :option-label="(opt: string) => (opt ? projectNameForPath(opt) : '')"
                 @filter="filterProjectPaths"
-                @input-value="(val: string) => { projectPath = val }"
+                @input-value="onProjectPathInput"
             >
               <template #prepend>
                 <q-icon name="folder" size="14px" color="grey-5" />
+              </template>
+              <template #option="{ opt, itemProps }">
+                <q-item v-bind="itemProps">
+                  <q-item-section>
+                    <q-item-label>{{ projectNameForPath(opt) }}</q-item-label>
+                    <q-item-label caption>{{ opt }}</q-item-label>
+                  </q-item-section>
+                </q-item>
               </template>
               <template #no-option>
                 <q-item>
@@ -700,6 +709,7 @@ import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { loadCreatePagePrefs, saveCreatePagePrefs } from 'src/utils/create-page-prefs'
 import { buildTemplateVars, expandTemplate } from 'src/utils/expand-template'
+import { projectNameForPath } from 'src/utils/project-color'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -1295,11 +1305,26 @@ watch(projectPath, (val) => {
   }, 500)
 })
 
-// Filter project paths for the q-select
+// Filter project paths for the q-select. The field now displays project names,
+// so match against both the path and the resolved name (covers custom display
+// names that differ from the folder basename).
 function filterProjectPaths(val: string, update: (fn: () => void) => void) {
+  const needle = val.toLowerCase()
   update(() => {
-    pathFilterOptions.value = settingsStore.projectPaths.filter((p) => p.toLowerCase().includes(val.toLowerCase()))
+    pathFilterOptions.value = settingsStore.projectPaths.filter(
+      (p) => p.toLowerCase().includes(needle) || projectNameForPath(p).toLowerCase().includes(needle),
+    )
   })
+}
+
+// The repo q-select shows the project NAME (via :option-label), so `fill-input`
+// writes that name into the field on selection — and Quasar emits it through
+// @input-value. Map a known project name back to its absolute path so the model
+// stays canonical; a real path the user types contains slashes and never equals
+// a name, so it passes through unchanged (custom-path entry still works).
+function onProjectPathInput(val: string) {
+  const known = settingsStore.projectPaths.find((p) => projectNameForPath(p) === val)
+  projectPath.value = known ?? val
 }
 
 // Fetch settings + available engines on mount. The engine list powers the
