@@ -4,6 +4,10 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.8.4
+
+- feat: add Claude Sonnet 5 to the model catalogue
+
 ## 1.8.3
 
 - fix: prevent git-stats revert and queued-image loss, improve project picker
