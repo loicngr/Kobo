@@ -73,6 +73,12 @@ export const CLAUDE_MODELS: readonly AgentModel[] = [
     i18nDescriptionKey: 'model.opus1mDescription',
   },
   {
+    id: 'claude-sonnet-5',
+    label: 'Sonnet 5',
+    i18nLabelKey: 'model.sonnet5',
+    i18nDescriptionKey: 'model.sonnet5Description',
+  },
+  {
     id: 'claude-sonnet-4-6',
     label: 'Sonnet 4.6 (Classic)',
     i18nLabelKey: 'model.sonnetClassic',
