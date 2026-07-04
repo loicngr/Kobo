@@ -8,6 +8,8 @@
 
 Kōbō runs multiple coding agents in parallel, each isolated in its own git worktree, branch, and dev server. A single Vue dashboard streams output, tasks, git state, and quota usage across every workspace.
 
+![Kōbō workspace view: live chat and git panel](docs/assets/images/workspace-chat.png)
+
 > [!NOTE]
 > Active development on `develop`. Forward-only migrations and timestamped pre-migration backups keep upgrades safe.
 
@@ -15,16 +17,24 @@ Kōbō runs multiple coding agents in parallel, each isolated in its own git wor
 
 - **Isolated worktrees**: each workspace is a dedicated git worktree on its own branch, so parallel sessions never collide.
 - **Two agent engines**: Claude Code (via `@anthropic-ai/claude-agent-sdk`) and OpenAI Codex (via `codex app-server`), chosen per workspace.
-- **Live chat**: streaming text, reasoning blocks, inline Edit/Write diffs, per-turn cards, infinite scrollback. `/` autocompletes skills and commands, `@` fuzzy-autocompletes worktree file paths, and you can export any workspace's session events to CSV.
-- **Task tracking**: a per-workspace MCP server (`kobo-tasks`) lets the agent manage its own tasks, acceptance criteria, and live status.
-- **Git panel**: a Monaco-based diff viewer with **inline file editing** (edit the right-hand panel directly, save with `Ctrl/Cmd+S`, conflict-guarded via sha precondition), inline conflict resolution, and `Sync` / `Push` / `Open PR` / `Change PR base` / `Change source branch` (cherry-pick of the branch-proper commits, with an optional custom bash script). Multi-forge: GitHub (`gh`), GitLab (`glab`), or no forge, auto-detected from the remote and overridable per project.
-- **Attention indicators**: workspace cards in the drawer surface CI failures and review-requested-changes inline, so failing PRs/MRs stand out at a glance.
-- **Auto-loop**: an opt-in mode that walks the task list, spawning a fresh session per task and stopping on completion, stall, or error.
+- **Live chat**: streaming text, reasoning blocks, inline Edit/Write diffs, per-turn cards, a compaction-in-progress indicator, infinite scrollback. `/` autocompletes skills and commands, `@` fuzzy-autocompletes worktree file paths, and you can export any workspace's session events to CSV.
+- **Full MCP toolset (`kobo-tasks`)**: a per-workspace MCP server the agent uses for far more than tasks — task/acceptance-criteria CRUD, starting/stopping the dev server and reading its logs, a unified `get_ticket` (Notion or Sentry), searching past conversations across every workspace, per-session token/cost usage, and a `.ai/thoughts` decision log. Native Claude Code Task tools complement it for lightweight sub-agent coordination. See [`AGENTS.md`](./AGENTS.md) for the full tool list.
+
+  ![Sub-agents panel showing parallel tool calls](docs/assets/images/sub-agents-panel.png)
+- **Git panel**: a Monaco-based diff viewer with **inline file editing** (edit the right-hand panel directly, save with `Ctrl/Cmd+S`, conflict-guarded via sha precondition), inline conflict resolution, and `Sync` / `Push` / `Open PR` / `Change PR base` / `Change source branch`. Multi-forge: GitHub (`gh`), GitLab (`glab`), or no forge, auto-detected from the remote and overridable per project.
+
+  ![Diff viewer with side-by-side changes](docs/assets/images/diff-viewer.png)
+- **Dev server panel**: start, stop, and tail logs for a workspace's dev server (Docker or npm) straight from the Tools panel — no need to leave the UI.
+- **Attention indicators**: workspace cards surface CI failures, review-requested changes, and a conflict-aware **ready-to-merge** badge, plus a one-click **Fix CI** button that spawns a fix workspace automatically.
+- **Interactive Q&A**: an agent can pause mid-session to ask a clarifying question through the UI; the workspace surfaces under "Needs Attention" until you answer.
+
+  ![Agent asking a clarifying question, awaiting the user's answer](docs/assets/images/agent-question.png)
+- **Auto-loop**: an opt-in mode that walks the task list, spawning a fresh session per task and stopping once there's nothing left to do, progress stalls, an error occurs, or the agent needs input from you.
 - **Quota-aware**: 5-hour / 7-day Claude usage and Codex rate-limit buckets sit in the footer, and sessions auto-resume after a rate-limit reset.
-- **Scheduled wakeups**: the agent schedules a one-shot wake-up via the `ScheduleWakeup` tool. Kōbō persists it across restarts, shows a live countdown, and re-invokes the agent with the stored prompt at the chosen time.
+- **Scheduled wakeups**: the agent schedules a one-shot wake-up via the `schedule_wakeup` MCP tool. Kōbō persists it across restarts, shows a live countdown, and re-invokes the agent with the stored prompt at the chosen time.
 - **Cron schedules**: recurring per-workspace triggers the agent registers through MCP tools (`cron_create` / `cron_delete` / `cron_list`). Each tick resumes the workspace session (skipped if already active), and schedules are re-armed at boot with skip-missed semantics.
-- **Lifecycle scripts**: shell scripts run automatically at key moments. **setup** (worktree created), **cleanup** (session ended), **archive** (workspace archived). Configure them globally or per project, with their output streamed into the chat.
-- **Disk-space purge**: free a merged workspace's disk space without losing its chat history. The worktree folder is removed (PR metadata is captured for later restore), the workspace is archived, and the chat log stays queryable. Trigger it manually from the workspace menu or enable **auto-purge on PR merged** in Settings → Worktrees. Recreate the worktree later with `gh pr checkout <pr-number>` and Kōbō detects the folder reappearing within 30 seconds, then unarchives and reactivates the workspace with no UI action needed.
+- **Lifecycle scripts**: shell scripts run automatically at key moments — **setup** (worktree created), **cleanup** (session ended), **archive** (workspace archived). Configure them globally or per project, with their output streamed into the chat.
+- **Disk-space purge**: free a merged workspace's disk space without losing its chat history — see [below](#disk-space-purge).
 - **Optional integrations**: Notion (import missions), Sentry (fix from issue URL), local voice transcription (whisper.cpp).
 
 ## Quick start
@@ -43,17 +53,7 @@ SERVER_PORT=9997 PORT=9998 npx @loicngr/kobo@latest
 
 Open <http://localhost:3000> (or whichever port you picked). Data is persisted under `~/.config/kobo/` (override via `KOBO_HOME`).
 
-### From source
-
-```bash
-git clone https://github.com/loicngr/Kobo.git
-cd Kobo
-npm install
-(cd src/client && npm install)
-npm run dev:all   # backend :3300 + client :8080
-```
-
-A production-installed Kōbō (`npx @loicngr/kobo`) and a dev server can run side by side, since they use separate data directories.
+Want to run from source or contribute? See [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
 ## Configuration
 
@@ -65,6 +65,7 @@ The most common knobs:
 | `SERVER_PORT` | none | Preferred override for the server port; takes precedence over `PORT` |
 | `KOBO_HOME` | `~/.config/kobo` | Data directory (SQLite, settings, voice models) |
 | `NOTION_API_TOKEN` | none | Notion integration token |
+| `ANTHROPIC_API_KEY` | none | Claude Code engine credential (alternative to `claude /login`) |
 | `OPENAI_API_KEY` | none | Codex engine credential (alternative to `codex login`) |
 
 Global and per-project settings (worktree path, dev server commands, E2E framework, prompt templates, git conventions, branch prefixes, lifecycle scripts, task prompt) are edited in **Settings** at runtime. Per-project values inherit from the global ones when left empty.
@@ -84,29 +85,8 @@ A merged workspace is automatically archived, but its worktree folder usually ca
 
 - **Manual**: workspace context menu → *Free disk space (delete worktree)*. The worktree is removed; the chat history and PR metadata stay in the database.
 - **Automatic**: **Settings → Worktrees → Auto-purge worktree on PR merged**. When the pr-watcher sees the OPEN → MERGED transition, it archives **and** purges.
-- **Restore**: recreate the folder yourself (`gh pr checkout <pr>` or `git worktree add <path> <branch>`). The pr-watcher detects the directory reappearing within 30 seconds and re-activates the workspace automatically (clears purge flag, unarchives). No UI action needed.
-
-### Avoiding permission errors during purge
-
-Docker containers usually write as `root`, so files in `node_modules` / `vendor` end up root-owned on the host. Plain `rm -rf` (which Kōbō uses under the hood) then fails with `EACCES` / `EPERM`. Pick one of these strategies depending on your setup:
-
-1. **Best: run your container as the host user.** Add a `USER` directive in your `Dockerfile`, or set `user: "${UID}:${GID}"` in `docker-compose.yml` with `UID`/`GID` exported in your shell. No more root-owned files, and nothing extra to do.
-2. **Preventive ACL on the worktrees root.** On ext4 / btrfs / xfs with a regular Docker bind mount, a default ACL grants your user access to every file created later:
-   ```bash
-   setfacl -d -m u:$(whoami):rwX <worktrees-root>   # e.g. ~/.worktrees
-   ```
-   Caveats: does **not** work on named Docker volumes (use a bind mount), filesystems without ACL support (NTFS, exFAT, tmpfs), strict SELinux with `:Z`, or with Docker `userns-remap`.
-3. **Unblock an already-broken worktree** (existing root-owned files):
-   ```bash
-   # Option A — recursive ACL (keeps ownership intact, just adds your user)
-   sudo setfacl -Rd -m u:$(whoami):rwX . && sudo setfacl -R -m u:$(whoami):rwX .
-
-   # Option B — take ownership outright (simpler, loses the "root-from-container" trace)
-   sudo chown -R $(whoami):$(whoami) .
-   ```
-   Run from inside the worktree folder, or directly on your worktrees root (e.g. `~/.worktrees/`) to cover all existing and future workspaces at once.
-
-When a purge does fail, Kōbō surfaces a toast with a copy-pasteable recovery command and a `git worktree prune` follow-up. The same guide is wired into **Settings → Worktrees → How purge works** for in-app reference.
+- **Restore**: recreate the folder yourself (`gh pr checkout <pr>` or `git worktree add <path> <branch>`). The pr-watcher detects the directory reappearing within 30 seconds and re-activates the workspace automatically. No UI action needed.
+- **Permission errors**: if removal hits `EACCES`/`EPERM` (common with Docker containers writing as `root`), Kōbō first tries to auto-recover by `chown`-ing the worktree from a throwaway Docker container. If that isn't possible, it shows a toast with a copy-pasteable manual recovery command. Full troubleshooting (ACL setup, Docker `USER` directive, manual `chown`) is in [`CONFIGURATION.md`](./CONFIGURATION.md#permission-errors-during-purge).
 
 ## Optional integrations
 
@@ -165,30 +145,14 @@ src/
 ├── client/         # Vue 3 + Quasar SPA
 ├── mcp-server/     # kobo-tasks MCP server, spawned per workspace
 ├── shared/         # types shared backend ↔ frontend
-└── __tests__/      # Vitest suite (1500+ tests)
+└── __tests__/      # Vitest suite, backend + client, thousands of tests
 ```
 
 [`AGENTS.md`](./AGENTS.md) covers the data model, WebSocket protocol, engine contracts, MCP tool surface, migration discipline, i18n rules, and contribution guidelines.
 
-## Scripts
-
-```bash
-npm run dev:all        # backend (:3300) + client (:8080)
-npm run build          # production build (client + server)
-npm start              # run the compiled server
-npm test               # backend vitest suite
-npm run test:client    # client vitest suite
-npm run lint           # biome check (lint + format)
-make ci                # full CI pipeline (audit + lint + tsc + tests)
-```
-
 ## Contributing
 
-PRs welcome. Branch off `develop`, follow Conventional Commits, run `make ci` before pushing. CI runs lint, type check, and tests on every PR to `develop`. See [`AGENTS.md`](./AGENTS.md) for code conventions and the database-migration discipline.
-
-## Release
-
-Releases are cut from `main`. Bump `package.json` on `develop`, merge into `main`, push. The release workflow builds, tests, publishes to npm, tags `v<version>`, and creates the GitHub Release. It fails early if the version or tag already exists.
+PRs welcome. See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for the from-source setup, scripts, and release process, and [`AGENTS.md`](./AGENTS.md) for code conventions and the database-migration discipline.
 
 ## License
 
