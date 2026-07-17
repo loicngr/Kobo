@@ -7,9 +7,9 @@ import type { AgentModel } from './models.js'
  * editing the workspace `model` field directly. This list reflects the
  * recommended set surfaced in the create-workspace selector.
  *
- * Auth caveat: `gpt-5.5` is currently only reachable when authenticated via
- * ChatGPT (Plus/Pro/Team/Enterprise). API-key auth is limited to `gpt-5.4`
- * and below.
+ * Auth caveat: the `gpt-5.6-*` family and `gpt-5.5` are currently only
+ * reachable when authenticated via ChatGPT (Plus/Pro/Team/Enterprise).
+ * API-key auth is limited to `gpt-5.4` and below.
  */
 export const CODEX_MODELS: readonly AgentModel[] = [
   {
@@ -17,6 +17,24 @@ export const CODEX_MODELS: readonly AgentModel[] = [
     label: 'Auto',
     i18nLabelKey: 'model.auto',
     i18nDescriptionKey: 'model.autoDescription',
+  },
+  {
+    id: 'gpt-5.6-sol',
+    label: 'GPT-5.6 Sol',
+    i18nLabelKey: 'model.gpt56sol',
+    i18nDescriptionKey: 'model.gpt56solDescription',
+  },
+  {
+    id: 'gpt-5.6-terra',
+    label: 'GPT-5.6 Terra',
+    i18nLabelKey: 'model.gpt56terra',
+    i18nDescriptionKey: 'model.gpt56terraDescription',
+  },
+  {
+    id: 'gpt-5.6-luna',
+    label: 'GPT-5.6 Luna',
+    i18nLabelKey: 'model.gpt56luna',
+    i18nDescriptionKey: 'model.gpt56lunaDescription',
   },
   {
     id: 'gpt-5.5',
@@ -35,6 +53,12 @@ export const CODEX_MODELS: readonly AgentModel[] = [
     label: 'GPT-5.4 mini',
     i18nLabelKey: 'model.gpt54mini',
     i18nDescriptionKey: 'model.gpt54miniDescription',
+  },
+  {
+    id: 'gpt-5.2',
+    label: 'GPT-5.2',
+    i18nLabelKey: 'model.gpt52',
+    i18nDescriptionKey: 'model.gpt52Description',
   },
   {
     id: 'gpt-5.3-codex',

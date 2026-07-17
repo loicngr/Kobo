@@ -59,12 +59,22 @@ export default {
   'model.sonnetClassicDescription': 'Équilibré',
   'model.sonnet1mDescription': 'Équilibré, contexte 1M',
   'model.haikuDescription': 'Le plus rapide',
+  'model.gpt56sol': 'GPT-5.6 Sol',
+  'model.gpt56solDescription': 'Dernier modèle de codage agentique de pointe (nécessite une authentification ChatGPT)',
+  'model.gpt56terra': 'GPT-5.6 Terra',
+  'model.gpt56terraDescription':
+    'Modèle de codage agentique équilibré pour un usage quotidien (nécessite une authentification ChatGPT)',
+  'model.gpt56luna': 'GPT-5.6 Luna',
+  'model.gpt56lunaDescription':
+    'Modèle de codage agentique rapide et économique (nécessite une authentification ChatGPT)',
   'model.gpt55': 'GPT-5.5',
   'model.gpt55Description': 'Recommandé pour le code complexe (nécessite une authentification ChatGPT)',
   'model.gpt54': 'GPT-5.4',
   'model.gpt54Description': 'Repli par défaut — raisonnement solide, compatible avec une clé API',
   'model.gpt54mini': 'GPT-5.4 mini',
   'model.gpt54miniDescription': 'Rapide et efficient — idéal pour les tâches réactives et les sous-agents',
+  'model.gpt52': 'GPT-5.2',
+  'model.gpt52Description': 'Optimisé pour un usage professionnel et les agents longue durée',
   'model.gpt53codex': 'GPT-5.3 Codex',
   'model.gpt53codexDescription': "Modèle spécialisé code pour l'ingénierie logicielle complexe",
 
