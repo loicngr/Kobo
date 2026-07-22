@@ -4,6 +4,10 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.8.6
+
+- feat: add auto-loop session modes and global MCP workspace tools
+
 ## 1.8.5
 
 - feat: add gpt-5.6 codex model family and gpt-5.2 to catalogue
