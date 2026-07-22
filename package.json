@@ -70,7 +70,7 @@
     "@anthropic-ai/claude-agent-sdk": "^0.3.183",
     "@emnapi/core": "^1.11.1",
     "@emnapi/runtime": "^1.11.1",
-    "@hono/node-server": "^2.0.5",
+    "@hono/node-server": "^2.0.11",
     "@modelcontextprotocol/sdk": "^1.29.0",
     "@openai/codex": "^0.141.0",
     "better-sqlite3": "^12.11.1",
@@ -90,5 +90,9 @@
     "tsx": "^4.22.4",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9"
+  },
+  "overrides": {
+    "@hono/node-server": "^2.0.11",
+    "shell-quote": "^1.10.0"
   }
 }

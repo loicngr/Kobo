@@ -1315,6 +1315,12 @@ export default {
     'Grooming läuft — der Agent erstellt / überprüft Aufgaben. Die Schleife startet, sobald mark_auto_loop_ready aufgerufen wird.',
   'autoLoop.running': 'Auto-Schleife läuft',
   'autoLoop.startInMode': 'Im Auto-Schleifen-Modus starten',
+  'autoLoop.sessionMode.perTask': 'Neue Sitzung pro Aufgabe',
+  'autoLoop.sessionMode.perTaskTooltip':
+    'Jede Aufgabe startet eine neue Claude-Code-Sitzung ohne Erinnerung an vorherige Aufgaben',
+  'autoLoop.sessionMode.continuous': 'Durchgehende Sitzung',
+  'autoLoop.sessionMode.continuousTooltip':
+    'Alle Aufgaben laufen in derselben Sitzung — der Agent behält den vollen Kontext, aber die Sitzung wird mit der Zeit länger',
   'koboCommand.prepAutoloopDesc': 'Aufgaben für Auto-Schleifen-Modus vorbereiten (auf Atomarität prüfen)',
   'staleSessionBanner.title': 'Auto-Schleife läuft',
   'staleSessionBanner.message': 'Du siehst eine ältere Sitzung — der Agent arbeitet gerade in der neuesten.',

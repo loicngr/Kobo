@@ -1311,6 +1311,12 @@ export default {
     "Grooming in corso — l'agente sta creando / revisionando le attività. Il loop partirà quando chiamerà mark_auto_loop_ready.",
   'autoLoop.running': 'Auto-loop in corso',
   'autoLoop.startInMode': 'Avvia in modalità auto-loop',
+  'autoLoop.sessionMode.perTask': 'Nuova sessione per attività',
+  'autoLoop.sessionMode.perTaskTooltip':
+    'Ogni attività avvia una nuova sessione Claude Code senza memoria delle attività precedenti',
+  'autoLoop.sessionMode.continuous': 'Sessione continua',
+  'autoLoop.sessionMode.continuousTooltip':
+    "Tutte le attività si susseguono nella stessa sessione — l'agente mantiene tutto il contesto, ma la sessione si allunga nel tempo",
   'koboCommand.prepAutoloopDesc': 'Preparare le attività per la modalità auto-loop (atomicità)',
   'staleSessionBanner.title': 'Auto-loop in corso',
   'staleSessionBanner.message':

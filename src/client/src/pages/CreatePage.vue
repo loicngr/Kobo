@@ -462,8 +462,8 @@
           </div>
         </div>
 
-        <!-- Row 1b: action toggles (auto-loop, skip-setup, attach-worktree) -->
-        <div class="row q-col-gutter-xs q-pa-xs col-12  items-center justify-center">
+        <!-- Row 1b: auto-loop toggle + its session-mode selector, alone on their own row -->
+        <div class="row q-col-gutter-xs q-pa-xs col-12 items-center justify-center">
           <div class="col-12 col-md-auto">
             <!-- Auto-loop toggle -->
             <q-btn
@@ -481,6 +481,34 @@
             </q-btn>
           </div>
 
+          <div v-if="autoLoop" class="col-12 col-md-auto">
+            <!-- Auto-loop session mode: per-task (fresh session each iteration) vs continuous (resume) -->
+            <q-btn-toggle
+                v-model="autoLoopSessionMode"
+                dense
+                no-caps
+                size="sm"
+                toggle-color="indigo-8"
+                color="grey-9"
+                text-color="grey-5"
+                :options="[
+                  { label: $t('autoLoop.sessionMode.perTask'), value: 'per_task', icon: 'restart_alt' },
+                  { label: $t('autoLoop.sessionMode.continuous'), value: 'continuous', icon: 'link' },
+                ]"
+            >
+              <q-tooltip>
+                {{
+                  autoLoopSessionMode === 'continuous'
+                    ? $t('autoLoop.sessionMode.continuousTooltip')
+                    : $t('autoLoop.sessionMode.perTaskTooltip')
+                }}
+              </q-tooltip>
+            </q-btn-toggle>
+          </div>
+        </div>
+
+        <!-- Row 1c: remaining action toggles (skip-setup, attach-worktree) -->
+        <div class="row q-col-gutter-xs q-pa-xs col-12 items-center justify-center">
           <div class="col-12 col-md-auto">
             <!-- Skip-setup toggle -->
             <q-btn
@@ -1157,17 +1185,13 @@ function toggleNotion() {
 
 const useSentry = ref(false)
 const autoLoop = ref(false)
+const autoLoopSessionMode = ref<'per_task' | 'continuous'>('per_task')
 // Auto-loop ON forces 'bypass' (plan would deadlock the loop).
 watch(
   () => autoLoop.value,
   (enabled) => {
     if (enabled && agentPermissionMode.value !== 'bypass') {
       agentPermissionMode.value = 'bypass'
-      $q.notify({
-        type: 'info',
-        message: t('agentPermissionMode.autoLoopLocked'),
-        timeout: 4000,
-      })
     }
   },
 )
@@ -1349,6 +1373,9 @@ onMounted(async () => {
   if (prefs.autoLoop === true) {
     autoLoop.value = true
   }
+  if (prefs.autoLoopSessionMode === 'continuous') {
+    autoLoopSessionMode.value = 'continuous'
+  }
   if (prefs.projectPath && settingsStore.projectPaths.includes(prefs.projectPath)) {
     projectPath.value = prefs.projectPath
   }
@@ -1521,7 +1548,7 @@ async function handleCreate() {
         : {}),
       ...(skipSetupScript.value && !useExistingWorktree.value ? { skipSetupScript: true } : {}),
       ...(description.value.trim() ? { description: description.value.trim() } : {}),
-      ...(autoLoop.value ? { autoLoop: true } : {}),
+      ...(autoLoop.value ? { autoLoop: true, autoLoopSessionMode: autoLoopSessionMode.value } : {}),
       // Auto-loop cannot run in 'plan' (blocks MCP + edits) — promote to bypass.
       agentPermissionMode:
         autoLoop.value && agentPermissionMode.value === 'plan' ? 'bypass' : agentPermissionMode.value,
@@ -1547,6 +1574,7 @@ async function handleCreate() {
     saveCreatePagePrefs({
       projectPath: projectPath.value.trim(),
       autoLoop: autoLoop.value,
+      autoLoopSessionMode: autoLoopSessionMode.value,
     })
 
     // Subscribe to receive WebSocket events for this workspace

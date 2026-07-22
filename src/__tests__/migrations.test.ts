@@ -41,8 +41,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 27', () => {
-    expect(SCHEMA_VERSION).toBe(27)
+  it('exporte SCHEMA_VERSION = 28', () => {
+    expect(SCHEMA_VERSION).toBe(28)
   })
 
   it('migration v17 unifies legacy permission_mode + permission_profile into agent_permission_mode', () => {
@@ -1695,6 +1695,65 @@ describe('migration v25: add-workspace-initial-prompt', () => {
     runMigrations(db) // second pass should be a no-op
     const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
     expect(cols.filter((c) => c.name === 'initial_prompt')).toHaveLength(1)
+    db.close()
+  })
+})
+
+describe('migration v28: add-auto-loop-session-mode', () => {
+  it('adds the auto_loop_session_mode column with default per_task after runMigrations', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{
+      name: string
+      notnull: number
+      dflt_value: unknown
+    }>
+    const col = cols.find((c) => c.name === 'auto_loop_session_mode')
+    expect(col).toBeTruthy()
+    expect(col?.notnull).toBe(1)
+    expect(col?.dflt_value).toBe("'per_task'")
+    db.close()
+  })
+
+  it('fresh install via initSchema produces the same column as runMigrations', () => {
+    const freshDb = new Database(':memory:')
+    initSchema(freshDb)
+    const freshCol = (freshDb.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>).find(
+      (c) => c.name === 'auto_loop_session_mode',
+    )
+
+    const upgradedDb = new Database(':memory:')
+    runMigrations(upgradedDb)
+    const upgradedCol = (upgradedDb.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>).find(
+      (c) => c.name === 'auto_loop_session_mode',
+    )
+
+    expect(freshCol).toEqual(upgradedCol)
+    freshDb.close()
+    upgradedDb.close()
+  })
+
+  it('v27 → v28 upgrade defaults existing rows to per_task', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run('w1', 'legacy', '/tmp/p', 'main', 'feat', '2025-01-01', '2025-01-01')
+
+    const row = db.prepare('SELECT auto_loop_session_mode FROM workspaces WHERE id = ?').get('w1') as {
+      auto_loop_session_mode: string
+    }
+    expect(row.auto_loop_session_mode).toBe('per_task')
+    db.close()
+  })
+
+  it('is idempotent — re-running runMigrations does not re-add the column', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    runMigrations(db)
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
+    expect(cols.filter((c) => c.name === 'auto_loop_session_mode')).toHaveLength(1)
     db.close()
   })
 })

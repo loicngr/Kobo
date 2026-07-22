@@ -32,6 +32,7 @@ interface WorkspaceRow {
   status: string
   auto_loop: number
   auto_loop_ready: number
+  auto_loop_session_mode: string
   no_progress_streak: number
   archived_at: string | null
 }
@@ -41,7 +42,7 @@ function getRow(workspaceId: string): WorkspaceRow | null {
   const row = db
     .prepare(
       `SELECT id, project_path, working_branch, worktree_path, model, permission_mode, agent_permission_mode, reasoning_effort,
-              status, auto_loop, auto_loop_ready, no_progress_streak, archived_at
+              status, auto_loop, auto_loop_ready, auto_loop_session_mode, no_progress_streak, archived_at
        FROM workspaces WHERE id = ?`,
     )
     .get(workspaceId) as WorkspaceRow | undefined
@@ -227,7 +228,7 @@ export function forgetAutoLoopState(workspaceId: string): void {
 
 // ── Internal ──────────────────────────────────────────────────────────────────
 
-const PROMPT_TEMPLATE = `[Kōbō auto-loop — iteration #{n}]
+const PROMPT_TEMPLATE = `[Kōbō auto-loop — iteration #{n}{sessionModeSuffix}]
 
 Current pending task (highest priority, non-acceptance-criterion first):
 - Task ID: {taskId}
@@ -322,7 +323,10 @@ function spawnNextIteration(workspaceId: string, opts: { throwOnStartAgentError?
     overrideBlock = buildE2eIterationBlock(e2eSettings)
   }
 
+  const continuousSession = row.auto_loop_session_mode === 'continuous'
+
   const prompt = PROMPT_TEMPLATE.replaceAll('{n}', String(iterationNumber))
+    .replaceAll('{sessionModeSuffix}', continuousSession ? ', session continue' : '')
     .replaceAll('{taskId}', task.id)
     .replaceAll('{taskTitle}', task.title)
     .replaceAll('{isAcceptanceCriterion}', String(task.isAcceptanceCriterion))
@@ -364,7 +368,13 @@ function spawnNextIteration(workspaceId: string, opts: { throwOnStartAgentError?
       worktreePath,
       prompt,
       row.model,
-      false, // resume=false — fresh context for each iteration
+      // resume=false spawns a fresh session per iteration (default); resume=true
+      // (auto_loop_session_mode='continuous') resumes the workspace's last
+      // session so the agent keeps full context across tasks. When there is no
+      // prior session to resume (e.g. the very first iteration), orchestrator's
+      // resolveSessionForResume gracefully falls back to a fresh session — no
+      // special-casing needed here.
+      continuousSession,
       agentPermissionMode,
       undefined,
       row.reasoning_effort,
@@ -438,6 +448,12 @@ export function onAutoLoopReadySet(workspaceId: string): void {
 export function _test_setAutoLoopReady(workspaceId: string, ready: boolean): void {
   const db = getDb()
   db.prepare('UPDATE workspaces SET auto_loop_ready = ? WHERE id = ?').run(ready ? 1 : 0, workspaceId)
+}
+
+/** @internal */
+export function _test_setAutoLoopSessionMode(workspaceId: string, mode: 'per_task' | 'continuous'): void {
+  const db = getDb()
+  db.prepare('UPDATE workspaces SET auto_loop_session_mode = ? WHERE id = ?').run(mode, workspaceId)
 }
 
 /** @internal */

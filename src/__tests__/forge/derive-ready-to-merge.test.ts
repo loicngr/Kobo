@@ -89,17 +89,27 @@ describe('deriveReadyToMerge', () => {
     ).toBe(true)
   })
 
-  it('treats null/unknown mergeable as non-blocking (preserves the no-CI case)', () => {
-    for (const mergeable of [null, 'UNKNOWN'] as const) {
-      expect(
-        deriveReadyToMerge({
-          state: 'OPEN',
-          ci: { rollup: null, checks: [] },
-          reviewDecision: null,
-          reviewers: [],
-          mergeable,
-        }),
-      ).toBe(true)
-    }
+  it('treats null mergeable as non-blocking (forge does not report it — preserves the no-CI case)', () => {
+    expect(
+      deriveReadyToMerge({
+        state: 'OPEN',
+        ci: { rollup: null, checks: [] },
+        reviewDecision: null,
+        reviewers: [],
+        mergeable: null,
+      }),
+    ).toBe(true)
+  })
+
+  it('is NOT ready when mergeable is UNKNOWN (GitHub still computing after the base branch advanced)', () => {
+    expect(
+      deriveReadyToMerge({
+        state: 'OPEN',
+        ci: { rollup: null, checks: [] },
+        reviewDecision: null,
+        reviewers: [],
+        mergeable: 'UNKNOWN',
+      }),
+    ).toBe(false)
   })
 })

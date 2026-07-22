@@ -37,6 +37,7 @@ import {
   listDocumentsHandler,
   listTasksHandler,
   listWorkspaceImagesHandler,
+  listWorkspacesHandler,
   logThoughtHandler,
   markTaskDoneHandler,
   readDocumentHandler,
@@ -686,6 +687,42 @@ describe('MCP tasks server handlers', () => {
       expect(info.agentDescription).toBe('Live status')
     })
   })
+
+  describe('listWorkspacesHandler', () => {
+    it('returns all non-archived workspaces ordered by updated_at DESC', () => {
+      const result = listWorkspacesHandler(db, {})
+      expect(result.map((w) => w.id)).toEqual(['other-ws', workspaceId])
+    })
+
+    it('maps fields to id/title/status/createdAt', () => {
+      const result = listWorkspacesHandler(db, {})
+      const testWs = result.find((w) => w.id === workspaceId)
+      expect(testWs).toBeDefined()
+      expect(testWs?.title).toBe('Test WS')
+      expect(testWs?.status).toBe('idle')
+      expect(typeof testWs?.createdAt).toBe('string')
+    })
+
+    it('excludes archived workspaces by default', () => {
+      const now = new Date().toISOString()
+      db.prepare(
+        'INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, status, archived_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ).run('archived-ws', 'Archived', '/tmp', 'main', 'feature/archived', 'idle', now, now, now)
+
+      const result = listWorkspacesHandler(db, {})
+      expect(result.map((w) => w.id)).not.toContain('archived-ws')
+    })
+
+    it('includes archived workspaces when includeArchived is true', () => {
+      const now = new Date().toISOString()
+      db.prepare(
+        'INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, status, archived_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      ).run('archived-ws', 'Archived', '/tmp', 'main', 'feature/archived', 'idle', now, now, now)
+
+      const result = listWorkspacesHandler(db, { includeArchived: true })
+      expect(result.map((w) => w.id)).toContain('archived-ws')
+    })
+  })
 })
 
 describe('MCP server tool registration — set_workspace_agent_description', () => {
@@ -781,6 +818,92 @@ describe('MCP server tool registration — cron family', () => {
     )
     // cron_list is read-only — no timer involvement, fine to dispatch locally.
     expect(serverSource).toMatch(/name === 'cron_list'[\s\S]*?cronListHandler\s*\(/)
+  })
+})
+
+describe('MCP server tool registration — global workspace tools', () => {
+  const readServerSource = () =>
+    fs.readFileSync(path.join(__dirname, '..', 'mcp-server', 'kobo-tasks-server.ts'), 'utf-8')
+
+  it('exposes list_workspaces, create_workspace, archive_workspace, stop_workspace with the right schemas', () => {
+    const src = readServerSource()
+    expect(src).toMatch(/name:\s*['"]list_workspaces['"]/)
+    expect(src).toMatch(/name:\s*['"]create_workspace['"]/)
+    expect(src).toMatch(/name:\s*['"]archive_workspace['"]/)
+    expect(src).toMatch(/name:\s*['"]stop_workspace['"]/)
+    expect(src).toMatch(
+      /required:\s*\[['"]name['"]\s*,\s*['"]project_path['"]\s*,\s*['"]source_branch['"]\s*,\s*['"]working_branch['"]\]/,
+    )
+  })
+
+  it('defines the 4 global tools inside GLOBAL_TOOLS, not WORKSPACE_SCOPED_TOOLS', () => {
+    const src = readServerSource()
+    const globalBlockMatch = src.match(/const GLOBAL_TOOLS[\s\S]*?\n\]/)
+    expect(globalBlockMatch).not.toBeNull()
+    const globalBlock = globalBlockMatch?.[0] ?? ''
+    for (const toolName of ['list_workspaces', 'create_workspace', 'archive_workspace', 'stop_workspace']) {
+      expect(globalBlock).toMatch(new RegExp(`name:\\s*['"]${toolName}['"]`))
+    }
+    const scopedBlockMatch = src.match(/const WORKSPACE_SCOPED_TOOLS[\s\S]*?\n\]\n\nconst GLOBAL_TOOLS/)
+    expect(scopedBlockMatch).not.toBeNull()
+    const scopedBlock = scopedBlockMatch?.[0] ?? ''
+    for (const toolName of ['list_workspaces', 'create_workspace', 'archive_workspace', 'stop_workspace']) {
+      expect(scopedBlock).not.toMatch(new RegExp(`name:\\s*['"]${toolName}['"]`))
+    }
+  })
+
+  it('gates the exposed tool list on workspaceId being set', () => {
+    const src = readServerSource()
+    expect(src).toMatch(
+      /tools:\s*workspaceId\s*\?\s*\[\.\.\.WORKSPACE_SCOPED_TOOLS,\s*\.\.\.GLOBAL_TOOLS\]\s*:\s*GLOBAL_TOOLS/,
+    )
+  })
+
+  it('no longer exits the process when KOBO_WORKSPACE_ID is unset', () => {
+    const src = readServerSource()
+    expect(src).not.toMatch(/KOBO_WORKSPACE_ID env var is required/)
+  })
+
+  it('gates workspace-scoped tool calls behind a single early check, not per-branch', () => {
+    const src = readServerSource()
+    expect(src).toMatch(/if \(!workspaceId && !GLOBAL_TOOL_NAMES\.has\(name\)\) \{\s*return fail\(/)
+  })
+
+  it('dispatches list_workspaces to listWorkspacesHandler locally', () => {
+    const src = readServerSource()
+    expect(src).toMatch(/name === 'list_workspaces'[\s\S]*?listWorkspacesHandler\s*\(/)
+  })
+
+  it('routes create_workspace/archive_workspace/stop_workspace through the backend HTTP API', () => {
+    const src = readServerSource()
+    expect(src).toMatch(
+      /name === 'create_workspace'[\s\S]*?backendRequest\(\s*['"]POST['"]\s*,\s*['"]\/api\/workspaces['"]/,
+    )
+    expect(src).toMatch(
+      /name === 'archive_workspace'[\s\S]*?backendRequest\(\s*['"]POST['"]\s*,\s*`\/api\/workspaces\/\$\{[^}]+\}\/archive`/,
+    )
+    expect(src).toMatch(
+      /name === 'stop_workspace'[\s\S]*?backendRequest\(\s*['"]POST['"]\s*,\s*`\/api\/workspaces\/\$\{[^}]+\}\/stop`/,
+    )
+  })
+
+  it('create_workspace requires name, project_path, source_branch, working_branch', () => {
+    const src = readServerSource()
+    expect(src).toMatch(
+      /name === 'create_workspace'[\s\S]*?return fail\('name, project_path, source_branch, and working_branch parameters are required'\)/,
+    )
+  })
+
+  it('archive_workspace and stop_workspace require workspace_id', () => {
+    const src = readServerSource()
+    expect(src).toMatch(/name === 'archive_workspace'[\s\S]*?return fail\('workspace_id parameter is required'\)/)
+    expect(src).toMatch(/name === 'stop_workspace'[\s\S]*?return fail\('workspace_id parameter is required'\)/)
+  })
+
+  it('surfaces a clear "backend unreachable" message on network failure for the 3 mutating tools', () => {
+    const src = readServerSource()
+    expect(src).toMatch(/function backendErrorMessage\(/)
+    expect(src).toMatch(/Kōbō backend unreachable at \$\{backendUrl\}/)
   })
 })
 

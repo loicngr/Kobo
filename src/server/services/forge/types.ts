@@ -38,17 +38,25 @@ export interface PrSnapshot {
   unresolvedReviewThreadsCount: number
   /** Computed: OPEN + CI green or absent + no merge conflict + not blocked by changes-requested. */
   readyToMerge: boolean
-  /** Merge conflict state from the forge. `CONFLICTING` blocks readyToMerge.
-   *  `null` = forge didn't report it (treated as non-blocking). */
+  /** Merge conflict state from the forge. `CONFLICTING` and `UNKNOWN` both
+   *  block readyToMerge — GitHub reports `UNKNOWN` while it recomputes
+   *  mergeability after the base branch advances, which is exactly the
+   *  window where a conflicting PR would otherwise show as ready.
+   *  `null` = forge didn't report it at all (treated as non-blocking). */
   mergeable: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN' | null
 }
 
 /**
  * True when nothing blocks merging the PR: it is open, CI is not failing or
  * in-flight (green `SUCCESS` or absent `null` — matching GitHub's "Ready to
- * merge"), and no reviewer is actively requesting changes. `null` covers repos
- * or PRs with no CI configured. Pending/failure/cancelled/neutral are NOT ready.
- * Mirrors the front-end blocking rule — trust a reviewer still in
+ * merge"), no reviewer is actively requesting changes, and the forge doesn't
+ * report an active or pending merge conflict. `null` covers repos or PRs
+ * with no CI configured, or forges that don't report `mergeable` at all.
+ * `UNKNOWN` is treated as blocking, not as "no data" — GitHub uses it while
+ * asynchronously recomputing mergeability (e.g. right after the base branch
+ * advances), so treating it as non-blocking would show a conflicting PR as
+ * ready during that window. Pending/failure/cancelled/neutral CI is NOT
+ * ready. Mirrors the front-end blocking rule — trust a reviewer still in
  * CHANGES_REQUESTED, not the sticky `reviewDecision` alone.
  */
 export function deriveReadyToMerge(
@@ -56,7 +64,7 @@ export function deriveReadyToMerge(
 ): boolean {
   const blocked = s.reviewDecision === 'CHANGES_REQUESTED' && s.reviewers.some((r) => r.state === 'CHANGES_REQUESTED')
   const ciOk = s.ci.rollup === 'SUCCESS' || s.ci.rollup === null
-  const noConflict = s.mergeable !== 'CONFLICTING'
+  const noConflict = s.mergeable === 'MERGEABLE' || s.mergeable === null
   return s.state === 'OPEN' && ciOk && !blocked && noConflict
 }
 

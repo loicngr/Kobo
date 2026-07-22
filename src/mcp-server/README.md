@@ -8,7 +8,7 @@ Kōbō's Claude Code engine (under `src/server/services/agent/engines/claude-cod
 
 | Env var | Purpose |
 |---|---|
-| `KOBO_WORKSPACE_ID` | ID of the current workspace — scopes all queries. **Required**. |
+| `KOBO_WORKSPACE_ID` | ID of the current workspace — scopes all queries. Optional: when unset, the server runs in "global" mode (see [Global tools](#global-tools-workspace-less-mode) below) and only exposes the workspace-management tools; workspace-scoped tools are omitted from the tool list entirely. |
 | `KOBO_DB_PATH` | Absolute path to Kōbō's SQLite DB. **Required**. |
 | `KOBO_SETTINGS_PATH` | Absolute path to Kōbō's `settings.json`. Optional — `get_settings` returns an error shape if absent. |
 | `KOBO_BACKEND_URL` | Base URL of the running Kōbō HTTP backend. Default: `http://localhost:3000`. Used by tools that need runtime state (dev server, git info, workspace transitions). |
@@ -167,6 +167,51 @@ List all images uploaded to the current workspace via Kōbō's chat paste/upload
 
 **Input:** none
 **Output:** `Array<{ uid, originalName, relativePath, createdAt }>`
+
+---
+
+### Global tools (workspace-less mode)
+
+These 4 tools are always registered, regardless of whether `KOBO_WORKSPACE_ID` is set — they let a Claude Code session that Kōbō did NOT spawn (e.g. a standalone terminal session) discover and manage workspaces instead of being bound to one.
+
+#### `list_workspaces`
+List Kōbō workspaces with id, title, status, and creation date. Reads the DB directly — works even when the Kōbō backend server isn't running.
+
+**Input:**
+- `include_archived` (boolean, optional) — default `false`
+
+**Output:** `Array<{ id, title, status, createdAt }>`
+
+---
+
+#### `create_workspace`
+Create a new workspace (git worktree + agent session), like the "Créer" button on the Create page. Requires the Kōbō backend server to be running and reachable at `KOBO_BACKEND_URL` — this API has no automatic branch-name derivation from the workspace name, unlike the UI.
+
+**Input:**
+- `name`, `project_path`, `source_branch`, `working_branch` (string, required)
+- `model`, `reasoning_effort`, `engine`, `description` (string, optional)
+- `tasks`, `acceptance_criteria` (string[], optional)
+- `agent_permission_mode` (`plan | bypass | strict | interactive`, optional)
+- `auto_loop` (boolean, optional), `auto_loop_session_mode` (`per_task | continuous`, optional)
+- `skip_setup_script` (boolean, optional)
+
+**Output:** created `Workspace`
+
+---
+
+#### `archive_workspace`
+Archive a workspace by id, like the "Archiver" action in the workspace context menu. Requires the backend to be running.
+
+**Input:**
+- `workspace_id` (string, required) — from `list_workspaces`
+
+---
+
+#### `stop_workspace`
+Force-stop the currently running agent session on a workspace, like the red "Arrêter" button in the chat header. Requires the backend to be running. Safe to call when nothing is running.
+
+**Input:**
+- `workspace_id` (string, required) — from `list_workspaces`
 
 ---
 

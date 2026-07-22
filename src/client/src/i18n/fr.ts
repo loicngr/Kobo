@@ -1312,6 +1312,12 @@ export default {
     "Grooming en cours — l'agent crée / révise les tâches. La boucle démarrera quand il appellera mark_auto_loop_ready.",
   'autoLoop.running': 'Auto-loop en cours',
   'autoLoop.startInMode': 'Démarrer en mode auto-loop',
+  'autoLoop.sessionMode.perTask': 'Nouvelle session par tâche',
+  'autoLoop.sessionMode.perTaskTooltip':
+    'Chaque tâche démarre une session Claude Code neuve, sans mémoire des tâches précédentes',
+  'autoLoop.sessionMode.continuous': 'Session continue',
+  'autoLoop.sessionMode.continuousTooltip':
+    "Toutes les tâches s'enchaînent dans la même session — l'agent garde tout le contexte, mais la session s'allonge au fil du temps",
   'koboCommand.prepAutoloopDesc': 'Préparer les tâches pour le mode auto-loop (atomicité)',
   'staleSessionBanner.title': 'Auto-loop en cours',
   'staleSessionBanner.message':

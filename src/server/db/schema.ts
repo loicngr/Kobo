@@ -26,6 +26,7 @@ export function initSchema(db: Database.Database): void {
       engine TEXT NOT NULL DEFAULT 'claude-code',
       auto_loop INTEGER NOT NULL DEFAULT 0,
       auto_loop_ready INTEGER NOT NULL DEFAULT 0,
+      auto_loop_session_mode TEXT NOT NULL DEFAULT 'per_task',
       no_progress_streak INTEGER NOT NULL DEFAULT 0,
       permission_profile TEXT NOT NULL DEFAULT 'bypass',
       agent_permission_mode TEXT NOT NULL DEFAULT 'bypass',

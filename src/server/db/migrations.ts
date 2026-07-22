@@ -375,6 +375,21 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 28,
+    name: 'add-auto-loop-session-mode',
+    migrate: (db) => {
+      // 'per_task' = current behavior (fresh session every iteration).
+      // 'continuous' = resume the same session across iterations. Set once
+      // at workspace-creation time; immutable afterwards.
+      const table = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='workspaces'").get()
+      if (!table) return
+      const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
+      if (!cols.some((c) => c.name === 'auto_loop_session_mode')) {
+        db.prepare("ALTER TABLE workspaces ADD COLUMN auto_loop_session_mode TEXT NOT NULL DEFAULT 'per_task'").run()
+      }
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

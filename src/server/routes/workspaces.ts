@@ -113,6 +113,7 @@ app.post('/', migrationGuard, async (c) => {
       agentPermissionMode?: 'plan' | 'bypass' | 'strict' | 'interactive'
       engine?: string
       autoLoop?: boolean
+      autoLoopSessionMode?: 'per_task' | 'continuous'
       worktreePath?: string
     }>()
 
@@ -896,11 +897,11 @@ Once the brainstorming + planning steps above are complete and you have a saved 
         notionContent != null &&
         notionContent.todos.length > 0 &&
         notionContent.gherkinFeatures.length > 0
+      const sessionMode = body.autoLoopSessionMode === 'continuous' ? 'continuous' : 'per_task'
       const db = getDb()
-      db.prepare('UPDATE workspaces SET auto_loop = 1, auto_loop_ready = ? WHERE id = ?').run(
-        notionProducedTasks ? 1 : 0,
-        workspace.id,
-      )
+      db.prepare(
+        'UPDATE workspaces SET auto_loop = 1, auto_loop_ready = ?, auto_loop_session_mode = ? WHERE id = ?',
+      ).run(notionProducedTasks ? 1 : 0, sessionMode, workspace.id)
       // Emit events so the frontend refreshes autoLoopStates without F5.
       wsService.emitEphemeral(workspace.id, 'autoloop:enabled', {})
       if (notionProducedTasks) {

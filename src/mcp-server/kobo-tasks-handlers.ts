@@ -59,6 +59,43 @@ export function listTasksHandler(db: Database.Database, workspaceId: string): Ta
   return rows.map(rowToDto)
 }
 
+/** Public-facing representation of a workspace exposed via the global list_workspaces MCP tool. */
+export interface WorkspaceListItemDto {
+  id: string
+  title: string
+  status: string
+  createdAt: string
+}
+
+interface WorkspaceListRow {
+  id: string
+  name: string
+  status: string
+  created_at: string
+}
+
+/**
+ * List workspaces for the global `list_workspaces` MCP tool. Reads SQLite
+ * directly (no backend HTTP dependency) so it works even when the Kōbō
+ * server isn't running — the same DB file the backend uses.
+ */
+export function listWorkspacesHandler(
+  db: Database.Database,
+  opts: { includeArchived?: boolean },
+): WorkspaceListItemDto[] {
+  // updated_at can collide at second resolution (e.g. bulk-seeded test data); rowid DESC breaks ties, most-recently-inserted first.
+  const sql = opts.includeArchived
+    ? 'SELECT id, name, status, created_at FROM workspaces ORDER BY updated_at DESC, rowid DESC'
+    : 'SELECT id, name, status, created_at FROM workspaces WHERE archived_at IS NULL ORDER BY updated_at DESC, rowid DESC'
+  const rows = db.prepare(sql).all() as WorkspaceListRow[]
+  return rows.map((row) => ({
+    id: row.id,
+    title: row.name,
+    status: row.status,
+    createdAt: row.created_at,
+  }))
+}
+
 /**
  * Flip the workspace's `auto_loop_ready` flag. Called at the end of a
  * `/kobo-prep-autoloop` grooming session to unlock the auto-loop toggle.

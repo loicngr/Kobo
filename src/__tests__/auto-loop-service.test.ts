@@ -755,6 +755,45 @@ describe('auto-loop-service', () => {
     })
   })
 
+  describe('spawnNextIteration — auto_loop_session_mode', () => {
+    beforeEach(async () => {
+      const orch = await import('../server/services/agent/orchestrator.js')
+      ;(orch.startAgent as ReturnType<typeof vi.fn>).mockImplementation(() => ({
+        agentSessionId: 'mock-agent-session-id',
+      }))
+    })
+
+    it('continuous mode spawns each iteration with resume=true', async () => {
+      const svc = await import('../server/services/auto-loop-service.js')
+      const orch = await import('../server/services/agent/orchestrator.js')
+      const { createTask } = await import('../server/services/workspace-service.js')
+      createTask(wsId, { title: 't1', isAcceptanceCriterion: false, sortOrder: 0 })
+
+      svc._test_setAutoLoopReady(wsId, true)
+      svc._test_setAutoLoopSessionMode(wsId, 'continuous')
+      svc.enable(wsId)
+
+      const call = (orch.startAgent as ReturnType<typeof vi.fn>).mock.calls[0]
+      expect(call[0]).toBe(wsId)
+      expect(call[4]).toBe(true) // resume=true
+    })
+
+    it('continuous mode prompt includes the session-continue marker', async () => {
+      const svc = await import('../server/services/auto-loop-service.js')
+      const orch = await import('../server/services/agent/orchestrator.js')
+      const { createTask } = await import('../server/services/workspace-service.js')
+      createTask(wsId, { title: 't1', isAcceptanceCriterion: false, sortOrder: 0 })
+
+      svc._test_setAutoLoopReady(wsId, true)
+      svc._test_setAutoLoopSessionMode(wsId, 'continuous')
+      svc.enable(wsId)
+
+      const call = (orch.startAgent as ReturnType<typeof vi.fn>).mock.calls[0]
+      const prompt = call[2] as string
+      expect(prompt).toContain('session continue')
+    })
+  })
+
   describe('spawnNextIteration — project slug in worktree path', () => {
     beforeEach(async () => {
       const orch = await import('../server/services/agent/orchestrator.js')

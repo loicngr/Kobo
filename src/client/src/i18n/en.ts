@@ -1295,6 +1295,11 @@ export default {
     'Grooming in progress — the agent is creating / reviewing tasks. The loop will start running once it calls mark_auto_loop_ready.',
   'autoLoop.running': 'Auto-loop running',
   'autoLoop.startInMode': 'Start in auto-loop mode',
+  'autoLoop.sessionMode.perTask': 'New session per task',
+  'autoLoop.sessionMode.perTaskTooltip': 'Each task starts a fresh Claude Code session with no memory of prior tasks',
+  'autoLoop.sessionMode.continuous': 'Continuous session',
+  'autoLoop.sessionMode.continuousTooltip':
+    'All tasks run in the same session — the agent keeps full context, but the session grows longer over time',
   'koboCommand.prepAutoloopDesc': 'Prepare tasks for auto-loop mode (groom for atomicity)',
   'staleSessionBanner.title': 'Auto-loop running',
   'staleSessionBanner.message': "You're viewing an older session — the agent is currently working in the latest one.",

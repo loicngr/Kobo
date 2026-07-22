@@ -42,6 +42,19 @@ describe('create-page-prefs', () => {
       expect(loadCreatePagePrefs()).toEqual({ projectPath: '/p', autoLoop: true })
     })
 
+    it('loads a valid autoLoopSessionMode', () => {
+      localStorage.setItem(
+        'kobo:create-page-prefs',
+        JSON.stringify({ autoLoop: true, autoLoopSessionMode: 'continuous' }),
+      )
+      expect(loadCreatePagePrefs()).toEqual({ autoLoop: true, autoLoopSessionMode: 'continuous' })
+    })
+
+    it('drops an invalid autoLoopSessionMode value', () => {
+      localStorage.setItem('kobo:create-page-prefs', JSON.stringify({ autoLoop: true, autoLoopSessionMode: 'bogus' }))
+      expect(loadCreatePagePrefs()).toEqual({ autoLoop: true })
+    })
+
     it('returns {} when stored value is an array', () => {
       localStorage.setItem('kobo:create-page-prefs', JSON.stringify([1, 2, 3]))
       expect(loadCreatePagePrefs()).toEqual({})
@@ -66,6 +79,11 @@ describe('create-page-prefs', () => {
     it('load returns just the field that was saved (partial)', () => {
       saveCreatePagePrefs({ autoLoop: true })
       expect(loadCreatePagePrefs()).toEqual({ autoLoop: true })
+    })
+
+    it('save then load round-trips autoLoopSessionMode', () => {
+      saveCreatePagePrefs({ autoLoop: true, autoLoopSessionMode: 'continuous' })
+      expect(loadCreatePagePrefs()).toEqual({ autoLoop: true, autoLoopSessionMode: 'continuous' })
     })
   })
 })

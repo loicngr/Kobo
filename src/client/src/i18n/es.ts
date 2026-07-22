@@ -1313,6 +1313,12 @@ export default {
     'Preparación en curso — el agente está creando / revisando tareas. El bucle arrancará cuando llame a mark_auto_loop_ready.',
   'autoLoop.running': 'Auto-loop en ejecución',
   'autoLoop.startInMode': 'Iniciar en modo auto-loop',
+  'autoLoop.sessionMode.perTask': 'Nueva sesión por tarea',
+  'autoLoop.sessionMode.perTaskTooltip':
+    'Cada tarea inicia una sesión nueva de Claude Code sin memoria de tareas anteriores',
+  'autoLoop.sessionMode.continuous': 'Sesión continua',
+  'autoLoop.sessionMode.continuousTooltip':
+    'Todas las tareas se encadenan en la misma sesión — el agente conserva todo el contexto, pero la sesión se alarga con el tiempo',
   'koboCommand.prepAutoloopDesc': 'Preparar tareas para modo auto-loop (atomicidad)',
   'staleSessionBanner.title': 'Auto-loop en curso',
   'staleSessionBanner.message': 'Estás viendo una sesión anterior — el agente está trabajando en la más reciente.',

@@ -3,6 +3,7 @@ const STORAGE_KEY = 'kobo:create-page-prefs'
 export interface CreatePagePrefs {
   projectPath?: string
   autoLoop?: boolean
+  autoLoopSessionMode?: 'per_task' | 'continuous'
 }
 
 function readRaw(): unknown {
@@ -27,6 +28,9 @@ export function loadCreatePagePrefs(): CreatePagePrefs {
   }
   if (typeof raw.autoLoop === 'boolean') {
     out.autoLoop = raw.autoLoop
+  }
+  if (raw.autoLoopSessionMode === 'per_task' || raw.autoLoopSessionMode === 'continuous') {
+    out.autoLoopSessionMode = raw.autoLoopSessionMode
   }
   return out
 }

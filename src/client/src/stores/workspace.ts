@@ -95,6 +95,7 @@ export interface CreateWorkspaceInput {
   tasks?: string[]
   acceptanceCriteria?: string[]
   autoLoop?: boolean
+  autoLoopSessionMode?: 'per_task' | 'continuous'
 }
 
 export class WorkspaceActionError extends Error {
