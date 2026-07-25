@@ -160,13 +160,30 @@ app.post('/', migrationGuard, async (c) => {
       }
     }
 
-    // Fetch the source branch from origin first — if this fails, block creation
-    // immediately (no DB records created, user stays on the create page).
+    // Fetch the source branch from origin first. On failure this is non-fatal:
+    // fall back to the local source branch if it exists (offline / no remote),
+    // and only hard-block (422) when neither origin nor a local branch is usable.
+    // The reuse path (body.worktreePath) needs no base ref, so a failed fetch is
+    // simply logged there.
+    const isReuseRequest = !!body.worktreePath
+    let baseRef = `origin/${body.sourceBranch}`
+    let usedLocalFallback = false
     try {
       gitOps.fetchSourceBranch(body.projectPath, body.sourceBranch)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      return c.json({ error: message }, 422)
+      if (isReuseRequest) {
+        console.warn(`[workspaces] fetch of '${body.sourceBranch}' from origin failed; reusing existing worktree, ignoring: ${message}`)
+      } else if (gitOps.localBranchExists(body.projectPath, body.sourceBranch)) {
+        baseRef = body.sourceBranch
+        usedLocalFallback = true
+        console.warn(`[workspaces] fetch of '${body.sourceBranch}' from origin failed; falling back to local branch: ${message}`)
+      } else {
+        return c.json(
+          { error: `${message} — and no local branch '${body.sourceBranch}' exists to fall back on` },
+          422,
+        )
+      }
     }
 
     // Reuse-existing-worktree path. When the caller passes `worktreePath`,
@@ -442,13 +459,14 @@ app.post('/', migrationGuard, async (c) => {
       worktreePath = body.worktreePath as string
     } else {
       try {
-        worktreePath = worktreeService.createWorktree(
+        const created = worktreeService.createWorktree(
           body.projectPath,
           workingBranch,
-          body.sourceBranch,
+          baseRef,
           globalSettings.worktreesPath,
           projectSlug,
         )
+        worktreePath = created.worktreePath
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
         // Roll back the half-created workspace: a failed worktree creation must NOT
@@ -931,6 +949,9 @@ Once the brainstorming + planning steps above are complete and you have a saved 
       // "Branch already existed — created <new-branch> instead". The actual
       // resolved branch is on the returned workspace already.
       c.header('X-Kobo-Branch-Adjusted', '1')
+    }
+    if (usedLocalFallback) {
+      c.header('X-Kobo-Source-Fallback', 'local')
     }
     return c.json(workspaceWithTasks, 201)
   } catch (err) {
