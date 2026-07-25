@@ -1,0 +1,89 @@
+# Example deployment: Traefik terminates TLS (Let's Encrypt) and proxies to
+# Kōbō, which is never reachable except through Traefik (no published port).
+#
+# Before using this:
+#   1. Replace `image: kobo:local` with a real registry tag once one is
+#      published, or `docker build -t kobo:local .` from this repo first.
+#   2. Replace `kobo.example.com` with your real domain.
+#   3. Replace `you@example.com` with a real email (Let's Encrypt account).
+#   4. Populate `.env` (see the `environment:` keys below) with your
+#      GH_TOKEN / GITLAB_TOKEN.
+#   5. Point the bind mounts at real paths on your host — see comments below.
+#      ~/.claude.json in particular must already EXIST as a file (run
+#      `claude /login` on that machine first) — Docker silently creates an
+#      empty directory instead of erroring if you bind-mount a path that
+#      doesn't exist yet, which breaks Claude Code auth in a confusing way.
+#   6. Network access + "behind a reverse proxy" are pre-enabled via the
+#      KOBO_NETWORK_ACCESS_* env vars below — no manual bootstrap step
+#      needed. Find the auto-generated token with:
+#        docker compose -f docker-compose.example.yml logs kobo | grep Token
+
+services:
+  traefik:
+    image: traefik:v3
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.le.acme.tlschallenge=true
+      - --certificatesresolvers.le.acme.email=you@example.com
+      - --certificatesresolvers.le.acme.storage=/letsencrypt/acme.json
+    ports:
+      - "443:443"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - letsencrypt:/letsencrypt
+
+  kobo:
+    image: kobo:local
+    restart: unless-stopped
+    environment:
+      - KOBO_HOME=/root/.config/kobo
+      - GH_TOKEN=${GH_TOKEN}
+      - GITLAB_TOKEN=${GITLAB_TOKEN}
+      - KOBO_NETWORK_ACCESS_ENABLED=true
+      - KOBO_NETWORK_ACCESS_BEHIND_PROXY=true
+    volumes:
+      # Named volume: Kōbō's own state (SQLite DB, settings.json, etc).
+      - kobo-data:/root/.config/kobo
+      # Your cloned repos + their worktrees, all on one filesystem so
+      # worktrees created next to a project land on the same volume.
+      - ${KOBO_PROJECTS_DIR:-./kobo-projects}:/projects
+      # Git SSH auth — read-only, Kōbō/the agents never need to write here.
+      - ${HOME}/.ssh:/root/.ssh:ro
+      # Commit author identity — without this, agent-authored commits fail
+      # with "please tell me who you are".
+      - ${HOME}/.gitconfig:/root/.gitconfig:ro
+      # Claude Code auth + MCP server registrations.
+      - ${HOME}/.claude.json:/root/.claude.json
+      # Claude Code's full state directory (skills/plugins cache, session
+      # transcripts, memory) — read-write, Claude Code writes into this tree
+      # during normal operation.
+      - ${HOME}/.claude:/root/.claude
+      # Codex's full state directory (auth.json, config.toml, etc) —
+      # read-write for the same reason.
+      - ${HOME}/.codex:/root/.codex
+      # DANGER: grants this container root-equivalent control over the HOST
+      # — anyone who can run a command inside `kobo` can spawn a privileged
+      # container that mounts the host filesystem. Accepted knowingly to
+      # support the dev-server panel (start/stop/logs for your projects'
+      # docker-compose stacks). Remove this line if you don't need that
+      # panel — see CONFIGURATION.md for the tradeoff.
+      - /var/run/docker.sock:/var/run/docker.sock
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.kobo.rule=Host(`kobo.example.com`)
+      - traefik.http.routers.kobo.entrypoints=websecure
+      - traefik.http.routers.kobo.tls.certresolver=le
+      - traefik.http.services.kobo.loadbalancer.server.port=3000
+      # WebSocket traffic (Kōbō's live updates) rides the same HTTP route —
+      # Traefik proxies WS upgrades automatically, no extra label needed.
+    ports:
+      # SSH is the one exception to "no published ports" — Traefik routes
+      # HTTP/WS, not raw TCP, and SSH has its own independent key-based auth.
+      - "2222:22"
+
+volumes:
+  letsencrypt:
+  kobo-data:
