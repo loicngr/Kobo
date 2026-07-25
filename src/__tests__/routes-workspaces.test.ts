@@ -522,7 +522,10 @@ describe('POST /api/workspaces', () => {
       worktreesPrefixByProject: false,
     })
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({ worktreePath: '/home/test/kobo/worktress/feature/test', base: 'origin' })
+    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+      worktreePath: '/home/test/kobo/worktress/feature/test',
+      base: 'origin',
+    })
     vi.mocked(workspaceService.listTasks).mockReturnValue([])
     vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
 
@@ -4746,7 +4749,10 @@ describe('POST /api/workspaces — worktree path collision', () => {
     } as never)
     vi.mocked(fs.existsSync).mockReturnValue(false)
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({ worktreePath: '/tmp/project/.worktrees/sekur/feature/test', base: 'origin' })
+    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+      worktreePath: '/tmp/project/.worktrees/sekur/feature/test',
+      base: 'origin',
+    })
     vi.mocked(workspaceService.listTasks).mockReturnValue([])
     vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
 

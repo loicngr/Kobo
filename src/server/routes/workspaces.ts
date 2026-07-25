@@ -173,16 +173,17 @@ app.post('/', migrationGuard, async (c) => {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       if (isReuseRequest) {
-        console.warn(`[workspaces] fetch of '${body.sourceBranch}' from origin failed; reusing existing worktree, ignoring: ${message}`)
+        console.warn(
+          `[workspaces] fetch of '${body.sourceBranch}' from origin failed; reusing existing worktree, ignoring: ${message}`,
+        )
       } else if (gitOps.localBranchExists(body.projectPath, body.sourceBranch)) {
         baseRef = body.sourceBranch
         usedLocalFallback = true
-        console.warn(`[workspaces] fetch of '${body.sourceBranch}' from origin failed; falling back to local branch: ${message}`)
-      } else {
-        return c.json(
-          { error: `${message} — and no local branch '${body.sourceBranch}' exists to fall back on` },
-          422,
+        console.warn(
+          `[workspaces] fetch of '${body.sourceBranch}' from origin failed; falling back to local branch: ${message}`,
         )
+      } else {
+        return c.json({ error: `${message} — and no local branch '${body.sourceBranch}' exists to fall back on` }, 422)
       }
     }
 
