@@ -62,8 +62,21 @@
                   round
                   size="xs"
                   color="grey-6"
-                  @click.stop="openRenameDialog(scope.opt.value, scope.opt.label)"
-                />
+                  @click.stop
+                >
+                  <q-menu auto-close>
+                    <q-list dense>
+                      <q-item clickable @click="openRenameDialog(scope.opt.value, scope.opt.label)">
+                        <q-item-section avatar><q-icon name="edit" size="16px" /></q-item-section>
+                        <q-item-section>{{ $t('workspacePage.renameSession') }}</q-item-section>
+                      </q-item>
+                      <q-item clickable @click="copyEngineSessionId(scope.opt.value)">
+                        <q-item-section avatar><q-icon name="content_copy" size="16px" /></q-item-section>
+                        <q-item-section>{{ $t('workspacePage.copySessionId') }}</q-item-section>
+                      </q-item>
+                    </q-list>
+                  </q-menu>
+                </q-btn>
               </q-item-section>
             </q-item>
           </template>
@@ -153,8 +166,8 @@
         <span class="text-body2 text-grey-8">
           {{ $t('workspacePage.selectWorkspace') }}
         </span>
+        <q-space />
       </template>
-      <q-space />
       <q-btn
         flat
         dense
@@ -319,6 +332,7 @@ import { PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
 import { useLayoutStore } from 'src/stores/layout'
 import type { AgentSession } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { copyToClipboard } from 'src/utils/clipboard'
 import { useTimeAgo } from 'src/utils/formatters'
 import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue'
@@ -605,6 +619,15 @@ const renameDialogOpen = ref(false)
 const renameTarget = ref<{ id: string } | null>(null)
 const renameValue = ref('')
 const creatingSession = ref(false)
+
+function copyEngineSessionId(sessionId: string) {
+  const session = store.sessions.find((s) => s.id === sessionId)
+  if (!session?.engineSessionId) {
+    $q.notify({ type: 'warning', message: t('workspacePage.noEngineSessionId'), position: 'top' })
+    return
+  }
+  void copyToClipboard($q, t, session.engineSessionId)
+}
 
 function openRenameDialog(sessionId: string, currentLabel: string) {
   const session = store.sessions.find((s) => s.id === sessionId)

@@ -30,6 +30,14 @@
     <q-tooltip>{{ prTooltip }}</q-tooltip>
   </q-icon>
   <q-icon
+    v-if="workspace.prWatchDisabledAt"
+    name="visibility_off"
+    size="14px"
+    color="grey-6"
+  >
+    <q-tooltip>{{ t('workspaceList.prWatchDisabledIndicator') }}</q-tooltip>
+  </q-icon>
+  <q-icon
     v-if="workspaceStore.autoLoopStates[workspace.id]?.auto_loop"
     name="autorenew"
     size="14px"

@@ -134,6 +134,8 @@ export default {
   'workspacePage.sessionNameLabel': 'Session name',
   'workspacePage.sessionEndedNotice': 'This session has ended. Create a new session to continue.',
   'workspacePage.renameFailed': 'Rename failed',
+  'workspacePage.copySessionId': 'Copy session ID',
+  'workspacePage.noEngineSessionId': "No engine session ID yet — the agent hasn't started this session",
   'workspacePage.createSessionFailed': 'Failed to create session',
   'workspacePage.startFailed': 'Start failed',
   'workspacePage.stopFailed': 'Stop failed',
@@ -1078,6 +1080,9 @@ export default {
   'contextMenu.openNotion': 'Open in Notion',
   'contextMenu.openSentry': 'Open in Sentry',
   'contextMenu.openPr': 'Open PR',
+  'contextMenu.ignorePrWatch': 'Ignore PR checks',
+  'contextMenu.resumePrWatch': 'Resume PR checks',
+  'contextMenu.prWatchToggleFailed': 'Failed to update PR checks setting',
 
   // Workspace
   'workspace.favorite': 'Mark as favorite',
@@ -1127,6 +1132,9 @@ export default {
   'settings.network.hint':
     'Control Kōbō from another device on your trusted LAN. Off = localhost only. On = reachable on your network, protected by a token. Restart Kōbō after toggling.',
   'settings.network.enable': 'Enable network access',
+  'settings.network.behindProxy': 'Behind a reverse proxy',
+  'settings.network.behindProxyHint':
+    'Kōbō can no longer tell your own machine apart from a proxied request — even localhost will need the token from now on. Enable this only if a reverse proxy (Traefik, nginx, Caddy…) sits in front of Kōbō.',
   'settings.network.restartRequired': 'Restart Kōbō to apply the new bind address.',
   'settings.network.token': 'Access token',
   'settings.network.copy': 'Copy',
@@ -1273,6 +1281,7 @@ export default {
 
   // Workspace list drawer indicators
   'workspaceList.prOpen': '#{n} — Pull request open',
+  'workspaceList.prWatchDisabledIndicator': 'PR checks ignored for this workspace',
   'workspaceList.prChangesRequested': '#{n} — Changes requested',
   'workspaceList.attentionCiFailed': 'CI failed',
   'workspaceList.attentionChangesRequested': 'Changes requested',

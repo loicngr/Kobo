@@ -23,6 +23,7 @@ export interface Workspace {
   hasUnread: boolean
   archivedAt: string | null
   favoritedAt: string | null
+  prWatchDisabledAt: string | null
   tags: string[]
   description: string | null
   agentDescription: string | null
@@ -450,6 +451,38 @@ export const useWorkspaceStore = defineStore('workspace', {
         this.workspaces = this.workspaces.map((w) => (w.id === id ? updated : w))
       } catch (err) {
         this.workspaces = this.workspaces.map((w) => (w.id === id ? { ...w, favoritedAt: previous } : w))
+        throw err
+      }
+    },
+
+    async togglePrWatch(id: string) {
+      const before = this.workspaces.find((w) => w.id === id)
+      if (!before) return
+      const disabling = before.prWatchDisabledAt === null
+      const optimistic = disabling ? new Date().toISOString() : null
+      this.workspaces = this.workspaces.map((w) => (w.id === id ? { ...w, prWatchDisabledAt: optimistic } : w))
+      try {
+        const res = await fetch(`/api/workspaces/${id}/pr-watch-disabled`, {
+          method: disabling ? 'POST' : 'DELETE',
+        })
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        if (disabling) {
+          const updated = (await res.json()) as Workspace
+          this.workspaces = this.workspaces.map((w) => (w.id === id ? updated : w))
+          delete this.prSnapshots[id]
+        } else {
+          const { workspace, prSnapshot } = (await res.json()) as {
+            workspace: Workspace
+            prSnapshot: PrSnapshot | null
+          }
+          this.workspaces = this.workspaces.map((w) => (w.id === id ? workspace : w))
+          if (prSnapshot) this.prSnapshots[id] = prSnapshot
+          else delete this.prSnapshots[id]
+        }
+      } catch (err) {
+        this.workspaces = this.workspaces.map((w) =>
+          w.id === id ? { ...w, prWatchDisabledAt: before.prWatchDisabledAt } : w,
+        )
         throw err
       }
     },

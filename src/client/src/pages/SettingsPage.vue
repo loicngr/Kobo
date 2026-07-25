@@ -1383,6 +1383,17 @@ where ffmpeg</pre>
                 {{ $t('settings.network.restartRequired') }}
               </q-banner>
 
+              <div v-if="network.enabled" class="q-mt-md">
+                <q-toggle
+                  :model-value="network.behindProxy"
+                  :label="$t('settings.network.behindProxy')"
+                  dark
+                  color="indigo-4"
+                  @update:model-value="onToggleBehindProxy"
+                />
+                <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.network.behindProxyHint') }}</div>
+              </div>
+
               <template v-if="network.enabled && network.token">
                 <div class="q-mt-md">
                   <div class="text-caption text-grey-7 q-mb-xs">{{ $t('settings.network.token') }}</div>
@@ -2300,9 +2311,10 @@ const globalAutoPurgeOnPrMerged = ref(false)
 interface NetworkState {
   enabled: boolean
   token: string
+  behindProxy: boolean
   urls: string[]
 }
-const network = ref<NetworkState>({ enabled: false, token: '', urls: [] })
+const network = ref<NetworkState>({ enabled: false, token: '', behindProxy: false, urls: [] })
 const networkRestartRequired = ref(false)
 const networkQrDataUrl = ref('')
 
@@ -2347,7 +2359,7 @@ async function refreshQr() {
   }
 }
 
-async function postNetwork(body: { enabled?: boolean; regenerate?: boolean }) {
+async function postNetwork(body: { enabled?: boolean; regenerate?: boolean; behindProxy?: boolean }) {
   try {
     const res = await fetch('/api/settings/network', {
       method: 'POST',
@@ -2356,7 +2368,7 @@ async function postNetwork(body: { enabled?: boolean; regenerate?: boolean }) {
     })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = (await res.json()) as NetworkState & { restartRequired?: boolean }
-    network.value = { enabled: data.enabled, token: data.token, urls: data.urls }
+    network.value = { enabled: data.enabled, token: data.token, behindProxy: data.behindProxy, urls: data.urls }
     if (data.restartRequired) networkRestartRequired.value = true
     await refreshQr()
   } catch {
@@ -2368,6 +2380,10 @@ async function postNetwork(body: { enabled?: boolean; regenerate?: boolean }) {
 
 function onToggleNetwork(value: boolean) {
   void postNetwork({ enabled: value })
+}
+
+function onToggleBehindProxy(value: boolean) {
+  void postNetwork({ behindProxy: value })
 }
 
 function onRegenerateToken() {

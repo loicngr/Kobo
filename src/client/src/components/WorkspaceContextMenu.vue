@@ -38,6 +38,14 @@
           {{ workspace.favoritedAt ? $t('workspace.unfavorite') : $t('workspace.favorite') }}
         </q-item-section>
       </q-item>
+      <q-item clickable v-close-popup @click="togglePrWatch">
+        <q-item-section side>
+          <q-icon :name="workspace.prWatchDisabledAt ? 'visibility' : 'visibility_off'" size="xs" />
+        </q-item-section>
+        <q-item-section>
+          {{ workspace.prWatchDisabledAt ? $t('contextMenu.resumePrWatch') : $t('contextMenu.ignorePrWatch') }}
+        </q-item-section>
+      </q-item>
       <q-item clickable v-close-popup @click="emit('manageTags', workspace)">
         <q-item-section side><q-icon name="label" size="xs" /></q-item-section>
         <q-item-section>{{ $t('tags.manage') }}</q-item-section>
@@ -253,5 +261,12 @@ function dismissPrAttention(kind: 'changes-requested' | 'ci-failed') {
 
 function restorePrAttention(kind: 'changes-requested' | 'ci-failed') {
   void workspaceStore.restorePrAttention(props.workspace.id, kind)
+}
+
+function togglePrWatch() {
+  workspaceStore.togglePrWatch(props.workspace.id).catch((err) => {
+    console.error('[WorkspaceContextMenu] togglePrWatch failed:', err)
+    $q.notify({ type: 'negative', message: t('contextMenu.prWatchToggleFailed'), position: 'top' })
+  })
 }
 </script>

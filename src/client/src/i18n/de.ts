@@ -134,6 +134,8 @@ export default {
   'workspacePage.sessionNameLabel': 'Sitzungsname',
   'workspacePage.sessionEndedNotice': 'Diese Sitzung ist beendet. Erstelle eine neue Sitzung um fortzufahren.',
   'workspacePage.renameFailed': 'Umbenennung fehlgeschlagen',
+  'workspacePage.copySessionId': 'Sitzungs-ID kopieren',
+  'workspacePage.noEngineSessionId': 'Noch keine Sitzungs-ID — der Agent hat diese Sitzung noch nicht gestartet',
   'workspacePage.createSessionFailed': 'Sitzung konnte nicht erstellt werden',
   'workspacePage.startFailed': 'Start fehlgeschlagen',
   'workspacePage.stopFailed': 'Stopp fehlgeschlagen',
@@ -1094,6 +1096,9 @@ export default {
   'contextMenu.openNotion': 'In Notion öffnen',
   'contextMenu.openSentry': 'In Sentry öffnen',
   'contextMenu.openPr': 'PR öffnen',
+  'contextMenu.ignorePrWatch': 'PR-Prüfungen ignorieren',
+  'contextMenu.resumePrWatch': 'PR-Prüfungen fortsetzen',
+  'contextMenu.prWatchToggleFailed': 'Aktualisierung der PR-Prüfungen fehlgeschlagen',
 
   // Workspace
   'workspace.favorite': 'Als Favorit markieren',
@@ -1144,6 +1149,9 @@ export default {
   'settings.network.hint':
     'Steuere Kōbō von einem anderen Gerät in deinem vertrauenswürdigen LAN. Aus = nur localhost. An = im Netzwerk erreichbar, per Token geschützt. Starte Kōbō nach dem Umschalten neu.',
   'settings.network.enable': 'Netzwerkzugriff aktivieren',
+  'settings.network.behindProxy': 'Hinter einem Reverse Proxy',
+  'settings.network.behindProxyHint':
+    'Kōbō kann deinen eigenen Rechner nicht mehr von einer weitergeleiteten Anfrage unterscheiden — selbst localhost benötigt ab jetzt das Token. Aktiviere dies nur, wenn ein Reverse Proxy (Traefik, nginx, Caddy…) vor Kōbō steht.',
   'settings.network.restartRequired': 'Starte Kōbō neu, um die neue Bind-Adresse anzuwenden.',
   'settings.network.token': 'Zugriffstoken',
   'settings.network.copy': 'Kopieren',
@@ -1292,6 +1300,7 @@ export default {
 
   // Workspace list drawer indicators
   'workspaceList.prOpen': '#{n} — Pull Request offen',
+  'workspaceList.prWatchDisabledIndicator': 'PR-Prüfungen für diesen Workspace ignoriert',
   'workspaceList.prChangesRequested': '#{n} — Änderungen angefordert',
   'workspaceList.attentionCiFailed': 'CI fehlgeschlagen',
   'workspaceList.attentionChangesRequested': 'Änderungen angefordert',

@@ -136,6 +136,8 @@ export default {
   'workspacePage.sessionNameLabel': 'Nome sessione',
   'workspacePage.sessionEndedNotice': 'Questa sessione è terminata. Crea una nuova sessione per continuare.',
   'workspacePage.renameFailed': 'Rinomina fallita',
+  'workspacePage.copySessionId': 'Copia ID sessione',
+  'workspacePage.noEngineSessionId': "Nessun ID sessione ancora — l'agente non ha ancora avviato questa sessione",
   'workspacePage.createSessionFailed': 'Creazione sessione fallita',
   'workspacePage.startFailed': 'Avvio fallito',
   'workspacePage.stopFailed': 'Arresto fallito',
@@ -1090,6 +1092,9 @@ export default {
   'contextMenu.openNotion': 'Apri in Notion',
   'contextMenu.openSentry': 'Apri in Sentry',
   'contextMenu.openPr': 'Apri PR',
+  'contextMenu.ignorePrWatch': 'Ignora i controlli PR',
+  'contextMenu.resumePrWatch': 'Riprendi i controlli PR',
+  'contextMenu.prWatchToggleFailed': 'Aggiornamento dei controlli PR non riuscito',
 
   // Workspace
   'workspace.favorite': 'Segna come preferito',
@@ -1140,6 +1145,9 @@ export default {
   'settings.network.hint':
     'Controlla Kōbō da un altro dispositivo della tua LAN affidabile. Off = solo localhost. On = raggiungibile sulla rete, protetto da un token. Riavvia Kōbō dopo il cambio.',
   'settings.network.enable': 'Abilita accesso di rete',
+  'settings.network.behindProxy': 'Dietro un reverse proxy',
+  'settings.network.behindProxyHint':
+    "Kōbō non può più distinguere la tua macchina da una richiesta inoltrata — anche localhost dovrà presentare il token d'ora in poi. Attivalo solo se un reverse proxy (Traefik, nginx, Caddy…) si trova davanti a Kōbō.",
   'settings.network.restartRequired': 'Riavvia Kōbō per applicare il nuovo indirizzo di bind.',
   'settings.network.token': 'Token di accesso',
   'settings.network.copy': 'Copia',
@@ -1288,6 +1296,7 @@ export default {
 
   // Workspace list drawer indicators
   'workspaceList.prOpen': '#{n} — Pull request aperta',
+  'workspaceList.prWatchDisabledIndicator': 'Controlli PR ignorati per questo workspace',
   'workspaceList.prChangesRequested': '#{n} — Modifiche richieste',
   'workspaceList.attentionCiFailed': 'CI fallita',
   'workspaceList.attentionChangesRequested': 'Modifiche richieste',
