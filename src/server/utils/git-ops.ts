@@ -637,6 +637,20 @@ export function branchExists(repoPath: string, name: string, remote = 'origin'):
 }
 
 /**
+ * Check whether a branch name exists as a LOCAL branch (refs/heads only,
+ * ignoring remote-tracking refs). Used to decide whether worktree creation can
+ * fall back to the local source branch when `origin` is unreachable.
+ */
+export function localBranchExists(repoPath: string, name: string): boolean {
+  try {
+    git(repoPath, ['rev-parse', '--verify', '--quiet', `refs/heads/${name}`])
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
  * Move a worktree directory on disk via `git worktree move`. Both the
  * filesystem layout and the `worktrees` metadata file are updated atomically.
  * Throws if the destination exists, the worktree is dirty, or the source

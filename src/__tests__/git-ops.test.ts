@@ -32,6 +32,7 @@ import {
   listBranches,
   listCommitsBehind,
   listRemoteBranches,
+  localBranchExists,
   mergeBranch,
   pullBranch,
   pushBranch,
@@ -82,6 +83,16 @@ describe('listBranches(repoPath)', () => {
     branches.forEach((b) => {
       expect(typeof b).toBe('string')
     })
+  })
+})
+
+describe('localBranchExists', () => {
+  it('returns true for an existing local branch', () => {
+    expect(localBranchExists(repoDir, 'main')).toBe(true)
+  })
+
+  it('returns false for a branch that does not exist locally', () => {
+    expect(localBranchExists(repoDir, 'does-not-exist')).toBe(false)
   })
 })
 
