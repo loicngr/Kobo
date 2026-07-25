@@ -333,6 +333,7 @@ const fakeWorkspace = {
   notionUrl: null,
   notionPageId: null,
   model: 'claude-opus-4-6',
+  brainstormModel: null,
   reasoningEffort: 'auto',
   agentPermissionMode: 'bypass' as const,
   devServerStatus: 'stopped',
@@ -851,6 +852,103 @@ describe('POST /api/workspaces', () => {
     expect(prompt).toMatch(/short one-line summary/i)
     expect(prompt).not.toMatch(/kobo__set_workspace_description\b(?!_)/)
     expect(prompt).toMatch(/user[- ]controlled `?description`?[\s\S]*not touch/i)
+  })
+
+  it('uses brainstormModel for the initial session when autoLoop is true', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      model: 'claude-sonnet-4-6',
+      brainstormModel: 'claude-opus-4-8',
+      autoLoop: true,
+    })
+    vi.mocked(worktreeService.createWorktree).mockReturnValue('/tmp/worktree')
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const startSpy = vi.mocked(agentManager.startAgent)
+    startSpy.mockClear()
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/brainstorm-model',
+        model: 'claude-sonnet-4-6',
+        brainstormModel: 'claude-opus-4-8',
+        autoLoop: true,
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(startSpy).toHaveBeenCalledTimes(1)
+    const modelArg = startSpy.mock.calls[0][3]
+    expect(modelArg).toBe('claude-opus-4-8')
+    expect(workspaceService.createWorkspace).toHaveBeenCalledWith(
+      expect.objectContaining({ brainstormModel: 'claude-opus-4-8' }),
+    )
+  })
+
+  it('falls back to model for the initial session when brainstormModel is not set', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      model: 'claude-sonnet-4-6',
+      brainstormModel: null,
+      autoLoop: true,
+    })
+    vi.mocked(worktreeService.createWorktree).mockReturnValue('/tmp/worktree')
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const startSpy = vi.mocked(agentManager.startAgent)
+    startSpy.mockClear()
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/no-brainstorm-model',
+        model: 'claude-sonnet-4-6',
+        autoLoop: true,
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    const modelArg = startSpy.mock.calls[0][3]
+    expect(modelArg).toBe('claude-sonnet-4-6')
+  })
+
+  it('ignores brainstormModel for the initial session when autoLoop is false', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      model: 'claude-sonnet-4-6',
+      brainstormModel: 'claude-opus-4-8',
+      autoLoop: false,
+    })
+    vi.mocked(worktreeService.createWorktree).mockReturnValue('/tmp/worktree')
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const startSpy = vi.mocked(agentManager.startAgent)
+    startSpy.mockClear()
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/no-auto-loop',
+        model: 'claude-sonnet-4-6',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    const modelArg = startSpy.mock.calls[0][3]
+    expect(modelArg).toBe('claude-sonnet-4-6')
   })
 
   it('accepts engine: codex on creation', async () => {

@@ -105,6 +105,7 @@ app.post('/', migrationGuard, async (c) => {
       notionPageId?: string
       sentryUrl?: string
       model?: string
+      brainstormModel?: string
       reasoningEffort?: string
       tasks?: string[]
       acceptanceCriteria?: string[]
@@ -333,6 +334,7 @@ app.post('/', migrationGuard, async (c) => {
       worktreePath: prospectiveWorktreePath,
       worktreeOwned: !useReusedWorktree,
       model: body.model,
+      brainstormModel: body.brainstormModel,
       reasoningEffort: body.reasoningEffort,
       agentPermissionMode: resolveCreateAgentPermissionMode(
         body.agentPermissionMode,
@@ -851,11 +853,19 @@ Once the brainstorming + planning steps above are complete and you have a saved 
         })
       } else {
         try {
+          // The brainstorming session (this very first startAgent call) uses
+          // brainstormModel when the workspace was created with auto-loop
+          // enabled and a brainstorming-specific model was picked. Every
+          // subsequent auto-loop iteration always uses `workspace.model`
+          // (see auto-loop-service.ts's spawnNextIteration) — brainstormModel
+          // is consumed exactly once, here.
+          const initialSessionModel =
+            workspace.autoLoop && workspace.brainstormModel ? workspace.brainstormModel : workspace.model
           const agent = agentManager.startAgent(
             workspace.id,
             worktreePath,
             brainstormPrompt,
-            workspace.model,
+            initialSessionModel,
             false,
             workspace.agentPermissionMode,
             undefined,

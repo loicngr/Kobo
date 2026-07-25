@@ -43,6 +43,12 @@ export const CLAUDE_MODELS: readonly AgentModel[] = [
     i18nDescriptionKey: 'model.mythos5Description',
   },
   {
+    id: 'claude-opus-5',
+    label: 'Opus 5',
+    i18nLabelKey: 'model.opus5',
+    i18nDescriptionKey: 'model.opus5Description',
+  },
+  {
     id: 'claude-opus-4-8',
     label: 'Opus 4.8',
     i18nLabelKey: 'model.opus48',

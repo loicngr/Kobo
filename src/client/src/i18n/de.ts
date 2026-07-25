@@ -39,6 +39,7 @@ export default {
   'model.mythos5Description': 'Fable 5 ohne Sicherheitsklassifikatoren — eingeschränkter Zugriff (Project Glasswing)',
   'model.opus': 'Opus 4.6',
   'model.sonnet': 'Sonnet 4.6',
+  'model.opus5': 'Opus 5',
   'model.opus48': 'Opus 4.8',
   'model.opus47Classic': 'Opus 4.7 (Classic)',
   'model.opus471m': 'Opus 4.7 (1M)',
@@ -49,6 +50,7 @@ export default {
   'model.sonnet1m': 'Sonnet 4.6 (1M)',
   'model.haiku': 'Haiku 4.5',
   'model.autoDescription': 'Claude wählt das optimale Modell',
+  'model.opus5Description': 'Für komplexes agentisches Coding und Unternehmenseinsätze, 1M Kontext',
   'model.opus48Description':
     'Leistungsfähigstes Opus — Long-Horizon-Coding, 1M-Kontext standardmäßig, hoher Effort standardmäßig',
   'model.opus47ClassicDescription': 'Neuestes Opus, am leistungsfähigsten',
@@ -1315,6 +1317,11 @@ export default {
     'Grooming läuft — der Agent erstellt / überprüft Aufgaben. Die Schleife startet, sobald mark_auto_loop_ready aufgerufen wird.',
   'autoLoop.running': 'Auto-Schleife läuft',
   'autoLoop.startInMode': 'Im Auto-Schleifen-Modus starten',
+  'autoLoop.brainstormModelPrefix': 'Brainstorm:',
+  'autoLoop.brainstormModelTooltip':
+    'Modell nur für die anfängliche Brainstorming-Sitzung — jede Aufgabe danach nutzt das oben gewählte Modell',
+  'autoLoop.executionModelPrefix': 'Loop:',
+  'autoLoop.executionModelTooltip': 'Modell für jede Auto-Loop-Aufgabe nach der anfänglichen Brainstorming-Sitzung',
   'autoLoop.sessionMode.perTask': 'Neue Sitzung pro Aufgabe',
   'autoLoop.sessionMode.perTaskTooltip':
     'Jede Aufgabe startet eine neue Claude-Code-Sitzung ohne Erinnerung an vorherige Aufgaben',

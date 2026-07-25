@@ -86,4 +86,29 @@ describe('create-page-prefs', () => {
       expect(loadCreatePagePrefs()).toEqual({ autoLoop: true, autoLoopSessionMode: 'continuous' })
     })
   })
+
+  describe('brainstormModel', () => {
+    it('loads a valid brainstormModel string', () => {
+      localStorage.setItem(
+        'kobo:create-page-prefs',
+        JSON.stringify({ autoLoop: true, brainstormModel: 'claude-opus-4-8' }),
+      )
+      expect(loadCreatePagePrefs()).toEqual({ autoLoop: true, brainstormModel: 'claude-opus-4-8' })
+    })
+
+    it('drops a non-string brainstormModel', () => {
+      localStorage.setItem('kobo:create-page-prefs', JSON.stringify({ autoLoop: true, brainstormModel: 42 }))
+      expect(loadCreatePagePrefs()).toEqual({ autoLoop: true })
+    })
+
+    it('drops an empty-string brainstormModel', () => {
+      localStorage.setItem('kobo:create-page-prefs', JSON.stringify({ autoLoop: true, brainstormModel: '' }))
+      expect(loadCreatePagePrefs()).toEqual({ autoLoop: true })
+    })
+
+    it('save then load round-trips brainstormModel', () => {
+      saveCreatePagePrefs({ autoLoop: true, brainstormModel: 'claude-opus-4-8' })
+      expect(loadCreatePagePrefs()).toEqual({ autoLoop: true, brainstormModel: 'claude-opus-4-8' })
+    })
+  })
 })

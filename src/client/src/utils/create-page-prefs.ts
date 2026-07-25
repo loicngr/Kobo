@@ -4,6 +4,7 @@ export interface CreatePagePrefs {
   projectPath?: string
   autoLoop?: boolean
   autoLoopSessionMode?: 'per_task' | 'continuous'
+  brainstormModel?: string
 }
 
 function readRaw(): unknown {
@@ -31,6 +32,9 @@ export function loadCreatePagePrefs(): CreatePagePrefs {
   }
   if (raw.autoLoopSessionMode === 'per_task' || raw.autoLoopSessionMode === 'continuous') {
     out.autoLoopSessionMode = raw.autoLoopSessionMode
+  }
+  if (typeof raw.brainstormModel === 'string' && raw.brainstormModel.length > 0) {
+    out.brainstormModel = raw.brainstormModel
   }
   return out
 }

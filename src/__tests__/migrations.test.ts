@@ -41,8 +41,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 28', () => {
-    expect(SCHEMA_VERSION).toBe(28)
+  it('exporte SCHEMA_VERSION = 29', () => {
+    expect(SCHEMA_VERSION).toBe(29)
   })
 
   it('migration v17 unifies legacy permission_mode + permission_profile into agent_permission_mode', () => {
@@ -1754,6 +1754,65 @@ describe('migration v28: add-auto-loop-session-mode', () => {
     runMigrations(db)
     const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
     expect(cols.filter((c) => c.name === 'auto_loop_session_mode')).toHaveLength(1)
+    db.close()
+  })
+})
+
+describe('migration v29: add-brainstorm-model', () => {
+  it('adds the brainstorm_model column (nullable, no default) after runMigrations', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{
+      name: string
+      notnull: number
+      dflt_value: unknown
+    }>
+    const col = cols.find((c) => c.name === 'brainstorm_model')
+    expect(col).toBeTruthy()
+    expect(col?.notnull).toBe(0)
+    expect(col?.dflt_value).toBeNull()
+    db.close()
+  })
+
+  it('fresh install via initSchema produces the same column as runMigrations', () => {
+    const freshDb = new Database(':memory:')
+    initSchema(freshDb)
+    const freshCol = (freshDb.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>).find(
+      (c) => c.name === 'brainstorm_model',
+    )
+
+    const upgradedDb = new Database(':memory:')
+    runMigrations(upgradedDb)
+    const upgradedCol = (upgradedDb.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>).find(
+      (c) => c.name === 'brainstorm_model',
+    )
+
+    expect(freshCol).toEqual(upgradedCol)
+    freshDb.close()
+    upgradedDb.close()
+  })
+
+  it('v28 → v29 upgrade leaves existing rows with a null brainstorm_model', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run('w1', 'legacy', '/tmp/p', 'main', 'feat', '2025-01-01', '2025-01-01')
+
+    const row = db.prepare('SELECT brainstorm_model FROM workspaces WHERE id = ?').get('w1') as {
+      brainstorm_model: string | null
+    }
+    expect(row.brainstorm_model).toBeNull()
+    db.close()
+  })
+
+  it('is idempotent — re-running runMigrations does not re-add the column', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    runMigrations(db)
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
+    expect(cols.filter((c) => c.name === 'brainstorm_model')).toHaveLength(1)
     db.close()
   })
 })

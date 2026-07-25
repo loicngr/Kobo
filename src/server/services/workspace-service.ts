@@ -48,6 +48,12 @@ export interface Workspace {
   notionPageId: string | null
   sentryUrl: string | null
   model: string
+  /**
+   * Model used ONLY for the initial brainstorming session of a workspace
+   * created with auto-loop enabled. Null = feature unused; every session
+   * (brainstorming and every auto-loop iteration) uses `model`.
+   */
+  brainstormModel: string | null
   reasoningEffort: string
   /** Unified SDK-aligned permission mode (plan | bypass | strict | interactive). */
   agentPermissionMode: AgentPermissionMode
@@ -118,6 +124,7 @@ export interface CreateWorkspaceInput {
   notionPageId?: string
   sentryUrl?: string
   model?: string
+  brainstormModel?: string
   reasoningEffort?: string
   agentPermissionMode?: AgentPermissionMode
   engine?: string
@@ -157,6 +164,7 @@ interface WorkspaceRow {
   notion_page_id: string | null
   sentry_url: string | null
   model: string
+  brainstorm_model: string | null
   reasoning_effort: string
   permission_mode: string
   agent_permission_mode: string | null
@@ -223,6 +231,7 @@ function mapWorkspace(row: WorkspaceRow): Workspace {
     notionPageId: row.notion_page_id,
     sentryUrl: row.sentry_url,
     model: row.model,
+    brainstormModel: row.brainstorm_model,
     reasoningEffort: row.reasoning_effort ?? 'auto',
     agentPermissionMode: coerceAgentPermissionMode(row.agent_permission_mode),
     devServerStatus: row.dev_server_status,
@@ -293,8 +302,8 @@ export function createWorkspace(data: CreateWorkspaceInput): Workspace {
     INSERT INTO workspaces (
       id, name, project_path, source_branch, working_branch, status,
       notion_url, notion_page_id, sentry_url, worktree_path, worktree_owned,
-      model, reasoning_effort, permission_mode, permission_profile, agent_permission_mode, engine, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      model, brainstorm_model, reasoning_effort, permission_mode, permission_profile, agent_permission_mode, engine, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     data.name,
@@ -307,6 +316,7 @@ export function createWorkspace(data: CreateWorkspaceInput): Workspace {
     computedWorktreePath,
     owned ? 1 : 0,
     data.model ?? 'claude-opus-4-8',
+    data.brainstormModel ?? null,
     data.reasoningEffort ?? 'auto',
     legacyMode,
     legacyProfile,

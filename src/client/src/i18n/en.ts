@@ -39,6 +39,7 @@ export default {
   'model.mythos5Description': 'Fable 5 without safety classifiers — limited access (Project Glasswing)',
   'model.opus': 'Opus 4.6',
   'model.sonnet': 'Sonnet 4.6',
+  'model.opus5': 'Opus 5',
   'model.opus48': 'Opus 4.8',
   'model.opus47Classic': 'Opus 4.7 (Classic)',
   'model.opus471m': 'Opus 4.7 (1M)',
@@ -49,6 +50,7 @@ export default {
   'model.sonnet1m': 'Sonnet 4.6 (1M)',
   'model.haiku': 'Haiku 4.5',
   'model.autoDescription': 'Claude picks the optimal model',
+  'model.opus5Description': 'For complex agentic coding and enterprise work, 1M context',
   'model.opus48Description':
     'Most capable Opus — long-horizon agentic coding, 1M context by default, high effort default',
   'model.opus47ClassicDescription': 'Latest Opus, most capable',
@@ -1295,6 +1297,11 @@ export default {
     'Grooming in progress — the agent is creating / reviewing tasks. The loop will start running once it calls mark_auto_loop_ready.',
   'autoLoop.running': 'Auto-loop running',
   'autoLoop.startInMode': 'Start in auto-loop mode',
+  'autoLoop.brainstormModelPrefix': 'Brainstorm:',
+  'autoLoop.brainstormModelTooltip':
+    'Model used only for the initial brainstorming session — every task after that uses the model picked above',
+  'autoLoop.executionModelPrefix': 'Loop:',
+  'autoLoop.executionModelTooltip': 'Model used for every auto-loop task after the initial brainstorming session',
   'autoLoop.sessionMode.perTask': 'New session per task',
   'autoLoop.sessionMode.perTaskTooltip': 'Each task starts a fresh Claude Code session with no memory of prior tasks',
   'autoLoop.sessionMode.continuous': 'Continuous session',

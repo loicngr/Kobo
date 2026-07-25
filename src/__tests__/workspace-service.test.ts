@@ -92,6 +92,31 @@ describe('createWorkspace()', () => {
     expect(ws.reasoningEffort).toBe('high')
   })
 
+  it('accepte et persiste brainstormModel', async () => {
+    const { createWorkspace } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'Brainstorm WS',
+      projectPath: '/tmp/b',
+      sourceBranch: 'main',
+      workingBranch: 'feat/brainstorm',
+      model: 'claude-sonnet-4-6',
+      brainstormModel: 'claude-opus-4-8',
+    })
+    expect(ws.model).toBe('claude-sonnet-4-6')
+    expect(ws.brainstormModel).toBe('claude-opus-4-8')
+  })
+
+  it('brainstormModel est null par défaut', async () => {
+    const { createWorkspace } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'No Brainstorm WS',
+      projectPath: '/tmp/nb',
+      sourceBranch: 'main',
+      workingBranch: 'feat/no-brainstorm',
+    })
+    expect(ws.brainstormModel).toBeNull()
+  })
+
   it('génère un ID unique pour chaque workspace', async () => {
     const { createWorkspace } = await import('../server/services/workspace-service.js')
     const ws1 = createWorkspace({ name: 'A', projectPath: '/a', sourceBranch: 'main', workingBranch: 'f1' })

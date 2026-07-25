@@ -381,6 +381,7 @@
             >
               <template #selected>
               <span class="bottom-select-label row items-center no-wrap">
+                <span v-if="autoLoop" class="text-grey-5 q-mr-xs">{{ $t('autoLoop.executionModelPrefix') }}</span>
                 {{ modelOptions.find(m => m.value === model)?.label ?? model }}
                 <q-icon name="expand_more" size="12px" color="grey-5" />
               </span>
@@ -393,6 +394,7 @@
                   </q-item-section>
                 </q-item>
               </template>
+              <q-tooltip v-if="autoLoop">{{ $t('autoLoop.executionModelTooltip') }}</q-tooltip>
             </q-select>
           </div>
 
@@ -475,7 +477,7 @@
                 :color="autoLoop ? 'amber-4' : 'grey-5'"
                 :label="$t('autoLoop.startInMode')"
                 class="skip-setup-btn"
-                @click="autoLoop = !autoLoop"
+                @click="toggleAutoLoop"
             >
               <q-tooltip>{{ $t('autoLoop.startInMode') }}</q-tooltip>
             </q-btn>
@@ -504,6 +506,42 @@
                 }}
               </q-tooltip>
             </q-btn-toggle>
+          </div>
+
+          <div v-if="autoLoop" class="col-12 col-md-auto">
+            <!-- Brainstorming-session model override: used once, for the
+                 very first session, before the auto-loop takes over with
+                 the main model select above. -->
+            <q-select
+                v-model="brainstormModel"
+                :options="modelOptions"
+                dense
+                borderless
+                class="bottom-select rounded-borders model-select"
+                hide-dropdown-icon
+                emit-value
+                map-options
+                option-value="value"
+                option-label="label"
+            >
+              <template #selected>
+              <span class="bottom-select-label row items-center no-wrap">
+                <q-icon name="tips_and_updates" size="12px" color="amber-6" class="q-mr-xs" />
+                <span class="text-grey-5 q-mr-xs">{{ $t('autoLoop.brainstormModelPrefix') }}</span>
+                {{ modelOptions.find(m => m.value === brainstormModel)?.label ?? brainstormModel }}
+                <q-icon name="expand_more" size="12px" color="grey-5" />
+              </span>
+              </template>
+              <template #option="{ opt, itemProps }">
+                <q-item v-bind="itemProps" class="model-option">
+                  <q-item-section>
+                    <q-item-label class="text-white">{{ opt.label }}</q-item-label>
+                    <q-item-label caption class="text-grey-5">{{ opt.description }}</q-item-label>
+                  </q-item-section>
+                </q-item>
+              </template>
+              <q-tooltip>{{ $t('autoLoop.brainstormModelTooltip') }}</q-tooltip>
+            </q-select>
           </div>
         </div>
 
@@ -790,6 +828,11 @@ const CREATE_VOICE_MAX_MS = 60_000
 const notionUrl = ref('')
 const useNotion = ref(false)
 const model = ref('claude-opus-4-8')
+// Model used only for the initial brainstorming session when auto-loop is
+// on. Mirrors `model` at the moment auto-loop is switched on (see
+// toggleAutoLoop below); untouched afterwards unless the user picks a
+// different value in its own select.
+const brainstormModel = ref('claude-opus-4-8')
 const reasoningEffort = ref('auto')
 const projectPath = ref('')
 const branch = ref<string | null>(null)
@@ -1085,6 +1128,9 @@ watch(selectedEngineId, () => {
       model.value = validIds.includes('auto') ? 'auto' : (validIds[0] ?? 'auto')
     }
   }
+  if (validIds.length > 0 && !validIds.includes(brainstormModel.value)) {
+    brainstormModel.value = validIds.includes('auto') ? 'auto' : (validIds[0] ?? 'auto')
+  }
   const supportedModes = PERMISSION_MODES_BY_ENGINE[selectedEngineId.value] ?? []
   if (supportedModes.length > 0 && !supportedModes.includes(agentPermissionMode.value)) {
     agentPermissionMode.value = deriveDefaultAgentPermissionMode(projectPath.value, selectedEngineId.value)
@@ -1195,6 +1241,18 @@ watch(
     }
   },
 )
+
+function toggleAutoLoop() {
+  autoLoop.value = !autoLoop.value
+  // Seed the brainstorm-model select with the current execution model so
+  // leaving it untouched is a no-op (same model everywhere, today's
+  // behavior). Only runs on a real user click — NOT during the onMounted
+  // prefs restore below, which sets `autoLoop.value` directly and restores
+  // `brainstormModel` from localStorage instead.
+  if (autoLoop.value) {
+    brainstormModel.value = model.value
+  }
+}
 const sentryUrl = ref('')
 const isValidSentryUrl = computed(() => /\/issues\/\d+/.test(sentryUrl.value.trim()))
 
@@ -1376,6 +1434,9 @@ onMounted(async () => {
   if (prefs.autoLoopSessionMode === 'continuous') {
     autoLoopSessionMode.value = 'continuous'
   }
+  if (prefs.autoLoop === true && prefs.brainstormModel) {
+    brainstormModel.value = prefs.brainstormModel
+  }
   if (prefs.projectPath && settingsStore.projectPaths.includes(prefs.projectPath)) {
     projectPath.value = prefs.projectPath
   }
@@ -1400,6 +1461,12 @@ onMounted(async () => {
       model.value = globalDefault
     } else if (validIds.length > 0 && !validIds.includes(model.value)) {
       model.value = validIds.includes('auto') ? 'auto' : (validIds[0] ?? 'auto')
+    }
+  }
+  {
+    const validIds = modelOptions.value.map((m) => m.value)
+    if (validIds.length > 0 && !validIds.includes(brainstormModel.value)) {
+      brainstormModel.value = validIds.includes('auto') ? 'auto' : (validIds[0] ?? 'auto')
     }
   }
   window.addEventListener('keydown', onCreateWindowKeyDown)
@@ -1548,7 +1615,9 @@ async function handleCreate() {
         : {}),
       ...(skipSetupScript.value && !useExistingWorktree.value ? { skipSetupScript: true } : {}),
       ...(description.value.trim() ? { description: description.value.trim() } : {}),
-      ...(autoLoop.value ? { autoLoop: true, autoLoopSessionMode: autoLoopSessionMode.value } : {}),
+      ...(autoLoop.value
+        ? { autoLoop: true, autoLoopSessionMode: autoLoopSessionMode.value, brainstormModel: brainstormModel.value }
+        : {}),
       // Auto-loop cannot run in 'plan' (blocks MCP + edits) — promote to bypass.
       agentPermissionMode:
         autoLoop.value && agentPermissionMode.value === 'plan' ? 'bypass' : agentPermissionMode.value,
@@ -1575,6 +1644,7 @@ async function handleCreate() {
       projectPath: projectPath.value.trim(),
       autoLoop: autoLoop.value,
       autoLoopSessionMode: autoLoopSessionMode.value,
+      ...(autoLoop.value ? { brainstormModel: brainstormModel.value } : {}),
     })
 
     // Subscribe to receive WebSocket events for this workspace

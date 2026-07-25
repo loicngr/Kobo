@@ -90,6 +90,7 @@ export interface CreateWorkspaceInput {
   engine?: string
   notionUrl?: string
   model?: string
+  brainstormModel?: string
   reasoningEffort?: string
   agentPermissionMode?: 'plan' | 'bypass' | 'strict' | 'interactive'
   tasks?: string[]
