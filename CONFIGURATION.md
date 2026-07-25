@@ -424,6 +424,51 @@ spoof a loopback address to bypass authentication.
 - **Single shared token.** All remote devices share the same token. Regenerating
   it disconnects every device at once; there is no per-device revocation.
 
+### Behind a reverse proxy
+
+The loopback bypass described above — any request from `127.0.0.1`/`::1` is always allowed,
+token or not — becomes unsafe the moment a reverse proxy (Traefik, nginx, Caddy…) sits in front
+of Kōbō. In a typical Docker Compose deployment, Traefik and Kōbō run as separate containers on a
+shared network; every request Kōbō sees originates from the proxy, and depending on the network
+path it can be indistinguishable from a genuine loopback request. Without this setting, anyone who
+can reach the proxy publicly gets unauthenticated access to Kōbō, silently.
+
+**Enable it**: Settings → Global → Network access → **Behind a reverse proxy** (only visible once
+Network access itself is enabled). No restart needed — unlike the main Network access toggle, this
+one only changes the per-request auth decision, not the listening address.
+
+**What changes**: the loopback bypass is disabled entirely. Every request — including ones from
+the host machine itself — must present the token. If you `curl localhost:3000` directly from
+inside the container or the host for debugging, you now need `-H "X-Kobo-Token: <token>"` too.
+
+An official `Dockerfile` and a full example stack (`docker-compose.example.yml`, Traefik + Kōbō,
+terminating TLS via Let's Encrypt, Kōbō never exposed on a published port — only reachable through
+Traefik)
+ship in this repository — see [`docker-compose.example.yml`](./docker-compose.example.yml) for the
+complete, commented configuration, including the volume mounts needed for git SSH auth, commit
+identity, and Claude Code / Codex credentials. Kōbō's `127.0.0.1`-only default bind would otherwise
+block Traefik (it reaches Kōbō over the Docker network, not true loopback), so
+`docker-compose.example.yml` pre-enables both via `KOBO_NETWORK_ACCESS_ENABLED` /
+`KOBO_NETWORK_ACCESS_BEHIND_PROXY` env vars at container boot instead of requiring a manual
+bootstrap step — see the compose file for the exact keys, and `docker compose logs kobo` for the
+auto-generated token.
+
+After bringing this stack up, both settings are already on (via the env vars above) — grab the
+token from `docker compose logs kobo` and bookmark `https://kobo.example.com/?token=<token>` (same
+token-in-URL mechanism already used for LAN devices — stored in `localStorage`, no re-entry after
+the first visit).
+
+**Docker socket (dev-server panel support).** The example compose file mounts the host's
+`/var/run/docker.sock` into the `kobo` container so the dev-server panel can start/stop/tail logs
+for your projects' own `docker compose` stacks. This grants the container root-equivalent control
+over the host — anyone who can run a command inside `kobo` can spawn a privileged container that
+mounts the host filesystem. Remove that volume line if you don't need the dev-server panel.
+
+**SSH access.** The image runs an SSH server for interactive shell access (`ssh -p 2222
+root@<host>`, key-based auth only via the same mounted `~/.ssh`, no password login). Rebuilding the
+image regenerates the SSH host keys, so expect a "host key changed" warning from your SSH client
+after a rebuild — this is expected, not a security incident, as long as you trust the rebuild.
+
 ## Agent runtimes
 
 Engines are selected per workspace at creation time. Both share the same UI surface (chat feed, task panel, permission modes, sub-agent panel, quota footer, auto-loop).

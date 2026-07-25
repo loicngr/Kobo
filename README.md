@@ -55,6 +55,16 @@ Open <http://localhost:3000> (or whichever port you picked). Data is persisted u
 
 Want to run from source or contribute? See [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
+### Docker
+
+An official `Dockerfile` and an example Traefik + Kōbō stack
+([`docker-compose.example.yml`](./docker-compose.example.yml)) ship in this repository — useful for
+running Kōbō on a VPS behind a reverse proxy, with git SSH auth, Claude Code / Codex credentials,
+optional Docker-socket passthrough for the dev-server panel, and SSH access into the container for
+interactive work. See [`CONFIGURATION.md`](./CONFIGURATION.md#behind-a-reverse-proxy) for the full
+setup, including the `KOBO_NETWORK_ACCESS_ENABLED` / `KOBO_NETWORK_ACCESS_BEHIND_PROXY` env vars
+that bootstrap network access at container boot with no manual step.
+
 ## Configuration
 
 The most common knobs:
