@@ -5,6 +5,7 @@ import {
   generateToken,
   isLoopbackAddress,
   resolveBindHost,
+  resolveNetworkAccessEnvOverrides,
   tokenMatches,
 } from '../server/services/network-access-service.js'
 
@@ -75,6 +76,42 @@ describe('evaluateNetworkAccess', () => {
       evaluateNetworkAccess({ address: '10.0.0.5', enabled: true, expectedToken, providedToken: 'secret' }),
     ).toEqual({ allow: true, status: 200 })
   })
+  it('trustLoopback=false: loopback still needs a valid token when enabled', () => {
+    expect(
+      evaluateNetworkAccess({
+        address: '127.0.0.1',
+        enabled: true,
+        expectedToken,
+        providedToken: undefined,
+        trustLoopback: false,
+      }),
+    ).toEqual({ allow: false, status: 401 })
+    expect(
+      evaluateNetworkAccess({
+        address: '127.0.0.1',
+        enabled: true,
+        expectedToken,
+        providedToken: expectedToken,
+        trustLoopback: false,
+      }),
+    ).toEqual({ allow: true, status: 200 })
+  })
+  it('trustLoopback=false: 403 for loopback when disabled', () => {
+    expect(
+      evaluateNetworkAccess({
+        address: '127.0.0.1',
+        enabled: false,
+        expectedToken,
+        providedToken: undefined,
+        trustLoopback: false,
+      }),
+    ).toEqual({ allow: false, status: 403 })
+  })
+  it('trustLoopback omitted defaults to true (unchanged behavior)', () => {
+    expect(
+      evaluateNetworkAccess({ address: '127.0.0.1', enabled: true, expectedToken, providedToken: undefined }),
+    ).toEqual({ allow: true, status: 200 })
+  })
 })
 
 describe('authorizeWsUpgrade', () => {
@@ -91,5 +128,64 @@ describe('authorizeWsUpgrade', () => {
     expect(authorizeWsUpgrade({ address: '10.0.0.5', rawUrl: '/ws', enabled: true, expectedToken: 'secret' })).toBe(
       false,
     )
+  })
+  it('trustLoopback=false: loopback WS upgrade needs the token', () => {
+    expect(
+      authorizeWsUpgrade({
+        address: '::1',
+        rawUrl: '/ws',
+        enabled: true,
+        expectedToken: 'secret',
+        trustLoopback: false,
+      }),
+    ).toBe(false)
+    expect(
+      authorizeWsUpgrade({
+        address: '::1',
+        rawUrl: '/ws?token=secret',
+        enabled: true,
+        expectedToken: 'secret',
+        trustLoopback: false,
+      }),
+    ).toBe(true)
+  })
+})
+
+describe('resolveNetworkAccessEnvOverrides', () => {
+  it('returns {} when both env vars are unset', () => {
+    expect(resolveNetworkAccessEnvOverrides({})).toEqual({})
+  })
+  it('KOBO_NETWORK_ACCESS_ENABLED=true → networkAccessEnabled: true', () => {
+    expect(resolveNetworkAccessEnvOverrides({ KOBO_NETWORK_ACCESS_ENABLED: 'true' })).toEqual({
+      networkAccessEnabled: true,
+    })
+  })
+  it('KOBO_NETWORK_ACCESS_ENABLED=1 → networkAccessEnabled: true', () => {
+    expect(resolveNetworkAccessEnvOverrides({ KOBO_NETWORK_ACCESS_ENABLED: '1' })).toEqual({
+      networkAccessEnabled: true,
+    })
+  })
+  it('KOBO_NETWORK_ACCESS_ENABLED=false → networkAccessEnabled: false (explicit off)', () => {
+    expect(resolveNetworkAccessEnvOverrides({ KOBO_NETWORK_ACCESS_ENABLED: 'false' })).toEqual({
+      networkAccessEnabled: false,
+    })
+  })
+  it('KOBO_NETWORK_ACCESS_ENABLED=garbage → networkAccessEnabled: false (any non-true/1 is off)', () => {
+    expect(resolveNetworkAccessEnvOverrides({ KOBO_NETWORK_ACCESS_ENABLED: 'garbage' })).toEqual({
+      networkAccessEnabled: false,
+    })
+  })
+  it('KOBO_NETWORK_ACCESS_BEHIND_PROXY=true → networkAccessBehindProxy: true', () => {
+    expect(resolveNetworkAccessEnvOverrides({ KOBO_NETWORK_ACCESS_BEHIND_PROXY: 'true' })).toEqual({
+      networkAccessBehindProxy: true,
+    })
+  })
+  it('both env vars set → both keys present', () => {
+    expect(
+      resolveNetworkAccessEnvOverrides({
+        KOBO_NETWORK_ACCESS_ENABLED: 'true',
+        KOBO_NETWORK_ACCESS_BEHIND_PROXY: 'true',
+      }),
+    ).toEqual({ networkAccessEnabled: true, networkAccessBehindProxy: true })
   })
 })

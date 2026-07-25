@@ -16,11 +16,12 @@ const app = new Hono()
 app.use('/api/*', networkAuthMiddleware)
 app.get('/api/ping', (c) => c.json({ ok: true }))
 
-function setup(address: string | undefined, enabled: boolean, token: string) {
+function setup(address: string | undefined, enabled: boolean, token: string, behindProxy = false) {
   vi.mocked(getConnInfo).mockReturnValue({ remote: { address } } as never)
   vi.mocked(getGlobalSettings).mockReturnValue({
     networkAccessEnabled: enabled,
     networkAccessToken: token,
+    networkAccessBehindProxy: behindProxy,
   } as never)
 }
 
@@ -49,6 +50,16 @@ describe('networkAuthMiddleware', () => {
   })
   it('passes with the correct token', async () => {
     setup('192.168.1.5', true, 'secret')
+    const res = await app.request('/api/ping', { headers: { 'X-Kobo-Token': 'secret' } })
+    expect(res.status).toBe(200)
+  })
+  it('401 when behindProxy is true, loopback address, no token', async () => {
+    setup('127.0.0.1', true, 'secret', true)
+    const res = await app.request('/api/ping')
+    expect(res.status).toBe(401)
+  })
+  it('200 when behindProxy is true, loopback address, correct token', async () => {
+    setup('127.0.0.1', true, 'secret', true)
     const res = await app.request('/api/ping', { headers: { 'X-Kobo-Token': 'secret' } })
     expect(res.status).toBe(200)
   })

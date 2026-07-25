@@ -297,12 +297,14 @@ describe('network routes', () => {
     vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
       networkAccessEnabled: true,
       networkAccessToken: 'tok',
+      networkAccessBehindProxy: false,
     } as never)
     const res = await app.request('/api/settings/network')
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({
       enabled: true,
       token: 'tok',
+      behindProxy: false,
       urls: ['http://192.168.1.5:3300'],
     })
   })
@@ -345,6 +347,30 @@ describe('network routes', () => {
     const body = await res.json()
     expect(body.restartRequired).toBe(false)
     expect(body.token).toBe('fresh-token')
+  })
+
+  it('POST /network sets behindProxy without requiring a restart', async () => {
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
+      networkAccessEnabled: true,
+      networkAccessToken: 'tok',
+      networkAccessBehindProxy: false,
+    } as never)
+    vi.mocked(settingsService.updateNetworkAccessSettings).mockImplementation(
+      (patch) =>
+        ({ networkAccessEnabled: true, networkAccessToken: 'tok', networkAccessBehindProxy: false, ...patch }) as never,
+    )
+    const res = await app.request('/api/settings/network', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ behindProxy: true }),
+    })
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.behindProxy).toBe(true)
+    expect(body.restartRequired).toBe(false)
+    expect(settingsService.updateNetworkAccessSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ networkAccessBehindProxy: true }),
+    )
   })
 
   it('GET /network/ping returns ok', async () => {

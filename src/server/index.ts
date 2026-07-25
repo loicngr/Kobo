@@ -41,10 +41,16 @@ import { runContentMigrationIfNeeded } from './services/content-migration-servic
 import * as cronService from './services/cron-service.js'
 import { createDailyDbBackupIfNeeded, createPreMigrationBackup } from './services/db-backup-service.js'
 import { startDevServer, stopDevServer } from './services/dev-server-service.js'
-import { authorizeWsUpgrade, getLanUrls, resolveBindHost } from './services/network-access-service.js'
+import {
+  authorizeWsUpgrade,
+  generateToken,
+  getLanUrls,
+  resolveBindHost,
+  resolveNetworkAccessEnvOverrides,
+} from './services/network-access-service.js'
 import { startPrWatcher, stopPrWatcher } from './services/pr-watcher-service.js'
 import * as quotaBackoffService from './services/quota-backoff-service.js'
-import { getGlobalSettings } from './services/settings-service.js'
+import { getGlobalSettings, updateNetworkAccessSettings } from './services/settings-service.js'
 import { reloadDefaultTemplates } from './services/templates-service.js'
 import { createTerminal, destroyAllTerminals, getTerminal } from './services/terminal-service.js'
 import { startUsagePoller, stopUsagePoller } from './services/usage/index.js'
@@ -192,6 +198,16 @@ if (clientDistPath) {
 }
 
 // Create HTTP server via @hono/node-server
+const networkAccessEnvOverrides = resolveNetworkAccessEnvOverrides(process.env)
+if (Object.keys(networkAccessEnvOverrides).length > 0) {
+  const patch: typeof networkAccessEnvOverrides & { networkAccessToken?: string } = {
+    ...networkAccessEnvOverrides,
+  }
+  if (networkAccessEnvOverrides.networkAccessEnabled && !getGlobalSettings().networkAccessToken) {
+    patch.networkAccessToken = generateToken()
+  }
+  updateNetworkAccessSettings(patch)
+}
 const bindHost = resolveBindHost(getGlobalSettings().networkAccessEnabled)
 const server = serve(
   {
@@ -204,6 +220,7 @@ const server = serve(
     if (getGlobalSettings().networkAccessEnabled) {
       console.log(`Server running — network access ON (port ${info.port})`)
       for (const url of getLanUrls(info.port)) console.log(`  LAN: ${url}`)
+      console.log(`  Token: ${getGlobalSettings().networkAccessToken}`)
     } else {
       console.log(`Server running at http://localhost:${info.port} (localhost only)`)
     }
@@ -460,6 +477,7 @@ server.on('upgrade', (request, socket, head) => {
       rawUrl: request.url,
       enabled: wsGlobal.networkAccessEnabled,
       expectedToken: wsGlobal.networkAccessToken,
+      trustLoopback: !wsGlobal.networkAccessBehindProxy,
     })
   ) {
     console.warn(

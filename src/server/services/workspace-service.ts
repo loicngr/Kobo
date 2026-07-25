@@ -61,6 +61,7 @@ export interface Workspace {
   hasUnread: boolean
   archivedAt: string | null
   favoritedAt: string | null
+  prWatchDisabledAt: string | null
   tags: string[]
   description: string | null
   agentDescription: string | null
@@ -172,6 +173,7 @@ interface WorkspaceRow {
   has_unread: number
   archived_at: string | null
   favorited_at: string | null
+  pr_watch_disabled_at: string | null
   tags: string | null
   engine: string | null
   auto_loop: number | null
@@ -238,6 +240,7 @@ function mapWorkspace(row: WorkspaceRow): Workspace {
     hasUnread: row.has_unread === 1,
     archivedAt: row.archived_at,
     favoritedAt: row.favorited_at,
+    prWatchDisabledAt: row.pr_watch_disabled_at,
     tags: parseTags(row.tags),
     description: row.description,
     agentDescription: row.agent_description,
@@ -882,6 +885,33 @@ export function unsetFavorite(id: string): Workspace {
   const db = getDb()
   const now = new Date().toISOString()
   const result = db.prepare('UPDATE workspaces SET favorited_at = NULL, updated_at = ? WHERE id = ?').run(now, id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+  return getWorkspace(id) as Workspace
+}
+
+/** Skip the PR watcher's forge (gh/glab) call for this workspace every tick — no PR-status fetch,
+ *  no auto-archive-on-merge, no auto-purge. Local git stats keep updating regardless. */
+export function setPrWatchDisabled(id: string): Workspace {
+  const db = getDb()
+  const now = new Date().toISOString()
+  const result = db
+    .prepare('UPDATE workspaces SET pr_watch_disabled_at = ?, updated_at = ? WHERE id = ?')
+    .run(now, now, id)
+  if (result.changes === 0) {
+    throw new Error(`Workspace '${id}' not found`)
+  }
+  return getWorkspace(id) as Workspace
+}
+
+/** Resume PR-watcher forge polling for this workspace. */
+export function setPrWatchEnabled(id: string): Workspace {
+  const db = getDb()
+  const now = new Date().toISOString()
+  const result = db
+    .prepare('UPDATE workspaces SET pr_watch_disabled_at = NULL, updated_at = ? WHERE id = ?')
+    .run(now, id)
   if (result.changes === 0) {
     throw new Error(`Workspace '${id}' not found`)
   }

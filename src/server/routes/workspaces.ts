@@ -31,7 +31,12 @@ import {
 } from '../services/initial-prompt-template-service.js'
 import * as notionService from '../services/notion-service.js'
 import { renderPrTemplate } from '../services/pr-template-service.js'
-import { getAllGitStats, getAllPrSnapshots, refreshPrSnapshot } from '../services/pr-watcher-service.js'
+import {
+  clearPrSnapshotCache,
+  getAllGitStats,
+  getAllPrSnapshots,
+  refreshPrSnapshot,
+} from '../services/pr-watcher-service.js'
 import * as quotaBackoffService from '../services/quota-backoff-service.js'
 import { getActiveReviewTemplate, renderReviewTemplate } from '../services/review-template-service.js'
 import * as sentryService from '../services/sentry-service.js'
@@ -1844,6 +1849,34 @@ app.delete('/:id/favorite', (c) => {
   try {
     const ws = workspaceService.unsetFavorite(id)
     return c.json(ws)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error'
+    const status = msg.includes('not found') ? 404 : 500
+    return c.json({ error: msg }, status)
+  }
+})
+
+// POST /api/workspaces/:id/pr-watch-disabled — skip PR-watcher forge polling for this workspace
+app.post('/:id/pr-watch-disabled', (c) => {
+  const { id } = c.req.param()
+  try {
+    const ws = workspaceService.setPrWatchDisabled(id)
+    clearPrSnapshotCache(id)
+    return c.json(ws)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : 'Unknown error'
+    const status = msg.includes('not found') ? 404 : 500
+    return c.json({ error: msg }, status)
+  }
+})
+
+// DELETE /api/workspaces/:id/pr-watch-disabled — resume PR-watcher forge polling, refresh immediately
+app.delete('/:id/pr-watch-disabled', async (c) => {
+  const { id } = c.req.param()
+  try {
+    const ws = workspaceService.setPrWatchEnabled(id)
+    const prSnapshot = await refreshPrSnapshot(id).catch(() => null)
+    return c.json({ workspace: ws, prSnapshot })
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Unknown error'
     const status = msg.includes('not found') ? 404 : 500

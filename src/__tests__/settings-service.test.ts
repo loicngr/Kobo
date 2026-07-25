@@ -1946,6 +1946,33 @@ describe('network access settings (v39)', () => {
   })
 })
 
+describe('network access behind-proxy setting (v41)', () => {
+  it('fresh install has behindProxy disabled', () => {
+    const global = getGlobalSettings()
+    expect(global.networkAccessBehindProxy).toBe(false)
+  })
+
+  it('SETTINGS_SCHEMA_VERSION is at least 41', () => {
+    expect(SETTINGS_SCHEMA_VERSION).toBeGreaterThanOrEqual(41)
+  })
+
+  it('upgrades a v40 settings file without losing data and adds networkAccessBehindProxy', () => {
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        schemaVersion: 40,
+        global: { networkAccessEnabled: true, networkAccessToken: 'keep-me' },
+        projects: [],
+      }),
+    )
+    getSettings()
+    const global = getGlobalSettings()
+    expect(global.networkAccessEnabled).toBe(true)
+    expect(global.networkAccessToken).toBe('keep-me')
+    expect(global.networkAccessBehindProxy).toBe(false)
+  })
+})
+
 describe('question notification sound (v40)', () => {
   it('fresh install defaults the question sound to hey.mp3', () => {
     expect(getGlobalSettings().audioQuestionSound).toBe('hey.mp3')

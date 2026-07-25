@@ -23,6 +23,7 @@ export function initSchema(db: Database.Database): void {
       has_unread INTEGER NOT NULL DEFAULT 0,
       archived_at TEXT,
       favorited_at TEXT,
+      pr_watch_disabled_at TEXT,
       tags TEXT NOT NULL DEFAULT '[]',
       engine TEXT NOT NULL DEFAULT 'claude-code',
       auto_loop INTEGER NOT NULL DEFAULT 0,

@@ -62,6 +62,14 @@ export function getAllGitStats(): Record<string, GitStatsResult> {
   return out
 }
 
+/** Drops a single workspace's cached PR snapshot — called when PR-watch is
+ *  disabled for it, so a stale "Ready to merge"-style badge doesn't linger
+ *  after the toggle (the watcher loop skips, rather than clears, a disabled
+ *  workspace's entry, so this must be done explicitly by the caller). */
+export function clearPrSnapshotCache(workspaceId: string): void {
+  lastKnownPr.delete(workspaceId)
+}
+
 /**
  * Test-only escape hatch — drops the in-memory cache so each test starts
  * from a clean slate. Not part of the public API.
@@ -126,7 +134,14 @@ export async function checkPrStatuses(): Promise<void> {
     if (!fs.existsSync(ws.worktreePath)) continue
 
     try {
-      const pr = await getForgeProvider(resolveForge(ws.projectPath)).getPrStatus(ws.worktreePath, ws.workingBranch)
+      // Opt-out: skip the forge call entirely for a workspace with PR-watch
+      // disabled — no PR-status fetch, no auto-archive/purge, no PR-derived
+      // badges. Git stats (below) still run every tick regardless; the
+      // existing `if (!pr) continue` further down already handles a null
+      // `pr` correctly (same path taken by a workspace with no PR yet).
+      const pr = ws.prWatchDisabledAt
+        ? null
+        : await getForgeProvider(resolveForge(ws.projectPath)).getPrStatus(ws.worktreePath, ws.workingBranch)
 
       // Detect a PR base change BEFORE computing git stats so the new base
       // is used in commitCount / behindCount / diffStats. Otherwise the

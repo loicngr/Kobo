@@ -41,8 +41,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 29', () => {
-    expect(SCHEMA_VERSION).toBe(29)
+  it('exporte SCHEMA_VERSION = 30', () => {
+    expect(SCHEMA_VERSION).toBe(30)
   })
 
   it('migration v17 unifies legacy permission_mode + permission_profile into agent_permission_mode', () => {
@@ -1813,6 +1813,65 @@ describe('migration v29: add-brainstorm-model', () => {
     runMigrations(db)
     const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
     expect(cols.filter((c) => c.name === 'brainstorm_model')).toHaveLength(1)
+    db.close()
+  })
+})
+
+describe('migration v30: add-pr-watch-disabled', () => {
+  it('adds the pr_watch_disabled_at column (nullable, no default) after runMigrations', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{
+      name: string
+      notnull: number
+      dflt_value: unknown
+    }>
+    const col = cols.find((c) => c.name === 'pr_watch_disabled_at')
+    expect(col).toBeTruthy()
+    expect(col?.notnull).toBe(0)
+    expect(col?.dflt_value).toBeNull()
+    db.close()
+  })
+
+  it('fresh install via initSchema produces the same column as runMigrations', () => {
+    const freshDb = new Database(':memory:')
+    initSchema(freshDb)
+    const freshCol = (freshDb.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>).find(
+      (c) => c.name === 'pr_watch_disabled_at',
+    )
+
+    const upgradedDb = new Database(':memory:')
+    runMigrations(upgradedDb)
+    const upgradedCol = (upgradedDb.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>).find(
+      (c) => c.name === 'pr_watch_disabled_at',
+    )
+
+    expect(freshCol).toEqual(upgradedCol)
+    freshDb.close()
+    upgradedDb.close()
+  })
+
+  it('v29 → v30 upgrade leaves existing rows with a null pr_watch_disabled_at', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ).run('w1', 'legacy', '/tmp/p', 'main', 'feat', '2025-01-01', '2025-01-01')
+
+    const row = db.prepare('SELECT pr_watch_disabled_at FROM workspaces WHERE id = ?').get('w1') as {
+      pr_watch_disabled_at: string | null
+    }
+    expect(row.pr_watch_disabled_at).toBeNull()
+    db.close()
+  })
+
+  it('is idempotent — re-running runMigrations does not re-add the column', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    runMigrations(db)
+    const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
+    expect(cols.filter((c) => c.name === 'pr_watch_disabled_at')).toHaveLength(1)
     db.close()
   })
 })

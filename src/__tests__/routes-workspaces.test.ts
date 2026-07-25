@@ -35,6 +35,8 @@ vi.mock('../server/services/workspace-service.js', () => ({
   markWorkspaceUnread: vi.fn(),
   setFavorite: vi.fn(),
   unsetFavorite: vi.fn(),
+  setPrWatchDisabled: vi.fn(),
+  setPrWatchEnabled: vi.fn(),
   setWorkspaceTags: vi.fn(),
   updateWorkspaceSourceBranch: vi.fn(),
   setInitialPrompt: vi.fn(),
@@ -209,6 +211,7 @@ vi.mock('../server/services/pr-watcher-service.js', () => ({
   getAllPrSnapshots: vi.fn(),
   getAllGitStats: vi.fn(() => ({})),
   refreshPrSnapshot: vi.fn(),
+  clearPrSnapshotCache: vi.fn(),
   startPrWatcher: vi.fn(),
   stopPrWatcher: vi.fn(),
 }))
@@ -3367,6 +3370,88 @@ describe('favorite endpoints', () => {
     expect(workspaceService.setFavorite).toHaveBeenCalledWith('ws-1')
     // GET /:id uses getWorkspaceWithTasks — if that was called, route order regressed
     expect(workspaceService.getWorkspaceWithTasks).not.toHaveBeenCalled()
+  })
+})
+
+describe('pr-watch-disabled endpoints', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  const disabledWorkspace = { ...fakeWorkspace, prWatchDisabledAt: '2026-04-17T10:00:00.000Z' } as any
+  const enabledWorkspace = { ...fakeWorkspace, prWatchDisabledAt: null } as any
+
+  it('POST /:id/pr-watch-disabled returns 200 + updated workspace, calls setPrWatchDisabled and clearPrSnapshotCache', async () => {
+    vi.mocked(workspaceService.setPrWatchDisabled).mockReturnValue(disabledWorkspace)
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+
+    const res = await app.request('/api/workspaces/ws-1/pr-watch-disabled', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.prWatchDisabledAt).toBe('2026-04-17T10:00:00.000Z')
+    expect(workspaceService.setPrWatchDisabled).toHaveBeenCalledWith('ws-1')
+    expect(prWatcher.clearPrSnapshotCache).toHaveBeenCalledWith('ws-1')
+  })
+
+  it('POST /:id/pr-watch-disabled returns 404 when service throws not-found', async () => {
+    vi.mocked(workspaceService.setPrWatchDisabled).mockImplementation(() => {
+      throw new Error("Workspace 'ws-missing' not found")
+    })
+
+    const res = await app.request('/api/workspaces/ws-missing/pr-watch-disabled', { method: 'POST' })
+
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body.error).toContain('not found')
+  })
+
+  it('DELETE /:id/pr-watch-disabled returns 200 + workspace and prSnapshot, awaits refreshPrSnapshot', async () => {
+    vi.mocked(workspaceService.setPrWatchEnabled).mockReturnValue(enabledWorkspace)
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.refreshPrSnapshot).mockResolvedValue({ number: 7, state: 'OPEN' } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/pr-watch-disabled', { method: 'DELETE' })
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.workspace.prWatchDisabledAt).toBeNull()
+    expect(body.prSnapshot).toEqual(expect.objectContaining({ number: 7 }))
+    expect(prWatcher.refreshPrSnapshot).toHaveBeenCalledWith('ws-1')
+  })
+
+  it('DELETE /:id/pr-watch-disabled returns prSnapshot: null when there is no PR', async () => {
+    vi.mocked(workspaceService.setPrWatchEnabled).mockReturnValue(enabledWorkspace)
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.refreshPrSnapshot).mockResolvedValue(null)
+
+    const res = await app.request('/api/workspaces/ws-1/pr-watch-disabled', { method: 'DELETE' })
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.prSnapshot).toBeNull()
+  })
+
+  it('DELETE /:id/pr-watch-disabled returns 200 with prSnapshot: null even if refreshPrSnapshot rejects', async () => {
+    vi.mocked(workspaceService.setPrWatchEnabled).mockReturnValue(enabledWorkspace)
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.refreshPrSnapshot).mockRejectedValue(new Error('gh exploded'))
+
+    const res = await app.request('/api/workspaces/ws-1/pr-watch-disabled', { method: 'DELETE' })
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.prSnapshot).toBeNull()
+  })
+
+  it('DELETE /:id/pr-watch-disabled returns 404 when service throws not-found', async () => {
+    vi.mocked(workspaceService.setPrWatchEnabled).mockImplementation(() => {
+      throw new Error("Workspace 'ws-missing' not found")
+    })
+
+    const res = await app.request('/api/workspaces/ws-missing/pr-watch-disabled', { method: 'DELETE' })
+
+    expect(res.status).toBe(404)
+    const body = await res.json()
+    expect(body.error).toContain('not found')
   })
 })
 

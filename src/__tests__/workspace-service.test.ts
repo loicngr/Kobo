@@ -1060,6 +1060,36 @@ describe('setFavorite / unsetFavorite', () => {
   })
 })
 
+describe('pr-watch opt-out', () => {
+  it('setPrWatchDisabled sets a timestamp', async () => {
+    const { createWorkspace, setPrWatchDisabled } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'W', projectPath: '/tmp/w', sourceBranch: 'main', workingBranch: 'feat/w' })
+    expect(ws.prWatchDisabledAt).toBeNull()
+    const updated = setPrWatchDisabled(ws.id)
+    expect(updated.prWatchDisabledAt).not.toBeNull()
+  })
+
+  it('setPrWatchEnabled clears the timestamp', async () => {
+    const { createWorkspace, setPrWatchDisabled, setPrWatchEnabled } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const ws = createWorkspace({ name: 'W2', projectPath: '/tmp/w2', sourceBranch: 'main', workingBranch: 'feat/w2' })
+    setPrWatchDisabled(ws.id)
+    const updated = setPrWatchEnabled(ws.id)
+    expect(updated.prWatchDisabledAt).toBeNull()
+  })
+
+  it('setPrWatchDisabled throws on unknown workspace id', async () => {
+    const { setPrWatchDisabled } = await import('../server/services/workspace-service.js')
+    expect(() => setPrWatchDisabled('nonexistent')).toThrow(/not found/)
+  })
+
+  it('setPrWatchEnabled throws on unknown workspace id', async () => {
+    const { setPrWatchEnabled } = await import('../server/services/workspace-service.js')
+    expect(() => setPrWatchEnabled('nonexistent')).toThrow(/not found/)
+  })
+})
+
 describe('renameSession()', () => {
   it('met à jour le name de la session', async () => {
     const { createWorkspace, createIdleSession, listSessions, renameSession } = await import(

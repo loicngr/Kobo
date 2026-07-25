@@ -407,6 +407,23 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 30,
+    name: 'add-pr-watch-disabled',
+    migrate: (db) => {
+      // When set, the PR watcher skips the forge (gh/glab) call for this
+      // workspace every tick — no PR-status fetch, no auto-archive-on-merge,
+      // no auto-purge, no PR-derived attention badges. Local git stats
+      // (ahead/behind, changed files, rebase status) keep updating every
+      // tick regardless — see pr-watcher-service.ts's checkPrStatuses().
+      const table = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='workspaces'").get()
+      if (!table) return
+      const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
+      if (!cols.some((c) => c.name === 'pr_watch_disabled_at')) {
+        db.prepare('ALTER TABLE workspaces ADD COLUMN pr_watch_disabled_at TEXT').run()
+      }
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

@@ -68,6 +68,7 @@ app.get('/network', (c) => {
     return c.json({
       enabled: global.networkAccessEnabled,
       token: global.networkAccessToken,
+      behindProxy: global.networkAccessBehindProxy,
       urls: getLanUrls(getBackendPort()),
     })
   } catch (err) {
@@ -82,9 +83,10 @@ app.get('/network/ping', (c) => c.json({ ok: true }))
 // POST /api/settings/network — toggle enabled / regenerate token
 app.post('/network', async (c) => {
   try {
-    const body = await c.req.json<{ enabled?: boolean; regenerate?: boolean }>()
+    const body = await c.req.json<{ enabled?: boolean; regenerate?: boolean; behindProxy?: boolean }>()
     const current = settingsService.getGlobalSettings()
-    const patch: { networkAccessEnabled?: boolean; networkAccessToken?: string } = {}
+    const patch: { networkAccessEnabled?: boolean; networkAccessToken?: string; networkAccessBehindProxy?: boolean } =
+      {}
     let restartRequired = false
 
     if (typeof body.enabled === 'boolean' && body.enabled !== current.networkAccessEnabled) {
@@ -97,11 +99,15 @@ app.post('/network', async (c) => {
     if (body.regenerate) {
       patch.networkAccessToken = generateToken()
     }
+    if (typeof body.behindProxy === 'boolean' && body.behindProxy !== current.networkAccessBehindProxy) {
+      patch.networkAccessBehindProxy = body.behindProxy
+    }
 
     const updated = settingsService.updateNetworkAccessSettings(patch)
     return c.json({
       enabled: updated.networkAccessEnabled,
       token: updated.networkAccessToken,
+      behindProxy: updated.networkAccessBehindProxy,
       urls: getLanUrls(getBackendPort()),
       restartRequired,
     })

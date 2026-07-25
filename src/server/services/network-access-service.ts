@@ -53,8 +53,17 @@ export function evaluateNetworkAccess(params: {
   enabled: boolean
   expectedToken: string
   providedToken: string | undefined
+  /**
+   * When false, loopback addresses are NOT automatically trusted — they fall
+   * through to the normal enabled/token checks like any other address.
+   * Defaults to true (today's behavior) so every caller that omits it is
+   * unaffected. Set to false when Kōbō runs behind a reverse proxy, where a
+   * proxied request can appear to originate from loopback.
+   */
+  trustLoopback?: boolean
 }): NetworkAccessDecision {
-  if (isLoopbackAddress(params.address)) return { allow: true, status: 200 }
+  const trustLoopback = params.trustLoopback ?? true
+  if (trustLoopback && isLoopbackAddress(params.address)) return { allow: true, status: 200 }
   if (!params.enabled) return { allow: false, status: 403 }
   if (tokenMatches(params.providedToken, params.expectedToken)) return { allow: true, status: 200 }
   return { allow: false, status: 401 }
@@ -66,6 +75,7 @@ export function authorizeWsUpgrade(params: {
   rawUrl: string | undefined
   enabled: boolean
   expectedToken: string
+  trustLoopback?: boolean
 }): boolean {
   let providedToken: string | undefined
   try {
@@ -78,5 +88,30 @@ export function authorizeWsUpgrade(params: {
     enabled: params.enabled,
     expectedToken: params.expectedToken,
     providedToken,
+    trustLoopback: params.trustLoopback,
   }).allow
+}
+
+/**
+ * Reads KOBO_NETWORK_ACCESS_ENABLED / KOBO_NETWORK_ACCESS_BEHIND_PROXY and
+ * returns only the fields an env var actually specifies — an unset env var
+ * means "leave current settings alone" (key omitted from the result); a SET
+ * env var always produces a decisive true/false, even for a value that isn't
+ * literally "true"/"1" (an explicit non-true value is a deliberate "off",
+ * not "don't touch"). Re-applied on every server boot — see index.ts.
+ */
+export function resolveNetworkAccessEnvOverrides(env: NodeJS.ProcessEnv): {
+  networkAccessEnabled?: boolean
+  networkAccessBehindProxy?: boolean
+} {
+  const overrides: { networkAccessEnabled?: boolean; networkAccessBehindProxy?: boolean } = {}
+  if (env.KOBO_NETWORK_ACCESS_ENABLED !== undefined) {
+    overrides.networkAccessEnabled =
+      env.KOBO_NETWORK_ACCESS_ENABLED === 'true' || env.KOBO_NETWORK_ACCESS_ENABLED === '1'
+  }
+  if (env.KOBO_NETWORK_ACCESS_BEHIND_PROXY !== undefined) {
+    overrides.networkAccessBehindProxy =
+      env.KOBO_NETWORK_ACCESS_BEHIND_PROXY === 'true' || env.KOBO_NETWORK_ACCESS_BEHIND_PROXY === '1'
+  }
+  return overrides
 }

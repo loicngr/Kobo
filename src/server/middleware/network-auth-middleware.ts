@@ -6,7 +6,9 @@ import { getGlobalSettings } from '../services/settings-service.js'
 /**
  * Gates non-loopback requests behind the network-access token.
  *
- * Loopback requests always pass (the host machine's own usage is frictionless).
+ * Loopback requests pass without a token (the host machine's own usage is
+ * frictionless) — unless `networkAccessBehindProxy` is enabled, in which case
+ * loopback is treated like any other address (see network-access-service.ts).
  * The client IP comes only from the OS socket via getConnInfo, never from
  * X-Forwarded-For, so a remote client cannot spoof a loopback address.
  */
@@ -18,6 +20,7 @@ export const networkAuthMiddleware: MiddlewareHandler = async (c, next) => {
     enabled: global.networkAccessEnabled,
     expectedToken: global.networkAccessToken,
     providedToken: c.req.header('X-Kobo-Token'),
+    trustLoopback: !global.networkAccessBehindProxy,
   })
   if (decision.allow) return next()
   // Surface denied requests so "my device can't connect" is debuggable.

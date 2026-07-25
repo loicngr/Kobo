@@ -29,12 +29,25 @@ vi.mock('node:fs', async () => {
 })
 
 import { computeGitStats } from '../server/services/git-stats-service.js'
-import { _resetForTest, checkPrStatuses, getAllGitStats } from '../server/services/pr-watcher-service.js'
+import {
+  _resetForTest,
+  checkPrStatuses,
+  clearPrSnapshotCache,
+  getAllGitStats,
+} from '../server/services/pr-watcher-service.js'
 import * as wsSvc from '../server/services/websocket-service.js'
 import * as wsService from '../server/services/workspace-service.js'
 import * as gitOps from '../server/utils/git-ops.js'
 
-function makeWorkspace(overrides: Partial<{ id: string; name: string; sourceBranch: string; status: string }> = {}) {
+function makeWorkspace(
+  overrides: Partial<{
+    id: string
+    name: string
+    sourceBranch: string
+    status: string
+    prWatchDisabledAt?: string | null
+  }> = {},
+) {
   return {
     id: 'ws-1',
     name: 'test ws',
@@ -53,6 +66,7 @@ function makeWorkspace(overrides: Partial<{ id: string; name: string; sourceBran
     hasUnread: false,
     archivedAt: null,
     favoritedAt: null,
+    prWatchDisabledAt: null,
     tags: [],
     autoLoop: false,
     autoLoopReady: false,
@@ -468,6 +482,61 @@ describe('checkPrStatuses — git stats caching', () => {
     const stats = getAllGitStats()
     expect(stats['ws-a']).toBeUndefined()
     expect(stats['ws-b']).toEqual({ commitCount: 2 })
+  })
+})
+
+describe('checkPrStatuses — PR-watch opt-out', () => {
+  beforeEach(() => {
+    _resetForTest()
+    vi.clearAllMocks()
+  })
+
+  it('skips the forge call for a disabled workspace, but still computes git stats', async () => {
+    const ws = makeWorkspace({ id: 'ws-disabled', prWatchDisabledAt: '2026-01-01T00:00:00.000Z' })
+    vi.mocked(wsService.listWorkspaces).mockReturnValue([ws] as never)
+    vi.mocked(computeGitStats).mockResolvedValue({ commitCount: 3 } as never)
+
+    await checkPrStatuses()
+
+    expect(getPrStatusMock).not.toHaveBeenCalled()
+    expect(computeGitStats).toHaveBeenCalledWith(ws, null)
+    expect(getAllGitStats()['ws-disabled']).toEqual({ commitCount: 3 })
+  })
+
+  it('still calls the forge for a workspace where PR-watch is not disabled', async () => {
+    const ws = makeWorkspace({ id: 'ws-enabled' })
+    vi.mocked(wsService.listWorkspaces).mockReturnValue([ws] as never)
+    getPrStatusMock.mockResolvedValue(null)
+    vi.mocked(computeGitStats).mockResolvedValue({ commitCount: 1 } as never)
+
+    await checkPrStatuses()
+
+    expect(getPrStatusMock).toHaveBeenCalledWith(ws.worktreePath, ws.workingBranch)
+  })
+})
+
+describe('clearPrSnapshotCache', () => {
+  beforeEach(() => {
+    _resetForTest()
+    vi.clearAllMocks()
+  })
+
+  it('removes only the targeted workspace from getAllPrSnapshots, leaving others untouched', async () => {
+    const wsA = makeWorkspace({ id: 'ws-a' })
+    const wsB = makeWorkspace({ id: 'ws-b' })
+    vi.mocked(wsService.listWorkspaces).mockReturnValue([wsA, wsB] as never)
+    getPrStatusMock.mockResolvedValue(makePrSnapshot({ number: 1 }))
+
+    await checkPrStatuses()
+
+    const { getAllPrSnapshots } = await import('../server/services/pr-watcher-service.js')
+    expect(getAllPrSnapshots()['ws-a']).toBeDefined()
+    expect(getAllPrSnapshots()['ws-b']).toBeDefined()
+
+    clearPrSnapshotCache('ws-a')
+
+    expect(getAllPrSnapshots()['ws-a']).toBeUndefined()
+    expect(getAllPrSnapshots()['ws-b']).toBeDefined()
   })
 })
 

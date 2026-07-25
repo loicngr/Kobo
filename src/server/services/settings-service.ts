@@ -267,6 +267,14 @@ export interface GlobalSettings {
   networkAccessEnabled: boolean
   /** Shared secret required for non-loopback access. Empty until first enabled. */
   networkAccessToken: string
+  /**
+   * When true, disables the loopback-trust bypass entirely — every request,
+   * including ones that look like they came from 127.0.0.1, must present the
+   * token. Only meaningful when networkAccessEnabled is also true. Needed
+   * behind a reverse proxy (Traefik, nginx, Caddy…), where a proxied request
+   * can appear to originate from loopback. Seeded by settings migration v41.
+   */
+  networkAccessBehindProxy: boolean
   browserNotifications: boolean
   audioNotifications: boolean
   audioNotificationSound: string
@@ -860,6 +868,18 @@ const settingsMigrations: SettingsMigration[] = [
       }
     },
   },
+  {
+    version: 41,
+    name: 'add-network-access-behind-proxy',
+    migrate: ({ global }) => {
+      // Disables the loopback-trust bypass when true — every request needs
+      // the token, even ones that look like they came from 127.0.0.1. Only
+      // meaningful when networkAccessEnabled is also true.
+      if (typeof global.networkAccessBehindProxy !== 'boolean') {
+        global.networkAccessBehindProxy = false
+      }
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -938,6 +958,7 @@ function defaultSettings(): Settings {
       autoPurgeOnPrMerged: false,
       networkAccessEnabled: false,
       networkAccessToken: '',
+      networkAccessBehindProxy: false,
       browserNotifications: true,
       audioNotifications: true,
       audioNotificationSound: 'hey.mp3',
@@ -1414,6 +1435,7 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
 export function updateNetworkAccessSettings(patch: {
   networkAccessEnabled?: boolean
   networkAccessToken?: string
+  networkAccessBehindProxy?: boolean
 }): GlobalSettings {
   const settings = readSettings()
   if (typeof patch.networkAccessEnabled === 'boolean') {
@@ -1421,6 +1443,9 @@ export function updateNetworkAccessSettings(patch: {
   }
   if (typeof patch.networkAccessToken === 'string') {
     settings.global.networkAccessToken = patch.networkAccessToken
+  }
+  if (typeof patch.networkAccessBehindProxy === 'boolean') {
+    settings.global.networkAccessBehindProxy = patch.networkAccessBehindProxy
   }
   writeSettings(settings, { backup: true })
   return settings.global
