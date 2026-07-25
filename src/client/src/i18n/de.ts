@@ -312,6 +312,8 @@ export default {
   'createPage.errorCreating': 'Fehler beim Erstellen des Arbeitsbereichs.',
   'createPage.branchAdjusted':
     'Branch existierte bereits — stattdessen `{branch}` erstellt. Der zugehörige Worktree-Ordner verwendet das gleiche Suffix.',
+  'createPage.localSourceFallback':
+    'Workspace vom lokalen Branch erstellt (origin nicht erreichbar) — die Basis ist möglicherweise veraltet.',
   'createPage.validationNotionUrl':
     'Bitte eine gültige Notion-URL einfügen (https://www.notion.so/... oder https://app.notion.com/...).',
   'createPage.validationDescription': 'Bitte beschreiben Sie die Aufgabe.',

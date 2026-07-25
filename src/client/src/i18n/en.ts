@@ -308,6 +308,8 @@ export default {
   'createPage.errorCreating': 'Error creating workspace.',
   'createPage.branchAdjusted':
     'Branch already existed — created `{branch}` instead. The matching worktree folder uses the same suffix.',
+  'createPage.localSourceFallback':
+    'Workspace created from the local branch (origin unreachable) — the base may be stale.',
   'createPage.validationNotionUrl':
     'Please paste a valid Notion URL (https://www.notion.so/... or https://app.notion.com/...).',
   'createPage.validationDescription': 'Please describe the task.',
