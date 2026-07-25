@@ -742,6 +742,8 @@ describe('POST /api/workspaces', () => {
 
     expect(res.status).toBe(422)
     expect(worktreeService.createWorktree).not.toHaveBeenCalled()
+    // The hard-block happens before any DB write, so no orphan workspace row is left behind.
+    expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
   })
 
   it('does not block reuse of an existing worktree when origin fetch fails', async () => {
