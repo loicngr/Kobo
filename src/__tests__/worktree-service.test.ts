@@ -51,16 +51,16 @@ afterAll(() => {
   }
 })
 
-describe('createWorktree(projectPath, branchName, sourceBranch)', () => {
-  it('crée un worktree et retourne le chemin', () => {
-    const worktreePath = createWorktree(repoDir, 'feature/wt-test', 'main')
-    expect(worktreePath).toBeTruthy()
+describe('createWorktree(projectPath, branchName, baseRef)', () => {
+  it('creates a worktree directory for the branch', () => {
+    const { worktreePath, base } = createWorktree(repoDir, 'feature/wt-test', 'origin/main')
     expect(fs.existsSync(worktreePath)).toBe(true)
+    expect(base).toBe('origin')
   })
 
   it('le chemin du worktree est <projectPath>/.worktrees/<branchName>', () => {
     const branchName = 'feature/path-check'
-    const worktreePath = createWorktree(repoDir, branchName, 'main')
+    const { worktreePath } = createWorktree(repoDir, branchName, 'origin/main')
     const expected = path.join(repoDir, '.worktrees', branchName)
     expect(worktreePath).toBe(expected)
     expect(fs.existsSync(worktreePath)).toBe(true)
@@ -68,7 +68,7 @@ describe('createWorktree(projectPath, branchName, sourceBranch)', () => {
 
   it('accepte une racine de worktrees relative personnalisée', () => {
     const branchName = 'feature/custom-root'
-    const worktreePath = createWorktree(repoDir, branchName, 'main', 'kobo-worktrees')
+    const { worktreePath } = createWorktree(repoDir, branchName, 'origin/main', 'kobo-worktrees')
     const expected = path.join(repoDir, 'kobo-worktrees', branchName)
     expect(worktreePath).toBe(expected)
     expect(fs.existsSync(worktreePath)).toBe(true)
@@ -76,7 +76,7 @@ describe('createWorktree(projectPath, branchName, sourceBranch)', () => {
 
   it('ajoute le worktree à .git/info/exclude', () => {
     const branchName = 'feature/exclude-test'
-    const worktreePath = createWorktree(repoDir, branchName, 'main')
+    const { worktreePath } = createWorktree(repoDir, branchName, 'origin/main')
     const excludeFile = path.join(repoDir, '.git', 'info', 'exclude')
     const content = fs.readFileSync(excludeFile, 'utf-8')
     const relativePath = path.relative(repoDir, worktreePath)
@@ -89,7 +89,7 @@ describe('createWorktree(projectPath, branchName, sourceBranch)', () => {
     let worktreePath = ''
 
     try {
-      worktreePath = createWorktree(repoDir, branchName, 'main', externalRoot)
+      ;({ worktreePath } = createWorktree(repoDir, branchName, 'origin/main', externalRoot))
       expect(worktreePath).toBe(path.join(externalRoot, branchName))
       expect(fs.existsSync(worktreePath)).toBe(true)
 
@@ -109,8 +109,19 @@ describe('createWorktree(projectPath, branchName, sourceBranch)', () => {
     // Create branch first without a worktree
     gitSetup(repoDir, ['branch', 'feature/existing-branch'])
     // createWorktree should fall back to 'git worktree add <path> <branch>'
-    const worktreePath = createWorktree(repoDir, 'feature/existing-branch', 'main')
+    const { worktreePath } = createWorktree(repoDir, 'feature/existing-branch', 'origin/main')
     expect(fs.existsSync(worktreePath)).toBe(true)
+  })
+
+  it('creates a worktree from a local branch when base ref has no origin/ prefix', () => {
+    // `main` exists locally in repoDir (the clone). Base directly off it.
+    const { worktreePath, base } = createWorktree(repoDir, 'feature/local-base', 'main')
+    expect(fs.existsSync(worktreePath)).toBe(true)
+    expect(base).toBe('local')
+    // The new branch points at the same commit as local main.
+    const head = execFileSync('git', ['-C', worktreePath, 'rev-parse', 'HEAD'], { encoding: 'utf-8' }).trim()
+    const mainHead = execFileSync('git', ['-C', repoDir, 'rev-parse', 'main'], { encoding: 'utf-8' }).trim()
+    expect(head).toBe(mainHead)
   })
 })
 
@@ -133,7 +144,7 @@ describe('listWorktrees(projectPath)', () => {
 
   it('inclut les worktrees créés', () => {
     const branchName = 'feature/list-check'
-    createWorktree(repoDir, branchName, 'main')
+    createWorktree(repoDir, branchName, 'origin/main')
     const worktrees = listWorktrees(repoDir)
     const found = worktrees.some((wt) => wt.branch === branchName)
     expect(found).toBe(true)
@@ -143,7 +154,7 @@ describe('listWorktrees(projectPath)', () => {
 describe('worktreeExists(projectPath, branchName)', () => {
   it('retourne true si le worktree existe', () => {
     const branchName = 'feature/exists-true'
-    createWorktree(repoDir, branchName, 'main')
+    createWorktree(repoDir, branchName, 'origin/main')
     expect(worktreeExists(repoDir, branchName)).toBe(true)
   })
 
@@ -155,7 +166,7 @@ describe('worktreeExists(projectPath, branchName)', () => {
 describe('removeWorktree(projectPath, worktreePath)', () => {
   it('supprime le worktree et son dossier', () => {
     const branchName = 'feature/remove-test'
-    const worktreePath = createWorktree(repoDir, branchName, 'main')
+    const { worktreePath } = createWorktree(repoDir, branchName, 'origin/main')
     expect(fs.existsSync(worktreePath)).toBe(true)
 
     removeWorktree(repoDir, worktreePath)
@@ -164,7 +175,7 @@ describe('removeWorktree(projectPath, worktreePath)', () => {
 
   it("retire l'entrée de .git/info/exclude après suppression", () => {
     const branchName = 'feature/remove-exclude'
-    const worktreePath = createWorktree(repoDir, branchName, 'main')
+    const { worktreePath } = createWorktree(repoDir, branchName, 'origin/main')
     removeWorktree(repoDir, worktreePath)
 
     const excludeFile = path.join(repoDir, '.git', 'info', 'exclude')
@@ -177,7 +188,7 @@ describe('removeWorktree(projectPath, worktreePath)', () => {
 
   it("le worktree n'apparaît plus dans listWorktrees après suppression", () => {
     const branchName = 'feature/remove-list-check'
-    const worktreePath = createWorktree(repoDir, branchName, 'main')
+    const { worktreePath } = createWorktree(repoDir, branchName, 'origin/main')
     removeWorktree(repoDir, worktreePath)
 
     const worktrees = listWorktrees(repoDir)
