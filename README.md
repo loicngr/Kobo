@@ -57,13 +57,13 @@ Want to run from source or contribute? See [`CONTRIBUTING.md`](./CONTRIBUTING.md
 
 ### Docker
 
-An official `Dockerfile` and an example Traefik + Kōbō stack
-([`docker-compose.example.yml`](./docker-compose.example.yml)) ship in this repository — useful for
-running Kōbō on a VPS behind a reverse proxy, with git SSH auth, Claude Code / Codex credentials,
-optional Docker-socket passthrough for the dev-server panel, and SSH access into the container for
-interactive work. See [`CONFIGURATION.md`](./CONFIGURATION.md#behind-a-reverse-proxy) for the full
-setup, including the `KOBO_NETWORK_ACCESS_ENABLED` / `KOBO_NETWORK_ACCESS_BEHIND_PROXY` env vars
-that bootstrap network access at container boot with no manual step.
+An official `Dockerfile` and three ready-to-use Compose files ship in this repository: a quick local
+test stack, a Traefik-fronted local rehearsal (`kobo.localhost`, no domain needed), and a full VPS
+reference (Traefik + Let's Encrypt, SSH access, optional Docker-socket passthrough for the
+dev-server panel). See [`CONFIGURATION.md`](./CONFIGURATION.md#docker-deployment) for the complete
+setup — every compose file, every env var, every volume mount, and the `KOBO_NETWORK_ACCESS_ENABLED`
+/ `KOBO_NETWORK_ACCESS_BEHIND_PROXY` env vars that bootstrap network access at container boot with
+no manual step.
 
 ## Configuration
 

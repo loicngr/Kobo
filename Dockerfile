@@ -76,7 +76,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       "https://gitlab.com/gitlab-org/cli/-/releases/v${GLAB_VERSION}/downloads/glab_${GLAB_VERSION}_linux_amd64.deb" \
       -o /tmp/glab.deb \
     && apt-get install -y --no-install-recommends /tmp/glab.deb \
-    && rm -rf /var/lib/apt/lists/* /tmp/glab.deb
+    && rm -rf /var/lib/apt/lists/* /tmp/glab.deb \
+    # Bind-mounted project repos keep the HOST user's UID on disk, but this
+    # container runs as root — git's ownership check (CVE-2022-24765
+    # mitigation) refuses to operate on a repo it doesn't "own" unless told
+    # otherwise. Single-user dev container, no untrusted repos expected, so
+    # trust everything rather than requiring a `safe.directory` entry per
+    # mounted project.
+    && git config --system --add safe.directory '*'
 
 # Production dependencies only (root tree — the client's own node_modules
 # aren't needed at runtime, its build output is static files).

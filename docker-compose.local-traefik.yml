@@ -1,0 +1,67 @@
+# Local staging: validates the REAL production topology (Traefik in front,
+# Kōbō never exposed on a published port, "Behind a reverse proxy" auth mode)
+# without needing a real domain or TLS certificate. Uses `kobo.localhost`,
+# which resolves to 127.0.0.1 on most OSes without touching /etc/hosts.
+#
+# This is NOT what you deploy to a real VPS — see docker-compose.example.yml
+# for that (real domain, Let's Encrypt). Use this one to rehearse the exact
+# routing/auth/mount setup locally before doing it for real.
+#
+# Run:   docker build -t kobo:local .   (once)
+#        docker compose -f docker-compose.local-traefik.yml up -d
+# Open:  http://kobo.localhost
+#        Traefik dashboard (router/service debugging): http://traefik.localhost
+#        user: admin / password: kobo-local (local-only throwaway credential,
+#        see the basicauth label below — change the hash if you care)
+# Stop:  docker compose -f docker-compose.local-traefik.yml down
+
+services:
+  traefik:
+    image: traefik:v3
+    restart: unless-stopped
+    command:
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --entrypoints.web.address=:80
+      - --api=true
+      - --api.dashboard=true
+    ports:
+      - "80:80"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    labels:
+      # Dashboard/API only reachable via Traefik itself (not a raw insecure
+      # port), gated by basic auth — --api.insecure=true would otherwise
+      # expose it on :8080 with no auth at all.
+      - traefik.enable=true
+      - traefik.http.routers.dashboard.rule=Host(`traefik.localhost`)
+      - traefik.http.routers.dashboard.service=api@internal
+      - traefik.http.routers.dashboard.middlewares=dashboard-auth
+      # admin / kobo-local — regenerate with: openssl passwd -apr1 '<password>'
+      # ($ must be doubled to $$ for Compose's own variable interpolation).
+      - traefik.http.middlewares.dashboard-auth.basicauth.users=admin:$$apr1$$m1A2kAKE$$17EUFhJeS/RFLzu/X9Irw0
+
+  kobo:
+    image: kobo:local
+    restart: unless-stopped
+    environment:
+      - KOBO_HOME=/root/.config/kobo
+      - KOBO_NETWORK_ACCESS_ENABLED=true
+      - KOBO_NETWORK_ACCESS_BEHIND_PROXY=true
+    volumes:
+      - kobo-test-data:/root/.config/kobo
+      - ${KOBO_PROJECTS_DIR:-./kobo-projects}:/projects
+      - ${HOME}/.ssh:/root/.ssh:ro
+      - ${HOME}/.gitconfig:/root/.gitconfig:ro
+      - ${HOME}/.claude.json:/root/.claude.json
+      - ${HOME}/.claude:/root/.claude
+      - ${HOME}/.codex:/root/.codex
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.kobo.rule=Host(`kobo.localhost`)
+      - traefik.http.routers.kobo.entrypoints=web
+      - traefik.http.services.kobo.loadbalancer.server.port=3000
+    # No `ports:` — same as production, only Traefik is reachable.
+
+volumes:
+  kobo-test-data:

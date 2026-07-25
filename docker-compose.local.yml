@@ -1,0 +1,54 @@
+# Quick local test stack — just Kōbō, port published directly (no Traefik,
+# no TLS, no SSH server, no Docker socket). Use this to try Kōbō out or poke
+# at a change locally; use docker-compose.example.yml as the reference for an
+# actual reverse-proxy deployment.
+#
+# Before using this:
+#   1. Build the image once: `docker build -t kobo:local .`
+#   2. Point KOBO_PROJECTS_DIR at a folder containing a git repo you want to
+#      test a workspace against (defaults to ./kobo-projects next to this
+#      file if unset).
+#   3. `~/.claude.json` must already exist as a FILE on your host (run
+#      `claude /login` locally first if it doesn't) — Docker silently
+#      creates an empty directory instead of erroring on a missing bind
+#      mount source, which breaks auth in a confusing way.
+#
+# Run:   docker compose -f docker-compose.local.yml up -d
+# Token: docker compose -f docker-compose.local.yml logs kobo | grep Token
+# Open:  http://localhost:3000/?token=<token from above>
+#        (KOBO_NETWORK_ACCESS_ENABLED below makes Kōbō bind 0.0.0.0 inside
+#        the container, otherwise the published port connects to nothing —
+#        Docker's port-forwarded connection doesn't look like loopback from
+#        Kōbō's point of view, so the token above is still required once.)
+# Stop:  docker compose -f docker-compose.local.yml down
+
+services:
+  kobo:
+    image: kobo:local
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - KOBO_HOME=/root/.config/kobo
+      - KOBO_NETWORK_ACCESS_ENABLED=true
+    volumes:
+      # Kōbō's own state (SQLite DB, settings.json, etc) — a named volume so
+      # it survives `docker compose down` (without -v).
+      - kobo-test-data:/root/.config/kobo
+      # Repos you'll create test workspaces against.
+      - ${KOBO_PROJECTS_DIR:-./kobo-projects}:/projects
+      # Git SSH auth — read-only, needed to push/pull.
+      - ${HOME}/.ssh:/root/.ssh:ro
+      # Commit author identity — without this, agent commits fail.
+      - ${HOME}/.gitconfig:/root/.gitconfig:ro
+      # Claude Code auth + MCP server registrations.
+      - ${HOME}/.claude.json:/root/.claude.json
+      # Claude Code's full state directory (skills/plugins cache, session
+      # transcripts) — read-write, Claude Code writes into this tree.
+      - ${HOME}/.claude:/root/.claude
+      # Codex's full state directory (auth.json, config.toml) — read-write
+      # for the same reason. Harmless to mount even if you only use Claude.
+      - ${HOME}/.codex:/root/.codex
+
+volumes:
+  kobo-test-data:

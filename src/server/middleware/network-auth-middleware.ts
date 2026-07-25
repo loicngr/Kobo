@@ -11,8 +11,15 @@ import { getGlobalSettings } from '../services/settings-service.js'
  * loopback is treated like any other address (see network-access-service.ts).
  * The client IP comes only from the OS socket via getConnInfo, never from
  * X-Forwarded-For, so a remote client cannot spoof a loopback address.
+ *
+ * `/api/health` is always exempt, regardless of `networkAccessBehindProxy`:
+ * it exposes only `{ status, version }` (nothing sensitive), and Docker's own
+ * HEALTHCHECK / a Compose healthcheck / an orchestrator's liveness probe has
+ * no way to supply the runtime-generated token — without this exemption, a
+ * "behind a reverse proxy" deployment's own container never reports healthy.
  */
 export const networkAuthMiddleware: MiddlewareHandler = async (c, next) => {
+  if (c.req.path === '/api/health') return next()
   const address = getConnInfo(c).remote.address
   const global = getGlobalSettings()
   const decision = evaluateNetworkAccess({

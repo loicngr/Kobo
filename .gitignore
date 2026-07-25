@@ -4,6 +4,7 @@ dist/
 docs/
 !docs/assets
 .worktrees/
+kobo-projects/
 .agent-runner/
 .superpowers/
 .idea/

@@ -10,6 +10,17 @@ Complete reference for every Kōbō setting, environment variable, and external 
 - [Custom change-source-branch script](#custom-change-source-branch-script)
 - [Auto-purge worktree on PR merged](#auto-purge-worktree-on-pr-merged)
 - [Network access](#network-access)
+- [Docker deployment](#docker-deployment)
+  - [Choosing a compose file](#choosing-a-compose-file)
+  - [The image](#the-image)
+  - [Environment variables (Docker)](#environment-variables-docker)
+  - [Volumes](#volumes)
+  - [Ports](#ports)
+  - [Token / login flow](#token--login-flow)
+  - [Quick local test — docker-compose.local.yml](#quick-local-test--docker-composelocalyml)
+  - [Rehearsing the reverse-proxy stack — docker-compose.local-traefikyml](#rehearsing-the-reverse-proxy-stack--docker-composelocal-traefikyml)
+  - [Real deployment — docker-compose.exampleyml](#real-deployment--docker-composeexampleyml)
+  - [Troubleshooting](#troubleshooting)
 - [Agent runtimes](#agent-runtimes)
   - [Claude Code](#claude-code)
   - [OpenAI Codex](#openai-codex)
@@ -68,6 +79,10 @@ A production-installed Kōbō (`npx @loicngr/kobo`) and a dev server can run sid
 | `CLAUDE_CONFIG_DIR` | `~/.claude` | Where the Claude SDK reads its auth and MCP config. |
 | `WHISPER_CPP_COMMAND` | `whisper-cli` | Override the whisper.cpp binary if it's not in `PATH` and you don't want to set it via Settings. |
 | `DEBUG_MCP_STDERR` | — | When set, pipe spawned MCP servers' stderr to the Kōbō log. Useful for debugging Notion/Sentry MCP issues. |
+| `KOBO_NETWORK_ACCESS_ENABLED` | — | Set `true` to enable [network access](#network-access) at boot, without going through Settings. Mainly useful for headless/Docker deployments. |
+| `KOBO_NETWORK_ACCESS_BEHIND_PROXY` | — | Set `true` to enable [behind a reverse proxy](#behind-a-reverse-proxy) mode at boot (disables the loopback bypass entirely). Requires `KOBO_NETWORK_ACCESS_ENABLED=true`. |
+| `GH_TOKEN` | — | Non-interactive auth for the `gh` CLI (used by the [forge integration](#forge-integration)). Needed in headless containers where `gh auth login`'s browser flow isn't practical. |
+| `GITLAB_TOKEN` | — | Non-interactive auth for the `glab` CLI, same rationale as `GH_TOKEN`. |
 | `KOBO_WORKTREE_CLEANUP_IMAGE` | `alpine` | Docker image used to reclaim ownership of root-owned files when removing a worktree fails on a permission error. Override with a locally cached image to avoid a pull. |
 
 ## Settings UI
@@ -441,33 +456,190 @@ one only changes the per-request auth decision, not the listening address.
 the host machine itself — must present the token. If you `curl localhost:3000` directly from
 inside the container or the host for debugging, you now need `-H "X-Kobo-Token: <token>"` too.
 
-An official `Dockerfile` and a full example stack (`docker-compose.example.yml`, Traefik + Kōbō,
-terminating TLS via Let's Encrypt, Kōbō never exposed on a published port — only reachable through
-Traefik)
-ship in this repository — see [`docker-compose.example.yml`](./docker-compose.example.yml) for the
-complete, commented configuration, including the volume mounts needed for git SSH auth, commit
-identity, and Claude Code / Codex credentials. Kōbō's `127.0.0.1`-only default bind would otherwise
-block Traefik (it reaches Kōbō over the Docker network, not true loopback), so
-`docker-compose.example.yml` pre-enables both via `KOBO_NETWORK_ACCESS_ENABLED` /
-`KOBO_NETWORK_ACCESS_BEHIND_PROXY` env vars at container boot instead of requiring a manual
-bootstrap step — see the compose file for the exact keys, and `docker compose logs kobo` for the
-auto-generated token.
+For the concrete Docker setup (which compose file, which env vars, which volumes), see
+[Docker deployment](#docker-deployment) below.
 
-After bringing this stack up, both settings are already on (via the env vars above) — grab the
-token from `docker compose logs kobo` and bookmark `https://kobo.example.com/?token=<token>` (same
-token-in-URL mechanism already used for LAN devices — stored in `localStorage`, no re-entry after
-the first visit).
+## Docker deployment
 
-**Docker socket (dev-server panel support).** The example compose file mounts the host's
-`/var/run/docker.sock` into the `kobo` container so the dev-server panel can start/stop/tail logs
-for your projects' own `docker compose` stacks. This grants the container root-equivalent control
-over the host — anyone who can run a command inside `kobo` can spawn a privileged container that
-mounts the host filesystem. Remove that volume line if you don't need the dev-server panel.
+Kōbō ships an official `Dockerfile` and three ready-to-use Compose files, one per use case. All
+three build from the same image; only the topology and a handful of env vars differ.
 
-**SSH access.** The image runs an SSH server for interactive shell access (`ssh -p 2222
-root@<host>`, key-based auth only via the same mounted `~/.ssh`, no password login). Rebuilding the
-image regenerates the SSH host keys, so expect a "host key changed" warning from your SSH client
-after a rebuild — this is expected, not a security incident, as long as you trust the rebuild.
+### Choosing a compose file
+
+| File | Topology | Use it for |
+|---|---|---|
+| [`docker-compose.local.yml`](./docker-compose.local.yml) | Kōbō only, port `3000` published directly. No Traefik, no TLS, no SSH server, no Docker socket. | Trying Kōbō out or poking at a change locally — the fastest path to a running instance. |
+| [`docker-compose.local-traefik.yml`](./docker-compose.local-traefik.yml) | Traefik in front, Kōbō never on a published port, `kobo.localhost` (auto-resolves to `127.0.0.1`, no `/etc/hosts` editing). | Rehearsing the exact reverse-proxy topology/auth/mount setup locally, before touching a real VPS. |
+| [`docker-compose.example.yml`](./docker-compose.example.yml) | Traefik + Let's Encrypt (real domain, real TLS), SSH access, optional Docker-socket passthrough. | The reference for an actual production deployment (VPS behind a reverse proxy). |
+
+All three share the same underlying image (`docker build -t kobo:local .` from the repo root,
+once) and the same core volume set; they differ in network topology and which optional pieces
+(SSH server, Docker socket, TLS) are wired in.
+
+### The image
+
+Multi-stage `Dockerfile`, `node:24-slim` base:
+
+- **Build stage**: installs root + client deps, runs `npm run build` (client via Quasar, server via `tsc`).
+- **Runtime stage**: production deps only, plus OS tooling the agents and forge CLIs need — `git`, `openssh-client` + `openssh-server`, `ripgrep`, `fd-find`, `jq`, `curl`, Python + build tools, the Docker CLI (talks to a mounted host socket, see [Volumes](#volumes)), `gh`, `glab`, `tmux`, `vim`/`nano`, and more for interactive shell use.
+- **Global CLIs**: `@anthropic-ai/claude-code` and `@openai/codex` are installed globally for interactive login (`claude /login`, `codex login` over SSH) — separate from Kōbō's own bundled SDK/subprocess usage, which needs no global install.
+- **`git config --system --add safe.directory '*'`**: the container runs as root, but bind-mounted project repos keep the *host* user's UID on disk. Git's ownership check (CVE-2022-24765 mitigation) refuses to touch a repo it doesn't "own" unless told otherwise. This line pre-trusts every mounted path — fine for a single-user dev container, not something you'd do on a multi-tenant host.
+- **`HEALTHCHECK`**: `curl -f http://localhost:$SERVER_PORT/api/health` every 30s. `/api/health` is exempt from the network-access token gate unconditionally (even with `networkAccessBehindProxy` on) — Docker's `HEALTHCHECK` process has no way to supply the runtime-generated token, and without the exemption a "behind a reverse proxy" container never reports healthy, which makes Traefik's Docker provider filter it out of its router table entirely (Traefik drops unhealthy/starting containers from routing).
+- **`EXPOSE 3000`**, `ENV SERVER_PORT=3000`, entrypoint `docker-entrypoint.sh` → `npm start`.
+
+Build once: `docker build -t kobo:local .`
+
+### Environment variables (Docker)
+
+Beyond the [general environment variables](#environment-variables), these matter specifically for a container deployment:
+
+| Variable | Where it's set | Purpose |
+|---|---|---|
+| `KOBO_HOME` | all three compose files | Points at the named volume mount (`/root/.config/kobo`) so state survives `docker compose down`. |
+| `KOBO_NETWORK_ACCESS_ENABLED` | all three | Binds Kōbō to `0.0.0.0` inside the container at boot — required, since a Docker-forwarded or Traefik-proxied connection never looks like true loopback from Kōbō's point of view, even locally. Without it the container's `127.0.0.1`-only default blocks every external route. |
+| `KOBO_NETWORK_ACCESS_BEHIND_PROXY` | `local-traefik.yml`, `example.yml` | Disables the loopback-trust bypass entirely — needed whenever a reverse proxy sits in front, since every request now looks like it comes from the proxy. Not set in `local.yml`, which publishes Kōbō's port directly with no proxy in between. |
+| `GH_TOKEN` / `GITLAB_TOKEN` | `example.yml` (bring your own via `.env`) | Non-interactive auth for `gh`/`glab` inside the container — there's no browser to complete an interactive `gh auth login` on a headless VPS. |
+| `KOBO_PROJECTS_DIR` | host-side, read by all three via `${KOBO_PROJECTS_DIR:-./kobo-projects}` | Not a container env var — a *host* shell variable that picks the bind-mount source for `/projects`. Defaults to `./kobo-projects` next to the compose file. |
+
+Both `KOBO_NETWORK_ACCESS_ENABLED` and `KOBO_NETWORK_ACCESS_BEHIND_PROXY` are read once at boot —
+this is what lets the container come up fully configured with no manual Settings-UI step (there's
+no browser to click through on a fresh headless deploy). The auto-generated token still needs to be
+retrieved once — see [Token / login flow](#token--login-flow).
+
+### Volumes
+
+| Mount | RO/RW | Purpose |
+|---|---|---|
+| `<name>-data:/root/.config/kobo` (named volume) | RW | Kōbō's own state — SQLite DB, `settings.json`, etc. Named (not bind-mounted) so it survives `docker compose down` without `-v`, and so it can be deliberately **shared** across compose files by reusing the same volume name (see the two local files, both `kobo-test-data`). |
+| `${KOBO_PROJECTS_DIR:-./kobo-projects}:/projects` | RW | The repos you create workspaces against, and their worktrees — all on one filesystem, so a worktree created next to a project lands on the same volume as the project itself. |
+| `${HOME}/.ssh:/root/.ssh` | RO | Git SSH auth — needed to push/pull over SSH remotes. |
+| `${HOME}/.gitconfig:/root/.gitconfig` | RO | Commit author identity. Without it, agent-authored commits fail with "please tell me who you are". |
+| `${HOME}/.claude.json:/root/.claude.json` | RW | Claude Code auth + MCP server registrations. **Must already exist as a file on the host** (run `claude /login` locally first if it doesn't) — Docker silently creates an empty *directory* instead of erroring on a missing bind-mount source, which breaks auth in a confusing way. |
+| `${HOME}/.claude:/root/.claude` | RW | Claude Code's full state directory (skills/plugins cache, session transcripts, memory) — Claude Code writes into this tree during normal operation. |
+| `${HOME}/.codex:/root/.codex` | RW | Codex's full state directory (`auth.json`, `config.toml`). Harmless to mount even if you only use Claude Code. |
+| `/var/run/docker.sock:/var/run/docker.sock` | RW, `example.yml` only | Lets the dev-server panel start/stop/tail logs for your projects' own `docker compose` stacks. **DANGER**: grants the container root-equivalent control over the host — anyone who can run a command inside `kobo` can spawn a privileged container that mounts the host filesystem. Remove this line if you don't need the dev-server panel. |
+
+### Ports
+
+| Port | File(s) | Notes |
+|---|---|---|
+| `3000` (published) | `local.yml` only | Kōbō's HTTP/WS port, published directly — no proxy in front. |
+| `80` | `local-traefik.yml` | Traefik's plain-HTTP entrypoint, routes `kobo.localhost` / `traefik.localhost`. |
+| `443` | `example.yml` | Traefik's TLS entrypoint (Let's Encrypt via the `le` cert resolver), routes your real domain. |
+| `2222 → 22` (published) | `example.yml` only | SSH into the container (`ssh -p 2222 root@<host>`), key-based auth only via the same mounted `~/.ssh`, no password login. The one exception to "no published ports" — Traefik proxies HTTP/WS, not raw TCP, so SSH needs its own path. Rebuilding the image regenerates the SSH host keys, so expect a one-time "host key changed" warning from your SSH client after a rebuild. |
+
+Kōbō itself is **never** published directly in the two Traefik-fronted files — only Traefik is
+reachable, matching the real production posture.
+
+### Token / login flow
+
+All three files pre-enable network access via env vars, so there's no interactive Settings-UI step.
+Retrieve the auto-generated token from the container's boot log, then bookmark the token-bearing URL:
+
+```bash
+docker compose -f <compose-file> logs kobo | grep Token
+```
+
+Open `http://<host>/?token=<token>` (exact host depends on the file — see the walkthroughs below).
+The token is stored in the browser's `localStorage`, so you only paste it once per browser.
+
+### Quick local test — `docker-compose.local.yml`
+
+```bash
+docker build -t kobo:local .                          # once
+docker compose -f docker-compose.local.yml up -d
+docker compose -f docker-compose.local.yml logs kobo | grep Token
+```
+
+Open `http://localhost:3000/?token=<token from above>`.
+
+By default the file bind-mounts `./kobo-projects` (next to it) at `/projects` — put a real git repo
+in there (or set `KOBO_PROJECTS_DIR` to point elsewhere) before creating a workspace. When you get
+to the project-path picker in the Create-workspace UI, remember it's browsing the **container's**
+filesystem, not your host's — your repo shows up under `/projects/<name>`, not wherever it lives on
+your machine. A repo created purely with `git init` has no `origin` remote — Kōbō needs one to
+`git fetch`, so either clone a real project into `/projects`, or point `origin` at any reachable git
+URL (a local bare repo works fine for throwaway testing — see [Troubleshooting](#troubleshooting)).
+
+Stop with `docker compose -f docker-compose.local.yml down` (add `-v` to also drop the named volume
+and lose all Kōbō state).
+
+### Rehearsing the reverse-proxy stack — `docker-compose.local-traefik.yml`
+
+```bash
+docker build -t kobo:local .                          # once, if not already built
+docker compose -f docker-compose.local-traefik.yml up -d
+docker compose -f docker-compose.local-traefik.yml logs kobo | grep Token
+```
+
+Open `http://kobo.localhost/?token=<token from above>` — `.localhost` resolves to `127.0.0.1` on
+most OSes without touching `/etc/hosts`. This exercises the exact routing/auth/mount setup used by
+`docker-compose.example.yml`, minus a real domain and TLS certificate.
+
+**Traefik dashboard**: `http://traefik.localhost`, protected by HTTP basic auth (`admin` /
+`kobo-local` — a local-only throwaway credential). Useful for debugging router/service discovery
+(`/api/http/routers` shows exactly what Traefik sees). To change the password, generate a new hash
+and swap it into the `dashboard-auth` middleware label:
+
+```bash
+openssl passwd -apr1 '<new-password>'
+```
+
+The hash contains literal `$` characters, which Compose's own variable interpolation would try to
+expand — every `$` in the label value must be doubled to `$$` (already done in the shipped file).
+
+This file intentionally shares its named volume (`kobo-test-data`) with `docker-compose.local.yml`,
+so a workspace created under one is visible under the other. If you want isolated state instead,
+rename the volume in one of the two files.
+
+Stop with `docker compose -f docker-compose.local-traefik.yml down`.
+
+### Real deployment — `docker-compose.example.yml`
+
+Before using it:
+
+1. Replace `image: kobo:local` with a real registry tag once one is published, or `docker build -t kobo:local .` from this repo on the target machine.
+2. Replace `kobo.example.com` with your real domain, and `you@example.com` with a real email (Let's Encrypt account).
+3. Populate a `.env` file next to the compose file with `GH_TOKEN` / `GITLAB_TOKEN` if you use the forge integration.
+4. Point every bind mount (`~/.ssh`, `~/.gitconfig`, `~/.claude.json`, `~/.claude`, `~/.codex`) at real paths on the host — see [Volumes](#volumes) for what each one is for, in particular the "`~/.claude.json` must already exist as a file" gotcha.
+5. Decide whether you need the Docker-socket passthrough (dev-server panel). If not, delete that volume line — see the DANGER note in [Volumes](#volumes).
+6. Network access + behind-a-reverse-proxy are already pre-enabled via the `KOBO_NETWORK_ACCESS_*` env vars in the file — no manual bootstrap step.
+
+Bring it up, grab the token, bookmark the URL:
+
+```bash
+docker compose -f docker-compose.example.yml up -d
+docker compose -f docker-compose.example.yml logs kobo | grep Token
+```
+
+Open `https://kobo.example.com/?token=<token>`. SSH access: `ssh -p 2222 root@<host>` (key-based
+only). See [Ports](#ports) and [Volumes](#volumes) above for the full rationale on the Docker socket
+and SSH tradeoffs before deploying this to a real machine.
+
+### Troubleshooting
+
+- **`fatal: detected dubious ownership in repository at '/projects/<name>'`** — only happens if you
+  build your own image without the `git config --system --add safe.directory '*'` line described in
+  [The image](#the-image) above; the shipped image already has it.
+- **A workspace's `git fetch origin` fails with "'origin' does not appear to be a git repository"**
+  — the project under `/projects/<name>` has no `origin` remote (e.g. a plain `git init` test repo).
+  Kōbō's workspace-creation flow always does `git fetch origin <branch>` first. Fix by pointing
+  `origin` at any reachable git URL; for throwaway testing, a local bare repo works fine:
+  ```bash
+  git init -q --bare /projects/my-repo-remote.git
+  git -C /projects/my-repo push /projects/my-repo-remote.git HEAD
+  git -C /projects/my-repo remote add origin /projects/my-repo-remote.git
+  ```
+- **The project-path picker in the Create-workspace UI shows unfamiliar folders** — it browses the
+  **container's** filesystem, not your host's. Your repos show up under `/projects/<name>`, not
+  wherever they live on your machine.
+- **Container stays `unhealthy` / Traefik never routes to it with `KOBO_NETWORK_ACCESS_BEHIND_PROXY=true`**
+  — check `docker inspect <container> --format '{{json .State.Health}}'`. This should not happen on
+  a current image (`/api/health` is exempt from the token gate, see [The image](#the-image)); if you
+  see a 401 in the health log on a custom-built image, you're missing that exemption.
+- **`docker compose logs kobo | grep Token` returns nothing** — network access wasn't enabled at
+  boot. Confirm `KOBO_NETWORK_ACCESS_ENABLED=true` is actually set in the `environment:` block for
+  the `kobo` service.
 
 ## Agent runtimes
 
