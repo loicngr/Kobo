@@ -4,6 +4,14 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.9.0
+
+- feat: opt out a workspace from PR-watch (skip forge polling, keep local git stats)
+- feat: official Docker image, with an example Traefik reverse-proxy stack
+- feat: reverse-proxy-safe auth mode + env-var network-access bootstrap
+- feat: workspace toolbar polish (aligned model badges, copy engine session ID)
+- docs: document reverse-proxy mode, Docker deployment, and Codex maturity
+
 ## 1.8.9
 
 - docs: sync README/AGENTS.md with recent changes, dedupe CHANGELOG
