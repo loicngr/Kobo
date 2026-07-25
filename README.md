@@ -29,7 +29,7 @@ Kōbō runs multiple coding agents in parallel, each isolated in its own git wor
 - **Interactive Q&A**: an agent can pause mid-session to ask a clarifying question through the UI; the workspace surfaces under "Needs Attention" until you answer.
 
   ![Agent asking a clarifying question, awaiting the user's answer](docs/assets/images/agent-question.png)
-- **Auto-loop**: an opt-in mode that walks the task list, spawning a fresh session per task and stopping once there's nothing left to do, progress stalls, an error occurs, or the agent needs input from you.
+- **Auto-loop**: an opt-in mode that walks the task list, spawning a fresh session per task and stopping once there's nothing left to do, progress stalls, an error occurs, or the agent needs input from you. Optionally run the initial brainstorming session on a stronger model and every task after that on a cheaper one, without leaving the engine you picked.
 - **Quota-aware**: 5-hour / 7-day Claude usage and Codex rate-limit buckets sit in the footer, and sessions auto-resume after a rate-limit reset.
 - **Scheduled wakeups**: the agent schedules a one-shot wake-up via the `schedule_wakeup` MCP tool. Kōbō persists it across restarts, shows a live countdown, and re-invokes the agent with the stored prompt at the chosen time.
 - **Cron schedules**: recurring per-workspace triggers the agent registers through MCP tools (`cron_create` / `cron_delete` / `cron_list`). Each tick resumes the workspace session (skipped if already active), and schedules are re-armed at boot with skip-missed semantics.
@@ -75,7 +75,7 @@ The full reference (every env var, every setting key, MCP server registration, N
 ## Agent runtimes
 
 - **Claude Code.** Authenticate once with `claude /login`. Kōbō calls the embedded SDK directly, so no `claude` binary is required at runtime.
-- **OpenAI Codex** (experimental). Run `codex login` or export `OPENAI_API_KEY`. Kōbō spawns a long-lived `codex app-server` subprocess per workspace and bridges its JSON-RPC stream to the same UI.
+- **OpenAI Codex.** Run `codex login` or export `OPENAI_API_KEY`. Kōbō spawns a long-lived `codex app-server` subprocess per workspace and bridges its JSON-RPC stream to the same UI.
 
 You pick the engine at workspace creation. Both share the same task tracking, permission modes, sub-agent panel, and quota footer. The mapping of Kōbō's four permission modes (`plan` / `bypass` / `strict` / `interactive`) to each engine's native sandbox + approval semantics is in [`CONFIGURATION.md`](./CONFIGURATION.md#permission-modes).
 

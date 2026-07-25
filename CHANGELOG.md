@@ -7,7 +7,6 @@ section — the in-app "What's new" dialog reads this file.
 ## 1.8.8
 
 - fix: resolve npm audit findings and scope client audit to prod deps
-- feat: add auto-loop brainstorming model override and Claude Opus 5
 
 ## 1.8.7
 
