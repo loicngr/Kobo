@@ -4,6 +4,10 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.9.2
+
+- feat: fall back to local source branch when origin is unreachable (#14)
+
 ## 1.9.1
 
 - fix: exempt /api/health from network-auth and add local Docker compose stacks
