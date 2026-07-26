@@ -1637,6 +1637,15 @@ async function handleCreate() {
       })
     }
 
+    if ((workspace as { _sourceFallback?: boolean })._sourceFallback) {
+      $q.notify({
+        type: 'warning',
+        message: t('createPage.localSourceFallback'),
+        position: 'top',
+        timeout: 6000,
+      })
+    }
+
     // Persist last-used inputs so the next Create-workspace visit pre-fills
     // them. Run only after a successful create — failures keep the previous
     // saved values intact.

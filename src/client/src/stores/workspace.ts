@@ -597,6 +597,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         // The header is the cheapest way to signal that without changing the
         // JSON shape — the resolved branch is already on the returned workspace.
         const branchAdjusted = res.headers.get('X-Kobo-Branch-Adjusted') === '1'
+        const sourceFallback = res.headers.get('X-Kobo-Source-Fallback') === 'local'
         const data = await res.json()
         const workspace = data.workspace ?? data
         // Dedup against a concurrent fetchWorkspaces() that may have already
@@ -617,6 +618,7 @@ export const useWorkspaceStore = defineStore('workspace', {
           void this.fetchAutoLoopStates()
         }
         ;(workspace as Workspace & { _branchAdjusted?: boolean })._branchAdjusted = branchAdjusted
+        ;(workspace as Workspace & { _sourceFallback?: boolean })._sourceFallback = sourceFallback
         return workspace as Workspace
       } catch (err) {
         console.error('[workspace store] createWorkspace failed:', err)

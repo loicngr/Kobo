@@ -312,6 +312,8 @@ export default {
   'createPage.errorCreating': 'Error al crear el workspace.',
   'createPage.branchAdjusted':
     'La rama ya existía — se creó `{branch}` en su lugar. La carpeta worktree correspondiente usa el mismo sufijo.',
+  'createPage.localSourceFallback':
+    'Workspace creado desde la rama local (origin inalcanzable) — la base puede estar desactualizada.',
   'createPage.validationNotionUrl':
     'Introduce una URL de Notion válida (https://www.notion.so/... o https://app.notion.com/...).',
   'createPage.validationDescription': 'Describe la tarea.',

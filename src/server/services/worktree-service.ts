@@ -112,25 +112,27 @@ function removeFromExclude(projectPath: string, worktreePath: string): void {
   fs.writeFileSync(excludeFile, trimmed ? `${trimmed}\n` : '', 'utf-8')
 }
 
-/** Create a git worktree for the given branch. Returns the worktree path. */
+/** Create a git worktree for the given branch, based on `baseRef`.
+ * `baseRef` is passed explicitly by the caller: `origin/<sourceBranch>` in the
+ * nominal path, or the local `<sourceBranch>` when origin is unreachable.
+ * Returns the worktree path and which base was used. */
 export function createWorktree(
   projectPath: string,
   branchName: string,
-  sourceBranch: string,
+  baseRef: string,
   worktreesPath?: string | null,
   projectSlug?: string,
-): string {
+): { worktreePath: string; base: 'origin' | 'local' } {
   const worktreesDir = resolveWorktreesRoot(projectPath, worktreesPath)
   if (!fs.existsSync(worktreesDir)) {
     fs.mkdirSync(worktreesDir, { recursive: true })
   }
 
   const worktreePath = resolveWorkspaceWorktreePath(projectPath, branchName, worktreesPath, projectSlug)
+  const base: 'origin' | 'local' = baseRef.startsWith('origin/') ? 'origin' : 'local'
 
   try {
-    // Use origin/<sourceBranch> as the base so the worktree starts from the
-    // freshly-fetched remote ref (fetchSourceBranch is always called first).
-    git(projectPath, ['worktree', 'add', '-b', branchName, worktreePath, `origin/${sourceBranch}`])
+    git(projectPath, ['worktree', 'add', '-b', branchName, worktreePath, baseRef])
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
 
@@ -144,7 +146,7 @@ export function createWorktree(
 
   addToExclude(projectPath, worktreePath)
 
-  return worktreePath
+  return { worktreePath, base }
 }
 
 /** Remove a git worktree and clean up the .git/info/exclude entry.
