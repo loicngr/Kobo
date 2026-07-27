@@ -772,6 +772,7 @@ export default {
   'settings.nav.notifications': 'Benachrichtigungen',
   'settings.nav.worktrees': 'Worktrees',
   'settings.nav.export': 'Export',
+  'settings.openNav': 'Navigation öffnen',
   'settings.saveError': 'Fehler beim Speichern der Einstellungen.',
   'settings.projectSaved': 'Projekt gespeichert.',
   'settings.projectSaveError': 'Fehler beim Speichern des Projekts.',
