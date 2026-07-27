@@ -179,6 +179,7 @@ export default {
   'workspacePage.activeSessionModelTooltip': 'Modèle effectivement utilisé par la session sélectionnée',
   'workspacePage.switchEngine': 'Changer d’engine',
   'workspacePage.switchEngineHint': 'Continuer ce workspace avec un autre engine agent',
+  'workspacePage.moreActions': "Plus d'actions",
   'workspacePage.switchEngineTitle': 'Changer d’engine agent',
   'workspacePage.switchEngineWarning':
     'L’agent actuel sera arrêté et une nouvelle session démarrera dans le même worktree.',

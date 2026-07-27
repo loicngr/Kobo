@@ -176,6 +176,7 @@ export default {
   'workspacePage.activeSessionModelTooltip': 'Modell, das von der ausgewählten Sitzung tatsächlich verwendet wird',
   'workspacePage.switchEngine': 'Engine wechseln',
   'workspacePage.switchEngineHint': 'Diesen Workspace mit einer anderen Agent-Engine fortsetzen',
+  'workspacePage.moreActions': 'Weitere Aktionen',
   'workspacePage.switchEngineTitle': 'Agent-Engine wechseln',
   'workspacePage.switchEngineWarning':
     'Der aktuelle Agent wird gestoppt und eine neue Sitzung startet im selben Worktree.',

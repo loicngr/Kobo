@@ -29,140 +29,143 @@
           class="q-ml-sm"
           style="font-size: 10px;"
         />
-        <AutoLoopChip />
-        <q-select
-          v-if="sessions.length > 0"
-          v-model="selectedSessionId"
-          :options="sessionOptions"
-          emit-value
-          map-options
-          dense
-          dark
-          borderless
-          options-dense
-          :loading="creatingSession"
-          :disable="creatingSession"
-          class="q-ml-sm"
-          style="min-width: 160px; max-width: 220px; font-size: 11px;"
-        >
-          <template #option="scope">
-            <q-separator v-if="!scope.opt.isSession" spaced />
-            <q-item v-bind="scope.itemProps" clickable dense class="row items-center no-wrap">
-              <q-item-section>
-                <q-item-label :class="!scope.opt.isSession ? 'text-grey-5' : ''">
-                  {{ scope.opt.label }}
-                </q-item-label>
-                <q-item-label v-if="scope.opt.caption" caption>{{ scope.opt.caption }}</q-item-label>
-              </q-item-section>
-              <q-item-section v-if="scope.opt.isSession" side>
-                <q-btn
-                  icon="more_vert"
-                  flat
-                  dense
-                  round
-                  size="xs"
-                  color="grey-6"
-                  @click.stop
-                >
-                  <q-menu auto-close>
-                    <q-list dense>
-                      <q-item clickable @click="openRenameDialog(scope.opt.value, scope.opt.label)">
-                        <q-item-section avatar><q-icon name="edit" size="16px" /></q-item-section>
-                        <q-item-section>{{ $t('workspacePage.renameSession') }}</q-item-section>
-                      </q-item>
-                      <q-item clickable @click="copyEngineSessionId(scope.opt.value)">
-                        <q-item-section avatar><q-icon name="content_copy" size="16px" /></q-item-section>
-                        <q-item-section>{{ $t('workspacePage.copySessionId') }}</q-item-section>
-                      </q-item>
-                      <q-item v-if="sessionCanBeDeleted(scope.opt.value)" clickable class="text-negative" @click="confirmDeleteSession(scope.opt.value)">
-                        <q-item-section avatar><q-icon name="delete_outline" size="16px" /></q-item-section>
-                        <q-item-section>{{ $t('workspacePage.deleteSession') }}</q-item-section>
-                      </q-item>
-                    </q-list>
-                  </q-menu>
-                </q-btn>
-              </q-item-section>
-            </q-item>
-          </template>
-        </q-select>
-        <q-badge
-          v-if="selectedSessionModel !== null && selectedSessionModel !== selectedWs.model"
-          color="indigo-8"
-          text-color="indigo-1"
-          class="q-ml-sm"
-          style="font-size: 10px;"
-        >
-          <q-icon name="auto_awesome" size="11px" class="q-mr-xs" />
-          {{ $t('workspacePage.activeSessionModel', { model: activeSessionModelLabel }) }}
-          <q-tooltip>{{ $t('workspacePage.activeSessionModelTooltip') }}</q-tooltip>
-        </q-badge>
-        <q-space />
-        <q-select
-          v-model="currentPermissionMode"
-          :options="permissionModeOptions"
-          emit-value
-          map-options
-          dense
-          dark
-          borderless
-          options-dense
-          class="q-mr-xs"
-          style="min-width: 80px; max-width: 140px; font-size: 11px;"
-        >
-          <template #selected>
-            <span class="row items-center no-wrap text-caption text-grey-5">
-              <q-icon :name="currentPermissionMode === 'plan' ? 'visibility' : currentPermissionMode === 'strict' ? 'lock' : currentPermissionMode === 'interactive' ? 'security' : 'flash_on'" size="12px" color="amber-6" class="q-mr-xs" />
-              {{ permissionModeOptions.find(m => m.value === currentPermissionMode)?.label ?? currentPermissionMode }}
-              <q-icon v-if="pendingSpawnChanges.has('agentPermissionMode')" name="schedule" size="11px" color="orange-6" class="q-ml-xs">
-                <q-tooltip>{{ $t('workspacePage.pendingNextRun') }}</q-tooltip>
-              </q-icon>
-            </span>
-          </template>
-        </q-select>
-        <q-select
-          v-model="currentModel"
-          :options="modelOptions"
-          emit-value
-          map-options
-          dense
-          dark
-          borderless
-          options-dense
-          class="q-mr-sm model-select"
-          style="min-width: 100px; max-width: 160px; font-size: 11px;"
-        >
-          <template #selected>
-            <span class="row items-center no-wrap text-caption text-grey-5">
-              <q-icon name="auto_awesome" size="12px" color="indigo-4" class="q-mr-xs" />
-              {{ modelOptions.find(m => m.value === currentModel)?.label ?? currentModel }}
-              <q-icon v-if="pendingSpawnChanges.has('model')" name="schedule" size="11px" color="orange-6" class="q-ml-xs">
-                <q-tooltip>{{ $t('workspacePage.pendingNextRun') }}</q-tooltip>
-              </q-icon>
-            </span>
-          </template>
-        </q-select>
-        <q-select
-          v-model="currentReasoningEffort"
-          :options="reasoningOptions"
-          emit-value
-          map-options
-          dense
-          dark
-          borderless
-          options-dense
-          class="q-mr-sm"
-          style="min-width: 90px; max-width: 140px; font-size: 11px;"
-        >
-          <template #selected>
-            <span class="row items-center no-wrap text-caption text-grey-5">
-              <q-icon name="psychology" size="12px" color="amber-6" class="q-mr-xs" />
-              {{ formatReasoningSelectedLabel(currentReasoningEffort) }}
-              <q-icon v-if="pendingSpawnChanges.has('reasoningEffort')" name="schedule" size="11px" color="orange-6" class="q-ml-xs">
-                <q-tooltip>{{ $t('workspacePage.pendingNextRun') }}</q-tooltip>
-              </q-icon>
-            </span>
-          </template>
-        </q-select>
+        <template v-if="!isMobile">
+          <AutoLoopChip />
+          <q-select
+            v-if="sessions.length > 0"
+            v-model="selectedSessionId"
+            :options="sessionOptions"
+            emit-value
+            map-options
+            dense
+            dark
+            borderless
+            options-dense
+            :loading="creatingSession"
+            :disable="creatingSession"
+            class="q-ml-sm"
+            style="min-width: 160px; max-width: 220px; font-size: 11px;"
+          >
+            <template #option="scope">
+              <q-separator v-if="!scope.opt.isSession" spaced />
+              <q-item v-bind="scope.itemProps" clickable dense class="row items-center no-wrap">
+                <q-item-section>
+                  <q-item-label :class="!scope.opt.isSession ? 'text-grey-5' : ''">
+                    {{ scope.opt.label }}
+                  </q-item-label>
+                  <q-item-label v-if="scope.opt.caption" caption>{{ scope.opt.caption }}</q-item-label>
+                </q-item-section>
+                <q-item-section v-if="scope.opt.isSession" side>
+                  <q-btn
+                    icon="more_vert"
+                    flat
+                    dense
+                    round
+                    size="xs"
+                    color="grey-6"
+                    @click.stop
+                  >
+                    <q-menu auto-close>
+                      <q-list dense>
+                        <q-item clickable @click="openRenameDialog(scope.opt.value, scope.opt.label)">
+                          <q-item-section avatar><q-icon name="edit" size="16px" /></q-item-section>
+                          <q-item-section>{{ $t('workspacePage.renameSession') }}</q-item-section>
+                        </q-item>
+                        <q-item clickable @click="copyEngineSessionId(scope.opt.value)">
+                          <q-item-section avatar><q-icon name="content_copy" size="16px" /></q-item-section>
+                          <q-item-section>{{ $t('workspacePage.copySessionId') }}</q-item-section>
+                        </q-item>
+                        <q-item v-if="sessionCanBeDeleted(scope.opt.value)" clickable class="text-negative" @click="confirmDeleteSession(scope.opt.value)">
+                          <q-item-section avatar><q-icon name="delete_outline" size="16px" /></q-item-section>
+                          <q-item-section>{{ $t('workspacePage.deleteSession') }}</q-item-section>
+                        </q-item>
+                      </q-list>
+                    </q-menu>
+                  </q-btn>
+                </q-item-section>
+              </q-item>
+            </template>
+          </q-select>
+          <q-badge
+            v-if="selectedSessionModel !== null && selectedSessionModel !== selectedWs.model"
+            color="indigo-8"
+            text-color="indigo-1"
+            class="q-ml-sm"
+            style="font-size: 10px;"
+          >
+            <q-icon name="auto_awesome" size="11px" class="q-mr-xs" />
+            {{ $t('workspacePage.activeSessionModel', { model: activeSessionModelLabel }) }}
+            <q-tooltip>{{ $t('workspacePage.activeSessionModelTooltip') }}</q-tooltip>
+          </q-badge>
+          <q-space />
+          <q-select
+            v-model="currentPermissionMode"
+            :options="permissionModeOptions"
+            emit-value
+            map-options
+            dense
+            dark
+            borderless
+            options-dense
+            class="q-mr-xs"
+            style="min-width: 80px; max-width: 140px; font-size: 11px;"
+          >
+            <template #selected>
+              <span class="row items-center no-wrap text-caption text-grey-5">
+                <q-icon :name="currentPermissionMode === 'plan' ? 'visibility' : currentPermissionMode === 'strict' ? 'lock' : currentPermissionMode === 'interactive' ? 'security' : 'flash_on'" size="12px" color="amber-6" class="q-mr-xs" />
+                {{ permissionModeOptions.find(m => m.value === currentPermissionMode)?.label ?? currentPermissionMode }}
+                <q-icon v-if="pendingSpawnChanges.has('agentPermissionMode')" name="schedule" size="11px" color="orange-6" class="q-ml-xs">
+                  <q-tooltip>{{ $t('workspacePage.pendingNextRun') }}</q-tooltip>
+                </q-icon>
+              </span>
+            </template>
+          </q-select>
+          <q-select
+            v-model="currentModel"
+            :options="modelOptions"
+            emit-value
+            map-options
+            dense
+            dark
+            borderless
+            options-dense
+            class="q-mr-sm model-select"
+            style="min-width: 100px; max-width: 160px; font-size: 11px;"
+          >
+            <template #selected>
+              <span class="row items-center no-wrap text-caption text-grey-5">
+                <q-icon name="auto_awesome" size="12px" color="indigo-4" class="q-mr-xs" />
+                {{ modelOptions.find(m => m.value === currentModel)?.label ?? currentModel }}
+                <q-icon v-if="pendingSpawnChanges.has('model')" name="schedule" size="11px" color="orange-6" class="q-ml-xs">
+                  <q-tooltip>{{ $t('workspacePage.pendingNextRun') }}</q-tooltip>
+                </q-icon>
+              </span>
+            </template>
+          </q-select>
+          <q-select
+            v-model="currentReasoningEffort"
+            :options="reasoningOptions"
+            emit-value
+            map-options
+            dense
+            dark
+            borderless
+            options-dense
+            class="q-mr-sm"
+            style="min-width: 90px; max-width: 140px; font-size: 11px;"
+          >
+            <template #selected>
+              <span class="row items-center no-wrap text-caption text-grey-5">
+                <q-icon name="psychology" size="12px" color="amber-6" class="q-mr-xs" />
+                {{ formatReasoningSelectedLabel(currentReasoningEffort) }}
+                <q-icon v-if="pendingSpawnChanges.has('reasoningEffort')" name="schedule" size="11px" color="orange-6" class="q-ml-xs">
+                  <q-tooltip>{{ $t('workspacePage.pendingNextRun') }}</q-tooltip>
+                </q-icon>
+              </span>
+            </template>
+          </q-select>
+        </template>
+        <q-space v-else />
         <WorkspaceWhipControl
           v-if="selectedWs && !selectedWs.archivedAt"
           :workspace-id="selectedWs.id"
@@ -184,12 +187,160 @@
           size="sm"
           color="negative"
           icon="stop"
-          :label="$t('common.stop')"
+          :label="isMobile ? undefined : $t('common.stop')"
           class="q-mr-xs"
           :loading="stopping"
           :disable="stopping"
           @click="handleStop"
         />
+        <q-btn
+          v-if="isMobile"
+          flat
+          dense
+          round
+          icon="more_vert"
+          :aria-label="$t('workspacePage.moreActions')"
+        >
+          <q-tooltip>{{ $t('workspacePage.moreActions') }}</q-tooltip>
+          <q-menu>
+            <q-list style="min-width: 240px">
+              <q-item>
+                <q-item-section @click.stop>
+                  <AutoLoopChip />
+                </q-item-section>
+              </q-item>
+              <q-item v-if="sessions.length > 0">
+                <q-item-section @click.stop>
+                  <q-select
+                    v-model="selectedSessionId"
+                    :options="sessionOptions"
+                    emit-value
+                    map-options
+                    dense
+                    dark
+                    borderless
+                    options-dense
+                    :loading="creatingSession"
+                    :disable="creatingSession"
+                    style="min-width: 160px; font-size: 11px;"
+                  >
+                    <template #option="scope">
+                      <q-separator v-if="!scope.opt.isSession" spaced />
+                      <q-item v-bind="scope.itemProps" clickable dense class="row items-center no-wrap">
+                        <q-item-section>
+                          <q-item-label :class="!scope.opt.isSession ? 'text-grey-5' : ''">
+                            {{ scope.opt.label }}
+                          </q-item-label>
+                          <q-item-label v-if="scope.opt.caption" caption>{{ scope.opt.caption }}</q-item-label>
+                        </q-item-section>
+                        <q-item-section v-if="scope.opt.isSession" side>
+                          <q-btn
+                            icon="more_vert"
+                            flat
+                            dense
+                            round
+                            size="xs"
+                            color="grey-6"
+                            @click.stop
+                          >
+                            <q-menu auto-close>
+                              <q-list dense>
+                                <q-item clickable @click="openRenameDialog(scope.opt.value, scope.opt.label)">
+                                  <q-item-section avatar><q-icon name="edit" size="16px" /></q-item-section>
+                                  <q-item-section>{{ $t('workspacePage.renameSession') }}</q-item-section>
+                                </q-item>
+                                <q-item clickable @click="copyEngineSessionId(scope.opt.value)">
+                                  <q-item-section avatar><q-icon name="content_copy" size="16px" /></q-item-section>
+                                  <q-item-section>{{ $t('workspacePage.copySessionId') }}</q-item-section>
+                                </q-item>
+                              </q-list>
+                            </q-menu>
+                          </q-btn>
+                        </q-item-section>
+                      </q-item>
+                    </template>
+                  </q-select>
+                </q-item-section>
+              </q-item>
+              <q-item>
+                <q-item-section @click.stop>
+                  <q-select
+                    v-model="currentPermissionMode"
+                    :options="permissionModeOptions"
+                    emit-value
+                    map-options
+                    dense
+                    dark
+                    borderless
+                    options-dense
+                    style="min-width: 160px; font-size: 11px;"
+                  >
+                    <template #selected>
+                      <span class="row items-center no-wrap text-caption text-grey-5">
+                        <q-icon :name="currentPermissionMode === 'plan' ? 'visibility' : currentPermissionMode === 'strict' ? 'lock' : currentPermissionMode === 'interactive' ? 'security' : 'flash_on'" size="12px" color="amber-6" class="q-mr-xs" />
+                        {{ permissionModeOptions.find(m => m.value === currentPermissionMode)?.label ?? currentPermissionMode }}
+                        <q-icon v-if="pendingSpawnChanges.has('agentPermissionMode')" name="schedule" size="11px" color="orange-6" class="q-ml-xs">
+                          <q-tooltip>{{ $t('workspacePage.pendingNextRun') }}</q-tooltip>
+                        </q-icon>
+                      </span>
+                    </template>
+                  </q-select>
+                </q-item-section>
+              </q-item>
+              <q-item>
+                <q-item-section @click.stop>
+                  <q-select
+                    v-model="currentModel"
+                    :options="modelOptions"
+                    emit-value
+                    map-options
+                    dense
+                    dark
+                    borderless
+                    options-dense
+                    class="model-select"
+                    style="min-width: 160px; font-size: 11px;"
+                  >
+                    <template #selected>
+                      <span class="row items-center no-wrap text-caption text-grey-5">
+                        <q-icon name="auto_awesome" size="12px" color="indigo-4" class="q-mr-xs" />
+                        {{ modelOptions.find(m => m.value === currentModel)?.label ?? currentModel }}
+                        <q-icon v-if="pendingSpawnChanges.has('model')" name="schedule" size="11px" color="orange-6" class="q-ml-xs">
+                          <q-tooltip>{{ $t('workspacePage.pendingNextRun') }}</q-tooltip>
+                        </q-icon>
+                      </span>
+                    </template>
+                  </q-select>
+                </q-item-section>
+              </q-item>
+              <q-item>
+                <q-item-section @click.stop>
+                  <q-select
+                    v-model="currentReasoningEffort"
+                    :options="reasoningOptions"
+                    emit-value
+                    map-options
+                    dense
+                    dark
+                    borderless
+                    options-dense
+                    style="min-width: 160px; font-size: 11px;"
+                  >
+                    <template #selected>
+                      <span class="row items-center no-wrap text-caption text-grey-5">
+                        <q-icon name="psychology" size="12px" color="amber-6" class="q-mr-xs" />
+                        {{ formatReasoningSelectedLabel(currentReasoningEffort) }}
+                        <q-icon v-if="pendingSpawnChanges.has('reasoningEffort')" name="schedule" size="11px" color="orange-6" class="q-ml-xs">
+                          <q-tooltip>{{ $t('workspacePage.pendingNextRun') }}</q-tooltip>
+                        </q-icon>
+                      </span>
+                    </template>
+                  </q-select>
+                </q-item-section>
+              </q-item>
+            </q-list>
+          </q-menu>
+        </q-btn>
       </template>
       <template v-else>
         <span class="text-body2 text-grey-8">
@@ -446,6 +597,7 @@
 
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
+import { useIsMobile } from 'src/composables/use-is-mobile'
 import { EFFORT_OPTION_DEFS_BY_ENGINE } from 'src/constants/efforts'
 import { MODEL_OPTION_DEFS, MODEL_OPTION_DEFS_BY_ENGINE } from 'src/constants/models'
 import { PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
@@ -481,6 +633,7 @@ import WorkspaceHistorySearch from 'src/components/WorkspaceHistorySearch.vue'
 import WorkspaceWhipControl from 'src/components/WorkspaceWhipControl.vue'
 
 const $q = useQuasar()
+const { isMobile } = useIsMobile()
 const store = useWorkspaceStore()
 const layout = useLayoutStore()
 const { t } = useI18n()
