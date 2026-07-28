@@ -58,11 +58,11 @@
 </template>
 
 <script setup lang="ts">
+import { useIsMobile } from 'src/composables/use-is-mobile'
+import { useLayoutStore } from 'src/stores/layout'
 import { renderChatMarkdown } from 'src/utils/render-chat-markdown'
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { useIsMobile } from 'src/composables/use-is-mobile'
-import { useLayoutStore } from 'src/stores/layout'
 
 interface ChangelogEntry {
   version: string

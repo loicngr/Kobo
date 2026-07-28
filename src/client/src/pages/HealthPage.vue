@@ -337,10 +337,10 @@
 
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
-import { computed, onMounted, ref } from 'vue'
-import { useRouter } from 'vue-router'
 import { useIsMobile } from 'src/composables/use-is-mobile'
 import { useLayoutStore } from 'src/stores/layout'
+import { computed, onMounted, ref } from 'vue'
+import { useRouter } from 'vue-router'
 
 const $q = useQuasar()
 const router = useRouter()
