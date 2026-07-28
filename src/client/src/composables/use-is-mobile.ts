@@ -2,11 +2,14 @@ import { useQuasar } from 'quasar'
 import { computed } from 'vue'
 
 /**
- * Single source of truth for "phone portrait" (< 600px, Quasar `lt.sm`).
- * Reused by SettingsPage, WorkspacePage and ChatInput to branch layout.
+ * Responsive breakpoints for the client.
+ * - isMobile: phone portrait (< 600px, Quasar `lt.sm`) — layout compactness.
+ * - isDrawerCollapsed: the global left drawer is an overlay (< 1024px, `lt.md`),
+ *   matching MainLayout's DRAWER_BREAKPOINT. Use for "re-open the drawer" affordances.
  */
 export function useIsMobile() {
   const $q = useQuasar()
   const isMobile = computed(() => $q.screen.lt.sm)
-  return { isMobile }
+  const isDrawerCollapsed = computed(() => $q.screen.lt.md)
+  return { isMobile, isDrawerCollapsed }
 }
