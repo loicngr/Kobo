@@ -233,7 +233,7 @@ describe('listOrphanWorktrees(projectPath, attachedPaths)', () => {
     const orphans = listOrphanWorktrees(projectPath, attached)
 
     expect(orphans).toHaveLength(1)
-    expect(orphans[0].path).toBe(wt2)
+    expect(fs.realpathSync(orphans[0].path)).toBe(fs.realpathSync(wt2))
     expect(orphans[0].branch).toBe('feature/bar')
     expect(orphans[0].head).toBeTruthy()
     expect(orphans[0].suggestedSourceBranch).toBe('main') // origin/HEAD fallback
@@ -245,7 +245,7 @@ describe('listOrphanWorktrees(projectPath, attachedPaths)', () => {
 
     const orphans = listOrphanWorktrees(projectPath, new Set())
     expect(orphans).toHaveLength(1)
-    expect(orphans[0].path).toBe(wt1)
+    expect(fs.realpathSync(orphans[0].path)).toBe(fs.realpathSync(wt1))
   })
 
   it('excludes detached HEAD worktrees', () => {
