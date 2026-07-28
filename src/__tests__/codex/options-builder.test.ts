@@ -16,9 +16,9 @@ describe('buildCodexOptions — permission mode mapping', () => {
     expect(threadParams.approvalPolicy).toBe('never')
   })
 
-  it('bypass → sandbox: workspace-write, approvalPolicy: never', () => {
+  it('bypass → sandbox: danger-full-access, approvalPolicy: never', () => {
     const { threadParams } = buildCodexOptions({ ...BASE_INPUT, agentPermissionMode: 'bypass' })
-    expect(threadParams.sandbox).toBe('workspace-write')
+    expect(threadParams.sandbox).toBe('danger-full-access')
     expect(threadParams.approvalPolicy).toBe('never')
   })
 

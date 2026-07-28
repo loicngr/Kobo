@@ -57,7 +57,7 @@ export function buildCodexOptions(input: BuildCodexOptionsInput): BuildCodexOpti
       threadParams.approvalPolicy = 'never'
       break
     case 'bypass':
-      threadParams.sandbox = 'workspace-write'
+      threadParams.sandbox = 'danger-full-access'
       threadParams.approvalPolicy = 'never'
       break
     case 'strict':

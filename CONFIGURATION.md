@@ -691,11 +691,12 @@ Each engine maps Kōbō's four modes onto its own sandbox + approval flags. The 
 | Kōbō mode | Codex sandbox | Codex approval | `collaborationMode` |
 |---|---|---|---|
 | `plan` | `read-only` | `never` | `plan` (enables `request_user_input`) |
-| `bypass` | `workspace-write` | `never` | `default` |
+| `bypass` | `danger-full-access` | `never` | `default` |
 | `strict` | `workspace-write` | `on-request` | `default` |
 | `interactive` | `workspace-write` | `unless-trusted` | `default` |
 
 Interactive Q&A (`request_user_input`) is only available in `plan` for Codex, a constraint of Codex itself.
+Full access in `bypass` is required for linked-worktree Git metadata under the repository's shared `.git` directory.
 
 ## Dev server
 
