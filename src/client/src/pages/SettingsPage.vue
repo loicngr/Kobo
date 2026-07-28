@@ -16,6 +16,15 @@
         behavior="mobile"
         :width="240"
       >
+        <q-list>
+          <q-item clickable @click="openWorkspacesDrawer">
+            <q-item-section avatar>
+              <q-icon name="arrow_back" />
+            </q-item-section>
+            <q-item-section>{{ $t('workspaceList.title') }}</q-item-section>
+          </q-item>
+          <q-separator />
+        </q-list>
         <div class="settings-nav">
           <div class="settings-nav__title">{{ $t('settings.title') }}</div>
           <SettingsNavList :nav-items="navItems" :active-tab="activeTab" @select="selectTab" />
@@ -2483,6 +2492,7 @@ import { useIsMobile } from 'src/composables/use-is-mobile'
 import { useOnboarding } from 'src/composables/use-onboarding'
 import { CODEX_MODEL_OPTION_DEFS, MODEL_OPTION_DEFS } from 'src/constants/models'
 import { type AgentPermissionMode, PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
+import { useLayoutStore } from 'src/stores/layout'
 import type { ProjectSettings } from 'src/stores/settings'
 import { useSettingsStore } from 'src/stores/settings'
 import { type Template, useTemplatesStore } from 'src/stores/templates'
@@ -2519,6 +2529,7 @@ const templatesStore = useTemplatesStore()
 const { t, locale } = useI18n()
 const { startTour } = useOnboarding()
 const { isMobile } = useIsMobile()
+const layout = useLayoutStore()
 
 // Tab state
 const activeTab = ref('general')
@@ -2527,6 +2538,11 @@ const navDrawerOpen = ref(false)
 function selectTab(tab: string) {
   activeTab.value = tab
   if (isMobile.value) navDrawerOpen.value = false
+}
+
+function openWorkspacesDrawer() {
+  navDrawerOpen.value = false
+  layout.toggleLeft()
 }
 
 const navItems = computed(() => [
