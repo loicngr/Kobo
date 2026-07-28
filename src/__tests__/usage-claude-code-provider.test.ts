@@ -14,6 +14,15 @@ describe('claude-code usage provider', () => {
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kobo-claude-creds-'))
     process.env.CLAUDE_CONFIG_DIR = tmpDir
+    vi.mocked(execFile).mockImplementation(((
+      _cmd: string,
+      _args: readonly string[],
+      _opts: unknown,
+      cb: (e: Error | null, stdout: string) => void,
+    ) => {
+      cb(new Error('SecKeychainSearchCopyNext: item not found'), '')
+      return {} as never
+    }) as never)
   })
 
   afterEach(async () => {
