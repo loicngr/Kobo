@@ -34,6 +34,7 @@
       <!-- Content panel -->
       <main class="settings-content">
         <header class="settings-content__header">
+          <DrawerToggleButton exclude-mobile class="q-mr-sm" />
           <q-btn
             v-if="isMobile"
             flat
@@ -2484,6 +2485,7 @@ where ffmpeg</pre>
 <script setup lang="ts">
 import QRCode from 'qrcode'
 import { type QInput, useQuasar } from 'quasar'
+import DrawerToggleButton from 'src/components/DrawerToggleButton.vue'
 import FolderPickerDialog from 'src/components/FolderPickerDialog.vue'
 import PrNotificationSoundSettings from 'src/components/PrNotificationSoundSettings.vue'
 import SettingsNavList from 'src/components/SettingsNavList.vue'
