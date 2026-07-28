@@ -2,18 +2,7 @@
   <q-page class="q-pa-md search-page">
     <div class="search-header">
       <div class="row items-center">
-        <q-btn
-          v-if="isDrawerCollapsed"
-          flat
-          dense
-          round
-          size="sm"
-          class="q-mr-sm"
-          :icon="layout.leftDrawerOpen ? 'menu_open' : 'menu'"
-          @click="layout.toggleLeft()"
-        >
-          <q-tooltip>{{ $t('layout.toggleWorkspaces') }}</q-tooltip>
-        </q-btn>
+        <DrawerToggleButton class="q-mr-sm" />
         <h2 class="text-h5 q-mb-md">{{ $t('search.title') }}</h2>
       </div>
 
@@ -90,8 +79,7 @@
 </template>
 
 <script setup lang="ts">
-import { useIsMobile } from 'src/composables/use-is-mobile'
-import { useLayoutStore } from 'src/stores/layout'
+import DrawerToggleButton from 'src/components/DrawerToggleButton.vue'
 import { type SearchResult, useSearchStore } from 'src/stores/search'
 import { useTimeAgo } from 'src/utils/formatters'
 import { ref, watch } from 'vue'
@@ -102,8 +90,6 @@ const store = useSearchStore()
 const router = useRouter()
 const { t } = useI18n()
 const { timeAgo } = useTimeAgo()
-const layout = useLayoutStore()
-const { isDrawerCollapsed } = useIsMobile()
 
 const inputEl = ref<HTMLInputElement | null>(null)
 let debounceTimer: ReturnType<typeof setTimeout> | null = null

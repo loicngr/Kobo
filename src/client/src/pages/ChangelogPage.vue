@@ -1,15 +1,7 @@
 <template>
   <q-page class="q-pa-md" style="max-width: 900px; margin: 0 auto;">
     <div class="row items-center q-mb-md">
-      <q-btn
-        v-if="isDrawerCollapsed"
-        flat dense round size="sm"
-        class="q-mr-xs"
-        :icon="layout.leftDrawerOpen ? 'menu_open' : 'menu'"
-        @click="layout.toggleLeft()"
-      >
-        <q-tooltip>{{ $t('layout.toggleWorkspaces') }}</q-tooltip>
-      </q-btn>
+      <DrawerToggleButton class="q-mr-xs" />
       <q-btn flat dense round icon="arrow_back" @click="router.back()" />
       <div class="text-h6 q-ml-sm">{{ $t('changelog.title') }}</div>
       <q-space />
@@ -58,8 +50,7 @@
 </template>
 
 <script setup lang="ts">
-import { useIsMobile } from 'src/composables/use-is-mobile'
-import { useLayoutStore } from 'src/stores/layout'
+import DrawerToggleButton from 'src/components/DrawerToggleButton.vue'
 import { renderChatMarkdown } from 'src/utils/render-chat-markdown'
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
@@ -70,8 +61,6 @@ interface ChangelogEntry {
 }
 
 const router = useRouter()
-const layout = useLayoutStore()
-const { isDrawerCollapsed } = useIsMobile()
 const versions = ref<ChangelogEntry[]>([])
 const currentVersion = ref<string>('')
 const loading = ref<boolean>(false)

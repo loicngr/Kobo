@@ -1,17 +1,6 @@
 <template>
   <q-page class="create-page">
-    <q-btn
-      v-if="isDrawerCollapsed"
-      flat
-      dense
-      round
-      size="sm"
-      class="create-page__drawer-toggle"
-      :icon="layout.leftDrawerOpen ? 'menu_open' : 'menu'"
-      @click="layout.toggleLeft()"
-    >
-      <q-tooltip>{{ $t('layout.toggleWorkspaces') }}</q-tooltip>
-    </q-btn>
+    <DrawerToggleButton class="create-page__drawer-toggle" />
     <div class="create-inner q-mx-auto">
       <header class="q-mb-lg">
         <div class="create-title text-weight-bold text-grey-2">{{ $t('createPage.title') }}</div>
@@ -716,13 +705,12 @@
 <script setup lang="ts">
 import type { QInput } from 'quasar'
 import { useQuasar } from 'quasar'
+import DrawerToggleButton from 'src/components/DrawerToggleButton.vue'
 import SlashSuggestionsPopup from 'src/components/SlashSuggestionsPopup.vue'
-import { useIsMobile } from 'src/composables/use-is-mobile'
 import { type SlashDropdownItem, useSlashAutocomplete } from 'src/composables/use-slash-autocomplete'
 import { EFFORT_OPTION_DEFS_BY_ENGINE } from 'src/constants/efforts'
 import { MODEL_OPTION_DEFS, MODEL_OPTION_DEFS_BY_ENGINE } from 'src/constants/models'
 import { PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
-import { useLayoutStore } from 'src/stores/layout'
 import { useSettingsStore } from 'src/stores/settings'
 import { useTemplatesStore } from 'src/stores/templates'
 import { useWebSocketStore } from 'src/stores/websocket'
@@ -762,8 +750,6 @@ const router = useRouter()
 const $q = useQuasar()
 const store = useWorkspaceStore()
 const settingsStore = useSettingsStore()
-const layout = useLayoutStore()
-const { isDrawerCollapsed } = useIsMobile()
 const { t } = useI18n()
 
 const pathFilterOptions = ref<string[]>([])
