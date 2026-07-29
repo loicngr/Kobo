@@ -55,6 +55,8 @@ export function createCodexEngine(): AgentEngine {
       let iteratorRunning = false
       let userInterrupted = false
       let discoveredSessionId: string | undefined = options.resumeFromEngineSessionId
+      let activeTurnId: string | undefined
+      let steerChain: Promise<void> = Promise.resolve()
 
       const safeEmit = (ev: AgentEvent): void => {
         try {
@@ -128,7 +130,7 @@ export function createCodexEngine(): AgentEngine {
           if (method === 'turn/completed') {
             const n = params as TurnCompletedNotification
             for (const ev of handleTurnCompleted(n, mapperState)) safeEmit(ev)
-            resolveTurnDone()
+            if (!activeTurnId || !n.turn?.id || n.turn.id === activeTurnId) resolveTurnDone()
             return
           }
 
@@ -219,11 +221,12 @@ export function createCodexEngine(): AgentEngine {
 
           // collaborationMode is sticky server-side — always send it explicitly,
           // never omit (would leave a Bypass turn stuck in a previous Plan mode).
-          await client.startTurn({
+          const initialTurn = await client.startTurn({
             threadId: discoveredSessionId!,
             input,
             collaborationMode,
           })
+          activeTurnId = initialTurn.turnId
 
           await turnDonePromise
 
@@ -276,8 +279,21 @@ export function createCodexEngine(): AgentEngine {
         isAlive(): boolean {
           return iteratorRunning
         },
-        sendMessage() {
-          throw new Error('sendMessage not supported in Codex app-server single-shot mode')
+        sendMessage(text: string): Promise<void> {
+          const steer = async (): Promise<void> => {
+            if (!discoveredSessionId || !activeTurnId) {
+              throw new Error('Codex session is not ready to receive a message')
+            }
+            const response = await client.steerTurn({
+              threadId: discoveredSessionId,
+              expectedTurnId: activeTurnId,
+              input: [{ type: 'text', text, text_elements: [] }],
+            })
+            activeTurnId = response.turnId
+          }
+          const queued = steerChain.then(steer)
+          steerChain = queued.catch(() => {})
+          return queued
         },
         interrupt() {
           userInterrupted = true

@@ -52,6 +52,7 @@ vi.mock('../server/services/agent/orchestrator.js', () => ({
   startAgent: vi.fn().mockReturnValue({ agentSessionId: 'mock-agent-session-id' }),
   stopAgent: vi.fn(),
   sendMessage: vi.fn(),
+  hasController: vi.fn(() => false),
   getAgentStatus: vi.fn().mockReturnValue(null),
   getActiveSessionId: vi.fn().mockReturnValue('active-session-id'),
 }))
@@ -1888,6 +1889,20 @@ describe('PATCH /api/workspaces/:id', () => {
     })
 
     expect(res.status).toBe(404)
+  })
+
+  it('refuses to mark an active agent workspace idle', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(agentManager.hasController).mockReturnValue(true)
+
+    const res = await app.request('/api/workspaces/ws-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'idle' }),
+    })
+
+    expect(res.status).toBe(409)
+    expect(workspaceService.updateWorkspaceStatus).not.toHaveBeenCalled()
   })
 })
 

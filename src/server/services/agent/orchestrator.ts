@@ -1001,7 +1001,7 @@ export function stopAgent(workspaceId: string): void {
 }
 
 /** Write a user message to the running agent. */
-export function sendMessage(workspaceId: string, content: string, expectedSessionId?: string): void {
+export function sendMessage(workspaceId: string, content: string, expectedSessionId?: string): void | Promise<void> {
   const ctrl = controllers.get(workspaceId)
   if (!ctrl) {
     throw new Error(`No agent running for workspace '${workspaceId}'`)
@@ -1010,7 +1010,7 @@ export function sendMessage(workspaceId: string, content: string, expectedSessio
     throw new Error(`Session '${expectedSessionId}' is not active for workspace '${workspaceId}'`)
   }
   wakeupService.cancel(workspaceId, 'user-message')
-  ctrl.sendMessage(content)
+  return ctrl.sendMessage(content)
 }
 
 /**
@@ -1023,10 +1023,12 @@ function formatDeferredAnswerForChat(questions: unknown, answers: Record<string,
   const lines: string[] = []
   for (const q of questions) {
     if (!q || typeof q !== 'object') continue
+    if ((q as { isSecret?: unknown }).isSecret === true) continue
     const questionText =
       typeof (q as { question?: unknown }).question === 'string' ? (q as { question: string }).question : null
     if (!questionText) continue
-    const answer = answers[questionText]
+    const questionId = typeof (q as { id?: unknown }).id === 'string' ? (q as { id: string }).id : questionText
+    const answer = answers[questionId] ?? answers[questionText]
     if (!answer) continue
     lines.push(`- **${questionText}** → ${answer}`)
   }
@@ -1042,7 +1044,7 @@ export async function answerPendingQuestion(
   workspaceId: string,
   answers: Record<string, string>,
   expectedToolCallId?: string,
-  opts?: { awaitingFreeForm?: boolean },
+  opts?: { awaitingFreeForm?: boolean; response?: string },
 ): Promise<void> {
   const head = peekPending(workspaceId)
   if (!head) {
@@ -1085,7 +1087,11 @@ export async function answerPendingQuestion(
     throw new Error(`Agent for workspace '${workspaceId}' has no active engine process`)
   }
 
-  const resolved = engineProcess.resolvePendingUserInput(head.toolCallId, { kind: 'question', answers })
+  const resolved = engineProcess.resolvePendingUserInput(head.toolCallId, {
+    kind: 'question',
+    answers,
+    ...(opts?.response !== undefined ? { response: opts.response } : {}),
+  })
   if (!resolved) {
     throw new Error(`No pending callback for toolCallId '${head.toolCallId}'`)
   }

@@ -18,7 +18,7 @@ export interface AgentEngine {
 }
 
 export type PendingUserInputResponse =
-  | { kind: 'question'; answers: Record<string, string> }
+  | { kind: 'question'; answers: Record<string, string>; response?: string }
   | { kind: 'question-cancel'; reason?: string }
   | { kind: 'permission-allow' }
   | { kind: 'permission-deny'; reason?: string }
@@ -26,7 +26,7 @@ export type PendingUserInputResponse =
 export interface EngineProcess {
   readonly pid: number | undefined
   readonly engineSessionId: string | undefined
-  sendMessage(text: string): void
+  sendMessage(text: string): void | Promise<void>
   interrupt(): void
   stop(): Promise<void>
   /**

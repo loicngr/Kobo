@@ -122,6 +122,25 @@ describe('claude-code engine (SDK)', () => {
     expect(opts?.mcpServers?.['kobo-tasks']?.type).toBe('stdio')
   })
 
+  it('disables the native ScheduleWakeup tool in favor of Kōbō wakeups', async () => {
+    const { query } = await import('@anthropic-ai/claude-agent-sdk')
+    const engine = createClaudeCodeEngine()
+    await engine.start(
+      {
+        workspaceId: 'w-kobo-wakeup',
+        workingDir: '/tmp',
+        prompt: 'wait for CI',
+        backendUrl: 'http://localhost:3000',
+        koboHome: '/tmp/kobo',
+        settings: { dangerouslySkipPermissions: true } as any,
+      },
+      () => {},
+    )
+
+    const args = vi.mocked(query).mock.calls.at(-1)?.[0] as { options?: { disallowedTools?: string[] } } | undefined
+    expect(args?.options?.disallowedTools).toContain('ScheduleWakeup')
+  })
+
   it('isAlive() flips false after the iterator completes (watchdog signal)', async () => {
     const engine = createClaudeCodeEngine()
     const events: AgentEvent[] = []
@@ -426,6 +445,78 @@ describe('claude-code engine — forced chat input', () => {
         type: 'user',
         message: { role: 'user', content: 'arrête la vérification PTI' },
         parent_tool_use_id: null,
+      })
+    } finally {
+      vi.doUnmock('@anthropic-ai/claude-agent-sdk')
+      vi.resetModules()
+    }
+  })
+})
+
+describe('claude-code engine — free-form question response', () => {
+  it('forwards a free-form response alongside structured answers to the SDK', async () => {
+    vi.resetModules()
+    let resolveToolResult: ((result: unknown) => void) | undefined
+    const toolResult = new Promise<unknown>((resolve) => {
+      resolveToolResult = resolve
+    })
+
+    vi.doMock('@anthropic-ai/claude-agent-sdk', () => ({
+      query: vi.fn(
+        (args: {
+          options?: {
+            canUseTool?: (
+              name: string,
+              input: unknown,
+              ctx: { toolUseID: string; signal: AbortSignal },
+            ) => Promise<unknown>
+          }
+        }) => ({
+          async *[Symbol.asyncIterator]() {
+            yield { type: 'system', subtype: 'init', session_id: 'free-form-session', model: 'm', slash_commands: [] }
+            const result = await args.options?.canUseTool?.(
+              'AskUserQuestion',
+              { questions: [{ question: 'Quel détail faut-il ajouter ?', header: 'Détail', options: [] }] },
+              { toolUseID: 'question-1', signal: new AbortController().signal },
+            )
+            resolveToolResult?.(result)
+            yield { type: 'result', subtype: 'success', usage: { input_tokens: 1, output_tokens: 1 } }
+          },
+          interrupt: vi.fn(),
+        }),
+      ),
+    }))
+
+    try {
+      const { createClaudeCodeEngine } = await import('../server/services/agent/engines/claude-code/engine.js')
+      const proc = await createClaudeCodeEngine().start(
+        {
+          workspaceId: 'w-free-form',
+          workingDir: '/tmp',
+          prompt: 'initial prompt',
+          backendUrl: 'http://localhost:3000',
+          koboHome: '/tmp/kobo',
+          settings: { dangerouslySkipPermissions: true } as any,
+          agentPermissionMode: 'interactive',
+        },
+        () => {},
+      )
+
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      expect(
+        proc.resolvePendingUserInput('question-1', {
+          kind: 'question',
+          answers: { 'Quel détail faut-il ajouter ?': 'Autre' },
+          response: 'Reproduire le problème sur un iPhone réel.',
+        }),
+      ).toBe(true)
+
+      await expect(toolResult).resolves.toMatchObject({
+        behavior: 'allow',
+        updatedInput: {
+          answers: { 'Quel détail faut-il ajouter ?': 'Autre' },
+          response: 'Reproduire le problème sur un iPhone réel.',
+        },
       })
     } finally {
       vi.doUnmock('@anthropic-ai/claude-agent-sdk')

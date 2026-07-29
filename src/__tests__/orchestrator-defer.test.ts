@@ -143,6 +143,78 @@ describe('Orchestrator — pending question (canUseTool)', () => {
     })
   })
 
+  it('passes an inline free-form response through to the engine callback', async () => {
+    const { createWorkspace, updateWorkspaceStatus } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'Free-form response',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/free-form-response',
+    })
+    updateWorkspaceStatus(ws.id, 'brainstorming')
+    updateWorkspaceStatus(ws.id, 'executing')
+
+    const { startAgent, answerPendingQuestion } = await import('../server/services/agent/orchestrator.js')
+    startAgent(ws.id, '/tmp', 'hi')
+    await Promise.resolve()
+    await Promise.resolve()
+    const cap = captured.at(-1)
+    if (!cap) throw new Error('no capture')
+
+    cap.onEvent({ kind: 'session:started', engineSessionId: 'engine-sess-free-form' })
+    cap.onEvent({
+      kind: 'session:user-input-requested',
+      requestKind: 'question',
+      toolCallId: 'toolu_free_form',
+      toolName: 'AskUserQuestion',
+      payload: { questions: [{ question: 'Quel détail ?', options: [] }] },
+    })
+
+    await answerPendingQuestion(ws.id, { 'Quel détail ?': 'Autre' }, 'toolu_free_form', {
+      response: 'Tester sur un appareil physique.',
+    })
+
+    expect(cap.resolvePendingUserInput).toHaveBeenCalledWith('toolu_free_form', {
+      kind: 'question',
+      answers: { 'Quel détail ?': 'Autre' },
+      response: 'Tester sur un appareil physique.',
+    })
+  })
+
+  it('does not persist a secret Codex answer in the workspace conversation', async () => {
+    const { createWorkspace, updateWorkspaceStatus } = await import('../server/services/workspace-service.js')
+    const { emit } = await import('../server/services/websocket-service.js')
+    const ws = createWorkspace({
+      name: 'Secret question',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/secret-question',
+    })
+    updateWorkspaceStatus(ws.id, 'brainstorming')
+    updateWorkspaceStatus(ws.id, 'executing')
+
+    const { startAgent, answerPendingQuestion } = await import('../server/services/agent/orchestrator.js')
+    startAgent(ws.id, '/tmp', 'hi')
+    await Promise.resolve()
+    await Promise.resolve()
+    const cap = captured[0]
+    if (!cap) throw new Error('no capture')
+
+    cap.onEvent({ kind: 'session:started', engineSessionId: 'engine-sess-secret' })
+    cap.onEvent({
+      kind: 'session:user-input-requested',
+      requestKind: 'question',
+      toolCallId: 'toolu_secret',
+      toolName: 'AskUserQuestion',
+      payload: { questions: [{ id: 'token', question: 'Token', isSecret: true, options: [] }] },
+    })
+    vi.mocked(emit).mockClear()
+
+    await answerPendingQuestion(ws.id, { token: 'secret-value' })
+
+    expect(emit).not.toHaveBeenCalled()
+  })
+
   it('disables auto-loop with reason=awaiting-clarification when awaitingFreeForm is true', async () => {
     const { createWorkspace, updateWorkspaceStatus } = await import('../server/services/workspace-service.js')
     const ws = createWorkspace({

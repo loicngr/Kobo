@@ -1357,13 +1357,22 @@ app.post('/:id/deferred-tool-use/answer', async (c) => {
   try {
     const id = c.req.param('id')
     const body = await c.req
-      .json<{ answers?: Record<string, string>; toolCallId?: string; awaitingFreeForm?: boolean }>()
-      .catch(() => ({}) as { answers?: Record<string, string>; toolCallId?: string; awaitingFreeForm?: boolean })
+      .json<{ answers?: Record<string, string>; toolCallId?: string; awaitingFreeForm?: boolean; response?: string }>()
+      .catch(
+        () =>
+          ({}) as {
+            answers?: Record<string, string>
+            toolCallId?: string
+            awaitingFreeForm?: boolean
+            response?: string
+          },
+      )
     if (!body?.answers || typeof body.answers !== 'object') {
       return c.json({ error: 'answers payload required' }, 400)
     }
     await agentManager.answerPendingQuestion(id, body.answers, body.toolCallId, {
       awaitingFreeForm: body.awaitingFreeForm === true,
+      ...(typeof body.response === 'string' ? { response: body.response } : {}),
     })
     return c.json({ ok: true })
   } catch (err) {
@@ -1985,6 +1994,9 @@ app.patch('/:id', migrationGuard, async (c) => {
       updated = workspaceService.updateAgentPermissionMode(id, body.agentPermissionMode)
     }
     if (body.status) {
+      if (body.status === 'idle' && agentManager.hasController(id)) {
+        return c.json({ error: 'Cannot mark an active agent workspace idle; end or stop the agent session first' }, 409)
+      }
       updated = workspaceService.updateWorkspaceStatus(id, body.status)
     }
     if (body.name !== undefined) {

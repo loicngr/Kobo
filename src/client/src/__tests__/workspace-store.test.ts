@@ -649,6 +649,53 @@ describe('workspace store', () => {
       expect(store.pendingQueue.w1?.length).toBe(1)
     })
 
+    it('clears an expired question when its agent session already ended', async () => {
+      const store = useWorkspaceStore()
+      store.enqueuePending('w1', {
+        kind: 'question',
+        agentSessionId: 'sA',
+        toolCallId: 'q1',
+        toolName: 'AskUserQuestion',
+        input: {},
+      })
+      const fetchMock = vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: false,
+          json: async () => ({ error: "No agent running for workspace 'w1'" }),
+        } as Response)
+        .mockResolvedValueOnce({ ok: true, json: async () => [] } as Response)
+      vi.stubGlobal('fetch', fetchMock)
+      try {
+        await expect(store.submitDeferredAnswer('w1', { q: 'answer' }, 'q1')).resolves.toBeUndefined()
+        expect(store.peekPending('w1')).toBeUndefined()
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    })
+
+    it('sends an inline free-form response with a deferred answer', async () => {
+      const store = useWorkspaceStore()
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true } as Response)
+      vi.stubGlobal('fetch', fetchMock)
+      try {
+        await store.submitDeferredAnswer('w1', { detail: 'Autre' }, 'q1', false, 'Tester sur un appareil physique.')
+        expect(fetchMock).toHaveBeenCalledWith(
+          '/api/workspaces/w1/deferred-tool-use/answer',
+          expect.objectContaining({
+            body: JSON.stringify({
+              answers: { detail: 'Autre' },
+              toolCallId: 'q1',
+              awaitingFreeForm: false,
+              response: 'Tester sur un appareil physique.',
+            }),
+          }),
+        )
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    })
+
     it('clearPendingForSession drops items of one session, leaves the other', () => {
       const store = useWorkspaceStore()
       store.enqueuePending('w1', {

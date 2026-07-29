@@ -17,7 +17,7 @@ Kōbō runs multiple coding agents in parallel, each isolated in its own git wor
 
 - **Isolated worktrees**: each workspace is a dedicated git worktree on its own branch, so parallel sessions never collide.
 - **Two agent engines**: Claude Code (via `@anthropic-ai/claude-agent-sdk`) and OpenAI Codex (via `codex app-server`), chosen per workspace.
-- **Live chat**: streaming text, reasoning blocks, inline Edit/Write diffs, per-turn cards, a compaction-in-progress indicator, infinite scrollback. `/` autocompletes skills and commands, `@` fuzzy-autocompletes worktree file paths, and you can export any workspace's session events to CSV. Messages queued while an agent is busy stay scoped to their workspace and session; for an active Claude Code session, **Send now** injects the queued message into the running SDK stream and keeps it queued until the server confirms acceptance. Codex retains the next-turn queue behaviour.
+- **Live chat**: streaming text, reasoning blocks, inline Edit/Write diffs, per-turn cards, a compaction-in-progress indicator, infinite scrollback. `/` autocompletes skills and commands, `@` fuzzy-autocompletes worktree file paths, and you can export any workspace's session events to CSV. Messages queued while an agent is busy stay scoped to their workspace and session. **Send now** delivers a queued message to an active Claude Code stream or steers the active Codex turn; it remains queued until the engine confirms acceptance.
 - **Full MCP toolset (`kobo-tasks`)**: a per-workspace MCP server the agent uses for far more than tasks — task/acceptance-criteria CRUD, starting/stopping the dev server and reading its logs, a unified `get_ticket` (Notion or Sentry), searching past conversations across every workspace, per-session token/cost usage, and a `.ai/thoughts` decision log. Native Claude Code Task tools complement it for lightweight sub-agent coordination. See [`AGENTS.md`](./AGENTS.md) for the full tool list.
 
   ![Sub-agents panel showing parallel tool calls](docs/assets/images/sub-agents-panel.png)
@@ -26,7 +26,7 @@ Kōbō runs multiple coding agents in parallel, each isolated in its own git wor
   ![Diff viewer with side-by-side changes](docs/assets/images/diff-viewer.png)
 - **Dev server panel**: start, stop, and tail logs for a workspace's dev server (Docker or npm) straight from the Tools panel — no need to leave the UI.
 - **Attention indicators**: workspace cards surface CI failures, review-requested changes, and a conflict-aware **ready-to-merge** badge, plus a one-click **Fix CI** button that spawns a fix workspace automatically.
-- **Interactive Q&A**: an agent can pause mid-session to ask a clarifying question through the UI; the workspace surfaces under "Needs Attention" until you answer.
+- **Interactive Q&A**: an agent can pause mid-session to ask a clarifying question through the UI; the workspace surfaces under "Needs Attention" until you answer. Choosing **Other** opens an inline free-form field, and option previews are available on hover. Codex native interactive questions require its `plan` permission mode.
 
   ![Agent asking a clarifying question, awaiting the user's answer](docs/assets/images/agent-question.png)
 - **Auto-loop**: an opt-in mode that walks the task list, spawning a fresh session per task and stopping once there's nothing left to do, progress stalls, an error occurs, or the agent needs input from you. Optionally run the initial brainstorming session on a stronger model and every task after that on a cheaper one, without leaving the engine you picked.

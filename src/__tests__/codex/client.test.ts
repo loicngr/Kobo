@@ -125,6 +125,23 @@ describe('createAppServerClient', () => {
     await expect(p).resolves.toEqual({ turnId: 'turn_42' })
   })
 
+  it('steerTurn() sends turn/steer with the active-turn precondition', async () => {
+    const { stdin, stdout, written } = makeStreams()
+    const client = createAppServerClient({ stdin, stdout, clientInfo: CLIENT_INFO })
+    const steerParams = {
+      threadId: 'thr_1',
+      expectedTurnId: 'turn_active',
+      input: [{ type: 'text' as const, text: 'Stop and focus on the failing test.', text_elements: [] }],
+    }
+    const p = client.steerTurn(steerParams)
+    expect(written).toHaveLength(1)
+    const msg = JSON.parse(written[0])
+    expect(msg.method).toBe('turn/steer')
+    expect(msg.params).toEqual(steerParams)
+    stdout.push(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { turnId: 'turn_steered' } })}\n`)
+    await expect(p).resolves.toEqual({ turnId: 'turn_steered' })
+  })
+
   it('notifications are forwarded to onNotification', async () => {
     const { stdin, stdout } = makeStreams()
     const onNotification = vi.fn()

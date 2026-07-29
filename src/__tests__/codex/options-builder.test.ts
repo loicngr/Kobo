@@ -134,6 +134,12 @@ describe('buildCodexOptions — brief prepend', () => {
     expect(text).not.toContain('[Kōbō MCP]')
     expect(text).toBe('Resumed prompt')
   })
+
+  it('does not tell an active Codex session to set the workspace idle', () => {
+    const { input } = buildCodexOptions({ ...BASE_INPUT, prompt: 'My prompt' })
+    const text = (input[0] as { type: 'text'; text: string }).text
+    expect(text).toContain('Never set `idle` while this session is active')
+  })
 })
 
 // ── Required fields ───────────────────────────────────────────────────────────

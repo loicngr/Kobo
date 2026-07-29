@@ -33,7 +33,7 @@ const KOBO_MCP_BRIEF = [
   '• `kobo__search_codebase` to recall prior chat history (conversations, not source — use Grep for source).',
   '• `kobo__read_workspace_events_csv` to read paginated user/agent history from this workspace across sessions when prior context is useful. Use `limit` + `offset` (and optional `session_id`) instead of loading everything.',
   '• `kobo__get_workspace_info` / `kobo__get_git_info` / `kobo__get_ticket` for context.',
-  '• `kobo__set_workspace_status` when the mission is done / blocked / idle.',
+  '• `kobo__set_workspace_status` when the mission is done or irrecoverably blocked. Never set `idle` while this session is active; use AskUserQuestion for clarification, or end the turn.',
   '• `kobo__schedule_wakeup` / `kobo__cancel_wakeup` to schedule (or cancel) a follow-up session — prefer these over the built-in `ScheduleWakeup` tool.',
   'Each tool carries its own "WHEN to use" guidance in its description — follow it.',
 ].join('\n')
@@ -53,6 +53,10 @@ export function buildClaudeOptions(input: BuildClaudeOptionsInput): BuildClaudeO
   const options: Options = {
     cwd: input.workingDir,
     systemPrompt: { type: 'preset', preset: 'claude_code', append: KOBO_SYSTEM_APPEND },
+    // Kōbō persists wakeups independently of the SDK and creates a fresh
+    // controller when they fire. The native wakeup is bound to one SDK stream,
+    // so it can outlive Kōbō's controller and produce unanswerable questions.
+    disallowedTools: ['ScheduleWakeup'],
     // Leave `tools` undefined: the `claude_code` preset EXCLUDES MCP tools, so
     // under bypassPermissions MCP tools surface as "haven't granted it yet"
     // even when the user chose bypass. Undefined → full toolbox (built-ins +

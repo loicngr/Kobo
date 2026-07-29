@@ -35,3 +35,14 @@ export function supportsQuotaStatus(engineId: string | undefined): boolean {
   if (!engineId) return true
   return SUPPORTS_QUOTA_STATUS_BY_ENGINE[engineId] ?? true
 }
+
+/** Engines that can accept a chat message while their current turn is running. */
+export const SUPPORTS_LIVE_STEERING_BY_ENGINE: Record<string, boolean> = {
+  'claude-code': true,
+  codex: true,
+}
+
+export function supportsLiveSteering(engineId: string | undefined): boolean {
+  if (!engineId) return false
+  return SUPPORTS_LIVE_STEERING_BY_ENGINE[engineId] ?? false
+}

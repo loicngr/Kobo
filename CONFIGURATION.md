@@ -671,6 +671,8 @@ OPENAI_API_KEY=sk-… npx @loicngr/kobo
 
 Kōbō spawns a long-lived `codex app-server` subprocess per workspace and bridges its JSON-RPC stream to the same UI. The `codex` binary ships transitively via [`@openai/codex`](https://www.npmjs.com/package/@openai/codex), so no separate install is required.
 
+When a Codex session is already working, **Send now** sends a queued chat message through the app-server's `turn/steer` endpoint. The message stays queued until Codex acknowledges the steer request; a failed request is restored to the queue instead of being lost.
+
 Supported models include `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, and `gpt-5.3-codex` (note: `gpt-5.5` requires ChatGPT auth; API-key auth is limited to `gpt-5.4` and below). Reasoning effort (`auto` / `minimal` / `low` / `medium` / `high` / `xhigh`) is selectable on every workspace. Both selectors switch automatically when you flip the engine.
 
 ### Permission modes
@@ -695,7 +697,7 @@ Each engine maps Kōbō's four modes onto its own sandbox + approval flags. The 
 | `strict` | `workspace-write` | `on-request` | `default` |
 | `interactive` | `workspace-write` | `unless-trusted` | `default` |
 
-Interactive Q&A (`request_user_input`) is only available in `plan` for Codex, a constraint of Codex itself.
+Interactive Q&A (`request_user_input`) is only available in `plan` for Codex, a constraint of Codex itself. In `bypass`, `strict`, and `interactive`, Codex can still ask questions as normal chat text and you can respond in the chat, but it cannot open Kōbō's structured question panel.
 Full access in `bypass` is required for linked-worktree Git metadata under the repository's shared `.git` directory.
 
 ## Dev server

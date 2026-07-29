@@ -322,7 +322,7 @@ const WORKSPACE_SCOPED_TOOLS: Tool[] = [
   {
     name: 'set_workspace_status',
     description:
-      'CALL WHEN you believe the mission is done (`completed`), blocked beyond recovery (`error`), or explicitly idle awaiting user input (`idle`). Transitions are validated by the backend — invalid ones are rejected.',
+      'CALL WHEN you believe the mission is done (`completed`) or blocked beyond recovery (`error`). Do NOT set `idle` while this agent session is active: ask the user with AskUserQuestion or end the turn instead. Transitions are validated by the backend — invalid or unsafe ones are rejected.',
     inputSchema: {
       type: 'object',
       properties: {

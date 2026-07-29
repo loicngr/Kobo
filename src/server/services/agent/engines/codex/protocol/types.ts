@@ -155,6 +155,17 @@ export type TurnStartResponse = {
   turnId: string
 }
 
+export type TurnSteerParams = {
+  threadId: string
+  expectedTurnId: string
+  clientUserMessageId?: string | null
+  input: Array<{ type: 'text'; text: string; text_elements: unknown[] }>
+}
+
+export type TurnSteerResponse = {
+  turnId: string
+}
+
 export type TurnInterruptParams = {
   threadId: string
   turnId?: string
@@ -412,10 +423,10 @@ export type ToolRequestUserInputOption = {
 export type ToolRequestUserInputQuestion = {
   id: string
   question: string
-  header?: string
-  options?: ToolRequestUserInputOption[] | null
-  isOther?: boolean
-  isSecret?: boolean
+  header: string
+  options: ToolRequestUserInputOption[] | null
+  isOther: boolean
+  isSecret: boolean
 }
 
 export type ToolRequestUserInputParams = {
@@ -423,6 +434,7 @@ export type ToolRequestUserInputParams = {
   turnId: string
   itemId: string
   questions: ToolRequestUserInputQuestion[]
+  autoResolutionMs: number | null
 }
 
 export type ToolRequestUserInputResponse = {
