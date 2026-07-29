@@ -141,7 +141,30 @@ describe('auto-loop-service', () => {
 
     svc.disable(wsId, 'user-action')
     expect(svc.getStatus(wsId).auto_loop).toBe(false)
-    expect(ws.emitEphemeral).toHaveBeenCalledWith(wsId, 'autoloop:disabled', { reason: 'user-action' })
+    expect(ws.emitEphemeral).toHaveBeenCalledWith(
+      wsId,
+      'autoloop:disabled',
+      expect.objectContaining({ reason: 'user-action' }),
+    )
+  })
+
+  it('emits diagnostic context when disabling auto-loop', async () => {
+    const { createTask } = await import('../server/services/workspace-service.js')
+    const svc = await import('../server/services/auto-loop-service.js')
+    const ws = await import('../server/services/websocket-service.js')
+    createTask(wsId, { title: 't', isAcceptanceCriterion: false, sortOrder: 0 })
+    svc._test_setAutoLoopReady(wsId, true)
+    svc.enable(wsId)
+    vi.clearAllMocks()
+
+    svc.disable(wsId, 'stall')
+
+    expect(ws.emitEphemeral).toHaveBeenCalledWith(wsId, 'autoloop:disabled', {
+      reason: 'stall',
+      tasksPending: 1,
+      noProgressStreak: 0,
+      status: 'created',
+    })
   })
 
   it('disable(awaiting-clarification) turns auto-loop off and a later session:ended no-ops', async () => {
@@ -205,15 +228,18 @@ describe('auto-loop-service', () => {
       expect(svc.getStatus(wsId).auto_loop).toBe(false)
     })
 
-    it('stops on reason=killed regardless of delta', async () => {
+    it('continues after reason=killed so a transient engine interruption does not stop the loop', async () => {
       const svc = await import('../server/services/auto-loop-service.js')
+      const orch = await import('../server/services/agent/orchestrator.js')
       const { createTask } = await import('../server/services/workspace-service.js')
       createTask(wsId, { title: 't1', isAcceptanceCriterion: false, sortOrder: 0 })
       svc._test_setAutoLoopReady(wsId, true)
       svc.enable(wsId)
+      ;(orch.startAgent as ReturnType<typeof vi.fn>).mockClear()
 
       svc.onSessionEnded(wsId, 'killed', 1)
-      expect(svc.getStatus(wsId).auto_loop).toBe(false)
+      expect(svc.getStatus(wsId).auto_loop).toBe(true)
+      expect(orch.startAgent).toHaveBeenCalledOnce()
     })
 
     it('resets streak when delta > 0', async () => {
@@ -251,7 +277,11 @@ describe('auto-loop-service', () => {
 
       svc.onSessionEnded(wsId, 'completed', 0)
       expect(svc.getStatus(wsId).auto_loop).toBe(false)
-      expect(ws.emitEphemeral).toHaveBeenCalledWith(wsId, 'autoloop:disabled', { reason: 'stall' })
+      expect(ws.emitEphemeral).toHaveBeenCalledWith(
+        wsId,
+        'autoloop:disabled',
+        expect.objectContaining({ reason: 'stall' }),
+      )
     })
 
     it('disables with reason=completed when all tasks done', async () => {
@@ -266,7 +296,11 @@ describe('auto-loop-service', () => {
 
       svc.onSessionEnded(wsId, 'completed', 1)
       expect(svc.getStatus(wsId).auto_loop).toBe(false)
-      expect(ws.emitEphemeral).toHaveBeenCalledWith(wsId, 'autoloop:disabled', { reason: 'completed' })
+      expect(ws.emitEphemeral).toHaveBeenCalledWith(
+        wsId,
+        'autoloop:disabled',
+        expect.objectContaining({ reason: 'completed' }),
+      )
     })
 
     it('is a no-op when auto_loop is already false', async () => {
@@ -472,7 +506,11 @@ describe('auto-loop-service', () => {
 
       expect(() => svc.enable(wsId)).toThrow(/boom/)
       expect(svc.getStatus(wsId).auto_loop).toBe(false)
-      expect(ws.emitEphemeral).toHaveBeenCalledWith(wsId, 'autoloop:disabled', { reason: 'error' })
+      expect(ws.emitEphemeral).toHaveBeenCalledWith(
+        wsId,
+        'autoloop:disabled',
+        expect.objectContaining({ reason: 'error' }),
+      )
     })
 
     it('swallows startAgent throw in onSessionEnded (not in enable path) and auto-disables', async () => {
@@ -494,7 +532,11 @@ describe('auto-loop-service', () => {
       // onSessionEnded should NOT throw, but should auto-disable.
       expect(() => svc.onSessionEnded(wsId, 'completed', 1)).not.toThrow()
       expect(svc.getStatus(wsId).auto_loop).toBe(false)
-      expect(ws.emitEphemeral).toHaveBeenCalledWith(wsId, 'autoloop:disabled', { reason: 'error' })
+      expect(ws.emitEphemeral).toHaveBeenCalledWith(
+        wsId,
+        'autoloop:disabled',
+        expect.objectContaining({ reason: 'error' }),
+      )
     })
   })
 
