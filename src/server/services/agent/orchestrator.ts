@@ -497,11 +497,12 @@ function reuseOrCreateFreshSession(
 // ── Event handler ─────────────────────────────────────────────────────────────
 
 /**
- * Snapshot of the `tasks` done-count at `session:started`, read back and
- * cleared at `session:ended` to compute the per-session delta. Used by
- * `auto-loop-service.onSessionEnded` for stall detection.
+ * Snapshots of task completion and task state at `session:started`, read back
+ * at `session:ended` for auto-loop stall detection. A task moved to
+ * `in_progress` is meaningful progress even if it is not done yet.
  */
 const tasksDoneSnapshot = new Map<string, number>()
+const taskStateSnapshot = new Map<string, string>()
 
 function getDoneTaskCount(workspaceId: string): number {
   try {
@@ -518,9 +519,23 @@ function getDoneTaskCount(workspaceId: string): number {
   }
 }
 
+function getTaskStateSignature(workspaceId: string): string {
+  try {
+    const db = getDb()
+    const rows = db
+      .prepare('SELECT id, status, updated_at FROM tasks WHERE workspace_id = ? ORDER BY id')
+      .all(workspaceId) as Array<{ id: string; status: string; updated_at: string }>
+    return JSON.stringify(rows)
+  } catch (err) {
+    console.warn('[orchestrator] getTaskStateSignature failed, returning empty state:', err)
+    return ''
+  }
+}
+
 /** Clear the in-memory done-count snapshot for a workspace (called on delete). */
 export function forgetTasksDoneSnapshot(workspaceId: string): void {
   tasksDoneSnapshot.delete(workspaceId)
+  taskStateSnapshot.delete(workspaceId)
 }
 
 /** Drop the resume-failed flag for a workspace (called on delete). */
@@ -554,6 +569,7 @@ function handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent
   // can compute a delta for auto-loop stall detection.
   if (ev.kind === 'session:started') {
     tasksDoneSnapshot.set(workspaceId, getDoneTaskCount(workspaceId))
+    taskStateSnapshot.set(workspaceId, getTaskStateSignature(workspaceId))
   }
 
   // Legacy fallback: the built-in `ScheduleWakeup` tool (CLI tradition) isn't
@@ -652,8 +668,12 @@ function handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent
 
     const before = tasksDoneSnapshot.get(workspaceId) ?? getDoneTaskCount(workspaceId)
     const after = getDoneTaskCount(workspaceId)
-    const delta = Math.max(0, after - before)
+    const completedDelta = Math.max(0, after - before)
+    const taskStateBefore = taskStateSnapshot.get(workspaceId) ?? getTaskStateSignature(workspaceId)
+    const taskStateAfter = getTaskStateSignature(workspaceId)
+    const progressDelta = completedDelta > 0 || taskStateBefore !== taskStateAfter ? 1 : 0
     tasksDoneSnapshot.delete(workspaceId)
+    taskStateSnapshot.delete(workspaceId)
 
     clearPendingForSession(workspaceId, agentSessionId)
 
@@ -670,7 +690,7 @@ function handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent
     // disable() clears it, and the cleanup hook needs to know whether this was
     // a mid-loop session (never cleans) or a standalone one.
     const wasAutoLoop = autoLoopService.getStatus(workspaceId).auto_loop
-    autoLoopService.onSessionEnded(workspaceId, effectiveReason, delta)
+    autoLoopService.onSessionEnded(workspaceId, effectiveReason, progressDelta)
     cleanupScriptService.onSessionEnded(workspaceId, effectiveReason, { wasAutoLoop })
   }
 

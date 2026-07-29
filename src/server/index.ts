@@ -457,6 +457,9 @@ setMessageHandler(async (type, payload) => {
 
   if (type === 'workspace:stop' && p?.workspaceId) {
     try {
+      // A deliberate stop must not be treated like a recoverable engine
+      // interruption: disable before the engine emits session:ended(killed).
+      autoLoopService.disable(p.workspaceId, 'user-action')
       stopAgent(p.workspaceId)
     } catch (err) {
       console.error('[ws] Failed to stop agent:', err)

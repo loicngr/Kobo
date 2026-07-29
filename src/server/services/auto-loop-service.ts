@@ -115,7 +115,17 @@ export function disable(workspaceId: string, reason: DisableReason): void {
   if (!row || row.auto_loop !== 1) return
   const db = getDb()
   db.prepare('UPDATE workspaces SET auto_loop = 0 WHERE id = ?').run(workspaceId)
-  emitEphemeral(workspaceId, 'autoloop:disabled', { reason })
+  const diagnostic = {
+    reason,
+    tasksPending: countPendingTasks(workspaceId),
+    noProgressStreak: row.no_progress_streak,
+    status: row.status,
+  }
+  console.info(
+    `[auto-loop] disabled workspace '${workspaceId}' reason=${reason}` +
+      ` pending=${diagnostic.tasksPending} streak=${diagnostic.noProgressStreak} status=${diagnostic.status}`,
+  )
+  emitEphemeral(workspaceId, 'autoloop:disabled', diagnostic)
 
   // The loop finished every task — run the project's cleanup script. Other
   // disable reasons (stall / error / user-action) leave tasks unfinished, so
@@ -128,9 +138,9 @@ export function disable(workspaceId: string, reason: DisableReason): void {
 /**
  * Route a `session:ended` event into the auto-loop state machine.
  *
- * Called by orchestrator.handleEvent. The delta is the number of tasks that
- * transitioned to `done` during this session (computed from a snapshot taken
- * at `session:started`).
+ * Called by orchestrator.handleEvent. The delta records whether task state
+ * progressed during this session, including transitions such as pending to
+ * in_progress, not only completion.
  *
  * When status is `quota` we skip spawning: the orchestrator's handleQuota
  * already scheduled a backoff timer and will call `onQuotaBackoffExpired` once
@@ -139,7 +149,7 @@ export function disable(workspaceId: string, reason: DisableReason): void {
 export function onSessionEnded(
   workspaceId: string,
   reason: 'completed' | 'error' | 'killed',
-  tasksDoneDelta: number,
+  taskProgressDelta: number,
 ): void {
   const row = getRow(workspaceId)
   if (!row) return
@@ -153,7 +163,7 @@ export function onSessionEnded(
   // will resume the deferred turn explicitly.
   if (row.status === 'awaiting-user') return
 
-  if (reason === 'error' || reason === 'killed') {
+  if (reason === 'error') {
     disable(workspaceId, 'error')
     return
   }
@@ -165,7 +175,7 @@ export function onSessionEnded(
 
   const db = getDb()
   let streak: number
-  if (tasksDoneDelta > 0) {
+  if (taskProgressDelta > 0) {
     db.prepare('UPDATE workspaces SET no_progress_streak = 0 WHERE id = ?').run(workspaceId)
     streak = 0
   } else {
