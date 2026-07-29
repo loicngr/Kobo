@@ -4,6 +4,22 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.9.6
+
+- feat(chat): inject a queued message into a running Claude session, with a
+  session-scoped queue and explicit server acceptance
+- feat(sessions): persist the model used by each agent session and display it
+  when it differs from the workspace default
+- fix(auto-loop): apply the brainstorming model before the initial session
+  starts; add a separate brainstorming reasoning-effort selector
+- feat(mcp): let agents read paginated user/agent conversation history across
+  workspace sessions as CSV, with optional session filtering
+- fix(chat): start a fresh session automatically when a historical session
+  cannot be resumed
+- ui(create): clarify auto-loop, session-mode, brainstorming, model and
+  reasoning-effort controls; remember reasoning effort per model locally
+- docs: document the Claude queued-message behavior
+
 ## 1.9.5
 
 - fix(tests): make macOS tests portable (#16)
