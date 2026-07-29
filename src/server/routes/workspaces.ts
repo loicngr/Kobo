@@ -111,6 +111,7 @@ app.post('/', migrationGuard, async (c) => {
       sentryUrl?: string
       model?: string
       brainstormModel?: string
+      brainstormReasoningEffort?: string
       reasoningEffort?: string
       tasks?: string[]
       acceptanceCriteria?: string[]
@@ -368,6 +369,27 @@ app.post('/', migrationGuard, async (c) => {
       engine: body.engine,
       ...(useReusedWorktree ? {} : { worktreesPath: globalSettings.worktreesPath }),
     })
+
+    // Enable auto-loop before starting the initial brainstorming session so
+    // its model override is available when selecting that session's model.
+    if (body.autoLoop === true) {
+      const notionProducedTasks =
+        body.notionUrl !== undefined &&
+        notionContent != null &&
+        notionContent.todos.length > 0 &&
+        notionContent.gherkinFeatures.length > 0
+      const sessionMode = body.autoLoopSessionMode === 'continuous' ? 'continuous' : 'per_task'
+      const db = getDb()
+      db.prepare(
+        'UPDATE workspaces SET auto_loop = 1, auto_loop_ready = ?, auto_loop_session_mode = ? WHERE id = ?',
+      ).run(notionProducedTasks ? 1 : 0, sessionMode, workspace.id)
+      workspace = workspaceService.getWorkspace(workspace.id) ?? workspace
+      // Emit events so the frontend refreshes autoLoopStates without F5.
+      wsService.emitEphemeral(workspace.id, 'autoloop:enabled', {})
+      if (notionProducedTasks) {
+        wsService.emitEphemeral(workspace.id, 'autoloop:ready-flipped', {})
+      }
+    }
 
     // Auto-tag the workspace based on its creation source — `notion` when
     // imported from a Notion page, `sentry` when bootstrapped from a Sentry
@@ -885,6 +907,10 @@ Once the brainstorming + planning steps above are complete and you have a saved 
           // is consumed exactly once, here.
           const initialSessionModel =
             workspace.autoLoop && workspace.brainstormModel ? workspace.brainstormModel : workspace.model
+          const initialSessionEffort =
+            body.autoLoop === true && body.brainstormReasoningEffort
+              ? body.brainstormReasoningEffort
+              : workspace.reasoningEffort
           const agent = agentManager.startAgent(
             workspace.id,
             worktreePath,
@@ -893,7 +919,7 @@ Once the brainstorming + planning steps above are complete and you have a saved 
             false,
             workspace.agentPermissionMode,
             undefined,
-            workspace.reasoningEffort,
+            initialSessionEffort,
           )
           // Persist the initial prompt in the feed so it's visible in the chat,
           // tagged with the freshly created session id so the strict session filter shows it.
@@ -919,27 +945,6 @@ Once the brainstorming + planning steps above are complete and you have a saved 
             /* already logged */
           }
         }
-      }
-    }
-
-    // Apply the auto-loop checkbox from CreatePage. Notion-imported workspaces
-    // with both todos AND gherkin features auto-unlock `auto_loop_ready=1` —
-    // they're considered good enough to drive the loop without grooming.
-    if (body.autoLoop === true) {
-      const notionProducedTasks =
-        body.notionUrl !== undefined &&
-        notionContent != null &&
-        notionContent.todos.length > 0 &&
-        notionContent.gherkinFeatures.length > 0
-      const sessionMode = body.autoLoopSessionMode === 'continuous' ? 'continuous' : 'per_task'
-      const db = getDb()
-      db.prepare(
-        'UPDATE workspaces SET auto_loop = 1, auto_loop_ready = ?, auto_loop_session_mode = ? WHERE id = ?',
-      ).run(notionProducedTasks ? 1 : 0, sessionMode, workspace.id)
-      // Emit events so the frontend refreshes autoLoopStates without F5.
-      wsService.emitEphemeral(workspace.id, 'autoloop:enabled', {})
-      if (notionProducedTasks) {
-        wsService.emitEphemeral(workspace.id, 'autoloop:ready-flipped', {})
       }
     }
 

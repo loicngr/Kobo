@@ -1,4 +1,6 @@
 export default {
+  'model.tooltip': 'Modèle utilisé par l’agent pour ce workspace',
+  'reasoning.tooltip': 'Niveau de raisonnement utilisé par l’agent pour ce workspace',
   // Common
   'common.save': 'Enregistrer',
   'common.cancel': 'Annuler',
@@ -156,6 +158,8 @@ export default {
   'workspacePage.interruptTooltip':
     'Interruption douce (comme Escape) — arrête le tool en cours mais garde la session active',
   'workspacePage.pendingNextRun': 'Appliqué au prochain démarrage',
+  'workspacePage.activeSessionModel': 'En cours : {model}',
+  'workspacePage.activeSessionModelTooltip': 'Modèle effectivement utilisé par la session sélectionnée',
 
   // Search
   'search.title': 'Recherche',
@@ -201,6 +205,7 @@ export default {
   'chatInput.skills': 'Skills',
   'chatInput.attachImage': 'Joindre une image',
   'chatInput.queueBanner': "Message en file d'attente — sera envoyé quand l'agent aura terminé",
+  'chatInput.forceQueue': "Envoyer maintenant à l'agent Claude",
   'chatInput.cancelQueue': "Annuler la file d'attente",
   'chatInput.autoLoopBanner': "L'auto-loop tourne — arrête-le pour envoyer un message",
   'chatInput.awaitingUserBanner': "L'agent attend ta réponse ci-dessus — réponds via le panneau de question",
@@ -1328,10 +1333,14 @@ export default {
   'autoLoop.brainstormModelPrefix': 'Brainstorm :',
   'autoLoop.brainstormModelTooltip':
     'Modèle utilisé uniquement pour la session de brainstorming initiale — chaque tâche ensuite utilise le modèle choisi au-dessus',
+  'autoLoop.brainstormReasoningPrefix': 'Brainstorm :',
+  'autoLoop.brainstormReasoningTooltip':
+    'Niveau de raisonnement utilisé uniquement pour la session de brainstorming initiale',
   'autoLoop.executionModelPrefix': 'Loop :',
   'autoLoop.executionModelTooltip':
     "Modèle utilisé pour chaque tâche de l'auto-loop après la session de brainstorming initiale",
   'autoLoop.sessionMode.perTask': 'Nouvelle session par tâche',
+  'autoLoop.sessionMode.label': 'Session :',
   'autoLoop.sessionMode.perTaskTooltip':
     'Chaque tâche démarre une session Claude Code neuve, sans mémoire des tâches précédentes',
   'autoLoop.sessionMode.continuous': 'Session continue',

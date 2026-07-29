@@ -951,6 +951,7 @@ export interface AgentSession {
   pid: number | null
   engineSessionId: string | null
   status: string
+  model: string | null
   startedAt: string
   endedAt: string | null
   name: string | null
@@ -962,6 +963,7 @@ interface AgentSessionRow {
   pid: number | null
   engine_session_id: string | null
   status: string
+  model: string | null
   started_at: string
   ended_at: string | null
   name: string | null
@@ -974,6 +976,7 @@ function mapSession(row: AgentSessionRow): AgentSession {
     pid: row.pid,
     engineSessionId: row.engine_session_id,
     status: row.status,
+    model: row.model,
     startedAt: row.started_at,
     endedAt: row.ended_at,
     name: row.name,
@@ -1039,6 +1042,7 @@ export function createIdleSession(workspaceId: string): AgentSession {
     pid: null,
     engineSessionId: null,
     status: 'idle',
+    model: null,
     startedAt: now,
     endedAt: null,
     name: null,

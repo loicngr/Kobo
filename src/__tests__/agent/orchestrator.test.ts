@@ -76,6 +76,21 @@ describe('Orchestrator — startAgent', () => {
     expect(_getControllers().get(ws.id)?.pid).toBe(1111)
   })
 
+  it('records the model used to start the agent session', async () => {
+    const { createWorkspace, listSessions } = await import('../../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'W',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/model',
+    })
+    const { startAgent } = await import('../../server/services/agent/orchestrator.js')
+
+    startAgent(ws.id, '/tmp', 'brainstorm', 'claude-opus-4-8')
+
+    expect(listSessions(ws.id)[0]?.model).toBe('claude-opus-4-8')
+  })
+
   it('throws if an agent is already running for the workspace', async () => {
     const { createWorkspace } = await import('../../server/services/workspace-service.js')
     const ws = createWorkspace({ name: 'W', projectPath: '/tmp', sourceBranch: 'develop', workingBranch: 'b' })
@@ -124,6 +139,17 @@ describe('Orchestrator — stop / interrupt / sendMessage', () => {
   it('sendMessage throws when no agent is running', async () => {
     const { sendMessage } = await import('../../server/services/agent/orchestrator.js')
     expect(() => sendMessage('nope', 'hi')).toThrow(/No agent running/)
+  })
+
+  it('refuses a message addressed to a session other than the active controller', async () => {
+    const { createWorkspace } = await import('../../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'W', projectPath: '/tmp', sourceBranch: 'd', workingBranch: 'b' })
+    const { startAgent, sendMessage } = await import('../../server/services/agent/orchestrator.js')
+    const { agentSessionId } = startAgent(ws.id, '/tmp', 'hi')
+    await flushControllerStart()
+
+    expect(() => sendMessage(ws.id, 'wrong session', 'another-session')).toThrow(/is not active/)
+    expect(() => sendMessage(ws.id, 'right session', agentSessionId)).not.toThrow()
   })
 
   it('getRunningCount reflects active controllers', async () => {

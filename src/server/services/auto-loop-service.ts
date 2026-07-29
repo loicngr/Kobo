@@ -239,6 +239,7 @@ Throughout the steps below, keep the workspace description current via \`kobo__s
 
 Your job this iteration:
 1. Read \`kobo__list_tasks\` to see all tasks and the big picture.
+   When prior-session context is useful, call \`kobo__read_workspace_events_csv\` to read the paginated user/agent history for this workspace. Use a small \`limit\` and follow \`nextOffset\` only as needed.
 2. Implement the SINGLE task above and nothing else. Do not pick a different task.
 3. Run the project's quality checks (lint, typecheck, tests). Check \`.ai/.git-conventions.md\` for the exact commands if unclear.
 4. If checks fail, fix until they pass. If blocked, leave the task unchanged and explain in chat.

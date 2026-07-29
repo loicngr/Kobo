@@ -1,4 +1,6 @@
 export default {
+  'model.tooltip': 'Modello usato dall’agente per questo workspace',
+  'reasoning.tooltip': 'Livello di ragionamento usato dall’agente per questo workspace',
   // Common
   'common.save': 'Salva',
   'common.cancel': 'Annulla',
@@ -156,6 +158,8 @@ export default {
   'workspacePage.interruptTooltip':
     'Interruzione leggera (come Escape) — ferma lo strumento corrente ma mantiene la sessione attiva',
   'workspacePage.pendingNextRun': 'Applicato al prossimo avvio',
+  'workspacePage.activeSessionModel': 'In uso: {model}',
+  'workspacePage.activeSessionModelTooltip': 'Modello effettivamente usato dalla sessione selezionata',
 
   // Search
   'search.title': 'Ricerca',
@@ -201,6 +205,7 @@ export default {
   'chatInput.skills': 'Skill',
   'chatInput.attachImage': 'Allega immagine',
   'chatInput.queueBanner': "Messaggio in coda — verrà inviato quando l'agente avrà terminato",
+  'chatInput.forceQueue': "Invia ora all'agente Claude",
   'chatInput.cancelQueue': 'Annulla coda',
   'chatInput.autoLoopBanner': 'Auto-loop attivo — fermalo per inviare un messaggio',
   'chatInput.awaitingUserBanner': "L'agente attende la tua risposta sopra — rispondi tramite il pannello della domanda",
@@ -1327,10 +1332,13 @@ export default {
   'autoLoop.brainstormModelPrefix': 'Brainstorm:',
   'autoLoop.brainstormModelTooltip':
     'Modello usato solo per la sessione di brainstorming iniziale — ogni attività successiva usa il modello scelto sopra',
+  'autoLoop.brainstormReasoningPrefix': 'Brainstorm:',
+  'autoLoop.brainstormReasoningTooltip': 'Livello di ragionamento usato solo per la sessione di brainstorming iniziale',
   'autoLoop.executionModelPrefix': 'Loop:',
   'autoLoop.executionModelTooltip':
     "Modello usato per ogni attività dell'auto-loop dopo la sessione di brainstorming iniziale",
   'autoLoop.sessionMode.perTask': 'Nuova sessione per attività',
+  'autoLoop.sessionMode.label': 'Sessione:',
   'autoLoop.sessionMode.perTaskTooltip':
     'Ogni attività avvia una nuova sessione Claude Code senza memoria delle attività precedenti',
   'autoLoop.sessionMode.continuous': 'Sessione continua',

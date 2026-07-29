@@ -5,6 +5,7 @@ export interface CreatePagePrefs {
   autoLoop?: boolean
   autoLoopSessionMode?: 'per_task' | 'continuous'
   brainstormModel?: string
+  reasoningEffortByModel?: Record<string, string>
 }
 
 function readRaw(): unknown {
@@ -35,6 +36,12 @@ export function loadCreatePagePrefs(): CreatePagePrefs {
   }
   if (typeof raw.brainstormModel === 'string' && raw.brainstormModel.length > 0) {
     out.brainstormModel = raw.brainstormModel
+  }
+  if (isPlainObject(raw.reasoningEffortByModel)) {
+    const entries = Object.entries(raw.reasoningEffortByModel).filter(
+      ([model, effort]) => model.length > 0 && typeof effort === 'string' && effort.length > 0,
+    )
+    out.reasoningEffortByModel = Object.fromEntries(entries)
   }
   return out
 }

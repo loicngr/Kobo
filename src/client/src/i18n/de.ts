@@ -1,4 +1,6 @@
 export default {
+  'model.tooltip': 'Modell, das der Agent für diesen Workspace verwendet',
+  'reasoning.tooltip': 'Denkaufwand des Agenten für diesen Workspace',
   // Common
   'common.save': 'Speichern',
   'common.cancel': 'Abbrechen',
@@ -154,6 +156,8 @@ export default {
   'workspacePage.interruptTooltip':
     'Sanfte Unterbrechung (wie Escape) — stoppt das aktuelle Tool, hält die Sitzung aktiv',
   'workspacePage.pendingNextRun': 'Beim nächsten Start angewendet',
+  'workspacePage.activeSessionModel': 'Aktiv: {model}',
+  'workspacePage.activeSessionModelTooltip': 'Modell, das von der ausgewählten Sitzung tatsächlich verwendet wird',
 
   // Search
   'search.title': 'Suche',
@@ -199,6 +203,7 @@ export default {
   'chatInput.skills': 'Skills',
   'chatInput.attachImage': 'Bild anhängen',
   'chatInput.queueBanner': 'Nachricht in Warteschlange — wird gesendet, wenn der Agent fertig ist',
+  'chatInput.forceQueue': 'Jetzt an den Claude-Agenten senden',
   'chatInput.cancelQueue': 'Warteschlange abbrechen',
   'chatInput.autoLoopBanner': 'Auto-Loop läuft — beende ihn, um eine Nachricht zu senden',
   'chatInput.awaitingUserBanner': 'Der Agent wartet auf deine Antwort oben — antworte über das Fragefenster',
@@ -1331,9 +1336,12 @@ export default {
   'autoLoop.brainstormModelPrefix': 'Brainstorm:',
   'autoLoop.brainstormModelTooltip':
     'Modell nur für die anfängliche Brainstorming-Sitzung — jede Aufgabe danach nutzt das oben gewählte Modell',
+  'autoLoop.brainstormReasoningPrefix': 'Brainstorm:',
+  'autoLoop.brainstormReasoningTooltip': 'Denkaufwand nur für die anfängliche Brainstorming-Sitzung',
   'autoLoop.executionModelPrefix': 'Loop:',
   'autoLoop.executionModelTooltip': 'Modell für jede Auto-Loop-Aufgabe nach der anfänglichen Brainstorming-Sitzung',
   'autoLoop.sessionMode.perTask': 'Neue Sitzung pro Aufgabe',
+  'autoLoop.sessionMode.label': 'Sitzung:',
   'autoLoop.sessionMode.perTaskTooltip':
     'Jede Aufgabe startet eine neue Claude-Code-Sitzung ohne Erinnerung an vorherige Aufgaben',
   'autoLoop.sessionMode.continuous': 'Durchgehende Sitzung',

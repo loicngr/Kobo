@@ -394,7 +394,7 @@
                   </q-item-section>
                 </q-item>
               </template>
-              <q-tooltip v-if="autoLoop">{{ $t('autoLoop.executionModelTooltip') }}</q-tooltip>
+              <q-tooltip>{{ $t(autoLoop ? 'autoLoop.executionModelTooltip' : 'model.tooltip') }}</q-tooltip>
             </q-select>
           </div>
 
@@ -427,6 +427,7 @@
                   </q-item-section>
                 </q-item>
               </template>
+              <q-tooltip>{{ $t('reasoning.tooltip') }}</q-tooltip>
             </q-select>
           </div>
 
@@ -465,7 +466,8 @@
         </div>
 
         <!-- Row 1b: auto-loop toggle + its session-mode selector, alone on their own row -->
-        <div class="row q-col-gutter-xs q-pa-xs col-12 items-center justify-center">
+        <div class="column q-pa-xs col-12 items-center">
+          <div class="row q-col-gutter-xs items-center justify-center">
           <div class="col-12 col-md-auto">
             <!-- Auto-loop toggle -->
             <q-btn
@@ -483,32 +485,37 @@
             </q-btn>
           </div>
 
-          <div v-if="autoLoop" class="col-12 col-md-auto">
+          <div v-if="autoLoop" class="col-12 row justify-center q-mt-xs">
             <!-- Auto-loop session mode: per-task (fresh session each iteration) vs continuous (resume) -->
-            <q-btn-toggle
-                v-model="autoLoopSessionMode"
-                dense
-                no-caps
-                size="sm"
-                toggle-color="indigo-8"
-                color="grey-9"
-                text-color="grey-5"
-                :options="[
-                  { label: $t('autoLoop.sessionMode.perTask'), value: 'per_task', icon: 'restart_alt' },
-                  { label: $t('autoLoop.sessionMode.continuous'), value: 'continuous', icon: 'link' },
-                ]"
-            >
-              <q-tooltip>
-                {{
-                  autoLoopSessionMode === 'continuous'
-                    ? $t('autoLoop.sessionMode.continuousTooltip')
-                    : $t('autoLoop.sessionMode.perTaskTooltip')
-                }}
-              </q-tooltip>
-            </q-btn-toggle>
+            <div class="auto-loop-session-panel row items-center no-wrap q-gutter-xs">
+              <span class="auto-loop-session-label">{{ $t('autoLoop.sessionMode.label') }}</span>
+              <q-btn-toggle
+                  v-model="autoLoopSessionMode"
+                  dense
+                  no-caps
+                  size="sm"
+                  toggle-color="indigo-8"
+                  color="grey-9"
+                  text-color="grey-5"
+                  :options="[
+                    { label: $t('autoLoop.sessionMode.perTask'), value: 'per_task', icon: 'restart_alt' },
+                    { label: $t('autoLoop.sessionMode.continuous'), value: 'continuous', icon: 'link' },
+                  ]"
+              >
+                <q-tooltip>
+                  {{
+                    autoLoopSessionMode === 'continuous'
+                      ? $t('autoLoop.sessionMode.continuousTooltip')
+                      : $t('autoLoop.sessionMode.perTaskTooltip')
+                  }}
+                </q-tooltip>
+              </q-btn-toggle>
+            </div>
+          </div>
           </div>
 
-          <div v-if="autoLoop" class="col-12 col-md-auto">
+          <div v-if="autoLoop" class="auto-loop-brainstorm-panel row items-center q-gutter-xs q-mt-xs">
+            <span class="auto-loop-brainstorm-label">{{ $t('autoLoop.brainstormModelPrefix') }}</span>
             <!-- Brainstorming-session model override: used once, for the
                  very first session, before the auto-loop takes over with
                  the main model select above. -->
@@ -541,6 +548,26 @@
                 </q-item>
               </template>
               <q-tooltip>{{ $t('autoLoop.brainstormModelTooltip') }}</q-tooltip>
+            </q-select>
+
+            <q-select
+              v-model="brainstormReasoningEffort"
+              :options="reasoningOptions"
+              dense borderless class="bottom-select rounded-borders" hide-dropdown-icon
+              emit-value map-options option-value="value" option-label="label"
+            >
+              <template #selected>
+                <span class="bottom-select-label row items-center no-wrap">
+                  <q-icon name="psychology" size="12px" color="amber-6" class="q-mr-xs" />
+                  <span class="text-grey-5 q-mr-xs">{{ $t('autoLoop.brainstormReasoningPrefix') }}</span>
+                  {{ reasoningOptions.find(r => r.value === brainstormReasoningEffort)?.label ?? brainstormReasoningEffort }}
+                  <q-icon name="expand_more" size="12px" color="grey-5" />
+                </span>
+              </template>
+              <template #option="{ opt, itemProps }">
+                <q-item v-bind="itemProps"><q-item-section><q-item-label class="text-white">{{ opt.label }}</q-item-label><q-item-label caption class="text-grey-5">{{ opt.description }}</q-item-label></q-item-section></q-item>
+              </template>
+              <q-tooltip>{{ $t('autoLoop.brainstormReasoningTooltip') }}</q-tooltip>
             </q-select>
           </div>
         </div>
@@ -833,7 +860,9 @@ const model = ref('claude-opus-4-8')
 // toggleAutoLoop below); untouched afterwards unless the user picks a
 // different value in its own select.
 const brainstormModel = ref('claude-opus-4-8')
+const brainstormReasoningEffort = ref('auto')
 const reasoningEffort = ref('auto')
+const reasoningEffortByModel = ref<Record<string, string>>({})
 const projectPath = ref('')
 const branch = ref<string | null>(null)
 const branchType = ref('feature')
@@ -1163,6 +1192,18 @@ const reasoningOptions = computed(() => {
   }))
 })
 
+watch(model, (selectedModel) => {
+  const savedEffort = reasoningEffortByModel.value[selectedModel]
+  if (savedEffort && reasoningOptions.value.some((option) => option.value === savedEffort)) {
+    reasoningEffort.value = savedEffort
+  }
+})
+
+watch(reasoningEffort, (effort) => {
+  reasoningEffortByModel.value = { ...reasoningEffortByModel.value, [model.value]: effort }
+  saveCreatePagePrefs({ ...loadCreatePagePrefs(), reasoningEffortByModel: reasoningEffortByModel.value })
+})
+
 // Validate Notion URL
 // Notion has two URL flavours in the wild — keep both:
 //   - legacy  https://www.notion.so/...
@@ -1428,6 +1469,7 @@ onMounted(async () => {
   // restored when it's still a known project — a stale path silently falls
   // back to empty rather than re-displaying a dead value.
   const prefs = loadCreatePagePrefs()
+  reasoningEffortByModel.value = prefs.reasoningEffortByModel ?? {}
   if (prefs.autoLoop === true) {
     autoLoop.value = true
   }
@@ -1462,6 +1504,10 @@ onMounted(async () => {
     } else if (validIds.length > 0 && !validIds.includes(model.value)) {
       model.value = validIds.includes('auto') ? 'auto' : (validIds[0] ?? 'auto')
     }
+  }
+  const savedEffort = reasoningEffortByModel.value[model.value]
+  if (savedEffort && reasoningOptions.value.some((option) => option.value === savedEffort)) {
+    reasoningEffort.value = savedEffort
   }
   {
     const validIds = modelOptions.value.map((m) => m.value)
@@ -1616,7 +1662,12 @@ async function handleCreate() {
       ...(skipSetupScript.value && !useExistingWorktree.value ? { skipSetupScript: true } : {}),
       ...(description.value.trim() ? { description: description.value.trim() } : {}),
       ...(autoLoop.value
-        ? { autoLoop: true, autoLoopSessionMode: autoLoopSessionMode.value, brainstormModel: brainstormModel.value }
+        ? {
+            autoLoop: true,
+            autoLoopSessionMode: autoLoopSessionMode.value,
+            brainstormModel: brainstormModel.value,
+            brainstormReasoningEffort: brainstormReasoningEffort.value,
+          }
         : {}),
       // Auto-loop cannot run in 'plan' (blocks MCP + edits) — promote to bypass.
       agentPermissionMode:
@@ -1654,6 +1705,7 @@ async function handleCreate() {
       autoLoop: autoLoop.value,
       autoLoopSessionMode: autoLoopSessionMode.value,
       ...(autoLoop.value ? { brainstormModel: brainstormModel.value } : {}),
+      reasoningEffortByModel: { ...reasoningEffortByModel.value, [model.value]: reasoningEffort.value },
     })
 
     // Subscribe to receive WebSocket events for this workspace
@@ -2008,6 +2060,32 @@ async function handleCreate() {
     padding: 0;
     min-height: unset;
   }
+}
+
+.auto-loop-brainstorm-panel {
+  background: rgba(255, 193, 7, 0.08);
+  border: 1px solid rgba(255, 193, 7, 0.28);
+  border-radius: 4px;
+  padding: 4px 6px;
+}
+
+.auto-loop-session-panel {
+  background: rgba(79, 70, 229, 0.1);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  border-radius: 4px;
+  padding: 3px 5px;
+}
+
+.auto-loop-session-label {
+  color: #a5b4fc;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.auto-loop-brainstorm-label {
+  color: #f6c343;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 .bottom-select-label {

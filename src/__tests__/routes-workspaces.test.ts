@@ -1001,6 +1001,12 @@ describe('POST /api/workspaces', () => {
       ...fakeWorkspace,
       model: 'claude-sonnet-4-6',
       brainstormModel: 'claude-opus-4-8',
+      autoLoop: false,
+    })
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      model: 'claude-sonnet-4-6',
+      brainstormModel: 'claude-opus-4-8',
       autoLoop: true,
     })
     vi.mocked(worktreeService.createWorktree).mockReturnValue({ worktreePath: '/tmp/worktree', base: 'origin' })
@@ -1034,6 +1040,12 @@ describe('POST /api/workspaces', () => {
 
   it('falls back to model for the initial session when brainstormModel is not set', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      model: 'claude-sonnet-4-6',
+      brainstormModel: null,
+      autoLoop: true,
+    })
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
       ...fakeWorkspace,
       model: 'claude-sonnet-4-6',
       brainstormModel: null,

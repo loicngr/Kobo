@@ -22,6 +22,7 @@ import {
   markAutoLoopReadyHandler,
   markTaskDoneHandler,
   readDocumentHandler,
+  readWorkspaceEventsCsvHandler,
   setWorkspaceAgentDescriptionHandler,
   updateTaskHandler,
 } from './kobo-tasks-handlers.js'
@@ -471,6 +472,21 @@ const WORKSPACE_SCOPED_TOOLS: Tool[] = [
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   {
+    name: 'read_workspace_events_csv',
+    description:
+      'Read the user/agent conversation history for THIS workspace as paginated CSV. Use it to recover context from prior sessions without loading the whole history at once. Optionally filter to one session_id. Read-only; cannot access another workspace.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        session_id: { type: 'string', description: 'Optional Kōbō session id to restrict the history.' },
+        offset: { type: 'number', description: 'Zero-based offset for pagination, default 0.' },
+        limit: { type: 'number', description: 'Messages to return, default 100, max 500.' },
+      },
+      required: [],
+    },
+    annotations: { readOnlyHint: true, openWorldHint: false },
+  },
+  {
     name: 'schedule_wakeup',
     description:
       'WHEN: use this whenever you would otherwise WAIT for or POLL a long-running task (test suite, CI, build, deploy, or external state) — never block your turn with sleep/poll loops, and never end a turn merely "waiting" on a background job, because the session goes idle and will not resume on its own. CALL to schedule a follow-up turn on THIS workspace after a delay. End the current turn normally; once it finishes and the workspace is idle, Kōbō waits `delaySeconds`, then resumes the same conversation by injecting `prompt` as the next user message. The wakeup is scoped to the current workspace and resumes its latest session — you cannot target another workspace or another session. If a turn is still active when the timer fires, the wakeup is skipped (status: `session-active`). Replaces any previously pending wakeup on this workspace. Delay is clamped to [60, 21600] seconds (1min to 6h). Prefer this over the built-in `ScheduleWakeup` tool — it is the SDK-supported entry point.',
@@ -844,6 +860,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === 'get_session_usage') {
       return ok(getSessionUsageHandler(db, workspaceId!))
+    }
+
+    if (name === 'read_workspace_events_csv') {
+      return ok(
+        readWorkspaceEventsCsvHandler(db, workspaceId!, {
+          sessionId: typeof a.session_id === 'string' ? a.session_id : undefined,
+          offset: typeof a.offset === 'number' ? a.offset : undefined,
+          limit: typeof a.limit === 'number' ? a.limit : undefined,
+        }),
+      )
     }
 
     if (name === 'schedule_wakeup') {

@@ -173,6 +173,19 @@
       </q-btn>
 
       <q-btn
+        v-if="isQueued && canForceQueuedMessage"
+        flat
+        dense
+        icon="send"
+        color="primary"
+        :loading="forcingQueue"
+        :disable="forcingQueue"
+        @click="forceQueuedMessage"
+      >
+        <q-tooltip>{{ $t('chatInput.forceQueue') }}</q-tooltip>
+      </q-btn>
+
+      <q-btn
         v-if="isQueued"
         flat
         dense
@@ -254,6 +267,7 @@ const wsStore = useWebSocketStore()
 const templatesStore = useTemplatesStore()
 const message = ref('')
 const interrupting = ref(false)
+const forcingQueue = ref(false)
 
 const showInterrupt = computed(() => isBusyStatus(store.selectedWorkspace?.status))
 
@@ -278,7 +292,16 @@ async function handleInterrupt() {
 
 const isAgentBusy = computed(() => isBusyStatus(store.selectedWorkspace?.status))
 
-const isQueued = computed(() => !!store.queuedMessages[props.workspaceId])
+const queuedSessionId = computed(() => store.selectedSessionId)
+const queuedMessage = computed(() => store.getQueuedMessage(props.workspaceId, queuedSessionId.value))
+const isQueued = computed(() => !!queuedMessage.value)
+
+const canForceQueuedMessage = computed(() => {
+  const workspace =
+    store.workspaces.find((item) => item.id === props.workspaceId) ??
+    store.archivedWorkspaces.find((item) => item.id === props.workspaceId)
+  return workspace?.engine === 'claude-code' && isAgentBusy.value
+})
 
 // Chat input element ref (for caret position access)
 const chatInputRef = ref<InstanceType<typeof QInput> | null>(null)
@@ -519,10 +542,18 @@ let cancelledManually = false
 
 function cancelQueue() {
   cancelledManually = true
-  store.cancelQueuedMessage(props.workspaceId)
+  store.cancelQueuedMessage(props.workspaceId, queuedSessionId.value)
+}
+
+function forceQueuedMessage() {
+  const queued = queuedMessage.value
+  if (!queued || !canForceQueuedMessage.value) return
+  forcingQueue.value = true
+  wsStore.sendChatMessage(props.workspaceId, queued.content, queued.sessionId, undefined, true)
 }
 
 watch(isQueued, (queued, wasQueued) => {
+  if (!queued) forcingQueue.value = false
   if (wasQueued && !queued && !cancelledManually) {
     message.value = ''
     // The queued message (including its `[image: …]` tokens) has just been
@@ -537,14 +568,11 @@ watch(isQueued, (queued, wasQueued) => {
   cancelledManually = false
 })
 
-watch(
-  () => props.workspaceId,
-  (wid) => {
-    const queued = store.queuedMessages[wid]
-    message.value = queued ? queued.content : ''
-    if (isRecording.value) void stopVoiceCapture()
-  },
-)
+watch([() => props.workspaceId, () => store.selectedSessionId], ([wid]) => {
+  const queued = store.getQueuedMessage(wid, store.selectedSessionId)
+  message.value = queued ? queued.content : ''
+  if (isRecording.value) void stopVoiceCapture()
+})
 
 // Watch the message text: re-detect slash fragments + reconcile the image
 // placeholder list (so deleting "[image: …]" from the textarea also drops
@@ -751,7 +779,7 @@ async function sendMessage() {
   const text = message.value.trim()
   if ((!text && pendingImages.value.length === 0) || isDisabled.value || hasUploading.value) return
 
-  const session = currentSession.value
+  let session = currentSession.value
 
   // Intercept Kobo built-in commands
   const koboCmd = KOBO_COMMANDS[text]
@@ -774,10 +802,11 @@ async function sendMessage() {
 
   // Queue the message if the agent is busy
   if (isAgentBusy.value) {
-    store.queueMessage(props.workspaceId, text, store.selectedSessionId ?? undefined)
+    if (!store.selectedSessionId) return
+    store.queueMessage(props.workspaceId, text, store.selectedSessionId)
     return
   }
-  store.cancelQueuedMessage(props.workspaceId)
+  store.cancelQueuedMessage(props.workspaceId, store.selectedSessionId)
 
   // Placeholders already contain `[image: path]` once the upload is done,
   // so no replacement is needed. Append orphan images as a safety net.
@@ -789,18 +818,24 @@ async function sendMessage() {
   if (orphanTags) {
     composedText = `${composedText} ${orphanTags}`.trim()
   }
-  const sessionTag = store.selectedSessionId ?? undefined
-
-  // Early guard: completed/error session without engineSessionId can't be resumed.
+  // Historical completed/error sessions without an engine conversation cannot
+  // be resumed. Start a new session transparently so the user's message can
+  // still continue the workspace.
   if ((session?.status === 'completed' || session?.status === 'error') && !session.engineSessionId) {
-    $q.notify({
-      type: 'warning',
-      message: t('workspacePage.sessionEndedNotice'),
-      position: 'top',
-      timeout: 5000,
-    })
-    return
+    try {
+      session = await store.createSession(props.workspaceId)
+    } catch (err) {
+      const serverMsg = err instanceof Error ? err.message : null
+      $q.notify({
+        type: 'negative',
+        message: serverMsg ?? t('workspacePage.startFailed'),
+        position: 'top',
+        timeout: 6000,
+      })
+      return
+    }
   }
+  const sessionTag = session?.id ?? store.selectedSessionId ?? undefined
 
   // Add the optimistic local item BEFORE sending so the WS user:message event
   // (which the backend may emit synchronously during /start) can find it via

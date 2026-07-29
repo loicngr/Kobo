@@ -1,4 +1,6 @@
 export default {
+  'model.tooltip': 'Model used by the agent for this workspace',
+  'reasoning.tooltip': 'Reasoning level used by the agent for this workspace',
   // Common
   'common.save': 'Save',
   'common.cancel': 'Cancel',
@@ -152,6 +154,8 @@ export default {
   'workspacePage.interruptFailed': 'Interrupt failed',
   'workspacePage.interruptTooltip': 'Soft interrupt (like Escape) — stops the current tool but keeps the session alive',
   'workspacePage.pendingNextRun': 'Applied on next start',
+  'workspacePage.activeSessionModel': 'Active: {model}',
+  'workspacePage.activeSessionModelTooltip': 'Model currently used by the selected session',
 
   // Search
   'search.title': 'Search',
@@ -197,6 +201,7 @@ export default {
   'chatInput.skills': 'Skills',
   'chatInput.attachImage': 'Attach image',
   'chatInput.queueBanner': 'Message queued — will be sent when the agent finishes',
+  'chatInput.forceQueue': 'Send now to the Claude agent',
   'chatInput.cancelQueue': 'Cancel Queue',
   'chatInput.autoLoopBanner': 'Auto-loop is running — stop it to send a message',
   'chatInput.awaitingUserBanner': 'The agent is waiting for your answer above — reply via the question panel',
@@ -1311,9 +1316,12 @@ export default {
   'autoLoop.brainstormModelPrefix': 'Brainstorm:',
   'autoLoop.brainstormModelTooltip':
     'Model used only for the initial brainstorming session — every task after that uses the model picked above',
+  'autoLoop.brainstormReasoningPrefix': 'Brainstorm:',
+  'autoLoop.brainstormReasoningTooltip': 'Reasoning level used only for the initial brainstorming session',
   'autoLoop.executionModelPrefix': 'Loop:',
   'autoLoop.executionModelTooltip': 'Model used for every auto-loop task after the initial brainstorming session',
   'autoLoop.sessionMode.perTask': 'New session per task',
+  'autoLoop.sessionMode.label': 'Session:',
   'autoLoop.sessionMode.perTaskTooltip': 'Each task starts a fresh Claude Code session with no memory of prior tasks',
   'autoLoop.sessionMode.continuous': 'Continuous session',
   'autoLoop.sessionMode.continuousTooltip':

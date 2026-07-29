@@ -241,6 +241,7 @@ export const DEFAULT_TEMPLATES: readonly DefaultTemplate[] = [
       `- \`kobo__set_workspace_agent_description\` — short one-line summary shown in the sidebar; keep it current\n` +
       `- \`kobo__set_workspace_name\` — rename this workspace (the sidebar title); ONLY when the user explicitly asks for a rename, never on your own\n` +
       `- \`kobo__get_workspace_info\` / \`kobo__get_git_info\` — read workspace metadata + git state\n` +
+      `- \`kobo__read_workspace_events_csv\` — read paginated user/agent history from this workspace across sessions when prior context is useful; use \`limit\` + \`offset\` rather than loading everything\n` +
       `- \`kobo__cron_create\` / \`cron_delete\` / \`cron_list\` — schedule recurring or one-shot triggers on THIS workspace\n` +
       `- \`kobo__schedule_wakeup\` / \`cancel_wakeup\` — pause now and resume this same session after a one-off delay\n` +
       `- \`kobo__mark_auto_loop_ready\` — flip the loop into auto-execution after grooming\n\n` +

@@ -1,4 +1,6 @@
 export default {
+  'model.tooltip': 'Modelo usado por el agente en este workspace',
+  'reasoning.tooltip': 'Nivel de razonamiento usado por el agente en este workspace',
   // Common
   'common.save': 'Guardar',
   'common.cancel': 'Cancelar',
@@ -155,6 +157,8 @@ export default {
   'workspacePage.interruptTooltip':
     'Interrupción suave (como Escape) — detiene la herramienta actual pero mantiene la sesión activa',
   'workspacePage.pendingNextRun': 'Se aplicará en el próximo inicio',
+  'workspacePage.activeSessionModel': 'En uso: {model}',
+  'workspacePage.activeSessionModelTooltip': 'Modelo utilizado actualmente por la sesión seleccionada',
 
   // Search
   'search.title': 'Búsqueda',
@@ -200,6 +204,7 @@ export default {
   'chatInput.skills': 'Skills',
   'chatInput.attachImage': 'Adjuntar imagen',
   'chatInput.queueBanner': 'Mensaje en cola — se enviará cuando el agente termine',
+  'chatInput.forceQueue': 'Enviar ahora al agente Claude',
   'chatInput.cancelQueue': 'Cancelar cola',
   'chatInput.autoLoopBanner': 'Auto-loop activo — deténlo para enviar un mensaje',
   'chatInput.awaitingUserBanner': 'El agente espera tu respuesta arriba — responde mediante el panel de la pregunta',
@@ -1329,10 +1334,13 @@ export default {
   'autoLoop.brainstormModelPrefix': 'Brainstorm:',
   'autoLoop.brainstormModelTooltip':
     'Modelo usado solo para la sesión de brainstorming inicial — cada tarea posterior usa el modelo elegido arriba',
+  'autoLoop.brainstormReasoningPrefix': 'Brainstorm:',
+  'autoLoop.brainstormReasoningTooltip': 'Nivel de razonamiento usado solo para la sesión de brainstorming inicial',
   'autoLoop.executionModelPrefix': 'Loop:',
   'autoLoop.executionModelTooltip':
     'Modelo usado para cada tarea del auto-loop tras la sesión de brainstorming inicial',
   'autoLoop.sessionMode.perTask': 'Nueva sesión por tarea',
+  'autoLoop.sessionMode.label': 'Sesión:',
   'autoLoop.sessionMode.perTaskTooltip':
     'Cada tarea inicia una sesión nueva de Claude Code sin memoria de tareas anteriores',
   'autoLoop.sessionMode.continuous': 'Sesión continua',

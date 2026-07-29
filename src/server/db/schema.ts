@@ -60,6 +60,7 @@ export function initSchema(db: Database.Database): void {
       pid INTEGER,
       engine_session_id TEXT,
       status TEXT NOT NULL DEFAULT 'running',
+      model TEXT,
       started_at TEXT NOT NULL,
       ended_at TEXT,
       name TEXT

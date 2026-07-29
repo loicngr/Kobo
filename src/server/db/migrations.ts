@@ -424,6 +424,18 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 31,
+    name: 'add-agent-session-model',
+    migrate: (db) => {
+      const table = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='agent_sessions'").get()
+      if (!table) return
+      const cols = db.prepare('PRAGMA table_info(agent_sessions)').all() as Array<{ name: string }>
+      if (!cols.some((c) => c.name === 'model')) {
+        db.prepare('ALTER TABLE agent_sessions ADD COLUMN model TEXT').run()
+      }
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

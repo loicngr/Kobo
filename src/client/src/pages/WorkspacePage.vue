@@ -81,6 +81,17 @@
             </q-item>
           </template>
         </q-select>
+        <q-badge
+          v-if="selectedSessionModel !== null && selectedSessionModel !== selectedWs.model"
+          color="indigo-8"
+          text-color="indigo-1"
+          class="q-ml-sm"
+          style="font-size: 10px;"
+        >
+          <q-icon name="auto_awesome" size="11px" class="q-mr-xs" />
+          {{ $t('workspacePage.activeSessionModel', { model: activeSessionModelLabel }) }}
+          <q-tooltip>{{ $t('workspacePage.activeSessionModelTooltip') }}</q-tooltip>
+        </q-badge>
         <q-space />
         <q-select
           v-model="currentPermissionMode"
@@ -590,6 +601,13 @@ const selectedId = computed(() => store.selectedWorkspaceId)
 const selectedWs = computed(() => store.selectedWorkspace)
 
 const sessions = computed(() => store.sessions)
+const selectedSession = computed(() => store.sessions.find((session) => session.id === store.selectedSessionId) ?? null)
+const selectedSessionModel = computed(() => selectedSession.value?.model ?? null)
+const activeSessionModelLabel = computed(
+  () =>
+    modelOptions.value.find((option) => option.value === selectedSessionModel.value)?.label ??
+    selectedSessionModel.value,
+)
 const selectedSessionId = computed({
   get: () => store.selectedSessionId,
   set: (val: string | null) => {

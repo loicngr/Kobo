@@ -412,6 +412,7 @@ interface AgentSessionRow {
 function resolveSessionForResume(
   workspaceId: string,
   existingSessionId: string | undefined,
+  model: string | undefined,
 ): { agentSessionId: string; engineSessionId: string | undefined; existed: boolean } {
   const db = getDb()
   let lastSession: AgentSessionRow | undefined
@@ -448,48 +449,48 @@ function resolveSessionForResume(
       )?.id
     const agentSessionId = existingId ?? nanoid()
     if (existingId) {
-      db.prepare('UPDATE agent_sessions SET status = ?, ended_at = NULL WHERE id = ?').run('running', agentSessionId)
+      db.prepare('UPDATE agent_sessions SET status = ?, ended_at = NULL, model = ? WHERE id = ?').run(
+        'running',
+        model ?? null,
+        agentSessionId,
+      )
     } else {
       db.prepare(
-        'INSERT INTO agent_sessions (id, workspace_id, pid, status, engine_session_id, started_at) VALUES (?, ?, ?, ?, ?, ?)',
-      ).run(agentSessionId, workspaceId, null, 'running', engineSessionId, new Date().toISOString())
+        'INSERT INTO agent_sessions (id, workspace_id, pid, status, engine_session_id, model, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+      ).run(agentSessionId, workspaceId, null, 'running', engineSessionId, model ?? null, new Date().toISOString())
     }
     return { agentSessionId, engineSessionId, existed: Boolean(existingId) }
   }
 
   // No engine session to resume — fall through to fresh session creation
   const agentSessionId = nanoid()
-  db.prepare('INSERT INTO agent_sessions (id, workspace_id, pid, status, started_at) VALUES (?, ?, ?, ?, ?)').run(
-    agentSessionId,
-    workspaceId,
-    null,
-    'running',
-    new Date().toISOString(),
-  )
+  db.prepare(
+    'INSERT INTO agent_sessions (id, workspace_id, pid, status, model, started_at) VALUES (?, ?, ?, ?, ?, ?)',
+  ).run(agentSessionId, workspaceId, null, 'running', model ?? null, new Date().toISOString())
   return { agentSessionId, engineSessionId: undefined, existed: false }
 }
 
-function reuseOrCreateFreshSession(workspaceId: string, existingSessionId: string | undefined): string {
+function reuseOrCreateFreshSession(
+  workspaceId: string,
+  existingSessionId: string | undefined,
+  model: string | undefined,
+): string {
   const db = getDb()
   if (existingSessionId) {
     const result = db
       .prepare(
-        'UPDATE agent_sessions SET status = ?, started_at = ?, ended_at = NULL WHERE id = ? AND workspace_id = ?',
+        'UPDATE agent_sessions SET status = ?, started_at = ?, ended_at = NULL, model = ? WHERE id = ? AND workspace_id = ?',
       )
-      .run('running', new Date().toISOString(), existingSessionId, workspaceId)
+      .run('running', new Date().toISOString(), model ?? null, existingSessionId, workspaceId)
     if (result.changes === 0) {
       throw new Error(`Agent session '${existingSessionId}' not found for workspace '${workspaceId}'`)
     }
     return existingSessionId
   }
   const agentSessionId = nanoid()
-  db.prepare('INSERT INTO agent_sessions (id, workspace_id, pid, status, started_at) VALUES (?, ?, ?, ?, ?)').run(
-    agentSessionId,
-    workspaceId,
-    null,
-    'running',
-    new Date().toISOString(),
-  )
+  db.prepare(
+    'INSERT INTO agent_sessions (id, workspace_id, pid, status, model, started_at) VALUES (?, ?, ?, ?, ?, ?)',
+  ).run(agentSessionId, workspaceId, null, 'running', model ?? null, new Date().toISOString())
   return agentSessionId
 }
 
@@ -702,7 +703,11 @@ function handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent
     sessionIds.set(workspaceId, ev.engineSessionId)
     try {
       const db = getDb()
-      db.prepare('UPDATE agent_sessions SET engine_session_id = ? WHERE id = ?').run(ev.engineSessionId, agentSessionId)
+      db.prepare('UPDATE agent_sessions SET engine_session_id = ?, model = COALESCE(?, model) WHERE id = ?').run(
+        ev.engineSessionId,
+        ev.model ?? null,
+        agentSessionId,
+      )
     } catch (err) {
       console.error('[orchestrator] Failed to persist engine session id:', err)
     }
@@ -867,11 +872,11 @@ export function startAgent(
   let resumeFromEngineSessionId: string | undefined
 
   if (resume) {
-    const r = resolveSessionForResume(workspaceId, existingSessionId)
+    const r = resolveSessionForResume(workspaceId, existingSessionId, model)
     agentSessionId = r.agentSessionId
     resumeFromEngineSessionId = r.engineSessionId
   } else {
-    agentSessionId = reuseOrCreateFreshSession(workspaceId, existingSessionId)
+    agentSessionId = reuseOrCreateFreshSession(workspaceId, existingSessionId, model)
   }
 
   const settings = ws ? readEffectiveSettingsSafe(ws.projectPath) : readEffectiveSettingsSafe(workingDir)
@@ -996,10 +1001,13 @@ export function stopAgent(workspaceId: string): void {
 }
 
 /** Write a user message to the running agent. */
-export function sendMessage(workspaceId: string, content: string): void {
+export function sendMessage(workspaceId: string, content: string, expectedSessionId?: string): void {
   const ctrl = controllers.get(workspaceId)
   if (!ctrl) {
     throw new Error(`No agent running for workspace '${workspaceId}'`)
+  }
+  if (expectedSessionId && ctrl.agentSessionId !== expectedSessionId) {
+    throw new Error(`Session '${expectedSessionId}' is not active for workspace '${workspaceId}'`)
   }
   wakeupService.cancel(workspaceId, 'user-message')
   ctrl.sendMessage(content)

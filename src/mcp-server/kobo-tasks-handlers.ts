@@ -655,6 +655,50 @@ export function getSessionUsageHandler(db: Database.Database, workspaceId: strin
   }
 }
 
+function csvCell(value: string): string {
+  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value
+}
+
+/** Read the user/agent conversation history as paginated CSV. */
+export function readWorkspaceEventsCsvHandler(
+  db: Database.Database,
+  workspaceId: string,
+  options: { sessionId?: string; limit?: number; offset?: number } = {},
+): { csv: string; eventCount: number; totalEvents: number; offset: number; nextOffset: number | null } {
+  const safeLimit = Math.min(Math.max(Math.floor(options.limit ?? 100), 1), 500)
+  const safeOffset = Math.max(Math.floor(options.offset ?? 0), 0)
+  const sessionFilter = options.sessionId ? ' AND session_id = ?' : ''
+  const params = options.sessionId ? [workspaceId, options.sessionId] : [workspaceId]
+  const conversationFilter =
+    " AND (type = 'user:message' OR (type = 'agent:event' AND json_extract(payload, '$.kind') = 'message:text'))"
+  const rows = db
+    .prepare(
+      `SELECT session_id, type, payload, created_at FROM ws_events WHERE workspace_id = ?${sessionFilter}${conversationFilter} ORDER BY rowid ASC LIMIT ? OFFSET ?`,
+    )
+    .all(...params, safeLimit, safeOffset) as Array<{
+    session_id: string | null
+    type: string
+    payload: string
+    created_at: string
+  }>
+  const total = (
+    db
+      .prepare(`SELECT COUNT(*) AS count FROM ws_events WHERE workspace_id = ?${sessionFilter}${conversationFilter}`)
+      .get(...params) as { count: number }
+  ).count
+  const lines = [
+    ['created_at', 'session_id', 'type', 'payload'],
+    ...rows.map((r) => [r.created_at, r.session_id ?? '', r.type, r.payload]),
+  ]
+  return {
+    csv: lines.map((row) => row.map(csvCell).join(',')).join('\n'),
+    eventCount: rows.length,
+    totalEvents: total,
+    offset: safeOffset,
+    nextOffset: safeOffset + rows.length < total ? safeOffset + rows.length : null,
+  }
+}
+
 // ── Crons ────────────────────────────────────────────────────────────────────
 
 /**

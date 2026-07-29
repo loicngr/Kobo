@@ -5,6 +5,7 @@ import {
   type PermissionResult,
   query,
   type SDKMessage,
+  type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
 import { nanoid } from 'nanoid'
 import type { AgentEngine, AgentEvent, EngineProcess, StartOptions } from '../types.js'
@@ -25,6 +26,7 @@ type McpStdioServerConfigWithAlwaysLoad = McpStdioServerConfig & { alwaysLoad: b
  * and auto-loop are not frozen forever.
  */
 const RESULT_DRAIN_TIMEOUT_MS = 15_000
+const MAX_PENDING_USER_MESSAGES = 20
 
 function toMcpServersMap(specs: StartOptions['mcpServers']): Options['mcpServers'] | undefined {
   if (!specs || specs.length === 0) return undefined
@@ -44,6 +46,60 @@ interface PendingResolver {
   /** The original input the SDK passed to canUseTool — used to echo back questions on resolve. */
   input: Record<string, unknown>
   requestKind: 'question' | 'permission'
+}
+
+class ClaudeInputStream implements AsyncIterable<SDKUserMessage> {
+  private readonly messages: Array<{ message: SDKUserMessage; forced: boolean }>
+  private waiting?: () => void
+  private closed = false
+  private queuedForcedMessages = 0
+  private yieldedMessages = 0
+
+  constructor(initialPrompt: string) {
+    this.messages = [{ message: this.toUserMessage(initialPrompt), forced: false }]
+  }
+
+  send(text: string): void {
+    if (this.closed) throw new Error('Claude input stream is closed')
+    if (this.queuedForcedMessages >= MAX_PENDING_USER_MESSAGES) {
+      throw new Error(`Claude input queue is full (max ${MAX_PENDING_USER_MESSAGES} messages)`)
+    }
+    this.messages.push({ message: this.toUserMessage(text), forced: true })
+    this.queuedForcedMessages++
+    const wake = this.waiting
+    this.waiting = undefined
+    wake?.()
+  }
+
+  close(): void {
+    this.closed = true
+    const wake = this.waiting
+    this.waiting = undefined
+    wake?.()
+  }
+
+  hasUnansweredInput(completedResponses: number): boolean {
+    return this.queuedForcedMessages > 0 || this.yieldedMessages > completedResponses
+  }
+
+  async *[Symbol.asyncIterator](): AsyncGenerator<SDKUserMessage, void, undefined> {
+    while (!this.closed || this.messages.length > 0) {
+      const next = this.messages.shift()
+      if (next) {
+        if (next.forced) this.queuedForcedMessages--
+        this.yieldedMessages++
+        yield next.message
+        continue
+      }
+      await new Promise<void>((resolve) => {
+        this.waiting = resolve
+      })
+    }
+  }
+
+  private toUserMessage(text: string): SDKUserMessage {
+    return { type: 'user', message: { role: 'user', content: text }, parent_tool_use_id: null }
+  }
 }
 
 export function createClaudeCodeEngine(): AgentEngine {
@@ -173,7 +229,8 @@ export function createClaudeCodeEngine(): AgentEngine {
       const explicitBinary = resolveClaudeBinaryPath()
       if (explicitBinary) sdkOptions.pathToClaudeCodeExecutable = explicitBinary
 
-      const q = query({ prompt: effectivePrompt, options: sdkOptions })
+      const inputStream = new ClaudeInputStream(effectivePrompt)
+      const q = query({ prompt: inputStream, options: sdkOptions })
 
       let discoveredSessionId: string | undefined
 
@@ -189,6 +246,7 @@ export function createClaudeCodeEngine(): AgentEngine {
 
       let iteratorRunning = false
       let userInterrupted = false
+      let completedResponses = 0
 
       // Guard so the post-result drain watchdog and the natural loop exit (or
       // catch block) never both emit `session:ended` for the same run.
@@ -252,7 +310,14 @@ export function createClaudeCodeEngine(): AgentEngine {
               if (ev.kind === 'session:started') discoveredSessionId = ev.engineSessionId
               safeEmit(ev)
             }
-            if ((msg as { type?: string }).type === 'result') armResultDrainWatchdog()
+            if ((msg as { type?: string }).type === 'result') {
+              completedResponses++
+              // A queued forced message starts the next response on this same SDK stream.
+              if (!inputStream.hasUnansweredInput(completedResponses)) {
+                inputStream.close()
+                armResultDrainWatchdog()
+              }
+            }
           }
           // If the SDK ended with a `result.subtype === 'error_*'`, the
           // event-mapper already surfaced an `error` event but the iterator
@@ -303,6 +368,7 @@ export function createClaudeCodeEngine(): AgentEngine {
           }
           pendingResolvers.clear()
           iteratorRunning = false
+          inputStream.close()
         }
       })()
 
@@ -316,8 +382,9 @@ export function createClaudeCodeEngine(): AgentEngine {
         isAlive(): boolean {
           return iteratorRunning
         },
-        sendMessage() {
-          throw new Error('sendMessage not supported in single-shot SDK mode')
+        sendMessage(text: string) {
+          if (!iteratorRunning) throw new Error('Claude agent is no longer running')
+          inputStream.send(text)
         },
         interrupt() {
           userInterrupted = true

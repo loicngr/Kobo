@@ -384,3 +384,52 @@ describe('claude-code engine — user interrupt', () => {
     vi.resetModules()
   })
 })
+
+describe('claude-code engine — forced chat input', () => {
+  it("injects a forced chat message into Claude's active streaming input", async () => {
+    vi.resetModules()
+    let resolveInjected: ((message: unknown) => void) | undefined
+    const injected = new Promise<unknown>((resolve) => {
+      resolveInjected = resolve
+    })
+
+    vi.doMock('@anthropic-ai/claude-agent-sdk', () => ({
+      query: vi.fn((args: { prompt: AsyncIterable<unknown> }) => ({
+        async *[Symbol.asyncIterator]() {
+          const input = args.prompt[Symbol.asyncIterator]()
+          await input.next() // Initial Kōbō prompt.
+          yield { type: 'system', subtype: 'init', session_id: 'streaming-session', model: 'm', slash_commands: [] }
+          resolveInjected?.((await input.next()).value)
+          yield { type: 'result', subtype: 'success', usage: { input_tokens: 1, output_tokens: 1 } }
+        },
+        interrupt: vi.fn(),
+      })),
+    }))
+
+    try {
+      const { createClaudeCodeEngine } = await import('../server/services/agent/engines/claude-code/engine.js')
+      const proc = await createClaudeCodeEngine().start(
+        {
+          workspaceId: 'w-streaming-input',
+          workingDir: '/tmp',
+          prompt: 'initial prompt',
+          backendUrl: 'http://localhost:3000',
+          koboHome: '/tmp/kobo',
+          settings: { dangerouslySkipPermissions: true } as any,
+        },
+        () => {},
+      )
+
+      proc.sendMessage('arrête la vérification PTI')
+
+      await expect(injected).resolves.toMatchObject({
+        type: 'user',
+        message: { role: 'user', content: 'arrête la vérification PTI' },
+        parent_tool_use_id: null,
+      })
+    } finally {
+      vi.doUnmock('@anthropic-ai/claude-agent-sdk')
+      vi.resetModules()
+    }
+  })
+})

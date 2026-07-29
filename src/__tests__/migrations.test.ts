@@ -41,8 +41,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 30', () => {
-    expect(SCHEMA_VERSION).toBe(30)
+  it('exporte SCHEMA_VERSION = 31', () => {
+    expect(SCHEMA_VERSION).toBe(31)
   })
 
   it('migration v17 unifies legacy permission_mode + permission_profile into agent_permission_mode', () => {

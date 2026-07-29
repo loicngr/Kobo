@@ -307,6 +307,9 @@ export function dispatchAgentEvent(
             ? 'error'
             : 'idle'
     workspaceStore.updateWorkspaceFromEvent(workspaceId, { status: derivedStatus })
+    if (sessionId && event.reason === 'completed') {
+      workspaceStore.flushQueuedMessage(workspaceId, sessionId)
+    }
     // Subagents live inside the parent session: when it ends, any still in
     // `running` are orphaned. Flip them to `done` so AgentBusyBanner doesn't
     // keep reporting "1 sub-agent en cours" on a completed workspace.
@@ -429,10 +432,11 @@ export const useWebSocketStore = defineStore('websocket', {
       content: string,
       sessionId?: string,
       agentPermissionModeOverride?: 'plan' | 'bypass' | 'strict' | 'interactive',
+      force = false,
     ) {
       this._send({
         type: 'chat:message',
-        payload: { workspaceId, content, sessionId, agentPermissionModeOverride },
+        payload: { workspaceId, content, sessionId, agentPermissionModeOverride, force },
       })
 
       // The native `/compact` command triggers a context compaction that runs
@@ -520,6 +524,12 @@ export const useWebSocketStore = defineStore('websocket', {
       const wid = msg.workspaceId ?? (payload.workspaceId as string | undefined) ?? ''
 
       switch (msg.type) {
+        case 'chat:accepted': {
+          const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : undefined
+          if (wid && sessionId) workspaceStore.cancelQueuedMessage(wid, sessionId)
+          break
+        }
+
         case 'agent:event': {
           if (!wid) break
           // The payload IS the normalised AgentEvent — emitted by

@@ -69,6 +69,7 @@ export interface AgentSession {
   pid: number | null
   engineSessionId: string | null
   status: string
+  model?: string | null
   startedAt: string
   endedAt: string | null
   name: string | null
@@ -333,7 +334,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     hasMoreEvents: {} as Record<string, boolean>,
     providerUsage: {} as Record<ProviderId, UsageSnapshot | undefined>,
     chatDraft: '',
-    queuedMessages: {} as Record<string, { content: string; sessionId?: string }>,
+    queuedMessages: {} as Record<string, { content: string; sessionId: string }>,
     gitRefreshTrigger: 0,
     gitStatsCache: {} as Record<string, GitStats>,
     pendingWakeups: {} as Record<string, PendingWakeup>,
@@ -1896,12 +1897,27 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
-    queueMessage(workspaceId: string, content: string, sessionId?: string) {
-      this.queuedMessages[workspaceId] = { content, sessionId }
+    queuedMessageKey(workspaceId: string, sessionId: string) {
+      return `${workspaceId}:${sessionId}`
     },
 
-    cancelQueuedMessage(workspaceId: string) {
-      delete this.queuedMessages[workspaceId]
+    getQueuedMessage(workspaceId: string, sessionId: string | null | undefined) {
+      return sessionId ? this.queuedMessages[this.queuedMessageKey(workspaceId, sessionId)] : undefined
+    },
+
+    queueMessage(workspaceId: string, content: string, sessionId: string) {
+      this.queuedMessages[this.queuedMessageKey(workspaceId, sessionId)] = { content, sessionId }
+    },
+
+    cancelQueuedMessage(workspaceId: string, sessionId: string | null | undefined) {
+      if (sessionId) delete this.queuedMessages[this.queuedMessageKey(workspaceId, sessionId)]
+    },
+
+    flushQueuedMessage(workspaceId: string, sessionId: string) {
+      const queued = this.getQueuedMessage(workspaceId, sessionId)
+      if (!queued) return
+      this.cancelQueuedMessage(workspaceId, sessionId)
+      useWebSocketStore().sendChatMessage(workspaceId, queued.content, sessionId)
     },
 
     updateWorkspaceFromEvent(workspaceId: string, data: Partial<Workspace>) {
@@ -1926,21 +1942,6 @@ export const useWorkspaceStore = defineStore('workspace', {
               subs[id] = { ...sub, status: 'done' }
             }
           }
-        }
-        // Auto-send queued message when agent finishes successfully
-        const queued = this.queuedMessages[workspaceId]
-        if ((data.status === 'completed' || data.status === 'idle') && queued) {
-          delete this.queuedMessages[workspaceId]
-          const wsStore = useWebSocketStore()
-          wsStore.sendChatMessage(workspaceId, queued.content, queued.sessionId)
-          this.addActivityItem(workspaceId, {
-            id: `user-${Date.now()}`,
-            type: 'text',
-            content: queued.content,
-            timestamp: new Date().toISOString(),
-            sessionId: queued.sessionId,
-            meta: { sender: 'user', pending: true },
-          })
         }
       }
     },

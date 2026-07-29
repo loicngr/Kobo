@@ -343,6 +343,7 @@ setMessageHandler((type, payload) => {
     prompt?: string
     sessionId?: string
     agentPermissionModeOverride?: 'plan' | 'bypass' | 'strict' | 'interactive'
+    force?: boolean
   } | null
 
   if (type === 'chat:message' && p?.workspaceId && p?.content) {
@@ -375,17 +376,23 @@ setMessageHandler((type, payload) => {
     // never steal the tagging.
     const activeSession = getActiveSession(p.workspaceId)
     const sessionTag = p.sessionId ?? activeSession?.id ?? undefined
-    // Persist user message so it survives page refresh
-    emit(p.workspaceId, 'user:message', { content: p.content, sender: 'user' }, sessionTag)
+    // Forced sends are persisted only once the active engine has accepted the
+    // input, so a stale session cannot make the client lose its queued text.
+    if (!p.force) emit(p.workspaceId, 'user:message', { content: p.content, sender: 'user' }, sessionTag)
 
     try {
-      sendMessage(p.workspaceId, p.content)
+      sendMessage(p.workspaceId, p.content, p.sessionId)
+      if (p.force) {
+        emit(p.workspaceId, 'user:message', { content: p.content, sender: 'user' }, sessionTag)
+        emitEphemeral(p.workspaceId, 'chat:accepted', { sessionId: p.sessionId })
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       // Only resume on the specific "No agent running" path. Other errors
       // (stdin closed, process dead mid-write, etc.) should surface to the
       // logs instead of silently respawning a fresh agent.
       if (!msg.includes('No agent running')) {
+        if (p.force) emitEphemeral(p.workspaceId, 'chat:rejected', { sessionId: p.sessionId, message: msg })
         console.error(`[ws] chat:message failed for workspace ${p.workspaceId}:`, err)
         return
       }
