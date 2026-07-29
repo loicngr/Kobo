@@ -4,6 +4,26 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.10.0
+
+- fix(agent): make Claude sessions recover cleanly from a stuck post-result
+  stream, prevent native wakeups from leaving orphaned questions, and keep
+  live sessions out of the `idle` state
+- feat(chat): keep queued messages scoped to the selected workspace session,
+  restore them after a rejected send, and confirm delivery only after the
+  engine accepts it
+- feat(chat): send a queued message immediately to an active Claude session
+  or steer an active Codex turn; serialise concurrent Codex steer requests
+  against the current turn id
+- feat(questions): support inline free-form answers for **Other**, option
+  previews, structured Codex question ids, missing option arrays, secret
+  answers, and stale-question-panel recovery
+- fix(codex): map `request_user_input` and its auto-resolution metadata to the
+  shared question UI, and document that structured Codex questions require
+  `plan` mode
+- docs: document live steering, interactive-question limitations, and the
+  updated Q&A experience in README and CONFIGURATION
+
 ## 1.9.6
 
 - feat(chat): inject a queued message into a running Claude session, with a
