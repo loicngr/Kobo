@@ -80,7 +80,8 @@ describe('handleServerRequest — item/fileChange/requestApproval', () => {
 describe('handleServerRequest — item/tool/requestUserInput', () => {
   it('emits session:user-input-requested with requestKind=question, toolName=AskUserQuestion', () => {
     const { emit, register, emitted, registered, method, params, requestId } = makeArgs('item/tool/requestUserInput', {
-      questions: [{ id: 'q1', text: 'What is your name?' }],
+      autoResolutionMs: 60_000,
+      questions: [{ id: 'q1', header: 'Identity', question: 'What is your name?', isOther: false, options: null }],
     })
     const result = handleServerRequest({ requestId, method, params, emit, register })
     expect(result).toBe(true)
@@ -88,7 +89,10 @@ describe('handleServerRequest — item/tool/requestUserInput', () => {
       kind: 'session:user-input-requested',
       requestKind: 'question',
       toolName: 'AskUserQuestion',
-      payload: { questions: [{ id: 'q1', text: 'What is your name?' }] },
+      payload: {
+        autoResolutionMs: 60_000,
+        questions: [{ id: 'q1', header: 'Identity', question: 'What is your name?', isOther: false, options: [] }],
+      },
     })
     expect(registered[0].pending.kind).toBe('user_input')
   })

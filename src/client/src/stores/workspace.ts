@@ -1636,18 +1636,24 @@ export const useWorkspaceStore = defineStore('workspace', {
       answers: Record<string, string>,
       toolCallId?: string,
       awaitingFreeForm?: boolean,
+      response?: string,
     ): Promise<void> {
       const res = await fetch(`/api/workspaces/${workspaceId}/deferred-tool-use/answer`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ answers, toolCallId, awaitingFreeForm }),
+        body: JSON.stringify({ answers, toolCallId, awaitingFreeForm, response }),
       })
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as { error?: string }
         const message = body.error ?? `HTTP ${res.status}`
-        // Self-heal a zombie panel left by a stale ws_events replay.
-        if (/no deferred tool use pending/i.test(message)) {
-          console.warn('[workspace] submitDeferredAnswer: backend has no pending — clearing zombie panel locally')
+        // Self-heal a zombie panel left by a stale replay or a session that
+        // ended while the question panel was visible. There is no callback to
+        // recover in any of these cases, so retaining the form only lets the
+        // user submit the same impossible answer again.
+        if (
+          /no deferred tool use pending|no agent running|no active engine process|no pending callback/i.test(message)
+        ) {
+          console.warn('[workspace] submitDeferredAnswer: deferred callback expired — clearing zombie panel locally')
           this.dequeuePending(workspaceId)
           void this.fetchWorkspaces()
           return

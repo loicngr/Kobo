@@ -18,3 +18,22 @@ export function expandOtherAnswer(value: string | string[], multiSelect: boolean
   const single = Array.isArray(value) ? (value[0] ?? '') : value
   return single === OTHER_OPTION_VALUE ? OTHER_INSTRUCTION : single
 }
+
+/**
+ * Replace the internal “Other” sentinel with the text entered directly in
+ * the question form. This keeps Codex's structured answer payload useful
+ * while Claude also receives the SDK-level `response` field.
+ */
+export function expandOtherAnswerWithResponse(
+  value: string | string[],
+  multiSelect: boolean,
+  response: string,
+): string {
+  const replacement = response.trim() || OTHER_INSTRUCTION
+  if (multiSelect) {
+    const labels = Array.isArray(value) ? value : []
+    return labels.map((label) => (label === OTHER_OPTION_VALUE ? replacement : label)).join(', ')
+  }
+  const single = Array.isArray(value) ? (value[0] ?? '') : value
+  return single === OTHER_OPTION_VALUE ? replacement : single
+}

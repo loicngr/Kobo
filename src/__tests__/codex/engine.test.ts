@@ -187,6 +187,58 @@ describe('createCodexEngine — happy path', () => {
   })
 })
 
+describe('createCodexEngine — active turn steering', () => {
+  it('steers the running turn when a user chat message arrives', async () => {
+    resetChild()
+    let resolveEnded: () => void = () => {}
+    const ended = new Promise<void>((resolve) => {
+      resolveEnded = resolve
+    })
+    const proc = await createCodexEngine().start(BASE_OPTIONS, (event) => {
+      if (event.kind === 'session:ended') resolveEnded()
+    })
+
+    await flush(10)
+    pushInitializeResponse(1)
+    await flush(5)
+    pushThreadStartResponse('thr_steer', 2)
+    await flush(5)
+    pushTurnStartResponse('turn_active', 3)
+    await flush(5)
+
+    const steering = proc.sendMessage('Arrête et concentre-toi sur le test qui échoue.')
+    await flush(5)
+
+    const request = _child._written
+      .map((line) => JSON.parse(line) as { method?: string; id?: number; params?: unknown })
+      .find((message) => message.method === 'turn/steer')
+    expect(request).toMatchObject({
+      method: 'turn/steer',
+      params: {
+        threadId: 'thr_steer',
+        expectedTurnId: 'turn_active',
+        input: [{ type: 'text', text: 'Arrête et concentre-toi sur le test qui échoue.', text_elements: [] }],
+      },
+    })
+
+    pushLine({ jsonrpc: '2.0', id: request?.id, result: { turnId: 'turn_steered' } })
+    await expect(steering).resolves.toBeUndefined()
+
+    pushNotification('turn/completed', {
+      threadId: 'thr_steer',
+      turn: {
+        id: 'turn_steered',
+        status: 'completed',
+        startedAt: null,
+        completedAt: null,
+        durationMs: null,
+        error: null,
+      },
+    })
+    await ended
+  })
+})
+
 describe('createCodexEngine — resume', () => {
   it('sends thread/resume (not thread/start) when resumeFromEngineSessionId is set', async () => {
     resetChild()

@@ -9,6 +9,8 @@ import type {
   TurnInterruptParams,
   TurnStartParams,
   TurnStartResponse,
+  TurnSteerParams,
+  TurnSteerResponse,
 } from './protocol/types.js'
 
 export interface AppServerClientOptions {
@@ -25,6 +27,7 @@ export interface AppServerClient {
   startThread(params: ThreadStartParams): Promise<ThreadStartResponse>
   resumeThread(params: ThreadResumeParams): Promise<ThreadStartResponse>
   startTurn(params: TurnStartParams): Promise<TurnStartResponse>
+  steerTurn(params: TurnSteerParams): Promise<TurnSteerResponse>
   interruptTurn(params: TurnInterruptParams): Promise<void>
   close(): void
   readonly peer: JsonRpcPeer
@@ -57,6 +60,9 @@ export function createAppServerClient(opts: AppServerClientOptions): AppServerCl
     },
     startTurn(params) {
       return peer.request<TurnStartResponse>('turn/start', params)
+    },
+    steerTurn(params) {
+      return peer.request<TurnSteerResponse>('turn/steer', params)
     },
     async interruptTurn(params) {
       await peer.request<unknown>('turn/interrupt', params)

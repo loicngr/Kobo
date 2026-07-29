@@ -273,30 +273,12 @@ export function createClaudeCodeEngine(): AgentEngine {
           )
           const reason = userInterrupted ? 'killed' : mapperState.sawErrorResult ? 'error' : 'completed'
           emitSessionEnded(reason, reason === 'completed' ? 0 : null)
-          // Normally we abort here to unstick the SDK so its subprocesses / MCP
-          // children tear down. BUT if a wakeup is scheduled for this workspace,
-          // the agent intentionally left background work running for the wakeup
-          // to resume and check — aborting would kill that work. Skip the abort
-          // in that case so the background tasks survive. `session:ended` was
-          // already emitted (so the orchestrator/auto-loop proceed and the
-          // controller is removed, letting the wakeup fire later); the parked
-          // generator drains on its own once the background work finishes.
-          //
-          // The wakeup check is a dynamic import: a static `import` of
-          // wakeup-service here would form an engine → wakeup-service →
-          // orchestrator → engine cycle that breaks module init under the test
-          // SSR transform. Resolving it at call-time (once, 15s after result)
-          // sidesteps the cycle with no hot-path cost.
-          void (async () => {
-            const { isWakeupScheduled } = await import('../../../wakeup-service.js')
-            if (isWakeupScheduled(options.workspaceId)) {
-              console.warn(
-                `[claude-engine] generator still open ${RESULT_DRAIN_TIMEOUT_MS}ms after 'result' but a wakeup is scheduled for ${options.workspaceId} — leaving background work alive (no abort)`,
-              )
-            } else {
-              abortController.abort()
-            }
-          })()
+          // A wakeup starts a new turn later; it cannot safely keep this SDK
+          // stream alive after Kōbō has emitted session:ended and detached its
+          // controller. Leaving it alive lets late hooks issue AskUserQuestion
+          // calls against a closed input stream, producing an unanswerable UI
+          // card followed by "Stream closed". Abort deterministically instead.
+          abortController.abort()
         }, RESULT_DRAIN_TIMEOUT_MS)
         resultDrainTimer.unref?.()
       }
@@ -431,6 +413,7 @@ export function createClaudeCodeEngine(): AgentEngine {
               updatedInput: {
                 ...(typeof questions !== 'undefined' ? { questions } : {}),
                 answers: response.answers,
+                ...(response.response !== undefined ? { response: response.response } : {}),
               },
             })
             return true

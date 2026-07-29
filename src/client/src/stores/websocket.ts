@@ -433,8 +433,8 @@ export const useWebSocketStore = defineStore('websocket', {
       sessionId?: string,
       agentPermissionModeOverride?: 'plan' | 'bypass' | 'strict' | 'interactive',
       force = false,
-    ) {
-      this._send({
+    ): boolean {
+      const sent = this._send({
         type: 'chat:message',
         payload: { workspaceId, content, sessionId, agentPermissionModeOverride, force },
       })
@@ -447,6 +447,7 @@ export const useWebSocketStore = defineStore('websocket', {
       if (/^\/compact(\s|$)/.test(content.trim())) {
         useAgentStreamStore().setCompacting(workspaceId, true)
       }
+      if (!sent) return false
 
       // Optimistic status update — flip to `executing` instantly if the
       // workspace is in a terminal state so the "Agent busy" banner,
@@ -462,12 +463,15 @@ export const useWebSocketStore = defineStore('websocket', {
       ) {
         ws.updateWorkspaceFromEvent(workspaceId, { status: 'executing' })
       }
+      return true
     },
 
-    _send(data: Record<string, unknown>) {
+    _send(data: Record<string, unknown>): boolean {
       if (_ws && _ws.readyState === WebSocket.OPEN) {
         _ws.send(JSON.stringify(data))
+        return true
       }
+      return false
     },
 
     // Public surface for callers that need to know whether their `_send`-based
@@ -527,6 +531,22 @@ export const useWebSocketStore = defineStore('websocket', {
         case 'chat:accepted': {
           const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : undefined
           if (wid && sessionId) workspaceStore.cancelQueuedMessage(wid, sessionId)
+          break
+        }
+
+        case 'chat:rejected': {
+          const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : undefined
+          const content = typeof payload.content === 'string' ? payload.content : undefined
+          const message = typeof payload.message === 'string' ? payload.message : t('network.login.unreachable')
+          if (wid && content) {
+            const items = workspaceStore.activityFeeds[wid] ?? []
+            const pending = items.find(
+              (item) => item.meta?.sender === 'user' && item.meta?.pending && item.content === content,
+            )
+            if (pending) workspaceStore.removeActivityItem(wid, pending.id)
+            if (sessionId) workspaceStore.queueMessage(wid, content, sessionId)
+          }
+          Notify.create({ type: 'negative', message, position: 'top', timeout: 6000 })
           break
         }
 

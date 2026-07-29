@@ -21,7 +21,7 @@ export class SessionController {
     this._status = 'running'
   }
 
-  sendMessage(content: string): void {
+  sendMessage(content: string): void | Promise<void> {
     if (!this._engineProcess) throw new Error('SessionController not started')
     this._engineProcess.sendMessage(content)
   }

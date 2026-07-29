@@ -62,12 +62,22 @@ export function handleServerRequest(args: HandleServerRequestArgs): boolean {
 
   if (method === 'item/tool/requestUserInput') {
     register(callId, { requestId, kind: 'user_input', payload: p })
+    // Codex allows a free-form question to omit `options` (or send null),
+    // while the shared question panel always renders an array. Keep Codex's
+    // `id` so the UI can return the protocol key instead of the display text.
+    const questions = Array.isArray(p.questions)
+      ? p.questions.map((question) => {
+          if (!question || typeof question !== 'object') return question
+          const raw = question as Record<string, unknown>
+          return { ...raw, options: Array.isArray(raw.options) ? raw.options : [] }
+        })
+      : []
     emit({
       kind: 'session:user-input-requested',
       requestKind: 'question',
       toolCallId: callId,
       toolName: 'AskUserQuestion',
-      payload: { questions: p.questions },
+      payload: { questions, autoResolutionMs: p.autoResolutionMs },
     })
     return true
   }

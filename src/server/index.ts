@@ -336,7 +336,7 @@ terminalWss.on('connection', (ws: WebSocket, workspaceId: string) => {
 })
 
 // Wire websocket-service message handler to the agent orchestrator
-setMessageHandler((type, payload) => {
+setMessageHandler(async (type, payload) => {
   const p = payload as {
     workspaceId?: string
     content?: string
@@ -366,6 +366,8 @@ setMessageHandler((type, payload) => {
     if (wsRow?.status === 'awaiting-user') {
       emitEphemeral(p.workspaceId, 'chat:rejected', {
         reason: 'awaiting-user',
+        sessionId: p.sessionId,
+        content: p.content,
         message: 'Answer via the question panel — typing in chat would orphan the pending callback',
       })
       return
@@ -376,23 +378,17 @@ setMessageHandler((type, payload) => {
     // never steal the tagging.
     const activeSession = getActiveSession(p.workspaceId)
     const sessionTag = p.sessionId ?? activeSession?.id ?? undefined
-    // Forced sends are persisted only once the active engine has accepted the
-    // input, so a stale session cannot make the client lose its queued text.
-    if (!p.force) emit(p.workspaceId, 'user:message', { content: p.content, sender: 'user' }, sessionTag)
-
     try {
-      sendMessage(p.workspaceId, p.content, p.sessionId)
-      if (p.force) {
-        emit(p.workspaceId, 'user:message', { content: p.content, sender: 'user' }, sessionTag)
-        emitEphemeral(p.workspaceId, 'chat:accepted', { sessionId: p.sessionId })
-      }
+      await sendMessage(p.workspaceId, p.content, p.sessionId)
+      emit(p.workspaceId, 'user:message', { content: p.content, sender: 'user' }, sessionTag)
+      if (p.force) emitEphemeral(p.workspaceId, 'chat:accepted', { sessionId: p.sessionId })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       // Only resume on the specific "No agent running" path. Other errors
       // (stdin closed, process dead mid-write, etc.) should surface to the
       // logs instead of silently respawning a fresh agent.
       if (!msg.includes('No agent running')) {
-        if (p.force) emitEphemeral(p.workspaceId, 'chat:rejected', { sessionId: p.sessionId, message: msg })
+        emitEphemeral(p.workspaceId, 'chat:rejected', { sessionId: p.sessionId, content: p.content, message: msg })
         console.error(`[ws] chat:message failed for workspace ${p.workspaceId}:`, err)
         return
       }
@@ -406,7 +402,7 @@ setMessageHandler((type, payload) => {
           // requires them (e.g. grooming), it sets the override to bypass the
           // workspace default for this spawn only.
           const effectiveMode = p.agentPermissionModeOverride ?? workspace.agentPermissionMode
-          startAgent(
+          const started = startAgent(
             p.workspaceId,
             worktreePath,
             p.content,
@@ -417,9 +413,20 @@ setMessageHandler((type, payload) => {
             workspace.reasoningEffort,
           )
           updateWorkspaceStatus(p.workspaceId, 'executing')
+          const resumedSessionId = p.sessionId ?? started.agentSessionId
+          emit(p.workspaceId, 'user:message', { content: p.content, sender: 'user' }, resumedSessionId)
+          if (p.force) emitEphemeral(p.workspaceId, 'chat:accepted', { sessionId: resumedSessionId })
+        } else {
+          emitEphemeral(p.workspaceId, 'chat:rejected', {
+            sessionId: p.sessionId,
+            content: p.content,
+            message: `Workspace '${p.workspaceId}' not found`,
+          })
         }
       } catch (restartErr) {
-        console.error('[ws] Failed to resume agent:', restartErr instanceof Error ? restartErr.message : restartErr)
+        const message = restartErr instanceof Error ? restartErr.message : String(restartErr)
+        emitEphemeral(p.workspaceId, 'chat:rejected', { sessionId: p.sessionId, content: p.content, message })
+        console.error('[ws] Failed to resume agent:', message)
       }
     }
   }

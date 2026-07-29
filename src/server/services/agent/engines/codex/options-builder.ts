@@ -36,7 +36,7 @@ const CODEX_KOBO_MCP_BRIEF = [
   '• `mcp__kobo-tasks__log_thought` to persist notable decisions to `.ai/thoughts/logs/<date>-<slug>.md`.',
   '• `mcp__kobo-tasks__search_codebase` to recall prior chat history (conversations, not source — use shell tools for source).',
   '• `mcp__kobo-tasks__get_workspace_info` / `mcp__kobo-tasks__get_git_info` / `mcp__kobo-tasks__get_ticket` for context.',
-  '• `mcp__kobo-tasks__set_workspace_status` when the mission is done / blocked / idle.',
+  '• `mcp__kobo-tasks__set_workspace_status` when the mission is done or irrecoverably blocked. Never set `idle` while this session is active; ask the user or end the turn instead.',
   '• `mcp__kobo-tasks__schedule_wakeup` / `mcp__kobo-tasks__cancel_wakeup` to schedule (or cancel) a follow-up session.',
   'Each tool carries its own "WHEN to use" guidance in its description — follow it.',
 ].join('\n')

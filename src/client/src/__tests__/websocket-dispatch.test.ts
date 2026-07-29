@@ -117,6 +117,13 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
     expect(stream.isCompacting('w1')).toBe(false)
   })
 
+  it('reports that a chat message was not sent while the WebSocket is disconnected', async () => {
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const wsStore = useWebSocketStore()
+
+    expect(wsStore.sendChatMessage('w1', 'do not lose this message')).toBe(false)
+  })
+
   it('accumulates TaskCreate calls into the agent todos panel (Claude Code ≥ v0.3.142)', async () => {
     const { useWorkspaceStore } = await import('../stores/workspace.js')
     const ws = useWorkspaceStore()

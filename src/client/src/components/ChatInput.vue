@@ -244,7 +244,7 @@ import QuotaFooter from 'src/components/QuotaFooter.vue'
 import SlashSuggestionsPopup from 'src/components/SlashSuggestionsPopup.vue'
 import { useFileMention } from 'src/composables/use-file-mention'
 import { type SlashDropdownItem, useSlashAutocomplete } from 'src/composables/use-slash-autocomplete'
-import { supportsQuotaStatus } from 'src/constants/engineFeatures'
+import { supportsLiveSteering, supportsQuotaStatus } from 'src/constants/engineFeatures'
 import { useSettingsStore } from 'src/stores/settings'
 import { useTemplatesStore } from 'src/stores/templates'
 import { useWebSocketStore } from 'src/stores/websocket'
@@ -300,7 +300,7 @@ const canForceQueuedMessage = computed(() => {
   const workspace =
     store.workspaces.find((item) => item.id === props.workspaceId) ??
     store.archivedWorkspaces.find((item) => item.id === props.workspaceId)
-  return workspace?.engine === 'claude-code' && isAgentBusy.value
+  return supportsLiveSteering(workspace?.engine) && isAgentBusy.value
 })
 
 // Chat input element ref (for caret position access)
@@ -549,7 +549,10 @@ function forceQueuedMessage() {
   const queued = queuedMessage.value
   if (!queued || !canForceQueuedMessage.value) return
   forcingQueue.value = true
-  wsStore.sendChatMessage(props.workspaceId, queued.content, queued.sessionId, undefined, true)
+  if (!wsStore.sendChatMessage(props.workspaceId, queued.content, queued.sessionId, undefined, true)) {
+    forcingQueue.value = false
+    $q.notify({ type: 'negative', message: t('network.login.unreachable'), position: 'top', timeout: 6000 })
+  }
 }
 
 watch(isQueued, (queued, wasQueued) => {
@@ -784,7 +787,10 @@ async function sendMessage() {
   // Intercept Kobo built-in commands
   const koboCmd = KOBO_COMMANDS[text]
   if (koboCmd) {
-    wsStore.sendChatMessage(props.workspaceId, koboCmd.prompt, store.selectedSessionId ?? undefined)
+    if (!wsStore.sendChatMessage(props.workspaceId, koboCmd.prompt, store.selectedSessionId ?? undefined)) {
+      $q.notify({ type: 'negative', message: t('network.login.unreachable'), position: 'top', timeout: 6000 })
+      return
+    }
     store.markRead(props.workspaceId)
     store.addActivityItem(props.workspaceId, {
       id: `user-${Date.now()}`,
@@ -836,6 +842,12 @@ async function sendMessage() {
     }
   }
   const sessionTag = session?.id ?? store.selectedSessionId ?? undefined
+
+  const requiresWebSocket = session?.status !== 'idle' && session?.status !== 'completed' && session?.status !== 'error'
+  if (requiresWebSocket && !wsStore.isConnected()) {
+    $q.notify({ type: 'negative', message: t('network.login.unreachable'), position: 'top', timeout: 6000 })
+    return
+  }
 
   // Add the optimistic local item BEFORE sending so the WS user:message event
   // (which the backend may emit synchronously during /start) can find it via
@@ -890,7 +902,9 @@ async function sendMessage() {
       rollback(err, 'resume session')
     }
   } else {
-    wsStore.sendChatMessage(props.workspaceId, composedText, store.selectedSessionId ?? undefined)
+    if (!wsStore.sendChatMessage(props.workspaceId, composedText, store.selectedSessionId ?? undefined)) {
+      rollback(new Error(t('network.login.unreachable')), 'send chat message')
+    }
   }
 }
 

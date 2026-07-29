@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   expandOtherAnswer,
+  expandOtherAnswerWithResponse,
   hasOtherSelection,
   OTHER_INSTRUCTION,
   OTHER_OPTION_VALUE,
@@ -43,6 +44,15 @@ describe('expandOtherAnswer()', () => {
 
   it('exports the expected sentinel value (regression guard)', () => {
     expect(OTHER_OPTION_VALUE).toBe('__KOBO_OTHER__')
+  })
+})
+
+describe('expandOtherAnswerWithResponse()', () => {
+  it('replaces Other with the inline free-form response', () => {
+    expect(expandOtherAnswerWithResponse(OTHER_OPTION_VALUE, false, '  appareil physique  ')).toBe('appareil physique')
+    expect(expandOtherAnswerWithResponse(['Option A', OTHER_OPTION_VALUE], true, 'appareil physique')).toBe(
+      'Option A, appareil physique',
+    )
   })
 })
 

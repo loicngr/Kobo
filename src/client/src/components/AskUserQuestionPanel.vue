@@ -55,7 +55,7 @@
             <q-checkbox
               v-for="opt in q.options"
               :key="opt.label"
-              v-model="answers[q.question]"
+              v-model="answers[answerKey(q)]"
               :val="opt.label"
               dark
               dense
@@ -63,7 +63,7 @@
               :disable="submitting"
             >
               <template #default>
-                <AukqOptionLabel :label="opt.label" :description="opt.description" />
+                <AukqOptionLabel :label="opt.label" :description="opt.description" :preview="opt.preview" />
               </template>
             </q-checkbox>
           </template>
@@ -71,7 +71,7 @@
             <q-radio
               v-for="opt in q.options"
               :key="opt.label"
-              v-model="singleAnswers[q.question]"
+              v-model="singleAnswers[answerKey(q)]"
               :val="opt.label"
               dark
               dense
@@ -79,11 +79,24 @@
               :disable="submitting"
             >
               <template #default>
-                <AukqOptionLabel :label="opt.label" :description="opt.description" />
+                <AukqOptionLabel :label="opt.label" :description="opt.description" :preview="opt.preview" />
               </template>
             </q-radio>
           </template>
         </div>
+        <q-input
+          v-if="questionHasOtherSelection(q)"
+          v-model="freeFormResponse"
+          type="textarea"
+          dark
+          dense
+          outlined
+          autogrow
+          class="q-mt-sm"
+          :label="t('askUserQuestion.freeFormLabel')"
+          :hint="t('askUserQuestion.freeFormHint')"
+          :disable="submitting"
+        />
       </q-step>
 
       <template #navigation>
@@ -139,18 +152,21 @@
 <script setup lang="ts">
 import AukqOptionLabel from 'src/components/AukqOptionLabel.vue'
 import { useWorkspaceStore } from 'src/stores/workspace'
-import { expandOtherAnswer, hasOtherSelection, OTHER_OPTION_VALUE } from 'src/utils/expand-other-answer'
+import { expandOtherAnswerWithResponse, hasOtherSelection, OTHER_OPTION_VALUE } from 'src/utils/expand-other-answer'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 interface QuestionOption {
   label: string
   description?: string
+  preview?: string
 }
 interface Question {
+  id?: string
   question: string
   header?: string
   options: QuestionOption[]
+  isOther?: boolean
   multiSelect?: boolean
 }
 
@@ -172,9 +188,13 @@ const questions = computed<Question[]>(() => {
   const raw = input?.questions ?? []
   return raw.map((q) => ({
     ...q,
-    options: [...q.options, { label: OTHER_OPTION_VALUE }],
+    options: q.isOther === false ? [...(q.options ?? [])] : [...(q.options ?? []), { label: OTHER_OPTION_VALUE }],
   }))
 })
+
+function answerKey(question: Question): string {
+  return question.id ?? question.question
+}
 
 const currentQuestion = computed(() => questions.value[stepIndex.value])
 
@@ -182,6 +202,7 @@ const currentQuestion = computed(() => questions.value[stepIndex.value])
 const answers = ref<Record<string, string[]>>({})
 // For single-select questions: scalar selected label.
 const singleAnswers = ref<Record<string, string>>({})
+const freeFormResponse = ref('')
 const submitting = ref(false)
 const error = ref<string | null>(null)
 const stepIndex = ref(0)
@@ -190,8 +211,9 @@ const collapsed = ref(false)
 watch(
   questions,
   (qs) => {
-    answers.value = Object.fromEntries(qs.map((q) => [q.question, []]))
-    singleAnswers.value = Object.fromEntries(qs.map((q) => [q.question, '']))
+    answers.value = Object.fromEntries(qs.map((q) => [answerKey(q), []]))
+    singleAnswers.value = Object.fromEntries(qs.map((q) => [answerKey(q), '']))
+    freeFormResponse.value = ''
     error.value = null
     stepIndex.value = 0
     submitting.value = false
@@ -213,8 +235,16 @@ function stepIcon(idx: number): string {
 function stepFilled(idx: number): boolean {
   const q = questions.value[idx]
   if (!q) return false
-  if (q.multiSelect) return (answers.value[q.question] ?? []).length > 0
-  return !!singleAnswers.value[q.question]
+  const selected = q.multiSelect ? (answers.value[answerKey(q)] ?? []) : (singleAnswers.value[answerKey(q)] ?? '')
+  if (Array.isArray(selected) ? selected.length === 0 : !selected) return false
+  return !hasOtherSelection([selected]) || freeFormResponse.value.trim().length > 0
+}
+
+function questionHasOtherSelection(question: Question): boolean {
+  const selected = question.multiSelect
+    ? (answers.value[answerKey(question)] ?? [])
+    : (singleAnswers.value[answerKey(question)] ?? '')
+  return hasOtherSelection([selected])
 }
 
 function stepDone(idx: number): boolean {
@@ -238,20 +268,23 @@ async function submit(): Promise<void> {
   error.value = null
   try {
     const payload: Record<string, string> = {}
-    const rawValues: Array<string | string[]> = []
+    const hasFreeFormSelection = questions.value.some(questionHasOtherSelection)
     for (const q of questions.value) {
       if (q.multiSelect) {
-        const sel = answers.value[q.question] ?? []
-        rawValues.push(sel)
-        payload[q.question] = expandOtherAnswer(sel, true)
+        const sel = answers.value[answerKey(q)] ?? []
+        payload[answerKey(q)] = expandOtherAnswerWithResponse(sel, true, freeFormResponse.value)
       } else {
-        const sel = singleAnswers.value[q.question] ?? ''
-        rawValues.push(sel)
-        payload[q.question] = expandOtherAnswer(sel, false)
+        const sel = singleAnswers.value[answerKey(q)] ?? ''
+        payload[answerKey(q)] = expandOtherAnswerWithResponse(sel, false, freeFormResponse.value)
       }
     }
-    const awaitingFreeForm = hasOtherSelection(rawValues)
-    await store.submitDeferredAnswer(props.workspaceId, payload, pending.value?.toolCallId, awaitingFreeForm)
+    await store.submitDeferredAnswer(
+      props.workspaceId,
+      payload,
+      pending.value?.toolCallId,
+      false,
+      hasFreeFormSelection ? freeFormResponse.value.trim() : undefined,
+    )
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
