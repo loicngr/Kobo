@@ -121,7 +121,15 @@ Settings are managed live from the **Settings** page in the UI and persisted to 
 | `browserNotifications` | `boolean` | Trigger Web Notifications when an agent finishes a turn. |
 | `audioNotifications` | `boolean` | Play a sound when an agent finishes a turn. |
 | `audioNotificationSound` | `string` | Identifier of the chosen sound. |
-| `audioNotificationVolume` | `number` | `0` to `100`. |
+| `audioQuestionSound` | `string` | Sound used when an agent asks a question. |
+| `audioPrCiFailedSound` | `string` | Sound used when CI enters `FAILURE`. |
+| `audioPrCiRecoveredSound` | `string` | Sound used when CI moves from `FAILURE` to `SUCCESS`. |
+| `audioPrChangesRequestedSound` | `string` | Sound used when a review requests changes. |
+| `audioPrApprovedSound` | `string` | Sound used when a PR becomes approved. |
+| `audioPrMergeConflictSound` | `string` | Sound used when a merge conflict appears. |
+| `audioPrReadyToMergeSound` | `string` | Sound used when an idle workspace's PR becomes ready to merge. |
+| `audioPrMergedSound` | `string` | Sound used when an open PR becomes merged. |
+| `audioNotificationVolume` | `number` | Shared volume for notification, question, and PR/MR event sounds, from `0` to `1`. |
 | `notionMcpKey` | `string` | Override the `~/.claude.json` key used for Notion (defaults to the first non-disabled entry containing `notion`). |
 | `sentryMcpKey` | `string` | Same logic for Sentry. |
 | `notionStatusProperty` | `string` | Notion DB property updated to `notionInProgressStatus` when a workspace starts work on a Notion-backed mission. Empty disables the feature. |
@@ -141,6 +149,13 @@ Settings are managed live from the **Settings** page in the UI and persisted to 
 | `voiceFfmpegPath` | `string` | Override `ffmpeg` path. Empty falls back to `PATH`. |
 | `voiceTemperature` | `number` | Decoding temperature, `0`–`1`. |
 | `voicePrompt` | `string` | Initial prompt to bias transcription (custom vocabulary, names). |
+
+PR/MR event sound settings accept `inherit` (the default, uses
+`audioNotificationSound`), `none` (browser notification without audio), or a
+bundled sound filename from **Settings → Notifications**. Review-decision
+sounds currently require GitHub because the GitLab provider does not expose
+approval decisions. When multiple states change in one poll, every configured
+sound is queued and played in order.
 
 ### Per-project settings
 
