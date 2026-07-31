@@ -191,6 +191,12 @@ export async function checkPrStatuses(): Promise<void> {
       // Archive on a transition FROM OPEN to CLOSED/MERGED. Skips the
       // base-change detection below — archiving wins.
       if (prev?.state === 'OPEN' && (pr.state === 'MERGED' || pr.state === 'CLOSED')) {
+        if (pr.state === 'MERGED') {
+          emitEphemeral(ws.id, 'pr:merged', {
+            prNumber: pr.number,
+            prUrl: pr.url,
+          })
+        }
         if (['extracting', 'brainstorming', 'executing'].includes(ws.status)) {
           // Agent is working — update the cache but skip auto-archive.
           // (The defensive base preservation from the no-base branch doesn't apply here
@@ -243,32 +249,33 @@ export async function checkPrStatuses(): Promise<void> {
         continue // do not run base-change detection on a workspace we just archived
       }
 
-      // Review-decision and CI transitions (only on OPEN PRs; first-sight is
-      // silent). Reuses the baseline rule from base-change detection: act only
-      // on an actual transition between two known states. Each notable
-      // transition (changes-requested newly raised, CI newly failing) flips
-      // `hasUnread` so the workspace card stands out as "something new to
-      // look at" in the drawer — the unread bit persists until the user opens
-      // the workspace, matching the existing read/unread UX.
+      // Review, CI, mergeability, and readiness transitions (only on OPEN PRs;
+      // first-sight is silent). Each check is independent so simultaneous
+      // state changes emit every applicable event.
       if (pr.state === 'OPEN' && prev) {
+        const payload = { prNumber: pr.number, prUrl: pr.url }
+
         if (prev.reviewDecision !== 'CHANGES_REQUESTED' && pr.reviewDecision === 'CHANGES_REQUESTED') {
-          emitEphemeral(ws.id, 'pr:changes-requested', {
-            prNumber: pr.number,
-            prUrl: pr.url,
-          })
+          emitEphemeral(ws.id, 'pr:changes-requested', payload)
           markUnread(ws.id)
-        } else if (prev.reviewDecision === 'CHANGES_REQUESTED' && pr.reviewDecision === 'APPROVED') {
-          emitEphemeral(ws.id, 'pr:approved', {
-            prNumber: pr.number,
-            prUrl: pr.url,
-          })
+        }
+        if (prev.reviewDecision !== 'APPROVED' && pr.reviewDecision === 'APPROVED') {
+          emitEphemeral(ws.id, 'pr:approved', payload)
         }
         if (prev.ci.rollup !== 'FAILURE' && pr.ci.rollup === 'FAILURE') {
+          emitEphemeral(ws.id, 'pr:ci-failed', payload)
+          markUnread(ws.id)
+        }
+        if (prev.ci.rollup === 'FAILURE' && pr.ci.rollup === 'SUCCESS') {
+          emitEphemeral(ws.id, 'pr:ci-recovered', payload)
+        }
+        if (prev.mergeable !== 'CONFLICTING' && pr.mergeable === 'CONFLICTING') {
+          emitEphemeral(ws.id, 'pr:merge-conflict', payload)
           markUnread(ws.id)
         }
         const notBusy = !['extracting', 'brainstorming', 'executing'].includes(ws.status)
         if (notBusy && !prev.readyToMerge && pr.readyToMerge) {
-          emitEphemeral(ws.id, 'pr:ready-to-merge', { prNumber: pr.number, prUrl: pr.url })
+          emitEphemeral(ws.id, 'pr:ready-to-merge', payload)
           markUnread(ws.id)
         }
       }
