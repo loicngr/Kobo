@@ -117,4 +117,17 @@ describe('settings store', () => {
     expect(store.global.notionInitialPromptTemplate).toBeDefined()
     expect(store.global.sentryInitialPromptTemplate).toBeDefined()
   })
+
+  it('defaults every PR notification sound to inherit', () => {
+    const store = useSettingsStore()
+    expect(store.global).toMatchObject({
+      audioPrCiFailedSound: 'inherit',
+      audioPrCiRecoveredSound: 'inherit',
+      audioPrChangesRequestedSound: 'inherit',
+      audioPrApprovedSound: 'inherit',
+      audioPrMergeConflictSound: 'inherit',
+      audioPrReadyToMergeSound: 'inherit',
+      audioPrMergedSound: 'inherit',
+    })
+  })
 })

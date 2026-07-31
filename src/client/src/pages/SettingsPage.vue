@@ -408,6 +408,12 @@
                   </div>
                 </div>
               </div>
+              <PrNotificationSoundSettings
+                v-model="globalPrNotificationSounds"
+                :disabled="!globalAudioNotifications"
+                :general-sound="globalAudioNotificationSound"
+                :volume="globalAudioNotificationVolume"
+              />
             </div>
 
             <!-- Voice transcription — Runtime status -->
@@ -2319,6 +2325,7 @@ where ffmpeg</pre>
 import QRCode from 'qrcode'
 import { type QInput, useQuasar } from 'quasar'
 import FolderPickerDialog from 'src/components/FolderPickerDialog.vue'
+import PrNotificationSoundSettings from 'src/components/PrNotificationSoundSettings.vue'
 import { useOnboarding } from 'src/composables/use-onboarding'
 import { CODEX_MODEL_OPTION_DEFS, MODEL_OPTION_DEFS } from 'src/constants/models'
 import { type AgentPermissionMode, PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
@@ -2327,8 +2334,12 @@ import { useSettingsStore } from 'src/stores/settings'
 import { type Template, useTemplatesStore } from 'src/stores/templates'
 import {
   DEFAULT_NOTIFICATION_SOUND,
+  DEFAULT_PR_NOTIFICATION_SOUND_SETTINGS,
   DEFAULT_WORKSPACE_CREATED_SOUND,
   NOTIFICATION_SOUNDS,
+  normalizeNotificationSoundSelection,
+  PR_NOTIFICATION_SOUND_SETTING_KEYS,
+  type PrNotificationSoundSettings as PrNotificationSoundSettingsModel,
   resolveSoundId,
 } from 'src/utils/notification-sounds'
 import { playNotificationSound } from 'src/utils/notifications'
@@ -2507,6 +2518,9 @@ const globalAudioWorkspaceCreatedSound = ref(DEFAULT_WORKSPACE_CREATED_SOUND)
 const globalAudioNotificationVolume = ref(1)
 const globalAudioQuestionVolume = ref(1)
 const globalAudioWorkspaceCreatedVolume = ref(1)
+const globalPrNotificationSounds = ref<PrNotificationSoundSettingsModel>({
+  ...DEFAULT_PR_NOTIFICATION_SOUND_SETTINGS,
+})
 const globalNotionStatusProperty = ref('')
 const globalNotionStatus = ref('')
 const globalNotionAssigneeProperty = ref('')
@@ -3205,6 +3219,7 @@ function captureGlobalSnapshot(): string {
     audioNotificationVolume: globalAudioNotificationVolume.value,
     audioQuestionVolume: globalAudioQuestionVolume.value,
     audioWorkspaceCreatedVolume: globalAudioWorkspaceCreatedVolume.value,
+    prNotificationSounds: globalPrNotificationSounds.value,
     notionStatusProperty: globalNotionStatusProperty.value,
     notionStatus: globalNotionStatus.value,
     notionAssigneeProperty: globalNotionAssigneeProperty.value,
@@ -3286,6 +3301,9 @@ function syncGlobalForm() {
   globalAudioNotificationSound.value = resolveSoundId(store.global.audioNotificationSound)
   globalAudioQuestionSound.value = resolveSoundId(store.global.audioQuestionSound)
   globalAudioWorkspaceCreatedSound.value = resolveSoundId(store.global.audioWorkspaceCreatedSound)
+  globalPrNotificationSounds.value = Object.fromEntries(
+    PR_NOTIFICATION_SOUND_SETTING_KEYS.map((key) => [key, normalizeNotificationSoundSelection(store.global[key])]),
+  ) as PrNotificationSoundSettingsModel
   const v = store.global.audioNotificationVolume
   globalAudioNotificationVolume.value = typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 1
   const questionVolume = store.global.audioQuestionVolume
@@ -3573,6 +3591,7 @@ async function saveGlobal() {
       audioNotificationVolume: globalAudioNotificationVolume.value,
       audioQuestionVolume: globalAudioQuestionVolume.value,
       audioWorkspaceCreatedVolume: globalAudioWorkspaceCreatedVolume.value,
+      ...globalPrNotificationSounds.value,
       notionStatusProperty: globalNotionStatusProperty.value,
       notionInProgressStatus: globalNotionStatus.value,
       notionAssigneeProperty: globalNotionAssigneeProperty.value,
