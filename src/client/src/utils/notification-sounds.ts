@@ -13,10 +13,53 @@ export const NOTIFICATION_SOUNDS: readonly NotificationSound[] = [
   { id: 'ca_va_peter.mp3', labelKey: 'settings.notificationSoundCaVaPeter' },
   { id: 'dry-fart.mp3', labelKey: 'settings.notificationSoundDryFart' },
   { id: 'for-shure.mp3', labelKey: 'settings.notificationSoundForShure' },
+  {
+    id: '7eme-compagnie-03.mp3',
+    labelKey: 'settings.notificationSoundSeptiemeCompagnie03',
+  },
+  { id: 'aller-ftg.mp3', labelKey: 'settings.notificationSoundAllerFtg' },
+  { id: 'arrete-de-mentir.mp3', labelKey: 'settings.notificationSoundArreteDeMentir' },
+  {
+    id: 'arretez-les-messages.mp3',
+    labelKey: 'settings.notificationSoundArretezLesMessages',
+  },
+  { id: 'bah-alors-on-est-nul.mp3', labelKey: 'settings.notificationSoundBahAlorsOnEstNul' },
+  { id: 'gta-v-death.mp3', labelKey: 'settings.notificationSoundGtaVDeath' },
+  { id: 'nan-tu-degages.mp3', labelKey: 'settings.notificationSoundNanTuDegages' },
+  { id: 'nan-wallah-pardon.mp3', labelKey: 'settings.notificationSoundNanWallahPardon' },
+  { id: 'ouais-cest-greg.mp3', labelKey: 'settings.notificationSoundOuaisCestGreg' },
+  { id: 'pas-ca-zinedine.mp3', labelKey: 'settings.notificationSoundPasCaZinedine' },
+  { id: 'ta-gueule.mp3', labelKey: 'settings.notificationSoundTaGueule' },
+  { id: 'tu-vas-la-fermer.mp3', labelKey: 'settings.notificationSoundTuVasLaFermer' },
 ] as const
 
 export const DEFAULT_NOTIFICATION_SOUND = 'hey.mp3'
 export const DEFAULT_WORKSPACE_CREATED_SOUND = 'warcraft-3-humain-travail.mp3'
+export const INHERIT_NOTIFICATION_SOUND = 'inherit'
+export const NO_NOTIFICATION_SOUND = 'none'
+
+export const PR_NOTIFICATION_SOUND_SETTING_KEYS = [
+  'audioPrCiFailedSound',
+  'audioPrCiRecoveredSound',
+  'audioPrChangesRequestedSound',
+  'audioPrApprovedSound',
+  'audioPrMergeConflictSound',
+  'audioPrReadyToMergeSound',
+  'audioPrMergedSound',
+] as const
+
+export type PrNotificationSoundSettingKey = (typeof PR_NOTIFICATION_SOUND_SETTING_KEYS)[number]
+export type PrNotificationSoundSettings = Record<PrNotificationSoundSettingKey, string>
+
+export const DEFAULT_PR_NOTIFICATION_SOUND_SETTINGS: Readonly<PrNotificationSoundSettings> = {
+  audioPrCiFailedSound: INHERIT_NOTIFICATION_SOUND,
+  audioPrCiRecoveredSound: INHERIT_NOTIFICATION_SOUND,
+  audioPrChangesRequestedSound: INHERIT_NOTIFICATION_SOUND,
+  audioPrApprovedSound: INHERIT_NOTIFICATION_SOUND,
+  audioPrMergeConflictSound: INHERIT_NOTIFICATION_SOUND,
+  audioPrReadyToMergeSound: INHERIT_NOTIFICATION_SOUND,
+  audioPrMergedSound: INHERIT_NOTIFICATION_SOUND,
+}
 
 export function isKnownSoundId(id: string): boolean {
   return NOTIFICATION_SOUNDS.some((s) => s.id === id)
@@ -24,6 +67,18 @@ export function isKnownSoundId(id: string): boolean {
 
 export function resolveSoundId(id: string | undefined | null): string {
   return id && isKnownSoundId(id) ? id : DEFAULT_NOTIFICATION_SOUND
+}
+
+export function resolveNotificationSoundOverride(value: unknown): string | null | undefined {
+  if (value === NO_NOTIFICATION_SOUND) return null
+  if (value === INHERIT_NOTIFICATION_SOUND) return undefined
+  return typeof value === 'string' && isKnownSoundId(value) ? value : undefined
+}
+
+export function normalizeNotificationSoundSelection(value: unknown): string {
+  const resolved = resolveNotificationSoundOverride(value)
+  if (resolved === null) return NO_NOTIFICATION_SOUND
+  return resolved ?? INHERIT_NOTIFICATION_SOUND
 }
 
 export function soundUrl(id: string): string {
