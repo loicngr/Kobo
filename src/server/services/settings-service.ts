@@ -283,6 +283,13 @@ export interface GlobalSettings {
   /** Sound played specifically when the agent asks a question. Seeded by migration v40. */
   audioQuestionSound: string
   audioWorkspaceCreatedSound: string
+  audioPrCiFailedSound: string
+  audioPrCiRecoveredSound: string
+  audioPrChangesRequestedSound: string
+  audioPrApprovedSound: string
+  audioPrMergeConflictSound: string
+  audioPrReadyToMergeSound: string
+  audioPrMergedSound: string
   audioNotificationVolume: number
   audioQuestionVolume: number
   audioWorkspaceCreatedVolume: number
@@ -920,6 +927,26 @@ const settingsMigrations: SettingsMigration[] = [
       }
     },
   },
+  {
+    version: 44,
+    name: 'add-pr-notification-sounds',
+    migrate: ({ global }) => {
+      const keys = [
+        'audioPrCiFailedSound',
+        'audioPrCiRecoveredSound',
+        'audioPrChangesRequestedSound',
+        'audioPrApprovedSound',
+        'audioPrMergeConflictSound',
+        'audioPrReadyToMergeSound',
+        'audioPrMergedSound',
+      ]
+      for (const key of keys) {
+        if (typeof global[key] !== 'string' || global[key].length === 0) {
+          global[key] = 'inherit'
+        }
+      }
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -1006,6 +1033,13 @@ function defaultSettings(): Settings {
       audioNotificationSound: 'hey.mp3',
       audioQuestionSound: 'hey.mp3',
       audioWorkspaceCreatedSound: 'warcraft-3-humain-travail.mp3',
+      audioPrCiFailedSound: 'inherit',
+      audioPrCiRecoveredSound: 'inherit',
+      audioPrChangesRequestedSound: 'inherit',
+      audioPrApprovedSound: 'inherit',
+      audioPrMergeConflictSound: 'inherit',
+      audioPrReadyToMergeSound: 'inherit',
+      audioPrMergedSound: 'inherit',
       audioNotificationVolume: 1,
       audioQuestionVolume: 1,
       audioWorkspaceCreatedVolume: 1,
@@ -1406,6 +1440,13 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'audioNotificationSound',
     'audioQuestionSound',
     'audioWorkspaceCreatedSound',
+    'audioPrCiFailedSound',
+    'audioPrCiRecoveredSound',
+    'audioPrChangesRequestedSound',
+    'audioPrApprovedSound',
+    'audioPrMergeConflictSound',
+    'audioPrReadyToMergeSound',
+    'audioPrMergedSound',
     'audioNotificationVolume',
     'audioQuestionVolume',
     'audioWorkspaceCreatedVolume',

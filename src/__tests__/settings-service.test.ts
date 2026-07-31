@@ -2038,6 +2038,88 @@ describe('workspace-created notification settings', () => {
   })
 })
 
+const PR_SOUND_DEFAULTS = {
+  audioPrCiFailedSound: 'inherit',
+  audioPrCiRecoveredSound: 'inherit',
+  audioPrChangesRequestedSound: 'inherit',
+  audioPrApprovedSound: 'inherit',
+  audioPrMergeConflictSound: 'inherit',
+  audioPrReadyToMergeSound: 'inherit',
+  audioPrMergedSound: 'inherit',
+} as const
+
+describe('PR notification sounds (v44)', () => {
+  it('fresh installs inherit the general sound for every PR event', () => {
+    expect(getGlobalSettings()).toMatchObject(PR_SOUND_DEFAULTS)
+  })
+
+  it('upgrades v43 without losing existing notification settings', () => {
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        schemaVersion: 43,
+        global: {
+          audioNotificationSound: 'travail_termine.mp3',
+          audioQuestionSound: 'hey.mp3',
+          networkAccessToken: 'keep-me',
+        },
+        projects: [],
+      }),
+    )
+
+    getSettings()
+
+    expect(getGlobalSettings()).toMatchObject({
+      ...PR_SOUND_DEFAULTS,
+      audioNotificationSound: 'travail_termine.mp3',
+      audioQuestionSound: 'hey.mp3',
+      networkAccessToken: 'keep-me',
+    })
+    expect(SETTINGS_SCHEMA_VERSION).toBe(44)
+  })
+
+  it('preserves existing valid values instead of overwriting them', () => {
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        schemaVersion: 43,
+        global: {
+          audioPrCiFailedSound: 'faaah.mp3',
+          audioPrMergedSound: 'none',
+        },
+        projects: [],
+      }),
+    )
+
+    getSettings()
+
+    expect(getGlobalSettings().audioPrCiFailedSound).toBe('faaah.mp3')
+    expect(getGlobalSettings().audioPrMergedSound).toBe('none')
+  })
+
+  it('allows all seven fields through updateGlobalSettings', () => {
+    updateGlobalSettings({
+      audioPrCiFailedSound: 'faaah.mp3',
+      audioPrCiRecoveredSound: 'for-shure.mp3',
+      audioPrChangesRequestedSound: 'none',
+      audioPrApprovedSound: 'hey.mp3',
+      audioPrMergeConflictSound: 'dry-fart.mp3',
+      audioPrReadyToMergeSound: 'travail_termine.mp3',
+      audioPrMergedSound: 'ca_va_peter.mp3',
+    })
+
+    expect(getGlobalSettings()).toMatchObject({
+      audioPrCiFailedSound: 'faaah.mp3',
+      audioPrCiRecoveredSound: 'for-shure.mp3',
+      audioPrChangesRequestedSound: 'none',
+      audioPrApprovedSound: 'hey.mp3',
+      audioPrMergeConflictSound: 'dry-fart.mp3',
+      audioPrReadyToMergeSound: 'travail_termine.mp3',
+      audioPrMergedSound: 'ca_va_peter.mp3',
+    })
+  })
+})
+
 describe('updateNetworkAccessSettings()', () => {
   it('persists the token to disk (real write path, not mocked)', () => {
     updateNetworkAccessSettings({ networkAccessEnabled: true, networkAccessToken: 'lan-secret-123' })
