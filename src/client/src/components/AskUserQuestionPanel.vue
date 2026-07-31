@@ -86,7 +86,7 @@
         </div>
         <q-input
           v-if="questionHasOtherSelection(q)"
-          v-model="freeFormResponse"
+          v-model="freeFormResponses[answerKey(q)]"
           type="textarea"
           dark
           dense
@@ -153,6 +153,7 @@
 import AukqOptionLabel from 'src/components/AukqOptionLabel.vue'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { expandOtherAnswerWithResponse, hasOtherSelection, OTHER_OPTION_VALUE } from 'src/utils/expand-other-answer'
+import { createOtherResponses } from 'src/utils/question-other-responses'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -202,7 +203,7 @@ const currentQuestion = computed(() => questions.value[stepIndex.value])
 const answers = ref<Record<string, string[]>>({})
 // For single-select questions: scalar selected label.
 const singleAnswers = ref<Record<string, string>>({})
-const freeFormResponse = ref('')
+const freeFormResponses = ref<Record<string, string>>({})
 const submitting = ref(false)
 const error = ref<string | null>(null)
 const stepIndex = ref(0)
@@ -213,7 +214,7 @@ watch(
   (qs) => {
     answers.value = Object.fromEntries(qs.map((q) => [answerKey(q), []]))
     singleAnswers.value = Object.fromEntries(qs.map((q) => [answerKey(q), '']))
-    freeFormResponse.value = ''
+    freeFormResponses.value = createOtherResponses(qs.map(answerKey))
     error.value = null
     stepIndex.value = 0
     submitting.value = false
@@ -237,7 +238,7 @@ function stepFilled(idx: number): boolean {
   if (!q) return false
   const selected = q.multiSelect ? (answers.value[answerKey(q)] ?? []) : (singleAnswers.value[answerKey(q)] ?? '')
   if (Array.isArray(selected) ? selected.length === 0 : !selected) return false
-  return !hasOtherSelection([selected]) || freeFormResponse.value.trim().length > 0
+  return !hasOtherSelection([selected]) || (freeFormResponses.value[answerKey(q)] ?? '').trim().length > 0
 }
 
 function questionHasOtherSelection(question: Question): boolean {
@@ -268,23 +269,16 @@ async function submit(): Promise<void> {
   error.value = null
   try {
     const payload: Record<string, string> = {}
-    const hasFreeFormSelection = questions.value.some(questionHasOtherSelection)
     for (const q of questions.value) {
       if (q.multiSelect) {
         const sel = answers.value[answerKey(q)] ?? []
-        payload[answerKey(q)] = expandOtherAnswerWithResponse(sel, true, freeFormResponse.value)
+        payload[answerKey(q)] = expandOtherAnswerWithResponse(sel, true, freeFormResponses.value[answerKey(q)] ?? '')
       } else {
         const sel = singleAnswers.value[answerKey(q)] ?? ''
-        payload[answerKey(q)] = expandOtherAnswerWithResponse(sel, false, freeFormResponse.value)
+        payload[answerKey(q)] = expandOtherAnswerWithResponse(sel, false, freeFormResponses.value[answerKey(q)] ?? '')
       }
     }
-    await store.submitDeferredAnswer(
-      props.workspaceId,
-      payload,
-      pending.value?.toolCallId,
-      false,
-      hasFreeFormSelection ? freeFormResponse.value.trim() : undefined,
-    )
+    await store.submitDeferredAnswer(props.workspaceId, payload, pending.value?.toolCallId, false, undefined)
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
   } finally {
