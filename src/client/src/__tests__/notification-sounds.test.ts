@@ -1,13 +1,39 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_NOTIFICATION_SOUND,
+  DEFAULT_PR_NOTIFICATION_SOUND_SETTINGS,
   DEFAULT_WORKSPACE_CREATED_SOUND,
+  INHERIT_NOTIFICATION_SOUND,
   isKnownSoundId,
+  NO_NOTIFICATION_SOUND,
   NOTIFICATION_SOUNDS,
+  normalizeNotificationSoundSelection,
+  PR_NOTIFICATION_SOUND_SETTING_KEYS,
+  resolveNotificationSoundOverride,
   resolveSoundId,
   SOUNDS_DIR,
   soundUrl,
 } from '../utils/notification-sounds'
+
+const NEW_SOUND_IDS = [
+  '7eme-compagnie-03.mp3',
+  'aller-ftg.mp3',
+  'arrete-de-mentir.mp3',
+  'arretez-les-messages.mp3',
+  'bah-alors-on-est-nul.mp3',
+  'gta-v-death.mp3',
+  'nan-tu-degages.mp3',
+  'nan-wallah-pardon.mp3',
+  'ouais-cest-greg.mp3',
+  'pas-ca-zinedine.mp3',
+  'ta-gueule.mp3',
+  'tu-vas-la-fermer.mp3',
+] as const
+
+const testDir = path.dirname(fileURLToPath(import.meta.url))
 
 describe('NOTIFICATION_SOUNDS', () => {
   it('exposes a non-empty list', () => {
@@ -43,6 +69,15 @@ describe('NOTIFICATION_SOUNDS', () => {
   it('exposes the dedicated default sound for workspace creation', () => {
     expect(DEFAULT_WORKSPACE_CREATED_SOUND).toBe('warcraft-3-humain-travail.mp3')
     expect(NOTIFICATION_SOUNDS.some((s) => s.id === DEFAULT_WORKSPACE_CREATED_SOUND)).toBe(true)
+  })
+
+  it('registers all twelve new assets and keeps every file present', () => {
+    expect(NOTIFICATION_SOUNDS).toHaveLength(19)
+    expect(NOTIFICATION_SOUNDS.map((sound) => sound.id)).toEqual(expect.arrayContaining([...NEW_SOUND_IDS]))
+    for (const id of NEW_SOUND_IDS) {
+      const asset = path.resolve(testDir, `../../public/sounds/${id}`)
+      expect(fs.existsSync(asset), id).toBe(true)
+    }
   })
 })
 
@@ -89,5 +124,38 @@ describe('soundUrl()', () => {
 
   it('builds the default URL for an unknown id', () => {
     expect(soundUrl('nope.mp3')).toBe(`${SOUNDS_DIR}/${DEFAULT_NOTIFICATION_SOUND}`)
+  })
+})
+
+describe('PR notification sound selections', () => {
+  it('defines all seven PR sound settings with inherit defaults', () => {
+    expect(PR_NOTIFICATION_SOUND_SETTING_KEYS).toHaveLength(7)
+    expect(Object.values(DEFAULT_PR_NOTIFICATION_SOUND_SETTINGS)).toEqual(Array(7).fill(INHERIT_NOTIFICATION_SOUND))
+  })
+
+  it.each([
+    ['inherit', undefined],
+    ['none', null],
+    ['faaah.mp3', 'faaah.mp3'],
+    ['missing.mp3', undefined],
+    ['', undefined],
+    [null, undefined],
+  ])('resolves event selection %j to %j', (selection, expected) => {
+    expect(resolveNotificationSoundOverride(selection)).toBe(expected)
+  })
+
+  it.each([
+    ['inherit', 'inherit'],
+    ['none', 'none'],
+    ['faaah.mp3', 'faaah.mp3'],
+    ['missing.mp3', 'inherit'],
+    ['', 'inherit'],
+    [undefined, 'inherit'],
+  ])('normalizes stored selection %j to %j', (selection, expected) => {
+    expect(normalizeNotificationSoundSelection(selection)).toBe(expected)
+  })
+
+  it('uses distinct inherit and no-sound sentinels', () => {
+    expect(INHERIT_NOTIFICATION_SOUND).not.toBe(NO_NOTIFICATION_SOUND)
   })
 })

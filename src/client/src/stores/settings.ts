@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { DEFAULT_PR_NOTIFICATION_AUDIO_SETTINGS } from 'src/utils/notification-sounds'
 import type { ProjectColor } from 'src/utils/project-color'
 import { WORKTREES_PATH } from '../../../shared/consts'
 import type { SkillSuite } from '../../../shared/skill-suite-prompts'
@@ -101,6 +102,27 @@ interface GlobalSettings {
   audioNotificationSound: string
   audioQuestionSound: string
   audioWorkspaceCreatedSound: string
+  audioPrCiFailedSound: string
+  audioPrCiFailedEnabled: boolean
+  audioPrCiFailedVolume: number
+  audioPrCiRecoveredSound: string
+  audioPrCiRecoveredEnabled: boolean
+  audioPrCiRecoveredVolume: number
+  audioPrChangesRequestedSound: string
+  audioPrChangesRequestedEnabled: boolean
+  audioPrChangesRequestedVolume: number
+  audioPrApprovedSound: string
+  audioPrApprovedEnabled: boolean
+  audioPrApprovedVolume: number
+  audioPrMergeConflictSound: string
+  audioPrMergeConflictEnabled: boolean
+  audioPrMergeConflictVolume: number
+  audioPrReadyToMergeSound: string
+  audioPrReadyToMergeEnabled: boolean
+  audioPrReadyToMergeVolume: number
+  audioPrMergedSound: string
+  audioPrMergedEnabled: boolean
+  audioPrMergedVolume: number
   audioNotificationVolume: number
   audioQuestionVolume: number
   audioWorkspaceCreatedVolume: number
@@ -203,6 +225,7 @@ export const useSettingsStore = defineStore('settings', {
       audioNotificationSound: 'hey.mp3',
       audioQuestionSound: 'hey.mp3',
       audioWorkspaceCreatedSound: 'warcraft-3-humain-travail.mp3',
+      ...DEFAULT_PR_NOTIFICATION_AUDIO_SETTINGS,
       audioNotificationVolume: 1,
       audioQuestionVolume: 1,
       audioWorkspaceCreatedVolume: 1,

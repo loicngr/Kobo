@@ -121,7 +121,29 @@ Settings are managed live from the **Settings** page in the UI and persisted to 
 | `browserNotifications` | `boolean` | Trigger Web Notifications when an agent finishes a turn. |
 | `audioNotifications` | `boolean` | Play a sound when an agent finishes a turn. |
 | `audioNotificationSound` | `string` | Identifier of the chosen sound. |
-| `audioNotificationVolume` | `number` | `0` to `100`. |
+| `audioQuestionSound` | `string` | Sound used when an agent asks a question. |
+| `audioPrCiFailedSound` | `string` | Sound used when CI enters `FAILURE`. |
+| `audioPrCiFailedEnabled` | `boolean` | Enable audio when CI enters `FAILURE`. |
+| `audioPrCiFailedVolume` | `number` | CI-failure sound volume from `0` to `1`. |
+| `audioPrCiRecoveredSound` | `string` | Sound used when CI moves from `FAILURE` to `SUCCESS`. |
+| `audioPrCiRecoveredEnabled` | `boolean` | Enable audio when CI recovers. |
+| `audioPrCiRecoveredVolume` | `number` | CI-recovery sound volume from `0` to `1`. |
+| `audioPrChangesRequestedSound` | `string` | Sound used when a review requests changes. |
+| `audioPrChangesRequestedEnabled` | `boolean` | Enable audio when changes are requested. |
+| `audioPrChangesRequestedVolume` | `number` | Changes-requested sound volume from `0` to `1`. |
+| `audioPrApprovedSound` | `string` | Sound used when a PR becomes approved. |
+| `audioPrApprovedEnabled` | `boolean` | Enable audio when a PR becomes approved. |
+| `audioPrApprovedVolume` | `number` | PR-approved sound volume from `0` to `1`. |
+| `audioPrMergeConflictSound` | `string` | Sound used when a merge conflict appears. |
+| `audioPrMergeConflictEnabled` | `boolean` | Enable audio when a merge conflict appears. |
+| `audioPrMergeConflictVolume` | `number` | Merge-conflict sound volume from `0` to `1`. |
+| `audioPrReadyToMergeSound` | `string` | Sound used when an idle workspace's PR becomes ready to merge. |
+| `audioPrReadyToMergeEnabled` | `boolean` | Enable audio when a PR becomes ready to merge. |
+| `audioPrReadyToMergeVolume` | `number` | Ready-to-merge sound volume from `0` to `1`. |
+| `audioPrMergedSound` | `string` | Sound used when an open PR becomes merged. |
+| `audioPrMergedEnabled` | `boolean` | Enable audio when a PR becomes merged. |
+| `audioPrMergedVolume` | `number` | PR-merged sound volume from `0` to `1`. |
+| `audioNotificationVolume` | `number` | General notification sound volume from `0` to `1`. |
 | `notionMcpKey` | `string` | Override the `~/.claude.json` key used for Notion (defaults to the first non-disabled entry containing `notion`). |
 | `sentryMcpKey` | `string` | Same logic for Sentry. |
 | `notionStatusProperty` | `string` | Notion DB property updated to `notionInProgressStatus` when a workspace starts work on a Notion-backed mission. Empty disables the feature. |
@@ -141,6 +163,15 @@ Settings are managed live from the **Settings** page in the UI and persisted to 
 | `voiceFfmpegPath` | `string` | Override `ffmpeg` path. Empty falls back to `PATH`. |
 | `voiceTemperature` | `number` | Decoding temperature, `0`–`1`. |
 | `voicePrompt` | `string` | Initial prompt to bias transcription (custom vocabulary, names). |
+
+PR/MR event sound settings accept `inherit` (the default, uses
+`audioNotificationSound`) or a bundled sound filename from **Settings →
+Notifications**. Each event has an independent `Enabled` toggle and `Volume`.
+Migration v45 converts a previous `none` selection into a disabled card and
+preserves the effective general volume. Review-decision sounds currently
+require GitHub because the GitLab provider does not expose approval decisions.
+When multiple states change in one poll, every enabled sound is queued and
+played in order.
 
 ### Per-project settings
 

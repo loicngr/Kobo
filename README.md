@@ -25,7 +25,7 @@ Kōbō runs multiple coding agents in parallel, each isolated in its own git wor
 
   ![Diff viewer with side-by-side changes](docs/assets/images/diff-viewer.png)
 - **Dev server panel**: start, stop, and tail logs for a workspace's dev server (Docker or npm) straight from the Tools panel — no need to leave the UI.
-- **Attention indicators**: workspace cards surface CI failures, review-requested changes, and a conflict-aware **ready-to-merge** badge, plus a one-click **Fix CI** button that spawns a fix workspace automatically.
+- **Attention indicators**: workspace cards surface CI failures, review-requested changes, and a conflict-aware **ready-to-merge** badge, plus a one-click **Fix CI** button that spawns a fix workspace automatically. Seven PR/MR and CI transitions each have their own audio toggle, sound, and volume; simultaneous transitions play sequentially.
 - **Interactive Q&A**: an agent can pause mid-session to ask a clarifying question through the UI; the workspace surfaces under "Needs Attention" until you answer. Choosing **Other** opens an inline free-form field, and option previews are available on hover. Codex native interactive questions require its `plan` permission mode.
 
   ![Agent asking a clarifying question, awaiting the user's answer](docs/assets/images/agent-question.png)

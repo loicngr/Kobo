@@ -117,4 +117,31 @@ describe('settings store', () => {
     expect(store.global.notionInitialPromptTemplate).toBeDefined()
     expect(store.global.sentryInitialPromptTemplate).toBeDefined()
   })
+
+  it('defaults every PR notification sound to inherit', () => {
+    const store = useSettingsStore()
+    expect(store.global).toMatchObject({
+      audioPrCiFailedSound: 'inherit',
+      audioPrCiFailedEnabled: true,
+      audioPrCiFailedVolume: 1,
+      audioPrCiRecoveredSound: 'inherit',
+      audioPrCiRecoveredEnabled: true,
+      audioPrCiRecoveredVolume: 1,
+      audioPrChangesRequestedSound: 'inherit',
+      audioPrChangesRequestedEnabled: true,
+      audioPrChangesRequestedVolume: 1,
+      audioPrApprovedSound: 'inherit',
+      audioPrApprovedEnabled: true,
+      audioPrApprovedVolume: 1,
+      audioPrMergeConflictSound: 'inherit',
+      audioPrMergeConflictEnabled: true,
+      audioPrMergeConflictVolume: 1,
+      audioPrReadyToMergeSound: 'inherit',
+      audioPrReadyToMergeEnabled: true,
+      audioPrReadyToMergeVolume: 1,
+      audioPrMergedSound: 'inherit',
+      audioPrMergedEnabled: true,
+      audioPrMergedVolume: 1,
+    })
+  })
 })

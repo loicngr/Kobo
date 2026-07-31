@@ -2038,6 +2038,147 @@ describe('workspace-created notification settings', () => {
   })
 })
 
+const PR_SOUND_DEFAULTS = {
+  audioPrCiFailedSound: 'inherit',
+  audioPrCiFailedEnabled: true,
+  audioPrCiFailedVolume: 1,
+  audioPrCiRecoveredSound: 'inherit',
+  audioPrCiRecoveredEnabled: true,
+  audioPrCiRecoveredVolume: 1,
+  audioPrChangesRequestedSound: 'inherit',
+  audioPrChangesRequestedEnabled: true,
+  audioPrChangesRequestedVolume: 1,
+  audioPrApprovedSound: 'inherit',
+  audioPrApprovedEnabled: true,
+  audioPrApprovedVolume: 1,
+  audioPrMergeConflictSound: 'inherit',
+  audioPrMergeConflictEnabled: true,
+  audioPrMergeConflictVolume: 1,
+  audioPrReadyToMergeSound: 'inherit',
+  audioPrReadyToMergeEnabled: true,
+  audioPrReadyToMergeVolume: 1,
+  audioPrMergedSound: 'inherit',
+  audioPrMergedEnabled: true,
+  audioPrMergedVolume: 1,
+} as const
+
+describe('PR notification sounds (v45)', () => {
+  it('fresh installs inherit the general sound for every PR event', () => {
+    expect(getGlobalSettings()).toMatchObject(PR_SOUND_DEFAULTS)
+  })
+
+  it('upgrades v43 without losing existing notification settings', () => {
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        schemaVersion: 43,
+        global: {
+          audioNotificationSound: 'travail_termine.mp3',
+          audioQuestionSound: 'hey.mp3',
+          networkAccessToken: 'keep-me',
+        },
+        projects: [],
+      }),
+    )
+
+    getSettings()
+
+    expect(getGlobalSettings()).toMatchObject({
+      ...PR_SOUND_DEFAULTS,
+      audioNotificationSound: 'travail_termine.mp3',
+      audioQuestionSound: 'hey.mp3',
+      networkAccessToken: 'keep-me',
+    })
+    expect(SETTINGS_SCHEMA_VERSION).toBe(45)
+  })
+
+  it('preserves existing valid values instead of overwriting them', () => {
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        schemaVersion: 43,
+        global: {
+          audioPrCiFailedSound: 'faaah.mp3',
+          audioPrMergedSound: 'none',
+        },
+        projects: [],
+      }),
+    )
+
+    getSettings()
+
+    expect(getGlobalSettings().audioPrCiFailedSound).toBe('faaah.mp3')
+    expect(getGlobalSettings().audioPrMergedSound).toBe('inherit')
+    expect(getGlobalSettings().audioPrMergedEnabled).toBe(false)
+  })
+
+  it('migrates legacy no-sound selections to disabled cards and preserves effective volume', () => {
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        schemaVersion: 44,
+        global: {
+          audioNotificationVolume: 0.35,
+          audioPrCiFailedSound: 'none',
+          audioPrApprovedSound: 'hey.mp3',
+        },
+        projects: [],
+      }),
+    )
+
+    const global = getGlobalSettings()
+
+    expect(global).toMatchObject({
+      audioPrCiFailedSound: 'inherit',
+      audioPrCiFailedEnabled: false,
+      audioPrCiFailedVolume: 0.35,
+      audioPrApprovedSound: 'hey.mp3',
+      audioPrApprovedEnabled: true,
+      audioPrApprovedVolume: 0.35,
+    })
+  })
+
+  it('allows all seven fields through updateGlobalSettings', () => {
+    updateGlobalSettings({
+      audioPrCiFailedSound: 'faaah.mp3',
+      audioPrCiRecoveredSound: 'for-shure.mp3',
+      audioPrChangesRequestedSound: 'none',
+      audioPrApprovedSound: 'hey.mp3',
+      audioPrMergeConflictSound: 'dry-fart.mp3',
+      audioPrReadyToMergeSound: 'travail_termine.mp3',
+      audioPrMergedSound: 'ca_va_peter.mp3',
+    })
+
+    expect(getGlobalSettings()).toMatchObject({
+      audioPrCiFailedSound: 'faaah.mp3',
+      audioPrCiRecoveredSound: 'for-shure.mp3',
+      audioPrChangesRequestedSound: 'none',
+      audioPrApprovedSound: 'hey.mp3',
+      audioPrMergeConflictSound: 'dry-fart.mp3',
+      audioPrReadyToMergeSound: 'travail_termine.mp3',
+      audioPrMergedSound: 'ca_va_peter.mp3',
+    })
+  })
+
+  it('allows and clamps the per-event audio controls', () => {
+    updateGlobalSettings({
+      audioPrCiFailedEnabled: false,
+      audioPrCiFailedVolume: 2,
+      audioPrApprovedEnabled: true,
+      audioPrApprovedVolume: 0.35,
+      audioPrMergedVolume: Number.NaN,
+    })
+
+    expect(getGlobalSettings()).toMatchObject({
+      audioPrCiFailedEnabled: false,
+      audioPrCiFailedVolume: 1,
+      audioPrApprovedEnabled: true,
+      audioPrApprovedVolume: 0.35,
+      audioPrMergedVolume: 1,
+    })
+  })
+})
+
 describe('updateNetworkAccessSettings()', () => {
   it('persists the token to disk (real write path, not mocked)', () => {
     updateNetworkAccessSettings({ networkAccessEnabled: true, networkAccessToken: 'lan-secret-123' })
