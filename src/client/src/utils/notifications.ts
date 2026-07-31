@@ -3,6 +3,14 @@ import { DEFAULT_NOTIFICATION_SOUND, resolveSoundId, soundUrl } from 'src/utils/
 
 const audioCache = new Map<string, HTMLAudioElement>()
 
+interface QueuedSound {
+  soundId: string
+  volume: number
+}
+
+const soundQueue: QueuedSound[] = []
+let queuePlaying = false
+
 function getAudio(soundId: string): HTMLAudioElement {
   let audio = audioCache.get(soundId)
   if (!audio) {
@@ -24,6 +32,37 @@ function clampVolume(v: number | undefined | null): number {
   return Math.max(0, Math.min(1, v))
 }
 
+function playNextQueuedSound(): void {
+  const next = soundQueue.shift()
+  if (!next) {
+    queuePlaying = false
+    return
+  }
+
+  queuePlaying = true
+  const audio = getAudio(resolveSoundId(next.soundId))
+  audio.volume = next.volume
+  audio.currentTime = 0
+  let advanced = false
+
+  const advance = () => {
+    if (advanced) return
+    advanced = true
+    audio.removeEventListener('ended', advance)
+    audio.removeEventListener('error', advance)
+    playNextQueuedSound()
+  }
+
+  audio.addEventListener('ended', advance, { once: true })
+  audio.addEventListener('error', advance, { once: true })
+  audio.play().catch(advance)
+}
+
+export function queueNotificationSound(soundId: string, volume?: number | null): void {
+  soundQueue.push({ soundId: resolveSoundId(soundId), volume: clampVolume(volume) })
+  if (!queuePlaying) playNextQueuedSound()
+}
+
 /**
  * Play a sound by id at a given volume (used both by `notify()` and by the
  * Settings preview button). Volume is clamped to [0, 1]; non-finite or missing
@@ -43,7 +82,7 @@ export function notify(
   title: string,
   body?: string,
   workspaceId?: string,
-  soundOverride?: string,
+  soundOverride?: string | null,
   volumeOverride?: number,
   audioEnabled?: boolean,
 ): void {
@@ -69,13 +108,13 @@ export function notify(
     }
   }
 
-  // Sound plays regardless of focus. A non-empty soundOverride (e.g. the distinct
-  // "agent asked a question" sound) takes precedence over the general sound.
-  if (audioEnabled ?? settings.global.audioNotifications) {
+  // Sound plays regardless of focus. `undefined` or an empty override inherits
+  // the general sound, while `null` explicitly keeps the notification silent.
+  if ((audioEnabled ?? settings.global.audioNotifications) && soundOverride !== null) {
     const sound =
       soundOverride && soundOverride.length > 0
         ? soundOverride
         : (settings.global.audioNotificationSound ?? DEFAULT_NOTIFICATION_SOUND)
-    playNotificationSound(sound, volumeOverride ?? settings.global.audioNotificationVolume)
+    queueNotificationSound(sound, volumeOverride ?? settings.global.audioNotificationVolume)
   }
 }
