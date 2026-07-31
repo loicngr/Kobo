@@ -103,12 +103,26 @@ interface GlobalSettings {
   audioQuestionSound: string
   audioWorkspaceCreatedSound: string
   audioPrCiFailedSound: string
+  audioPrCiFailedEnabled: boolean
+  audioPrCiFailedVolume: number
   audioPrCiRecoveredSound: string
+  audioPrCiRecoveredEnabled: boolean
+  audioPrCiRecoveredVolume: number
   audioPrChangesRequestedSound: string
+  audioPrChangesRequestedEnabled: boolean
+  audioPrChangesRequestedVolume: number
   audioPrApprovedSound: string
+  audioPrApprovedEnabled: boolean
+  audioPrApprovedVolume: number
   audioPrMergeConflictSound: string
+  audioPrMergeConflictEnabled: boolean
+  audioPrMergeConflictVolume: number
   audioPrReadyToMergeSound: string
+  audioPrReadyToMergeEnabled: boolean
+  audioPrReadyToMergeVolume: number
   audioPrMergedSound: string
+  audioPrMergedEnabled: boolean
+  audioPrMergedVolume: number
   audioNotificationVolume: number
   audioQuestionVolume: number
   audioWorkspaceCreatedVolume: number
@@ -212,6 +226,20 @@ export const useSettingsStore = defineStore('settings', {
       audioQuestionSound: 'hey.mp3',
       audioWorkspaceCreatedSound: 'warcraft-3-humain-travail.mp3',
       ...DEFAULT_PR_NOTIFICATION_SOUND_SETTINGS,
+      audioPrCiFailedEnabled: true,
+      audioPrCiFailedVolume: 1,
+      audioPrCiRecoveredEnabled: true,
+      audioPrCiRecoveredVolume: 1,
+      audioPrChangesRequestedEnabled: true,
+      audioPrChangesRequestedVolume: 1,
+      audioPrApprovedEnabled: true,
+      audioPrApprovedVolume: 1,
+      audioPrMergeConflictEnabled: true,
+      audioPrMergeConflictVolume: 1,
+      audioPrReadyToMergeEnabled: true,
+      audioPrReadyToMergeVolume: 1,
+      audioPrMergedEnabled: true,
+      audioPrMergedVolume: 1,
       audioNotificationVolume: 1,
       audioQuestionVolume: 1,
       audioWorkspaceCreatedVolume: 1,

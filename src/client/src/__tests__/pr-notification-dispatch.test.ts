@@ -36,11 +36,11 @@ describe('PR notification WebSocket dispatch', () => {
       payload: { prNumber: 42, prUrl: 'https://example.test/pr/42' },
     })
 
-    expect(notify).toHaveBeenLastCalledWith(expect.any(String), undefined, 'w1', sound)
+    expect(notify).toHaveBeenLastCalledWith(expect.any(String), undefined, 'w1', sound, 1, true)
   })
 
-  it('passes null for the no-sound selection without suppressing the notification', () => {
-    useSettingsStore().global.audioPrCiFailedSound = 'none'
+  it('disables CI-failure audio without suppressing the browser notification', () => {
+    useSettingsStore().global.audioPrCiFailedEnabled = false
 
     useWebSocketStore()._routeMessage({
       type: 'pr:ci-failed',
@@ -48,7 +48,22 @@ describe('PR notification WebSocket dispatch', () => {
       payload: { prNumber: 42, prUrl: 'https://example.test/pr/42' },
     })
 
-    expect(notify).toHaveBeenCalledWith(expect.any(String), undefined, 'w1', null)
+    expect(notify).toHaveBeenCalledWith(expect.any(String), undefined, 'w1', undefined, 1, false)
+  })
+
+  it('uses the approved event volume instead of the general volume', () => {
+    const settings = useSettingsStore().global
+    settings.audioNotificationVolume = 0.9
+    settings.audioPrApprovedSound = 'hey.mp3'
+    settings.audioPrApprovedVolume = 0.35
+
+    useWebSocketStore()._routeMessage({
+      type: 'pr:approved',
+      workspaceId: 'w1',
+      payload: { prNumber: 42, prUrl: 'https://example.test/pr/42' },
+    })
+
+    expect(notify).toHaveBeenLastCalledWith(expect.any(String), undefined, 'w1', 'hey.mp3', 0.35, true)
   })
 
   it.each(['inherit', 'unknown.mp3', ''])('inherits for stored value %j', (selection) => {
@@ -60,6 +75,6 @@ describe('PR notification WebSocket dispatch', () => {
       payload: { prNumber: 42, prUrl: 'https://example.test/pr/42' },
     })
 
-    expect(notify).toHaveBeenLastCalledWith(expect.any(String), undefined, 'w1', undefined)
+    expect(notify).toHaveBeenLastCalledWith(expect.any(String), undefined, 'w1', undefined, 1, true)
   })
 })

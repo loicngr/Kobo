@@ -27,19 +27,61 @@ type PrNotificationEvent =
   | 'pr:ready-to-merge'
   | 'pr:merged'
 
-const PR_SOUND_SETTING_BY_EVENT = {
-  'pr:ci-failed': 'audioPrCiFailedSound',
-  'pr:ci-recovered': 'audioPrCiRecoveredSound',
-  'pr:changes-requested': 'audioPrChangesRequestedSound',
-  'pr:approved': 'audioPrApprovedSound',
-  'pr:merge-conflict': 'audioPrMergeConflictSound',
-  'pr:ready-to-merge': 'audioPrReadyToMergeSound',
-  'pr:merged': 'audioPrMergedSound',
-} as const satisfies Record<PrNotificationEvent, keyof GlobalSettings>
+type PrAudioSettingKeys = {
+  soundKey: keyof GlobalSettings
+  enabledKey: keyof GlobalSettings
+  volumeKey: keyof GlobalSettings
+}
 
-function prSoundOverride(event: PrNotificationEvent): string | null | undefined {
-  const settings = useSettingsStore()
-  return resolveNotificationSoundOverride(settings.global[PR_SOUND_SETTING_BY_EVENT[event]])
+const PR_AUDIO_SETTINGS_BY_EVENT = {
+  'pr:ci-failed': {
+    soundKey: 'audioPrCiFailedSound',
+    enabledKey: 'audioPrCiFailedEnabled',
+    volumeKey: 'audioPrCiFailedVolume',
+  },
+  'pr:ci-recovered': {
+    soundKey: 'audioPrCiRecoveredSound',
+    enabledKey: 'audioPrCiRecoveredEnabled',
+    volumeKey: 'audioPrCiRecoveredVolume',
+  },
+  'pr:changes-requested': {
+    soundKey: 'audioPrChangesRequestedSound',
+    enabledKey: 'audioPrChangesRequestedEnabled',
+    volumeKey: 'audioPrChangesRequestedVolume',
+  },
+  'pr:approved': {
+    soundKey: 'audioPrApprovedSound',
+    enabledKey: 'audioPrApprovedEnabled',
+    volumeKey: 'audioPrApprovedVolume',
+  },
+  'pr:merge-conflict': {
+    soundKey: 'audioPrMergeConflictSound',
+    enabledKey: 'audioPrMergeConflictEnabled',
+    volumeKey: 'audioPrMergeConflictVolume',
+  },
+  'pr:ready-to-merge': {
+    soundKey: 'audioPrReadyToMergeSound',
+    enabledKey: 'audioPrReadyToMergeEnabled',
+    volumeKey: 'audioPrReadyToMergeVolume',
+  },
+  'pr:merged': {
+    soundKey: 'audioPrMergedSound',
+    enabledKey: 'audioPrMergedEnabled',
+    volumeKey: 'audioPrMergedVolume',
+  },
+} as const satisfies Record<PrNotificationEvent, PrAudioSettingKeys>
+
+function notifyPr(message: string, workspaceId: string, event: PrNotificationEvent): void {
+  const settings = useSettingsStore().global
+  const keys = PR_AUDIO_SETTINGS_BY_EVENT[event]
+  notify(
+    message,
+    undefined,
+    workspaceId,
+    resolveNotificationSoundOverride(settings[keys.soundKey]),
+    Number(settings[keys.volumeKey]),
+    Boolean(settings[keys.enabledKey]),
+  )
 }
 
 // Module-level variables — must NOT be reactive (Vue Proxy breaks WebSocket)
@@ -1046,7 +1088,7 @@ export const useWebSocketStore = defineStore('websocket', {
             timeout: current.timeout,
             message,
           })
-          notify(message, undefined, wid, prSoundOverride(eventType))
+          notifyPr(message, wid, eventType)
           if (eventType !== 'pr:merged') {
             void workspaceStore.refreshPrSnapshot(wid)
           }
@@ -1083,7 +1125,7 @@ export const useWebSocketStore = defineStore('websocket', {
             message,
             actions,
           })
-          notify(message, undefined, wid, prSoundOverride('pr:changes-requested'))
+          notifyPr(message, wid, 'pr:changes-requested')
           // Refresh the local snapshot so the icon flips immediately without
           // waiting for the next watcher tick to re-pull from /pr-states.
           void workspaceStore.refreshPrSnapshot(wid)
@@ -1101,7 +1143,7 @@ export const useWebSocketStore = defineStore('websocket', {
             timeout: 5000,
             message,
           })
-          notify(message, undefined, wid, prSoundOverride('pr:approved'))
+          notifyPr(message, wid, 'pr:approved')
           void workspaceStore.refreshPrSnapshot(wid)
           break
         }
@@ -1117,7 +1159,7 @@ export const useWebSocketStore = defineStore('websocket', {
             timeout: 5000,
             message,
           })
-          notify(message, undefined, wid, prSoundOverride('pr:ready-to-merge'))
+          notifyPr(message, wid, 'pr:ready-to-merge')
           void workspaceStore.refreshPrSnapshot(wid)
           break
         }
