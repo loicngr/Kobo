@@ -284,12 +284,26 @@ export interface GlobalSettings {
   audioQuestionSound: string
   audioWorkspaceCreatedSound: string
   audioPrCiFailedSound: string
+  audioPrCiFailedEnabled: boolean
+  audioPrCiFailedVolume: number
   audioPrCiRecoveredSound: string
+  audioPrCiRecoveredEnabled: boolean
+  audioPrCiRecoveredVolume: number
   audioPrChangesRequestedSound: string
+  audioPrChangesRequestedEnabled: boolean
+  audioPrChangesRequestedVolume: number
   audioPrApprovedSound: string
+  audioPrApprovedEnabled: boolean
+  audioPrApprovedVolume: number
   audioPrMergeConflictSound: string
+  audioPrMergeConflictEnabled: boolean
+  audioPrMergeConflictVolume: number
   audioPrReadyToMergeSound: string
+  audioPrReadyToMergeEnabled: boolean
+  audioPrReadyToMergeVolume: number
   audioPrMergedSound: string
+  audioPrMergedEnabled: boolean
+  audioPrMergedVolume: number
   audioNotificationVolume: number
   audioQuestionVolume: number
   audioWorkspaceCreatedVolume: number
@@ -947,6 +961,37 @@ const settingsMigrations: SettingsMigration[] = [
       }
     },
   },
+  {
+    version: 45,
+    name: 'add-pr-notification-audio-controls',
+    migrate: ({ global }) => {
+      const legacyVolume = global.audioNotificationVolume
+      const volume =
+        typeof legacyVolume === 'number' && Number.isFinite(legacyVolume) && legacyVolume >= 0 && legacyVolume <= 1
+          ? legacyVolume
+          : 1
+      const events = [
+        'CiFailed',
+        'CiRecovered',
+        'ChangesRequested',
+        'Approved',
+        'MergeConflict',
+        'ReadyToMerge',
+        'Merged',
+      ]
+      for (const event of events) {
+        const soundKey = `audioPr${event}Sound`
+        const enabledKey = `audioPr${event}Enabled`
+        const volumeKey = `audioPr${event}Volume`
+        const muted = global[soundKey] === 'none'
+        if (muted) global[soundKey] = 'inherit'
+        if (typeof global[enabledKey] !== 'boolean') global[enabledKey] = !muted
+        if (typeof global[volumeKey] !== 'number' || !Number.isFinite(global[volumeKey])) {
+          global[volumeKey] = volume
+        }
+      }
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -1034,12 +1079,26 @@ function defaultSettings(): Settings {
       audioQuestionSound: 'hey.mp3',
       audioWorkspaceCreatedSound: 'warcraft-3-humain-travail.mp3',
       audioPrCiFailedSound: 'inherit',
+      audioPrCiFailedEnabled: true,
+      audioPrCiFailedVolume: 1,
       audioPrCiRecoveredSound: 'inherit',
+      audioPrCiRecoveredEnabled: true,
+      audioPrCiRecoveredVolume: 1,
       audioPrChangesRequestedSound: 'inherit',
+      audioPrChangesRequestedEnabled: true,
+      audioPrChangesRequestedVolume: 1,
       audioPrApprovedSound: 'inherit',
+      audioPrApprovedEnabled: true,
+      audioPrApprovedVolume: 1,
       audioPrMergeConflictSound: 'inherit',
+      audioPrMergeConflictEnabled: true,
+      audioPrMergeConflictVolume: 1,
       audioPrReadyToMergeSound: 'inherit',
+      audioPrReadyToMergeEnabled: true,
+      audioPrReadyToMergeVolume: 1,
       audioPrMergedSound: 'inherit',
+      audioPrMergedEnabled: true,
+      audioPrMergedVolume: 1,
       audioNotificationVolume: 1,
       audioQuestionVolume: 1,
       audioWorkspaceCreatedVolume: 1,
@@ -1441,12 +1500,26 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'audioQuestionSound',
     'audioWorkspaceCreatedSound',
     'audioPrCiFailedSound',
+    'audioPrCiFailedEnabled',
+    'audioPrCiFailedVolume',
     'audioPrCiRecoveredSound',
+    'audioPrCiRecoveredEnabled',
+    'audioPrCiRecoveredVolume',
     'audioPrChangesRequestedSound',
+    'audioPrChangesRequestedEnabled',
+    'audioPrChangesRequestedVolume',
     'audioPrApprovedSound',
+    'audioPrApprovedEnabled',
+    'audioPrApprovedVolume',
     'audioPrMergeConflictSound',
+    'audioPrMergeConflictEnabled',
+    'audioPrMergeConflictVolume',
     'audioPrReadyToMergeSound',
+    'audioPrReadyToMergeEnabled',
+    'audioPrReadyToMergeVolume',
     'audioPrMergedSound',
+    'audioPrMergedEnabled',
+    'audioPrMergedVolume',
     'audioNotificationVolume',
     'audioQuestionVolume',
     'audioWorkspaceCreatedVolume',
@@ -1497,7 +1570,18 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     const sanitized = sanitizeBranchPrefixes(filtered.branchPrefixes)
     filtered.branchPrefixes = sanitized.length > 0 ? sanitized : settings.global.branchPrefixes
   }
-  for (const key of ['audioNotificationVolume', 'audioQuestionVolume', 'audioWorkspaceCreatedVolume'] as const) {
+  for (const key of [
+    'audioNotificationVolume',
+    'audioQuestionVolume',
+    'audioWorkspaceCreatedVolume',
+    'audioPrCiFailedVolume',
+    'audioPrCiRecoveredVolume',
+    'audioPrChangesRequestedVolume',
+    'audioPrApprovedVolume',
+    'audioPrMergeConflictVolume',
+    'audioPrReadyToMergeVolume',
+    'audioPrMergedVolume',
+  ] as const) {
     if (filtered[key] !== undefined) {
       const v = Number(filtered[key])
       filtered[key] = Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 1
