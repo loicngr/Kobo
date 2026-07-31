@@ -204,8 +204,10 @@ export function dispatchAgentEvent(
           : t('notification.agentPermissionRequest', { name: wsName })
       // Questions get the dedicated question sound; permission requests keep the
       // general notification sound.
-      const soundOverride = event.requestKind === 'question' ? useSettingsStore().global.audioQuestionSound : undefined
-      notify(title, undefined, workspaceId, soundOverride)
+      const settings = useSettingsStore().global
+      const soundOverride = event.requestKind === 'question' ? settings.audioQuestionSound : undefined
+      const volumeOverride = event.requestKind === 'question' ? settings.audioQuestionVolume : undefined
+      notify(title, undefined, workspaceId, soundOverride, volumeOverride, settings.audioQuestionNotifications)
     }
     return
   }

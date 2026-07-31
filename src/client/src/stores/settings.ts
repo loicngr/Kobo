@@ -96,9 +96,14 @@ interface GlobalSettings {
   autoPurgeOnPrMerged: boolean
   browserNotifications: boolean
   audioNotifications: boolean
+  audioQuestionNotifications: boolean
+  audioWorkspaceCreatedNotifications: boolean
   audioNotificationSound: string
   audioQuestionSound: string
+  audioWorkspaceCreatedSound: string
   audioNotificationVolume: number
+  audioQuestionVolume: number
+  audioWorkspaceCreatedVolume: number
   notionStatusProperty: string
   notionInProgressStatus: string
   notionAssigneeProperty: string
@@ -193,9 +198,14 @@ export const useSettingsStore = defineStore('settings', {
       autoPurgeOnPrMerged: false,
       browserNotifications: true,
       audioNotifications: true,
+      audioQuestionNotifications: true,
+      audioWorkspaceCreatedNotifications: true,
       audioNotificationSound: 'hey.mp3',
       audioQuestionSound: 'hey.mp3',
+      audioWorkspaceCreatedSound: 'warcraft-3-humain-travail.mp3',
       audioNotificationVolume: 1,
+      audioQuestionVolume: 1,
+      audioWorkspaceCreatedVolume: 1,
       notionStatusProperty: '',
       notionInProgressStatus: '',
       notionAssigneeProperty: '',

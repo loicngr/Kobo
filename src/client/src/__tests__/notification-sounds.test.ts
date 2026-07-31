@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   DEFAULT_NOTIFICATION_SOUND,
+  DEFAULT_WORKSPACE_CREATED_SOUND,
   isKnownSoundId,
   NOTIFICATION_SOUNDS,
   resolveSoundId,
@@ -37,6 +38,11 @@ describe('NOTIFICATION_SOUNDS', () => {
 
   it('DEFAULT_NOTIFICATION_SOUND is one of the listed ids', () => {
     expect(NOTIFICATION_SOUNDS.some((s) => s.id === DEFAULT_NOTIFICATION_SOUND)).toBe(true)
+  })
+
+  it('exposes the dedicated default sound for workspace creation', () => {
+    expect(DEFAULT_WORKSPACE_CREATED_SOUND).toBe('warcraft-3-humain-travail.mp3')
+    expect(NOTIFICATION_SOUNDS.some((s) => s.id === DEFAULT_WORKSPACE_CREATED_SOUND)).toBe(true)
   })
 })
 

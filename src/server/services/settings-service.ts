@@ -277,10 +277,15 @@ export interface GlobalSettings {
   networkAccessBehindProxy: boolean
   browserNotifications: boolean
   audioNotifications: boolean
+  audioQuestionNotifications: boolean
+  audioWorkspaceCreatedNotifications: boolean
   audioNotificationSound: string
   /** Sound played specifically when the agent asks a question. Seeded by migration v40. */
   audioQuestionSound: string
+  audioWorkspaceCreatedSound: string
   audioNotificationVolume: number
+  audioQuestionVolume: number
+  audioWorkspaceCreatedVolume: number
   notionStatusProperty: string
   notionInProgressStatus: string
   notionAssigneeProperty: string
@@ -880,6 +885,41 @@ const settingsMigrations: SettingsMigration[] = [
       }
     },
   },
+  {
+    version: 42,
+    name: 'add-per-event-notification-audio-settings',
+    migrate: ({ global }) => {
+      const legacyVolume = global.audioNotificationVolume
+      const volume =
+        typeof legacyVolume === 'number' && Number.isFinite(legacyVolume) && legacyVolume >= 0 && legacyVolume <= 1
+          ? legacyVolume
+          : 1
+      if (typeof global.audioWorkspaceCreatedSound !== 'string' || global.audioWorkspaceCreatedSound.length === 0) {
+        global.audioWorkspaceCreatedSound = 'warcraft-3-humain-travail.mp3'
+      }
+      if (typeof global.audioQuestionVolume !== 'number' || !Number.isFinite(global.audioQuestionVolume)) {
+        global.audioQuestionVolume = volume
+      }
+      if (
+        typeof global.audioWorkspaceCreatedVolume !== 'number' ||
+        !Number.isFinite(global.audioWorkspaceCreatedVolume)
+      ) {
+        global.audioWorkspaceCreatedVolume = volume
+      }
+    },
+  },
+  {
+    version: 43,
+    name: 'add-per-event-notification-audio-toggles',
+    migrate: ({ global }) => {
+      if (typeof global.audioQuestionNotifications !== 'boolean') {
+        global.audioQuestionNotifications = true
+      }
+      if (typeof global.audioWorkspaceCreatedNotifications !== 'boolean') {
+        global.audioWorkspaceCreatedNotifications = true
+      }
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -961,9 +1001,14 @@ function defaultSettings(): Settings {
       networkAccessBehindProxy: false,
       browserNotifications: true,
       audioNotifications: true,
+      audioQuestionNotifications: true,
+      audioWorkspaceCreatedNotifications: true,
       audioNotificationSound: 'hey.mp3',
       audioQuestionSound: 'hey.mp3',
+      audioWorkspaceCreatedSound: 'warcraft-3-humain-travail.mp3',
       audioNotificationVolume: 1,
+      audioQuestionVolume: 1,
+      audioWorkspaceCreatedVolume: 1,
       notionStatusProperty: '',
       notionInProgressStatus: '',
       notionAssigneeProperty: '',
@@ -1356,9 +1401,14 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'autoPurgeOnPrMerged',
     'browserNotifications',
     'audioNotifications',
+    'audioQuestionNotifications',
+    'audioWorkspaceCreatedNotifications',
     'audioNotificationSound',
     'audioQuestionSound',
+    'audioWorkspaceCreatedSound',
     'audioNotificationVolume',
+    'audioQuestionVolume',
+    'audioWorkspaceCreatedVolume',
     'notionStatusProperty',
     'notionInProgressStatus',
     'notionAssigneeProperty',
@@ -1406,9 +1456,11 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     const sanitized = sanitizeBranchPrefixes(filtered.branchPrefixes)
     filtered.branchPrefixes = sanitized.length > 0 ? sanitized : settings.global.branchPrefixes
   }
-  if (filtered.audioNotificationVolume !== undefined) {
-    const v = Number(filtered.audioNotificationVolume)
-    filtered.audioNotificationVolume = Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 1
+  for (const key of ['audioNotificationVolume', 'audioQuestionVolume', 'audioWorkspaceCreatedVolume'] as const) {
+    if (filtered[key] !== undefined) {
+      const v = Number(filtered[key])
+      filtered[key] = Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 1
+    }
   }
   if (filtered.voiceTemperature !== undefined) {
     const t = Number(filtered.voiceTemperature)

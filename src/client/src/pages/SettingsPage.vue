@@ -234,90 +234,178 @@
               class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
             >
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.notifications') }}</div>
-              <div class="column q-gutter-xs">
-                <q-toggle
-                  v-model="globalBrowserNotifications"
-                  :label="$t('settings.browserNotifications')"
-                  dark
-                  dense
-                  color="indigo-4"
-                  class="text-grey-5 text-caption"
-                />
-                <q-toggle
-                  v-model="globalAudioNotifications"
-                  :label="$t('settings.audioNotifications')"
-                  dark
-                  dense
-                  color="indigo-4"
-                  class="text-grey-5 text-caption"
-                />
-              </div>
-              <div class="row items-center q-gutter-sm q-mt-sm">
-                <q-select
-                  v-model="globalAudioNotificationSound"
-                  :options="soundSelectOptions"
-                  :label="$t('settings.notificationSound')"
-                  :disable="!globalAudioNotifications"
-                  dark
-                  dense
-                  outlined
-                  emit-value
-                  map-options
-                  color="indigo-4"
-                  class="col"
-                />
-                <q-btn
-                  flat
-                  dense
-                  color="indigo-4"
-                  icon="play_arrow"
-                  :label="$t('settings.notificationSoundPreview')"
-                  :disable="!globalAudioNotifications"
-                  @click="previewNotificationSound"
-                />
-              </div>
-              <div class="text-grey-6 text-caption q-mt-sm">{{ $t('settings.questionSoundHint') }}</div>
-              <div class="row items-center q-gutter-sm q-mt-xs">
-                <q-select
-                  v-model="globalAudioQuestionSound"
-                  :options="soundSelectOptions"
-                  :label="$t('settings.questionSound')"
-                  :disable="!globalAudioNotifications"
-                  dark
-                  dense
-                  outlined
-                  emit-value
-                  map-options
-                  color="indigo-4"
-                  class="col"
-                />
-                <q-btn
-                  flat
-                  dense
-                  color="indigo-4"
-                  icon="play_arrow"
-                  :label="$t('settings.notificationSoundPreview')"
-                  :disable="!globalAudioNotifications"
-                  @click="previewQuestionSound"
-                />
-              </div>
-              <div class="row items-center q-gutter-sm q-mt-sm">
-                <div class="text-grey-5 text-caption" style="min-width: 80px;">
-                  {{ $t('settings.notificationVolume') }}
+              <div class="notification-sounds-grid q-mt-md">
+                <div class="notification-sound-card q-pa-md rounded-borders">
+                  <div class="text-subtitle2">{{ $t('settings.notificationSound') }}</div>
+                  <div class="text-grey-6 text-caption q-mb-sm">{{ $t('settings.notificationSoundHint') }}</div>
+                  <div class="column q-gutter-xs q-mb-sm">
+                    <q-toggle
+                      v-model="globalBrowserNotifications"
+                      :label="$t('settings.enableBrowserNotifications')"
+                      dark
+                      dense
+                      color="indigo-4"
+                      class="text-grey-5 text-caption"
+                    />
+                    <q-toggle
+                      v-model="globalAudioNotifications"
+                      :label="$t('settings.enableAudio')"
+                      dark
+                      dense
+                      color="indigo-4"
+                      class="text-grey-5 text-caption"
+                    />
+                  </div>
+                  <div class="row items-center q-gutter-sm">
+                    <q-select
+                      v-model="globalAudioNotificationSound"
+                      :options="soundSelectOptions"
+                      :label="$t('settings.notificationSound')"
+                      :disable="!globalAudioNotifications"
+                      dark
+                      dense
+                      outlined
+                      emit-value
+                      map-options
+                      color="indigo-4"
+                      class="col"
+                    />
+                    <q-btn
+                      flat
+                      dense
+                      color="indigo-4"
+                      icon="play_arrow"
+                      :label="$t('settings.notificationSoundPreview')"
+                      :disable="!globalAudioNotifications"
+                      @click="previewNotificationSound"
+                    />
+                  </div>
+                  <div class="row items-center q-gutter-sm q-mt-sm">
+                    <div class="text-grey-5 text-caption" style="min-width: 58px;">{{ $t('settings.notificationVolume') }}</div>
+                    <q-slider
+                      v-model="globalAudioNotificationVolume"
+                      :min="0"
+                      :max="1"
+                      :step="0.05"
+                      :disable="!globalAudioNotifications"
+                      :aria-label="$t('settings.notificationVolume')"
+                      dark
+                      dense
+                      color="indigo-4"
+                      class="col"
+                    />
+                    <div class="text-grey-5 text-caption" style="min-width: 40px; text-align: right;">
+                      {{ Math.round(globalAudioNotificationVolume * 100) }}%
+                    </div>
+                  </div>
                 </div>
-                <q-slider
-                  v-model="globalAudioNotificationVolume"
-                  :min="0"
-                  :max="1"
-                  :step="0.05"
-                  :disable="!globalAudioNotifications"
-                  dark
-                  dense
-                  color="indigo-4"
-                  class="col"
-                />
-                <div class="text-grey-5 text-caption" style="min-width: 40px; text-align: right;">
-                  {{ Math.round(globalAudioNotificationVolume * 100) }}%
+                <div class="notification-sound-card q-pa-md rounded-borders">
+                  <div class="text-subtitle2">{{ $t('settings.questionSound') }}</div>
+                  <div class="text-grey-6 text-caption q-mb-sm">{{ $t('settings.questionSoundHint') }}</div>
+                  <q-toggle
+                    v-model="globalAudioQuestionNotifications"
+                    :label="$t('settings.enableAudio')"
+                    dark
+                    dense
+                    color="indigo-4"
+                    class="text-grey-5 text-caption q-mb-sm"
+                  />
+                  <div class="row items-center q-gutter-sm">
+                    <q-select
+                      v-model="globalAudioQuestionSound"
+                      :options="soundSelectOptions"
+                      :label="$t('settings.questionSound')"
+                      :disable="!globalAudioQuestionNotifications"
+                      dark
+                      dense
+                      outlined
+                      emit-value
+                      map-options
+                      color="indigo-4"
+                      class="col"
+                    />
+                    <q-btn
+                      flat
+                      dense
+                      color="indigo-4"
+                      icon="play_arrow"
+                      :label="$t('settings.notificationSoundPreview')"
+                      :disable="!globalAudioQuestionNotifications"
+                      @click="previewQuestionSound"
+                    />
+                  </div>
+                  <div class="row items-center q-gutter-sm q-mt-sm">
+                    <div class="text-grey-5 text-caption" style="min-width: 58px;">{{ $t('settings.notificationVolume') }}</div>
+                    <q-slider
+                      v-model="globalAudioQuestionVolume"
+                      :min="0"
+                      :max="1"
+                      :step="0.05"
+                      :disable="!globalAudioQuestionNotifications"
+                      :aria-label="$t('settings.notificationVolume')"
+                      dark
+                      dense
+                      color="indigo-4"
+                      class="col"
+                    />
+                    <div class="text-grey-5 text-caption" style="min-width: 40px; text-align: right;">
+                      {{ Math.round(globalAudioQuestionVolume * 100) }}%
+                    </div>
+                  </div>
+                </div>
+                <div class="notification-sound-card q-pa-md rounded-borders">
+                  <div class="text-subtitle2">{{ $t('settings.workspaceCreatedSound') }}</div>
+                  <div class="text-grey-6 text-caption q-mb-sm">{{ $t('settings.workspaceCreatedSoundHint') }}</div>
+                  <q-toggle
+                    v-model="globalAudioWorkspaceCreatedNotifications"
+                    :label="$t('settings.enableAudio')"
+                    dark
+                    dense
+                    color="indigo-4"
+                    class="text-grey-5 text-caption q-mb-sm"
+                  />
+                  <div class="row items-center q-gutter-sm">
+                    <q-select
+                      v-model="globalAudioWorkspaceCreatedSound"
+                      :options="soundSelectOptions"
+                      :label="$t('settings.workspaceCreatedSound')"
+                      :disable="!globalAudioWorkspaceCreatedNotifications"
+                      dark
+                      dense
+                      outlined
+                      emit-value
+                      map-options
+                      color="indigo-4"
+                      class="col"
+                    />
+                    <q-btn
+                      flat
+                      dense
+                      color="indigo-4"
+                      icon="play_arrow"
+                      :label="$t('settings.notificationSoundPreview')"
+                      :disable="!globalAudioWorkspaceCreatedNotifications"
+                      @click="previewWorkspaceCreatedSound"
+                    />
+                  </div>
+                  <div class="row items-center q-gutter-sm q-mt-sm">
+                    <div class="text-grey-5 text-caption" style="min-width: 58px;">{{ $t('settings.notificationVolume') }}</div>
+                    <q-slider
+                      v-model="globalAudioWorkspaceCreatedVolume"
+                      :min="0"
+                      :max="1"
+                      :step="0.05"
+                      :disable="!globalAudioWorkspaceCreatedNotifications"
+                      :aria-label="$t('settings.notificationVolume')"
+                      dark
+                      dense
+                      color="indigo-4"
+                      class="col"
+                    />
+                    <div class="text-grey-5 text-caption" style="min-width: 40px; text-align: right;">
+                      {{ Math.round(globalAudioWorkspaceCreatedVolume * 100) }}%
+                    </div>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2237,7 +2325,12 @@ import { type AgentPermissionMode, PERMISSION_MODES_BY_ENGINE } from 'src/consta
 import type { ProjectSettings } from 'src/stores/settings'
 import { useSettingsStore } from 'src/stores/settings'
 import { type Template, useTemplatesStore } from 'src/stores/templates'
-import { DEFAULT_NOTIFICATION_SOUND, NOTIFICATION_SOUNDS, resolveSoundId } from 'src/utils/notification-sounds'
+import {
+  DEFAULT_NOTIFICATION_SOUND,
+  DEFAULT_WORKSPACE_CREATED_SOUND,
+  NOTIFICATION_SOUNDS,
+  resolveSoundId,
+} from 'src/utils/notification-sounds'
 import { playNotificationSound } from 'src/utils/notifications'
 import { PROJECT_COLOR_PALETTE, type ProjectColor } from 'src/utils/project-color'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -2406,9 +2499,14 @@ function copyToken() {
 
 const globalBrowserNotifications = ref(true)
 const globalAudioNotifications = ref(true)
+const globalAudioQuestionNotifications = ref(true)
+const globalAudioWorkspaceCreatedNotifications = ref(true)
 const globalAudioNotificationSound = ref(DEFAULT_NOTIFICATION_SOUND)
 const globalAudioQuestionSound = ref(DEFAULT_NOTIFICATION_SOUND)
+const globalAudioWorkspaceCreatedSound = ref(DEFAULT_WORKSPACE_CREATED_SOUND)
 const globalAudioNotificationVolume = ref(1)
+const globalAudioQuestionVolume = ref(1)
+const globalAudioWorkspaceCreatedVolume = ref(1)
 const globalNotionStatusProperty = ref('')
 const globalNotionStatus = ref('')
 const globalNotionAssigneeProperty = ref('')
@@ -3062,7 +3160,11 @@ function previewNotificationSound(): void {
 }
 
 function previewQuestionSound(): void {
-  playNotificationSound(globalAudioQuestionSound.value, globalAudioNotificationVolume.value)
+  playNotificationSound(globalAudioQuestionSound.value, globalAudioQuestionVolume.value)
+}
+
+function previewWorkspaceCreatedSound(): void {
+  playNotificationSound(globalAudioWorkspaceCreatedSound.value, globalAudioWorkspaceCreatedVolume.value)
 }
 
 // Selected project
@@ -3095,9 +3197,14 @@ function captureGlobalSnapshot(): string {
     autoPurgeOnPrMerged: globalAutoPurgeOnPrMerged.value,
     browserNotifications: globalBrowserNotifications.value,
     audioNotifications: globalAudioNotifications.value,
+    audioQuestionNotifications: globalAudioQuestionNotifications.value,
+    audioWorkspaceCreatedNotifications: globalAudioWorkspaceCreatedNotifications.value,
     audioNotificationSound: globalAudioNotificationSound.value,
     audioQuestionSound: globalAudioQuestionSound.value,
+    audioWorkspaceCreatedSound: globalAudioWorkspaceCreatedSound.value,
     audioNotificationVolume: globalAudioNotificationVolume.value,
+    audioQuestionVolume: globalAudioQuestionVolume.value,
+    audioWorkspaceCreatedVolume: globalAudioWorkspaceCreatedVolume.value,
     notionStatusProperty: globalNotionStatusProperty.value,
     notionStatus: globalNotionStatus.value,
     notionAssigneeProperty: globalNotionAssigneeProperty.value,
@@ -3174,10 +3281,21 @@ function syncGlobalForm() {
   globalAutoPurgeOnPrMerged.value = store.global.autoPurgeOnPrMerged ?? false
   globalBrowserNotifications.value = store.global.browserNotifications ?? true
   globalAudioNotifications.value = store.global.audioNotifications ?? true
+  globalAudioQuestionNotifications.value = store.global.audioQuestionNotifications ?? true
+  globalAudioWorkspaceCreatedNotifications.value = store.global.audioWorkspaceCreatedNotifications ?? true
   globalAudioNotificationSound.value = resolveSoundId(store.global.audioNotificationSound)
   globalAudioQuestionSound.value = resolveSoundId(store.global.audioQuestionSound)
+  globalAudioWorkspaceCreatedSound.value = resolveSoundId(store.global.audioWorkspaceCreatedSound)
   const v = store.global.audioNotificationVolume
   globalAudioNotificationVolume.value = typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 1
+  const questionVolume = store.global.audioQuestionVolume
+  globalAudioQuestionVolume.value =
+    typeof questionVolume === 'number' && Number.isFinite(questionVolume) ? Math.max(0, Math.min(1, questionVolume)) : 1
+  const workspaceCreatedVolume = store.global.audioWorkspaceCreatedVolume
+  globalAudioWorkspaceCreatedVolume.value =
+    typeof workspaceCreatedVolume === 'number' && Number.isFinite(workspaceCreatedVolume)
+      ? Math.max(0, Math.min(1, workspaceCreatedVolume))
+      : 1
   globalNotionStatusProperty.value = store.global.notionStatusProperty ?? ''
   globalNotionStatus.value = store.global.notionInProgressStatus ?? ''
   globalNotionAssigneeProperty.value = store.global.notionAssigneeProperty ?? ''
@@ -3447,9 +3565,14 @@ async function saveGlobal() {
       autoPurgeOnPrMerged: globalAutoPurgeOnPrMerged.value,
       browserNotifications: globalBrowserNotifications.value,
       audioNotifications: globalAudioNotifications.value,
+      audioQuestionNotifications: globalAudioQuestionNotifications.value,
+      audioWorkspaceCreatedNotifications: globalAudioWorkspaceCreatedNotifications.value,
       audioNotificationSound: globalAudioNotificationSound.value,
       audioQuestionSound: globalAudioQuestionSound.value,
+      audioWorkspaceCreatedSound: globalAudioWorkspaceCreatedSound.value,
       audioNotificationVolume: globalAudioNotificationVolume.value,
+      audioQuestionVolume: globalAudioQuestionVolume.value,
+      audioWorkspaceCreatedVolume: globalAudioWorkspaceCreatedVolume.value,
       notionStatusProperty: globalNotionStatusProperty.value,
       notionInProgressStatus: globalNotionStatus.value,
       notionAssigneeProperty: globalNotionAssigneeProperty.value,
@@ -3842,6 +3965,17 @@ onUnmounted(() => {
   border: 1px solid var(--kobo-border-subtle);
   border-radius: var(--kobo-radius-md);
   margin-bottom: 16px;
+}
+
+.notification-sounds-grid {
+  display: grid;
+  gap: 12px;
+  grid-template-columns: 1fr;
+}
+
+.notification-sound-card {
+  background: var(--kobo-surface-2);
+  border: 1px solid var(--kobo-border-subtle);
 }
 
 .voice-model-row {
