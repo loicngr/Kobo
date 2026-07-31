@@ -4,6 +4,31 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.11.0
+
+- feat(pwa): ship the production client as an installable Progressive Web App.
+- feat(chat): add `Ctrl+J` for a new line and `Ctrl+Enter` to force delivery of
+  a queued message while an agent is active.
+- feat(chat): move the latest Claude/Codex reasoning into one live panel above
+  the chat input, with a global visibility preference.
+- feat(integrations): independently enable or disable Notion and Sentry from
+  Settings while preserving their configuration.
+- feat(integrations): add **Test connection** checks for the configured Notion
+  and Sentry MCP servers, with actionable status and elapsed time.
+- feat(chat): add `Ctrl+F` workspace-history search with readable results;
+  opening a result loads the matching session, scrolls to its message, and
+  highlights it. Global search now deep-links to the same location.
+- feat(git): let Edit and Write cards open their exact worktree-relative file
+  in the Git diff viewer.
+- feat(observability): add a session timeline panel and downloadable redacted
+  workspace diagnostic JSON.
+- feat(pwa): show offline and update-ready states, with explicit update reload
+  instead of interrupting an active page.
+- fix(chat): consume one-shot search deep-link parameters after use so a page
+  refresh does not jump back to an old result.
+- feat(permissions): remember workspace-scoped tool or exact-operation
+  approvals across sessions.
+
 ## 1.10.3
 
 - feat(notifications): add configurable PR state sounds (#22)
