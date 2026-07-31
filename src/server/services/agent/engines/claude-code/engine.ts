@@ -26,6 +26,10 @@ type McpStdioServerConfigWithAlwaysLoad = McpStdioServerConfig & { alwaysLoad: b
  * and auto-loop are not frozen forever.
  */
 const RESULT_DRAIN_TIMEOUT_MS = 15_000
+// Claude may occasionally leave its async iterator open after its final text
+// without producing a result message. Keep a separate, conservative guard for
+// that shape; active tool/message traffic always cancels and re-arms it.
+const TEXT_IDLE_TIMEOUT_MS = 120_000
 const MAX_PENDING_USER_MESSAGES = 20
 
 function toMcpServersMap(specs: StartOptions['mcpServers']): Options['mcpServers'] | undefined {
@@ -265,6 +269,24 @@ export function createClaudeCodeEngine(): AgentEngine {
       // `result` is observed we arm a timer that force-emits `session:ended`
       // with the result's own outcome, then aborts the generator best-effort.
       let resultDrainTimer: ReturnType<typeof setTimeout> | undefined
+      let textIdleTimer: ReturnType<typeof setTimeout> | undefined
+      const clearTextIdleWatchdog = (): void => {
+        if (!textIdleTimer) return
+        clearTimeout(textIdleTimer)
+        textIdleTimer = undefined
+      }
+      const armTextIdleWatchdog = (): void => {
+        clearTextIdleWatchdog()
+        textIdleTimer = setTimeout(() => {
+          console.warn(
+            `[claude-engine] SDK stream inactive ${TEXT_IDLE_TIMEOUT_MS}ms after a text-only response — forcing session:ended`,
+          )
+          const reason = userInterrupted ? 'killed' : mapperState.sawErrorResult ? 'error' : 'completed'
+          emitSessionEnded(reason, reason === 'completed' ? 0 : null)
+          abortController.abort()
+        }, TEXT_IDLE_TIMEOUT_MS)
+        textIdleTimer.unref?.()
+      }
       const armResultDrainWatchdog = (): void => {
         if (resultDrainTimer) return
         resultDrainTimer = setTimeout(() => {
@@ -292,7 +314,15 @@ export function createClaudeCodeEngine(): AgentEngine {
               if (ev.kind === 'session:started') discoveredSessionId = ev.engineSessionId
               safeEmit(ev)
             }
+            // A plain final response is normally followed by `result`. If the
+            // SDK instead leaves the iterator parked, release the workspace
+            // after a conservative quiet period. Tool activity never arms it.
+            clearTextIdleWatchdog()
+            if (events.some((ev) => ev.kind === 'message:text') && !events.some((ev) => ev.kind === 'tool:call')) {
+              armTextIdleWatchdog()
+            }
             if ((msg as { type?: string }).type === 'result') {
+              clearTextIdleWatchdog()
               completedResponses++
               // A queued forced message starts the next response on this same SDK stream.
               if (!inputStream.hasUnansweredInput(completedResponses)) {
@@ -338,6 +368,7 @@ export function createClaudeCodeEngine(): AgentEngine {
             clearTimeout(resultDrainTimer)
             resultDrainTimer = undefined
           }
+          clearTextIdleWatchdog()
           // Drain any callback still pending (SDK terminated while awaiting an
           // answer). canUseTool's abort path covers signalled stops; this
           // covers natural iterator completion.
