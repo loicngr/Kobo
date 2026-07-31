@@ -2004,6 +2004,40 @@ describe('question notification sound (v40)', () => {
   })
 })
 
+describe('workspace-created notification settings', () => {
+  it('seeds a dedicated workspace-created sound and keeps the legacy volume', () => {
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        schemaVersion: 41,
+        global: { audioNotificationVolume: 0.35 },
+        projects: [],
+      }),
+    )
+
+    const global = getGlobalSettings()
+
+    expect(global.audioWorkspaceCreatedSound).toBe('warcraft-3-humain-travail.mp3')
+    expect(global.audioQuestionVolume).toBe(0.35)
+    expect(global.audioWorkspaceCreatedVolume).toBe(0.35)
+    expect(global.audioQuestionNotifications).toBe(true)
+    expect(global.audioWorkspaceCreatedNotifications).toBe(true)
+  })
+
+  it('allows updating the dedicated sounds and volumes', () => {
+    updateGlobalSettings({
+      audioWorkspaceCreatedSound: 'hey.mp3',
+      audioQuestionVolume: 0.4,
+      audioWorkspaceCreatedVolume: 0.65,
+    })
+
+    const global = getGlobalSettings()
+    expect(global.audioWorkspaceCreatedSound).toBe('hey.mp3')
+    expect(global.audioQuestionVolume).toBe(0.4)
+    expect(global.audioWorkspaceCreatedVolume).toBe(0.65)
+  })
+})
+
 describe('updateNetworkAccessSettings()', () => {
   it('persists the token to disk (real write path, not mocked)', () => {
     updateNetworkAccessSettings({ networkAccessEnabled: true, networkAccessToken: 'lan-secret-123' })

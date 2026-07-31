@@ -802,6 +802,7 @@ import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { loadCreatePagePrefs, saveCreatePagePrefs } from 'src/utils/create-page-prefs'
 import { buildTemplateVars, expandTemplate } from 'src/utils/expand-template'
+import { playNotificationSound } from 'src/utils/notifications'
 import { projectNameForPath } from 'src/utils/project-color'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -1675,6 +1676,13 @@ async function handleCreate() {
     }
 
     const workspace = await store.createWorkspace(payload)
+
+    if (settingsStore.global.audioWorkspaceCreatedNotifications) {
+      playNotificationSound(
+        settingsStore.global.audioWorkspaceCreatedSound,
+        settingsStore.global.audioWorkspaceCreatedVolume,
+      )
+    }
 
     // The server appends a `-<HASH>` suffix when the requested branch / path
     // collides with an existing one. Surface that so the user knows why the

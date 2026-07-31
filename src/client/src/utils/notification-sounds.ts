@@ -7,6 +7,7 @@ export interface NotificationSound {
 
 export const NOTIFICATION_SOUNDS: readonly NotificationSound[] = [
   { id: 'hey.mp3', labelKey: 'settings.notificationSoundHey' },
+  { id: 'warcraft-3-humain-travail.mp3', labelKey: 'settings.notificationSoundWorkspaceCreated' },
   { id: 'travail_termine.mp3', labelKey: 'settings.notificationSoundTravailTermine' },
   { id: 'faaah.mp3', labelKey: 'settings.notificationSoundFaaah' },
   { id: 'ca_va_peter.mp3', labelKey: 'settings.notificationSoundCaVaPeter' },
@@ -15,6 +16,7 @@ export const NOTIFICATION_SOUNDS: readonly NotificationSound[] = [
 ] as const
 
 export const DEFAULT_NOTIFICATION_SOUND = 'hey.mp3'
+export const DEFAULT_WORKSPACE_CREATED_SOUND = 'warcraft-3-humain-travail.mp3'
 
 export function isKnownSoundId(id: string): boolean {
   return NOTIFICATION_SOUNDS.some((s) => s.id === id)
