@@ -129,4 +129,26 @@ describe('playNotificationSound() volume application', () => {
 
     expect(instances).toHaveLength(0)
   })
+
+  it('queues an override with its per-event volume', async () => {
+    setActivePinia(createPinia())
+    const { notify } = await import('../utils/notifications')
+
+    notify('Question', undefined, 'w1', 'faaah.mp3', 0.42, true)
+
+    expect(instances).toHaveLength(1)
+    expect(instances[0]?.src).toContain('/sounds/faaah.mp3')
+    expect(instances[0]?.volume).toBe(0.42)
+  })
+
+  it('honors a disabled per-event audio toggle', async () => {
+    setActivePinia(createPinia())
+    const { useSettingsStore } = await import('../stores/settings')
+    useSettingsStore().global.audioNotifications = true
+    const { notify } = await import('../utils/notifications')
+
+    notify('Question', undefined, 'w1', 'faaah.mp3', 0.42, false)
+
+    expect(instances).toHaveLength(0)
+  })
 })
