@@ -51,6 +51,42 @@ export const PR_NOTIFICATION_SOUND_SETTING_KEYS = [
 export type PrNotificationSoundSettingKey = (typeof PR_NOTIFICATION_SOUND_SETTING_KEYS)[number]
 export type PrNotificationSoundSettings = Record<PrNotificationSoundSettingKey, string>
 
+export const PR_NOTIFICATION_AUDIO_CONTROL_SETTING_KEYS = [
+  'audioPrCiFailedEnabled',
+  'audioPrCiFailedVolume',
+  'audioPrCiRecoveredEnabled',
+  'audioPrCiRecoveredVolume',
+  'audioPrChangesRequestedEnabled',
+  'audioPrChangesRequestedVolume',
+  'audioPrApprovedEnabled',
+  'audioPrApprovedVolume',
+  'audioPrMergeConflictEnabled',
+  'audioPrMergeConflictVolume',
+  'audioPrReadyToMergeEnabled',
+  'audioPrReadyToMergeVolume',
+  'audioPrMergedEnabled',
+  'audioPrMergedVolume',
+] as const
+
+export type PrNotificationAudioControlSettingKey = (typeof PR_NOTIFICATION_AUDIO_CONTROL_SETTING_KEYS)[number]
+
+export type PrNotificationAudioSettings = PrNotificationSoundSettings & {
+  audioPrCiFailedEnabled: boolean
+  audioPrCiFailedVolume: number
+  audioPrCiRecoveredEnabled: boolean
+  audioPrCiRecoveredVolume: number
+  audioPrChangesRequestedEnabled: boolean
+  audioPrChangesRequestedVolume: number
+  audioPrApprovedEnabled: boolean
+  audioPrApprovedVolume: number
+  audioPrMergeConflictEnabled: boolean
+  audioPrMergeConflictVolume: number
+  audioPrReadyToMergeEnabled: boolean
+  audioPrReadyToMergeVolume: number
+  audioPrMergedEnabled: boolean
+  audioPrMergedVolume: number
+}
+
 export const DEFAULT_PR_NOTIFICATION_SOUND_SETTINGS: Readonly<PrNotificationSoundSettings> = {
   audioPrCiFailedSound: INHERIT_NOTIFICATION_SOUND,
   audioPrCiRecoveredSound: INHERIT_NOTIFICATION_SOUND,
@@ -59,6 +95,24 @@ export const DEFAULT_PR_NOTIFICATION_SOUND_SETTINGS: Readonly<PrNotificationSoun
   audioPrMergeConflictSound: INHERIT_NOTIFICATION_SOUND,
   audioPrReadyToMergeSound: INHERIT_NOTIFICATION_SOUND,
   audioPrMergedSound: INHERIT_NOTIFICATION_SOUND,
+}
+
+export const DEFAULT_PR_NOTIFICATION_AUDIO_SETTINGS: Readonly<PrNotificationAudioSettings> = {
+  ...DEFAULT_PR_NOTIFICATION_SOUND_SETTINGS,
+  audioPrCiFailedEnabled: true,
+  audioPrCiFailedVolume: 1,
+  audioPrCiRecoveredEnabled: true,
+  audioPrCiRecoveredVolume: 1,
+  audioPrChangesRequestedEnabled: true,
+  audioPrChangesRequestedVolume: 1,
+  audioPrApprovedEnabled: true,
+  audioPrApprovedVolume: 1,
+  audioPrMergeConflictEnabled: true,
+  audioPrMergeConflictVolume: 1,
+  audioPrReadyToMergeEnabled: true,
+  audioPrReadyToMergeVolume: 1,
+  audioPrMergedEnabled: true,
+  audioPrMergedVolume: 1,
 }
 
 export function isKnownSoundId(id: string): boolean {

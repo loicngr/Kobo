@@ -410,9 +410,7 @@
               </div>
               <PrNotificationSoundSettings
                 v-model="globalPrNotificationSounds"
-                :disabled="!globalAudioNotifications"
                 :general-sound="globalAudioNotificationSound"
-                :volume="globalAudioNotificationVolume"
               />
             </div>
 
@@ -2334,12 +2332,13 @@ import { useSettingsStore } from 'src/stores/settings'
 import { type Template, useTemplatesStore } from 'src/stores/templates'
 import {
   DEFAULT_NOTIFICATION_SOUND,
-  DEFAULT_PR_NOTIFICATION_SOUND_SETTINGS,
+  DEFAULT_PR_NOTIFICATION_AUDIO_SETTINGS,
   DEFAULT_WORKSPACE_CREATED_SOUND,
   NOTIFICATION_SOUNDS,
   normalizeNotificationSoundSelection,
+  PR_NOTIFICATION_AUDIO_CONTROL_SETTING_KEYS,
   PR_NOTIFICATION_SOUND_SETTING_KEYS,
-  type PrNotificationSoundSettings as PrNotificationSoundSettingsModel,
+  type PrNotificationAudioSettings as PrNotificationSoundSettingsModel,
   resolveSoundId,
 } from 'src/utils/notification-sounds'
 import { playNotificationSound } from 'src/utils/notifications'
@@ -2519,7 +2518,7 @@ const globalAudioNotificationVolume = ref(1)
 const globalAudioQuestionVolume = ref(1)
 const globalAudioWorkspaceCreatedVolume = ref(1)
 const globalPrNotificationSounds = ref<PrNotificationSoundSettingsModel>({
-  ...DEFAULT_PR_NOTIFICATION_SOUND_SETTINGS,
+  ...DEFAULT_PR_NOTIFICATION_AUDIO_SETTINGS,
 })
 const globalNotionStatusProperty = ref('')
 const globalNotionStatus = ref('')
@@ -3301,9 +3300,18 @@ function syncGlobalForm() {
   globalAudioNotificationSound.value = resolveSoundId(store.global.audioNotificationSound)
   globalAudioQuestionSound.value = resolveSoundId(store.global.audioQuestionSound)
   globalAudioWorkspaceCreatedSound.value = resolveSoundId(store.global.audioWorkspaceCreatedSound)
-  globalPrNotificationSounds.value = Object.fromEntries(
+  const prSounds = Object.fromEntries(
     PR_NOTIFICATION_SOUND_SETTING_KEYS.map((key) => [key, normalizeNotificationSoundSelection(store.global[key])]),
-  ) as PrNotificationSoundSettingsModel
+  )
+  const prAudioControls = Object.fromEntries(
+    PR_NOTIFICATION_AUDIO_CONTROL_SETTING_KEYS.map((key) => {
+      const value = store.global[key]
+      if (key.endsWith('Enabled')) return [key, typeof value === 'boolean' ? value : true]
+      const volume = Number(value)
+      return [key, Number.isFinite(volume) ? Math.max(0, Math.min(1, volume)) : 1]
+    }),
+  )
+  globalPrNotificationSounds.value = { ...prSounds, ...prAudioControls } as PrNotificationSoundSettingsModel
   const v = store.global.audioNotificationVolume
   globalAudioNotificationVolume.value = typeof v === 'number' && Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 1
   const questionVolume = store.global.audioQuestionVolume
