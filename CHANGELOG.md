@@ -4,6 +4,12 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.10.2
+
+- feat(notifications): add workspace creation sound (#21)
+- fix(questions): isolate other responses (#20)
+- fix(claude): recover idle terminal streams (#19)
+
 ## 1.10.1
 
 - fix(auto-loop): recover from interrupted sessions (#18)
