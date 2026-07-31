@@ -38,6 +38,7 @@
             @update:model-value="setRightTab"
           >
             <q-tab name="git" icon="commit" />
+            <q-tab name="timeline" icon="timeline" />
             <q-tab name="tasks" icon="checklist" />
             <q-tab v-if="subagentsTabVisible" name="subagents" icon="smart_toy" />
             <q-tab name="documents" icon="description" />
@@ -52,6 +53,9 @@
             <q-tab-panels v-model="rightTab" animated keep-alive>
               <q-tab-panel name="git" class="q-pa-none">
                 <GitPanel :workspace="store.selectedWorkspace" />
+              </q-tab-panel>
+              <q-tab-panel name="timeline" class="q-pa-none">
+                <SessionTimelinePanel v-if="store.selectedWorkspaceId" :workspace-id="store.selectedWorkspaceId" />
               </q-tab-panel>
 
               <q-tab-panel name="tasks" class="q-pa-none">
@@ -110,6 +114,7 @@
     </q-drawer>
 
     <q-page-container class="bg-dark">
+      <PwaStatusBanner />
       <router-view />
     </q-page-container>
 
@@ -123,7 +128,9 @@ import AcceptancePanel from 'src/components/AcceptancePanel.vue'
 import AgentTodosPanel from 'src/components/AgentTodosPanel.vue'
 import DocumentsPanel from 'src/components/DocumentsPanel.vue'
 import GitPanel from 'src/components/GitPanel.vue'
+import PwaStatusBanner from 'src/components/PwaStatusBanner.vue'
 import SchedulePanel from 'src/components/SchedulePanel.vue'
+import SessionTimelinePanel from 'src/components/SessionTimelinePanel.vue'
 import SubagentsPanel from 'src/components/SubagentsPanel.vue'
 import TasksPanel from 'src/components/TasksPanel.vue'
 import TerminalPanel from 'src/components/TerminalPanel.vue'
@@ -137,7 +144,7 @@ import { useDocumentsStore } from 'src/stores/documents'
 import { useLayoutStore } from 'src/stores/layout'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { cappedDrawerWidth } from 'src/utils/drawer-width'
-import { computed, onMounted, provide, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, provide, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
 // First-run onboarding tour, and the post-update "What's new" dialog.
@@ -149,7 +156,7 @@ onMounted(() => {
 })
 
 const DRAWER_TAB_KEY = 'kobo:rightTab'
-const VALID_RIGHT_TABS = ['git', 'tasks', 'subagents', 'documents', 'schedule'] as const
+const VALID_RIGHT_TABS = ['git', 'timeline', 'tasks', 'subagents', 'documents', 'schedule'] as const
 const storedRightTab = localStorage.getItem(DRAWER_TAB_KEY)
 const rightTab = ref(
   storedRightTab && (VALID_RIGHT_TABS as readonly string[]).includes(storedRightTab) ? storedRightTab : 'git',
@@ -159,6 +166,15 @@ function setRightTab(val: string) {
   rightTab.value = val
   localStorage.setItem(DRAWER_TAB_KEY, val)
 }
+
+async function onOpenDiff(event: Event) {
+  layout.setRight(true)
+  setRightTab('git')
+  await nextTick()
+  window.dispatchEvent(new CustomEvent('kobo:select-diff', { detail: (event as CustomEvent).detail }))
+}
+onMounted(() => window.addEventListener('kobo:open-diff', onOpenDiff))
+onUnmounted(() => window.removeEventListener('kobo:open-diff', onOpenDiff))
 
 // External deep-link: when the documents store signals a request to open
 // (e.g. user clicked a plan path inside a chat message), switch to the

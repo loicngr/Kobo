@@ -1,8 +1,8 @@
 import type { AgentEvent } from '../types/agent-event'
 
 export type ConversationItem =
-  | { type: 'text'; messageId: string; text: string; streaming: boolean; ts?: string }
-  | { type: 'thinking'; messageId: string; text: string; ts?: string }
+  | { type: 'text'; messageId: string; text: string; streaming: boolean; ts?: string; eventIds?: string[] }
+  | { type: 'thinking'; messageId: string; text: string; ts?: string; eventIds?: string[] }
   | {
       type: 'tool'
       toolCallId: string
@@ -10,9 +10,21 @@ export type ConversationItem =
       input: unknown
       result?: { output: unknown; isError: boolean }
       ts?: string
+      eventIds?: string[]
     }
-  | { type: 'session'; kind: 'started' | 'ended' | 'compacted'; detail?: unknown; ts?: string }
-  | { type: 'user'; content: string; sender: 'user' | 'system-prompt' | string; ts?: string }
+  | { type: 'session'; kind: 'started' | 'ended' | 'compacted'; detail?: unknown; ts?: string; eventIds?: string[] }
+  | { type: 'user'; content: string; sender: 'user' | 'system-prompt' | string; ts?: string; eventIds?: string[] }
+
+/** Return the newest usable thinking item from a normalised conversation. */
+export function getLatestThinkingItem(
+  items: ConversationItem[],
+): Extract<ConversationItem, { type: 'thinking' }> | null {
+  for (let index = items.length - 1; index >= 0; index--) {
+    const item = items[index]
+    if (item?.type === 'thinking' && item.text.trim().length > 0) return item
+  }
+  return null
+}
 
 /**
  * Fold a flat AgentEvent stream into ConversationItems.
@@ -23,11 +35,16 @@ export type ConversationItem =
  * is still running — when false, the last text message is force-closed so
  * the UI never shows a lingering spinner on a finished turn.
  */
-export function foldEvents(events: AgentEvent[], timestamps?: string[], sessionActive = true): ConversationItem[] {
+export function foldEvents(
+  events: AgentEvent[],
+  timestamps?: string[],
+  sessionActive = true,
+  eventIds?: Array<string | null>,
+): ConversationItem[] {
   const items: ConversationItem[] = []
   const textItems = new Map<
     string,
-    { type: 'text'; messageId: string; text: string; streaming: boolean; ts?: string }
+    { type: 'text'; messageId: string; text: string; streaming: boolean; ts?: string; eventIds?: string[] }
   >()
   const toolItems = new Map<
     string,
@@ -38,18 +55,21 @@ export function foldEvents(events: AgentEvent[], timestamps?: string[], sessionA
       input: unknown
       result?: { output: unknown; isError: boolean }
       ts?: string
+      eventIds?: string[]
     }
   >()
 
   for (let i = 0; i < events.length; i++) {
     const ev = events[i]
     const ts = timestamps?.[i]
+    const eventId = eventIds?.[i] ?? undefined
     switch (ev.kind) {
       case 'message:text': {
         const existing = textItems.get(ev.messageId)
         if (existing) {
           existing.text += ev.text
           existing.streaming = ev.streaming
+          if (eventId) existing.eventIds?.push(eventId)
         } else {
           const item = {
             type: 'text' as const,
@@ -57,6 +77,7 @@ export function foldEvents(events: AgentEvent[], timestamps?: string[], sessionA
             text: ev.text,
             streaming: ev.streaming,
             ts,
+            eventIds: eventId ? [eventId] : undefined,
           }
           textItems.set(ev.messageId, item)
           items.push(item)
@@ -69,7 +90,13 @@ export function foldEvents(events: AgentEvent[], timestamps?: string[], sessionA
         break
       }
       case 'message:thinking': {
-        items.push({ type: 'thinking', messageId: ev.messageId, text: ev.text, ts })
+        items.push({
+          type: 'thinking',
+          messageId: ev.messageId,
+          text: ev.text,
+          ts,
+          eventIds: eventId ? [eventId] : undefined,
+        })
         break
       }
       case 'tool:call': {
@@ -79,6 +106,7 @@ export function foldEvents(events: AgentEvent[], timestamps?: string[], sessionA
           name: ev.name,
           input: ev.input,
           ts,
+          eventIds: eventId ? [eventId] : undefined,
         }
         toolItems.set(ev.toolCallId, item)
         items.push(item)
@@ -88,6 +116,7 @@ export function foldEvents(events: AgentEvent[], timestamps?: string[], sessionA
         const existing = toolItems.get(ev.toolCallId)
         if (existing) {
           existing.result = { output: ev.output, isError: ev.isError }
+          if (eventId) existing.eventIds?.push(eventId)
         }
         break
       }
@@ -97,6 +126,7 @@ export function foldEvents(events: AgentEvent[], timestamps?: string[], sessionA
           kind: 'started',
           detail: { engineSessionId: ev.engineSessionId, model: ev.model },
           ts,
+          eventIds: eventId ? [eventId] : undefined,
         })
         break
       case 'session:ended':
@@ -105,10 +135,11 @@ export function foldEvents(events: AgentEvent[], timestamps?: string[], sessionA
           kind: 'ended',
           detail: { reason: ev.reason, exitCode: ev.exitCode },
           ts,
+          eventIds: eventId ? [eventId] : undefined,
         })
         break
       case 'session:compacted':
-        items.push({ type: 'session', kind: 'compacted', ts })
+        items.push({ type: 'session', kind: 'compacted', ts, eventIds: eventId ? [eventId] : undefined })
         break
       // Ignored categories — consumed by dedicated panels (session:compacting
       // is an ephemeral live indicator handled by the agent-stream store, never
@@ -116,6 +147,7 @@ export function foldEvents(events: AgentEvent[], timestamps?: string[], sessionA
       case 'session:compacting':
       case 'session:brainstorm-complete':
       case 'session:user-input-requested':
+      case 'mcp:status':
       case 'message:raw':
       case 'skills:discovered':
       case 'usage':
@@ -156,6 +188,7 @@ export interface UserMessage {
   content: string
   sender: string
   ts: string
+  eventIds?: string[]
 }
 
 /**
@@ -170,6 +203,7 @@ export function mergeWithUserMessages(agentItems: ConversationItem[], userMessag
     content: m.content,
     sender: m.sender,
     ts: m.ts,
+    eventIds: m.eventIds,
   }))
   const merged = [...agentItems, ...userItems]
   merged.sort((a, b) => {

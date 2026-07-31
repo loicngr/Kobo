@@ -216,15 +216,24 @@
             <!-- Activity feed display -->
             <div v-show="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.activityFeed') }}</div>
-              <q-toggle
-                :model-value="store.showVerboseSystemMessages"
-                :label="$t('settings.verboseMessages')"
-                dark
-                dense
-                color="indigo-4"
-                class="text-grey-5 text-caption"
-                @update:model-value="store.toggleVerboseSystemMessages()"
-              />
+              <div class="row items-center q-gutter-lg">
+                <q-toggle
+                  v-model="globalShowVerboseSystemMessages"
+                  :label="$t('settings.verboseMessages')"
+                  dark
+                  dense
+                  color="indigo-4"
+                  class="text-grey-5 text-caption"
+                />
+                <q-toggle
+                  v-model="globalShowThinkingBlocks"
+                  :label="$t('settings.showThinkingBlocks')"
+                  dark
+                  dense
+                  color="indigo-4"
+                  class="text-grey-5 text-caption"
+                />
+              </div>
             </div>
 
             <!-- Notifications -->
@@ -814,6 +823,20 @@ where ffmpeg</pre>
                   @click="resetFieldToDefault('reviewPromptTemplate')"
                 />
               </div>
+              <q-btn
+                flat
+                dense
+                no-caps
+                color="indigo-4"
+                icon="health_and_safety"
+                :label="$t('settings.testIntegration')"
+                :loading="integrationTestLoading === 'notion'"
+                :disable="!globalNotionEnabled || integrationTestLoading !== null"
+                @click="testIntegration('notion')"
+              />
+              <div v-if="integrationTestResult.notion" :class="['text-caption q-mt-sm', integrationTestResult.notion.ok ? 'text-positive' : 'text-negative']">
+                {{ integrationTestResult.notion.detail }} ({{ integrationTestResult.notion.durationMs }} ms)
+              </div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.prPromptHint') }}</div>
               <q-input
                 v-model="globalReviewPrompt"
@@ -953,10 +976,13 @@ where ffmpeg</pre>
               />
             </div>
 
+            <div v-show="activeTab === 'notion'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <q-toggle v-model="globalNotionEnabled" :label="$t('settings.integrationEnabled')" dark dense color="indigo-4" />
+            </div>
             <div
-              v-show="activeTab === 'notion' || activeTab === 'sentry'"
+              v-show="activeTab === 'notion'"
               data-tour="settings-card-notion"
-              class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
+              :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalNotionEnabled }]"
             >
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.mcpSelection') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.mcpSelectionHint') }}</div>
@@ -973,6 +999,29 @@ where ffmpeg</pre>
                   class="settings-input"
                 />
               </div>
+              <q-btn
+                flat
+                dense
+                no-caps
+                color="indigo-4"
+                icon="health_and_safety"
+                :label="$t('settings.testIntegration')"
+                :loading="integrationTestLoading === 'sentry'"
+                :disable="!globalSentryEnabled || integrationTestLoading !== null"
+                @click="testIntegration('sentry')"
+              />
+              <div v-if="integrationTestResult.sentry" :class="['text-caption q-mt-sm', integrationTestResult.sentry.ok ? 'text-positive' : 'text-negative']">
+                {{ integrationTestResult.sentry.detail }} ({{ integrationTestResult.sentry.durationMs }} ms)
+              </div>
+            </div>
+
+            <div v-show="activeTab === 'sentry'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <q-toggle v-model="globalSentryEnabled" :label="$t('settings.integrationEnabled')" dark dense color="indigo-4" />
+            </div>
+
+            <div v-show="activeTab === 'sentry'" :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalSentryEnabled }]">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.mcpSelection') }}</div>
+              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.mcpSelectionHint') }}</div>
               <div class="q-mb-sm">
                 <div class="field-label-sub text-caption q-mb-xs text-grey-7">{{ $t('settings.sentryMcp') }}</div>
                 <q-select
@@ -988,7 +1037,7 @@ where ffmpeg</pre>
               </div>
             </div>
 
-            <div v-if="activeTab === 'notion'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-if="activeTab === 'notion'" :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalNotionEnabled }]">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.notionStatus') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.notionStatusHint') }}</div>
               <div class="q-mb-sm">
@@ -1040,7 +1089,7 @@ where ffmpeg</pre>
             </div>
 
             <!-- Notion assignment -->
-            <div v-show="activeTab === 'notion'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-show="activeTab === 'notion'" :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalNotionEnabled }]">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.notionAssignee') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.notionAssigneeHint') }}</div>
               <div class="q-mb-sm">
@@ -1117,7 +1166,7 @@ where ffmpeg</pre>
               </div>
             </div>
 
-            <div v-if="activeTab === 'sentry'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-if="activeTab === 'sentry'" :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalSentryEnabled }]">
               <div class="text-subtitle2 q-mb-sm">{{ t('settings.sentryIntegration') }}</div>
               <div class="row items-center q-mb-sm">
                 <div class="text-subtitle2">{{ t('settings.sentryInitialPrompt') }}</div>
@@ -2524,6 +2573,35 @@ const globalNotionStatusProperty = ref('')
 const globalNotionStatus = ref('')
 const globalNotionAssigneeProperty = ref('')
 const globalNotionUserId = ref('')
+const globalShowVerboseSystemMessages = ref(false)
+const globalShowThinkingBlocks = ref(true)
+type IntegrationKey = 'notion' | 'sentry'
+interface IntegrationTestResult {
+  ok: boolean
+  durationMs: number
+  detail: string
+}
+const integrationTestLoading = ref<IntegrationKey | null>(null)
+const integrationTestResult = ref<Partial<Record<IntegrationKey, IntegrationTestResult>>>({})
+
+async function testIntegration(integration: IntegrationKey) {
+  integrationTestLoading.value = integration
+  try {
+    const response = await fetch(`/api/${integration}/test`, { method: 'POST' })
+    const body = (await response.json()) as IntegrationTestResult & { error?: string }
+    integrationTestResult.value[integration] = response.ok
+      ? body
+      : { ok: false, durationMs: 0, detail: body.error ?? `HTTP ${response.status}` }
+  } catch (error) {
+    integrationTestResult.value[integration] = {
+      ok: false,
+      durationMs: 0,
+      detail: error instanceof Error ? error.message : String(error),
+    }
+  } finally {
+    integrationTestLoading.value = null
+  }
+}
 
 interface NotionUserOption {
   id: string
@@ -2576,6 +2654,8 @@ const globalClaudePermissionMode = ref<AgentPermissionMode>('bypass')
 const globalCodexPermissionMode = ref<AgentPermissionMode>('bypass')
 const globalNotionMcpKey = ref('')
 const globalSentryMcpKey = ref('')
+const globalNotionEnabled = ref(true)
+const globalSentryEnabled = ref(true)
 const globalTags = ref<string[]>([])
 const globalBranchPrefixes = ref<string[]>([])
 const newBranchPrefix = ref('')
@@ -3229,6 +3309,10 @@ function captureGlobalSnapshot(): string {
     codexPermissionMode: globalCodexPermissionMode.value,
     notionMcpKey: globalNotionMcpKey.value,
     sentryMcpKey: globalSentryMcpKey.value,
+    notionEnabled: globalNotionEnabled.value,
+    sentryEnabled: globalSentryEnabled.value,
+    showVerboseSystemMessages: globalShowVerboseSystemMessages.value,
+    showThinkingBlocks: globalShowThinkingBlocks.value,
     tags: globalTags.value,
     branchPrefixes: globalBranchPrefixes.value,
     setupScript: globalSetupScript.value,
@@ -3340,6 +3424,10 @@ function syncGlobalForm() {
   }
   globalNotionMcpKey.value = store.global.notionMcpKey ?? ''
   globalSentryMcpKey.value = store.global.sentryMcpKey ?? ''
+  globalNotionEnabled.value = store.global.notionEnabled ?? true
+  globalSentryEnabled.value = store.global.sentryEnabled ?? true
+  globalShowVerboseSystemMessages.value = store.showVerboseSystemMessages
+  globalShowThinkingBlocks.value = store.global.showThinkingBlocks ?? true
   globalTags.value = Array.isArray(store.global.tags) ? [...store.global.tags] : []
   globalBranchPrefixes.value = Array.isArray(store.global.branchPrefixes) ? [...store.global.branchPrefixes] : []
   globalSetupScript.value = store.global.setupScript ?? ''
@@ -3612,6 +3700,9 @@ async function saveGlobal() {
       },
       notionMcpKey: globalNotionMcpKey.value,
       sentryMcpKey: globalSentryMcpKey.value,
+      notionEnabled: globalNotionEnabled.value,
+      sentryEnabled: globalSentryEnabled.value,
+      showThinkingBlocks: globalShowThinkingBlocks.value,
       tags: globalTags.value,
       branchPrefixes: globalBranchPrefixes.value,
       setupScript: globalSetupScript.value,
@@ -3640,6 +3731,7 @@ async function saveGlobal() {
       voiceTranslateToEnglish: globalVoiceTranslateToEnglish.value,
       voiceSuppressNonSpeechTokens: globalVoiceSuppressNst.value,
     })
+    store.setVerboseSystemMessages(globalShowVerboseSystemMessages.value)
     globalSavedSnapshot.value = captureGlobalSnapshot()
     $q.notify({ type: 'positive', message: t('settings.saved'), position: 'top' })
   } catch {
@@ -3835,7 +3927,7 @@ onMounted(async () => {
   await store.fetchVoiceModels()
   await store.fetchVoiceRuntime()
   syncGlobalForm()
-  loadNotionUsers().catch(() => {})
+  if (store.global.notionEnabled) loadNotionUsers().catch(() => {})
   void fetchNetwork()
 })
 

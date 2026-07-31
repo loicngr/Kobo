@@ -56,7 +56,7 @@
         v-for="(r, idx) in store.results"
         :key="`${r.workspaceId}-${r.timestamp}-${idx}`"
         class="search-result q-pa-sm q-mb-sm cursor-pointer"
-        @click="openResult(r.workspaceId)"
+        @click="openResult(r)"
       >
         <div class="row items-center q-mb-xs text-caption">
           <span class="text-grey-5 text-weight-medium">{{ r.workspaceName }}</span>
@@ -76,7 +76,7 @@
 </template>
 
 <script setup lang="ts">
-import { useSearchStore } from 'src/stores/search'
+import { type SearchResult, useSearchStore } from 'src/stores/search'
 import { useTimeAgo } from 'src/utils/formatters'
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -107,8 +107,15 @@ watch(
   },
 )
 
-function openResult(workspaceId: string): void {
-  router.push({ name: 'workspace', params: { id: workspaceId } })
+function openResult(result: SearchResult): void {
+  router.push({
+    name: 'workspace',
+    params: { id: result.workspaceId },
+    query: {
+      eventId: result.eventId,
+      ...(result.sessionId ? { session: result.sessionId } : {}),
+    },
+  })
 }
 
 function typeLabel(type: string): string {

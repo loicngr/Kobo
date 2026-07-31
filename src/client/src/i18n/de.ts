@@ -1,6 +1,7 @@
 export default {
   'model.tooltip': 'Modell, das der Agent für diesen Workspace verwendet',
   'reasoning.tooltip': 'Denkaufwand des Agenten für diesen Workspace',
+  'thinking.label': 'Überlegung',
   // Common
   'common.save': 'Speichern',
   'common.cancel': 'Abbrechen',
@@ -203,7 +204,8 @@ export default {
   'chatInput.skills': 'Skills',
   'chatInput.attachImage': 'Bild anhängen',
   'chatInput.queueBanner': 'Nachricht in Warteschlange — wird gesendet, wenn der Agent fertig ist',
-  'chatInput.forceQueue': 'Jetzt an den aktiven Agenten senden',
+  'chatInput.forceQueue': 'Senden erzwingen',
+  'chatInput.searchHistory': 'suchen',
   'chatInput.cancelQueue': 'Warteschlange abbrechen',
   'chatInput.autoLoopBanner': 'Auto-Loop läuft — beende ihn, um eine Nachricht zu senden',
   'chatInput.awaitingUserBanner': 'Der Agent wartet auf deine Antwort oben — antworte über das Fragefenster',
@@ -294,7 +296,7 @@ export default {
   'createPage.instructions': 'Zusätzliche Anweisungen (optional)...',
   'createPage.instructionsPlaceholder': 'Aufgabe beschreiben...',
   'createPage.manualHint':
-    'Kein Notion-Ticket? Fügen Sie Ihre Aufgaben und Akzeptanzkriterien manuell hinzu — sie werden dem Claude-Agent als Kontext mitgegeben.',
+    'Fügen Sie Ihre Aufgaben und Akzeptanzkriterien manuell hinzu — sie werden dem Agenten als Kontext mitgegeben.',
   'createPage.tasks': 'Aufgaben ({count})',
   'createPage.addTask': 'Aufgabe hinzufügen...',
   'createPage.acceptanceCriteria': 'Akzeptanzkriterien ({count})',
@@ -422,6 +424,20 @@ export default {
   'settings.defaultPermissionModeHint':
     'Modus bei der Erstellung eines neuen Workspaces. Plan = nur lesen, Bypass = keine Nachfragen, Strict = Edits automatisch akzeptieren mit allow-list, Interaktiv = vor jedem Tool fragen.',
   'settings.activityFeed': 'Aktivitätsfeed',
+  'settings.showThinkingBlocks': 'Denkblöcke der Agenten anzeigen',
+  'settings.testIntegration': 'Verbindung testen',
+  'pwa.offline': 'Du bist offline. Chat und Agenten benötigen den Kōbō-Server.',
+  'pwa.installReady': 'Kōbō als App installieren.',
+  'pwa.install': 'Installieren',
+  'pwa.updateReady': 'Ein Kōbō-Update ist verfügbar.',
+  'pwa.reload': 'Neu laden',
+  'chat.searchWorkspaceHistory': 'Workspace-Verlauf durchsuchen',
+  'chat.historySearch.user': 'Sie',
+  'chat.historySearch.agent': 'Agent',
+  'chat.openInGitDiff': 'Im Git-Diff öffnen',
+  'timeline.title': 'Sitzungszeitachse',
+  'timeline.export': 'Diagnose exportieren',
+  'timeline.unnamed': 'Agent-Sitzung',
   'settings.verboseMessages': 'Ausführliche Systemnachrichten anzeigen (task_progress, task_started)',
   'settings.availableVariables': 'Verfügbare Template-Variablen',
   'settings.prPromptTemplate': 'PR-Prompt-Vorlage',
@@ -1111,8 +1127,7 @@ export default {
   'settings.purgeDocsPermissionsTitle': 'Berechtigungsfehler während der Bereinigung vermeiden',
   'settings.purgeDocsPermissionsIntro':
     'Docker hinterlässt oft root-eigene Dateien in node_modules / vendor innerhalb des Worktrees. Wenn Kōbō versucht, sie zu entfernen, erhältst du EACCES / EPERM und die Bereinigung schlägt fehl. Zwei Vorbeugemöglichkeiten:',
-  'settings.purgeDocsPermissionsDocker':
-    'Konfiguriere deinen Container so, dass er als dein Host-Benutzer läuft — USER-Direktive im Dockerfile oder `user: "${UID}:${GID}"` in docker-compose (mit UID/GID in deiner Shell exportiert).',
+  'settings.purgeDocsPermissionsDocker': `Konfiguriere deinen Container so, dass er als dein Host-Benutzer läuft — USER-Direktive im Dockerfile oder \`user: "\${UID}:\${GID}"\` in docker-compose (mit UID/GID in deiner Shell exportiert).`,
   'settings.purgeDocsPermissionsAcl':
     'Bereite das Worktrees-Root mit einer Standard-ACL vor — Sicherheitsnetz, das in den MEISTEN Fällen funktioniert (ext4/btrfs/xfs + Standard-Docker-Bind-Mount). Jede neue Datei erbt dann einen Zugriffseintrag für deinen Benutzer, zusätzlich zum nominalen Besitzer:',
   'settings.purgeDocsPermissionsAclCommand': '  setfacl -d -m u:$(whoami):rwX [worktrees-root]',
@@ -1237,6 +1252,8 @@ export default {
   'health.integrationsTitle': 'Integrationen',
   'health.integrationConfigured': 'konfiguriert',
   'health.integrationMissing': 'nicht konfiguriert',
+  'health.integrationDisabled': 'deaktiviert',
+  'settings.integrationEnabled': 'Integration aktivieren',
   'health.activeTitle': 'Aktiver Zustand',
   'health.activeQuotaBackoffs': 'Ausstehende Quota-Backoffs',
   'health.activeWakeups': 'Geplante Aufweckungen',
@@ -1339,9 +1356,16 @@ export default {
   // Interactive permission request panel
   'permissionRequest.title': 'Der Agent möchte ein Tool verwenden',
   'permissionRequest.allow': 'Erlauben',
+  'permissionRequest.allowOnce': 'Einmal erlauben',
+  'permissionRequest.allowTurn': 'Diesen Zug erlauben',
+  'permissionRequest.allowOperation': 'Diese Aktion immer erlauben',
+  'permissionRequest.allowTool': 'Dieses Tool immer erlauben',
   'permissionRequest.deny': 'Ablehnen',
   'permissionRequest.tool': 'Tool',
   'permissionRequest.input': 'Eingabe',
+  'permissionRequest.rawInput': 'Technische Details',
+  'permissionRequest.collapse': 'Berechtigungsfenster einklappen',
+  'permissionRequest.expand': 'Berechtigungsfenster ausklappen',
   'permissionRequest.denied': 'vom Nutzer abgelehnt',
 
   'workspaceStatus.awaitingUser': 'wartet auf deine Antwort',

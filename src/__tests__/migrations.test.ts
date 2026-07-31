@@ -23,6 +23,7 @@ describe('runMigrations(db)', () => {
     expect(tableNames).toContain('tasks')
     expect(tableNames).toContain('agent_sessions')
     expect(tableNames).toContain('ws_events')
+    expect(tableNames).toContain('workspace_permission_rules')
     expect(tableNames).toContain('schema_migrations')
     expect(tableNames).not.toContain('schema_version')
     db.close()
@@ -41,8 +42,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 31', () => {
-    expect(SCHEMA_VERSION).toBe(31)
+  it('exporte SCHEMA_VERSION = 32', () => {
+    expect(SCHEMA_VERSION).toBe(32)
   })
 
   it('migration v17 unifies legacy permission_mode + permission_profile into agent_permission_mode', () => {

@@ -2,6 +2,8 @@ import { getDb } from '../db/index.js'
 
 /** A single search hit returned by `searchEvents`. */
 export interface SearchResult {
+  eventId: string
+  sessionId: string | null
   workspaceId: string
   workspaceName: string
   archived: boolean
@@ -65,7 +67,9 @@ function buildSnippet(text: string, matchIndex: number, query: string): string {
 }
 
 interface Row {
+  id: string
   workspace_id: string
+  session_id: string | null
   workspace_name: string
   archived_at: string | null
   type: string
@@ -100,7 +104,7 @@ export function searchEvents(query: string, options: SearchOptions = {}): Search
 
   const rows = db
     .prepare(
-      `SELECT e.workspace_id, e.type, e.created_at, e.payload,
+      `SELECT e.id, e.workspace_id, e.session_id, e.type, e.created_at, e.payload,
               w.name AS workspace_name, w.archived_at
        FROM ws_events e
        JOIN workspaces w ON e.workspace_id = w.id
@@ -128,6 +132,8 @@ export function searchEvents(query: string, options: SearchOptions = {}): Search
     if (idx < 0) continue
 
     results.push({
+      eventId: row.id,
+      sessionId: row.session_id,
       workspaceId: row.workspace_id,
       workspaceName: row.workspace_name,
       archived: row.archived_at !== null,

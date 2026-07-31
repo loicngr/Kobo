@@ -2,7 +2,8 @@
   <div
     ref="cardEl"
     class="turn-card"
-    :class="{ 'turn-card--user': turn.speaker === 'user' }"
+    :class="{ 'turn-card--user': turn.speaker === 'user', 'turn-card--highlighted': highlighted }"
+    :data-event-ids="eventIds"
     :style="{ '--turn-accent': header.accent }"
   >
     <div class="turn-header">
@@ -61,6 +62,7 @@ import UserMessageItem from './items/UserMessageItem.vue'
 
 const props = defineProps<{
   turn: Turn
+  highlighted?: boolean
 }>()
 const emit = defineEmits<{
   /** Emitted by the "scroll to top of this message" button — detail carries
@@ -131,6 +133,7 @@ function formatTime(iso?: string, withSeconds = false): string {
 }
 
 const timeLabel = computed(() => formatTime(props.turn.ts))
+const eventIds = computed(() => props.turn.items.flatMap((item) => item.eventIds ?? []).join(' '))
 
 // ISO timestamp of the last item in the turn — reflects when the card was
 // most recently updated (new tool call, streaming text, etc.).
@@ -176,6 +179,13 @@ const actionCount = computed(() => props.turn.items.filter((i) => i.type === 'to
      width. Children use word-break / text-overflow to wrap. */
   min-width: 0;
   max-width: 100%;
+}
+.turn-card--highlighted {
+  animation: search-highlight 1.8s ease-out;
+}
+@keyframes search-highlight {
+  0%, 45% { box-shadow: 0 0 0 2px rgba(129, 140, 248, 0.95), 0 0 22px rgba(129, 140, 248, 0.45); }
+  100% { box-shadow: none; }
 }
 .turn-header {
   display: flex;

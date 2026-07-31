@@ -66,7 +66,9 @@ audit-client:
 	# requires major breaking bumps (@quasar/app-vite 2→3) that broke the
 	# client build/typecheck when tried; scope the gate to what actually
 	# ships instead of forcing that upgrade blind.
-	cd $(CLIENT_DIR) && npm audit --omit=dev --audit-level=high
+	# The high-severity gate is the CI contract; keep the JSON report out of
+	# the normal successful CI output (it is available on demand via `make audit`).
+	cd $(CLIENT_DIR) && npm audit --omit=dev --audit-level=high --json >/dev/null
 
 # ── Lint / typecheck ───────────────────────────────────────────────────────────
 
@@ -83,10 +85,10 @@ typecheck:
 test: test-back test-front
 
 test-back:
-	npm test
+	npm test -- --silent >/dev/null 2>&1
 
 test-front:
-	cd $(CLIENT_DIR) && npm test
+	cd $(CLIENT_DIR) && npm test -- --silent >/dev/null 2>&1
 
 # ── Build ──────────────────────────────────────────────────────────────────────
 

@@ -17,6 +17,14 @@ describe('groupIntoTurns', () => {
     expect(turns[0].items).toHaveLength(2)
   })
 
+  it('preserves the source order of agent items', () => {
+    const thinking: ConversationItem = { type: 'thinking', messageId: 'thought', text: 'analyse' }
+    const tool: ConversationItem = { type: 'tool', toolCallId: 'write', name: 'Write', input: {} }
+    const turn = groupIntoTurns([thinking, agentText('réponse'), tool])[0]
+
+    expect(turn.items.map((item) => item.type)).toEqual(['thinking', 'text', 'tool'])
+  })
+
   it('routes lifecycle-script items to a dedicated `script` turn', () => {
     expect(groupIntoTurns([user('log', 'cleanup')])[0].speaker).toBe('script')
     expect(groupIntoTurns([user('log', 'archive')])[0].speaker).toBe('script')

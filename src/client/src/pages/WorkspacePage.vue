@@ -283,6 +283,12 @@
     <AgentErrorBanner v-if="selectedId" :workspace-id="selectedId" />
     <StaleSessionBanner v-if="selectedId" :workspace-id="selectedId" />
     <QuotaBackoffBanner v-if="selectedId" :workspace-id="selectedId" />
+    <WorkspaceHistorySearch
+      v-if="selectedId && historySearchOpen"
+      :key="selectedId"
+      :workspace-id="selectedId"
+      @close="historySearchOpen = false"
+    />
 
     <!-- Activity Feed with Suspense -->
     <Suspense v-if="selectedId">
@@ -299,6 +305,7 @@
     <WakeupBanner />
     <AskUserQuestionPanel v-if="selectedId" :workspace-id="selectedId" />
     <PermissionRequestPanel v-if="selectedId" :workspace-id="selectedId" />
+    <LatestThinkingPanel v-if="selectedId" :workspace-id="selectedId" />
 
     <!-- Chat Input — pinned at bottom -->
     <ChatInput
@@ -346,7 +353,7 @@ import { useWorkspaceStore } from 'src/stores/workspace'
 import { copyToClipboard } from 'src/utils/clipboard'
 import { useTimeAgo } from 'src/utils/formatters'
 import { isBusyStatus } from 'src/utils/workspace-status'
-import { computed, defineAsyncComponent, onMounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -361,10 +368,12 @@ import AgentErrorBanner from 'src/components/AgentErrorBanner.vue'
 import AskUserQuestionPanel from 'src/components/AskUserQuestionPanel.vue'
 import AutoLoopChip from 'src/components/AutoLoopChip.vue'
 import ChatInput from 'src/components/ChatInput.vue'
+import LatestThinkingPanel from 'src/components/LatestThinkingPanel.vue'
 import PermissionRequestPanel from 'src/components/PermissionRequestPanel.vue'
 import QuotaBackoffBanner from 'src/components/QuotaBackoffBanner.vue'
 import StaleSessionBanner from 'src/components/StaleSessionBanner.vue'
 import WakeupBanner from 'src/components/WakeupBanner.vue'
+import WorkspaceHistorySearch from 'src/components/WorkspaceHistorySearch.vue'
 
 const $q = useQuasar()
 const store = useWorkspaceStore()
@@ -379,7 +388,14 @@ function statusLabel(status: string): string {
 
 const starting = ref(false)
 const stopping = ref(false)
+const historySearchOpen = ref(false)
 const pendingWorkspaceUpdates = new Set<Promise<unknown>>()
+
+function onWorkspaceShortcut(event: KeyboardEvent) {
+  if (!event.ctrlKey || event.key.toLowerCase() !== 'f') return
+  event.preventDefault()
+  historySearchOpen.value = true
+}
 
 // True when the workspace has a brainstorm prompt waiting to be replayed —
 // happens when the setup script crashed at creation time and the agent
@@ -689,6 +705,7 @@ async function handleCreateSession() {
 }
 
 onMounted(() => {
+  window.addEventListener('keydown', onWorkspaceShortcut)
   const id = route.params.id as string | undefined
   if (id) {
     store.selectWorkspace(id)
@@ -701,6 +718,10 @@ onMounted(() => {
   if (sessionParam) {
     store.selectSession(sessionParam)
   }
+})
+
+onUnmounted(() => {
+  window.removeEventListener('keydown', onWorkspaceShortcut)
 })
 
 watch(

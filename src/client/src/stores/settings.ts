@@ -139,6 +139,9 @@ interface GlobalSettings {
   defaultPermissionModeByEngine: Record<string, string>
   notionMcpKey: string
   sentryMcpKey: string
+  notionEnabled: boolean
+  sentryEnabled: boolean
+  showThinkingBlocks: boolean
   tags: string[]
   /**
    * User-managed git branch prefixes for the workspace creation page. Stored
@@ -236,6 +239,9 @@ export const useSettingsStore = defineStore('settings', {
       defaultPermissionModeByEngine: { 'claude-code': 'plan', codex: 'plan' } as Record<string, string>,
       notionMcpKey: '',
       sentryMcpKey: '',
+      notionEnabled: true,
+      sentryEnabled: true,
+      showThinkingBlocks: true,
       tags: [],
       branchPrefixes: [],
       setupScript: '',
@@ -361,8 +367,12 @@ export const useSettingsStore = defineStore('settings', {
     },
 
     toggleVerboseSystemMessages() {
-      this.showVerboseSystemMessages = !this.showVerboseSystemMessages
-      localStorage.setItem('kobo:showVerboseSystemMessages', String(this.showVerboseSystemMessages))
+      this.setVerboseSystemMessages(!this.showVerboseSystemMessages)
+    },
+
+    setVerboseSystemMessages(value: boolean) {
+      this.showVerboseSystemMessages = value
+      localStorage.setItem('kobo:showVerboseSystemMessages', String(value))
     },
 
     async deleteProject(projectPath: string) {

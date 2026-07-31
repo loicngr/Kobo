@@ -171,6 +171,7 @@ export type AgentEvent =
       costUsd?: number
     }
   | { kind: 'rate_limit'; info: RateLimitInfo }
+  | { kind: 'mcp:status'; serverName: string; status: 'starting' | 'ready' | 'error'; message?: string }
   // Errors
   | {
       kind: 'error'

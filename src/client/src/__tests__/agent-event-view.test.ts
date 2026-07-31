@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest'
-import { type ConversationItem, foldEvents, mergeWithUserMessages } from '../services/agent-event-view.js'
+import {
+  type ConversationItem,
+  foldEvents,
+  getLatestThinkingItem,
+  mergeWithUserMessages,
+} from '../services/agent-event-view.js'
 import type { AgentEvent } from '../types/agent-event'
 
 describe('foldEvents', () => {
@@ -59,6 +64,18 @@ describe('foldEvents', () => {
       { kind: 'error', category: 'other', message: 'x' },
     ])
     expect(items).toEqual([])
+  })
+})
+
+describe('getLatestThinkingItem', () => {
+  it('returns the last non-empty thinking item', () => {
+    const result = getLatestThinkingItem([
+      { type: 'thinking', messageId: 'first', text: 'First' },
+      { type: 'thinking', messageId: 'blank', text: '   ' },
+      { type: 'thinking', messageId: 'last', text: 'Last' },
+    ])
+
+    expect(result?.messageId).toBe('last')
   })
 })
 

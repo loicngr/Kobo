@@ -12,6 +12,8 @@ export interface HandleServerRequestArgs {
   params: unknown
   emit: (ev: AgentEvent) => void
   register: (callId: string, pending: PendingApproval) => void
+  respond?: (id: number | string, result: unknown) => void
+  autoApprove?: (toolName: string, payload: unknown) => boolean
   /**
    * Optional respondError hook used by `handleServerRequest` to immediately
    * decline server requests we cannot satisfy (e.g. MCP elicitation). Without
@@ -21,7 +23,7 @@ export interface HandleServerRequestArgs {
 }
 
 export function handleServerRequest(args: HandleServerRequestArgs): boolean {
-  const { method, params, requestId, emit, register, respondError } = args
+  const { method, params, requestId, emit, register, respondError, respond, autoApprove } = args
   const p = (params ?? {}) as Record<string, unknown>
   const callId = typeof p.callId === 'string' ? p.callId : `srv_${requestId}`
 
@@ -37,25 +39,35 @@ export function handleServerRequest(args: HandleServerRequestArgs): boolean {
   // (`execCommandApproval`, `applyPatchApproval`) are kept for compat with
   // older Codex CLI builds that haven't transitioned to the v2 namespace.
   if (method === 'item/commandExecution/requestApproval' || method === 'execCommandApproval') {
+    const payload = { command: p.command, cwd: p.cwd, reason: p.reason }
+    if (autoApprove?.('Bash', payload)) {
+      respond?.(requestId, { decision: 'accept' })
+      return true
+    }
     register(callId, { requestId, kind: 'command', payload: p })
     emit({
       kind: 'session:user-input-requested',
       requestKind: 'permission',
       toolCallId: callId,
       toolName: 'Bash',
-      payload: { command: p.command, cwd: p.cwd, reason: p.reason },
+      payload,
     })
     return true
   }
 
   if (method === 'item/fileChange/requestApproval' || method === 'applyPatchApproval') {
+    const payload = { changes: p.changes, reason: p.reason }
+    if (autoApprove?.('Edit', payload)) {
+      respond?.(requestId, { decision: 'accept' })
+      return true
+    }
     register(callId, { requestId, kind: 'file_change', payload: p })
     emit({
       kind: 'session:user-input-requested',
       requestKind: 'permission',
       toolCallId: callId,
       toolName: 'Edit',
-      payload: { changes: p.changes, reason: p.reason },
+      payload,
     })
     return true
   }

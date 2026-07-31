@@ -150,10 +150,10 @@ export function getChangelogPath(): string {
 }
 
 /**
- * Absolute path to the built Quasar SPA (src/client/dist/spa). Returns null
+ * Absolute path to the built Quasar PWA (src/client/dist/pwa). Returns null
  * if the SPA has not been built yet.
  */
 export function getClientSpaPath(): string | null {
-  const spa = getPackageAssetPath('src', 'client', 'dist', 'spa')
-  return fs.existsSync(spa) ? spa : null
+  const pwa = getPackageAssetPath('src', 'client', 'dist', 'pwa')
+  return fs.existsSync(pwa) ? pwa : null
 }

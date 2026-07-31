@@ -30,6 +30,32 @@ export interface SentryMcpConfig {
   env: Record<string, string>
 }
 
+export interface IntegrationTestResult {
+  ok: boolean
+  durationMs: number
+  detail: string
+}
+
+/** Lightweight MCP/auth smoke test; does not access or mutate an issue. */
+export async function testSentryConnection(): Promise<IntegrationTestResult> {
+  const startedAt = Date.now()
+  const global = getGlobalSettings()
+  const config = readSentryMcpConfig(global.sentryMcpKey)
+  const mcpProcess = spawnMcpProcess(config.command, config.args, config.env)
+  try {
+    await initializeMcp(mcpProcess)
+    await callMcpTool(mcpProcess, 'whoami', {})
+    return {
+      ok: true,
+      durationMs: Date.now() - startedAt,
+      detail: 'MCP connection and Sentry authentication succeeded',
+    }
+  } finally {
+    mcpProcess.stdin?.end()
+    mcpProcess.kill()
+  }
+}
+
 const SENTRY_CONFIG_ERROR =
   "Sentry MCP server not configured in ~/.claude.json — add an enabled 'sentry' entry under mcpServers"
 

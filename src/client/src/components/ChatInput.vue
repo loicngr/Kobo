@@ -210,7 +210,9 @@
     </div>
     <div class="chat-hint row items-center text-caption text-grey-8">
       <div>
-        <kbd>Enter</kbd> {{ $t('common.send') }} <span class="q-mx-xs">&middot;</span> <kbd>Shift+Enter</kbd> {{ $t('common.newLine') }} <span class="q-mx-xs">&middot;</span> <kbd>↑↓</kbd> {{ $t('common.history') }} <span class="q-mx-xs">&middot;</span> <kbd>@</kbd> {{ $t('chatInput.fileSearchHint') }}
+        <kbd>Enter</kbd> {{ $t('common.send') }} <span class="q-mx-xs">&middot;</span> <kbd>Ctrl+Enter</kbd> {{ $t('chatInput.forceQueue') }}
+        <span class="q-mx-xs">&middot;</span> <kbd>Shift+Enter</kbd> / <kbd>Ctrl+J</kbd> {{ $t('common.newLine') }}
+        <span class="q-mx-xs">&middot;</span> <kbd>Ctrl+F</kbd> {{ $t('chatInput.searchHistory') }} <span class="q-mx-xs">&middot;</span> <kbd>↑↓</kbd> {{ $t('common.history') }} <span class="q-mx-xs">&middot;</span> <kbd>@</kbd> {{ $t('chatInput.fileSearchHint') }}
       </div>
       <q-space />
       <div v-if="isTranscribing" class="row items-center text-caption text-amber-6 q-mr-sm">
@@ -1021,6 +1023,22 @@ function onVisibilityChange() {
 }
 
 function onKeydown(event: KeyboardEvent) {
+  if (event.ctrlKey && event.key === 'Enter' && isQueued.value && canForceQueuedMessage.value) {
+    event.preventDefault()
+    forceQueuedMessage()
+    return
+  }
+
+  if (event.ctrlKey && event.key.toLowerCase() === 'j') {
+    event.preventDefault()
+    const textarea = event.target as HTMLTextAreaElement | null
+    const start = textarea?.selectionStart ?? message.value.length
+    const end = textarea?.selectionEnd ?? start
+    message.value = `${message.value.slice(0, start)}\n${message.value.slice(end)}`
+    nextTick(() => textarea?.setSelectionRange(start + 1, start + 1))
+    return
+  }
+
   if (showFiles.value && fileMatches.value.length > 0) {
     if (event.key === 'ArrowDown') {
       event.preventDefault()

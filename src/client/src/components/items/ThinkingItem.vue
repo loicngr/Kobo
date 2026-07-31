@@ -4,14 +4,21 @@
       v-if="needsExpand"
       dense
       dense-toggle
-      :label="preview"
+      default-opened
+      class="thinking-expansion"
       header-class="text-grey-5 text-caption"
       style="font-style: italic;"
     >
+      <template #header>
+        <div class="thinking-label row items-center no-wrap">
+          <q-icon name="psychology" size="14px" class="q-mr-xs" />
+          <span>{{ t('thinking.label') }}</span>
+        </div>
+      </template>
       <!-- eslint-disable-next-line vue/no-v-html -->
       <div class="q-py-xs markdown-thinking" v-html="html" />
     </q-expansion-item>
-    <span v-else style="white-space: pre-wrap;">{{ item.text }}</span>
+    <span v-else style="white-space: pre-wrap;"><q-icon name="psychology" size="14px" class="q-mr-xs" />{{ item.text }}</span>
   </div>
 </template>
 
@@ -19,10 +26,11 @@
 import type { ConversationItem } from 'src/services/agent-event-view'
 import { renderChatMarkdown } from 'src/utils/render-chat-markdown'
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{ item: Extract<ConversationItem, { type: 'thinking' }> }>()
+const { t } = useI18n()
 
-const preview = computed(() => props.item.text.trim().slice(0, 100))
 const hasContent = computed(() => props.item.text.trim().length > 0)
 const needsExpand = computed(() => props.item.text.trim().length > 100)
 
@@ -42,5 +50,8 @@ const html = computed(() => {
   background: rgba(255, 255, 255, 0.08);
   padding: 0.1em 0.3em;
   border-radius: 3px;
+}
+.thinking-expansion :deep(.q-item__section--side) {
+  margin-left: auto;
 }
 </style>

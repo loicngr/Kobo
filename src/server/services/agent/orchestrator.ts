@@ -19,6 +19,7 @@ import { getEffectiveSettings } from '../settings-service.js'
 import { refreshNow } from '../usage/poller.js'
 import * as wakeupService from '../wakeup-service.js'
 import { emit, emitEphemeral } from '../websocket-service.js'
+import * as permissionPolicyService from '../workspace-permission-policy-service.js'
 import {
   getWorkspace as getWs,
   markWorkspaceUnread,
@@ -676,6 +677,10 @@ function handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent
     taskStateSnapshot.delete(workspaceId)
 
     clearPendingForSession(workspaceId, agentSessionId)
+    // A completed/failed SDK session cannot resolve canUseTool anymore. Drop
+    // its persisted prompts too, otherwise a reconnect resurrects a panel
+    // whose backend callback has already been discarded.
+    purgeAllPersistedUserInputRequests(workspaceId, agentSessionId)
 
     // Must run BEFORE autoLoopService.onSessionEnded → spawnNextIteration →
     // startAgent, otherwise startAgent throws "Agent already running" because
@@ -848,6 +853,8 @@ export function startAgent(
   existingSessionId?: string,
   reasoningEffort?: string,
 ): StartAgentResult {
+  // "For this turn" never survives a new agent session.
+  permissionPolicyService.clearTurnPermissions(workspaceId)
   // Zombie detection: an SDK iterator hung on a never-resolved canUseTool
   // callback can leave its controller in the map after the workspace is
   // logically idle. Evict it instead of refusing the new session.
@@ -1154,7 +1161,12 @@ export async function answerPendingQuestion(
  */
 export async function answerPendingPermission(
   workspaceId: string,
-  decision: { toolCallId: string; decision: 'allow' | 'deny'; reason?: string },
+  decision: {
+    toolCallId: string
+    decision: 'allow' | 'deny'
+    reason?: string
+    scope?: 'once' | 'turn' | 'operation' | 'tool'
+  },
 ): Promise<void> {
   const head = peekPending(workspaceId)
   if (!head) {
@@ -1194,6 +1206,20 @@ export async function answerPendingPermission(
     decision.decision === 'allow'
       ? ({ kind: 'permission-allow' } as const)
       : ({ kind: 'permission-deny', reason: decision.reason } as const)
+  if (decision.decision === 'allow' && (decision.scope === 'operation' || decision.scope === 'tool')) {
+    permissionPolicyService.createWorkspacePermissionRule(
+      workspaceId,
+      { engine: (ws as { engine?: string }).engine ?? 'claude-code', toolName: head.toolName, payload: head.toolInput },
+      decision.scope,
+    )
+  }
+  if (decision.decision === 'allow' && decision.scope === 'turn') {
+    permissionPolicyService.allowPermissionForTurn(workspaceId, {
+      engine: (ws as { engine?: string }).engine ?? 'claude-code',
+      toolName: head.toolName,
+      payload: head.toolInput,
+    })
+  }
   const resolved = engineProcess.resolvePendingUserInput(decision.toolCallId, response)
   if (!resolved) {
     throw new Error(`No pending callback for toolCallId '${decision.toolCallId}'`)

@@ -41,7 +41,7 @@ export function loadCreatePagePrefs(): CreatePagePrefs {
     const entries = Object.entries(raw.reasoningEffortByModel).filter(
       ([model, effort]) => model.length > 0 && typeof effort === 'string' && effort.length > 0,
     )
-    out.reasoningEffortByModel = Object.fromEntries(entries)
+    out.reasoningEffortByModel = Object.fromEntries(entries) as Record<string, string>
   }
   return out
 }

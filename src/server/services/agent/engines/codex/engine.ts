@@ -1,4 +1,6 @@
 import { getPackageVersion } from '../../../../utils/paths.js'
+import { isWorkspacePermissionAllowed } from '../../../workspace-permission-policy-service.js'
+import { createStreamingBatcher } from '../../streaming-batcher.js'
 import type { AgentEngine, AgentEvent, EngineProcess, StartOptions } from '../types.js'
 import { CODEX_CAPABILITIES } from './capabilities.js'
 import { createAppServerClient } from './client.js'
@@ -23,6 +25,22 @@ import type {
 } from './protocol/types.js'
 import { buildResponseForResolve, handleServerRequest, type PendingApproval } from './server-requests.js'
 import { spawnAppServer } from './spawn.js'
+import { createTurnLiveness } from './turn-liveness.js'
+
+/** Long enough for normal tool work, short enough to recover a lost turn event. */
+export const CODEX_TURN_IDLE_TIMEOUT_MS = 120_000
+export const CODEX_GRACEFUL_INTERRUPT_TIMEOUT_MS = 3_000
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+class CodexTurnTimeoutError extends Error {
+  constructor() {
+    super('Codex stopped reporting activity for this turn')
+    this.name = 'CodexTurnTimeoutError'
+  }
+}
 
 /**
  * Heuristic for detecting a stale/expired thread id on `thread/resume`.
@@ -57,14 +75,17 @@ export function createCodexEngine(): AgentEngine {
       let discoveredSessionId: string | undefined = options.resumeFromEngineSessionId
       let activeTurnId: string | undefined
       let steerChain: Promise<void> = Promise.resolve()
+      let gracefulInterruptPromise: Promise<void> | undefined
 
-      const safeEmit = (ev: AgentEvent): void => {
+      const emitDirect = (ev: AgentEvent): void => {
         try {
           onEvent(ev)
         } catch (err) {
           console.error('[codex-engine] onEvent handler threw:', err)
         }
       }
+      const streamingBatcher = createStreamingBatcher(emitDirect)
+      const safeEmit = (ev: AgentEvent): void => streamingBatcher.push(ev)
 
       const child = spawnAppServer({ cwd: options.workingDir, signal: abortController.signal })
 
@@ -86,6 +107,14 @@ export function createCodexEngine(): AgentEngine {
         resolveTurnDone = resolve
         rejectTurnDone = reject
       })
+      const turnLiveness = createTurnLiveness({
+        timeoutMs: CODEX_TURN_IDLE_TIMEOUT_MS,
+        onTimeout() {
+          mapperState.sawErrorResult = true
+          safeEmit({ kind: 'error', category: 'other', message: 'Codex stopped reporting activity for this turn' })
+          rejectTurnDone(new CodexTurnTimeoutError())
+        },
+      })
       abortController.signal.addEventListener('abort', () => {
         const err = new Error('AbortError')
         err.name = 'AbortError'
@@ -98,9 +127,24 @@ export function createCodexEngine(): AgentEngine {
         clientInfo: { name: 'kobo', version: getPackageVersion() },
 
         onNotification(method: string, params: unknown) {
+          turnLiveness.activity()
           // Ignored notifications — harmless bookkeeping by the server
+          if (method === 'mcpServer/startupStatus/updated') {
+            const status = (params ?? {}) as Record<string, unknown>
+            const rawStatus = String(status.status ?? status.state ?? 'starting').toLowerCase()
+            const normalized =
+              rawStatus.includes('error') || rawStatus.includes('fail')
+                ? 'error'
+                : rawStatus.includes('ready') || rawStatus.includes('running')
+                  ? 'ready'
+                  : 'starting'
+            const serverName = String(status.serverName ?? status.name ?? status.id ?? 'MCP')
+            const rawMessage = typeof status.message === 'string' ? status.message : undefined
+            const message = rawMessage?.replace(/(token|api[_-]?key|secret)\s*[:=]\s*\S+/gi, '$1=[redacted]')
+            safeEmit({ kind: 'mcp:status', serverName, status: normalized, message })
+            return
+          }
           if (
-            method === 'mcpServer/startupStatus/updated' ||
             method === 'thread/started' ||
             method === 'thread/status/changed' ||
             method === 'remoteControl/status/changed' ||
@@ -183,8 +227,12 @@ export function createCodexEngine(): AgentEngine {
             emit: safeEmit,
             register(callId, pending) {
               pendingByCallId.set(callId, pending)
+              turnLiveness.pause()
             },
             respondError: (reqId, code, message) => client.peer.respondError(reqId, code, message),
+            respond: (reqId, result) => client.peer.respond(reqId, result),
+            autoApprove: (toolName, payload) =>
+              isWorkspacePermissionAllowed(options.workspaceId, { engine: 'codex', toolName, payload }),
           })
         },
 
@@ -227,8 +275,10 @@ export function createCodexEngine(): AgentEngine {
             collaborationMode,
           })
           activeTurnId = initialTurn.turnId
+          turnLiveness.start()
 
           await turnDonePromise
+          turnLiveness.stop()
 
           const reason: 'error' | 'killed' | 'completed' = mapperState.sawErrorResult
             ? 'error'
@@ -241,6 +291,7 @@ export function createCodexEngine(): AgentEngine {
             exitCode: reason === 'completed' ? 0 : null,
           })
         } catch (err) {
+          turnLiveness.stop()
           const error = err as Error
           const message = error.message ?? String(err)
           const isAbort = userInterrupted || error.name === 'AbortError' || abortController.signal.aborted
@@ -248,6 +299,8 @@ export function createCodexEngine(): AgentEngine {
 
           if (isAbort) {
             safeEmit({ kind: 'session:ended', reason: 'killed', exitCode: null })
+          } else if (error.name === 'CodexTurnTimeoutError') {
+            safeEmit({ kind: 'session:ended', reason: 'error', exitCode: null })
           } else if (QUOTA_PATTERN.test(message)) {
             tryEmitQuota(mapperState, safeEmit, message)
             safeEmit({ kind: 'session:ended', reason: 'error', exitCode: null })
@@ -259,6 +312,8 @@ export function createCodexEngine(): AgentEngine {
             safeEmit({ kind: 'session:ended', reason: 'error', exitCode: null })
           }
         } finally {
+          turnLiveness.stop()
+          streamingBatcher.close()
           iteratorRunning = false
           client.close()
           try {
@@ -297,13 +352,21 @@ export function createCodexEngine(): AgentEngine {
         },
         interrupt() {
           userInterrupted = true
-          abortController.abort()
-          if (discoveredSessionId) {
-            client.interruptTurn({ threadId: discoveredSessionId }).catch(() => {})
-          }
+          if (gracefulInterruptPromise) return
+          gracefulInterruptPromise = (async () => {
+            if (discoveredSessionId) {
+              await Promise.race([
+                client.interruptTurn({ threadId: discoveredSessionId }).catch(() => {}),
+                wait(CODEX_GRACEFUL_INTERRUPT_TIMEOUT_MS),
+              ])
+            }
+            await Promise.race([turnDonePromise.catch(() => {}), wait(CODEX_GRACEFUL_INTERRUPT_TIMEOUT_MS)])
+            if (iteratorRunning) abortController.abort()
+          })()
         },
         async stop() {
-          abortController.abort()
+          engineProcess.interrupt()
+          await gracefulInterruptPromise
           try {
             await iteratorPromise
           } catch {
@@ -319,6 +382,7 @@ export function createCodexEngine(): AgentEngine {
           const pending = pendingByCallId.get(callId)
           if (!pending) return false
           pendingByCallId.delete(callId)
+          turnLiveness.resume()
           const result = buildResponseForResolve(pending, response)
           client.peer.respond(pending.requestId, result)
           return true

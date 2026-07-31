@@ -81,8 +81,8 @@ interface HealthReport {
     orphaned: number
   }
   integrations: {
-    notion: { configured: boolean }
-    sentry: { configured: boolean }
+    notion: { configured: boolean; enabled: boolean }
+    sentry: { configured: boolean; enabled: boolean }
     editor: { configured: boolean }
   }
   active: {
@@ -269,8 +269,8 @@ app.get('/report', (c) => {
     },
     agentSessions: { orphaned },
     integrations: {
-      notion: { configured: Boolean(healthGlobalSettings.notionMcpKey) },
-      sentry: { configured: Boolean(healthGlobalSettings.sentryMcpKey) },
+      notion: { configured: Boolean(healthGlobalSettings.notionMcpKey), enabled: healthGlobalSettings.notionEnabled },
+      sentry: { configured: Boolean(healthGlobalSettings.sentryMcpKey), enabled: healthGlobalSettings.sentryEnabled },
       editor: { configured: Boolean(healthGlobalSettings.editorCommand) },
     },
     active: {

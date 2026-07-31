@@ -6,7 +6,7 @@
 [![license](https://img.shields.io/npm/l/@loicngr/kobo.svg)](./LICENSE)
 [![node](https://img.shields.io/node/v/@loicngr/kobo.svg)](https://nodejs.org/)
 
-Kōbō runs multiple coding agents in parallel, each isolated in its own git worktree, branch, and dev server. A single Vue dashboard streams output, tasks, git state, and quota usage across every workspace.
+Kōbō runs multiple coding agents in parallel, each isolated in its own git worktree, branch, and dev server. Its installable Vue/Quasar dashboard streams output, tasks, git state, and quota usage across every workspace.
 
 ![Kōbō workspace view: live chat and git panel](docs/assets/images/workspace-chat.png)
 
@@ -17,11 +17,11 @@ Kōbō runs multiple coding agents in parallel, each isolated in its own git wor
 
 - **Isolated worktrees**: each workspace is a dedicated git worktree on its own branch, so parallel sessions never collide.
 - **Two agent engines**: Claude Code (via `@anthropic-ai/claude-agent-sdk`) and OpenAI Codex (via `codex app-server`), chosen per workspace.
-- **Live chat**: streaming text, reasoning blocks, inline Edit/Write diffs, per-turn cards, a compaction-in-progress indicator, infinite scrollback. `/` autocompletes skills and commands, `@` fuzzy-autocompletes worktree file paths, and you can export any workspace's session events to CSV. Messages queued while an agent is busy stay scoped to their workspace and session. **Send now** delivers a queued message to an active Claude Code stream or steers the active Codex turn; it remains queued until the engine confirms acceptance.
+- **Live chat**: streaming text, inline Edit/Write diffs, per-turn cards, a compaction-in-progress indicator, infinite scrollback, and the latest Claude or Codex reasoning in a panel immediately above the message input. `/` autocompletes skills and commands, `@` fuzzy-autocompletes worktree file paths, and `Ctrl+F` searches readable messages in the current workspace: selecting a result loads its session and scrolls to it. The global search page deep-links to the same location. Messages queued while an agent is busy stay scoped to their workspace and session. **Send now** delivers a queued message to an active Claude Code stream or steers the active Codex turn; it remains queued until the engine confirms acceptance. Use `Enter` to send, `Ctrl+Enter` to force delivery while an agent is busy, and `Shift+Enter` or `Ctrl+J` for a new line.
 - **Full MCP toolset (`kobo-tasks`)**: a per-workspace MCP server the agent uses for far more than tasks — task/acceptance-criteria CRUD, starting/stopping the dev server and reading its logs, a unified `get_ticket` (Notion or Sentry), searching past conversations across every workspace, per-session token/cost usage, and a `.ai/thoughts` decision log. Native Claude Code Task tools complement it for lightweight sub-agent coordination. See [`AGENTS.md`](./AGENTS.md) for the full tool list.
 
   ![Sub-agents panel showing parallel tool calls](docs/assets/images/sub-agents-panel.png)
-- **Git panel**: a Monaco-based diff viewer with **inline file editing** (edit the right-hand panel directly, save with `Ctrl/Cmd+S`, conflict-guarded via sha precondition), inline conflict resolution, and `Sync` / `Push` / `Open PR` / `Change PR base` / `Change source branch`. Multi-forge: GitHub (`gh`), GitLab (`glab`), or no forge, auto-detected from the remote and overridable per project.
+- **Git panel**: a Monaco-based diff viewer with **inline file editing** (edit the right-hand panel directly, save with `Ctrl/Cmd+S`, conflict-guarded via sha precondition), inline conflict resolution, and `Sync` / `Push` / `Open PR` / `Change PR base` / `Change source branch`. Edit/Write cards in chat open their exact changed file in the diff viewer. Multi-forge: GitHub (`gh`), GitLab (`glab`), or no forge, auto-detected from the remote and overridable per project.
 
   ![Diff viewer with side-by-side changes](docs/assets/images/diff-viewer.png)
 - **Dev server panel**: start, stop, and tail logs for a workspace's dev server (Docker or npm) straight from the Tools panel — no need to leave the UI.
@@ -35,7 +35,9 @@ Kōbō runs multiple coding agents in parallel, each isolated in its own git wor
 - **Cron schedules**: recurring per-workspace triggers the agent registers through MCP tools (`cron_create` / `cron_delete` / `cron_list`). Each tick resumes the workspace session (skipped if already active), and schedules are re-armed at boot with skip-missed semantics.
 - **Lifecycle scripts**: shell scripts run automatically at key moments — **setup** (worktree created), **cleanup** (session ended), **archive** (workspace archived). Configure them globally or per project, with their output streamed into the chat.
 - **Disk-space purge**: free a merged workspace's disk space without losing its chat history — see [below](#disk-space-purge).
-- **Optional integrations**: Notion (import missions), Sentry (fix from issue URL), local voice transcription (whisper.cpp).
+- **Observability**: a compact session timeline in the right panel shows session duration and status; download a redacted workspace diagnostic JSON for troubleshooting.
+- **Optional integrations**: independently enable or disable Notion (import missions) and Sentry (fix from issue URL) in Settings, with a **Test connection** action for each; local voice transcription uses whisper.cpp.
+- **Installable PWA**: production builds work as a Progressive Web App. Install Kōbō from your browser on desktop or mobile for an app-like window; it signals offline state and offers an explicit reload when an update is ready. Live agent activity still requires a connection to the local Kōbō server.
 
 ## Quick start
 
@@ -52,6 +54,10 @@ SERVER_PORT=9997 PORT=9998 npx @loicngr/kobo@latest
 ```
 
 Open <http://localhost:3000> (or whichever port you picked). Data is persisted under `~/.config/kobo/` (override via `KOBO_HOME`).
+
+### Install as an app
+
+Kōbō's production build is a PWA. When opening a production instance, use your browser's **Install app** / **Add to Home Screen** action to install it. It shows an offline notice and lets you explicitly reload when an update is ready, so an active session is never interrupted automatically. The development client (`npm run dev:client`) intentionally runs as a normal Vite application, so it does not expose an install prompt.
 
 Want to run from source or contribute? See [`CONTRIBUTING.md`](./CONTRIBUTING.md).
 
@@ -78,7 +84,7 @@ The most common knobs:
 | `ANTHROPIC_API_KEY` | none | Claude Code engine credential (alternative to `claude /login`) |
 | `OPENAI_API_KEY` | none | Codex engine credential (alternative to `codex login`) |
 
-Global and per-project settings (worktree path, dev server commands, E2E framework, prompt templates, git conventions, branch prefixes, lifecycle scripts, task prompt) are edited in **Settings** at runtime. Per-project values inherit from the global ones when left empty.
+Global and per-project settings (worktree path, dev server commands, E2E framework, prompt templates, git conventions, branch prefixes, lifecycle scripts, task prompt) are edited in **Settings** at runtime. Notion and Sentry are enabled independently in their respective tabs; disabling one keeps its configuration and existing workspace links, but removes its import and automation UI. In **Settings → General → Activity feed**, you can hide agent reasoning panels. Per-project values inherit from the global ones when left empty.
 
 The full reference (every env var, every setting key, MCP server registration, Notion / Sentry / Voice setup) is in [`CONFIGURATION.md`](./CONFIGURATION.md).
 
@@ -102,8 +108,8 @@ A merged workspace is automatically archived, but its worktree folder usually ca
 
 Kōbō ships first-class support for three external systems. All are opt-in and reuse credentials you may already have configured for Claude Code.
 
-- **Notion**: import missions, tasks, and acceptance criteria from a Notion page.
-- **Sentry**: paste an issue URL to spawn a fix workspace with the stacktrace, tags, and a TDD workflow.
+- **Notion**: import missions, tasks, and acceptance criteria from a Notion page. Enable it in **Settings → Notion** when you want its creation/import flow, then use **Test connection** to validate its MCP credentials.
+- **Sentry**: paste an issue URL to spawn a fix workspace with the stacktrace, tags, and a TDD workflow. Enable it independently in **Settings → Sentry**; **Test connection** validates its MCP credentials and authenticated identity.
 - **Voice transcription**: local push-to-talk via [`whisper.cpp`](https://github.com/ggml-org/whisper.cpp).
 
 See [`CONFIGURATION.md`](./CONFIGURATION.md) for the setup of each.
@@ -145,14 +151,14 @@ Full install instructions and the prompt-suite differences are in [`CONFIGURATIO
 
 ## Architecture
 
-Hono backend, Vue 3 + Quasar SPA, SQLite (WAL) for persistence, WebSocket for live updates. Each workspace spawns its own agent engine and a dedicated MCP server (`kobo-tasks`) that the agent uses to query and mutate workspace state.
+Hono backend, Vue 3 + Quasar PWA, SQLite (WAL) for persistence, WebSocket for live updates. Each workspace spawns its own agent engine and a dedicated MCP server (`kobo-tasks`) that the agent uses to query and mutate workspace state.
 
 ```
 src/
 ├── server/         # Hono backend (routes, services, db, agent orchestrator)
 │   ├── services/agent/engines/  # claude-code/ + codex/ engines
 │   └── ...
-├── client/         # Vue 3 + Quasar SPA
+├── client/         # Vue 3 + Quasar PWA
 ├── mcp-server/     # kobo-tasks MCP server, spawned per workspace
 ├── shared/         # types shared backend ↔ frontend
 └── __tests__/      # Vitest suite, backend + client, thousands of tests

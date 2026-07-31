@@ -20,6 +20,16 @@ export default defineConfig(() => {
       vueRouterMode: 'hash',
     },
 
+    pwa: {
+      workboxMode: 'GenerateSW',
+      // Keep live workspace data network-only: Workbox only precaches the
+      // versioned application shell and does not install API runtime caching.
+      extendGenerateSWOptions(config) {
+        config.skipWaiting = false
+        config.clientsClaim = true
+      },
+    },
+
     devServer: {
       port: 8080,
       proxy: {

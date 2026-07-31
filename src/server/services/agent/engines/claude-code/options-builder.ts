@@ -67,6 +67,9 @@ export function buildClaudeOptions(input: BuildClaudeOptionsInput): BuildClaudeO
     // `~/.claude/settings.json` (where `skipDangerousModePermissionPrompt`
     // lives), breaking bypass for MCP tools.
     settingSources: ['user', 'project', 'local'],
+    // Relay the Anthropic API's raw message stream so Kōbō can display true
+    // text deltas instead of waiting for complete assistant content blocks.
+    includePartialMessages: true,
   }
 
   switch (input.agentPermissionMode) {

@@ -29,6 +29,7 @@
           :key="i"
           ref="turnRefs"
           :turn="turn"
+          :highlighted="turn.items.some((item) => item.eventIds?.includes(highlightedEventId ?? '') ?? false)"
           @scroll-to="onTurnScrollTo"
         />
       </div>
@@ -130,6 +131,7 @@ const userMessages = computed<(UserMessage & { sessionId?: string })[]>(() => {
       sender: (i.meta?.sender as string) ?? 'user',
       ts: i.timestamp,
       sessionId: i.sessionId,
+      eventIds: [i.id],
     }))
 })
 
@@ -145,17 +147,22 @@ const turns = computed(() => {
   const allEvents = stream.eventsFor(props.workspaceId)
   const allTs = stream.timestampsFor(props.workspaceId)
   const allSids = stream.sessionIdsFor(props.workspaceId)
+  const allIds = stream.eventIdsFor(props.workspaceId)
   const filteredEvents: AgentEvent[] = []
   const filteredTs: string[] = []
+  const filteredIds: Array<string | null> = []
   for (let i = 0; i < allEvents.length; i++) {
     if (sessionMatches(allSids[i])) {
       filteredEvents.push(allEvents[i])
       filteredTs.push(allTs[i])
+      filteredIds.push(allIds[i] ?? null)
     }
   }
-  const agentItems = foldEvents(filteredEvents, filteredTs, sessionActive.value)
+  const agentItems = foldEvents(filteredEvents, filteredTs, sessionActive.value, filteredIds)
   const merged = mergeWithUserMessages(agentItems, userMessages.value)
-  const filtered = settings.showVerboseSystemMessages ? merged : merged.filter((it) => it.type !== 'session')
+  const filtered = merged.filter(
+    (item) => item.type !== 'thinking' && (settings.showVerboseSystemMessages || item.type !== 'session'),
+  )
   return groupIntoTurns(filtered)
 })
 
@@ -176,6 +183,7 @@ const FETCH_MORE_THRESHOLD_PX = 200
 // as soon as they scroll up past STICKY_THRESHOLD_PX.
 const stickToBottom = ref(true)
 const loadingOlder = ref(false)
+const highlightedEventId = ref<string | null>(null)
 let initialScrollDone = false
 
 // Workspace-switch spinner: true on mount and whenever the workspace id
@@ -385,6 +393,94 @@ function onTurnScrollTo(y: number) {
   area.setScrollPosition('vertical', Math.max(0, y), 250)
 }
 
+/** Consume a one-shot search deep link without changing the current view. */
+function clearHistoryFocusUrl(): void {
+  const hash = window.location.hash
+  const queryIndex = hash.indexOf('?')
+  if (queryIndex === -1) return
+  const params = new URLSearchParams(hash.slice(queryIndex + 1))
+  if (!params.has('eventId')) return
+  const cleanHash = hash.slice(0, queryIndex)
+  window.history.replaceState(
+    window.history.state,
+    '',
+    `${window.location.pathname}${window.location.search}${cleanHash}`,
+  )
+}
+
+interface HistoryFocusDetail {
+  workspaceId?: string
+  sessionId?: string | null
+  eventId?: string
+}
+
+/** Load a compact event window centered on a search hit, then land on its turn. */
+async function focusHistoryEvent(event: Event): Promise<void> {
+  const detail = (event as CustomEvent<HistoryFocusDetail>).detail
+  if (detail?.workspaceId !== props.workspaceId || !detail.eventId) return
+
+  try {
+    const params = new URLSearchParams({ around: detail.eventId, limit: '200' })
+    if (detail.sessionId) params.set('session', detail.sessionId)
+    const response = await fetch(`/api/workspaces/${props.workspaceId}/events?${params}`)
+    if (!response.ok) return
+    const body = (await response.json()) as { events: FetchedEvent[] }
+    const fetched = body.events ?? []
+    const agentEvents = fetched.filter((item) => item.type === 'agent:event' && item.workspaceId === props.workspaceId)
+    const userEvents = fetched.filter((item) => item.type === 'user:message' && item.workspaceId === props.workspaceId)
+
+    stream.reset(
+      props.workspaceId,
+      agentEvents.map((item) => item.payload as unknown as AgentEvent),
+      agentEvents.map((item) => item.createdAt),
+      {
+        oldestId: fetched[0]?.id,
+        hasMoreOlder: false,
+        sessionIds: agentEvents.map((item) => item.sessionId),
+        eventIds: agentEvents.map((item) => item.id),
+      },
+    )
+    for (const item of userEvents) {
+      const payload = item.payload
+      if (typeof payload.content !== 'string') continue
+      workspaceStore.addActivityItem(props.workspaceId, {
+        id: item.id,
+        type: 'text',
+        content: payload.content,
+        timestamp: item.createdAt,
+        sessionId: item.sessionId ?? undefined,
+        meta: { sender: (payload.sender as string) ?? 'user' },
+      })
+    }
+
+    // On a route navigation the feed may still be showing its workspace
+    // switch spinner. Wait until the scroll area is mounted, then let the
+    // session/filter watchers render the focused window before resolving the
+    // corresponding TurnCard template ref.
+    const deadline = Date.now() + 5000
+    while (switching.value && Date.now() < deadline) {
+      await new Promise((resolve) => window.setTimeout(resolve, 20))
+    }
+    await nextTick()
+    await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+    const turnIndex = turns.value.findIndex((turn) =>
+      turn.items.some((item) => item.eventIds?.includes(detail.eventId!) ?? false),
+    )
+    const card = turnRefs.value[turnIndex]?.$el as HTMLElement | undefined
+    const area = scrollRef.value
+    const origin = contentOriginRef.value
+    if (!card || !area || !origin) return
+    const y = card.getBoundingClientRect().top - origin.getBoundingClientRect().top
+    highlightedEventId.value = detail.eventId
+    area.setScrollPosition('vertical', Math.max(0, y - 16), 250)
+    window.setTimeout(() => {
+      if (highlightedEventId.value === detail.eventId) highlightedEventId.value = null
+    }, 1800)
+  } catch (err) {
+    console.error('[ActivityFeed] failed to focus history event:', err)
+  }
+}
+
 // Collected via Vue template refs on <TurnCard v-for … ref="turnRefs">.
 // Parallel to `turns.value` — same index, same length.
 const turnRefs = ref<Array<{ $el: HTMLElement } | null>>([])
@@ -540,6 +636,7 @@ watch(switching, async (isSwitching) => {
 })
 
 onMounted(() => {
+  window.addEventListener('kobo:focus-history-event', focusHistoryEvent)
   void showSwitchingSpinner()
   if (eventCount.value > 0) void armInitialScroll()
   // Fire the session-scoped fetch in parallel with sync:response, not after
@@ -547,6 +644,17 @@ onMounted(() => {
   // outside the sync:response window, this shaves off the RTT latency so
   // the feed paints at roughly the same speed as in-window sessions.
   if (selectedSessionId.value) void fetchSessionIfMissing()
+  // Read the optional deep-link target without depending on vue-router's
+  // injection: ActivityFeed is also mounted in isolated component tests.
+  const eventId = new URLSearchParams(window.location.hash.split('?')[1] ?? '').get('eventId')
+  if (eventId) {
+    void focusHistoryEvent(
+      new CustomEvent<HistoryFocusDetail>('kobo:focus-history-event', {
+        detail: { workspaceId: props.workspaceId, sessionId: selectedSessionId.value, eventId },
+      }),
+    )
+    clearHistoryFocusUrl()
+  }
 })
 
 // First-populate + live-follow watcher. Fires on any new event (including
@@ -565,6 +673,7 @@ watch(eventCount, async (newLen, oldLen) => {
 })
 
 onUnmounted(() => {
+  window.removeEventListener('kobo:focus-history-event', focusHistoryEvent)
   if (pendingScrollFrame != null) {
     cancelAnimationFrame(pendingScrollFrame)
     pendingScrollFrame = null

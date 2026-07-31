@@ -436,6 +436,27 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 32,
+    name: 'add-workspace-permission-rules',
+    migrate: (db) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS workspace_permission_rules (
+          id TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+          engine TEXT,
+          tool_name TEXT NOT NULL,
+          scope TEXT NOT NULL CHECK(scope IN ('operation', 'tool')),
+          fingerprint TEXT,
+          display_label TEXT NOT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_workspace_permission_rules_lookup
+          ON workspace_permission_rules(workspace_id, engine, tool_name, scope, fingerprint);
+      `)
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

@@ -630,7 +630,7 @@ import PrPanel from 'src/components/PrPanel.vue'
 import { useSettingsStore } from 'src/stores/settings'
 import type { BranchCommit, ForgeInfo, GitStats, Workspace } from 'src/stores/workspace'
 import { useWorkspaceStore, WorkspaceActionError } from 'src/stores/workspace'
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import CompareCommitsDialog from './CompareCommitsDialog.vue'
 
 const props = defineProps<{
@@ -673,6 +673,21 @@ function openDiff(asReview: boolean) {
   compareFrom.value = undefined
   compareTo.value = undefined
   diffInitialReview.value = asReview
+  showDiff.value = true
+}
+
+/**
+ * Tool cards in the activity feed request a concrete file through this event.
+ * Opening the right drawer alone is not enough: DiffViewer lives in this
+ * dialog and is only mounted after `showDiff` becomes true. The file path is
+ * kept by pending-diff-open until DiffViewer consumes it at mount time.
+ */
+function onSelectDiff(event: Event) {
+  const detail = (event as CustomEvent<{ workspaceId?: string; path?: string }>).detail
+  if (detail?.workspaceId !== props.workspace?.id || !detail.path) return
+  compareFrom.value = undefined
+  compareTo.value = undefined
+  diffInitialReview.value = false
   showDiff.value = true
 }
 
@@ -982,11 +997,16 @@ watch(
 )
 
 onBeforeUnmount(() => {
+  window.removeEventListener('kobo:select-diff', onSelectDiff)
   if (gitRefreshTimeout) {
     clearTimeout(gitRefreshTimeout)
     gitRefreshTimeout = null
   }
   inflightController?.abort()
+})
+
+onMounted(() => {
+  window.addEventListener('kobo:select-diff', onSelectDiff)
 })
 
 function openRenameBranchDialog() {

@@ -90,6 +90,8 @@ export interface MapperState {
   sessionStartedEmitted: boolean
   /** Track streaming text messages: messageId → seenTextOnce (for `streaming` flag). */
   openMessages: Map<string, { sawText: boolean }>
+  /** Message id announced by the current Claude raw streaming sequence. */
+  streamingMessageId?: string
   /**
    * Set when a `result` message with an error subtype was observed, or when
    * a quota notice was detected in assistant text. Read by the engine after
@@ -193,6 +195,31 @@ export function mapSdkMessage(msg: SDKMessage, state: MapperState): AgentEvent[]
     return events
   }
 
+  if (type === 'stream_event') {
+    const event = parsed.event as Record<string, unknown> | undefined
+    if (!event) return events
+    if (event.type === 'message_start') {
+      const streamedMessage = event.message as Record<string, unknown> | undefined
+      const messageId = typeof streamedMessage?.id === 'string' ? streamedMessage.id : undefined
+      if (messageId) {
+        state.streamingMessageId = messageId
+        if (!state.openMessages.has(messageId)) state.openMessages.set(messageId, { sawText: false })
+      }
+      return events
+    }
+    if (event.type === 'content_block_delta') {
+      const delta = event.delta as Record<string, unknown> | undefined
+      const text = delta?.type === 'text_delta' && typeof delta.text === 'string' ? delta.text : undefined
+      if (text && state.streamingMessageId) {
+        const messageId = state.streamingMessageId
+        const messageState = state.openMessages.get(messageId)
+        if (messageState) messageState.sawText = true
+        events.push({ kind: 'message:text', messageId, text, streaming: true })
+      }
+    }
+    return events
+  }
+
   if (type === 'system') {
     if (subtype === 'compact' || subtype === 'compact_boundary') {
       events.push({ kind: 'session:compacted' })
@@ -280,8 +307,10 @@ export function mapSdkMessage(msg: SDKMessage, state: MapperState): AgentEvent[]
       const blockType = block.type as string | undefined
       if (blockType === 'text' && typeof block.text === 'string') {
         const text = block.text as string
-        events.push({ kind: 'message:text', messageId, text, streaming: true })
-        msgState.sawText = true
+        if (!msgState.sawText) {
+          events.push({ kind: 'message:text', messageId, text, streaming: true })
+          msgState.sawText = true
+        }
         if (text.includes('[BRAINSTORM_COMPLETE]')) {
           events.push({ kind: 'session:brainstorm-complete' })
         }

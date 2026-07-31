@@ -46,6 +46,7 @@ import { getSuitePrompts } from '../services/skill-suite-prompts.js'
 import * as terminalService from '../services/terminal-service.js'
 import * as wakeupService from '../services/wakeup-service.js'
 import * as wsService from '../services/websocket-service.js'
+import * as permissionPolicyService from '../services/workspace-permission-policy-service.js'
 import type { AgentPermissionMode, WorkspaceStatus } from '../services/workspace-service.js'
 import * as workspaceService from '../services/workspace-service.js'
 import * as purgeWorktreeService from '../services/worktree-purge-service.js'
@@ -232,6 +233,9 @@ app.post('/', migrationGuard, async (c) => {
     // before createWorkspace and surface failures as 422.
     let notionContent: notionService.NotionPageContent | null = null
     if (body.notionUrl) {
+      if (!settingsService.getGlobalSettings().notionEnabled) {
+        return c.json({ error: 'Notion integration is disabled in Settings' }, 403)
+      }
       try {
         notionContent = await notionService.extractNotionPage(body.notionUrl)
       } catch (err) {
@@ -254,6 +258,9 @@ app.post('/', migrationGuard, async (c) => {
 
     let sentryContent: sentryService.SentryIssueContent | null = null
     if (body.sentryUrl) {
+      if (!settingsService.getGlobalSettings().sentryEnabled) {
+        return c.json({ error: 'Sentry integration is disabled in Settings' }, 403)
+      }
       try {
         sentryContent = await sentryService.extractSentryIssue(body.sentryUrl)
       } catch (err) {
@@ -440,11 +447,9 @@ app.post('/', migrationGuard, async (c) => {
 
       // Update workspace name with Notion page title only if user didn't
       // provide a custom name. Prefix with the Notion unique-id (e.g.
-      // "TK-123 | …") when the page has one — it makes the workspace
-      // immediately scannable in the sidebar.
+      // Use the Notion page title when the user left the generic placeholder.
       if (notionContent.title && workspace.name === 'workspace') {
-        const prefix = notionContent.ticketId ? `${notionContent.ticketId} | ` : ''
-        workspace = workspaceService.updateWorkspaceName(workspace.id, `${prefix}${notionContent.title}`)
+        workspace = workspaceService.updateWorkspaceName(workspace.id, notionContent.title)
       }
     }
 
@@ -1409,18 +1414,35 @@ app.post('/:id/deferred-permission/decision', async (c) => {
   try {
     const id = c.req.param('id')
     const body = await c.req
-      .json<{ toolCallId?: string; decision?: 'allow' | 'deny'; reason?: string }>()
-      .catch(() => ({}) as { toolCallId?: string; decision?: 'allow' | 'deny'; reason?: string })
+      .json<{
+        toolCallId?: string
+        decision?: 'allow' | 'deny'
+        reason?: string
+        scope?: 'once' | 'turn' | 'operation' | 'tool'
+      }>()
+      .catch(
+        () =>
+          ({}) as {
+            toolCallId?: string
+            decision?: 'allow' | 'deny'
+            reason?: string
+            scope?: 'once' | 'turn' | 'operation' | 'tool'
+          },
+      )
     if (!body?.toolCallId || typeof body.toolCallId !== 'string') {
       return c.json({ error: 'toolCallId required' }, 400)
     }
     if (body.decision !== 'allow' && body.decision !== 'deny') {
       return c.json({ error: "decision must be 'allow' or 'deny'" }, 400)
     }
+    if (body.scope && !['once', 'turn', 'operation', 'tool'].includes(body.scope)) {
+      return c.json({ error: "scope must be 'once', 'turn', 'operation' or 'tool'" }, 400)
+    }
     await agentManager.answerPendingPermission(id, {
       toolCallId: body.toolCallId,
       decision: body.decision,
       reason: typeof body.reason === 'string' ? body.reason : undefined,
+      scope: body.scope,
     })
     return c.json({ ok: true })
   } catch (err) {
@@ -1428,6 +1450,20 @@ app.post('/:id/deferred-permission/decision', async (c) => {
     const status = /no deferred tool use pending/i.test(message) ? 409 : 400
     return c.json({ error: message }, status)
   }
+})
+
+app.get('/:id/permission-rules', (c) => {
+  const id = c.req.param('id')
+  if (!workspaceService.getWorkspace(id)) return c.json({ error: `Workspace '${id}' not found` }, 404)
+  return c.json({ rules: permissionPolicyService.listWorkspacePermissionRules(id) })
+})
+
+app.delete('/:id/permission-rules/:ruleId', (c) => {
+  const id = c.req.param('id')
+  if (!workspaceService.getWorkspace(id)) return c.json({ error: `Workspace '${id}' not found` }, 404)
+  if (!permissionPolicyService.removeWorkspacePermissionRule(id, c.req.param('ruleId')))
+    return c.json({ error: 'Permission rule not found' }, 404)
+  return c.json({ ok: true })
 })
 
 // DELETE /api/workspaces/:id/events/:eventId — permanently dismiss a single
@@ -1617,6 +1653,111 @@ app.post('/:id/tasks/:taskId/notify-done', (c) => {
   }
 })
 
+// GET /api/workspaces/:id/history-search — full-workspace persisted conversation search.
+app.get('/:id/history-search', (c) => {
+  try {
+    const id = c.req.param('id')
+    if (!workspaceService.getWorkspace(id)) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    const query = (c.req.query('q') ?? '').trim()
+    if (query.length < 2) return c.json({ results: [] })
+    const limit = Math.min(parseInt(c.req.query('limit') ?? '30', 10) || 30, 100)
+    const needle = `%${query.replace(/[%_]/g, '\\$&')}%`
+    const rows = getDb()
+      .prepare(
+        `SELECT id, session_id, type, payload, created_at FROM ws_events
+         WHERE workspace_id = ? AND payload LIKE ? ESCAPE '\\'
+         ORDER BY rowid DESC LIMIT ?`,
+      )
+      .all(id, needle, limit * 4) as Array<{
+      id: string
+      session_id: string | null
+      type: string
+      payload: string
+      created_at: string
+    }>
+    const normalized = rows.flatMap((row) => {
+      const result = readableHistorySearchResult(row.type, row.payload, query)
+      if (!result) return []
+      return [{ eventId: row.id, sessionId: row.session_id, createdAt: row.created_at, ...result }]
+    })
+    return c.json({ results: normalized.slice(0, limit) })
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+  }
+})
+
+function readableHistorySearchResult(
+  type: string,
+  rawPayload: string,
+  query: string,
+): { kind: 'user' | 'agent'; snippet: string } | null {
+  let payload: Record<string, unknown>
+  try {
+    payload = JSON.parse(rawPayload) as Record<string, unknown>
+  } catch {
+    return null
+  }
+
+  let text: string | null = null
+  let kind: 'user' | 'agent' = 'agent'
+  if (type === 'user:message') {
+    text = typeof payload.content === 'string' ? payload.content : null
+    kind = 'user'
+  } else if (type === 'agent:event') {
+    if (payload.kind === 'message:text' && typeof payload.text === 'string') text = payload.text
+  } else if (type === 'agent:output') {
+    const message = payload.message as { content?: unknown } | undefined
+    if (Array.isArray(message?.content)) {
+      text = message.content
+        .flatMap((block) => {
+          if (!block || typeof block !== 'object') return []
+          const candidate = block as { type?: unknown; text?: unknown }
+          return candidate.type === 'text' && typeof candidate.text === 'string' ? [candidate.text] : []
+        })
+        .join('\n')
+    }
+  }
+  if (!text) return null
+  const matchIndex = text.toLowerCase().indexOf(query.toLowerCase())
+  if (matchIndex < 0) return null
+  const start = Math.max(0, matchIndex - 90)
+  const end = Math.min(text.length, matchIndex + query.length + 180)
+  return {
+    kind,
+    snippet: `${start > 0 ? '…' : ''}${text.slice(start, end).replace(/\s+/g, ' ').trim()}${end < text.length ? '…' : ''}`,
+  }
+}
+
+// GET /api/workspaces/:id/diagnostic.json — portable, redacted-by-design event diagnostic.
+app.get('/:id/diagnostic.json', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    const db = getDb()
+    const sessions = db
+      .prepare(
+        'SELECT id, engine_session_id, status, started_at, ended_at, model, name FROM agent_sessions WHERE workspace_id = ? ORDER BY started_at ASC',
+      )
+      .all(id)
+    const events = db
+      .prepare('SELECT id, session_id, type, created_at FROM ws_events WHERE workspace_id = ? ORDER BY rowid ASC')
+      .all(id)
+    c.header(
+      'Content-Disposition',
+      `attachment; filename="${workspace.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase() || id}-diagnostic.json"`,
+    )
+    return c.json({
+      generatedAt: new Date().toISOString(),
+      workspace: { id, name: workspace.name, engine: workspace.engine },
+      sessions,
+      events,
+    })
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+  }
+})
+
 // GET /api/workspaces/:id/events — paginated event history (must be before GET /:id for route ordering)
 app.get('/:id/events', (c) => {
   try {
@@ -1627,6 +1768,7 @@ app.get('/:id/events', (c) => {
     }
 
     const before = c.req.query('before') // event ID cursor
+    const around = c.req.query('around') // event ID to include in a focused history window
     // optional: scope to a session view. Session views also include
     // workspace-level rows where session_id IS NULL (legacy/pre-session items).
     const session = c.req.query('session')
@@ -1642,7 +1784,22 @@ app.get('/:id/events', (c) => {
       created_at: string
     }>
 
-    if (before) {
+    if (around) {
+      const targetRow = db.prepare('SELECT rowid FROM ws_events WHERE id = ? AND workspace_id = ?').get(around, id) as
+        | { rowid: number }
+        | undefined
+      if (!targetRow) return c.json({ events: [], hasMore: false })
+      const halfWindow = Math.floor(limit / 2)
+      rows = session
+        ? (db
+            .prepare(
+              'SELECT * FROM ws_events WHERE workspace_id = ? AND (session_id = ? OR session_id IS NULL) AND rowid BETWEEN ? AND ? ORDER BY rowid ASC',
+            )
+            .all(id, session, targetRow.rowid - halfWindow, targetRow.rowid + halfWindow) as typeof rows)
+        : (db
+            .prepare('SELECT * FROM ws_events WHERE workspace_id = ? AND rowid BETWEEN ? AND ? ORDER BY rowid ASC')
+            .all(id, targetRow.rowid - halfWindow, targetRow.rowid + halfWindow) as typeof rows)
+    } else if (before) {
       // Get the rowid of the cursor event
       const cursorRow = db.prepare('SELECT rowid FROM ws_events WHERE id = ?').get(before) as
         | { rowid: number }
@@ -1676,7 +1833,7 @@ app.get('/:id/events', (c) => {
 
     // Reverse to chronological order (we queried DESC for "before" pagination,
     // or for the "session + no cursor" case where we fetched the newest first).
-    if (before || session) rows.reverse()
+    if (before || (session && !around)) rows.reverse()
 
     const events = rows.map((row) => {
       let parsedPayload: unknown

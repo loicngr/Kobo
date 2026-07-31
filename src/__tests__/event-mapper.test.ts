@@ -15,6 +15,30 @@ function asMsg(obj: Record<string, unknown>): SDKMessage {
 }
 
 describe('event-mapper', () => {
+  describe('stream_event partial assistant messages', () => {
+    it('emits text deltas under the streamed assistant message id', () => {
+      const state = createMapperState()
+
+      mapSdkMessage(
+        asMsg({
+          type: 'stream_event',
+          event: { type: 'message_start', message: { id: 'msg-streamed' } },
+        }),
+        state,
+      )
+
+      expect(
+        mapSdkMessage(
+          asMsg({
+            type: 'stream_event',
+            event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Hello' } },
+          }),
+          state,
+        ),
+      ).toEqual([{ kind: 'message:text', messageId: 'msg-streamed', text: 'Hello', streaming: true }])
+    })
+  })
+
   describe('system:init', () => {
     it('emits session:started + skills:discovered', () => {
       const state = createMapperState()

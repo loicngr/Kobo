@@ -342,8 +342,9 @@ import { type ReviewComment, useReviewDraft } from 'src/composables/use-review-d
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { buildPathTree, countLeaves, type PathTreeNode } from 'src/utils/build-path-tree'
+import { takePendingDiffOpen } from 'src/utils/pending-diff-open'
 import { isBusyStatus } from 'src/utils/workspace-status'
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import ReviewCommentBlock from './ReviewCommentBlock.vue'
 import ReviewDraftPanel from './ReviewDraftPanel.vue'
@@ -1174,7 +1175,11 @@ watch(selectedFile, async (filePath, previousPath) => {
   }
 
   if (filePath) {
-    loadFileDiff(filePath)
+    // The DiffViewer can receive a target file while its dialog is still
+    // being mounted. Wait for the teleported dialog DOM before loading Monaco
+    // so loadFileDiff does not bail out on a missing editor container.
+    await nextTick()
+    if (selectedFile.value === filePath) await loadFileDiff(filePath)
   } else {
     // Selection was cleared (e.g. after a successful rollback removed the
     // file from the diff). Tear down Monaco so the previous diff stops
@@ -1247,9 +1252,30 @@ function statusColor(status: DiffFile['status']): string {
 
 // ── Lifecycle ────────────────────────────────────────────────────────────────
 
-onMounted(loadFiles)
+function selectRequestedFile(path: string) {
+  // A tool card may refer to a file that no longer belongs to the current
+  // diff scope. Do not replace the current selection in that case.
+  if (!files.value.some((file) => file.path === path)) return
+  selectedFile.value = path
+  // The watcher performs the actual load after the next DOM tick.
+}
+
+function onOpenDiff(event: Event) {
+  const detail = (event as CustomEvent<{ workspaceId?: string; path?: string }>).detail
+  if (detail?.workspaceId !== props.workspaceId || !detail.path) return
+  void selectRequestedFile(detail.path)
+}
+
+onMounted(() => {
+  window.addEventListener('kobo:select-diff', onOpenDiff)
+  void loadFiles().then(() => {
+    const path = takePendingDiffOpen(props.workspaceId)
+    if (path) void selectRequestedFile(path)
+  })
+})
 
 onUnmounted(() => {
+  window.removeEventListener('kobo:select-diff', onOpenDiff)
   // Single source of truth — disposeEditor() handles selection disposables,
   // editor and (in Review mode) view zones / mounted Vue apps.
   reviewDraft.flush() // before disposeEditor in case the user closed mid-edit

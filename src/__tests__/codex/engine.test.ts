@@ -239,6 +239,32 @@ describe('createCodexEngine — active turn steering', () => {
   })
 })
 
+describe('createCodexEngine — interruption', () => {
+  it('asks Codex to interrupt the turn before terminating its process', async () => {
+    resetChild()
+    const proc = await createCodexEngine().start(BASE_OPTIONS, () => {})
+
+    await flush(10)
+    pushInitializeResponse(1)
+    await flush(5)
+    pushThreadStartResponse('thr_interrupt', 2)
+    await flush(5)
+    pushTurnStartResponse('turn_interrupt', 3)
+    await flush(5)
+
+    proc.interrupt()
+    await flush(5)
+
+    const interruptRequest = _child._written
+      .map((line) => JSON.parse(line) as { method?: string; params?: unknown })
+      .find((message) => message.method === 'turn/interrupt')
+    expect(interruptRequest).toMatchObject({
+      params: { threadId: 'thr_interrupt' },
+    })
+    expect(_child.kill).not.toHaveBeenCalled()
+  })
+})
+
 describe('createCodexEngine — resume', () => {
   it('sends thread/resume (not thread/start) when resumeFromEngineSessionId is set', async () => {
     resetChild()
@@ -303,17 +329,13 @@ describe('createCodexEngine — interrupt', () => {
     resetChild()
     const engine = createCodexEngine()
     const events: AgentEvent[] = []
-
+    let resolveEnded: () => void = () => {}
     const sessionEndedPromise = new Promise<void>((resolve) => {
-      void engine
-        .start(BASE_OPTIONS, (ev) => {
-          events.push(ev)
-          if (ev.kind === 'session:ended') resolve()
-        })
-        .then((proc) => {
-          // After initialize and thread start, call interrupt
-          flush(30).then(() => proc.interrupt())
-        })
+      resolveEnded = resolve
+    })
+    const proc = await engine.start(BASE_OPTIONS, (ev) => {
+      events.push(ev)
+      if (ev.kind === 'session:ended') resolveEnded()
     })
 
     await flush(5)
@@ -326,9 +348,16 @@ describe('createCodexEngine — interrupt', () => {
     pushTurnStartResponse('turn_1', 3)
     await flush(5)
 
-    // Now interrupt() is called by the timer above (after 30ms total)
-    // The abort signal will cause the pending turnDonePromise to reject when the
-    // transport closes.
+    proc.interrupt()
+    await flush(5)
+    const request = _child._written
+      .map((line) => JSON.parse(line) as { method?: string; id?: number })
+      .find((message) => message.method === 'turn/interrupt')
+    pushLine({ jsonrpc: '2.0', id: request?.id, result: {} })
+    pushNotification('turn/completed', {
+      threadId: 'thr_interrupt',
+      turn: { id: 'turn_1', status: 'interrupted', startedAt: null, completedAt: null, durationMs: null, error: null },
+    })
 
     await sessionEndedPromise
     await flush(10)
@@ -368,8 +397,17 @@ describe('createCodexEngine — stop()', () => {
     pushTurnStartResponse('turn_1', 3)
     await flush(5)
 
-    // Call stop() — must await it and trigger the kill.
-    await proc.stop()
+    const stopping = proc.stop()
+    await flush(5)
+    const request = _child._written
+      .map((line) => JSON.parse(line) as { method?: string; id?: number })
+      .find((message) => message.method === 'turn/interrupt')
+    pushLine({ jsonrpc: '2.0', id: request?.id, result: {} })
+    pushNotification('turn/completed', {
+      threadId: 'thr_stop',
+      turn: { id: 'turn_1', status: 'interrupted', startedAt: null, completedAt: null, durationMs: null, error: null },
+    })
+    await stopping
     await sessionEndedPromise
 
     const sessionEnded = events.find((e) => e.kind === 'session:ended') as Extract<

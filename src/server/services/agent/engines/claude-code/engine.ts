@@ -8,6 +8,8 @@ import {
   type SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
 import { nanoid } from 'nanoid'
+import { isWorkspacePermissionAllowed } from '../../../workspace-permission-policy-service.js'
+import { createStreamingBatcher } from '../../streaming-batcher.js'
 import type { AgentEngine, AgentEvent, EngineProcess, StartOptions } from '../types.js'
 import { CLAUDE_CODE_CAPABILITIES } from './capabilities.js'
 import { createMapperState, mapSdkMessage, QUOTA_PATTERN, tryEmitQuota } from './event-mapper.js'
@@ -130,12 +132,21 @@ export function createClaudeCodeEngine(): AgentEngine {
         if (toolName !== 'AskUserQuestion' && !isInteractive) {
           return Promise.resolve<PermissionResult>({ behavior: 'allow', updatedInput: input })
         }
+        if (
+          toolName !== 'AskUserQuestion' &&
+          isWorkspacePermissionAllowed(options.workspaceId, { engine: 'claude-code', toolName, payload: input })
+        ) {
+          return Promise.resolve<PermissionResult>({ behavior: 'allow', updatedInput: input })
+        }
 
         const requestKind: 'question' | 'permission' = toolName === 'AskUserQuestion' ? 'question' : 'permission'
 
         return new Promise<PermissionResult>((resolve, reject) => {
           const resolver: PendingResolver = { resolve, input, requestKind }
           pendingResolvers.set(toolCallId, resolver)
+          // A user decision is intentional inactivity. The text-only watchdog
+          // must never end this session while the permission card is visible.
+          clearTextIdleWatchdog()
 
           const onAbort = (): void => {
             if (pendingResolvers.get(toolCallId) === resolver) {
@@ -240,13 +251,15 @@ export function createClaudeCodeEngine(): AgentEngine {
 
       // A throwing onEvent handler (e.g. DB query against a closed connection
       // during async test teardown) must not escape as an unhandled rejection.
-      const safeEmit = (ev: AgentEvent): void => {
+      const emitDirect = (ev: AgentEvent): void => {
         try {
           onEvent(ev)
         } catch (err) {
           console.error('[claude-engine] onEvent handler threw:', err)
         }
       }
+      const streamingBatcher = createStreamingBatcher(emitDirect)
+      const safeEmit = (ev: AgentEvent): void => streamingBatcher.push(ev)
 
       let iteratorRunning = false
       let userInterrupted = false
@@ -278,6 +291,10 @@ export function createClaudeCodeEngine(): AgentEngine {
       const armTextIdleWatchdog = (): void => {
         clearTextIdleWatchdog()
         textIdleTimer = setTimeout(() => {
+          if (pendingResolvers.size > 0) {
+            textIdleTimer = undefined
+            return
+          }
           console.warn(
             `[claude-engine] SDK stream inactive ${TEXT_IDLE_TIMEOUT_MS}ms after a text-only response — forcing session:ended`,
           )
@@ -361,6 +378,7 @@ export function createClaudeCodeEngine(): AgentEngine {
             emitSessionEnded('error', null)
           }
         } finally {
+          streamingBatcher.close()
           // The post-result drain watchdog (if armed) is moot once the
           // iterator has exited — clear it so a healthy run never triggers a
           // stray abort after it already ended.

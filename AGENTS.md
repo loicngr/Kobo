@@ -12,13 +12,13 @@ Single-user dev tool, local by default. The server binds `127.0.0.1` unless the 
 
 **Backend**: Node.js ≥ 20, Hono (HTTP), `ws` (WebSocket), better-sqlite3 (WAL mode), nanoid, `@modelcontextprotocol/sdk`. TypeScript throughout, `tsx` for dev, `tsc` for production build.
 
-**Frontend**: Vue 3, Quasar 2, Pinia, vue-router, marked + dompurify for markdown rendering. Vite via `@quasar/app-vite`.
+**Frontend**: Vue 3, Quasar 2, Pinia, vue-router, marked + dompurify for markdown rendering. Vite via `@quasar/app-vite`, built and served as a Progressive Web App in production.
 
 **Database**: a single SQLite file under the **Kōbō home directory** (`~/.config/kobo/kobo.db` by default, overridable via `KOBO_HOME`). Fresh-install schema lives in `src/server/db/schema.ts` (`initSchema`); incremental migrations live in `src/server/db/migrations.ts`. **The project is in production**, so every schema change MUST ship as a migration that preserves data, never as a breaking change to `initSchema` alone. See [Database migrations](#database-migrations) below.
 
 **Kōbō home directory**: `KOBO_HOME` env var overrides everything. Otherwise `$XDG_CONFIG_HOME/kobo/`, else `~/.config/kobo/`. Contains `kobo.db`, `settings.json`, `skills.json`, `templates.json`. **Development uses `./data/`** via the `KOBO_HOME=./data` prefix in the `dev` npm script, so local dev never touches your real `~/.config/kobo/` and can run in parallel with a production-installed Kōbō (`npx @loicngr/kobo`). See `src/server/utils/paths.ts`.
 
-**Tests**: vitest (24 backend test files, 544+ tests; 5 frontend test files, 45+ tests at time of writing). Frontend tests cover Pinia stores and pure utility modules; Vue components are not tested (type-check + manual smoke only).
+**Tests**: Vitest covers backend services/routes and frontend stores/pure utilities. Vue components are not unit-tested; type-checking and manual smoke tests cover their behavior. Run `npm test` and `(cd src/client && npm test)` for the complete suites.
 
 ## Commands
 
@@ -83,7 +83,7 @@ src/
 │   ├── utils/
 │   │   ├── git-ops.ts              # pushBranch, pullBranch, getCommitsBetween, delete{Local,Remote}Branch…
 │   │   └── process-tracker.ts      # per-workspace spawned-process map
-├── client/                         # Vue 3 + Quasar SPA
+├── client/                         # Vue 3 + Quasar PWA
 │   └── src/
 │       ├── stores/                 # pinia: workspace, websocket, settings, dev-server, templates
 │       ├── components/             # WorkspaceList, NotionPanel, AcceptancePanel, ChatInput, GitPanel, PlansPanel, WorkspaceAttentionLabels…
@@ -102,10 +102,11 @@ src/
 |---|---|
 | `workspaces` | the unit of work: id, name, project_path, source_branch, working_branch, status, notion_url, model, `brainstorm_model`, dev_server_status, `archived_at`, `worktree_purged_at`, `worktree_purge_restore_data` (JSON), `auto_loop`, `auto_loop_ready`, `auto_loop_session_mode`, `no_progress_streak`, timestamps |
 | `tasks` | workspace sub-items: title, status, `is_acceptance_criterion`, sort_order; CASCADE DELETE on workspace |
-| `agent_sessions` | Claude Code CLI invocations: pid, `claude_session_id`, status, started_at, ended_at, `name` |
+| `agent_sessions` | agent-engine sessions: pid where applicable, engine session id, status, timestamps, model, and name |
 | `ws_events` | persisted WebSocket events for replay on reconnect: type, payload, session_id, created_at |
 | `pending_wakeups` | one-row-per-workspace scheduler for the `ScheduleWakeup` tool: target_at (ISO UTC), prompt, reason; CASCADE DELETE on workspace |
 | `workspace_chat_history` | chat-input history per workspace: message text + `created_at`, ordered by autoincrement id, capped at 200 entries by the service; CASCADE DELETE on workspace |
+| `workspace_permission_rules` | remembered per-workspace tool approvals, scoped to an exact operation or every invocation of a tool; CASCADE DELETE on workspace |
 
 `status` enum: `created | extracting | brainstorming | executing | completed | idle | error | quota`. Transitions are validated in `updateWorkspaceStatus` against `VALID_TRANSITIONS`.
 

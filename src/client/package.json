@@ -15,7 +15,8 @@
   },
   "scripts": {
     "dev": "quasar dev",
-    "build": "quasar build",
+    "build": "quasar build -m pwa",
+    "build:spa": "quasar build",
     "type-check": "vue-tsc --noEmit",
     "postinstall": "quasar prepare",
     "test": "vitest run",
@@ -48,7 +49,8 @@
     "sass": "^1.101.0",
     "typescript": "^6.0.3",
     "vitest": "^4.1.9",
-    "vue-tsc": "^3.3.5"
+    "vue-tsc": "^3.3.5",
+    "workbox-build": "^7.4.1"
   },
   "overrides": {
     "esbuild": "0.28.1"

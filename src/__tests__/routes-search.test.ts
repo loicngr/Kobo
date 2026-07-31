@@ -13,6 +13,8 @@ app.route('/api/search', router)
 
 const fakeResults = [
   {
+    eventId: 'event-1',
+    sessionId: 'session-1',
     workspaceId: 'ws-1',
     workspaceName: 'My Work',
     archived: false,

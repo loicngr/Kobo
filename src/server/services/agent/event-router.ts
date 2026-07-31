@@ -8,5 +8,9 @@ export function routeEvent(workspaceId: string, agentSessionId: string, event: A
     emitEphemeral(workspaceId, 'agent:event', event)
     return
   }
+  if (event.kind === 'mcp:status' && event.status !== 'error') {
+    emitEphemeral(workspaceId, 'agent:event', event)
+    return
+  }
   emit(workspaceId, 'agent:event', event, agentSessionId)
 }

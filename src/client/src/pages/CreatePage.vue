@@ -18,6 +18,7 @@
           </span>
           <q-space />
           <q-btn
+            v-if="settingsStore.global.notionEnabled"
             flat
             dense
             no-caps
@@ -31,6 +32,7 @@
             {{ useNotion ? $t('createPage.notionEnabled') : $t('createPage.importNotion') }}
           </q-btn>
           <q-btn
+            v-if="settingsStore.global.sentryEnabled"
             flat
             dense
             no-caps

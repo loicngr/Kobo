@@ -1699,11 +1699,12 @@ export const useWorkspaceStore = defineStore('workspace', {
       toolCallId: string,
       decision: 'allow' | 'deny',
       reason?: string,
+      scope: 'once' | 'turn' | 'operation' | 'tool' = 'once',
     ): Promise<void> {
       const res = await fetch(`/api/workspaces/${workspaceId}/deferred-permission/decision`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ toolCallId, decision, reason }),
+        body: JSON.stringify({ toolCallId, decision, reason, scope }),
       })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))

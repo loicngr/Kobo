@@ -407,6 +407,8 @@ beforeEach(() => {
     defaultPermissionMode: 'plan',
     notionMcpKey: '',
     sentryMcpKey: '',
+    notionEnabled: true,
+    sentryEnabled: true,
     tags: [],
     worktreesPath: '.worktrees',
     worktreesPrefixByProject: false,
@@ -599,9 +601,9 @@ describe('POST /api/workspaces', () => {
     expect(res.status).toBe(201)
     expect(notionService.extractNotionPage).toHaveBeenCalledWith('https://notion.so/page-123')
     expect(workspaceService.createTask).toHaveBeenCalled()
-    // Workspace name is prefixed with the Notion ticket id when the user
-    // didn't provide a custom name (placeholder name = "workspace").
-    expect(workspaceService.updateWorkspaceName).toHaveBeenCalledWith('ws-1', 'TK-123 | Notion Page Title')
+    // Workspace name uses the Notion title when the user left the generic
+    // placeholder name ("workspace").
+    expect(workspaceService.updateWorkspaceName).toHaveBeenCalledWith('ws-1', 'Notion Page Title')
     // Ticket-ID injection now happens BEFORE createWorkspace, so the final
     // working branch is passed in directly — no follow-up updateWorkingBranch call.
     expect(workspaceService.createWorkspace).toHaveBeenCalledWith(

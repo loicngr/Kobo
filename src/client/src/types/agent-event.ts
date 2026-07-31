@@ -64,6 +64,7 @@ export type AgentEvent =
       costUsd?: number
     }
   | { kind: 'rate_limit'; info: RateLimitInfo }
+  | { kind: 'mcp:status'; serverName: string; status: 'starting' | 'ready' | 'error'; message?: string }
   // Errors
   | {
       kind: 'error'
@@ -89,6 +90,7 @@ export const ALL_AGENT_EVENT_KINDS = [
   'skills:discovered',
   'usage',
   'rate_limit',
+  'mcp:status',
   'error',
 ] as const
 

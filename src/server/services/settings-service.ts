@@ -321,6 +321,10 @@ export interface GlobalSettings {
   defaultPermissionModeByEngine: Record<string, string>
   notionMcpKey: string
   sentryMcpKey: string
+  notionEnabled: boolean
+  sentryEnabled: boolean
+  /** Whether agent thinking/reasoning blocks are displayed in the activity feed. */
+  showThinkingBlocks: boolean
   tags: string[]
   /**
    * User-managed git branch prefixes shown on the workspace creation page.
@@ -992,6 +996,21 @@ const settingsMigrations: SettingsMigration[] = [
       }
     },
   },
+  {
+    version: 46,
+    name: 'add-integration-enabled-switches',
+    migrate: ({ global }) => {
+      if (typeof global.notionEnabled !== 'boolean') global.notionEnabled = true
+      if (typeof global.sentryEnabled !== 'boolean') global.sentryEnabled = true
+    },
+  },
+  {
+    version: 47,
+    name: 'add-thinking-block-visibility',
+    migrate: ({ global }) => {
+      if (typeof global.showThinkingBlocks !== 'boolean') global.showThinkingBlocks = true
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -1109,6 +1128,9 @@ function defaultSettings(): Settings {
       defaultPermissionModeByEngine: { 'claude-code': 'plan', codex: 'plan' },
       notionMcpKey: '',
       sentryMcpKey: '',
+      notionEnabled: true,
+      sentryEnabled: true,
+      showThinkingBlocks: true,
       tags: [...DEFAULT_WORKSPACE_TAGS],
       branchPrefixes: [...DEFAULT_BRANCH_PREFIXES],
       worktreesPath: WORKTREES_PATH,
@@ -1530,6 +1552,9 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'defaultPermissionModeByEngine',
     'notionMcpKey',
     'sentryMcpKey',
+    'notionEnabled',
+    'sentryEnabled',
+    'showThinkingBlocks',
     'tags',
     'branchPrefixes',
     'worktreesPath',

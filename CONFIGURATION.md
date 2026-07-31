@@ -7,6 +7,7 @@ Complete reference for every Kōbō setting, environment variable, and external 
 - [Storage layout](#storage-layout)
 - [Environment variables](#environment-variables)
 - [Settings UI](#settings-ui)
+- [Progressive Web App](#progressive-web-app)
 - [Custom change-source-branch script](#custom-change-source-branch-script)
 - [Auto-purge worktree on PR merged](#auto-purge-worktree-on-pr-merged)
 - [Network access](#network-access)
@@ -146,6 +147,9 @@ Settings are managed live from the **Settings** page in the UI and persisted to 
 | `audioNotificationVolume` | `number` | General notification sound volume from `0` to `1`. |
 | `notionMcpKey` | `string` | Override the `~/.claude.json` key used for Notion (defaults to the first non-disabled entry containing `notion`). |
 | `sentryMcpKey` | `string` | Same logic for Sentry. |
+| `notionEnabled` | `boolean` | Enable Notion imports and automations. Defaults to `true`; disabling preserves its configuration and existing workspace links. |
+| `sentryEnabled` | `boolean` | Enable Sentry imports and automations. Defaults to `true`; disabling preserves its configuration and existing workspace links. |
+| `showThinkingBlocks` | `boolean` | Display the latest agent reasoning panel immediately above the chat input. Defaults to `true`. |
 | `notionStatusProperty` | `string` | Notion DB property updated to `notionInProgressStatus` when a workspace starts work on a Notion-backed mission. Empty disables the feature. |
 | `notionInProgressStatus` | `string` | Value written to `notionStatusProperty`. |
 | `notionAssigneeProperty` | `string` | Notion People property to auto-assign to the authenticated user. |
@@ -196,6 +200,19 @@ Projects override a subset of global settings. Anything you set here takes prece
 | `e2e.skill` | `string` | Optional skill name injected into the E2E grooming prompt. |
 | `e2e.prompt` | `string` | Free-form prompt appended to every `[E2E] ` sub-task. |
 | `finalization.prompt` | `string` | Runs as the very last auto-loop iteration (`[FINAL]`-prefixed task). Empty disables. |
+
+## Progressive Web App
+
+Production builds (`npm run build`, `npm start`, or `npx @loicngr/kobo`) serve
+the Quasar PWA build. Open Kōbō in a browser and use **Install app** or **Add
+to Home Screen** to install it as a desktop or mobile application.
+
+The PWA caches the application shell for fast reopening, but agent sessions,
+chat history, HTTP requests, and WebSocket updates still require a reachable
+Kōbō server. Kōbō shows an offline notice and offers an explicit reload when a
+new service worker is ready; it never reloads an active page automatically.
+The development client (`npm run dev:client`) intentionally uses Quasar's
+normal dev server and is not installable.
 
 ## Custom change-source-branch script
 
@@ -731,6 +748,12 @@ Each engine maps Kōbō's four modes onto its own sandbox + approval flags. The 
 Interactive Q&A (`request_user_input`) is only available in `plan` for Codex, a constraint of Codex itself. In `bypass`, `strict`, and `interactive`, Codex can still ask questions as normal chat text and you can respond in the chat, but it cannot open Kōbō's structured question panel.
 Full access in `bypass` is required for linked-worktree Git metadata under the repository's shared `.git` directory.
 
+When an approval panel appears, **Allow this turn** permits the same tool for
+the rest of the current session. **Allow this operation** stores a rule for the
+same workspace, engine, tool, and exact operation payload; **Allow this tool**
+stores a rule for every invocation of that tool in the workspace. Persistent
+rules survive restarts and can be removed from the workspace's permission UI.
+
 ## Dev server
 
 Each workspace can run its own dev server. The **Tools** panel shows its status, a clickable URL, the live container count, and a logs button. That works only when your project follows a small contract. This section documents the contract so the panel lights up for *your* project, not just Docker-instance projects.
@@ -953,6 +976,14 @@ Kōbō only invokes the CLI binary. If the CLI is missing from `PATH` or not aut
 
 Pulls the body, title, and checklists of a Notion page to seed a workspace's tasks and acceptance criteria.
 
+Enable the integration in **Settings → Notion**. Disabling it preserves its
+credentials and existing workspace links but hides Notion import and automation
+actions until it is enabled again.
+
+Use **Test connection** in the same Settings tab to start the configured MCP
+server, initialise it, and make a lightweight authenticated API request. The
+result shows the elapsed time or an actionable configuration error.
+
 ### Setup
 
 1. Visit <https://www.notion.so/profile/integrations> and create an internal integration.
@@ -995,6 +1026,14 @@ When `notionStatusProperty` is set, Kōbō flips it to `notionInProgressStatus` 
 ## Sentry integration
 
 Turns a Sentry issue URL into a "fix workspace": Kōbō extracts the stacktrace, tags, and offending spans, writes them to `.ai/thoughts/SENTRY-<id>.md`, and primes the agent with a TDD fix workflow plus live access to the Sentry MCP tools.
+
+Enable the integration in **Settings → Sentry**. Disabling it preserves its
+configuration and existing workspace links but hides Sentry import and
+automation actions until it is enabled again.
+
+Use **Test connection** in the same Settings tab to initialise the configured
+MCP server and run its identity check. The result shows the elapsed time or an
+actionable configuration error.
 
 ### Setup
 

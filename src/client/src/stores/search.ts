@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia'
 
 export interface SearchResult {
+  eventId: string
+  sessionId: string | null
   workspaceId: string
   workspaceName: string
   archived: boolean

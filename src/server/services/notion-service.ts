@@ -353,6 +353,31 @@ export interface NotionUser {
   avatarUrl: string | null
 }
 
+export interface IntegrationTestResult {
+  ok: boolean
+  durationMs: number
+  detail: string
+}
+
+/** Lightweight MCP/auth smoke test; does not read a user page or mutate Notion. */
+export async function testNotionConnection(): Promise<IntegrationTestResult> {
+  const startedAt = Date.now()
+  const global = getGlobalSettings()
+  const mcpProcess = spawnNotionMcp(global.notionMcpKey)
+  try {
+    await initializeMcp(mcpProcess)
+    await callMcpTool(mcpProcess, 'API-get-users', { page_size: 1 })
+    return {
+      ok: true,
+      durationMs: Date.now() - startedAt,
+      detail: 'MCP connection and Notion authentication succeeded',
+    }
+  } finally {
+    mcpProcess.stdin?.end()
+    mcpProcess.kill()
+  }
+}
+
 export async function listNotionUsers(): Promise<NotionUser[]> {
   const global = getGlobalSettings()
   const mcpProcess = spawnNotionMcp(global.notionMcpKey)

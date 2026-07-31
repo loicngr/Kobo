@@ -75,6 +75,20 @@ export function initSchema(db: Database.Database): void {
       created_at TEXT NOT NULL
     );
 
+    CREATE TABLE IF NOT EXISTS workspace_permission_rules (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      engine TEXT,
+      tool_name TEXT NOT NULL,
+      scope TEXT NOT NULL CHECK(scope IN ('operation', 'tool')),
+      fingerprint TEXT,
+      display_label TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_workspace_permission_rules_lookup
+      ON workspace_permission_rules(workspace_id, engine, tool_name, scope, fingerprint);
+
     CREATE TABLE IF NOT EXISTS pending_wakeups (
       workspace_id     TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
       target_at        TEXT NOT NULL,

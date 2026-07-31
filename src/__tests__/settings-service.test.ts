@@ -47,6 +47,8 @@ describe('getSettings()', () => {
     expect(settings.global.defaultModelByEngine['claude-code']).toBe('auto')
     expect(settings.global.defaultModelByEngine.codex).toBe('auto')
     expect(settings.global.worktreesPath).toBe('.worktrees')
+    expect(settings.global.notionEnabled).toBe(true)
+    expect(settings.global.sentryEnabled).toBe(true)
     expect(typeof settings.global.prPromptTemplate).toBe('string')
     expect(settings.projects).toEqual([])
   })
@@ -143,6 +145,22 @@ describe('getGlobalSettings()', () => {
 })
 
 describe('updateGlobalSettings()', () => {
+  it('persists the thinking-block visibility preference', () => {
+    expect(getGlobalSettings().showThinkingBlocks).toBe(true)
+
+    const updated = updateGlobalSettings({ showThinkingBlocks: false })
+
+    expect(updated.showThinkingBlocks).toBe(false)
+    expect(getGlobalSettings().showThinkingBlocks).toBe(false)
+  })
+
+  it('persists global Notion and Sentry integration switches', () => {
+    const updated = updateGlobalSettings({ notionEnabled: false, sentryEnabled: false })
+
+    expect(updated.notionEnabled).toBe(false)
+    expect(updated.sentryEnabled).toBe(false)
+    expect(getGlobalSettings()).toMatchObject({ notionEnabled: false, sentryEnabled: false })
+  })
   it('patches only specified fields', () => {
     getSettings() // ensure defaults
     updateGlobalSettings({ prPromptTemplate: 'new template' })
@@ -2089,7 +2107,7 @@ describe('PR notification sounds (v45)', () => {
       audioQuestionSound: 'hey.mp3',
       networkAccessToken: 'keep-me',
     })
-    expect(SETTINGS_SCHEMA_VERSION).toBe(45)
+    expect(SETTINGS_SCHEMA_VERSION).toBe(47)
   })
 
   it('preserves existing valid values instead of overwriting them', () => {

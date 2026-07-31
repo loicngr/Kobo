@@ -299,17 +299,17 @@
           <div class="text-subtitle2 q-mb-sm">{{ $t('health.integrationsTitle') }}</div>
           <div class="column q-gutter-xs">
             <div class="row items-center">
-              <q-icon :name="statusIcon(report.integrations.notion.configured)" :color="statusColor(report.integrations.notion.configured)" size="sm" />
+              <q-icon :name="statusIcon(report.integrations.notion.enabled && report.integrations.notion.configured)" :color="statusColor(report.integrations.notion.enabled && report.integrations.notion.configured)" size="sm" />
               <span class="q-ml-sm text-body2">Notion</span>
               <span class="q-ml-sm text-caption text-grey-6">
-                {{ report.integrations.notion.configured ? $t('health.integrationConfigured') : $t('health.integrationMissing') }}
+                {{ !report.integrations.notion.enabled ? $t('health.integrationDisabled') : report.integrations.notion.configured ? $t('health.integrationConfigured') : $t('health.integrationMissing') }}
               </span>
             </div>
             <div class="row items-center">
-              <q-icon :name="statusIcon(report.integrations.sentry.configured)" :color="statusColor(report.integrations.sentry.configured)" size="sm" />
+              <q-icon :name="statusIcon(report.integrations.sentry.enabled && report.integrations.sentry.configured)" :color="statusColor(report.integrations.sentry.enabled && report.integrations.sentry.configured)" size="sm" />
               <span class="q-ml-sm text-body2">Sentry</span>
               <span class="q-ml-sm text-caption text-grey-6">
-                {{ report.integrations.sentry.configured ? $t('health.integrationConfigured') : $t('health.integrationMissing') }}
+                {{ !report.integrations.sentry.enabled ? $t('health.integrationDisabled') : report.integrations.sentry.configured ? $t('health.integrationConfigured') : $t('health.integrationMissing') }}
               </span>
             </div>
             <div class="row items-center">
@@ -385,8 +385,8 @@ interface HealthReport {
   workspaces: { total: number; archived: number; worktreesMissing: WorktreeCheck[] }
   agentSessions: { orphaned: number }
   integrations: {
-    notion: { configured: boolean }
-    sentry: { configured: boolean }
+    notion: { configured: boolean; enabled: boolean }
+    sentry: { configured: boolean; enabled: boolean }
     editor: { configured: boolean }
   }
   active: {

@@ -5,6 +5,9 @@
       <q-icon :name="toolIcon" size="14px" class="tool-icon" />
       <span class="tool-name">{{ fileChange.toolName === 'Bash:rm' ? 'Bash' : fileChange.toolName }}</span>
       <span class="tool-path" :title="fileChange.filePath">{{ displayFilePath }}</span>
+      <q-btn flat dense round size="xs" icon="open_in_new" class="tool-open-diff" @click.stop="openInDiff">
+        <q-tooltip>{{ t('chat.openInGitDiff') }}</q-tooltip>
+      </q-btn>
       <span v-if="fileChange.additions > 0" class="tool-stat-add">+{{ fileChange.additions }}</span>
       <span v-if="fileChange.deletions > 0" class="tool-stat-del">-{{ fileChange.deletions }}</span>
       <q-icon
@@ -71,12 +74,15 @@ import type { ConversationItem } from 'src/services/agent-event-view'
 import { computeInlineDiff, type DiffLine, getFileChangeInfo } from 'src/services/inline-diff'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { compactPath } from 'src/utils/compact-path'
+import { requestDiffOpen } from 'src/utils/pending-diff-open'
 import { computed, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{ item: Extract<ConversationItem, { type: 'tool' }> }>()
 
 const expanded = ref(false)
 const workspaceStore = useWorkspaceStore()
+const { t } = useI18n()
 
 const fileChange = computed(() => getFileChangeInfo(props.item.name, props.item.input))
 const displayFilePath = computed(() =>
@@ -179,6 +185,21 @@ function toggleExpand() {
   expanded.value = !expanded.value
 }
 
+function openInDiff() {
+  const rawPath = fileChange.value?.filePath
+  const workspace = workspaceStore.selectedWorkspace
+  const workspaceId = workspace?.id
+  // Agent SDKs report absolute worktree paths, whereas the Git diff API
+  // returns paths relative to that worktree. Use the same normalisation as
+  // the visible tool-card label before asking DiffViewer to select a file.
+  const path = rawPath ? compactPath(rawPath, workspace) : ''
+  // compactPath deliberately leaves unrelated absolute paths unchanged; do
+  // not treat those as worktree files.
+  if (!path || /^(?:[A-Za-z]:)?[\\/]/.test(path) || !workspaceId) return
+  requestDiffOpen(workspaceId, path)
+  window.dispatchEvent(new CustomEvent('kobo:open-diff', { detail: { workspaceId, path } }))
+}
+
 // Auto-expand whenever the tool result arrives with `isError === true` so
 // failures are visible without the user having to click. A subsequent
 // manual collapse still works (watcher only sets true, never false).
@@ -235,6 +256,7 @@ watch(
   font-family: 'SF Mono', Menlo, Consolas, monospace;
   font-size: 11.5px;
 }
+.tool-open-diff { flex-shrink: 0; }
 .tool-path {
   flex: 1;
 }
