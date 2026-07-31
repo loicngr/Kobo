@@ -3,8 +3,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import {
-  DEFAULT_PR_NOTIFICATION_SOUND_SETTINGS,
   DEFAULT_NOTIFICATION_SOUND,
+  DEFAULT_PR_NOTIFICATION_SOUND_SETTINGS,
   DEFAULT_WORKSPACE_CREATED_SOUND,
   INHERIT_NOTIFICATION_SOUND,
   isKnownSoundId,
@@ -73,9 +73,7 @@ describe('NOTIFICATION_SOUNDS', () => {
 
   it('registers all twelve new assets and keeps every file present', () => {
     expect(NOTIFICATION_SOUNDS).toHaveLength(19)
-    expect(NOTIFICATION_SOUNDS.map((sound) => sound.id)).toEqual(
-      expect.arrayContaining([...NEW_SOUND_IDS]),
-    )
+    expect(NOTIFICATION_SOUNDS.map((sound) => sound.id)).toEqual(expect.arrayContaining([...NEW_SOUND_IDS]))
     for (const id of NEW_SOUND_IDS) {
       const asset = path.resolve(testDir, `../../public/sounds/${id}`)
       expect(fs.existsSync(asset), id).toBe(true)
@@ -132,9 +130,7 @@ describe('soundUrl()', () => {
 describe('PR notification sound selections', () => {
   it('defines all seven PR sound settings with inherit defaults', () => {
     expect(PR_NOTIFICATION_SOUND_SETTING_KEYS).toHaveLength(7)
-    expect(Object.values(DEFAULT_PR_NOTIFICATION_SOUND_SETTINGS)).toEqual(
-      Array(7).fill(INHERIT_NOTIFICATION_SOUND),
-    )
+    expect(Object.values(DEFAULT_PR_NOTIFICATION_SOUND_SETTINGS)).toEqual(Array(7).fill(INHERIT_NOTIFICATION_SOUND))
   })
 
   it.each([

@@ -406,10 +406,7 @@ describe('checkPrStatuses — configurable notification transitions', () => {
   })
 
   it('emits and marks unread when CI first fails', async () => {
-    await runPrTransition(
-      { ci: { rollup: 'PENDING', checks: [] } },
-      { ci: { rollup: 'FAILURE', checks: [] } },
-    )
+    await runPrTransition({ ci: { rollup: 'PENDING', checks: [] } }, { ci: { rollup: 'FAILURE', checks: [] } })
     expect(wsSvc.emitEphemeral).toHaveBeenCalledWith('ws-1', 'pr:ci-failed', {
       prNumber: 1,
       prUrl: 'https://github.com/x/y/pull/1',
@@ -418,10 +415,7 @@ describe('checkPrStatuses — configurable notification transitions', () => {
   })
 
   it('emits without marking unread when CI recovers', async () => {
-    await runPrTransition(
-      { ci: { rollup: 'FAILURE', checks: [] } },
-      { ci: { rollup: 'SUCCESS', checks: [] } },
-    )
+    await runPrTransition({ ci: { rollup: 'FAILURE', checks: [] } }, { ci: { rollup: 'SUCCESS', checks: [] } })
     expect(wsSvc.emitEphemeral).toHaveBeenCalledWith('ws-1', 'pr:ci-recovered', {
       prNumber: 1,
       prUrl: 'https://github.com/x/y/pull/1',
@@ -462,9 +456,7 @@ describe('checkPrStatuses — configurable notification transitions', () => {
       },
     )
     const emittedTypes = vi.mocked(wsSvc.emitEphemeral).mock.calls.map((call) => call[1])
-    expect(emittedTypes).toEqual(
-      expect.arrayContaining(['pr:ci-recovered', 'pr:approved', 'pr:ready-to-merge']),
-    )
+    expect(emittedTypes).toEqual(expect.arrayContaining(['pr:ci-recovered', 'pr:approved', 'pr:ready-to-merge']))
   })
 
   it('emits merged even when the workspace is busy and skips archive', async () => {
@@ -481,26 +473,15 @@ describe('checkPrStatuses — configurable notification transitions', () => {
   })
 
   it('does not repeat events when the snapshot remains unchanged', async () => {
-    await runPrTransition(
-      { ci: { rollup: 'PENDING', checks: [] } },
-      { ci: { rollup: 'FAILURE', checks: [] } },
-    )
+    await runPrTransition({ ci: { rollup: 'PENDING', checks: [] } }, { ci: { rollup: 'FAILURE', checks: [] } })
     vi.mocked(wsSvc.emitEphemeral).mockClear()
-    getPrStatusMock.mockResolvedValueOnce(
-      makePrSnapshot({ base: 'main', ci: { rollup: 'FAILURE', checks: [] } }),
-    )
+    getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ base: 'main', ci: { rollup: 'FAILURE', checks: [] } }))
     await checkPrStatuses()
-    expect(wsSvc.emitEphemeral).not.toHaveBeenCalledWith(
-      'ws-1',
-      'pr:ci-failed',
-      expect.anything(),
-    )
+    expect(wsSvc.emitEphemeral).not.toHaveBeenCalledWith('ws-1', 'pr:ci-failed', expect.anything())
   })
 
   it('keeps first sight silent for all notification states', async () => {
-    vi.mocked(wsService.listWorkspaces).mockReturnValue([
-      makeWorkspace({ sourceBranch: 'main' }),
-    ] as never)
+    vi.mocked(wsService.listWorkspaces).mockReturnValue([makeWorkspace({ sourceBranch: 'main' })] as never)
     vi.mocked(computeGitStats).mockResolvedValue({} as never)
     getPrStatusMock.mockResolvedValueOnce(
       makePrSnapshot({
