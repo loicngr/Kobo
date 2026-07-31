@@ -2,11 +2,12 @@ import { defineStore } from 'pinia'
 import { Notify } from 'quasar'
 import i18n from 'src/i18n'
 import { useAgentStreamStore } from 'src/stores/agent-stream'
-import { useSettingsStore } from 'src/stores/settings'
+import { type GlobalSettings, useSettingsStore } from 'src/stores/settings'
 import type { AgentEvent } from 'src/types/agent-event'
 import type { ProviderId, UsageSnapshot } from 'src/types/usage'
 import { appendTokenToWsUrl, getToken } from 'src/utils/auth-token'
 import { openNetworkLogin } from 'src/utils/network-login-bus'
+import { resolveNotificationSoundOverride } from 'src/utils/notification-sounds'
 import { notify } from 'src/utils/notifications'
 import type { DevServerStatus } from './dev-server'
 import { useDevServerStore } from './dev-server'
@@ -16,6 +17,30 @@ import type { PendingCron } from './workspace'
 import { useWorkspaceStore } from './workspace'
 
 const t = i18n.global.t
+
+type PrNotificationEvent =
+  | 'pr:ci-failed'
+  | 'pr:ci-recovered'
+  | 'pr:changes-requested'
+  | 'pr:approved'
+  | 'pr:merge-conflict'
+  | 'pr:ready-to-merge'
+  | 'pr:merged'
+
+const PR_SOUND_SETTING_BY_EVENT = {
+  'pr:ci-failed': 'audioPrCiFailedSound',
+  'pr:ci-recovered': 'audioPrCiRecoveredSound',
+  'pr:changes-requested': 'audioPrChangesRequestedSound',
+  'pr:approved': 'audioPrApprovedSound',
+  'pr:merge-conflict': 'audioPrMergeConflictSound',
+  'pr:ready-to-merge': 'audioPrReadyToMergeSound',
+  'pr:merged': 'audioPrMergedSound',
+} as const satisfies Record<PrNotificationEvent, keyof GlobalSettings>
+
+function prSoundOverride(event: PrNotificationEvent): string | null | undefined {
+  const settings = useSettingsStore()
+  return resolveNotificationSoundOverride(settings.global[PR_SOUND_SETTING_BY_EVENT[event]])
+}
 
 // Module-level variables — must NOT be reactive (Vue Proxy breaks WebSocket)
 let _ws: WebSocket | null = null
@@ -995,6 +1020,39 @@ export const useWebSocketStore = defineStore('websocket', {
           break
         }
 
+        case 'pr:ci-failed':
+        case 'pr:ci-recovered':
+        case 'pr:merge-conflict':
+        case 'pr:merged': {
+          if (!wid) break
+          const eventType = msg.type as Extract<
+            PrNotificationEvent,
+            'pr:ci-failed' | 'pr:ci-recovered' | 'pr:merge-conflict' | 'pr:merged'
+          >
+          const p = payload as { prNumber?: number; prUrl?: string }
+          const prNumber = p.prNumber ?? 0
+          const presentation = {
+            'pr:ci-failed': { key: 'toast.prCiFailed', type: 'negative', timeout: 0 },
+            'pr:ci-recovered': { key: 'toast.prCiRecovered', type: 'positive', timeout: 5000 },
+            'pr:merge-conflict': { key: 'toast.prMergeConflict', type: 'warning', timeout: 0 },
+            'pr:merged': { key: 'toast.prMerged', type: 'positive', timeout: 5000 },
+          } as const
+          const current = presentation[eventType]
+          const message = t(current.key, { n: prNumber })
+
+          Notify.create({
+            type: current.type,
+            position: 'top',
+            timeout: current.timeout,
+            message,
+          })
+          notify(message, undefined, wid, prSoundOverride(eventType))
+          if (eventType !== 'pr:merged') {
+            void workspaceStore.refreshPrSnapshot(wid)
+          }
+          break
+        }
+
         case 'pr:changes-requested': {
           if (!wid) break
           const p = payload as { prNumber?: number; prUrl?: string }
@@ -1025,7 +1083,7 @@ export const useWebSocketStore = defineStore('websocket', {
             message,
             actions,
           })
-          notify(message, undefined, wid)
+          notify(message, undefined, wid, prSoundOverride('pr:changes-requested'))
           // Refresh the local snapshot so the icon flips immediately without
           // waiting for the next watcher tick to re-pull from /pr-states.
           void workspaceStore.refreshPrSnapshot(wid)
@@ -1043,7 +1101,7 @@ export const useWebSocketStore = defineStore('websocket', {
             timeout: 5000,
             message,
           })
-          notify(message, undefined, wid)
+          notify(message, undefined, wid, prSoundOverride('pr:approved'))
           void workspaceStore.refreshPrSnapshot(wid)
           break
         }
@@ -1059,7 +1117,7 @@ export const useWebSocketStore = defineStore('websocket', {
             timeout: 5000,
             message,
           })
-          notify(message, undefined, wid)
+          notify(message, undefined, wid, prSoundOverride('pr:ready-to-merge'))
           void workspaceStore.refreshPrSnapshot(wid)
           break
         }
