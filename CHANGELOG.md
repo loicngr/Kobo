@@ -4,6 +4,38 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.11.2
+
+- feat(integrations): let Notion and Sentry be enabled independently, keep
+  their settings isolated, hide inactive project overrides, and add detailed
+  **Test connection** feedback.
+- feat(chat): stream Claude output token-by-token like Codex, consolidate agent
+  reasoning into one live panel above the composer, and add a visibility
+  preference for reasoning and verbose system messages.
+- feat(chat): add `Ctrl+J` for a new line, `Ctrl+Enter` to force a queued
+  message while an agent is busy, and keep the shortcuts visible below chat.
+- feat(chat): add session-aware `Ctrl+F` workspace-history search, scrolling to
+  the selected result; global search now opens the same exact message.
+- feat(chat): add a `Ctrl+K` workspace command palette for common actions.
+- feat(chat): make worktree-relative paths and Edit/Write cards open the
+  corresponding file in the Git diff viewer.
+- feat(git): add workspace commits with either a user-written message or an
+  agent request; add confirmed PR/MR merging and an optional remote-branch
+  deletion after merge.
+- feat(auto-loop): retry quota, rate-limit, and temporary upstream failures;
+  add a configurable maximum retry count.
+- feat(notifications): add `basic-notification.mp3`, event-level sound
+  inheritance, an agent-error sound, browser-permission diagnostics, and more
+  reliable playback while Kobo is in a background tab.
+- feat(settings): extend the project color palette and improve save-state
+  handling for activity-feed preferences.
+- feat(observability): enrich the session timeline with tools, tokens, and
+  errors; keep it fresh during an active run and retain diagnostic export.
+- feat(pwa): show install, offline, update, and WebSocket-reconnection states;
+  preserve the visible chat area when the status banner is displayed.
+- fix(websocket): avoid reconnecting after an explicit disconnect and resume
+  safely after network connectivity returns.
+
 ## 1.11.1
 
 - feat(workspace): improve workspace actions
