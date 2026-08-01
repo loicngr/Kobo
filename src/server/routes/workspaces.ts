@@ -3336,6 +3336,62 @@ app.post('/:id/git/commit-all', async (c) => {
   }
 })
 
+/** Ask the workspace agent to inspect and commit the current working tree. */
+app.post('/:id/git/commit-with-agent', migrationGuard, async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const workingTree = gitOps.getWorkingTreeStatus(workspace.worktreePath)
+    if (workingTree.staged + workingTree.modified + workingTree.untracked === 0) {
+      return c.json({ error: 'No uncommitted changes to commit' }, 400)
+    }
+
+    const prompt = `Please prepare a clean commit for the uncommitted changes in this workspace.
+
+1. Read .ai/.git-conventions.md if it exists and follow it exactly.
+2. Inspect git status and the staged and unstaged diffs. Do not include unrelated files.
+3. Run the relevant focused checks when practical.
+4. Stage the intended changes and create one conventional, descriptive commit.
+5. Do NOT push the branch.
+
+When finished, report the commit SHA, its message, the files included, and the checks you ran.`
+
+    const session = workspaceService.getActiveSession(workspace.id)
+    wsService.emit(workspace.id, 'user:message', { content: prompt, sender: 'user' }, session?.id ?? undefined)
+    wakeupService.cancel(workspace.id, 'user-message')
+
+    let messageSent = false
+    try {
+      agentManager.sendMessage(workspace.id, prompt)
+      messageSent = true
+    } catch {
+      try {
+        agentManager.startAgent(
+          workspace.id,
+          workspace.worktreePath,
+          prompt,
+          workspace.model,
+          true,
+          workspace.agentPermissionMode,
+          undefined,
+          workspace.reasoningEffort,
+        )
+        workspaceService.updateWorkspaceStatus(workspace.id, 'executing')
+        messageSent = true
+      } catch (resumeErr) {
+        const message = resumeErr instanceof Error ? resumeErr.message : String(resumeErr)
+        return c.json({ error: `Unable to ask the agent to commit: ${message}` }, 409)
+      }
+    }
+
+    return c.json({ ok: true, messageSent })
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+  }
+})
+
 /** Discard working-tree changes (destructive recovery action for a dirty rebase/merge). */
 app.post('/:id/git/discard', (c) => {
   try {
@@ -3478,6 +3534,47 @@ app.post('/:id/change-pr-base', async (c) => {
     }
 
     await provider.changePrBase(workspace.worktreePath, body.base)
+    return c.json({ success: true })
+  } catch (err) {
+    if (err instanceof ForgeUnavailableError) {
+      return c.json({ error: err.message, code: 'forge_unavailable' }, 409)
+    }
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+/** Merge a ready, open PR/MR through its resolved forge provider. */
+app.post('/:id/merge-pr', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const provider = getForgeProvider(resolveForge(workspace.projectPath))
+    if (!provider.capabilities.canMergeRequest) {
+      return c.json({ error: 'This project has no forge that can merge the PR', code: 'forge_unsupported' }, 409)
+    }
+    const availability = await provider.isAvailable(workspace.worktreePath)
+    if (!availability.available) {
+      return c.json(
+        {
+          error: `Forge CLI unavailable (${availability.reason ?? 'unknown'})`,
+          code: `forge_${availability.reason ?? 'unavailable'}`,
+        },
+        409,
+      )
+    }
+
+    const snapshot = await provider.getPrStatus(workspace.worktreePath, workspace.workingBranch)
+    if (!snapshot || snapshot.state !== 'OPEN') {
+      return c.json({ error: 'No open PR found for this workspace', code: 'pr_not_open' }, 409)
+    }
+    if (!snapshot.readyToMerge) {
+      return c.json({ error: 'This PR is not ready to merge', code: 'pr_not_ready' }, 409)
+    }
+
+    await provider.mergeRequest(workspace.worktreePath, snapshot.number)
     return c.json({ success: true })
   } catch (err) {
     if (err instanceof ForgeUnavailableError) {

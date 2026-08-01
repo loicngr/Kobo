@@ -14,10 +14,15 @@ vi.mock('../server/services/dev-server-service.js', () => ({
   getDevServerLogs: vi.fn(),
 }))
 
+vi.mock('../server/services/settings-service.js', () => ({
+  getProjectSettings: vi.fn(),
+}))
+
 // ── Imports (after mocks) ────────────────────────────────────────────────────
 
 import router from '../server/routes/dev-server.js'
 import * as devServerService from '../server/services/dev-server-service.js'
+import { getProjectSettings } from '../server/services/settings-service.js'
 import { getWorkspace } from '../server/services/workspace-service.js'
 
 // ── App setup ────────────────────────────────────────────────────────────────
@@ -55,6 +60,7 @@ const fakeStatus = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(getProjectSettings).mockReturnValue({ devServer: { startCommand: 'npm run dev' } } as never)
 })
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -70,6 +76,21 @@ describe('GET /api/dev-server/:workspaceId/status', () => {
     expect(data.status).toBe('running')
     expect(data.instanceName).toBe('feature-test')
     expect(devServerService.getStatus).toHaveBeenCalledWith('/tmp/project', 'feature/test', 'ws-1')
+  })
+
+  it('reports not_configured when the project has no dev-server command', async () => {
+    vi.mocked(getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(getProjectSettings).mockReturnValue({ devServer: { startCommand: '' } } as never)
+
+    const res = await app.request('/api/dev-server/ws-1/status')
+
+    expect(res.status).toBe(200)
+    await expect(res.json()).resolves.toMatchObject({
+      status: 'not_configured',
+      configured: false,
+      message: 'No dev server is configured for this project',
+    })
+    expect(devServerService.getStatus).not.toHaveBeenCalled()
   })
 
   it('falls back to persisted devServerStatus when runtime returns unknown', async () => {

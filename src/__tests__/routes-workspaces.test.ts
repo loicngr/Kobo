@@ -222,6 +222,7 @@ vi.mock('../server/services/forge/resolve.js', () => ({
   resolveForge: vi.fn(() => 'github'),
 }))
 const changePrBaseMock = vi.fn()
+const mergeRequestMock = vi.fn()
 const createPrMock = vi.fn()
 const getPrStatusMock = vi.fn().mockResolvedValue(null)
 const changeSourceBranchMock = vi.fn()
@@ -231,9 +232,10 @@ vi.mock('../server/services/change-source-branch-service.js', () => ({
 vi.mock('../server/services/forge/registry.js', () => ({
   getForgeProvider: vi.fn(() => ({
     id: 'github',
-    capabilities: { canCreatePr: true, canChangePrBase: true, requestTermShort: 'PR' },
+    capabilities: { canCreatePr: true, canChangePrBase: true, canMergeRequest: true, requestTermShort: 'PR' },
     isAvailable: vi.fn(async () => ({ available: true })),
     changePrBase: changePrBaseMock,
+    mergeRequest: mergeRequestMock,
     createPr: createPrMock,
     getPrStatus: getPrStatusMock,
   })),
@@ -5195,6 +5197,34 @@ describe('POST /api/workspaces/:id/change-pr-base', () => {
       body: JSON.stringify({ base: 'develop' }),
     })
     expect(res.status).toBe(500)
+  })
+})
+
+describe('POST /api/workspaces/:id/merge-pr', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mergeRequestMock.mockReset()
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
+  })
+
+  it('merges a PR only after the provider confirms it is ready', async () => {
+    getPrStatusMock.mockResolvedValueOnce({ number: 42, state: 'OPEN', readyToMerge: true })
+    mergeRequestMock.mockResolvedValueOnce(undefined)
+
+    const res = await app.request('/api/workspaces/ws-1/merge-pr', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(mergeRequestMock).toHaveBeenCalledWith(expect.any(String), 42)
+  })
+
+  it('refuses to merge a PR that is no longer ready', async () => {
+    getPrStatusMock.mockResolvedValueOnce({ number: 42, state: 'OPEN', readyToMerge: false })
+
+    const res = await app.request('/api/workspaces/ws-1/merge-pr', { method: 'POST' })
+
+    expect(res.status).toBe(409)
+    expect(((await res.json()) as { code: string }).code).toBe('pr_not_ready')
+    expect(mergeRequestMock).not.toHaveBeenCalled()
   })
 })
 

@@ -230,6 +230,35 @@
           </q-btn>
         </template>
 
+        <q-btn
+          v-if="canMergeRequest"
+          no-caps
+          unelevated
+          dense
+          size="sm"
+          color="deep-orange-7"
+          icon="merge"
+          :label="$t('git.mergeRequest', { request: forge.capabilities.requestTermShort })"
+          class="full-width q-mb-xs"
+          :loading="mergingRequest"
+          :disable="isArchived"
+          @click="handleMergeRequest"
+        />
+
+        <q-btn
+          v-if="hasUncommittedChanges"
+          no-caps
+          unelevated
+          dense
+          size="sm"
+          color="green-7"
+          icon="commit"
+          :label="$t('git.commitChanges')"
+          class="full-width q-mb-xs"
+          :disable="isArchived"
+          @click="showCommitDialog = true"
+        />
+
         <!-- Secondary row: Sync dropdown + Push + Diff Review + overflow.
              Each action lives in its own `col` so the four share space evenly
              without overlap; the overflow icon stays at natural width via `col-auto`. -->
@@ -395,6 +424,59 @@
             :label="pushForce ? $t('git.forcePush') : $t('git.push')"
             :color="pushForce ? 'orange-4' : 'grey-5'"
             @click="confirmPush"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+
+    <q-dialog v-model="showCommitDialog" persistent>
+      <q-card dark style="min-width: 420px; max-width: 600px;">
+        <q-card-section>
+          <div class="text-subtitle1">
+            <q-icon name="commit" color="green-5" class="q-mr-xs" />
+            {{ $t('git.commitDialogTitle') }}
+          </div>
+          <div class="text-caption text-grey-6 q-mt-xs">{{ $t('git.commitDialogDescription') }}</div>
+        </q-card-section>
+        <q-card-section class="q-pt-none">
+          <q-input
+            v-model="commitMessage"
+            dark
+            dense
+            autofocus
+            :label="$t('git.commitMessage')"
+            :disable="committingDirect || committingWithAgent"
+            @keyup.enter="commitChangesDirectly"
+          />
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn
+            flat
+            no-caps
+            :label="$t('common.cancel')"
+            color="grey-5"
+            :disable="committingDirect || committingWithAgent"
+            @click="showCommitDialog = false"
+          />
+          <q-btn
+            flat
+            no-caps
+            icon="smart_toy"
+            color="indigo-4"
+            :label="$t('git.commitWithAgent')"
+            :loading="committingWithAgent"
+            :disable="committingDirect"
+            @click="commitWithAgent"
+          />
+          <q-btn
+            unelevated
+            no-caps
+            icon="commit"
+            color="green-7"
+            :label="$t('git.commitManual')"
+            :loading="committingDirect"
+            :disable="!commitMessage.trim() || committingWithAgent"
+            @click="commitChangesDirectly"
           />
         </q-card-actions>
       </q-card>
@@ -661,7 +743,12 @@ const merging = ref(false)
 const fetching = ref(false)
 const openingPr = ref(false)
 const changingBase = ref(false)
+const mergingRequest = ref(false)
 const showDiff = ref(false)
+const showCommitDialog = ref(false)
+const commitMessage = ref('')
+const committingDirect = ref(false)
+const committingWithAgent = ref(false)
 // Whether to open the DiffViewer directly in Review mode. Set by the "Diff v2"
 // button; the regular "Diff" button keeps the user's persisted preference.
 const diffInitialReview = ref(false)
@@ -854,7 +941,7 @@ const prSnapshot = computed(() => {
 /** Fallback when the backend hasn't returned a forge block yet (old cached response). */
 const FORGE_FALLBACK: ForgeInfo = {
   id: 'none',
-  capabilities: { canCreatePr: false, canChangePrBase: false, requestTermShort: 'PR' },
+  capabilities: { canCreatePr: false, canChangePrBase: false, canMergeRequest: false, requestTermShort: 'PR' },
   availability: { available: false },
 }
 
@@ -873,6 +960,23 @@ const canOpenPr = computed(() => {
   if (!forge.value.availability.available) return false
   if (gitStats.value.unpushedCount === -1) return false
   return true
+})
+
+const canMergeRequest = computed(
+  () =>
+    !!(
+      gitStats.value?.prUrl &&
+      gitStats.value.prState === 'OPEN' &&
+      prSnapshot.value?.readyToMerge &&
+      forge.value.capabilities.canMergeRequest &&
+      forge.value.availability.available
+    ),
+)
+
+const hasUncommittedChanges = computed(() => {
+  const workingTree = gitStats.value?.workingTree
+  if (!workingTree) return false
+  return workingTree.staged + workingTree.modified + workingTree.untracked > 0
 })
 
 const createPrDisabledReason = computed(() => {
@@ -1162,6 +1266,57 @@ function openDirtyDialog(
   dirtyDialog.value = true
 }
 
+async function commitChangesDirectly() {
+  if (!props.workspace || !commitMessage.value.trim()) return
+  committingDirect.value = true
+  try {
+    const res = await fetch(`/api/workspaces/${props.workspace.id}/git/commit-all`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ message: commitMessage.value.trim() }),
+    })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error ?? t('git.commitFailed'))
+    }
+    showCommitDialog.value = false
+    commitMessage.value = ''
+    await loadGitStats({ freshFetch: true })
+  } catch (err) {
+    $q.notify({
+      type: 'negative',
+      message: err instanceof Error ? err.message : t('git.commitFailed'),
+      position: 'top',
+      timeout: 6000,
+    })
+  } finally {
+    committingDirect.value = false
+  }
+}
+
+async function commitWithAgent() {
+  if (!props.workspace) return
+  committingWithAgent.value = true
+  try {
+    const res = await fetch(`/api/workspaces/${props.workspace.id}/git/commit-with-agent`, { method: 'POST' })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error ?? t('git.commitFailed'))
+    }
+    showCommitDialog.value = false
+    $q.notify({ type: 'positive', message: t('git.commitAgentSuccess'), position: 'top' })
+  } catch (err) {
+    $q.notify({
+      type: 'negative',
+      message: err instanceof Error ? err.message : t('git.commitFailed'),
+      position: 'top',
+      timeout: 6000,
+    })
+  } finally {
+    committingWithAgent.value = false
+  }
+}
+
 // Re-run the original operation after a recovery step succeeded.
 function retryDirtyOperation(opts?: { autostash?: boolean }) {
   const op = dirtyOperation.value
@@ -1410,6 +1565,35 @@ function handleChangePrBase() {
       $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
     } finally {
       changingBase.value = false
+    }
+  })
+}
+
+function handleMergeRequest() {
+  if (!props.workspace || !canMergeRequest.value) return
+  const request = forge.value.capabilities.requestTermShort
+  $q.dialog({
+    title: t('git.mergeRequestConfirmTitle', { request }),
+    message: t('git.mergeRequestConfirmMessage', { request }),
+    dark: true,
+    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    ok: { flat: true, label: t('git.mergeRequest', { request }), color: 'deep-orange-5' },
+  }).onOk(async () => {
+    if (!props.workspace) return
+    mergingRequest.value = true
+    try {
+      const res = await fetch(`/api/workspaces/${props.workspace.id}/merge-pr`, { method: 'POST' })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error ?? 'Failed')
+      }
+      $q.notify({ type: 'positive', message: t('git.mergeRequestSuccess', { request }), position: 'top' })
+      await Promise.allSettled([loadGitStats({ freshFetch: true }), store.refreshPrSnapshot(props.workspace.id)])
+    } catch (e) {
+      const message = e instanceof Error ? e.message : t('git.mergeRequestFailed', { request })
+      $q.notify({ type: 'negative', message, position: 'top', timeout: 6000 })
+    } finally {
+      mergingRequest.value = false
     }
   })
 }

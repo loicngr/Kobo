@@ -1,14 +1,14 @@
 <template>
-  <div v-if="thinking" class="latest-thinking-panel q-px-md q-pb-sm">
-    <ThinkingItem :item="thinking" />
+  <div v-if="isVisible" class="latest-thinking-panel q-px-md q-pb-sm">
+    <ThinkingItem :item="displayThinking" />
   </div>
 </template>
 
 <script setup lang="ts">
-import { foldEvents, getLatestThinkingItem } from 'src/services/agent-event-view'
 import { useAgentStreamStore } from 'src/stores/agent-stream'
 import { useSettingsStore } from 'src/stores/settings'
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed } from 'vue'
 import ThinkingItem from './items/ThinkingItem.vue'
 
@@ -33,17 +33,40 @@ function sessionMatches(sessionId: string | null | undefined): boolean {
   return sessionId === selectedSessionId.value || sessionId === selectedSessionLegacyTag.value
 }
 
-const thinking = computed(() => {
-  if (!settings.global.showThinkingBlocks) return null
-
+const latestThinking = computed(() => {
   const events = stream.eventsFor(props.workspaceId)
   const timestamps = stream.timestampsFor(props.workspaceId)
   const sessionIds = stream.sessionIdsFor(props.workspaceId)
-  const currentEvents = events.filter((_, index) => sessionMatches(sessionIds[index]))
-  const currentTimestamps = timestamps.filter((_, index) => sessionMatches(sessionIds[index]))
 
-  return getLatestThinkingItem(foldEvents(currentEvents, currentTimestamps, false))
+  // A thinking panel represents the engine's current activity, not its most
+  // recent historical thought. The first non-thinking event means it moved on
+  // to a tool call, an answer, or another phase and the panel must disappear.
+  for (let index = events.length - 1; index >= 0; index--) {
+    if (!sessionMatches(sessionIds[index])) continue
+    const event = events[index]
+    if (event.kind !== 'message:thinking') return null
+    return {
+      type: 'thinking' as const,
+      messageId: event.messageId,
+      text: event.text,
+      ts: timestamps[index],
+    }
+  }
+  return null
 })
+
+const isVisible = computed(
+  () =>
+    settings.global.showThinkingBlocks &&
+    isBusyStatus(workspaceStore.selectedWorkspace?.status) &&
+    latestThinking.value !== null,
+)
+
+// Some engines signal a thinking phase without exposing its details. In that
+// case, show the lightweight activity label for that phase only.
+const displayThinking = computed(
+  () => latestThinking.value ?? { type: 'thinking' as const, messageId: 'no-thinking-details', text: '' },
+)
 </script>
 
 <style scoped>

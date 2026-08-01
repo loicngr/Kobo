@@ -72,6 +72,7 @@ export function deriveReadyToMerge(
 export interface ForgeCapabilities {
   canCreatePr: boolean
   canChangePrBase: boolean
+  canMergeRequest: boolean
   /** Short request term for UI labels. */
   requestTermShort: 'PR' | 'MR'
 }
@@ -108,4 +109,5 @@ export interface ForgeProvider {
   getPrStatus(repoPath: string, branch: string): Promise<PrSnapshot | null>
   createPr(repoPath: string, opts: CreatePrOptions): Promise<{ url: string; number: number }>
   changePrBase(repoPath: string, base: string): Promise<void>
+  mergeRequest(repoPath: string, number: number): Promise<void>
 }

@@ -346,7 +346,7 @@ const WORKSPACE_SCOPED_TOOLS: Tool[] = [
   {
     name: 'get_dev_server_status',
     description:
-      'CALL BEFORE asking the user whether the app is running, or when your change is dev-server-sensitive. Returns running/stopped/starting/error + URL, port, container names.',
+      'CALL BEFORE asking the user whether the app is running, or when your change is dev-server-sensitive. Returns `not_configured` when this project has no dev server: do not start one manually in that case. Otherwise returns running/stopped/starting/error + URL, port, container names.',
     inputSchema: { type: 'object', properties: {}, required: [] },
     annotations: { readOnlyHint: true, openWorldHint: false },
   },

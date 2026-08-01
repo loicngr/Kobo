@@ -31,8 +31,15 @@ describe('github forge provider', () => {
     expect(githubProvider.capabilities).toEqual({
       canCreatePr: true,
       canChangePrBase: true,
+      canMergeRequest: true,
       requestTermShort: 'PR',
     })
+  })
+
+  it('merges a PR without deleting its branch', async () => {
+    execFileMock.mockResolvedValueOnce('')
+    await githubProvider.mergeRequest('/repo', 42)
+    expect(execFileMock).toHaveBeenCalledWith('gh', ['pr', 'merge', '42', '--merge'])
   })
 
   it('isAvailable returns available when gh auth status succeeds', async () => {

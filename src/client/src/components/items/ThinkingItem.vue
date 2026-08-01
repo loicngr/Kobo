@@ -1,5 +1,5 @@
 <template>
-  <div v-if="hasContent" class="text-caption text-grey-5" style="font-style: italic;">
+  <div class="text-caption text-grey-5" style="font-style: italic;">
     <q-expansion-item
       v-if="needsExpand"
       dense
@@ -18,7 +18,10 @@
       <!-- eslint-disable-next-line vue/no-v-html -->
       <div class="q-py-xs markdown-thinking" v-html="html" />
     </q-expansion-item>
-    <span v-else style="white-space: pre-wrap;"><q-icon name="psychology" size="14px" class="q-mr-xs" />{{ item.text }}</span>
+    <span v-else class="thinking-inline row items-center no-wrap">
+      <q-icon name="psychology" size="14px" class="q-mr-xs" />
+      {{ hasContent ? item.text : t('thinking.noDetails') }}
+    </span>
   </div>
 </template>
 
@@ -53,5 +56,9 @@ const html = computed(() => {
 }
 .thinking-expansion :deep(.q-item__section--side) {
   margin-left: auto;
+}
+.thinking-inline {
+  min-height: 20px;
+  line-height: 20px;
 }
 </style>

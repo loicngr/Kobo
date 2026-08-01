@@ -155,7 +155,7 @@ function availabilityFromError(err: unknown): ForgeAvailability {
 
 export const gitlabProvider: ForgeProvider = {
   id: 'gitlab',
-  capabilities: { canCreatePr: true, canChangePrBase: true, requestTermShort: 'MR' },
+  capabilities: { canCreatePr: true, canChangePrBase: true, canMergeRequest: true, requestTermShort: 'MR' },
 
   async isAvailable(repoPath: string): Promise<ForgeAvailability> {
     try {
@@ -208,5 +208,9 @@ export const gitlabProvider: ForgeProvider = {
 
   async changePrBase(repoPath: string, base: string): Promise<void> {
     await execFileAsync('glab', ['mr', 'update', '--target-branch', base], { cwd: repoPath, encoding: 'utf-8' })
+  },
+
+  async mergeRequest(repoPath: string, number: number): Promise<void> {
+    await execFileAsync('glab', ['mr', 'merge', String(number), '--yes'], { cwd: repoPath, encoding: 'utf-8' })
   },
 }

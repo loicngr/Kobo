@@ -1,6 +1,7 @@
 import { Hono } from 'hono'
 import { migrationGuard } from '../middleware/migration-guard.js'
 import { getDevServerLogs, getStatus, startDevServer, stopDevServer } from '../services/dev-server-service.js'
+import { getProjectSettings } from '../services/settings-service.js'
 import { getWorkspace } from '../services/workspace-service.js'
 
 /** Hono sub-router for per-workspace dev server lifecycle (start, stop, status, logs). */
@@ -14,6 +15,20 @@ app.get('/:workspaceId/status', (c) => {
 
     if (!workspace) {
       return c.json({ error: `Workspace '${workspaceId}' not found` }, 404)
+    }
+
+    const devServer = getProjectSettings(workspace.projectPath)?.devServer
+    if (!devServer?.startCommand?.trim()) {
+      return c.json({
+        status: 'not_configured',
+        configured: false,
+        message: 'No dev server is configured for this project',
+        instanceName: '',
+        projectName: '',
+        httpPort: '',
+        url: '',
+        containers: [],
+      })
     }
 
     const status = getStatus(workspace.projectPath, workspace.workingBranch, workspaceId)

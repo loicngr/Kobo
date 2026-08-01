@@ -176,7 +176,12 @@ export function isSubagentTerminalEvent(subtype: string | undefined, status?: st
 
 export interface ForgeInfo {
   id: 'github' | 'gitlab' | 'none'
-  capabilities: { canCreatePr: boolean; canChangePrBase: boolean; requestTermShort: 'PR' | 'MR' }
+  capabilities: {
+    canCreatePr: boolean
+    canChangePrBase: boolean
+    canMergeRequest: boolean
+    requestTermShort: 'PR' | 'MR'
+  }
   availability: { available: boolean; reason?: 'cli_missing' | 'not_authenticated' }
 }
 
