@@ -45,8 +45,8 @@ function makeWorkspace(over: Partial<Workspace> = {}): Workspace {
 describe('project-color utils', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
-  it('PROJECT_COLOR_PALETTE has 12 entries', () => {
-    expect(PROJECT_COLOR_PALETTE).toHaveLength(12)
+  it('PROJECT_COLOR_PALETTE has 19 entries', () => {
+    expect(PROJECT_COLOR_PALETTE).toHaveLength(19)
   })
 
   it('PROJECT_COLOR_TEXT_CONTRAST maps every palette colour', () => {

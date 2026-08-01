@@ -1992,8 +1992,8 @@ describe('network access behind-proxy setting (v41)', () => {
 })
 
 describe('question notification sound (v40)', () => {
-  it('fresh install defaults the question sound to hey.mp3', () => {
-    expect(getGlobalSettings().audioQuestionSound).toBe('hey.mp3')
+  it('fresh install defaults the question sound to the general sound', () => {
+    expect(getGlobalSettings().audioQuestionSound).toBe('inherit')
   })
 
   it('SETTINGS_SCHEMA_VERSION is at least 40', () => {
@@ -2058,31 +2058,36 @@ describe('workspace-created notification settings', () => {
 
 const PR_SOUND_DEFAULTS = {
   audioPrCiFailedSound: 'inherit',
-  audioPrCiFailedEnabled: true,
+  audioPrCiFailedEnabled: false,
   audioPrCiFailedVolume: 1,
   audioPrCiRecoveredSound: 'inherit',
-  audioPrCiRecoveredEnabled: true,
+  audioPrCiRecoveredEnabled: false,
   audioPrCiRecoveredVolume: 1,
   audioPrChangesRequestedSound: 'inherit',
-  audioPrChangesRequestedEnabled: true,
+  audioPrChangesRequestedEnabled: false,
   audioPrChangesRequestedVolume: 1,
   audioPrApprovedSound: 'inherit',
-  audioPrApprovedEnabled: true,
+  audioPrApprovedEnabled: false,
   audioPrApprovedVolume: 1,
   audioPrMergeConflictSound: 'inherit',
-  audioPrMergeConflictEnabled: true,
+  audioPrMergeConflictEnabled: false,
   audioPrMergeConflictVolume: 1,
   audioPrReadyToMergeSound: 'inherit',
-  audioPrReadyToMergeEnabled: true,
+  audioPrReadyToMergeEnabled: false,
   audioPrReadyToMergeVolume: 1,
   audioPrMergedSound: 'inherit',
-  audioPrMergedEnabled: true,
+  audioPrMergedEnabled: false,
   audioPrMergedVolume: 1,
 } as const
 
 describe('PR notification sounds (v45)', () => {
   it('fresh installs inherit the general sound for every PR event', () => {
     expect(getGlobalSettings()).toMatchObject(PR_SOUND_DEFAULTS)
+    expect(getGlobalSettings()).toMatchObject({
+      audioNotifications: true,
+      audioQuestionNotifications: false,
+      audioWorkspaceCreatedNotifications: false,
+    })
   })
 
   it('upgrades v43 without losing existing notification settings', () => {
@@ -2103,11 +2108,36 @@ describe('PR notification sounds (v45)', () => {
 
     expect(getGlobalSettings()).toMatchObject({
       ...PR_SOUND_DEFAULTS,
+      // v45 is historical and remains unchanged for existing users upgrading
+      // from a v43 settings file; only fresh-install defaults are muted.
+      audioPrCiFailedEnabled: true,
+      audioPrCiRecoveredEnabled: true,
+      audioPrChangesRequestedEnabled: true,
+      audioPrApprovedEnabled: true,
+      audioPrMergeConflictEnabled: true,
+      audioPrReadyToMergeEnabled: true,
+      audioPrMergedEnabled: true,
       audioNotificationSound: 'travail_termine.mp3',
       audioQuestionSound: 'hey.mp3',
       networkAccessToken: 'keep-me',
     })
-    expect(SETTINGS_SCHEMA_VERSION).toBe(47)
+    expect(SETTINGS_SCHEMA_VERSION).toBe(49)
+  })
+
+  it('adds the auto-loop retry limit while preserving existing settings', () => {
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        schemaVersion: 48,
+        global: { audioAgentErrorNotifications: true },
+        projects: [],
+      }),
+    )
+
+    expect(getGlobalSettings()).toMatchObject({
+      audioAgentErrorNotifications: true,
+      autoLoopMaxRetries: 5,
+    })
   })
 
   it('preserves existing valid values instead of overwriting them', () => {

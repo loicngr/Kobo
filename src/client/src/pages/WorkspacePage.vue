@@ -1,5 +1,5 @@
 <template>
-  <q-page class="column no-wrap" style="height: 100vh;">
+  <q-page class="column no-wrap" style="height: calc(100vh - var(--kobo-pwa-banner-height, 0px));">
     <!-- Header bar -->
     <div class="wp-header row items-center q-px-md q-py-sm no-wrap">
       <q-btn
@@ -310,8 +310,43 @@
     <!-- Chat Input — pinned at bottom -->
     <ChatInput
       v-if="selectedId"
+      ref="chatInputRef"
       :workspace-id="selectedId"
     />
+    <q-dialog v-model="commandPaletteOpen">
+      <q-card dark class="command-palette-card">
+        <q-card-section class="q-pb-sm">
+          <q-input
+            ref="commandPaletteInput"
+            v-model="commandPaletteQuery"
+            autofocus
+            dark
+            dense
+            borderless
+            :placeholder="t('workspacePage.commandPalettePlaceholder')"
+            @keydown.esc="commandPaletteOpen = false"
+          >
+            <template #prepend><q-icon name="search" /></template>
+          </q-input>
+        </q-card-section>
+        <q-separator dark />
+        <q-list dense class="q-py-sm">
+          <q-item
+            v-for="command in filteredCommands"
+            :key="command.id"
+            clickable
+            v-ripple
+            @click="runCommand(command)"
+          >
+            <q-item-section avatar><q-icon :name="command.icon" color="indigo-4" /></q-item-section>
+            <q-item-section>{{ command.label }}</q-item-section>
+          </q-item>
+          <q-item v-if="filteredCommands.length === 0" dense>
+            <q-item-section class="text-grey-6">{{ t('workspacePage.commandPaletteEmpty') }}</q-item-section>
+          </q-item>
+        </q-list>
+      </q-card>
+    </q-dialog>
     <q-dialog v-model="renameDialogOpen" persistent>
       <q-card dark style="min-width: 320px;">
         <q-card-section>
@@ -353,7 +388,7 @@ import { useWorkspaceStore } from 'src/stores/workspace'
 import { copyToClipboard } from 'src/utils/clipboard'
 import { useTimeAgo } from 'src/utils/formatters'
 import { isBusyStatus } from 'src/utils/workspace-status'
-import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 
@@ -389,12 +424,80 @@ function statusLabel(status: string): string {
 const starting = ref(false)
 const stopping = ref(false)
 const historySearchOpen = ref(false)
+const commandPaletteOpen = ref(false)
+const commandPaletteQuery = ref('')
+const commandPaletteInput = ref<{ focus: () => void } | null>(null)
+const chatInputRef = ref<{ focus: () => void } | null>(null)
 const pendingWorkspaceUpdates = new Set<Promise<unknown>>()
 
 function onWorkspaceShortcut(event: KeyboardEvent) {
-  if (!event.ctrlKey || event.key.toLowerCase() !== 'f') return
-  event.preventDefault()
-  historySearchOpen.value = true
+  if (!(event.ctrlKey || event.metaKey)) return
+  const key = event.key.toLowerCase()
+  if (key === 'k') {
+    event.preventDefault()
+    commandPaletteQuery.value = ''
+    commandPaletteOpen.value = true
+    void nextTick(() => commandPaletteInput.value?.focus())
+  } else if (key === 'f') {
+    event.preventDefault()
+    historySearchOpen.value = true
+  }
+}
+
+interface WorkspaceCommand {
+  id: string
+  label: string
+  icon: string
+  run: () => void
+}
+
+const workspaceCommands = computed<WorkspaceCommand[]>(() => {
+  const commands: WorkspaceCommand[] = [
+    {
+      id: 'focus-chat',
+      label: t('workspacePage.commandFocusChat'),
+      icon: 'chat',
+      run: () => void nextTick(() => chatInputRef.value?.focus()),
+    },
+    {
+      id: 'search-history',
+      label: t('workspacePage.commandSearchHistory'),
+      icon: 'search',
+      run: () => {
+        historySearchOpen.value = true
+      },
+    },
+    {
+      id: 'toggle-panel',
+      label: t('workspacePage.commandTogglePanel'),
+      icon: 'view_sidebar',
+      run: () => layout.toggleRight(),
+    },
+  ]
+  if (selectedWs.value && !selectedWs.value.archivedAt) {
+    commands.push(
+      isBusyStatus(selectedWs.value.status)
+        ? { id: 'stop-agent', label: t('workspacePage.commandStopAgent'), icon: 'stop', run: () => void handleStop() }
+        : {
+            id: 'start-agent',
+            label: t('workspacePage.commandStartAgent'),
+            icon: 'play_arrow',
+            run: () => void handleStart(),
+          },
+    )
+  }
+  return commands
+})
+
+const filteredCommands = computed(() => {
+  const query = commandPaletteQuery.value.trim().toLocaleLowerCase()
+  if (!query) return workspaceCommands.value
+  return workspaceCommands.value.filter((command) => command.label.toLocaleLowerCase().includes(query))
+})
+
+function runCommand(command: WorkspaceCommand): void {
+  commandPaletteOpen.value = false
+  command.run()
 }
 
 // True when the workspace has a brainstorm prompt waiting to be replayed —
@@ -752,6 +855,10 @@ watch(
   min-height: 48px;
   background-color: #16162a;
   border-bottom: 1px solid #2a2a4a;
+}
+
+.command-palette-card {
+  width: min(520px, calc(100vw - 32px));
 }
 
 .wp-archived-banner {

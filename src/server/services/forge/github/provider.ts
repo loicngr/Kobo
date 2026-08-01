@@ -111,7 +111,13 @@ function availabilityFromError(err: unknown): ForgeAvailability {
 
 export const githubProvider: ForgeProvider = {
   id: 'github',
-  capabilities: { canCreatePr: true, canChangePrBase: true, canMergeRequest: true, requestTermShort: 'PR' },
+  capabilities: {
+    canCreatePr: true,
+    canChangePrBase: true,
+    canMergeRequest: true,
+    canDeleteRemoteBranch: true,
+    requestTermShort: 'PR',
+  },
 
   async isAvailable(repoPath: string): Promise<ForgeAvailability> {
     try {
@@ -153,5 +159,8 @@ export const githubProvider: ForgeProvider = {
 
   async mergeRequest(repoPath: string, number: number): Promise<void> {
     await execFileAsync('gh', ['pr', 'merge', String(number), '--merge'], { cwd: repoPath, encoding: 'utf-8' })
+  },
+  async deleteRemoteBranch(repoPath: string, branch: string): Promise<void> {
+    await execFileAsync('git', ['push', 'origin', '--delete', branch], { cwd: repoPath, encoding: 'utf-8' })
   },
 }

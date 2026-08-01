@@ -95,13 +95,16 @@ interface GlobalSettings {
   terminalCommand: string
   /** Opt-in: pr-watcher auto-purges the worktree on PR-merged transition. */
   autoPurgeOnPrMerged: boolean
+  autoLoopMaxRetries: number
   browserNotifications: boolean
   audioNotifications: boolean
   audioQuestionNotifications: boolean
   audioWorkspaceCreatedNotifications: boolean
+  audioAgentErrorNotifications: boolean
   audioNotificationSound: string
   audioQuestionSound: string
   audioWorkspaceCreatedSound: string
+  audioAgentErrorSound: string
   audioPrCiFailedSound: string
   audioPrCiFailedEnabled: boolean
   audioPrCiFailedVolume: number
@@ -126,6 +129,7 @@ interface GlobalSettings {
   audioNotificationVolume: number
   audioQuestionVolume: number
   audioWorkspaceCreatedVolume: number
+  audioAgentErrorVolume: number
   notionStatusProperty: string
   notionInProgressStatus: string
   notionAssigneeProperty: string
@@ -221,17 +225,21 @@ export const useSettingsStore = defineStore('settings', {
       fileManagerCommand: '',
       terminalCommand: '',
       autoPurgeOnPrMerged: false,
+      autoLoopMaxRetries: 5,
       browserNotifications: true,
       audioNotifications: true,
-      audioQuestionNotifications: true,
-      audioWorkspaceCreatedNotifications: true,
+      audioQuestionNotifications: false,
+      audioWorkspaceCreatedNotifications: false,
+      audioAgentErrorNotifications: false,
       audioNotificationSound: 'hey.mp3',
-      audioQuestionSound: 'hey.mp3',
-      audioWorkspaceCreatedSound: 'warcraft-3-humain-travail.mp3',
+      audioQuestionSound: 'inherit',
+      audioWorkspaceCreatedSound: 'inherit',
+      audioAgentErrorSound: 'inherit',
       ...DEFAULT_PR_NOTIFICATION_AUDIO_SETTINGS,
       audioNotificationVolume: 1,
       audioQuestionVolume: 1,
       audioWorkspaceCreatedVolume: 1,
+      audioAgentErrorVolume: 1,
       notionStatusProperty: '',
       notionInProgressStatus: '',
       notionAssigneeProperty: '',

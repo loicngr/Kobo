@@ -16,7 +16,7 @@ import type {
 //   - "out of extra usage" / "out of usage"
 //   - "usage limit exceeded"
 
-export const QUOTA_PATTERN = /rate[_ ]limit|quota|usage limit|insufficient[_ ]quota|out of (extra )?usage/i
+export const QUOTA_PATTERN = /\b429\b|rate[_ ]limit|quota|usage limit|insufficient[_ ]quota|out of (extra )?usage/i
 
 // ── MapperState ───────────────────────────────────────────────────────────────
 

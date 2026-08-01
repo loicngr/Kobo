@@ -15,7 +15,7 @@ import * as autoLoopService from '../auto-loop-service.js'
 import * as cleanupScriptService from '../cleanup-script-service.js'
 import * as cronService from '../cron-service.js'
 import * as quotaBackoffService from '../quota-backoff-service.js'
-import { getEffectiveSettings } from '../settings-service.js'
+import { getEffectiveSettings, getGlobalSettings } from '../settings-service.js'
 import { refreshNow } from '../usage/poller.js'
 import * as wakeupService from '../wakeup-service.js'
 import { emit, emitEphemeral } from '../websocket-service.js'
@@ -659,6 +659,14 @@ function handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent
   }
   if (ev.kind === 'error' && ev.category === 'quota') {
     void handleQuota(workspaceId, agentSessionId)
+  }
+  if (
+    ev.kind === 'error' &&
+    ev.category === 'other' &&
+    TRANSIENT_SERVER_ERROR_PATTERN.test(ev.message) &&
+    getWs(workspaceId)?.autoLoop
+  ) {
+    void handleTransientAutoLoopFailure(workspaceId)
   }
   if (ev.kind === 'error' && ev.category === 'resume_failed') {
     resumeFailedSet.add(workspaceId)
@@ -1413,6 +1421,10 @@ export interface QuotaBackoff {
   source: 'rate_limit_info' | 'usage_api' | 'fallback_ladder'
 }
 
+/** Retryable upstream failures for an auto-loop iteration (not coding errors). */
+export const TRANSIENT_SERVER_ERROR_PATTERN =
+  /\b(?:http\s*)?500\b|internal server error|service unavailable|temporarily unavailable|overloaded/i
+
 const QUOTA_SAFETY_MARGIN_MS = 30_000
 const QUOTA_MAX_BACKOFF_MS = 24 * 60 * 60 * 1000
 const QUOTA_SATURATION_THRESHOLD_PCT = 95
@@ -1434,7 +1446,15 @@ const QUOTA_FALLBACK_LADDER_MINUTES = [15, 30, 60, 180, 300] as const
  * finally (2) a fixed ladder (15 → 30 → 60 → 180 → 300 min) whenever neither
  * source is usable.
  */
-export async function computeQuotaBackoffMs(workspaceId: string, retryCount: number): Promise<QuotaBackoff> {
+export async function computeQuotaBackoffMs(
+  workspaceId: string,
+  retryCount: number,
+  preferQuotaReset = true,
+): Promise<QuotaBackoff> {
+  if (!preferQuotaReset) {
+    const idx = Math.min(Math.max(0, retryCount), QUOTA_FALLBACK_LADDER_MINUTES.length - 1)
+    return { delayMs: QUOTA_FALLBACK_LADDER_MINUTES[idx] * 60 * 1000, source: 'fallback_ladder' }
+  }
   // 1. Prefer the rate_limit event from the agent stream — most recent + most precise.
   const info = latestRateLimitInfo.get(workspaceId)
   if (info?.buckets?.length) {
@@ -1497,6 +1517,17 @@ async function handleQuota(workspaceId: string, _agentSessionId?: string): Promi
   }
 
   const retryCount = retryCounts.get(workspaceId) ?? 0
+  const autoLoopEnabled = getWs(workspaceId)?.autoLoop === true
+  const maxRetries = autoLoopEnabled ? (getGlobalSettings().autoLoopMaxRetries ?? 5) : 5
+  if (autoLoopEnabled && retryCount >= maxRetries) {
+    autoLoopService.disable(workspaceId, 'error')
+    try {
+      updateWorkspaceStatus(workspaceId, 'error')
+    } catch {
+      // The loop is disabled even if an already-terminal status rejects this transition.
+    }
+    return
+  }
   const { delayMs, resetsAt, source } = await computeQuotaBackoffMs(workspaceId, retryCount)
   retryCounts.set(workspaceId, retryCount + 1)
 
@@ -1505,8 +1536,39 @@ async function handleQuota(workspaceId: string, _agentSessionId?: string): Promi
   quotaBackoffService.arm(workspaceId, delayMs, { resetsAt: resetsAt ?? null, source })
 }
 
+/**
+ * Use the same persisted retry path for temporary upstream failures (HTTP 500
+ * and overloads) while deliberately ignoring quota-reset data: a server error
+ * is unrelated to the user's quota window and follows the fallback ladder.
+ */
+async function handleTransientAutoLoopFailure(workspaceId: string): Promise<void> {
+  try {
+    updateWorkspaceStatus(workspaceId, 'quota')
+  } catch {
+    // May fail if transition is not valid.
+  }
+
+  const retryCount = retryCounts.get(workspaceId) ?? 0
+  const maxRetries = getGlobalSettings().autoLoopMaxRetries ?? 5
+  if (retryCount >= maxRetries) {
+    autoLoopService.disable(workspaceId, 'error')
+    try {
+      updateWorkspaceStatus(workspaceId, 'error')
+    } catch {
+      // The loop is disabled even if an already-terminal status rejects this transition.
+    }
+    return
+  }
+  const { delayMs, resetsAt, source } = await computeQuotaBackoffMs(workspaceId, retryCount, false)
+  retryCounts.set(workspaceId, retryCount + 1)
+  quotaBackoffService.arm(workspaceId, delayMs, { resetsAt: resetsAt ?? null, source })
+}
+
 /** @internal test-only — re-export of `handleQuota` for direct testing. */
 export const _handleQuota = handleQuota
+
+/** @internal test-only — re-export of the transient auto-loop retry handler. */
+export const _handleTransientAutoLoopFailure = handleTransientAutoLoopFailure
 
 /**
  * Rebuild the in-memory `retryCounts` map from the persisted `pending_quota_backoffs`

@@ -8,6 +8,7 @@ vi.mock('../../server/services/websocket-service.js', () => ({
 }))
 
 vi.mock('../../server/services/settings-service.js', () => ({
+  getGlobalSettings: () => ({ autoLoopMaxRetries: 5 }),
   getEffectiveSettings: () => ({
     model: 'claude-opus-4-7',
     dangerouslySkipPermissions: true,

@@ -259,6 +259,7 @@ export interface GlobalSettings {
    */
   terminalCommand: string
   autoPurgeOnPrMerged: boolean
+  autoLoopMaxRetries: number
   /**
    * Opt-in LAN network access. When false (default) the server binds
    * 127.0.0.1 only; when true it binds all interfaces and requires the
@@ -279,10 +280,12 @@ export interface GlobalSettings {
   audioNotifications: boolean
   audioQuestionNotifications: boolean
   audioWorkspaceCreatedNotifications: boolean
+  audioAgentErrorNotifications: boolean
   audioNotificationSound: string
   /** Sound played specifically when the agent asks a question. Seeded by migration v40. */
   audioQuestionSound: string
   audioWorkspaceCreatedSound: string
+  audioAgentErrorSound: string
   audioPrCiFailedSound: string
   audioPrCiFailedEnabled: boolean
   audioPrCiFailedVolume: number
@@ -307,6 +310,7 @@ export interface GlobalSettings {
   audioNotificationVolume: number
   audioQuestionVolume: number
   audioWorkspaceCreatedVolume: number
+  audioAgentErrorVolume: number
   notionStatusProperty: string
   notionInProgressStatus: string
   notionAssigneeProperty: string
@@ -1011,6 +1015,32 @@ const settingsMigrations: SettingsMigration[] = [
       if (typeof global.showThinkingBlocks !== 'boolean') global.showThinkingBlocks = true
     },
   },
+  {
+    version: 48,
+    name: 'add-agent-error-notification-sound',
+    migrate: ({ global }) => {
+      if (typeof global.audioAgentErrorNotifications !== 'boolean') global.audioAgentErrorNotifications = false
+      if (typeof global.audioAgentErrorSound !== 'string' || global.audioAgentErrorSound.length === 0) {
+        global.audioAgentErrorSound = 'inherit'
+      }
+      if (typeof global.audioAgentErrorVolume !== 'number' || !Number.isFinite(global.audioAgentErrorVolume)) {
+        global.audioAgentErrorVolume = 1
+      }
+    },
+  },
+  {
+    version: 49,
+    name: 'add-auto-loop-max-retries',
+    migrate: ({ global }) => {
+      if (
+        typeof global.autoLoopMaxRetries !== 'number' ||
+        !Number.isInteger(global.autoLoopMaxRetries) ||
+        global.autoLoopMaxRetries < 1
+      ) {
+        global.autoLoopMaxRetries = 5
+      }
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -1087,40 +1117,44 @@ function defaultSettings(): Settings {
       fileManagerCommand: '',
       terminalCommand: '',
       autoPurgeOnPrMerged: false,
+      autoLoopMaxRetries: 5,
       networkAccessEnabled: false,
       networkAccessToken: '',
       networkAccessBehindProxy: false,
       browserNotifications: true,
       audioNotifications: true,
-      audioQuestionNotifications: true,
-      audioWorkspaceCreatedNotifications: true,
+      audioQuestionNotifications: false,
+      audioWorkspaceCreatedNotifications: false,
+      audioAgentErrorNotifications: false,
       audioNotificationSound: 'hey.mp3',
-      audioQuestionSound: 'hey.mp3',
-      audioWorkspaceCreatedSound: 'warcraft-3-humain-travail.mp3',
+      audioQuestionSound: 'inherit',
+      audioWorkspaceCreatedSound: 'inherit',
+      audioAgentErrorSound: 'inherit',
       audioPrCiFailedSound: 'inherit',
-      audioPrCiFailedEnabled: true,
+      audioPrCiFailedEnabled: false,
       audioPrCiFailedVolume: 1,
       audioPrCiRecoveredSound: 'inherit',
-      audioPrCiRecoveredEnabled: true,
+      audioPrCiRecoveredEnabled: false,
       audioPrCiRecoveredVolume: 1,
       audioPrChangesRequestedSound: 'inherit',
-      audioPrChangesRequestedEnabled: true,
+      audioPrChangesRequestedEnabled: false,
       audioPrChangesRequestedVolume: 1,
       audioPrApprovedSound: 'inherit',
-      audioPrApprovedEnabled: true,
+      audioPrApprovedEnabled: false,
       audioPrApprovedVolume: 1,
       audioPrMergeConflictSound: 'inherit',
-      audioPrMergeConflictEnabled: true,
+      audioPrMergeConflictEnabled: false,
       audioPrMergeConflictVolume: 1,
       audioPrReadyToMergeSound: 'inherit',
-      audioPrReadyToMergeEnabled: true,
+      audioPrReadyToMergeEnabled: false,
       audioPrReadyToMergeVolume: 1,
       audioPrMergedSound: 'inherit',
-      audioPrMergedEnabled: true,
+      audioPrMergedEnabled: false,
       audioPrMergedVolume: 1,
       audioNotificationVolume: 1,
       audioQuestionVolume: 1,
       audioWorkspaceCreatedVolume: 1,
+      audioAgentErrorVolume: 1,
       notionStatusProperty: '',
       notionInProgressStatus: '',
       notionAssigneeProperty: '',
@@ -1494,6 +1528,17 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
       delete (data as Record<string, unknown>).cleanupScriptMode
     }
   }
+  if ('autoLoopMaxRetries' in data) {
+    if (
+      typeof data.autoLoopMaxRetries !== 'number' ||
+      !Number.isInteger(data.autoLoopMaxRetries) ||
+      data.autoLoopMaxRetries < 1 ||
+      data.autoLoopMaxRetries > 20
+    ) {
+      console.warn(`[settings] Invalid autoLoopMaxRetries value rejected: ${data.autoLoopMaxRetries}`)
+      delete (data as Record<string, unknown>).autoLoopMaxRetries
+    }
+  }
   const allowedGlobalKeys = [
     'defaultModelByEngine',
     'dangerouslySkipPermissions',
@@ -1514,13 +1559,16 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'fileManagerCommand',
     'terminalCommand',
     'autoPurgeOnPrMerged',
+    'autoLoopMaxRetries',
     'browserNotifications',
     'audioNotifications',
     'audioQuestionNotifications',
     'audioWorkspaceCreatedNotifications',
+    'audioAgentErrorNotifications',
     'audioNotificationSound',
     'audioQuestionSound',
     'audioWorkspaceCreatedSound',
+    'audioAgentErrorSound',
     'audioPrCiFailedSound',
     'audioPrCiFailedEnabled',
     'audioPrCiFailedVolume',
@@ -1545,6 +1593,7 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'audioNotificationVolume',
     'audioQuestionVolume',
     'audioWorkspaceCreatedVolume',
+    'audioAgentErrorVolume',
     'notionStatusProperty',
     'notionInProgressStatus',
     'notionAssigneeProperty',

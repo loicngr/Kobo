@@ -73,6 +73,7 @@ export interface ForgeCapabilities {
   canCreatePr: boolean
   canChangePrBase: boolean
   canMergeRequest: boolean
+  canDeleteRemoteBranch: boolean
   /** Short request term for UI labels. */
   requestTermShort: 'PR' | 'MR'
 }
@@ -110,4 +111,5 @@ export interface ForgeProvider {
   createPr(repoPath: string, opts: CreatePrOptions): Promise<{ url: string; number: number }>
   changePrBase(repoPath: string, base: string): Promise<void>
   mergeRequest(repoPath: string, number: number): Promise<void>
+  deleteRemoteBranch(repoPath: string, branch: string): Promise<void>
 }

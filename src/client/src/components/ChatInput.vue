@@ -212,7 +212,7 @@
       <div>
         <kbd>Enter</kbd> {{ $t('common.send') }} <span class="q-mx-xs">&middot;</span> <kbd>Ctrl+Enter</kbd> {{ $t('chatInput.forceQueue') }}
         <span class="q-mx-xs">&middot;</span> <kbd>Shift+Enter</kbd> / <kbd>Ctrl+J</kbd> {{ $t('common.newLine') }}
-        <span class="q-mx-xs">&middot;</span> <kbd>Ctrl+F</kbd> {{ $t('chatInput.searchHistory') }} <span class="q-mx-xs">&middot;</span> <kbd>↑↓</kbd> {{ $t('common.history') }} <span class="q-mx-xs">&middot;</span> <kbd>@</kbd> {{ $t('chatInput.fileSearchHint') }}
+        <span class="q-mx-xs">&middot;</span> <kbd>Ctrl+K</kbd> {{ $t('chatInput.commandPalette') }} <span class="q-mx-xs">&middot;</span> <kbd>Ctrl+F</kbd> {{ $t('chatInput.searchHistory') }} <span class="q-mx-xs">&middot;</span> <kbd>↑↓</kbd> {{ $t('common.history') }} <span class="q-mx-xs">&middot;</span> <kbd>@</kbd> {{ $t('chatInput.fileSearchHint') }}
       </div>
       <q-space />
       <div v-if="isTranscribing" class="row items-center text-caption text-amber-6 q-mr-sm">
@@ -321,6 +321,12 @@ function getChatInputEl(): HTMLTextAreaElement | HTMLInputElement | null {
   const el = inst.getNativeElement?.()
   return (el as HTMLTextAreaElement | HTMLInputElement | null) ?? null
 }
+
+function focus(): void {
+  getChatInputEl()?.focus()
+}
+
+defineExpose({ focus })
 
 // Slash autocomplete — state + computed lists handled by the composable.
 // Selection logic (template expansion, kobo auto-send, …) stays here because

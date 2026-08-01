@@ -265,6 +265,20 @@
                       class="text-grey-5 text-caption"
                     />
                   </div>
+                  <div class="row items-center q-gutter-sm q-mb-sm">
+                    <q-chip dense square :color="browserNotificationStatus.color" text-color="white" icon="notifications">
+                      {{ browserNotificationStatus.label }}
+                    </q-chip>
+                    <q-btn
+                      flat
+                      dense
+                      no-caps
+                      color="indigo-4"
+                      icon="notifications_active"
+                      :label="$t('settings.testBrowserNotification')"
+                      @click="testBrowserNotification"
+                    />
+                  </div>
                   <div class="row items-center q-gutter-sm">
                     <q-select
                       v-model="globalAudioNotificationSound"
@@ -322,7 +336,7 @@
                   <div class="row items-center q-gutter-sm">
                     <q-select
                       v-model="globalAudioQuestionSound"
-                      :options="soundSelectOptions"
+                      :options="eventSoundSelectOptions"
                       :label="$t('settings.questionSound')"
                       :disable="!globalAudioQuestionNotifications"
                       dark
@@ -376,7 +390,7 @@
                   <div class="row items-center q-gutter-sm">
                     <q-select
                       v-model="globalAudioWorkspaceCreatedSound"
-                      :options="soundSelectOptions"
+                      :options="eventSoundSelectOptions"
                       :label="$t('settings.workspaceCreatedSound')"
                       :disable="!globalAudioWorkspaceCreatedNotifications"
                       dark
@@ -414,6 +428,20 @@
                     <div class="text-grey-5 text-caption" style="min-width: 40px; text-align: right;">
                       {{ Math.round(globalAudioWorkspaceCreatedVolume * 100) }}%
                     </div>
+                  </div>
+                </div>
+                <div class="notification-sound-card q-pa-md rounded-borders">
+                  <div class="text-subtitle2">{{ $t('settings.agentErrorSound') }}</div>
+                  <div class="text-grey-6 text-caption q-mb-sm">{{ $t('settings.agentErrorSoundHint') }}</div>
+                  <q-toggle v-model="globalAudioAgentErrorNotifications" :label="$t('settings.enableAudio')" dark dense color="indigo-4" class="text-grey-5 text-caption q-mb-sm" />
+                  <div class="row items-center q-gutter-sm">
+                    <q-select v-model="globalAudioAgentErrorSound" :options="eventSoundSelectOptions" :label="$t('settings.agentErrorSound')" :disable="!globalAudioAgentErrorNotifications" dark dense outlined emit-value map-options color="indigo-4" class="col" />
+                    <q-btn flat dense color="indigo-4" icon="play_arrow" :label="$t('settings.notificationSoundPreview')" :disable="!globalAudioAgentErrorNotifications" @click="previewAgentErrorSound" />
+                  </div>
+                  <div class="row items-center q-gutter-sm q-mt-sm">
+                    <div class="text-grey-5 text-caption" style="min-width: 58px;">{{ $t('settings.notificationVolume') }}</div>
+                    <q-slider v-model="globalAudioAgentErrorVolume" :min="0" :max="1" :step="0.05" :disable="!globalAudioAgentErrorNotifications" :aria-label="$t('settings.notificationVolume')" dark dense color="indigo-4" class="col" />
+                    <div class="text-grey-5 text-caption" style="min-width: 40px; text-align: right;">{{ Math.round(globalAudioAgentErrorVolume * 100) }}%</div>
                   </div>
                 </div>
               </div>
@@ -1465,6 +1493,19 @@ where ffmpeg</pre>
                 <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.autoPurgeOnPrMergedHint') }}</div>
               </div>
 
+              <q-input
+                v-model.number="globalAutoLoopMaxRetries"
+                :label="$t('settings.autoLoopMaxRetries')"
+                :hint="$t('settings.autoLoopMaxRetriesHint')"
+                type="number"
+                min="1"
+                max="20"
+                dense
+                dark
+                outlined
+                class="settings-input q-mt-md"
+              />
+
               <q-expansion-item
                 dense
                 dark
@@ -1914,7 +1955,7 @@ where ffmpeg</pre>
                       />
                     </div>
 
-                    <div class="q-mb-md">
+                    <div v-if="globalNotionEnabled" class="q-mb-md">
                       <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ t('settings.notionInitialPrompt.project') }}</div>
                       <div class="text-caption text-grey-7 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
                       <q-input
@@ -1926,7 +1967,7 @@ where ffmpeg</pre>
                       />
                     </div>
 
-                    <div class="q-mb-md">
+                    <div v-if="globalSentryEnabled" class="q-mb-md">
                       <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ t('settings.sentryInitialPrompt.project') }}</div>
                       <div class="text-caption text-grey-7 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
                       <q-input
@@ -2382,7 +2423,7 @@ import { type Template, useTemplatesStore } from 'src/stores/templates'
 import {
   DEFAULT_NOTIFICATION_SOUND,
   DEFAULT_PR_NOTIFICATION_AUDIO_SETTINGS,
-  DEFAULT_WORKSPACE_CREATED_SOUND,
+  INHERIT_NOTIFICATION_SOUND,
   NOTIFICATION_SOUNDS,
   normalizeNotificationSoundSelection,
   PR_NOTIFICATION_AUDIO_CONTROL_SETTING_KEYS,
@@ -2458,6 +2499,7 @@ const globalEditorCommand = ref('')
 const globalFileManagerCommand = ref('')
 const globalTerminalCommand = ref('')
 const globalAutoPurgeOnPrMerged = ref(false)
+const globalAutoLoopMaxRetries = ref(5)
 
 // Network access
 interface NetworkState {
@@ -2557,15 +2599,21 @@ function copyToken() {
 }
 
 const globalBrowserNotifications = ref(true)
+const browserNotificationPermission = ref<NotificationPermission | 'unsupported'>(
+  typeof Notification === 'undefined' ? 'unsupported' : Notification.permission,
+)
 const globalAudioNotifications = ref(true)
-const globalAudioQuestionNotifications = ref(true)
-const globalAudioWorkspaceCreatedNotifications = ref(true)
+const globalAudioQuestionNotifications = ref(false)
+const globalAudioWorkspaceCreatedNotifications = ref(false)
+const globalAudioAgentErrorNotifications = ref(false)
 const globalAudioNotificationSound = ref(DEFAULT_NOTIFICATION_SOUND)
-const globalAudioQuestionSound = ref(DEFAULT_NOTIFICATION_SOUND)
-const globalAudioWorkspaceCreatedSound = ref(DEFAULT_WORKSPACE_CREATED_SOUND)
+const globalAudioQuestionSound = ref(INHERIT_NOTIFICATION_SOUND)
+const globalAudioWorkspaceCreatedSound = ref(INHERIT_NOTIFICATION_SOUND)
+const globalAudioAgentErrorSound = ref(INHERIT_NOTIFICATION_SOUND)
 const globalAudioNotificationVolume = ref(1)
 const globalAudioQuestionVolume = ref(1)
 const globalAudioWorkspaceCreatedVolume = ref(1)
+const globalAudioAgentErrorVolume = ref(1)
 const globalPrNotificationSounds = ref<PrNotificationSoundSettingsModel>({
   ...DEFAULT_PR_NOTIFICATION_AUDIO_SETTINGS,
 })
@@ -2575,6 +2623,39 @@ const globalNotionAssigneeProperty = ref('')
 const globalNotionUserId = ref('')
 const globalShowVerboseSystemMessages = ref(false)
 const globalShowThinkingBlocks = ref(true)
+
+const browserNotificationStatus = computed(() => {
+  switch (browserNotificationPermission.value) {
+    case 'granted':
+      return { color: 'positive', label: t('settings.browserNotificationGranted') }
+    case 'denied':
+      return { color: 'negative', label: t('settings.browserNotificationDenied') }
+    case 'default':
+      return { color: 'warning', label: t('settings.browserNotificationAsk') }
+    default:
+      return { color: 'grey-7', label: t('settings.browserNotificationUnsupported') }
+  }
+})
+
+async function testBrowserNotification() {
+  if (typeof Notification === 'undefined') {
+    $q.notify({ type: 'negative', message: t('settings.browserNotificationUnsupported'), position: 'top' })
+    return
+  }
+  if (Notification.permission === 'default') {
+    browserNotificationPermission.value = await Notification.requestPermission()
+  } else {
+    browserNotificationPermission.value = Notification.permission
+  }
+  if (browserNotificationPermission.value !== 'granted') {
+    $q.notify({ type: 'warning', message: t('settings.browserNotificationPermissionNeeded'), position: 'top' })
+    return
+  }
+  new Notification(t('settings.browserNotificationTestTitle'), {
+    body: t('settings.browserNotificationTestBody'),
+    icon: '/favicon.ico',
+  })
+}
 type IntegrationKey = 'notion' | 'sentry'
 interface IntegrationTestResult {
   ok: boolean
@@ -3219,8 +3300,12 @@ const mcpServerOptions = computed(() => [
 ])
 
 const soundSelectOptions = computed(() => NOTIFICATION_SOUNDS.map((s) => ({ label: t(s.labelKey), value: s.id })))
-const voiceModelOptions = computed(() =>
-  [{ label: t('voice.noneModel'), value: null }].concat(
+const eventSoundSelectOptions = computed(() => [
+  { label: t('settings.soundGeneral'), value: INHERIT_NOTIFICATION_SOUND },
+  ...soundSelectOptions.value,
+])
+const voiceModelOptions = computed<Array<{ label: string; value: string | null }>>(() =>
+  [{ label: t('voice.noneModel'), value: null as string | null }].concat(
     store.voiceModels.map((m) => ({
       label: m.installed ? `${m.name}` : `${m.name} (${t('voice.notInstalled')})`,
       value: m.name,
@@ -3260,6 +3345,10 @@ function previewWorkspaceCreatedSound(): void {
   playNotificationSound(globalAudioWorkspaceCreatedSound.value, globalAudioWorkspaceCreatedVolume.value)
 }
 
+function previewAgentErrorSound(): void {
+  playNotificationSound(globalAudioAgentErrorSound.value, globalAudioAgentErrorVolume.value)
+}
+
 // Selected project
 const selectedProject = computed<ProjectSettings | null>(() => {
   if (selectedProjectIndex.value < 0 || selectedProjectIndex.value >= store.projects.length) {
@@ -3288,16 +3377,20 @@ function captureGlobalSnapshot(): string {
     fileManagerCommand: globalFileManagerCommand.value,
     terminalCommand: globalTerminalCommand.value,
     autoPurgeOnPrMerged: globalAutoPurgeOnPrMerged.value,
+    autoLoopMaxRetries: globalAutoLoopMaxRetries.value,
     browserNotifications: globalBrowserNotifications.value,
     audioNotifications: globalAudioNotifications.value,
     audioQuestionNotifications: globalAudioQuestionNotifications.value,
     audioWorkspaceCreatedNotifications: globalAudioWorkspaceCreatedNotifications.value,
+    audioAgentErrorNotifications: globalAudioAgentErrorNotifications.value,
     audioNotificationSound: globalAudioNotificationSound.value,
     audioQuestionSound: globalAudioQuestionSound.value,
     audioWorkspaceCreatedSound: globalAudioWorkspaceCreatedSound.value,
+    audioAgentErrorSound: globalAudioAgentErrorSound.value,
     audioNotificationVolume: globalAudioNotificationVolume.value,
     audioQuestionVolume: globalAudioQuestionVolume.value,
     audioWorkspaceCreatedVolume: globalAudioWorkspaceCreatedVolume.value,
+    audioAgentErrorVolume: globalAudioAgentErrorVolume.value,
     prNotificationSounds: globalPrNotificationSounds.value,
     notionStatusProperty: globalNotionStatusProperty.value,
     notionStatus: globalNotionStatus.value,
@@ -3377,20 +3470,23 @@ function syncGlobalForm() {
   globalFileManagerCommand.value = store.global.fileManagerCommand ?? ''
   globalTerminalCommand.value = store.global.terminalCommand ?? ''
   globalAutoPurgeOnPrMerged.value = store.global.autoPurgeOnPrMerged ?? false
+  globalAutoLoopMaxRetries.value = store.global.autoLoopMaxRetries ?? 5
   globalBrowserNotifications.value = store.global.browserNotifications ?? true
   globalAudioNotifications.value = store.global.audioNotifications ?? true
-  globalAudioQuestionNotifications.value = store.global.audioQuestionNotifications ?? true
-  globalAudioWorkspaceCreatedNotifications.value = store.global.audioWorkspaceCreatedNotifications ?? true
+  globalAudioQuestionNotifications.value = store.global.audioQuestionNotifications ?? false
+  globalAudioWorkspaceCreatedNotifications.value = store.global.audioWorkspaceCreatedNotifications ?? false
+  globalAudioAgentErrorNotifications.value = store.global.audioAgentErrorNotifications ?? false
   globalAudioNotificationSound.value = resolveSoundId(store.global.audioNotificationSound)
-  globalAudioQuestionSound.value = resolveSoundId(store.global.audioQuestionSound)
-  globalAudioWorkspaceCreatedSound.value = resolveSoundId(store.global.audioWorkspaceCreatedSound)
+  globalAudioQuestionSound.value = normalizeNotificationSoundSelection(store.global.audioQuestionSound)
+  globalAudioWorkspaceCreatedSound.value = normalizeNotificationSoundSelection(store.global.audioWorkspaceCreatedSound)
+  globalAudioAgentErrorSound.value = normalizeNotificationSoundSelection(store.global.audioAgentErrorSound)
   const prSounds = Object.fromEntries(
     PR_NOTIFICATION_SOUND_SETTING_KEYS.map((key) => [key, normalizeNotificationSoundSelection(store.global[key])]),
   )
   const prAudioControls = Object.fromEntries(
     PR_NOTIFICATION_AUDIO_CONTROL_SETTING_KEYS.map((key) => {
       const value = store.global[key]
-      if (key.endsWith('Enabled')) return [key, typeof value === 'boolean' ? value : true]
+      if (key.endsWith('Enabled')) return [key, typeof value === 'boolean' ? value : false]
       const volume = Number(value)
       return [key, Number.isFinite(volume) ? Math.max(0, Math.min(1, volume)) : 1]
     }),
@@ -3405,6 +3501,11 @@ function syncGlobalForm() {
   globalAudioWorkspaceCreatedVolume.value =
     typeof workspaceCreatedVolume === 'number' && Number.isFinite(workspaceCreatedVolume)
       ? Math.max(0, Math.min(1, workspaceCreatedVolume))
+      : 1
+  const agentErrorVolume = store.global.audioAgentErrorVolume
+  globalAudioAgentErrorVolume.value =
+    typeof agentErrorVolume === 'number' && Number.isFinite(agentErrorVolume)
+      ? Math.max(0, Math.min(1, agentErrorVolume))
       : 1
   globalNotionStatusProperty.value = store.global.notionStatusProperty ?? ''
   globalNotionStatus.value = store.global.notionInProgressStatus ?? ''
@@ -3677,16 +3778,20 @@ async function saveGlobal() {
       fileManagerCommand: globalFileManagerCommand.value,
       terminalCommand: globalTerminalCommand.value,
       autoPurgeOnPrMerged: globalAutoPurgeOnPrMerged.value,
+      autoLoopMaxRetries: globalAutoLoopMaxRetries.value,
       browserNotifications: globalBrowserNotifications.value,
       audioNotifications: globalAudioNotifications.value,
       audioQuestionNotifications: globalAudioQuestionNotifications.value,
       audioWorkspaceCreatedNotifications: globalAudioWorkspaceCreatedNotifications.value,
+      audioAgentErrorNotifications: globalAudioAgentErrorNotifications.value,
       audioNotificationSound: globalAudioNotificationSound.value,
       audioQuestionSound: globalAudioQuestionSound.value,
       audioWorkspaceCreatedSound: globalAudioWorkspaceCreatedSound.value,
+      audioAgentErrorSound: globalAudioAgentErrorSound.value,
       audioNotificationVolume: globalAudioNotificationVolume.value,
       audioQuestionVolume: globalAudioQuestionVolume.value,
       audioWorkspaceCreatedVolume: globalAudioWorkspaceCreatedVolume.value,
+      audioAgentErrorVolume: globalAudioAgentErrorVolume.value,
       ...globalPrNotificationSounds.value,
       notionStatusProperty: globalNotionStatusProperty.value,
       notionInProgressStatus: globalNotionStatus.value,

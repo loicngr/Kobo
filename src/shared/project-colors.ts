@@ -17,6 +17,13 @@ export const PROJECT_COLOR_PALETTE = [
   'amber-5',
   'orange-5',
   'brown-5',
+  'light-blue-5',
+  'light-green-5',
+  'lime-5',
+  'yellow-6',
+  'deep-orange-5',
+  'blue-grey-5',
+  'grey-6',
 ] as const
 
 export type ProjectColor = (typeof PROJECT_COLOR_PALETTE)[number]

@@ -1651,7 +1651,7 @@ async function handleCreate() {
       // (backend ignores it when worktreePath is set) and force skipSetupScript.
       // Standard branch: keep the generated workingBranch as before.
       ...(useExistingWorktree.value && selectedWorktreePath.value
-        ? { worktreePath: selectedWorktreePath.value, skipSetupScript: true }
+        ? { worktreePath: selectedWorktreePath.value, skipSetupScript: true, workingBranch }
         : { workingBranch }),
       engine: selectedEngineId.value,
       model: model.value,

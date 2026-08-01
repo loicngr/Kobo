@@ -941,7 +941,13 @@ const prSnapshot = computed(() => {
 /** Fallback when the backend hasn't returned a forge block yet (old cached response). */
 const FORGE_FALLBACK: ForgeInfo = {
   id: 'none',
-  capabilities: { canCreatePr: false, canChangePrBase: false, canMergeRequest: false, requestTermShort: 'PR' },
+  capabilities: {
+    canCreatePr: false,
+    canChangePrBase: false,
+    canMergeRequest: false,
+    canDeleteRemoteBranch: false,
+    requestTermShort: 'PR',
+  },
   availability: { available: false },
 }
 
@@ -1587,8 +1593,18 @@ function handleMergeRequest() {
         const data = await res.json().catch(() => ({}))
         throw new Error(data.error ?? 'Failed')
       }
+      const data = (await res.json()) as { merged: boolean; branch: string }
       $q.notify({ type: 'positive', message: t('git.mergeRequestSuccess', { request }), position: 'top' })
       await Promise.allSettled([loadGitStats({ freshFetch: true }), store.refreshPrSnapshot(props.workspace.id)])
+      if (data.merged && forge.value.capabilities.canDeleteRemoteBranch) {
+        $q.dialog({
+          title: t('git.deleteRemoteBranchTitle'),
+          message: t('git.deleteRemoteBranchMessage', { branch: data.branch }),
+          dark: true,
+          cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+          ok: { flat: true, label: t('git.deleteRemoteBranch'), color: 'negative' },
+        }).onOk(() => void deleteRemoteBranch(data.branch))
+      }
     } catch (e) {
       const message = e instanceof Error ? e.message : t('git.mergeRequestFailed', { request })
       $q.notify({ type: 'negative', message, position: 'top', timeout: 6000 })
@@ -1596,6 +1612,24 @@ function handleMergeRequest() {
       mergingRequest.value = false
     }
   })
+}
+
+async function deleteRemoteBranch(branch: string) {
+  if (!props.workspace) return
+  try {
+    const res = await fetch(`/api/workspaces/${props.workspace.id}/delete-remote-branch`, { method: 'POST' })
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}))
+      throw new Error(data.error ?? 'Failed')
+    }
+    $q.notify({ type: 'positive', message: t('git.deleteRemoteBranchSuccess', { branch }), position: 'top' })
+  } catch (e) {
+    $q.notify({
+      type: 'negative',
+      message: e instanceof Error ? e.message : t('git.deleteRemoteBranchFailed'),
+      position: 'top',
+    })
+  }
 }
 
 const changingSource = ref(false)

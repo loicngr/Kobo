@@ -97,6 +97,20 @@ describe('playNotificationSound() volume application', () => {
     expect(instances[1]?.volume).toBe(0.75)
   })
 
+  it('plays background notifications immediately instead of waiting for the queue', async () => {
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' })
+    const { queueNotificationSound } = await import('../utils/notifications')
+
+    queueNotificationSound('hey.mp3', 0.4)
+    queueNotificationSound('faaah.mp3', 0.7)
+
+    expect(instances).toHaveLength(2)
+    expect(instances[0]?.play).toHaveBeenCalledOnce()
+    expect(instances[1]?.play).toHaveBeenCalledOnce()
+    expect(instances[1]?.volume).toBe(0.7)
+    Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' })
+  })
+
   it('advances after a media error', async () => {
     const { queueNotificationSound } = await import('../utils/notifications')
     queueNotificationSound('hey.mp3')

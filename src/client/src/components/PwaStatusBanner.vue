@@ -1,8 +1,8 @@
 <template>
-  <div v-if="offline || installPrompt || updateReady" class="pwa-status-banner row items-center q-gutter-sm q-px-md q-py-sm">
-    <q-icon :name="offline ? 'cloud_off' : updateReady ? 'system_update' : 'install_mobile'" size="18px" color="indigo-3" />
+  <div ref="bannerRef" v-if="offline || reconnecting || installPrompt || updateReady" class="pwa-status-banner row items-center q-gutter-sm q-px-md q-py-sm">
+    <q-icon :name="offline ? 'cloud_off' : reconnecting ? 'sync' : updateReady ? 'system_update' : 'install_mobile'" size="18px" color="indigo-3" />
     <span class="text-caption col">
-      {{ offline ? $t('pwa.offline') : updateReady ? $t('pwa.updateReady') : $t('pwa.installReady') }}
+      {{ offline ? $t('pwa.offline') : reconnecting ? $t('pwa.reconnecting') : updateReady ? $t('pwa.updateReady') : $t('pwa.installReady') }}
     </span>
     <q-btn
       v-if="installPrompt"
@@ -26,7 +26,8 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, onUnmounted, ref } from 'vue'
+import { useWebSocketStore } from 'src/stores/websocket'
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 
 interface BeforeInstallPromptEvent extends Event {
   prompt: () => Promise<void>
@@ -36,6 +37,18 @@ interface BeforeInstallPromptEvent extends Event {
 const installPrompt = ref<BeforeInstallPromptEvent | null>(null)
 const offline = ref(!navigator.onLine)
 const updateReady = ref(false)
+const websocketStore = useWebSocketStore()
+const reconnecting = computed(() => !offline.value && websocketStore.reconnecting)
+const bannerRef = ref<HTMLElement | null>(null)
+let resizeObserver: ResizeObserver | undefined
+
+function syncBannerHeight() {
+  document.documentElement.style.setProperty('--kobo-pwa-banner-height', `${bannerRef.value?.offsetHeight ?? 0}px`)
+}
+
+watch([offline, reconnecting, installPrompt, updateReady], () => {
+  void nextTick(syncBannerHeight)
+})
 let registration: ServiceWorkerRegistration | undefined
 let reloading = false
 
@@ -66,6 +79,9 @@ onMounted(async () => {
   window.addEventListener('beforeinstallprompt', onBeforeInstallPrompt)
   window.addEventListener('online', onOnlineChange)
   window.addEventListener('offline', onOnlineChange)
+  resizeObserver = new ResizeObserver(syncBannerHeight)
+  if (bannerRef.value) resizeObserver.observe(bannerRef.value)
+  syncBannerHeight()
   if (!('serviceWorker' in navigator)) return
   registration = await navigator.serviceWorker.getRegistration()
   if (!registration) return
@@ -86,6 +102,8 @@ onUnmounted(() => {
   window.removeEventListener('beforeinstallprompt', onBeforeInstallPrompt)
   window.removeEventListener('online', onOnlineChange)
   window.removeEventListener('offline', onOnlineChange)
+  resizeObserver?.disconnect()
+  document.documentElement.style.removeProperty('--kobo-pwa-banner-height')
 })
 </script>
 

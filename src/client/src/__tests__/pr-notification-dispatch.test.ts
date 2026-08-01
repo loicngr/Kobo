@@ -24,6 +24,17 @@ describe('PR notification WebSocket dispatch', () => {
     setActivePinia(createPinia())
     vi.clearAllMocks()
     vi.spyOn(useWorkspaceStore(), 'refreshPrSnapshot').mockResolvedValue(undefined as never)
+    // These tests cover the dispatch once a user has opted into each event.
+    // Fresh settings deliberately leave all PR sounds disabled.
+    Object.assign(useSettingsStore().global, {
+      audioPrCiFailedEnabled: true,
+      audioPrCiRecoveredEnabled: true,
+      audioPrChangesRequestedEnabled: true,
+      audioPrApprovedEnabled: true,
+      audioPrMergeConflictEnabled: true,
+      audioPrReadyToMergeEnabled: true,
+      audioPrMergedEnabled: true,
+    })
   })
 
   it.each(CASES)('routes %s through its own setting', (eventType, settingKey, sound) => {

@@ -1728,6 +1728,54 @@ function readableHistorySearchResult(
   }
 }
 
+// GET /api/workspaces/:id/session-metrics — compact observability data for the timeline.
+app.get('/:id/session-metrics', (c) => {
+  try {
+    const id = c.req.param('id')
+    if (!workspaceService.getWorkspace(id)) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    const db = getDb()
+    const sessions = workspaceService.listSessions(id)
+    interface SessionMetric {
+      sessionId: string
+      toolCalls: number
+      errors: number
+      inputTokens: number
+      outputTokens: number
+    }
+    const metrics = new Map<string, SessionMetric>(
+      sessions.map((session) => [
+        session.id,
+        { sessionId: session.id, toolCalls: 0, errors: 0, inputTokens: 0, outputTokens: 0 },
+      ]),
+    )
+    const events = db
+      .prepare(
+        "SELECT session_id, payload FROM ws_events WHERE workspace_id = ? AND type = 'agent:event' AND session_id IS NOT NULL",
+      )
+      .all(id) as Array<{ session_id: string; payload: string }>
+    for (const row of events) {
+      const metric = metrics.get(row.session_id)
+      if (!metric) continue
+      try {
+        const event = JSON.parse(row.payload) as Record<string, unknown>
+        if (event.kind === 'tool:call') metric.toolCalls++
+        if (event.kind === 'error' || (event.kind === 'tool:result' && event.isError === true)) metric.errors++
+        if (event.kind === 'usage') {
+          if (typeof event.inputTokens === 'number')
+            metric.inputTokens = Math.max(metric.inputTokens, event.inputTokens)
+          if (typeof event.outputTokens === 'number')
+            metric.outputTokens = Math.max(metric.outputTokens, event.outputTokens)
+        }
+      } catch {
+        // Corrupt historical events are intentionally ignored in diagnostics.
+      }
+    }
+    return c.json({ sessions, metrics: [...metrics.values()] })
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+  }
+})
+
 // GET /api/workspaces/:id/diagnostic.json — portable, redacted-by-design event diagnostic.
 app.get('/:id/diagnostic.json', (c) => {
   try {
@@ -3575,11 +3623,34 @@ app.post('/:id/merge-pr', async (c) => {
     }
 
     await provider.mergeRequest(workspace.worktreePath, snapshot.number)
-    return c.json({ success: true })
+    const merged = await provider.getPrStatus(workspace.worktreePath, workspace.workingBranch)
+    return c.json({ success: true, merged: merged?.state === 'MERGED', branch: workspace.workingBranch })
   } catch (err) {
     if (err instanceof ForgeUnavailableError) {
       return c.json({ error: err.message, code: 'forge_unavailable' }, 409)
     }
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+/** Delete the workspace branch from the remote after its PR/MR was merged. */
+app.post('/:id/delete-remote-branch', async (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    const provider = getForgeProvider(resolveForge(workspace.projectPath))
+    if (!provider.capabilities.canDeleteRemoteBranch) {
+      return c.json({ error: 'This project cannot delete remote branches', code: 'forge_unsupported' }, 409)
+    }
+    const availability = await provider.isAvailable(workspace.worktreePath)
+    if (!availability.available) return c.json({ error: 'Forge CLI unavailable', code: 'forge_unavailable' }, 409)
+    const snapshot = await provider.getPrStatus(workspace.worktreePath, workspace.workingBranch)
+    if (snapshot?.state !== 'MERGED') return c.json({ error: 'The PR is not merged yet', code: 'pr_not_merged' }, 409)
+    await provider.deleteRemoteBranch(workspace.worktreePath, workspace.workingBranch)
+    return c.json({ success: true })
+  } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
   }

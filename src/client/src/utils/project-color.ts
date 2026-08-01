@@ -18,6 +18,13 @@ export const PROJECT_COLOR_PALETTE = [
   'amber-5',
   'orange-5',
   'brown-5',
+  'light-blue-5',
+  'light-green-5',
+  'lime-5',
+  'yellow-6',
+  'deep-orange-5',
+  'blue-grey-5',
+  'grey-6',
 ] as const
 
 export type ProjectColor = (typeof PROJECT_COLOR_PALETTE)[number]
@@ -40,6 +47,13 @@ export const PROJECT_COLOR_TEXT_CONTRAST: Record<ProjectColor, 'white' | 'grey-9
   'amber-5': 'grey-9',
   'orange-5': 'white',
   'brown-5': 'white',
+  'light-blue-5': 'grey-9',
+  'light-green-5': 'grey-9',
+  'lime-5': 'grey-9',
+  'yellow-6': 'grey-9',
+  'deep-orange-5': 'white',
+  'blue-grey-5': 'white',
+  'grey-6': 'white',
 }
 
 export function projectColorFor(workspace: Workspace): ProjectColor | null {

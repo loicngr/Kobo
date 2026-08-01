@@ -88,6 +88,8 @@ function notifyPr(message: string, workspaceId: string, event: PrNotificationEve
 let _ws: WebSocket | null = null
 let _reconnectTimer: ReturnType<typeof setTimeout> | null = null
 let _reconnectAttempt = 0
+let _shouldReconnect = false
+let _networkListenersBound = false
 // Suppress notifications when the dispatcher is invoked during sync:response
 // replay. Mutated by the store's `_replaying` guard via `setReplaying`.
 let _replayingNotifications = false
@@ -384,33 +386,43 @@ export function dispatchAgentEvent(
     // keep reporting "1 sub-agent en cours" on a completed workspace.
     workspaceStore.finalizeRunningSubagents(workspaceId)
     workspaceStore.fetchWorkspaces()
-    if (!_replayingNotifications && event.reason !== 'killed') {
+    if (!_replayingNotifications && event.reason !== 'killed' && event.reason !== 'error') {
       // During auto-loop, defer the notification to the autoloop:disabled
       // handler — otherwise every iteration end fires a notification.
       const autoLoopActive = workspaceStore.autoLoopStates[workspaceId]?.auto_loop === true
       if (!autoLoopActive) {
         const wsName = workspaceStore.workspaces.find((w) => w.id === workspaceId)?.name ?? ''
-        const title =
-          event.reason === 'error'
-            ? t('notification.agentError', { name: wsName })
-            : t('notification.agentFinished', { name: wsName })
-        notify(title, undefined, workspaceId)
+        notify(t('notification.agentFinished', { name: wsName }), undefined, workspaceId)
       }
     }
     return
   }
 
-  // Quota errors: flip the workspace to 'quota' in the local cache and fetch
-  // the authoritative state. No notification — the user will see the panel.
-  if (event.kind === 'error' && event.category === 'quota') {
-    workspaceStore.updateWorkspaceFromEvent(workspaceId, { status: 'quota' })
-    workspaceStore.fetchWorkspaces()
+  if (event.kind === 'error') {
+    if (event.category === 'quota') {
+      workspaceStore.updateWorkspaceFromEvent(workspaceId, { status: 'quota' })
+      workspaceStore.fetchWorkspaces()
+    }
+    if (!_replayingNotifications) {
+      const settings = useSettingsStore().global
+      const wsName = workspaceStore.workspaces.find((w) => w.id === workspaceId)?.name ?? ''
+      notify(
+        t('notification.agentError', { name: wsName }),
+        undefined,
+        workspaceId,
+        settings.audioAgentErrorSound,
+        settings.audioAgentErrorVolume,
+        settings.audioAgentErrorNotifications,
+      )
+    }
   }
 }
 
 export const useWebSocketStore = defineStore('websocket', {
   state: () => ({
     connected: false,
+    reconnecting: false,
+    reconnectAttempt: 0,
     lastEventId: null as string | null,
     _replaying: false,
   }),
@@ -418,6 +430,26 @@ export const useWebSocketStore = defineStore('websocket', {
   actions: {
     connect() {
       if (_ws) return
+      _shouldReconnect = true
+      if (!_networkListenersBound) {
+        _networkListenersBound = true
+        window.addEventListener('online', () => {
+          if (_shouldReconnect) this.connect()
+        })
+        window.addEventListener('offline', () => {
+          this.connected = false
+          this.reconnecting = _shouldReconnect
+          if (_reconnectTimer) {
+            clearTimeout(_reconnectTimer)
+            _reconnectTimer = null
+          }
+        })
+      }
+      if (!navigator.onLine) {
+        this.connected = false
+        this.reconnecting = true
+        return
+      }
 
       const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
       const url = appendTokenToWsUrl(`${protocol}//${window.location.host}/ws`, getToken())
@@ -427,7 +459,9 @@ export const useWebSocketStore = defineStore('websocket', {
 
       ws.addEventListener('open', () => {
         this.connected = true
+        this.reconnecting = false
         _reconnectAttempt = 0
+        this.reconnectAttempt = 0
 
         // Re-subscribe to all known workspaces (subscriptions are lost on reconnect)
         const workspaceStore = useWorkspaceStore()
@@ -457,7 +491,7 @@ export const useWebSocketStore = defineStore('websocket', {
       ws.addEventListener('close', () => {
         this.connected = false
         _ws = null
-        this._scheduleReconnect()
+        if (_shouldReconnect) this._scheduleReconnect()
       })
 
       ws.addEventListener('error', () => {
@@ -466,6 +500,7 @@ export const useWebSocketStore = defineStore('websocket', {
     },
 
     disconnect() {
+      _shouldReconnect = false
       if (_reconnectTimer) {
         clearTimeout(_reconnectTimer)
         _reconnectTimer = null
@@ -475,6 +510,8 @@ export const useWebSocketStore = defineStore('websocket', {
         _ws = null
       }
       this.connected = false
+      this.reconnecting = false
+      this.reconnectAttempt = 0
     },
 
     subscribe(workspaceId: string) {
@@ -552,10 +589,18 @@ export const useWebSocketStore = defineStore('websocket', {
 
     _scheduleReconnect() {
       if (_reconnectTimer) return
+      if (!_shouldReconnect || !navigator.onLine) {
+        this.reconnecting = _shouldReconnect
+        return
+      }
 
-      // Exponential backoff: 1s, 2s, 4s, 8s, 16s, max 30s
-      const delay = Math.min(1000 * 2 ** _reconnectAttempt, 30000)
+      // Exponential backoff with light jitter prevents synchronized reconnect
+      // bursts when several Kōbō tabs regain network access together.
+      const baseDelay = Math.min(1000 * 2 ** _reconnectAttempt, 30000)
+      const delay = Math.round(baseDelay * (0.8 + Math.random() * 0.4))
       _reconnectAttempt++
+      this.reconnecting = true
+      this.reconnectAttempt = _reconnectAttempt
 
       // The browser surfaces a rejected WS upgrade (401 from the network-access
       // guard) only as a generic close → endless silent reconnect. After a few

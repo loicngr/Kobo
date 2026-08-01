@@ -9,6 +9,10 @@ vi.mock('../server/services/agent/event-router.js', () => ({
   routeEvent: vi.fn(),
 }))
 
+vi.mock('../server/services/settings-service.js', () => ({
+  getGlobalSettings: vi.fn(() => ({ autoLoopMaxRetries: 5 })),
+}))
+
 vi.mock('../server/services/workspace-service.js', () => ({
   updateWorkspaceStatus: vi.fn(),
   getWorkspace: vi.fn(() => null),
@@ -263,6 +267,21 @@ describe('handleQuota → quotaBackoffService.arm', () => {
     expect(delayMs).toBe(15 * 60_000)
     expect(meta.resetsAt).toBeNull()
     expect(meta.source).toBe('fallback_ladder')
+  })
+
+  it('retries a transient server failure on the fallback ladder, not a quota reset', async () => {
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const quotaBackoffService = await import('../server/services/quota-backoff-service.js')
+
+    orch._test_setRateLimitInfo('w-transient', {
+      buckets: [{ id: 'five_hour', usedPct: 100, resetsAt: '2026-04-23T10:30:00Z' }],
+    })
+    await orch._handleTransientAutoLoopFailure('w-transient')
+
+    expect(vi.mocked(quotaBackoffService.arm)).toHaveBeenCalledWith('w-transient', 15 * 60_000, {
+      resetsAt: null,
+      source: 'fallback_ladder',
+    })
   })
 
   it('calls arm() with usage_api source when usage API reports saturation', async () => {

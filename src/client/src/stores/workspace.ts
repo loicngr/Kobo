@@ -180,6 +180,7 @@ export interface ForgeInfo {
     canCreatePr: boolean
     canChangePrBase: boolean
     canMergeRequest: boolean
+    canDeleteRemoteBranch: boolean
     requestTermShort: 'PR' | 'MR'
   }
   availability: { available: boolean; reason?: 'cli_missing' | 'not_authenticated' }

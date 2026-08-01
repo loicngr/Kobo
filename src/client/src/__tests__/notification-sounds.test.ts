@@ -19,6 +19,7 @@ import {
 } from '../utils/notification-sounds'
 
 const NEW_SOUND_IDS = [
+  'basic-notification.mp3',
   '7eme-compagnie-03.mp3',
   'aller-ftg.mp3',
   'arrete-de-mentir.mp3',
@@ -67,12 +68,11 @@ describe('NOTIFICATION_SOUNDS', () => {
   })
 
   it('exposes the dedicated default sound for workspace creation', () => {
-    expect(DEFAULT_WORKSPACE_CREATED_SOUND).toBe('warcraft-3-humain-travail.mp3')
-    expect(NOTIFICATION_SOUNDS.some((s) => s.id === DEFAULT_WORKSPACE_CREATED_SOUND)).toBe(true)
+    expect(DEFAULT_WORKSPACE_CREATED_SOUND).toBe(INHERIT_NOTIFICATION_SOUND)
   })
 
-  it('registers all twelve new assets and keeps every file present', () => {
-    expect(NOTIFICATION_SOUNDS).toHaveLength(19)
+  it('registers all notification assets and keeps every file present', () => {
+    expect(NOTIFICATION_SOUNDS).toHaveLength(20)
     expect(NOTIFICATION_SOUNDS.map((sound) => sound.id)).toEqual(expect.arrayContaining([...NEW_SOUND_IDS]))
     for (const id of NEW_SOUND_IDS) {
       const asset = path.resolve(testDir, `../../public/sounds/${id}`)

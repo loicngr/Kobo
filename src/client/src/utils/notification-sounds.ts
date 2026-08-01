@@ -6,6 +6,7 @@ export interface NotificationSound {
 }
 
 export const NOTIFICATION_SOUNDS: readonly NotificationSound[] = [
+  { id: 'basic-notification.mp3', labelKey: 'settings.notificationSoundBasic' },
   { id: 'hey.mp3', labelKey: 'settings.notificationSoundHey' },
   { id: 'warcraft-3-humain-travail.mp3', labelKey: 'settings.notificationSoundWorkspaceCreated' },
   { id: 'travail_termine.mp3', labelKey: 'settings.notificationSoundTravailTermine' },
@@ -34,9 +35,9 @@ export const NOTIFICATION_SOUNDS: readonly NotificationSound[] = [
 ] as const
 
 export const DEFAULT_NOTIFICATION_SOUND = 'hey.mp3'
-export const DEFAULT_WORKSPACE_CREATED_SOUND = 'warcraft-3-humain-travail.mp3'
 export const INHERIT_NOTIFICATION_SOUND = 'inherit'
 export const NO_NOTIFICATION_SOUND = 'none'
+export const DEFAULT_WORKSPACE_CREATED_SOUND = INHERIT_NOTIFICATION_SOUND
 
 export const PR_NOTIFICATION_SOUND_SETTING_KEYS = [
   'audioPrCiFailedSound',
@@ -99,19 +100,19 @@ export const DEFAULT_PR_NOTIFICATION_SOUND_SETTINGS: Readonly<PrNotificationSoun
 
 export const DEFAULT_PR_NOTIFICATION_AUDIO_SETTINGS: Readonly<PrNotificationAudioSettings> = {
   ...DEFAULT_PR_NOTIFICATION_SOUND_SETTINGS,
-  audioPrCiFailedEnabled: true,
+  audioPrCiFailedEnabled: false,
   audioPrCiFailedVolume: 1,
-  audioPrCiRecoveredEnabled: true,
+  audioPrCiRecoveredEnabled: false,
   audioPrCiRecoveredVolume: 1,
-  audioPrChangesRequestedEnabled: true,
+  audioPrChangesRequestedEnabled: false,
   audioPrChangesRequestedVolume: 1,
-  audioPrApprovedEnabled: true,
+  audioPrApprovedEnabled: false,
   audioPrApprovedVolume: 1,
-  audioPrMergeConflictEnabled: true,
+  audioPrMergeConflictEnabled: false,
   audioPrMergeConflictVolume: 1,
-  audioPrReadyToMergeEnabled: true,
+  audioPrReadyToMergeEnabled: false,
   audioPrReadyToMergeVolume: 1,
-  audioPrMergedEnabled: true,
+  audioPrMergedEnabled: false,
   audioPrMergedVolume: 1,
 }
 

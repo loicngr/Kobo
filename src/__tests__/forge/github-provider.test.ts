@@ -32,6 +32,7 @@ describe('github forge provider', () => {
       canCreatePr: true,
       canChangePrBase: true,
       canMergeRequest: true,
+      canDeleteRemoteBranch: true,
       requestTermShort: 'PR',
     })
   })

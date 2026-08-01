@@ -8,7 +8,13 @@ import { type ForgeProvider, ForgeUnavailableError } from './types.js'
  */
 export const noneProvider: ForgeProvider = {
   id: 'none',
-  capabilities: { canCreatePr: false, canChangePrBase: false, canMergeRequest: false, requestTermShort: 'PR' },
+  capabilities: {
+    canCreatePr: false,
+    canChangePrBase: false,
+    canMergeRequest: false,
+    canDeleteRemoteBranch: false,
+    requestTermShort: 'PR',
+  },
   async isAvailable() {
     return { available: false }
   },
@@ -22,6 +28,9 @@ export const noneProvider: ForgeProvider = {
     throw new ForgeUnavailableError('This project has no supported forge configured')
   },
   async mergeRequest() {
+    throw new ForgeUnavailableError('This project has no supported forge configured')
+  },
+  async deleteRemoteBranch() {
     throw new ForgeUnavailableError('This project has no supported forge configured')
   },
 }

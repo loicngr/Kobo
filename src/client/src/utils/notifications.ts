@@ -20,6 +20,21 @@ function getAudio(soundId: string): HTMLAudioElement {
   return audio
 }
 
+/**
+ * Background tabs can defer `ended` events for HTML media. Notification sounds
+ * must not sit behind a queued sound whose completion the browser postponed,
+ * so background notifications get their own short-lived player.
+ */
+function playBackgroundNotificationSound(soundId: string, volume: number): void {
+  const audio = new Audio(soundUrl(resolveSoundId(soundId)))
+  audio.preload = 'auto'
+  audio.volume = volume
+  audio.play().catch(() => {
+    // A browser may still require a prior user interaction before allowing
+    // background media. There is no safe way to override that browser policy.
+  })
+}
+
 /** Request browser notification permission if not already granted. */
 export function requestNotificationPermission(): void {
   if ('Notification' in window && Notification.permission === 'default') {
@@ -59,7 +74,12 @@ function playNextQueuedSound(): void {
 }
 
 export function queueNotificationSound(soundId: string, volume?: number | null): void {
-  soundQueue.push({ soundId: resolveSoundId(soundId), volume: clampVolume(volume) })
+  const queued = { soundId: resolveSoundId(soundId), volume: clampVolume(volume) }
+  if (document.visibilityState === 'hidden') {
+    playBackgroundNotificationSound(queued.soundId, queued.volume)
+    return
+  }
+  soundQueue.push(queued)
   if (!queuePlaying) playNextQueuedSound()
 }
 

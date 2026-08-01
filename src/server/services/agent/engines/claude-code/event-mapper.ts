@@ -80,7 +80,7 @@ function normalizeRateLimitInfo(info: Record<string, unknown>): RateLimitInfo {
  * Anthropic's surfaces (`rate_limit_exceeded`, `Claude AI usage limit
  * reached`, `You're out of extra usage`, `quota exceeded`).
  */
-export const QUOTA_PATTERN = /out of extra usage|rate[_ ]limit|usage limit|quota exceeded/i
+export const QUOTA_PATTERN = /\b429\b|out of extra usage|rate[_ ]limit|usage limit|quota exceeded/i
 
 /** Mutable state carried across SDK messages within the same stream. */
 export interface MapperState {
