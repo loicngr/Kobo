@@ -436,6 +436,30 @@ export function updateWorkspaceReasoningEffort(id: string, reasoningEffort: stri
   return getWorkspace(id) as Workspace
 }
 
+/** Atomically change the engine configuration used by future workspace turns. */
+export function updateWorkspaceEngineConfiguration(
+  id: string,
+  engine: string,
+  model: string,
+  reasoningEffort: string,
+  agentPermissionMode: AgentPermissionMode,
+): Workspace {
+  const db = getDb()
+  const now = new Date().toISOString()
+  const legacyMode = agentPermissionMode === 'plan' ? 'plan' : 'auto-accept'
+  const legacyProfile = agentPermissionMode === 'plan' ? 'bypass' : agentPermissionMode
+  const result = db
+    .prepare(
+      `UPDATE workspaces
+       SET engine = ?, model = ?, reasoning_effort = ?, agent_permission_mode = ?,
+           permission_mode = ?, permission_profile = ?, updated_at = ?
+       WHERE id = ?`,
+    )
+    .run(engine, model, reasoningEffort, agentPermissionMode, legacyMode, legacyProfile, now, id)
+  if (result.changes === 0) throw new Error(`Workspace '${id}' not found`)
+  return getWorkspace(id) as Workspace
+}
+
 /**
  * Update the working branch for a workspace. Used both after ticket-ID
  * injection at creation time and after the rename-branch / resync-branch
@@ -950,6 +974,7 @@ export interface AgentSession {
   workspaceId: string
   pid: number | null
   engineSessionId: string | null
+  engine: string | null
   status: string
   model: string | null
   startedAt: string
@@ -962,6 +987,7 @@ interface AgentSessionRow {
   workspace_id: string
   pid: number | null
   engine_session_id: string | null
+  engine: string | null
   status: string
   model: string | null
   started_at: string
@@ -975,6 +1001,7 @@ function mapSession(row: AgentSessionRow): AgentSession {
     workspaceId: row.workspace_id,
     pid: row.pid,
     engineSessionId: row.engine_session_id,
+    engine: row.engine,
     status: row.status,
     model: row.model,
     startedAt: row.started_at,
@@ -1028,21 +1055,21 @@ export function getActiveSession(workspaceId: string): AgentSession | null {
 /** Create an idle agent session (no Claude process yet) for a workspace. */
 export function createIdleSession(workspaceId: string): AgentSession {
   const db = getDb()
+  const workspace = getWorkspace(workspaceId)
+  if (!workspace) throw new Error(`Workspace '${workspaceId}' not found`)
   const id = nanoid()
   const now = new Date().toISOString()
-  db.prepare('INSERT INTO agent_sessions (id, workspace_id, pid, status, started_at) VALUES (?, ?, NULL, ?, ?)').run(
-    id,
-    workspaceId,
-    'idle',
-    now,
-  )
+  db.prepare(
+    'INSERT INTO agent_sessions (id, workspace_id, pid, engine, status, model, started_at) VALUES (?, ?, NULL, ?, ?, ?, ?)',
+  ).run(id, workspaceId, workspace.engine, 'idle', workspace.model, now)
   return {
     id,
     workspaceId,
     pid: null,
     engineSessionId: null,
+    engine: workspace.engine,
     status: 'idle',
-    model: null,
+    model: workspace.model,
     startedAt: now,
     endedAt: null,
     name: null,
@@ -1058,4 +1085,38 @@ export function renameSession(sessionId: string, workspaceId: string, name: stri
   if (result.changes === 0) return null
   const row = db.prepare('SELECT * FROM agent_sessions WHERE id = ?').get(sessionId) as AgentSessionRow | undefined
   return row ? mapSession(row) : null
+}
+
+/** Delete a stopped session and only the persisted conversation attached to it. */
+export function deleteSession(sessionId: string, workspaceId: string): boolean {
+  const db = getDb()
+  const session = db
+    .prepare('SELECT status, engine FROM agent_sessions WHERE id = ? AND workspace_id = ?')
+    .get(sessionId, workspaceId) as { status: string; engine: string | null } | undefined
+  if (!session) return false
+  if (session.status === 'running') {
+    throw new Error(`Cannot delete active session '${sessionId}'`)
+  }
+  const transaction = db.transaction(() => {
+    db.prepare('DELETE FROM ws_events WHERE workspace_id = ? AND session_id = ?').run(workspaceId, sessionId)
+    db.prepare('DELETE FROM agent_sessions WHERE id = ? AND workspace_id = ?').run(sessionId, workspaceId)
+    const workspace = getWorkspace(workspaceId)
+    if (workspace?.engine === session.engine) {
+      const fallback = db
+        .prepare(
+          'SELECT engine, model FROM agent_sessions WHERE workspace_id = ? AND engine IS NOT NULL ORDER BY started_at DESC LIMIT 1',
+        )
+        .get(workspaceId) as { engine: string; model: string | null } | undefined
+      if (fallback) {
+        db.prepare('UPDATE workspaces SET engine = ?, model = COALESCE(?, model), updated_at = ? WHERE id = ?').run(
+          fallback.engine,
+          fallback.model,
+          new Date().toISOString(),
+          workspaceId,
+        )
+      }
+    }
+  })
+  transaction()
+  return true
 }

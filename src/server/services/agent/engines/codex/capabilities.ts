@@ -5,11 +5,12 @@ export const CODEX_CAPABILITIES: EngineCapabilities = {
   models: CODEX_MODELS.map((m) => ({ id: m.id, label: m.label })),
   effortLevels: [
     { id: 'auto', label: 'Auto' },
-    { id: 'minimal', label: 'Minimal' },
+    { id: 'none', label: 'None' },
     { id: 'low', label: 'Low' },
     { id: 'medium', label: 'Medium' },
     { id: 'high', label: 'High' },
     { id: 'xhigh', label: 'Extra High' },
+    { id: 'max', label: 'Maximum' },
   ],
   permissionModes: ['plan', 'bypass', 'strict', 'interactive'],
   supportsResume: true,

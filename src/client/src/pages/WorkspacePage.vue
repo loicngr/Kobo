@@ -74,6 +74,10 @@
                         <q-item-section avatar><q-icon name="content_copy" size="16px" /></q-item-section>
                         <q-item-section>{{ $t('workspacePage.copySessionId') }}</q-item-section>
                       </q-item>
+                      <q-item v-if="sessionCanBeDeleted(scope.opt.value)" clickable class="text-negative" @click="confirmDeleteSession(scope.opt.value)">
+                        <q-item-section avatar><q-icon name="delete_outline" size="16px" /></q-item-section>
+                        <q-item-section>{{ $t('workspacePage.deleteSession') }}</q-item-section>
+                      </q-item>
                     </q-list>
                   </q-menu>
                 </q-btn>
@@ -159,6 +163,14 @@
             </span>
           </template>
         </q-select>
+        <q-btn
+          flat dense no-caps size="sm" icon="swap_horiz" class="q-mr-sm"
+          :label="$t('workspacePage.switchEngine')"
+          :disable="!selectedWs || selectedWs.archivedAt"
+          @click="openEngineSwitch"
+        >
+          <q-tooltip>{{ $t('workspacePage.switchEngineHint') }}</q-tooltip>
+        </q-btn>
         <q-btn
           v-if="isBusyStatus(selectedWs.status) && !selectedWs.archivedAt"
           dense
@@ -374,8 +386,57 @@
         </q-card-actions>
       </q-card>
     </q-dialog>
+    <q-dialog v-model="engineSwitchOpen" persistent>
+      <q-card dark class="engine-switch-card">
+        <q-card-section class="row items-start no-wrap q-pb-sm">
+          <q-icon name="swap_horiz" color="primary" size="24px" class="q-mr-sm q-mt-xs" />
+          <div>
+            <div class="text-subtitle1">{{ t('workspacePage.switchEngineTitle') }}</div>
+            <div class="text-caption text-grey-5 q-mt-xs">{{ t('workspacePage.switchEngineWarning') }}</div>
+          </div>
+        </q-card-section>
+        <q-separator dark />
+        <q-card-section class="q-gutter-md">
+          <q-select v-model="switchEngineId" :options="switchEngineOptions" emit-value map-options dark dense outlined :label="t('workspacePage.engineLabel')" />
+          <div class="row q-col-gutter-md q-mx-none q-mt-sm">
+            <div class="col-12 col-sm-4 flex"><q-select v-model="switchModel" :options="switchModelOptions" emit-value map-options dark dense outlined class="engine-switch-field full-width" :label="$t('engine.model')" /></div>
+            <div class="col-12 col-sm-4 flex"><q-select v-model="switchEffort" :options="switchEffortOptions" emit-value map-options dark dense outlined class="engine-switch-field full-width" :label="$t('engine.effort')" /></div>
+            <div class="col-12 col-sm-4 flex"><q-select v-model="switchPermissionMode" :options="switchPermissionOptions" emit-value map-options dark dense outlined class="engine-switch-field full-width" :label="$t('agentPermissionMode.label')" /></div>
+          </div>
+          <q-expansion-item default-opened dense dense-toggle icon="description" :label="t('workspacePage.engineHandoff')" header-class="text-grey-3">
+            <div class="q-pt-sm">
+              <q-input
+                v-model="switchHandoff"
+                type="textarea"
+                dark outlined
+                :loading="switchHandoffLoading"
+                input-style="height: 230px; resize: vertical; line-height: 1.45;"
+                :hint="t('workspacePage.engineHandoffHint')"
+              />
+            </div>
+          </q-expansion-item>
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat :label="$t('common.cancel')" :disable="switchingEngine" @click="engineSwitchOpen = false" />
+          <q-btn color="primary" :label="t('workspacePage.confirmSwitchEngine')" :loading="switchingEngine" :disable="switchHandoffLoading || !switchHandoff.trim()" @click="confirmEngineSwitch" />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
   </q-page>
 </template>
+
+<style scoped>
+.engine-switch-card {
+  width: min(760px, calc(100vw - 32px));
+  max-width: 760px;
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+}
+
+.engine-switch-field :deep(.q-field__control) {
+  min-height: 44px;
+}
+</style>
 
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
@@ -746,7 +807,9 @@ const sessionOptions = computed(() => {
   const opts = store.sessions.map((s: AgentSession, idx: number) => ({
     label: s.name ?? t('workspacePage.session', { n: store.sessions.length - idx }),
     value: s.id,
-    caption: timeAgo(s.startedAt),
+    caption: s.engine
+      ? `${s.engine === 'codex' ? t('workspacePage.engineCodex') : t('workspacePage.engineClaude')} · ${timeAgo(s.startedAt)}`
+      : timeAgo(s.startedAt),
     isSession: true,
   }))
   return [...opts, { label: t('workspacePage.newSession'), value: '__new__', caption: '', isSession: false }]
@@ -756,6 +819,94 @@ const renameDialogOpen = ref(false)
 const renameTarget = ref<{ id: string } | null>(null)
 const renameValue = ref('')
 const creatingSession = ref(false)
+const engineSwitchOpen = ref(false)
+const switchingEngine = ref(false)
+const switchHandoffLoading = ref(false)
+const switchEngineId = ref('codex')
+const switchModel = ref('')
+const switchEffort = ref('auto')
+const switchPermissionMode = ref<AgentPermissionModeValue>('plan')
+const switchHandoff = ref('')
+
+const switchEngineOptions = computed(() => [
+  { value: 'claude-code', label: t('workspacePage.engineClaude'), disable: currentEngineId.value === 'claude-code' },
+  { value: 'codex', label: t('workspacePage.engineCodex'), disable: currentEngineId.value === 'codex' },
+])
+const switchModelOptions = computed(() =>
+  (MODEL_OPTION_DEFS_BY_ENGINE[switchEngineId.value] ?? MODEL_OPTION_DEFS).map((option) => ({
+    label: t(option.i18nLabelKey),
+    value: option.value,
+  })),
+)
+const switchEffortOptions = computed(() =>
+  (EFFORT_OPTION_DEFS_BY_ENGINE[switchEngineId.value] ?? EFFORT_OPTION_DEFS_BY_ENGINE['claude-code']).map((option) => ({
+    label: t(option.i18nLabelKey),
+    value: option.value,
+  })),
+)
+const switchPermissionOptions = computed(() =>
+  (PERMISSION_MODES_BY_ENGINE[switchEngineId.value] ?? PERMISSION_MODES_BY_ENGINE['claude-code']).map((mode) => ({
+    label: t(`agentPermissionMode.${mode}`),
+    value: mode,
+  })),
+)
+
+async function loadEngineHandoff() {
+  if (!store.selectedWorkspaceId || switchEngineId.value === currentEngineId.value) return
+  switchHandoffLoading.value = true
+  try {
+    switchHandoff.value = await store.previewEngineHandoff(store.selectedWorkspaceId, switchEngineId.value)
+  } catch (err) {
+    $q.notify({
+      type: 'negative',
+      message: err instanceof Error ? err.message : t('workspacePage.switchEngineFailed'),
+      position: 'top',
+    })
+  } finally {
+    switchHandoffLoading.value = false
+  }
+}
+
+function openEngineSwitch() {
+  switchEngineId.value = currentEngineId.value === 'claude-code' ? 'codex' : 'claude-code'
+  switchModel.value = switchModelOptions.value[0]?.value ?? ''
+  switchEffort.value = 'auto'
+  switchPermissionMode.value = (switchPermissionOptions.value[0]?.value ?? 'plan') as AgentPermissionModeValue
+  switchHandoff.value = ''
+  engineSwitchOpen.value = true
+  void loadEngineHandoff()
+}
+
+async function confirmEngineSwitch() {
+  if (!store.selectedWorkspaceId) return
+  switchingEngine.value = true
+  try {
+    const result = await store.switchEngine(store.selectedWorkspaceId, {
+      engine: switchEngineId.value,
+      model: switchModel.value,
+      reasoningEffort: switchEffort.value,
+      agentPermissionMode: switchPermissionMode.value,
+      handoff: switchHandoff.value,
+    })
+    store.selectSession(result.sessionId)
+    engineSwitchOpen.value = false
+  } catch (err) {
+    $q.notify({
+      type: 'negative',
+      message: err instanceof Error ? err.message : t('workspacePage.switchEngineFailed'),
+      position: 'top',
+    })
+  } finally {
+    switchingEngine.value = false
+  }
+}
+
+watch(switchEngineId, () => {
+  switchModel.value = switchModelOptions.value[0]?.value ?? ''
+  switchEffort.value = 'auto'
+  switchPermissionMode.value = (switchPermissionOptions.value[0]?.value ?? 'plan') as AgentPermissionModeValue
+  if (engineSwitchOpen.value) void loadEngineHandoff()
+})
 
 function copyEngineSessionId(sessionId: string) {
   const session = store.sessions.find((s) => s.id === sessionId)
@@ -772,6 +923,30 @@ function openRenameDialog(sessionId: string, currentLabel: string) {
   renameTarget.value = { id: sessionId }
   renameValue.value = session.name ?? currentLabel
   renameDialogOpen.value = true
+}
+
+function sessionCanBeDeleted(sessionId: string): boolean {
+  return store.sessions.find((session) => session.id === sessionId)?.status !== 'running'
+}
+
+function confirmDeleteSession(sessionId: string) {
+  const session = store.sessions.find((item) => item.id === sessionId)
+  if (!session || !store.selectedWorkspaceId) return
+  $q.dialog({
+    title: t('workspacePage.deleteSessionTitle'),
+    message: t('workspacePage.deleteSessionConfirm'),
+    cancel: true,
+    persistent: true,
+    color: 'negative',
+  }).onOk(() => {
+    void store.deleteSession(store.selectedWorkspaceId!, sessionId).catch((err) => {
+      $q.notify({
+        type: 'negative',
+        message: err instanceof Error ? err.message : t('workspacePage.deleteSessionFailed'),
+        position: 'top',
+      })
+    })
+  })
 }
 
 async function handleRename() {

@@ -5,7 +5,7 @@ export type AgentPermissionMode = 'plan' | 'bypass' | 'strict' | 'interactive'
 export interface BuildCodexOptionsInput {
   prompt: string
   model?: string
-  effort?: string // 'auto' | 'low' | 'medium' | 'high'
+  effort?: string
   /** Unified SDK-aligned permission mode (plan | bypass | strict | interactive). */
   agentPermissionMode: AgentPermissionMode
   /**
@@ -75,9 +75,11 @@ export function buildCodexOptions(input: BuildCodexOptionsInput): BuildCodexOpti
     threadParams.model = input.model
   }
 
-  // Effort: omit when undefined or 'auto'
+  // Effort: omit when undefined or 'auto'. `minimal` was emitted by older
+  // Kōbō versions; Codex 5.6 rejects it, so preserve old workspaces by
+  // translating it to the closest current setting instead of failing a turn.
   if (input.effort && input.effort !== 'auto') {
-    threadParams.modelReasoningEffort = input.effort as ModelReasoningEffort
+    threadParams.modelReasoningEffort = (input.effort === 'minimal' ? 'none' : input.effort) as ModelReasoningEffort
   }
 
   // `default_tools_approval_mode: 'auto'` pre-approves the namespace —

@@ -42,8 +42,39 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 32', () => {
-    expect(SCHEMA_VERSION).toBe(32)
+  it('exporte SCHEMA_VERSION = 33', () => {
+    expect(SCHEMA_VERSION).toBe(33)
+  })
+
+  it('migration v33 records and backfills the engine on agent sessions', () => {
+    const db = new Database(':memory:')
+    db.exec(`
+      CREATE TABLE workspaces (id TEXT PRIMARY KEY, engine TEXT NOT NULL);
+      CREATE TABLE agent_sessions (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        engine_session_id TEXT
+      );
+      INSERT INTO workspaces VALUES ('ws-1', 'codex');
+      INSERT INTO agent_sessions VALUES ('session-1', 'ws-1', 'thread-1');
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+    `)
+    for (let version = 1; version <= 32; version++) {
+      db.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(
+        version,
+        `v${version}`,
+        'now',
+      )
+    }
+
+    runMigrations(db)
+
+    const columns = (db.prepare('PRAGMA table_info(agent_sessions)').all() as Array<{ name: string }>).map(
+      (column) => column.name,
+    )
+    expect(columns).toContain('engine')
+    expect(db.prepare("SELECT engine FROM agent_sessions WHERE id = 'session-1'").get()).toEqual({ engine: 'codex' })
+    db.close()
   })
 
   it('migration v17 unifies legacy permission_mode + permission_profile into agent_permission_mode', () => {

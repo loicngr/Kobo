@@ -28,6 +28,7 @@ vi.mock('../server/services/workspace-service.js', () => ({
   getActiveSession: vi.fn(),
   createIdleSession: vi.fn(),
   renameSession: vi.fn(),
+  deleteSession: vi.fn(),
   archiveWorkspace: vi.fn(),
   unarchiveWorkspace: vi.fn(),
   listArchivedWorkspaces: vi.fn(),

@@ -18,6 +18,7 @@ import { listChatHistory, pushChatHistory } from '../services/chat-history-servi
 import { type CiFixCheck, renderCiFixTemplate } from '../services/ci-fix-template-service.js'
 import * as cronService from '../services/cron-service.js'
 import * as devServerService from '../services/dev-server-service.js'
+import { buildEngineHandoff } from '../services/engine-handoff-service.js'
 import { saveWorkspaceFile, shaOf } from '../services/file-editor-service.js'
 import { getForgeProvider } from '../services/forge/registry.js'
 import { resolveForge } from '../services/forge/resolve.js'
@@ -96,6 +97,85 @@ app.get('/', (c) => {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
+  }
+})
+
+// POST /api/workspaces/:id/engine-handoff-preview — build an editable, deterministic handoff.
+app.post('/:id/engine-handoff-preview', migrationGuard, async (c) => {
+  try {
+    const id = c.req.param('id')
+    const body = await c.req.json<{ engine?: string }>()
+    const workspace = workspaceService.getWorkspaceWithTasks(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    const engine = listEngines().find((item) => item.id === body.engine)
+    if (!engine) return c.json({ error: `Unknown engine '${body.engine ?? ''}'` }, 400)
+    return c.json({ handoff: buildEngineHandoff(workspace, workspace.engine, engine.id) })
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : 'Failed to build engine handoff' }, 500)
+  }
+})
+
+// POST /api/workspaces/:id/switch-engine — stop the current controller and start a fresh engine session.
+app.post('/:id/switch-engine', migrationGuard, async (c) => {
+  try {
+    const id = c.req.param('id')
+    const body = await c.req.json<{
+      engine?: string
+      model?: string
+      reasoningEffort?: string
+      agentPermissionMode?: AgentPermissionMode
+      handoff?: string
+    }>()
+    const workspace = workspaceService.getWorkspaceWithTasks(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    if (!body.engine || body.engine === workspace.engine) return c.json({ error: 'Choose a different engine' }, 400)
+    const engine = listEngines().find((item) => item.id === body.engine)
+    if (!engine) return c.json({ error: `Unknown engine '${body.engine}'` }, 400)
+    const model =
+      typeof body.model === 'string' && engine.capabilities.models.some((item) => item.id === body.model)
+        ? body.model
+        : engine.capabilities.models[0]?.id
+    if (!model) return c.json({ error: `Engine '${body.engine}' has no available model` }, 400)
+    if (
+      !isAgentPermissionMode(body.agentPermissionMode) ||
+      !engine.capabilities.permissionModes.includes(body.agentPermissionMode)
+    ) {
+      return c.json({ error: `Engine '${body.engine}' does not support the selected permission mode` }, 400)
+    }
+    const effort = typeof body.reasoningEffort === 'string' ? body.reasoningEffort : 'auto'
+    const handoff =
+      typeof body.handoff === 'string' && body.handoff.trim()
+        ? body.handoff.trim().slice(0, 30_000)
+        : buildEngineHandoff(workspace, workspace.engine, body.engine)
+
+    if (agentManager.hasController(id)) agentManager.stopAgent(id)
+    const updated = workspaceService.updateWorkspaceEngineConfiguration(
+      id,
+      body.engine,
+      model,
+      effort,
+      body.agentPermissionMode,
+    )
+    const session = agentManager.startAgent(
+      id,
+      updated.worktreePath,
+      handoff,
+      updated.model,
+      false,
+      updated.agentPermissionMode,
+      undefined,
+      updated.reasoningEffort,
+    )
+    workspaceService.updateWorkspaceStatus(id, 'executing')
+    wsService.emit(
+      id,
+      'user:message',
+      { content: handoff, sender: 'user', kind: 'engine-handoff' },
+      session.agentSessionId,
+    )
+    return c.json({ workspace: workspaceService.getWorkspace(id), sessionId: session.agentSessionId })
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : 'Failed to switch engine' }, 500)
   }
 })
 
@@ -1353,6 +1433,20 @@ app.patch('/:id/sessions/:sessionId', async (c) => {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
+  }
+})
+
+// DELETE /api/workspaces/:id/sessions/:sessionId — remove a stopped session and its history.
+app.delete('/:id/sessions/:sessionId', migrationGuard, (c) => {
+  try {
+    const workspaceId = c.req.param('id')
+    const sessionId = c.req.param('sessionId')
+    const deleted = workspaceService.deleteSession(sessionId, workspaceId)
+    if (!deleted) return c.json({ error: `Session '${sessionId}' not found` }, 404)
+    return c.json({ ok: true, workspace: workspaceService.getWorkspace(workspaceId) })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, message.includes('active session') ? 409 : 500)
   }
 })
 

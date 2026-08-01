@@ -1152,6 +1152,44 @@ describe('renameSession()', () => {
   })
 })
 
+describe('deleteSession()', () => {
+  it('deletes a stopped session and only its persisted events', async () => {
+    const {
+      createWorkspace,
+      createIdleSession,
+      deleteSession,
+      getWorkspace,
+      listSessions,
+      updateWorkspaceEngineConfiguration,
+    } = await import('../server/services/workspace-service.js')
+    const { getDb } = await import('../server/db/index.js')
+    const ws = createWorkspace({
+      name: 'delete-session',
+      projectPath: '/p',
+      sourceBranch: 'main',
+      workingBranch: 'delete',
+    })
+    const session = createIdleSession(ws.id)
+    const db = getDb()
+    db.prepare(
+      'INSERT INTO ws_events (id, workspace_id, type, payload, session_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    ).run('event-for-session', ws.id, 'user:message', '{"content":"remove"}', session.id, new Date().toISOString())
+    db.prepare(
+      'INSERT INTO ws_events (id, workspace_id, type, payload, session_id, created_at) VALUES (?, ?, ?, ?, NULL, ?)',
+    ).run('workspace-event', ws.id, 'agent:event', '{"kind":"message:text"}', new Date().toISOString())
+
+    updateWorkspaceEngineConfiguration(ws.id, 'codex', 'gpt-5.6-terra', 'high', 'plan')
+    const codexSession = createIdleSession(ws.id)
+    expect(deleteSession(codexSession.id, ws.id)).toBe(true)
+    expect(getWorkspace(ws.id)?.engine).toBe('claude-code')
+
+    expect(deleteSession(session.id, ws.id)).toBe(true)
+    expect(listSessions(ws.id)).toEqual([])
+    expect(db.prepare("SELECT id FROM ws_events WHERE id = 'event-for-session'").get()).toBeUndefined()
+    expect(db.prepare("SELECT id FROM ws_events WHERE id = 'workspace-event'").get()).toEqual({ id: 'workspace-event' })
+  })
+})
+
 describe('setWorkspaceTags(id, tags)', () => {
   it('stores the normalized tag list on the workspace', async () => {
     const { createWorkspace, setWorkspaceTags } = await import('../server/services/workspace-service.js')

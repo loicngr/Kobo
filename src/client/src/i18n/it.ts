@@ -87,6 +87,7 @@ export default {
   // Reasoning
   'reasoning.auto': 'auto',
   'reasoning.minimal': 'minimal',
+  'reasoning.none': 'nessuno',
   'reasoning.low': 'low',
   'reasoning.medium': 'medium',
   'reasoning.high': 'high',
@@ -94,6 +95,7 @@ export default {
   'reasoning.max': 'max',
   'reasoning.autoDescription': 'Lascia decidere al motore',
   'reasoning.minimalDescription': 'Ragionamento più veloce e superficiale',
+  'reasoning.noneDescription': 'Senza ragionamento aggiuntivo',
   'reasoning.lowDescription': 'Più veloce, meno profondità',
   'reasoning.mediumDescription': 'Bilanciato',
   'reasoning.highDescription': 'Più profondità',
@@ -148,6 +150,11 @@ export default {
   'workspacePage.sessionEndedNotice': 'Questa sessione è terminata. Crea una nuova sessione per continuare.',
   'workspacePage.renameFailed': 'Rinomina fallita',
   'workspacePage.copySessionId': 'Copia ID sessione',
+  'workspacePage.deleteSession': 'Elimina sessione',
+  'workspacePage.deleteSessionTitle': 'Eliminare la sessione?',
+  'workspacePage.deleteSessionConfirm':
+    'Questo elimina definitivamente la sessione e la cronologia della conversazione.',
+  'workspacePage.deleteSessionFailed': 'Impossibile eliminare la sessione',
   'workspacePage.noEngineSessionId': "Nessun ID sessione ancora — l'agente non ha ancora avviato questa sessione",
   'workspacePage.createSessionFailed': 'Creazione sessione fallita',
   'workspacePage.startFailed': 'Avvio fallito',
@@ -169,6 +176,18 @@ export default {
   'workspacePage.pendingNextRun': 'Applicato al prossimo avvio',
   'workspacePage.activeSessionModel': 'In uso: {model}',
   'workspacePage.activeSessionModelTooltip': 'Modello effettivamente usato dalla sessione selezionata',
+  'workspacePage.switchEngine': 'Cambia motore',
+  'workspacePage.switchEngineHint': 'Continua questo workspace con un altro motore agente',
+  'workspacePage.switchEngineTitle': 'Cambia motore agente',
+  'workspacePage.switchEngineWarning':
+    "L'agente attuale verrà fermato e una nuova sessione inizierà nello stesso worktree.",
+  'workspacePage.engineLabel': 'Motore',
+  'workspacePage.engineClaude': 'Claude Code',
+  'workspacePage.engineCodex': 'Codex',
+  'workspacePage.engineHandoff': 'Passaggio al nuovo motore',
+  'workspacePage.engineHandoffHint': 'Rivedi o modifica il contesto inviato al nuovo agente.',
+  'workspacePage.confirmSwitchEngine': 'Cambia motore',
+  'workspacePage.switchEngineFailed': 'Impossibile cambiare motore',
 
   // Search
   'search.title': 'Ricerca',

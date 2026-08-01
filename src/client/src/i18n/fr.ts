@@ -87,6 +87,7 @@ export default {
   // Reasoning
   'reasoning.auto': 'auto',
   'reasoning.minimal': 'minimal',
+  'reasoning.none': 'aucun',
   'reasoning.low': 'low',
   'reasoning.medium': 'medium',
   'reasoning.high': 'high',
@@ -94,6 +95,7 @@ export default {
   'reasoning.max': 'max',
   'reasoning.autoDescription': 'Laisse le moteur choisir',
   'reasoning.minimalDescription': 'Raisonnement le plus rapide et superficiel',
+  'reasoning.noneDescription': 'Sans raisonnement supplémentaire',
   'reasoning.lowDescription': 'Plus rapide, moins profond',
   'reasoning.mediumDescription': 'Équilibré',
   'reasoning.highDescription': 'Plus de profondeur',
@@ -148,6 +150,11 @@ export default {
   'workspacePage.sessionEndedNotice': 'Cette session est terminée. Crée une nouvelle session pour continuer.',
   'workspacePage.renameFailed': 'Échec du renommage',
   'workspacePage.copySessionId': "Copier l'ID de session",
+  'workspacePage.deleteSession': 'Supprimer la session',
+  'workspacePage.deleteSessionTitle': 'Supprimer la session ?',
+  'workspacePage.deleteSessionConfirm':
+    'Cette action supprime définitivement cette session et son historique de conversation.',
+  'workspacePage.deleteSessionFailed': 'Échec de la suppression de la session',
   'workspacePage.noEngineSessionId': "Pas encore d'ID de session — l'agent n'a pas encore démarré cette session",
   'workspacePage.createSessionFailed': 'Échec de la création de la session',
   'workspacePage.startFailed': 'Échec du démarrage',
@@ -169,6 +176,18 @@ export default {
   'workspacePage.pendingNextRun': 'Appliqué au prochain démarrage',
   'workspacePage.activeSessionModel': 'En cours : {model}',
   'workspacePage.activeSessionModelTooltip': 'Modèle effectivement utilisé par la session sélectionnée',
+  'workspacePage.switchEngine': 'Changer d’engine',
+  'workspacePage.switchEngineHint': 'Continuer ce workspace avec un autre engine agent',
+  'workspacePage.switchEngineTitle': 'Changer d’engine agent',
+  'workspacePage.switchEngineWarning':
+    'L’agent actuel sera arrêté et une nouvelle session démarrera dans le même worktree.',
+  'workspacePage.engineLabel': 'Engine',
+  'workspacePage.engineClaude': 'Claude Code',
+  'workspacePage.engineCodex': 'Codex',
+  'workspacePage.engineHandoff': 'Passation pour le nouvel engine',
+  'workspacePage.engineHandoffHint': 'Relisez ou modifiez le contexte envoyé au nouvel agent.',
+  'workspacePage.confirmSwitchEngine': 'Changer d’engine',
+  'workspacePage.switchEngineFailed': 'Échec du changement d’engine',
 
   // Search
   'search.title': 'Recherche',

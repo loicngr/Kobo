@@ -24,7 +24,7 @@ export type SandboxMode = 'read-only' | 'workspace-write' | 'danger-full-access'
 export type AskForApproval = 'never' | 'on-request' | 'on-failure' | 'unless-trusted' | 'untrusted'
 
 /** Reasoning effort level passed to the model. */
-export type ModelReasoningEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+export type ModelReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 /**
  * Codex's own session-level "mode" concept — independent from sandbox/approval.

@@ -36,14 +36,15 @@ export const CLAUDE_EFFORT_OPTION_DEFS: readonly EffortDef[] = [
   effort('max'),
 ]
 
-/** Codex: maps to the SDK `ModelReasoningEffort` union (`minimal..xhigh`). */
+/** Codex: mirrors the current app-server reasoning effort contract. */
 export const CODEX_EFFORT_OPTION_DEFS: readonly EffortDef[] = [
   effort('auto'),
-  effort('minimal'),
+  effort('none'),
   effort('low'),
   effort('medium'),
   effort('high'),
   effort('xhigh'),
+  effort('max'),
 ]
 
 /** Lookup by engine id. Unknown engines fall back to Claude's list. */

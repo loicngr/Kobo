@@ -68,6 +68,7 @@ export interface AgentSession {
   workspaceId: string
   pid: number | null
   engineSessionId: string | null
+  engine?: string | null
   status: string
   model?: string | null
   startedAt: string
@@ -651,6 +652,41 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
+    async previewEngineHandoff(id: string, engine: string): Promise<string> {
+      const res = await fetch(`/api/workspaces/${id}/engine-handoff-preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ engine }),
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`)
+      return body.handoff as string
+    },
+
+    async switchEngine(
+      id: string,
+      input: {
+        engine: string
+        model: string
+        reasoningEffort: string
+        agentPermissionMode: 'plan' | 'bypass' | 'strict' | 'interactive'
+        handoff: string
+      },
+    ): Promise<{ sessionId: string }> {
+      const res = await fetch(`/api/workspaces/${id}/switch-engine`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`)
+      const updated = body.workspace as Workspace
+      const idx = this.workspaces.findIndex((workspace) => workspace.id === id)
+      if (idx >= 0) this.workspaces[idx] = updated
+      await this.fetchSessions(id, body.sessionId)
+      return { sessionId: body.sessionId as string }
+    },
+
     async stopWorkspace(id: string) {
       try {
         const res = await fetch(`/api/workspaces/${id}/stop`, {
@@ -1171,6 +1207,20 @@ export const useWorkspaceStore = defineStore('workspace', {
       const updated = (await res.json().catch(() => null)) as AgentSession | null
       const session = this.sessions.find((s) => s.id === sessionId)
       if (session) session.name = updated?.name ?? name
+    },
+
+    async deleteSession(workspaceId: string, sessionId: string): Promise<void> {
+      const res = await fetch(`/api/workspaces/${workspaceId}/sessions/${sessionId}`, { method: 'DELETE' })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(body.error ?? `HTTP ${res.status}`)
+      const wasSelected = this.selectedSessionId === sessionId
+      const updated = body.workspace as Workspace | undefined
+      if (updated) {
+        const idx = this.workspaces.findIndex((workspace) => workspace.id === workspaceId)
+        if (idx >= 0) this.workspaces[idx] = updated
+      }
+      await this.fetchSessions(workspaceId)
+      if (wasSelected) this.selectSession(this.sessions[0]?.id ?? null)
     },
 
     addActivityItem(workspaceId: string, item: ActivityItem) {

@@ -71,6 +71,11 @@ describe('buildCodexOptions — effort', () => {
     const { threadParams } = buildCodexOptions({ ...BASE_INPUT, effort: 'high' })
     expect(threadParams.modelReasoningEffort).toBe('high')
   })
+
+  it('upgrades legacy minimal effort to none for current Codex models', () => {
+    const { threadParams } = buildCodexOptions({ ...BASE_INPUT, model: 'gpt-5.6-terra', effort: 'minimal' })
+    expect(threadParams.modelReasoningEffort).toBe('none')
+  })
 })
 
 // ── MCP servers ───────────────────────────────────────────────────────────────

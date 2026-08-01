@@ -457,6 +457,25 @@ export const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 33,
+    name: 'add-agent-session-engine',
+    migrate: (db) => {
+      const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_sessions'").get()
+      if (!table) return
+      const cols = db.prepare('PRAGMA table_info(agent_sessions)').all() as Array<{ name: string }>
+      if (!cols.some((col) => col.name === 'engine')) {
+        db.exec('ALTER TABLE agent_sessions ADD COLUMN engine TEXT')
+      }
+      // Historical rows predate per-session engine tracking. The workspace
+      // value is the best available attribution and keeps their history useful.
+      db.exec(`
+        UPDATE agent_sessions
+        SET engine = (SELECT engine FROM workspaces WHERE workspaces.id = agent_sessions.workspace_id)
+        WHERE engine IS NULL
+      `)
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

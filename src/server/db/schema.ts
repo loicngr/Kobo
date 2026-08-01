@@ -59,6 +59,7 @@ export function initSchema(db: Database.Database): void {
       workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
       pid INTEGER,
       engine_session_id TEXT,
+      engine TEXT,
       status TEXT NOT NULL DEFAULT 'running',
       model TEXT,
       started_at TEXT NOT NULL,

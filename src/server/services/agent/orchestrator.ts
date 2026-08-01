@@ -440,6 +440,7 @@ function buildAgentPrompt(prompt: string, projectPath: string | undefined): stri
 interface AgentSessionRow {
   id: string
   engine_session_id: string | null
+  engine: string | null
 }
 
 function resolveSessionForResume(
@@ -452,7 +453,7 @@ function resolveSessionForResume(
   if (existingSessionId) {
     lastSession = db
       .prepare(
-        'SELECT id, engine_session_id FROM agent_sessions WHERE id = ? AND workspace_id = ? AND engine_session_id IS NOT NULL LIMIT 1',
+        'SELECT id, engine_session_id, engine FROM agent_sessions WHERE id = ? AND workspace_id = ? AND engine_session_id IS NOT NULL LIMIT 1',
       )
       .get(existingSessionId, workspaceId) as AgentSessionRow | undefined
     if (!lastSession) {
@@ -464,7 +465,7 @@ function resolveSessionForResume(
   } else {
     lastSession = db
       .prepare(
-        'SELECT id, engine_session_id FROM agent_sessions WHERE workspace_id = ? AND engine_session_id IS NOT NULL ORDER BY started_at DESC LIMIT 1',
+        'SELECT id, engine_session_id, engine FROM agent_sessions WHERE workspace_id = ? AND engine_session_id IS NOT NULL ORDER BY started_at DESC LIMIT 1',
       )
       .get(workspaceId) as AgentSessionRow | undefined
   }
@@ -507,14 +508,15 @@ function reuseOrCreateFreshSession(
   workspaceId: string,
   existingSessionId: string | undefined,
   model: string | undefined,
+  engine: string,
 ): string {
   const db = getDb()
   if (existingSessionId) {
     const result = db
       .prepare(
-        'UPDATE agent_sessions SET status = ?, started_at = ?, ended_at = NULL, model = ? WHERE id = ? AND workspace_id = ?',
+        'UPDATE agent_sessions SET status = ?, started_at = ?, ended_at = NULL, model = ?, engine = ? WHERE id = ? AND workspace_id = ?',
       )
-      .run('running', new Date().toISOString(), model ?? null, existingSessionId, workspaceId)
+      .run('running', new Date().toISOString(), model ?? null, engine, existingSessionId, workspaceId)
     if (result.changes === 0) {
       throw new Error(`Agent session '${existingSessionId}' not found for workspace '${workspaceId}'`)
     }
@@ -522,8 +524,8 @@ function reuseOrCreateFreshSession(
   }
   const agentSessionId = nanoid()
   db.prepare(
-    'INSERT INTO agent_sessions (id, workspace_id, pid, status, model, started_at) VALUES (?, ?, ?, ?, ?, ?)',
-  ).run(agentSessionId, workspaceId, null, 'running', model ?? null, new Date().toISOString())
+    'INSERT INTO agent_sessions (id, workspace_id, pid, engine, status, model, started_at) VALUES (?, ?, ?, ?, ?, ?, ?)',
+  ).run(agentSessionId, workspaceId, null, engine, 'running', model ?? null, new Date().toISOString())
   return agentSessionId
 }
 
@@ -942,8 +944,11 @@ export function startAgent(
     const r = resolveSessionForResume(workspaceId, existingSessionId, model)
     agentSessionId = r.agentSessionId
     resumeFromEngineSessionId = r.engineSessionId
+    // A native resume is only used by the currently selected workspace engine.
+    // Keep older DB rows attributable even when they were created pre-migration.
+    getDb().prepare('UPDATE agent_sessions SET engine = ? WHERE id = ?').run(engineId, agentSessionId)
   } else {
-    agentSessionId = reuseOrCreateFreshSession(workspaceId, existingSessionId, model)
+    agentSessionId = reuseOrCreateFreshSession(workspaceId, existingSessionId, model, engineId)
   }
 
   const settings = ws ? readEffectiveSettingsSafe(ws.projectPath) : readEffectiveSettingsSafe(workingDir)
