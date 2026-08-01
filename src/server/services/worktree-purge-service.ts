@@ -127,7 +127,7 @@ async function captureRestoreData(
   return {
     prNumber,
     prUrl,
-    forge: forge as 'github' | 'gitlab' | 'none',
+    forge: forge as 'github' | 'gitlab' | 'bitbucket-community' | 'none',
     mergeCommitSha: null,
     originalWorktreePath: workspace.worktreePath,
     originalSourceBranch: workspace.sourceBranch,

@@ -1,7 +1,7 @@
 // src/server/services/forge/types.ts
 
 /** Known forge identifiers. `none` means "no supported forge / PR features off". */
-export type ForgeId = 'github' | 'gitlab' | 'none'
+export type ForgeId = 'github' | 'gitlab' | 'bitbucket-community' | 'none'
 
 /** Per-reviewer state in a PR/MR. Pending = requested but no review yet. */
 export interface PrReviewer {

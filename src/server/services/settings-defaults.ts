@@ -18,7 +18,7 @@ export const DEFAULT_CHANGE_SOURCE_BRANCH_SCRIPT = `#!/usr/bin/env bash
 #   KOBO_PROJECT_NAME    project directory name (basename of KOBO_PROJECT_PATH)
 #   KOBO_WORKSPACE_ID    Kōbō workspace id (stable across renames)
 #   KOBO_WORKSPACE_NAME  workspace display name
-#   KOBO_FORGE           resolved forge: github / gitlab / none
+#   KOBO_FORGE           resolved forge: github / gitlab / bitbucket-community / none
 #   KOBO_PR_NUMBER       PR/MR number on the resolved forge (empty if none open)
 set -euo pipefail
 

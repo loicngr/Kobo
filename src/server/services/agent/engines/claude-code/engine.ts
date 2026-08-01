@@ -236,6 +236,7 @@ export function createClaudeCodeEngine(): AgentEngine {
             console.warn(`[claude-engine stderr] ${data}`)
           }
         },
+        env: options.env,
       })
       sdkOptions.abortController = abortController
 

@@ -636,7 +636,7 @@ export function restorePrAttention(id: string, kind: PrAttentionKind): void {
 export interface WorktreePurgeRestoreData {
   prNumber: number | null
   prUrl: string | null
-  forge: 'github' | 'gitlab' | 'none' | null
+  forge: 'github' | 'gitlab' | 'bitbucket-community' | 'none' | null
   mergeCommitSha: string | null
   originalWorktreePath: string
   originalSourceBranch: string

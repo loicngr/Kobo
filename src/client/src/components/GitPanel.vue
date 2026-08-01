@@ -955,7 +955,11 @@ const FORGE_FALLBACK: ForgeInfo = {
 const forge = computed<ForgeInfo>(() => gitStats.value?.forge ?? FORGE_FALLBACK)
 
 /** CLI name used in tooltip messages ('gh' for GitHub, 'glab' for GitLab). */
-const forgeCli = computed(() => (forge.value.id === 'gitlab' ? 'glab' : 'gh'))
+const forgeCli = computed(() => {
+  if (forge.value.id === 'gitlab') return 'glab'
+  if (forge.value.id === 'bitbucket-community') return 'bkt'
+  return 'gh'
+})
 
 // Gate the "Create PR" button: the branch must exist on the remote, otherwise
 // `gh pr create` fails downstream. Once it's pushed, let the user open a PR

@@ -14,6 +14,7 @@ import { unregisterProcess } from '../../utils/process-tracker.js'
 import * as autoLoopService from '../auto-loop-service.js'
 import * as cleanupScriptService from '../cleanup-script-service.js'
 import * as cronService from '../cron-service.js'
+import { resolveForge } from '../forge/resolve.js'
 import * as quotaBackoffService from '../quota-backoff-service.js'
 import { getEffectiveSettings, getGlobalSettings } from '../settings-service.js'
 import { refreshNow } from '../usage/poller.js'
@@ -401,6 +402,37 @@ function buildMcpServers(workspaceId: string): McpServerSpec[] {
       },
     },
   ]
+}
+
+function isBitbucketProject(projectPath: string): boolean {
+  try {
+    return resolveForge(projectPath) === 'bitbucket-community'
+  } catch {
+    return false
+  }
+}
+
+function buildAgentEnv(projectPath: string): NodeJS.ProcessEnv | undefined {
+  if (!isBitbucketProject(projectPath)) return undefined
+  const global = getGlobalSettings()
+  if (!global.bitbucketToken) return undefined
+  return {
+    ...process.env,
+    BKT_HOST: 'https://bitbucket.org',
+    BKT_TOKEN: global.bitbucketToken,
+    BKT_USERNAME: global.bitbucketUsername,
+  }
+}
+
+function buildAgentPrompt(prompt: string, projectPath: string | undefined): string {
+  if (!projectPath || !isBitbucketProject(projectPath)) return prompt
+  return [
+    '[Kōbō Bitbucket] Bitbucket credentials are available through the `bkt` CLI in this session.',
+    'Use `bkt pr edit <number> --body <description>` and `bkt pr comment <number> --body <comment>` for PR updates.',
+    'Do not call the Bitbucket REST API with curl or reuse BKT_TOKEN as a Bearer token: Bitbucket Cloud API tokens require the bkt CLI authentication flow.',
+    '',
+    prompt,
+  ].join('\n')
 }
 
 // ── DB session row helpers ────────────────────────────────────────────────────
@@ -919,7 +951,7 @@ export function startAgent(
   const options: StartOptions = {
     workspaceId,
     workingDir,
-    prompt,
+    prompt: buildAgentPrompt(prompt, ws?.projectPath),
     model,
     effort: reasoningEffort,
     // Cascade: explicit caller override → workspace setting → 'bypass'.
@@ -935,6 +967,7 @@ export function startAgent(
     })(),
     settings,
     mcpServers: buildMcpServers(workspaceId),
+    env: ws ? buildAgentEnv(ws.projectPath) : undefined,
   }
 
   const controller = new SessionController(workspaceId, agentSessionId, engine, (ev) =>

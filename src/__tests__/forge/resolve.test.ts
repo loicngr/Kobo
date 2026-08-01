@@ -34,6 +34,11 @@ describe('forgeFromRemoteUrl', () => {
     expect(forgeFromRemoteUrl('git@gitlab.mycorp.com:o/r.git')).toBe('gitlab')
   })
 
+  it('detects Bitbucket Cloud and Data Center hosts', () => {
+    expect(forgeFromRemoteUrl('git@bitbucket.org:team/repo.git')).toBe('bitbucket-community')
+    expect(forgeFromRemoteUrl('https://bitbucket.mycorp.example/scm/team/repo.git')).toBe('bitbucket-community')
+  })
+
   it('returns none for an unrecognised host', () => {
     expect(forgeFromRemoteUrl('https://example.com/o/r.git')).toBe('none')
   })

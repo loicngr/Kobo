@@ -194,7 +194,7 @@ Projects override a subset of global settings. Anything you set here takes prece
 | `changeSourceBranchScript` | `string` | Per-project version of the custom change-source-branch script. Empty inherits the global value. See [Custom change-source-branch script](#custom-change-source-branch-script). |
 | `cleanupScriptMode` | `'' \| 'idle' \| 'no-tasks'` | Per-project override of the cleanup trigger mode. Empty inherits the global mode. |
 | `taskPromptTemplate` | `string` | Prompt auto-injected into the task-description textarea on the creation page when this project is selected. Empty disables. |
-| `forge` | `'auto' \| 'github' \| 'gitlab' \| 'none'` | Which forge provides PR/MR features. `auto` detects from the git remote URL. See [Forge integration](#forge-integration). |
+| `forge` | `'auto' \| 'github' \| 'gitlab' \| 'bitbucket-community' \| 'none'` | Which forge provides PR/MR features. `auto` detects from the git remote URL. See [Forge integration](#forge-integration). |
 | `devServer.startCommand` / `stopCommand` | `string` | Per-workspace dev server commands. Docker, npm, or any shell-startable process. See [Dev server](#dev-server) for the status/URL contract. |
 | `e2e.framework` | `'cypress' \| 'playwright' \| 'jest' \| 'vitest' \| 'other' \| ''` | E2E framework auto-loop grooming should target. |
 | `e2e.skill` | `string` | Optional skill name injected into the E2E grooming prompt. |
@@ -250,8 +250,8 @@ force-push confirmation prompt, and the agent-driven conflict resolution.
 | `KOBO_PROJECT_NAME` | project directory name (basename of `KOBO_PROJECT_PATH`); handy for log lines or notifications |
 | `KOBO_WORKSPACE_ID` | Kōbō workspace id (stable across renames); useful for backup branch naming, idempotency keys, etc. |
 | `KOBO_WORKSPACE_NAME` | workspace display name as shown in the Kōbō UI |
-| `KOBO_FORGE` | resolved forge id for this project (`github`, `gitlab` or `none`); use it to pick `gh` vs `glab` cleanly instead of probing both |
-| `KOBO_PR_NUMBER` | number of the PR / MR open on the resolved forge for the working branch. Empty when none is open, when the forge is `none`, or when the CLI (`gh` / `glab`) cannot resolve it. Use it to target the request explicitly: `gh pr edit "$KOBO_PR_NUMBER" --base "$KOBO_NEW_BASE"` |
+| `KOBO_FORGE` | resolved forge id for this project (`github`, `gitlab`, `bitbucket-community` or `none`); use it to pick the appropriate CLI cleanly instead of probing them all |
+| `KOBO_PR_NUMBER` | number of the PR / MR open on the resolved forge for the working branch. Empty when none is open, when the forge is `none`, or when its CLI cannot resolve it. |
 
 The standard process env (`PATH`, `HOME`, etc.) is forwarded unchanged.
 
@@ -919,15 +919,16 @@ Adapt the port stride, the `APP_NAME`, and any extra `*_PORT` keys to your stack
 
 ## Forge integration
 
-Kōbō can open pull requests (GitHub) or merge requests (GitLab) directly from the Git panel. The **forge** setting controls which service is used for a given project.
+Kōbō can open pull requests (GitHub or Bitbucket) or merge requests (GitLab) directly from the Git panel. The **forge** setting controls which service is used for a given project.
 
 ### Modes
 
 | Value | Behaviour |
 |---|---|
-| `auto` (default) | Kōbō reads the `origin` remote URL: host contains `github.com` → GitHub; host contains `gitlab` → GitLab; anything else → `none`. |
+| `auto` (default) | Kōbō reads the `origin` remote URL: host contains `github.com` → GitHub; host contains `gitlab` → GitLab; host contains `bitbucket` → Bitbucket Community; anything else → `none`. |
 | `github` | Always use GitHub, regardless of the remote URL. |
 | `gitlab` | Always use GitLab, regardless of the remote URL. |
+| `bitbucket-community` | Always use Bitbucket Community (`bkt`), regardless of the remote URL. |
 | `none` | PR/MR features are disabled. The PR block is hidden in the Git panel. |
 
 Set the per-project value in **Settings → (project) → Forge**.
@@ -938,6 +939,7 @@ Set the per-project value in **Settings → (project) → Forge**.
 
 - GitHub.com repositories: the remote URL contains `github.com` → GitHub detected automatically.
 - GitLab.com repositories: the remote URL contains `gitlab` → GitLab detected automatically.
+- Bitbucket Cloud repositories: the remote URL contains `bitbucket.org` → Bitbucket Community detected automatically.
 - Self-hosted GitLab on a custom hostname (e.g. `git.mycompany.com`): the hostname does not contain `gitlab`, so `auto` falls back to `none`. Set `forge: gitlab` explicitly for these projects.
 
 ### CLI prerequisites
@@ -964,11 +966,15 @@ glab auth login
 glab auth login --hostname git.mycompany.com
 ```
 
+**Bitbucket Cloud:**
+
+Install [`bkt`](https://github.com/avivsinai/bitbucket-cli), then open **Settings → Forge** and enter your Atlassian email and a Bitbucket-scoped API token. Kōbō keeps this token locally, excludes it from settings exports, and passes it to `bkt` for Bitbucket workspaces and their agents. No `bkt auth login` context or interactive keyring prompt is required.
+
 Kōbō only invokes the CLI binary. If the CLI is missing from `PATH` or not authenticated, PR/MR actions are disabled with an explanatory tooltip in the Git panel. Kōbō keeps working; only the PR/MR features are affected.
 
 ### UI behaviour
 
-- The Git panel label adapts per forge: **Create PR** on GitHub, **Create MR** on GitLab.
+- The Git panel label adapts per forge: **Create PR** on GitHub and Bitbucket, **Create MR** on GitLab.
 - When `forge` is `none` (or auto-resolves to `none`), the PR/MR block is hidden entirely: no errors, no placeholders.
 - When the CLI is absent or unauthenticated, the button is disabled with a tooltip explaining the issue instead of surfacing a raw error.
 

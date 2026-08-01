@@ -1065,6 +1065,13 @@ where ffmpeg</pre>
               </div>
             </div>
 
+            <div v-show="activeTab === 'forge'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.bitbucketCommunity') }}</div>
+              <div class="text-caption text-grey-6 q-mb-md">{{ $t('settings.bitbucketCommunityHint') }}</div>
+              <q-input v-model="globalBitbucketUsername" :label="$t('settings.bitbucketUsername')" autocomplete="username" dark dense outlined class="q-mb-sm" />
+              <q-input v-model="globalBitbucketToken" :label="$t('settings.bitbucketToken')" type="password" autocomplete="off" dark dense outlined />
+            </div>
+
             <div v-if="activeTab === 'notion'" :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalNotionEnabled }]">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.notionStatus') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.notionStatusHint') }}</div>
@@ -2462,6 +2469,7 @@ const navItems = computed(() => [
   { value: 'scripts', icon: 'terminal', label: t('settings.nav.scripts') },
   { value: 'notion', icon: 'integration_instructions', label: t('settings.nav.notion') },
   { value: 'sentry', icon: 'bug_report', label: t('settings.nav.sentry') },
+  { value: 'forge', icon: 'account_tree', label: t('settings.nav.forge') },
   { value: 'voice', icon: 'mic', label: t('settings.nav.voice') },
   { value: 'notifications', icon: 'notifications', label: t('settings.nav.notifications') },
   { value: 'worktrees', icon: 'account_tree', label: t('settings.nav.worktrees') },
@@ -2480,6 +2488,7 @@ const isGlobalSection = computed(() =>
     'scripts',
     'notion',
     'sentry',
+    'forge',
     'voice',
     'notifications',
     'worktrees',
@@ -2735,6 +2744,8 @@ const globalClaudePermissionMode = ref<AgentPermissionMode>('bypass')
 const globalCodexPermissionMode = ref<AgentPermissionMode>('bypass')
 const globalNotionMcpKey = ref('')
 const globalSentryMcpKey = ref('')
+const globalBitbucketToken = ref('')
+const globalBitbucketUsername = ref('')
 const globalNotionEnabled = ref(true)
 const globalSentryEnabled = ref(true)
 const globalTags = ref<string[]>([])
@@ -2896,7 +2907,7 @@ const projectForm = ref({
   color: null as ProjectColor | null,
   defaultSourceBranch: '',
   defaultModel: '',
-  forge: 'auto' as 'auto' | 'github' | 'gitlab' | 'none',
+  forge: 'auto' as 'auto' | 'github' | 'gitlab' | 'bitbucket-community' | 'none',
   prPromptTemplate: '',
   reviewPromptTemplate: '',
   ciFixPromptTemplate: '',
@@ -3255,6 +3266,7 @@ const forgeOptions = computed(() => [
   { label: t('settings.forge.auto'), value: 'auto' },
   { label: t('settings.forge.github'), value: 'github' },
   { label: t('settings.forge.gitlab'), value: 'gitlab' },
+  { label: t('settings.forge.bitbucketCommunity'), value: 'bitbucket-community' },
   { label: t('settings.forge.none'), value: 'none' },
 ])
 
@@ -3402,6 +3414,8 @@ function captureGlobalSnapshot(): string {
     codexPermissionMode: globalCodexPermissionMode.value,
     notionMcpKey: globalNotionMcpKey.value,
     sentryMcpKey: globalSentryMcpKey.value,
+    bitbucketToken: globalBitbucketToken.value,
+    bitbucketUsername: globalBitbucketUsername.value,
     notionEnabled: globalNotionEnabled.value,
     sentryEnabled: globalSentryEnabled.value,
     showVerboseSystemMessages: globalShowVerboseSystemMessages.value,
@@ -3525,6 +3539,8 @@ function syncGlobalForm() {
   }
   globalNotionMcpKey.value = store.global.notionMcpKey ?? ''
   globalSentryMcpKey.value = store.global.sentryMcpKey ?? ''
+  globalBitbucketToken.value = store.global.bitbucketToken ?? ''
+  globalBitbucketUsername.value = store.global.bitbucketUsername ?? ''
   globalNotionEnabled.value = store.global.notionEnabled ?? true
   globalSentryEnabled.value = store.global.sentryEnabled ?? true
   globalShowVerboseSystemMessages.value = store.showVerboseSystemMessages
@@ -3805,6 +3821,8 @@ async function saveGlobal() {
       },
       notionMcpKey: globalNotionMcpKey.value,
       sentryMcpKey: globalSentryMcpKey.value,
+      bitbucketToken: globalBitbucketToken.value,
+      bitbucketUsername: globalBitbucketUsername.value,
       notionEnabled: globalNotionEnabled.value,
       sentryEnabled: globalSentryEnabled.value,
       showThinkingBlocks: globalShowThinkingBlocks.value,

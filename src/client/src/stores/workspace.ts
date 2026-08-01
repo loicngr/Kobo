@@ -175,7 +175,7 @@ export function isSubagentTerminalEvent(subtype: string | undefined, status?: st
 }
 
 export interface ForgeInfo {
-  id: 'github' | 'gitlab' | 'none'
+  id: 'github' | 'gitlab' | 'bitbucket-community' | 'none'
   capabilities: {
     canCreatePr: boolean
     canChangePrBase: boolean

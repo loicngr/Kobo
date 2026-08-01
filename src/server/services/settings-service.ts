@@ -184,7 +184,7 @@ export interface ProjectSettings {
    * from the git remote URL; the others force a specific provider.
    * Seeded by settings migration v32.
    */
-  forge: 'auto' | 'github' | 'gitlab' | 'none'
+  forge: 'auto' | 'github' | 'gitlab' | 'bitbucket-community' | 'none'
 }
 
 /** Global settings that apply as defaults when no project override is set. */
@@ -325,6 +325,8 @@ export interface GlobalSettings {
   defaultPermissionModeByEngine: Record<string, string>
   notionMcpKey: string
   sentryMcpKey: string
+  bitbucketToken: string
+  bitbucketUsername: string
   notionEnabled: boolean
   sentryEnabled: boolean
   /** Whether agent thinking/reasoning blocks are displayed in the activity feed. */
@@ -1041,6 +1043,14 @@ const settingsMigrations: SettingsMigration[] = [
       }
     },
   },
+  {
+    version: 50,
+    name: 'add-bitbucket-credentials',
+    migrate: ({ global }) => {
+      if (typeof global.bitbucketToken !== 'string') global.bitbucketToken = ''
+      if (typeof global.bitbucketUsername !== 'string') global.bitbucketUsername = ''
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -1121,6 +1131,8 @@ function defaultSettings(): Settings {
       networkAccessEnabled: false,
       networkAccessToken: '',
       networkAccessBehindProxy: false,
+      bitbucketToken: '',
+      bitbucketUsername: '',
       browserNotifications: true,
       audioNotifications: true,
       audioQuestionNotifications: false,
@@ -1367,7 +1379,7 @@ export function getSettings(): Settings {
 }
 
 /** Keys stripped from exports — secrets that should stay on the machine. */
-const SECRET_GLOBAL_KEYS = ['notionMcpKey', 'sentryMcpKey', 'networkAccessToken'] as const
+const SECRET_GLOBAL_KEYS = ['notionMcpKey', 'sentryMcpKey', 'networkAccessToken', 'bitbucketToken'] as const
 
 export interface ConfigBundle {
   bundleVersion: number
@@ -1601,6 +1613,8 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'defaultPermissionModeByEngine',
     'notionMcpKey',
     'sentryMcpKey',
+    'bitbucketToken',
+    'bitbucketUsername',
     'notionEnabled',
     'sentryEnabled',
     'showThinkingBlocks',

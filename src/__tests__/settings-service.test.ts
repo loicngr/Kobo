@@ -2121,7 +2121,7 @@ describe('PR notification sounds (v45)', () => {
       audioQuestionSound: 'hey.mp3',
       networkAccessToken: 'keep-me',
     })
-    expect(SETTINGS_SCHEMA_VERSION).toBe(49)
+    expect(SETTINGS_SCHEMA_VERSION).toBe(50)
   })
 
   it('adds the auto-loop retry limit while preserving existing settings', () => {

@@ -63,6 +63,7 @@ export interface StartOptions {
   koboHome: string
   settings: EffectiveSettings
   mcpServers?: McpServerSpec[]
+  env?: NodeJS.ProcessEnv
 }
 
 export interface McpServerSpec {

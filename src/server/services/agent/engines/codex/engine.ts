@@ -87,7 +87,7 @@ export function createCodexEngine(): AgentEngine {
       const streamingBatcher = createStreamingBatcher(emitDirect)
       const safeEmit = (ev: AgentEvent): void => streamingBatcher.push(ev)
 
-      const child = spawnAppServer({ cwd: options.workingDir, signal: abortController.signal })
+      const child = spawnAppServer({ cwd: options.workingDir, env: options.env, signal: abortController.signal })
 
       if (child.stderr) {
         child.stderr.setEncoding('utf8')

@@ -14,6 +14,7 @@ export interface BuildClaudeOptionsInput {
   hooks?: Options['hooks']
   canUseTool?: CanUseTool
   stderr?: (data: string) => void
+  env?: Record<string, string | undefined>
 }
 
 export interface BuildClaudeOptionsResult {
@@ -104,6 +105,7 @@ export function buildClaudeOptions(input: BuildClaudeOptionsInput): BuildClaudeO
   if (input.hooks) options.hooks = input.hooks
   if (input.canUseTool) options.canUseTool = input.canUseTool
   if (input.stderr) options.stderr = input.stderr
+  if (input.env) options.env = input.env
 
   return { options, effectivePrompt: prompt }
 }

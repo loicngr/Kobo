@@ -53,7 +53,7 @@ interface ProjectSettings {
   finalization: FinalizationSettings
   color: ProjectColor | null
   /** Which forge provides PR/MR features for this project. `auto` = auto-detect. */
-  forge?: 'auto' | 'github' | 'gitlab' | 'none'
+  forge?: 'auto' | 'github' | 'gitlab' | 'bitbucket-community' | 'none'
 }
 
 interface GlobalSettings {
@@ -143,6 +143,8 @@ interface GlobalSettings {
   defaultPermissionModeByEngine: Record<string, string>
   notionMcpKey: string
   sentryMcpKey: string
+  bitbucketToken: string
+  bitbucketUsername: string
   notionEnabled: boolean
   sentryEnabled: boolean
   showThinkingBlocks: boolean
@@ -247,6 +249,8 @@ export const useSettingsStore = defineStore('settings', {
       defaultPermissionModeByEngine: { 'claude-code': 'plan', codex: 'plan' } as Record<string, string>,
       notionMcpKey: '',
       sentryMcpKey: '',
+      bitbucketToken: '',
+      bitbucketUsername: '',
       notionEnabled: true,
       sentryEnabled: true,
       showThinkingBlocks: true,

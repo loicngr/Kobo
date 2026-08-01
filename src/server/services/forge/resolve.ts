@@ -8,6 +8,7 @@ export function forgeFromRemoteUrl(url: string): ForgeId {
   const lower = url.toLowerCase()
   if (lower.includes('github.com')) return 'github'
   if (lower.includes('gitlab')) return 'gitlab'
+  if (lower.includes('bitbucket')) return 'bitbucket-community'
   return 'none'
 }
 
@@ -29,6 +30,8 @@ function readRemoteUrl(projectPath: string): string {
  */
 export function resolveForge(projectPath: string): ForgeId {
   const setting = getProjectSettings(projectPath)?.forge ?? 'auto'
-  if (setting === 'github' || setting === 'gitlab' || setting === 'none') return setting
+  if (setting === 'github' || setting === 'gitlab' || setting === 'bitbucket-community' || setting === 'none') {
+    return setting
+  }
   return forgeFromRemoteUrl(readRemoteUrl(projectPath))
 }
