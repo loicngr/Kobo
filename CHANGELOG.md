@@ -4,6 +4,10 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.11.5
+
+- fix(pwa): stabilize notifications and chat layout
+
 ## 1.11.4
 
 - feat(workspace): switch agent engines within a workspace
