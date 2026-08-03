@@ -874,8 +874,13 @@ export default {
   'git.discardFailed': 'Verwerfen fehlgeschlagen',
   'git.conflictTitleMerge': 'Merge-Konflikte erkannt',
   'git.conflictTitleRebase': 'Rebase-Konflikte erkannt',
+  'git.operationPausedTitle': 'Git-Vorgang fortsetzen',
+  'git.operationPausedSubtitle':
+    'Keine Dateien stehen im Konflikt. Git wartet nur darauf, dass du den Vorgang fortsetzt.',
   'git.conflictSubtitle': '{count} Datei(en) mit Konflikten. Wie soll fortgefahren werden?',
   'git.conflictAbort': 'Abbrechen',
+  'git.conflictContinue': 'Fortsetzen',
+  'git.conflictContinued': 'Git-Vorgang fortgesetzt',
   'git.conflictResolveWithAgent': 'Agent soll auflösen',
   'git.conflictAborted': 'Vorgang abgebrochen',
   'git.conflictHandoffSuccess': 'Agent löst die Konflikte',

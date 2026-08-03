@@ -6,6 +6,7 @@ import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   abortOngoingGitOperation,
+  continueOngoingGitOperation,
   GitConflictError,
   getOngoingGitOperation,
   listBackupBranches,
@@ -96,6 +97,27 @@ describe('cherry-pick conflict infrastructure', () => {
       // expected
     }
     expect(abortOngoingGitOperation(repo)).toBe('cherry-pick')
+    expect(getOngoingGitOperation(repo)).toBeNull()
+  })
+
+  it('continues a resolved cherry-pick', () => {
+    g(repo, ['checkout', '-q', '-b', 'feature'])
+    writeFileSync(join(repo, 'f.txt'), 'feature\n')
+    g(repo, ['commit', '-q', '-am', 'feature change'])
+    const featureSha = g(repo, ['rev-parse', 'HEAD'])
+    g(repo, ['checkout', '-q', 'main'])
+    writeFileSync(join(repo, 'f.txt'), 'main\n')
+    g(repo, ['commit', '-q', '-am', 'main change'])
+    try {
+      execFileSync('git', ['cherry-pick', featureSha], { cwd: repo })
+    } catch {
+      // expected to conflict
+    }
+
+    writeFileSync(join(repo, 'f.txt'), 'resolved\n')
+    g(repo, ['add', 'f.txt'])
+
+    expect(continueOngoingGitOperation(repo)).toBe('cherry-pick')
     expect(getOngoingGitOperation(repo)).toBeNull()
   })
 })

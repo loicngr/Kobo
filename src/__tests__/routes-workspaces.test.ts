@@ -142,6 +142,8 @@ vi.mock('../server/utils/git-ops.js', () => ({
   fetchAllBranches: vi.fn(),
   rebaseBranch: vi.fn(),
   mergeBranch: vi.fn(),
+  continueOngoingGitOperation: vi.fn(),
+  getConflictedFiles: vi.fn(),
   commitAllChanges: vi.fn(),
   discardWorkingTreeChanges: vi.fn(),
   // Real-enough error classes so `err instanceof gitOps.X` matches what the
@@ -5747,6 +5749,21 @@ describe('POST /:id/rebase & /:id/merge dirty-worktree handling', () => {
     expect(gitOps.mergeBranch).toHaveBeenCalledWith(fakeWorkspace.worktreePath, fakeWorkspace.sourceBranch, {
       autostash: false,
     })
+  })
+})
+
+describe('POST /:id/git/continue', () => {
+  beforeEach(() => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+  })
+
+  it('continues an in-progress Git operation', async () => {
+    vi.mocked(gitOps.continueOngoingGitOperation).mockReturnValue('rebase')
+
+    const res = await app.request('/api/workspaces/ws-1/git/continue', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(gitOps.continueOngoingGitOperation).toHaveBeenCalledWith(fakeWorkspace.worktreePath)
   })
 })
 

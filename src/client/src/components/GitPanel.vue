@@ -488,10 +488,10 @@
         <q-card-section>
           <div class="text-subtitle1 text-warning">
             <q-icon name="warning" class="q-mr-xs" />
-            {{ conflictOperation === 'merge' ? $t('git.conflictTitleMerge') : $t('git.conflictTitleRebase') }}
+            {{ conflictFiles.length === 0 ? $t('git.operationPausedTitle') : conflictOperation === 'merge' ? $t('git.conflictTitleMerge') : $t('git.conflictTitleRebase') }}
           </div>
           <div class="text-caption text-grey-6 q-mt-xs">
-            {{ $t('git.conflictSubtitle', { count: conflictFiles.length }) }}
+            {{ conflictFiles.length === 0 ? $t('git.operationPausedSubtitle') : $t('git.conflictSubtitle', { count: conflictFiles.length }) }}
           </div>
         </q-card-section>
         <q-card-section v-if="conflictFiles.length > 0" class="q-pt-none">
@@ -510,7 +510,7 @@
             no-caps
             :label="$t('common.cancel')"
             color="grey-5"
-            :disable="conflictAborting || conflictResolving"
+            :disable="conflictAborting || conflictResolving || conflictContinuing"
             @click="conflictDialog = false"
           />
           <q-btn
@@ -520,10 +520,22 @@
             icon="undo"
             :label="$t('git.conflictAbort')"
             :loading="conflictAborting"
-            :disable="conflictResolving"
+            :disable="conflictResolving || conflictContinuing"
             @click="abortGitOperation"
           />
           <q-btn
+            v-if="conflictFiles.length === 0"
+            unelevated
+            no-caps
+            color="primary"
+            icon="play_arrow"
+            :label="$t('git.conflictContinue')"
+            :loading="conflictContinuing"
+            :disable="conflictAborting"
+            @click="continueGitOperation"
+          />
+          <q-btn
+            v-if="conflictFiles.length > 0"
             unelevated
             no-caps
             color="primary"
@@ -876,6 +888,7 @@ const conflictOperation = ref<'merge' | 'rebase' | 'cherry-pick' | null>(null)
 const conflictFiles = ref<string[]>([])
 const conflictAborting = ref(false)
 const conflictResolving = ref(false)
+const conflictContinuing = ref(false)
 
 // Dirty-worktree recovery dialog (rebase/merge refused by uncommitted changes)
 const dirtyDialog = ref(false)
@@ -1405,6 +1418,26 @@ async function abortGitOperation() {
     $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
   } finally {
     conflictAborting.value = false
+  }
+}
+
+async function continueGitOperation() {
+  if (!props.workspace) return
+  conflictContinuing.value = true
+  try {
+    const res = await fetch(`/api/workspaces/${props.workspace.id}/git/continue`, { method: 'POST' })
+    if (!res.ok) {
+      const data = await res.json()
+      throw new Error(data.error ?? 'Continue failed')
+    }
+    $q.notify({ type: 'positive', message: t('git.conflictContinued'), position: 'top' })
+    conflictDialog.value = false
+    loadGitStats()
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'Continue failed'
+    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+  } finally {
+    conflictContinuing.value = false
   }
 }
 

@@ -3459,6 +3459,22 @@ app.post('/:id/git/abort', (c) => {
   }
 })
 
+/** Continue an in-progress merge, rebase or cherry-pick after resolution. */
+app.post('/:id/git/continue', (c) => {
+  try {
+    const id = c.req.param('id')
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const continued = gitOps.continueOngoingGitOperation(workspace.worktreePath)
+    if (!continued) return c.json({ error: 'No Git operation is in progress' }, 409)
+    return c.json({ success: true, continued })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
 /** Stage + commit all working-tree changes (recovery action for a dirty rebase/merge). */
 app.post('/:id/git/commit-all', async (c) => {
   try {

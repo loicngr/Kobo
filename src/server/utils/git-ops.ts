@@ -328,6 +328,19 @@ export function abortOngoingGitOperation(repoPath: string): 'merge' | 'rebase' |
   return op
 }
 
+/** Continue an in-progress merge, rebase or cherry-pick after its resolution. */
+export function continueOngoingGitOperation(repoPath: string): 'merge' | 'rebase' | 'cherry-pick' | null {
+  const op = getOngoingGitOperation(repoPath)
+  if (op === 'merge') {
+    git(repoPath, ['merge', '--continue'])
+  } else if (op === 'rebase') {
+    git(repoPath, ['rebase', '--continue'])
+  } else if (op === 'cherry-pick') {
+    git(repoPath, ['cherry-pick', '--continue'])
+  }
+  return op
+}
+
 /** Try a git command with `base`, falling back to `origin/base` if the local ref is missing. */
 function resolveBase(repoPath: string, base: string): string {
   // Prefer `origin/<base>` when it exists: local <base> can lag behind origin
