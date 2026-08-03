@@ -1,5 +1,5 @@
 <template>
-  <q-page class="column no-wrap" style="height: calc(100vh - var(--kobo-pwa-banner-height, 0px));">
+  <q-page class="column no-wrap" :style-fn="workspacePageStyle">
     <!-- Header bar -->
     <div class="wp-header row items-center q-px-md q-py-sm no-wrap">
       <q-btn
@@ -448,6 +448,7 @@ import type { AgentSession } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { copyToClipboard } from 'src/utils/clipboard'
 import { useTimeAgo } from 'src/utils/formatters'
+import { workspacePageStyle } from 'src/utils/workspace-page-layout'
 import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'

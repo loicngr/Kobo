@@ -1,11 +1,11 @@
 <template>
-  <div ref="bannerRef" v-if="offline || reconnecting || installPrompt || updateReady" class="pwa-status-banner row items-center q-gutter-sm q-px-md q-py-sm">
+  <div ref="bannerRef" v-if="offline || reconnecting || (installPrompt && !installBannerDismissed) || updateReady" class="pwa-status-banner row items-center q-gutter-sm q-px-md q-py-sm">
     <q-icon :name="offline ? 'cloud_off' : reconnecting ? 'sync' : updateReady ? 'system_update' : 'install_mobile'" size="18px" color="indigo-3" />
     <span class="text-caption col">
       {{ offline ? $t('pwa.offline') : reconnecting ? $t('pwa.reconnecting') : updateReady ? $t('pwa.updateReady') : $t('pwa.installReady') }}
     </span>
     <q-btn
-      v-if="installPrompt"
+      v-if="installPrompt && !installBannerDismissed"
       dense
       flat
       no-caps
@@ -13,6 +13,7 @@
       :label="$t('pwa.install')"
       @click="install"
     />
+    <q-btn v-if="installPrompt && !installBannerDismissed" dense flat no-caps color="indigo-3" :label="$t('pwa.ignore')" @click="ignoreInstallBanner" />
     <q-btn
       v-if="updateReady"
       dense
@@ -27,6 +28,7 @@
 
 <script setup lang="ts">
 import { useWebSocketStore } from 'src/stores/websocket'
+import { dismissPwaInstallBanner, isPwaInstallBannerDismissed } from 'src/utils/pwa-install-banner'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 
 interface BeforeInstallPromptEvent extends Event {
@@ -35,6 +37,7 @@ interface BeforeInstallPromptEvent extends Event {
 }
 
 const installPrompt = ref<BeforeInstallPromptEvent | null>(null)
+const installBannerDismissed = ref(isPwaInstallBannerDismissed())
 const offline = ref(!navigator.onLine)
 const updateReady = ref(false)
 const websocketStore = useWebSocketStore()
@@ -46,7 +49,7 @@ function syncBannerHeight() {
   document.documentElement.style.setProperty('--kobo-pwa-banner-height', `${bannerRef.value?.offsetHeight ?? 0}px`)
 }
 
-watch([offline, reconnecting, installPrompt, updateReady], () => {
+watch([offline, reconnecting, installPrompt, installBannerDismissed, updateReady], () => {
   void nextTick(syncBannerHeight)
 })
 let registration: ServiceWorkerRegistration | undefined
@@ -66,6 +69,12 @@ async function install() {
   if (!prompt) return
   await prompt.prompt()
   await prompt.userChoice
+  installPrompt.value = null
+}
+
+function ignoreInstallBanner() {
+  dismissPwaInstallBanner()
+  installBannerDismissed.value = true
   installPrompt.value = null
 }
 

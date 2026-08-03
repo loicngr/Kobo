@@ -208,18 +208,31 @@
         <q-tooltip>{{ $t('tooltip.sendMessage') }}</q-tooltip>
       </q-btn>
     </div>
-    <div class="chat-hint row items-center text-caption text-grey-8">
-      <div>
-        <kbd>Enter</kbd> {{ $t('common.send') }} <span class="q-mx-xs">&middot;</span> <kbd>Ctrl+Enter</kbd> {{ $t('chatInput.forceQueue') }}
-        <span class="q-mx-xs">&middot;</span> <kbd>Shift+Enter</kbd> / <kbd>Ctrl+J</kbd> {{ $t('common.newLine') }}
-        <span class="q-mx-xs">&middot;</span> <kbd>Ctrl+K</kbd> {{ $t('chatInput.commandPalette') }} <span class="q-mx-xs">&middot;</span> <kbd>Ctrl+F</kbd> {{ $t('chatInput.searchHistory') }} <span class="q-mx-xs">&middot;</span> <kbd>↑↓</kbd> {{ $t('common.history') }} <span class="q-mx-xs">&middot;</span> <kbd>@</kbd> {{ $t('chatInput.fileSearchHint') }}
+    <div class="chat-hint row items-center no-wrap text-caption text-grey-8">
+      <div class="chat-hint__shortcuts row items-center no-wrap">
+        <span class="chat-hint__primary"><kbd>Enter</kbd> {{ $t('common.send') }} <span class="q-mx-xs">&middot;</span> <kbd>Shift+Enter</kbd> {{ $t('common.newLine') }}</span>
+        <q-btn flat dense round size="xs" icon="keyboard" class="q-ml-xs">
+          <q-tooltip>{{ $t('chatInput.shortcuts') }}</q-tooltip>
+          <q-menu anchor="top left" self="bottom left">
+            <q-list dense class="chat-shortcuts-menu">
+              <q-item><q-item-section><kbd>Ctrl+Enter</kbd> {{ $t('chatInput.forceQueue') }}</q-item-section></q-item>
+              <q-item><q-item-section><kbd>Ctrl+J</kbd> {{ $t('common.newLine') }}</q-item-section></q-item>
+              <q-item><q-item-section><kbd>Ctrl+K</kbd> {{ $t('chatInput.commandPalette') }}</q-item-section></q-item>
+              <q-item><q-item-section><kbd>Ctrl+F</kbd> {{ $t('chatInput.searchHistory') }}</q-item-section></q-item>
+              <q-item><q-item-section><kbd>↑↓</kbd> {{ $t('common.history') }}</q-item-section></q-item>
+              <q-item><q-item-section><kbd>@</kbd> {{ $t('chatInput.fileSearchHint') }}</q-item-section></q-item>
+            </q-list>
+          </q-menu>
+        </q-btn>
       </div>
       <q-space />
-      <div v-if="isTranscribing" class="row items-center text-caption text-amber-6 q-mr-sm">
-        <q-spinner-dots size="14px" color="amber-6" class="q-mr-xs" />
-        <span>{{ $t('voice.transcribing') }}</span>
+      <div class="chat-hint__status row items-center no-wrap">
+        <div v-if="isTranscribing" class="row items-center text-caption text-amber-6 q-mr-sm">
+          <q-spinner-dots size="14px" color="amber-6" class="q-mr-xs" />
+          <span>{{ $t('voice.transcribing') }}</span>
+        </div>
+        <QuotaFooter v-if="quotaStatusVisible" class="q-mr-md" />
       </div>
-      <QuotaFooter v-if="quotaStatusVisible" class="q-mr-md" />
       <q-btn
         v-if="showInterrupt"
         flat
@@ -231,6 +244,7 @@
         :label="$t('workspacePage.interrupt')"
         :loading="interrupting"
         :disable="interrupting"
+        class="chat-hint__interrupt"
         @click="handleInterrupt"
       >
         <q-tooltip>{{ $t('workspacePage.interruptTooltip') }}</q-tooltip>
@@ -1213,6 +1227,11 @@ function onKeydown(event: KeyboardEvent) {
   font-size: 10px;
   text-align: left;
   padding: 2px 4px 0;
+  min-width: 0;
+
+  &__shortcuts { flex: 1 1 auto; min-width: 0; overflow: hidden; }
+  &__primary { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  &__status, &__interrupt { flex: 0 0 auto; }
 
   kbd {
     background-color: #2a2a4a;
@@ -1222,6 +1241,8 @@ function onKeydown(event: KeyboardEvent) {
     font-size: 9px;
   }
 }
+
+.chat-shortcuts-menu { min-width: 190px; font-size: 12px; }
 
 .queue-banner {
   background-color: #2a2a1a;
