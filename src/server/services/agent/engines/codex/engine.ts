@@ -76,6 +76,14 @@ export function createCodexEngine(): AgentEngine {
       let activeTurnId: string | undefined
       let steerChain: Promise<void> = Promise.resolve()
       let gracefulInterruptPromise: Promise<void> | undefined
+      let readySettled = false
+      let resolveReady!: () => void
+      let rejectReady!: (error: Error) => void
+      const readyPromise = new Promise<void>((resolve, reject) => {
+        resolveReady = resolve
+        rejectReady = reject
+      })
+      void readyPromise.catch(() => {})
 
       const emitDirect = (ev: AgentEvent): void => {
         try {
@@ -115,6 +123,7 @@ export function createCodexEngine(): AgentEngine {
           rejectTurnDone(new CodexTurnTimeoutError())
         },
       })
+      void turnDonePromise.catch(() => {})
       abortController.signal.addEventListener('abort', () => {
         const err = new Error('AbortError')
         err.name = 'AbortError'
@@ -276,6 +285,8 @@ export function createCodexEngine(): AgentEngine {
           })
           activeTurnId = initialTurn.turnId
           turnLiveness.start()
+          readySettled = true
+          resolveReady()
 
           await turnDonePromise
           turnLiveness.stop()
@@ -294,6 +305,10 @@ export function createCodexEngine(): AgentEngine {
           turnLiveness.stop()
           const error = err as Error
           const message = error.message ?? String(err)
+          if (!readySettled) {
+            readySettled = true
+            rejectReady(error)
+          }
           const isAbort = userInterrupted || error.name === 'AbortError' || abortController.signal.aborted
           const isResumeAttempt = options.resumeFromEngineSessionId !== undefined
 
@@ -336,6 +351,7 @@ export function createCodexEngine(): AgentEngine {
         },
         sendMessage(text: string): Promise<void> {
           const steer = async (): Promise<void> => {
+            await readyPromise
             if (!discoveredSessionId || !activeTurnId) {
               throw new Error('Codex session is not ready to receive a message')
             }

@@ -97,7 +97,7 @@ describe('SessionController', () => {
     const { engine, sentMessages } = fakeEngine()
     const ctrl = new SessionController('w1', 'sess-1', engine, () => {})
     await ctrl.start(BASE_OPTS)
-    ctrl.sendMessage('hey')
+    await ctrl.sendMessage('hey')
     expect(sentMessages).toEqual(['hey'])
   })
 
@@ -112,6 +112,46 @@ describe('SessionController', () => {
     await ctrl.start(BASE_OPTS)
 
     await expect(ctrl.sendMessage('hey')).rejects.toThrow('Codex turn is closing')
+  })
+
+  it('queues messages until the engine process is ready', async () => {
+    const { SessionController } = await import('../../server/services/agent/session-controller.js')
+    let releaseStart!: () => void
+    const startGate = new Promise<void>((resolve) => {
+      releaseStart = resolve
+    })
+    const sentMessages: string[] = []
+    const process: EngineProcess = {
+      sendMessage(text) {
+        sentMessages.push(text)
+      },
+      interrupt() {},
+      async stop() {},
+    }
+    const engine: AgentEngine = {
+      id: 'codex',
+      displayName: 'Codex',
+      capabilities: {
+        models: [],
+        permissionModes: ['bypass'],
+        supportsResume: true,
+        supportsMcp: true,
+        supportsSkills: true,
+      },
+      async start() {
+        await startGate
+        return process
+      },
+    }
+    const ctrl = new SessionController('w1', 'sess-1', engine, () => {})
+
+    const starting = ctrl.start(BASE_OPTS)
+    const sending = ctrl.sendMessage('queued')
+    expect(sentMessages).toEqual([])
+
+    releaseStart()
+    await Promise.all([starting, sending])
+    expect(sentMessages).toEqual(['queued'])
   })
 
   it('throws on a second start() call (re-entrancy guard)', async () => {

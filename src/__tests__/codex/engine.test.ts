@@ -188,6 +188,53 @@ describe('createCodexEngine — happy path', () => {
 })
 
 describe('createCodexEngine — active turn steering', () => {
+  it('queues steering until the initial Codex turn is ready', async () => {
+    resetChild()
+    let resolveEnded: () => void = () => {}
+    const ended = new Promise<void>((resolve) => {
+      resolveEnded = resolve
+    })
+    const proc = await createCodexEngine().start(BASE_OPTIONS, (event) => {
+      if (event.kind === 'session:ended') resolveEnded()
+    })
+
+    const steering = proc.sendMessage('Message en attente')
+    expect(_child._written.some((line) => JSON.parse(line).method === 'turn/steer')).toBe(false)
+
+    await flush(10)
+    pushInitializeResponse(1)
+    await flush(5)
+    pushThreadStartResponse('thr_queued', 2)
+    await flush(5)
+    pushTurnStartResponse('turn_initial', 3)
+    await flush(5)
+
+    const request = _child._written
+      .map((line) => JSON.parse(line) as { method?: string; id?: number; params?: unknown })
+      .find((message) => message.method === 'turn/steer')
+    expect(request).toMatchObject({
+      params: {
+        threadId: 'thr_queued',
+        expectedTurnId: 'turn_initial',
+      },
+    })
+    pushLine({ jsonrpc: '2.0', id: request?.id, result: { turnId: 'turn_queued' } })
+    await expect(steering).resolves.toBeUndefined()
+
+    pushNotification('turn/completed', {
+      threadId: 'thr_queued',
+      turn: {
+        id: 'turn_queued',
+        status: 'completed',
+        startedAt: null,
+        completedAt: null,
+        durationMs: null,
+        error: null,
+      },
+    })
+    await ended
+  })
+
   it('steers the running turn when a user chat message arrives', async () => {
     resetChild()
     let resolveEnded: () => void = () => {}
@@ -325,6 +372,27 @@ describe('createCodexEngine — resume', () => {
 })
 
 describe('createCodexEngine — interrupt', () => {
+  it('handles an interrupt before Codex initialization completes', async () => {
+    resetChild()
+    const events: AgentEvent[] = []
+    const sessionEndedPromise = new Promise<void>((resolve) => {
+      void createCodexEngine()
+        .start(BASE_OPTIONS, (event) => {
+          events.push(event)
+          if (event.kind === 'session:ended') resolve()
+        })
+        .then((proc) => {
+          proc.interrupt()
+          pushLine({ jsonrpc: '2.0', id: 1, error: { code: -32_000, message: 'interrupted during initialize' } })
+        })
+    })
+
+    await sessionEndedPromise
+    await flush(10)
+
+    expect(events).toContainEqual({ kind: 'session:ended', reason: 'killed', exitCode: null })
+  })
+
   it('emits session:ended with reason=killed when interrupt() is called', async () => {
     resetChild()
     const engine = createCodexEngine()

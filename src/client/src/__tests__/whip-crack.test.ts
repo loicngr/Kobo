@@ -117,25 +117,24 @@ describe('whip crack coordinator', () => {
   })
 
   it('still sends when interruption fails and serializes repeated cracks', async () => {
-    let releaseFirst!: () => void
-    const firstWait = new Promise<void>((resolve) => {
-      releaseFirst = resolve
+    let releaseFirstInterrupt!: () => void
+    const firstInterrupt = new Promise<void>((resolve) => {
+      releaseFirstInterrupt = resolve
     })
     const sent: string[] = []
-    let waits = 0
+    let interrupts = 0
     const coordinator = createWhipCrackCoordinator({ workspaceId: 'ws-1', sessionId: 'session-1' }, ['Go, tocard!'], {
       isAgentRunning: () => true,
       interruptAgent: async () => {
+        interrupts += 1
+        if (interrupts === 1) await firstInterrupt
         throw new Error('No agent running')
       },
       sendMessage: (_workspaceId, message) => {
         sent.push(message)
         return true
       },
-      wait: async () => {
-        waits += 1
-        if (waits === 1) await firstWait
-      },
+      wait: vi.fn(),
       random: () => 0,
       now: () => 1_000,
       onError: vi.fn(),
@@ -144,7 +143,7 @@ describe('whip crack coordinator', () => {
     const first = coordinator.enqueue()
     const second = coordinator.enqueue()
     expect(sent).toEqual([])
-    releaseFirst()
+    releaseFirstInterrupt()
     await Promise.all([first, second])
 
     expect(sent).toEqual(['Go, tocard!', 'Go, tocard!'])
