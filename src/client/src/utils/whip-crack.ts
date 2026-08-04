@@ -1,4 +1,6 @@
 export const WHIP_MESSAGE_DELAY_MS = 300
+export const WHIP_AGENT_STOP_POLL_MS = 50
+export const WHIP_AGENT_STOP_TIMEOUT_MS = 16_000
 export const WHIP_ERROR_COOLDOWN_MS = 5_000
 
 export interface WhipTarget {
@@ -39,6 +41,11 @@ export function createWhipCrackCoordinator(
         // still resume the captured session through Kōbō's WebSocket path.
       }
       await dependencies.wait(WHIP_MESSAGE_DELAY_MS)
+      let waited = WHIP_MESSAGE_DELAY_MS
+      while (dependencies.isAgentRunning(target.workspaceId) && waited < WHIP_AGENT_STOP_TIMEOUT_MS) {
+        await dependencies.wait(WHIP_AGENT_STOP_POLL_MS)
+        waited += WHIP_AGENT_STOP_POLL_MS
+      }
     }
 
     const rawIndex = Math.floor(dependencies.random() * phrases.length)

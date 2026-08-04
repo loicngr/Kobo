@@ -7,11 +7,12 @@ describe('whip crack coordinator', () => {
 
   it('interrupts before sending to the captured session', async () => {
     const calls: string[] = []
+    let running = true
     const coordinator = createWhipCrackCoordinator(
       { workspaceId: 'ws-1', sessionId: 'session-1' },
       ['Faster, tocard!'],
       {
-        isAgentRunning: () => true,
+        isAgentRunning: () => running,
         interruptAgent: async () => {
           calls.push('interrupt')
         },
@@ -21,6 +22,7 @@ describe('whip crack coordinator', () => {
         },
         wait: async (ms) => {
           calls.push(`wait:${ms}`)
+          running = false
         },
         random: () => 0,
         now: () => 1_000,
@@ -31,6 +33,38 @@ describe('whip crack coordinator', () => {
     await coordinator.enqueue()
 
     expect(calls).toEqual(['interrupt', 'wait:300', 'send:Faster, tocard!:session-1'])
+  })
+
+  it('waits for the interrupted agent to stop before sending', async () => {
+    const calls: string[] = []
+    let running = true
+    let waits = 0
+    const coordinator = createWhipCrackCoordinator(
+      { workspaceId: 'ws-1', sessionId: 'session-1' },
+      ['Faster, tocard!'],
+      {
+        isAgentRunning: () => running,
+        interruptAgent: async () => {
+          calls.push('interrupt')
+        },
+        sendMessage: () => {
+          calls.push('send')
+          return true
+        },
+        wait: async (ms) => {
+          calls.push(`wait:${ms}`)
+          waits += 1
+          if (waits === 2) running = false
+        },
+        random: () => 0,
+        now: () => 1_000,
+        onError: vi.fn(),
+      },
+    )
+
+    await coordinator.enqueue()
+
+    expect(calls).toEqual(['interrupt', 'wait:300', 'wait:50', 'send'])
   })
 
   it('still sends when interruption fails and serializes repeated cracks', async () => {

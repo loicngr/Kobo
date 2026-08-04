@@ -23,7 +23,7 @@ export class SessionController {
 
   sendMessage(content: string): void | Promise<void> {
     if (!this._engineProcess) throw new Error('SessionController not started')
-    this._engineProcess.sendMessage(content)
+    return this._engineProcess.sendMessage(content)
   }
 
   interrupt(): void {

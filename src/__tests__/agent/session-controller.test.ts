@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import type { AgentEngine, AgentEvent, EngineProcess, StartOptions } from '../../server/services/agent/engines/types.js'
 
-function fakeEngine(opts: { pid?: number; engineSessionId?: string } = {}): {
+function fakeEngine(
+  opts: { pid?: number; engineSessionId?: string; sendMessage?: (text: string) => void | Promise<void> } = {},
+): {
   engine: AgentEngine
   emit: (ev: AgentEvent) => void
   process: EngineProcess
@@ -16,6 +18,7 @@ function fakeEngine(opts: { pid?: number; engineSessionId?: string } = {}): {
     engineSessionId: opts.engineSessionId,
     sendMessage(t) {
       sent.push(t)
+      return opts.sendMessage?.(t)
     },
     interrupt() {},
     async stop() {
@@ -96,6 +99,19 @@ describe('SessionController', () => {
     await ctrl.start(BASE_OPTS)
     ctrl.sendMessage('hey')
     expect(sentMessages).toEqual(['hey'])
+  })
+
+  it('returns asynchronous sendMessage failures to its caller', async () => {
+    const { SessionController } = await import('../../server/services/agent/session-controller.js')
+    const { engine } = fakeEngine({
+      sendMessage: async () => {
+        throw new Error('Codex turn is closing')
+      },
+    })
+    const ctrl = new SessionController('w1', 'sess-1', engine, () => {})
+    await ctrl.start(BASE_OPTS)
+
+    await expect(ctrl.sendMessage('hey')).rejects.toThrow('Codex turn is closing')
   })
 
   it('throws on a second start() call (re-entrancy guard)', async () => {
