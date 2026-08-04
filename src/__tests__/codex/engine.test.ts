@@ -32,7 +32,17 @@ function makeChild() {
 let _child = makeChild()
 
 vi.mock('../../server/services/agent/engines/codex/spawn.js', () => ({
-  spawnAppServer: () => _child,
+  spawnAppServer: ({ signal }: { signal?: AbortSignal }) => {
+    const child = _child
+    signal?.addEventListener('abort', () => {
+      const error = Object.assign(new Error('The operation was aborted'), {
+        name: 'AbortError',
+        code: 'ABORT_ERR',
+      })
+      child.emit('error', error)
+    })
+    return child
+  },
   resolveCodexBinary: () => '/fake/codex',
 }))
 
@@ -436,6 +446,40 @@ describe('createCodexEngine — interrupt', () => {
     >
     expect(sessionEnded).toBeDefined()
     expect(sessionEnded.reason).toBe('killed')
+  })
+})
+
+describe('createCodexEngine — child process errors', () => {
+  it('ends the session and rejects queued messages when app-server fails', async () => {
+    resetChild()
+    const events: AgentEvent[] = []
+    let resolveEnded!: () => void
+    const ended = new Promise<void>((resolve) => {
+      resolveEnded = resolve
+    })
+    const proc = await createCodexEngine().start(BASE_OPTIONS, (event) => {
+      events.push(event)
+      if (event.kind === 'session:ended') resolveEnded()
+    })
+    const queuedMessage = proc.sendMessage('message queued before startup')
+    void queuedMessage.catch(() => {})
+
+    await flush(10)
+    const childError = Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' })
+    _child.emit('error', childError)
+
+    const outcome = await Promise.race([ended.then(() => 'ended'), flush(100).then(() => 'timeout')])
+    if (outcome === 'timeout') {
+      pushLine({ jsonrpc: '2.0', id: 1, error: { code: -32_000, message: childError.message } })
+      await ended
+    }
+
+    expect(outcome).toBe('ended')
+    expect(events).toContainEqual({ kind: 'error', category: 'spawn_failed', message: childError.message })
+    expect(events).toContainEqual({ kind: 'session:ended', reason: 'error', exitCode: null })
+    expect(events.filter((event) => event.kind === 'error' && event.category === 'spawn_failed')).toHaveLength(1)
+    expect(events.filter((event) => event.kind === 'session:ended')).toHaveLength(1)
+    await expect(queuedMessage).rejects.toThrow(childError.message)
   })
 })
 

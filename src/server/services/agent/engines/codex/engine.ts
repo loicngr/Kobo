@@ -95,7 +95,23 @@ export function createCodexEngine(): AgentEngine {
       const streamingBatcher = createStreamingBatcher(emitDirect)
       const safeEmit = (ev: AgentEvent): void => streamingBatcher.push(ev)
 
+      let rejectChildFailure!: (error: Error) => void
+      const childFailurePromise = new Promise<never>((_resolve, reject) => {
+        rejectChildFailure = reject
+      })
+      void childFailurePromise.catch(() => {})
+
       const child = spawnAppServer({ cwd: options.workingDir, env: options.env, signal: abortController.signal })
+
+      child.on('error', (error: NodeJS.ErrnoException) => {
+        const isExpectedAbort =
+          abortController.signal.aborted && (error.code === 'ABORT_ERR' || error.name === 'AbortError')
+        if (isExpectedAbort) return
+        console.error('[codex] child process error:', error)
+        rejectChildFailure(error)
+      })
+
+      const waitForChild = <T>(operation: Promise<T>): Promise<T> => Promise.race([operation, childFailurePromise])
 
       if (child.stderr) {
         child.stderr.setEncoding('utf8')
@@ -254,23 +270,25 @@ export function createCodexEngine(): AgentEngine {
       const iteratorPromise = (async () => {
         iteratorRunning = true
         try {
-          await client.connect()
+          await waitForChild(client.connect())
 
           if (isResume && options.resumeFromEngineSessionId) {
-            await client.resumeThread({
-              threadId: options.resumeFromEngineSessionId,
-              cwd: options.workingDir,
-              persistExtendedHistory: false,
-              ...(threadParams.model != null ? { model: threadParams.model } : {}),
-              ...(threadParams.approvalPolicy != null ? { approvalPolicy: threadParams.approvalPolicy } : {}),
-              ...(threadParams.sandbox != null ? { sandbox: threadParams.sandbox } : {}),
-              ...(threadParams.modelReasoningEffort != null
-                ? { modelReasoningEffort: threadParams.modelReasoningEffort }
-                : {}),
-              ...(threadParams.config != null ? { config: threadParams.config } : {}),
-            })
+            await waitForChild(
+              client.resumeThread({
+                threadId: options.resumeFromEngineSessionId,
+                cwd: options.workingDir,
+                persistExtendedHistory: false,
+                ...(threadParams.model != null ? { model: threadParams.model } : {}),
+                ...(threadParams.approvalPolicy != null ? { approvalPolicy: threadParams.approvalPolicy } : {}),
+                ...(threadParams.sandbox != null ? { sandbox: threadParams.sandbox } : {}),
+                ...(threadParams.modelReasoningEffort != null
+                  ? { modelReasoningEffort: threadParams.modelReasoningEffort }
+                  : {}),
+                ...(threadParams.config != null ? { config: threadParams.config } : {}),
+              }),
+            )
           } else {
-            const startResp = await client.startThread(threadParams)
+            const startResp = await waitForChild(client.startThread(threadParams))
             discoveredSessionId = startResp.thread.id
           }
 
@@ -278,17 +296,19 @@ export function createCodexEngine(): AgentEngine {
 
           // collaborationMode is sticky server-side — always send it explicitly,
           // never omit (would leave a Bypass turn stuck in a previous Plan mode).
-          const initialTurn = await client.startTurn({
-            threadId: discoveredSessionId!,
-            input,
-            collaborationMode,
-          })
+          const initialTurn = await waitForChild(
+            client.startTurn({
+              threadId: discoveredSessionId!,
+              input,
+              collaborationMode,
+            }),
+          )
           activeTurnId = initialTurn.turnId
           turnLiveness.start()
           readySettled = true
           resolveReady()
 
-          await turnDonePromise
+          await waitForChild(turnDonePromise)
           turnLiveness.stop()
 
           const reason: 'error' | 'killed' | 'completed' = mapperState.sawErrorResult
