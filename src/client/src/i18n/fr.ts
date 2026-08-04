@@ -188,6 +188,14 @@ export default {
   'workspacePage.engineHandoffHint': 'Relisez ou modifiez le contexte envoyé au nouvel agent.',
   'workspacePage.confirmSwitchEngine': 'Changer d’engine',
   'workspacePage.switchEngineFailed': 'Échec du changement d’engine',
+  'whip.button': 'Fouet',
+  'whip.tooltip': 'Activer le fouet',
+  'whip.dispatchFailed': "Impossible d'envoyer le message du fouet",
+  'whip.phrase1': 'Plus vite, tocard !',
+  'whip.phrase2': 'Accélère le rythme, tocard !',
+  'whip.phrase3': 'Au travail, tocard !',
+  'whip.phrase4': 'Montre-moi un peu de vitesse, tocard !',
+  'whip.phrase5': "Moins de réflexion, plus d'action, tocard !",
 
   // Search
   'search.title': 'Recherche',

@@ -186,6 +186,14 @@ export default {
   'workspacePage.engineHandoffHint': 'Revisa o edita el contexto que se enviará al nuevo agente.',
   'workspacePage.confirmSwitchEngine': 'Cambiar motor',
   'workspacePage.switchEngineFailed': 'No se pudo cambiar el motor',
+  'whip.button': 'Látigo',
+  'whip.tooltip': 'Activar el látigo',
+  'whip.dispatchFailed': 'No se pudo enviar el mensaje del látigo',
+  'whip.phrase1': '¡Más rápido, tocard!',
+  'whip.phrase2': '¡Acelera el ritmo, tocard!',
+  'whip.phrase3': '¡Vuelve al trabajo, tocard!',
+  'whip.phrase4': '¡Demuéstrame velocidad, tocard!',
+  'whip.phrase5': '¡Menos pensar y más hacer, tocard!',
 
   // Search
   'search.title': 'Búsqueda',

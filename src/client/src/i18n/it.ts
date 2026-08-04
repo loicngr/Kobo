@@ -188,6 +188,14 @@ export default {
   'workspacePage.engineHandoffHint': 'Rivedi o modifica il contesto inviato al nuovo agente.',
   'workspacePage.confirmSwitchEngine': 'Cambia motore',
   'workspacePage.switchEngineFailed': 'Impossibile cambiare motore',
+  'whip.button': 'Frusta',
+  'whip.tooltip': 'Attiva la frusta',
+  'whip.dispatchFailed': 'Impossibile inviare il messaggio della frusta',
+  'whip.phrase1': 'Più veloce, tocard!',
+  'whip.phrase2': 'Accelera il ritmo, tocard!',
+  'whip.phrase3': 'Torna al lavoro, tocard!',
+  'whip.phrase4': "Fammi vedere un po' di velocità, tocard!",
+  'whip.phrase5': 'Meno pensieri e più azione, tocard!',
 
   // Search
   'search.title': 'Ricerca',

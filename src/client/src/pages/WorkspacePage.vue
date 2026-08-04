@@ -163,6 +163,13 @@
             </span>
           </template>
         </q-select>
+        <WorkspaceWhipControl
+          v-if="selectedWs && !selectedWs.archivedAt"
+          :workspace-id="selectedWs.id"
+          :session-id="store.selectedSessionId"
+          :running="isAgentRunning"
+          class="q-mr-xs"
+        />
         <q-btn
           flat dense no-caps size="sm" icon="swap_horiz" class="q-mr-sm"
           :label="$t('workspacePage.switchEngine')"
@@ -471,6 +478,7 @@ import QuotaBackoffBanner from 'src/components/QuotaBackoffBanner.vue'
 import StaleSessionBanner from 'src/components/StaleSessionBanner.vue'
 import WakeupBanner from 'src/components/WakeupBanner.vue'
 import WorkspaceHistorySearch from 'src/components/WorkspaceHistorySearch.vue'
+import WorkspaceWhipControl from 'src/components/WorkspaceWhipControl.vue'
 
 const $q = useQuasar()
 const store = useWorkspaceStore()
