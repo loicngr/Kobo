@@ -46,12 +46,33 @@ const websocketStore = useWebSocketStore()
 const settingsStore = useSettingsStore()
 const active = ref(false)
 const showButton = computed(() => active.value || (props.running && props.sessionId !== null))
+const SOFT_INTERRUPT_GRACE_MS = 1_000
 let coordinator: WhipCrackCoordinator | null = null
+let stoppedTimer: number | null = null
+let allowStoppedUntil = 0
+
+function clearStoppedTimer(): void {
+  if (stoppedTimer === null) return
+  window.clearTimeout(stoppedTimer)
+  stoppedTimer = null
+}
 
 function deactivate(): void {
+  clearStoppedTimer()
+  allowStoppedUntil = 0
   active.value = false
   coordinator?.dispose()
   coordinator = null
+}
+
+function closeWhenInterruptGraceExpires(): void {
+  clearStoppedTimer()
+  const remaining = allowStoppedUntil - Date.now()
+  if (remaining <= 0) {
+    deactivate()
+    return
+  }
+  stoppedTimer = window.setTimeout(deactivate, remaining)
 }
 
 function activate(): void {
@@ -88,6 +109,11 @@ function toggleWhip(): void {
 }
 
 function handleCrack(): void {
+  const now = Date.now()
+  if (props.running || now <= allowStoppedUntil) {
+    allowStoppedUntil = now + SOFT_INTERRUPT_GRACE_MS
+    if (!props.running) closeWhenInterruptGraceExpires()
+  }
   void coordinator?.enqueue()
 }
 
@@ -95,6 +121,18 @@ watch(
   () => [props.workspaceId, props.sessionId] as const,
   ([workspaceId, sessionId], [previousWorkspaceId, previousSessionId]) => {
     if (workspaceId !== previousWorkspaceId || sessionId !== previousSessionId) deactivate()
+  },
+)
+
+watch(
+  () => props.running,
+  (running) => {
+    if (running) {
+      clearStoppedTimer()
+      return
+    }
+    if (!active.value) return
+    closeWhenInterruptGraceExpires()
   },
 )
 

@@ -64,7 +64,10 @@ describe('WorkspaceWhipControl', () => {
     vi.clearAllMocks()
   })
 
-  afterEach(() => vi.restoreAllMocks())
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
 
   it('only exposes the control for a running workspace with a selected session', async () => {
     const stopped = mountControl({ workspaceId: 'ws-1', sessionId: 'session-1', running: false })
@@ -106,6 +109,30 @@ describe('WorkspaceWhipControl', () => {
     await wrapper.vm.$nextTick()
     expect(doubles.dispose).toHaveBeenCalledTimes(2)
     expect(wrapper.findComponent(WhipOverlayStub).exists()).toBe(false)
+  })
+
+  it('closes when the agent stops naturally', async () => {
+    const wrapper = mountControl({ workspaceId: 'ws-1', sessionId: 'session-1', running: true })
+    await wrapper.get('button').trigger('click')
+
+    await wrapper.setProps({ running: false })
+
+    expect(doubles.dispose).toHaveBeenCalledOnce()
+    expect(wrapper.findComponent(WhipOverlayStub).exists()).toBe(false)
+  })
+
+  it('keeps the overlay through a soft interrupt, then closes if the agent stays stopped', async () => {
+    vi.useFakeTimers()
+    const wrapper = mountControl({ workspaceId: 'ws-1', sessionId: 'session-1', running: true })
+    await wrapper.get('button').trigger('click')
+    wrapper.getComponent(WhipOverlayStub).vm.$emit('crack')
+
+    await wrapper.setProps({ running: false })
+    expect(wrapper.findComponent(WhipOverlayStub).exists()).toBe(true)
+
+    await vi.advanceTimersByTimeAsync(1_000)
+    expect(wrapper.findComponent(WhipOverlayStub).exists()).toBe(false)
+    vi.useRealTimers()
   })
 
   it('wires stores, sound preferences, and translated errors into the coordinator', async () => {
