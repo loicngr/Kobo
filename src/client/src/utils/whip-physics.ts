@@ -10,6 +10,9 @@ export interface WhipState {
   dropping: boolean
   spawnedAt: number
   lastCrackAt: number
+  lastStepAt: number
+  accumulatorMs: number
+  lastPointer: { x: number; y: number }
 }
 
 export interface WhipBounds {
@@ -51,6 +54,9 @@ export const WHIP_CONFIG: Readonly<WhipConfig> = {
   spawnGraceMs: 350,
 }
 
+const FIXED_STEP_MS = 16
+const MAX_FRAME_DELTA_MS = 64
+
 function segmentLengthAt(index: number, config: Readonly<WhipConfig>): number {
   const denominator = Math.max(1, config.segments - 2)
   const progress = Math.min(1, index / denominator)
@@ -74,7 +80,15 @@ export function createWhip(
     points.push({ x, y, previousX: x, previousY: y })
   }
 
-  return { points, dropping: false, spawnedAt: now, lastCrackAt: Number.NEGATIVE_INFINITY }
+  return {
+    points,
+    dropping: false,
+    spawnedAt: now,
+    lastCrackAt: Number.NEGATIVE_INFINITY,
+    lastStepAt: now,
+    accumulatorMs: 0,
+    lastPointer: { ...pointer },
+  }
 }
 
 export function dropWhip(state: WhipState): void {
@@ -143,32 +157,46 @@ export function stepWhip(
   const cracked = !state.dropping && graceElapsed && cooldownElapsed && tipSpeed > config.crackSpeed
   if (cracked) state.lastCrackAt = input.now
 
-  const startIndex = state.dropping ? 0 : 1
-  const gravity = state.dropping ? config.dropGravity : config.gravity
-  for (let index = startIndex; index < state.points.length; index += 1) {
-    const point = state.points[index]!
-    const velocityX = (point.x - point.previousX) * config.damping
-    const velocityY = (point.y - point.previousY) * config.damping
-    point.previousX = point.x
-    point.previousY = point.y
-    point.x += velocityX
-    point.y += velocityY + gravity
-  }
+  const elapsed = Math.max(0, Math.min(MAX_FRAME_DELTA_MS, input.now - state.lastStepAt))
+  state.lastStepAt = input.now
+  const previousPointer = state.lastPointer
+  let simulatedElapsed = FIXED_STEP_MS - state.accumulatorMs
+  state.accumulatorMs += elapsed
 
-  if (!state.dropping) {
-    const handle = state.points[0]
-    if (handle) {
-      handle.x = input.pointer.x
-      handle.y = input.pointer.y
-      handle.previousX = input.pointer.x
-      handle.previousY = input.pointer.y
+  while (state.accumulatorMs >= FIXED_STEP_MS) {
+    if (!state.dropping) {
+      const handle = state.points[0]
+      if (handle) {
+        const progress = elapsed > 0 ? Math.min(1, simulatedElapsed / elapsed) : 1
+        const pointerX = previousPointer.x + (input.pointer.x - previousPointer.x) * progress
+        const pointerY = previousPointer.y + (input.pointer.y - previousPointer.y) * progress
+        handle.x = pointerX
+        handle.y = pointerY
+        handle.previousX = pointerX
+        handle.previousY = pointerY
+      }
     }
-  }
 
-  capStretch(state, config)
-  containLiveWhip(state, input.bounds)
-  constrainDistances(state, config)
-  containLiveWhip(state, input.bounds)
+    const startIndex = state.dropping ? 0 : 1
+    const gravity = state.dropping ? config.dropGravity : config.gravity
+    for (let index = startIndex; index < state.points.length; index += 1) {
+      const point = state.points[index]!
+      const velocityX = (point.x - point.previousX) * config.damping
+      const velocityY = (point.y - point.previousY) * config.damping
+      point.previousX = point.x
+      point.previousY = point.y
+      point.x += velocityX
+      point.y += velocityY + gravity
+    }
+
+    capStretch(state, config)
+    containLiveWhip(state, input.bounds)
+    constrainDistances(state, config)
+    containLiveWhip(state, input.bounds)
+    state.accumulatorMs -= FIXED_STEP_MS
+    simulatedElapsed += FIXED_STEP_MS
+  }
+  state.lastPointer = { ...input.pointer }
 
   return {
     cracked,

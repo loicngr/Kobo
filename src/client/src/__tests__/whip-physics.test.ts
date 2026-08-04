@@ -56,4 +56,26 @@ describe('whip physics', () => {
     }
     expect(offscreen).toBe(true)
   })
+
+  it('produces comparable motion at 60 Hz and 120 Hz', () => {
+    function simulate(frameMs: number) {
+      const state = createWhip({ x: 100, y: 200 }, 0)
+      let now = 0
+      while (now < 1_000) {
+        now = Math.min(1_000, now + frameMs)
+        stepWhip(state, {
+          pointer: { x: 100 + now * 0.4, y: 200 },
+          bounds,
+          now,
+        })
+      }
+      return state.points.at(-1)!
+    }
+
+    const sixtyHz = simulate(1_000 / 60)
+    const oneTwentyHz = simulate(1_000 / 120)
+
+    expect(Math.abs(oneTwentyHz.x - sixtyHz.x)).toBeLessThan(1)
+    expect(Math.abs(oneTwentyHz.y - sixtyHz.y)).toBeLessThan(1)
+  })
 })
