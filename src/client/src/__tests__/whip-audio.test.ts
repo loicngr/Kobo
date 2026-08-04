@@ -55,4 +55,12 @@ describe('whip audio', () => {
     expect(() => playWhipCrack({ enabled: true, volume: 1, createAudio })).not.toThrow()
     await Promise.resolve()
   })
+
+  it('ignores synchronous audio errors', () => {
+    const createAudio = vi.fn(() => {
+      throw new Error('audio unavailable')
+    })
+
+    expect(() => playWhipCrack({ enabled: true, volume: 1, createAudio })).not.toThrow()
+  })
 })
