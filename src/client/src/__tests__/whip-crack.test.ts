@@ -67,6 +67,55 @@ describe('whip crack coordinator', () => {
     expect(calls).toEqual(['interrupt', 'wait:300', 'wait:50', 'send'])
   })
 
+  it('does not poll optimistic running state when interruption finds no agent', async () => {
+    const wait = vi.fn(async () => undefined)
+    const sendMessage = vi.fn(() => true)
+    const coordinator = createWhipCrackCoordinator(
+      { workspaceId: 'ws-1', sessionId: 'session-1' },
+      ['Faster, tocard!'],
+      {
+        isAgentRunning: () => true,
+        interruptAgent: async () => {
+          throw new Error('No agent running')
+        },
+        sendMessage,
+        wait,
+        random: () => 0,
+        now: () => 1_000,
+        onError: vi.fn(),
+      },
+    )
+
+    await coordinator.enqueue()
+
+    expect(wait).not.toHaveBeenCalled()
+    expect(sendMessage).toHaveBeenCalledOnce()
+  })
+
+  it('bounds polling when an interrupted agent stays marked as running', async () => {
+    const wait = vi.fn(async () => undefined)
+    const sendMessage = vi.fn(() => true)
+    const coordinator = createWhipCrackCoordinator(
+      { workspaceId: 'ws-1', sessionId: 'session-1' },
+      ['Faster, tocard!'],
+      {
+        isAgentRunning: () => true,
+        interruptAgent: async () => undefined,
+        sendMessage,
+        wait,
+        random: () => 0,
+        now: () => 1_000,
+        onError: vi.fn(),
+      },
+    )
+
+    await coordinator.enqueue()
+
+    expect(wait).toHaveBeenCalledTimes(315)
+    expect(wait.mock.calls.reduce((total, [milliseconds]) => total + milliseconds, 0)).toBe(16_000)
+    expect(sendMessage).toHaveBeenCalledOnce()
+  })
+
   it('still sends when interruption fails and serializes repeated cracks', async () => {
     let releaseFirst!: () => void
     const firstWait = new Promise<void>((resolve) => {

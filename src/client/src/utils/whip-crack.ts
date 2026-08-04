@@ -34,17 +34,21 @@ export function createWhipCrackCoordinator(
 
   async function dispatchCrack(): Promise<void> {
     if (dependencies.isAgentRunning(target.workspaceId)) {
+      let interrupted = false
       try {
         await dependencies.interruptAgent(target.workspaceId)
+        interrupted = true
       } catch {
         // The interrupted turn may already have ended. Message dispatch can
         // still resume the captured session through Kōbō's WebSocket path.
       }
-      await dependencies.wait(WHIP_MESSAGE_DELAY_MS)
-      let waited = WHIP_MESSAGE_DELAY_MS
-      while (dependencies.isAgentRunning(target.workspaceId) && waited < WHIP_AGENT_STOP_TIMEOUT_MS) {
-        await dependencies.wait(WHIP_AGENT_STOP_POLL_MS)
-        waited += WHIP_AGENT_STOP_POLL_MS
+      if (interrupted) {
+        await dependencies.wait(WHIP_MESSAGE_DELAY_MS)
+        let waited = WHIP_MESSAGE_DELAY_MS
+        while (dependencies.isAgentRunning(target.workspaceId) && waited < WHIP_AGENT_STOP_TIMEOUT_MS) {
+          await dependencies.wait(WHIP_AGENT_STOP_POLL_MS)
+          waited += WHIP_AGENT_STOP_POLL_MS
+        }
       }
     }
 
