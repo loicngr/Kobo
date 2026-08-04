@@ -110,10 +110,13 @@ function toggleWhip(): void {
 
 function handleCrack(): void {
   const now = Date.now()
-  if (props.running || now <= allowStoppedUntil) {
+  if (props.running) {
     allowStoppedUntil = now + SOFT_INTERRUPT_GRACE_MS
-    if (!props.running) closeWhenInterruptGraceExpires()
+  } else if (now > allowStoppedUntil) {
+    deactivate()
+    return
   }
+  if (!props.running) closeWhenInterruptGraceExpires()
   void coordinator?.enqueue()
 }
 

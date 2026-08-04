@@ -130,7 +130,9 @@ describe('WorkspaceWhipControl', () => {
     await wrapper.setProps({ running: false })
     expect(wrapper.findComponent(WhipOverlayStub).exists()).toBe(true)
 
-    await vi.advanceTimersByTimeAsync(1_000)
+    await vi.advanceTimersByTimeAsync(500)
+    wrapper.getComponent(WhipOverlayStub).vm.$emit('crack')
+    await vi.advanceTimersByTimeAsync(500)
     expect(wrapper.findComponent(WhipOverlayStub).exists()).toBe(false)
     vi.useRealTimers()
   })
