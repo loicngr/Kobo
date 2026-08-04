@@ -1,68 +1,58 @@
 import { describe, expect, it, vi } from 'vitest'
 import { playWhipCrack } from '../utils/whip-audio'
 
-function createFakeAudioContext() {
-  const frequency = {
-    setValueAtTime: vi.fn(),
-    exponentialRampToValueAtTime: vi.fn(),
-  }
-  const gainValue = {
-    setValueAtTime: vi.fn(),
-    exponentialRampToValueAtTime: vi.fn(),
-  }
-  const oscillator = {
-    type: 'sine',
-    frequency,
-    connect: vi.fn(),
-    start: vi.fn(),
-    stop: vi.fn(),
-    onended: null as (() => void) | null,
-  }
-  const gain = {
-    gain: gainValue,
-    connect: vi.fn(),
-  }
-  const context = {
-    currentTime: 2,
-    destination: { name: 'destination' },
-    createOscillator: vi.fn(() => oscillator),
-    createGain: vi.fn(() => gain),
-    close: vi.fn(async () => undefined),
-  }
+function createFakeAudio() {
+  const players: Array<{ volume: number; play: ReturnType<typeof vi.fn> }> = []
+  const createAudio = vi.fn((_source: string) => {
+    const player = {
+      volume: 0,
+      play: vi.fn(async () => undefined),
+    }
+    players.push(player)
+    return player as unknown as HTMLAudioElement
+  })
 
-  return { context, frequency, gainValue, oscillator, gain }
+  return { createAudio, players }
 }
 
 describe('whip audio', () => {
-  it('does not create an audio context when sound is disabled', () => {
-    const createAudioContext = vi.fn()
+  it.each([
+    { enabled: false, volume: 1 },
+    { enabled: true, volume: 0 },
+  ])('does not create a player for $enabled/$volume', ({ enabled, volume }) => {
+    const { createAudio } = createFakeAudio()
 
-    playWhipCrack({ enabled: false, volume: 1, createAudioContext })
+    playWhipCrack({ enabled, volume, createAudio })
 
-    expect(createAudioContext).not.toHaveBeenCalled()
+    expect(createAudio).not.toHaveBeenCalled()
   })
 
-  it('synthesizes a short frequency and gain sweep at clamped volume', async () => {
-    const { context, frequency, gainValue, oscillator, gain } = createFakeAudioContext()
+  it('plays one recorded crack per call with clamped volume', () => {
+    const { createAudio, players } = createFakeAudio()
 
-    playWhipCrack({
-      enabled: true,
-      volume: 2,
-      createAudioContext: () => context as unknown as AudioContext,
-    })
+    playWhipCrack({ enabled: true, volume: 2, createAudio })
+    playWhipCrack({ enabled: true, volume: 0.4, createAudio })
 
-    expect(oscillator.type).toBe('square')
-    expect(frequency.setValueAtTime).toHaveBeenCalledWith(1_800, 2)
-    expect(frequency.exponentialRampToValueAtTime).toHaveBeenCalledWith(120, 2.09)
-    expect(gainValue.setValueAtTime).toHaveBeenCalledWith(1, 2)
-    expect(gainValue.exponentialRampToValueAtTime).toHaveBeenCalledWith(0.0001, 2.09)
-    expect(oscillator.connect).toHaveBeenCalledWith(gain)
-    expect(gain.connect).toHaveBeenCalledWith(context.destination)
-    expect(oscillator.start).toHaveBeenCalledWith(2)
-    expect(oscillator.stop).toHaveBeenCalledWith(2.1)
+    expect(createAudio).toHaveBeenCalledTimes(2)
+    expect(createAudio).toHaveBeenNthCalledWith(1, expect.stringContaining('fouet-ahh.mp3'))
+    expect(createAudio).toHaveBeenNthCalledWith(2, expect.stringContaining('fouet-ahh.mp3'))
+    expect(players.map(({ volume }) => volume)).toEqual([1, 0.4])
+    expect(players[0]?.play).toHaveBeenCalledOnce()
+    expect(players[1]?.play).toHaveBeenCalledOnce()
+  })
 
-    oscillator.onended?.()
+  it('ignores playback rejection', async () => {
+    const createAudio = vi.fn(
+      () =>
+        ({
+          volume: 0,
+          play: vi.fn(async () => {
+            throw new Error('playback blocked')
+          }),
+        }) as unknown as HTMLAudioElement,
+    )
+
+    expect(() => playWhipCrack({ enabled: true, volume: 1, createAudio })).not.toThrow()
     await Promise.resolve()
-    expect(context.close).toHaveBeenCalledOnce()
   })
 })
