@@ -481,6 +481,35 @@ describe('createCodexEngine — child process errors', () => {
     expect(events.filter((event) => event.kind === 'session:ended')).toHaveLength(1)
     await expect(queuedMessage).rejects.toThrow(childError.message)
   })
+
+  it('ends the session and rejects queued messages when app-server exits during startup', async () => {
+    resetChild()
+    const events: AgentEvent[] = []
+    let resolveEnded!: () => void
+    const ended = new Promise<void>((resolve) => {
+      resolveEnded = resolve
+    })
+    const proc = await createCodexEngine().start(BASE_OPTIONS, (event) => {
+      events.push(event)
+      if (event.kind === 'session:ended') resolveEnded()
+    })
+    const queuedMessage = proc.sendMessage('message queued before startup')
+    void queuedMessage.catch(() => {})
+
+    await flush(10)
+    _child.emit('exit', 1, null)
+
+    const outcome = await Promise.race([ended.then(() => 'ended'), flush(100).then(() => 'timeout')])
+
+    expect(outcome).toBe('ended')
+    expect(events).toContainEqual({
+      kind: 'error',
+      category: 'spawn_failed',
+      message: 'Codex app-server exited unexpectedly with code 1',
+    })
+    expect(events).toContainEqual({ kind: 'session:ended', reason: 'error', exitCode: null })
+    await expect(queuedMessage).rejects.toThrow('Codex app-server exited unexpectedly with code 1')
+  })
 })
 
 describe('createCodexEngine — stop()', () => {

@@ -110,6 +110,11 @@ export function createCodexEngine(): AgentEngine {
         console.error('[codex] child process error:', error)
         rejectChildFailure(error)
       })
+      child.once('exit', (code, signal) => {
+        if (!iteratorRunning || abortController.signal.aborted) return
+        const detail = code === null ? `signal ${signal ?? 'unknown'}` : `code ${code}`
+        rejectChildFailure(new Error(`Codex app-server exited unexpectedly with ${detail}`))
+      })
 
       const waitForChild = <T>(operation: Promise<T>): Promise<T> => Promise.race([operation, childFailurePromise])
 
