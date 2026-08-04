@@ -40,27 +40,23 @@ describe('whip crack coordinator', () => {
     })
     const sent: string[] = []
     let waits = 0
-    const coordinator = createWhipCrackCoordinator(
-      { workspaceId: 'ws-1', sessionId: 'session-1' },
-      ['Go, tocard!'],
-      {
-        isAgentRunning: () => true,
-        interruptAgent: async () => {
-          throw new Error('No agent running')
-        },
-        sendMessage: (_workspaceId, message) => {
-          sent.push(message)
-          return true
-        },
-        wait: async () => {
-          waits += 1
-          if (waits === 1) await firstWait
-        },
-        random: () => 0,
-        now: () => 1_000,
-        onError: vi.fn(),
+    const coordinator = createWhipCrackCoordinator({ workspaceId: 'ws-1', sessionId: 'session-1' }, ['Go, tocard!'], {
+      isAgentRunning: () => true,
+      interruptAgent: async () => {
+        throw new Error('No agent running')
       },
-    )
+      sendMessage: (_workspaceId, message) => {
+        sent.push(message)
+        return true
+      },
+      wait: async () => {
+        waits += 1
+        if (waits === 1) await firstWait
+      },
+      random: () => 0,
+      now: () => 1_000,
+      onError: vi.fn(),
+    })
 
     const first = coordinator.enqueue()
     const second = coordinator.enqueue()
@@ -74,19 +70,15 @@ describe('whip crack coordinator', () => {
   it('rate-limits WebSocket errors and refuses new work after dispose', async () => {
     const onError = vi.fn()
     let now = 1_000
-    const coordinator = createWhipCrackCoordinator(
-      { workspaceId: 'ws-1', sessionId: 'session-1' },
-      ['Go, tocard!'],
-      {
-        isAgentRunning: () => false,
-        interruptAgent: vi.fn(),
-        sendMessage: () => false,
-        wait: vi.fn(),
-        random: () => 0,
-        now: () => now,
-        onError,
-      },
-    )
+    const coordinator = createWhipCrackCoordinator({ workspaceId: 'ws-1', sessionId: 'session-1' }, ['Go, tocard!'], {
+      isAgentRunning: () => false,
+      interruptAgent: vi.fn(),
+      sendMessage: () => false,
+      wait: vi.fn(),
+      random: () => 0,
+      now: () => now,
+      onError,
+    })
 
     await coordinator.enqueue()
     now = 2_000

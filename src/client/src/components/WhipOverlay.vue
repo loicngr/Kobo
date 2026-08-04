@@ -5,8 +5,8 @@
 </template>
 
 <script setup lang="ts">
-import { createWhip, dropWhip, stepWhip, type WhipPoint, type WhipState } from 'src/utils/whip-physics'
 import { playWhipCrack } from 'src/utils/whip-audio'
+import { createWhip, dropWhip, stepWhip, type WhipPoint, type WhipState } from 'src/utils/whip-physics'
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 
 const props = defineProps<{

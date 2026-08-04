@@ -8,10 +8,7 @@ describe('whip physics', () => {
     const state = createWhip({ x: 200, y: 300 }, 1_000)
     expect(state.points).toHaveLength(WHIP_CONFIG.segments)
     expect(state.points[0]).toMatchObject({ x: 200, y: 300, previousX: 200, previousY: 300 })
-    const first = Math.hypot(
-      state.points[1]!.x - state.points[0]!.x,
-      state.points[1]!.y - state.points[0]!.y,
-    )
+    const first = Math.hypot(state.points[1]!.x - state.points[0]!.x, state.points[1]!.y - state.points[0]!.y)
     const lastIndex = state.points.length - 1
     const last = Math.hypot(
       state.points[lastIndex]!.x - state.points[lastIndex - 1]!.x,

@@ -62,9 +62,7 @@ export function createWhip(
   now: number,
   config: Readonly<WhipConfig> = WHIP_CONFIG,
 ): WhipState {
-  const points: WhipPoint[] = [
-    { x: pointer.x, y: pointer.y, previousX: pointer.x, previousY: pointer.y },
-  ]
+  const points: WhipPoint[] = [{ x: pointer.x, y: pointer.y, previousX: pointer.x, previousY: pointer.y }]
 
   for (let index = 1; index < config.segments; index += 1) {
     const previous = points[index - 1]!

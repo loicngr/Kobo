@@ -28,8 +28,8 @@ import WhipOverlay from 'src/components/WhipOverlay.vue'
 import { useSettingsStore } from 'src/stores/settings'
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
-import { isBusyStatus } from 'src/utils/workspace-status'
 import { createWhipCrackCoordinator, type WhipCrackCoordinator } from 'src/utils/whip-crack'
+import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -65,8 +65,7 @@ function activate(): void {
       return isBusyStatus(workspace?.status)
     },
     interruptAgent: (workspaceId) => workspaceStore.interruptAgent(workspaceId),
-    sendMessage: (workspaceId, message, sessionId) =>
-      websocketStore.sendChatMessage(workspaceId, message, sessionId),
+    sendMessage: (workspaceId, message, sessionId) => websocketStore.sendChatMessage(workspaceId, message, sessionId),
     wait: (milliseconds) => new Promise((resolve) => window.setTimeout(resolve, milliseconds)),
     random: Math.random,
     now: Date.now,

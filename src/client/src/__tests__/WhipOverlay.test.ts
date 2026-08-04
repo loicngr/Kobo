@@ -1,8 +1,8 @@
 import { mount } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import WhipOverlay from '../components/WhipOverlay.vue'
-import { dropWhip, stepWhip } from '../utils/whip-physics'
 import { playWhipCrack } from '../utils/whip-audio'
+import { dropWhip, stepWhip } from '../utils/whip-physics'
 
 const physics = vi.hoisted(() => ({
   result: { cracked: false, offscreen: false },
@@ -54,9 +54,7 @@ describe('WhipOverlay', () => {
     physics.result = { cracked: false, offscreen: false }
     animationCallback = undefined
     vi.clearAllMocks()
-    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(
-      context as unknown as CanvasRenderingContext2D,
-    )
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context as unknown as CanvasRenderingContext2D)
     vi.stubGlobal(
       'requestAnimationFrame',
       vi.fn((callback: FrameRequestCallback) => {
