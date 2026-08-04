@@ -168,7 +168,6 @@
           :workspace-id="selectedWs.id"
           :session-id="store.selectedSessionId"
           :running="isAgentRunning"
-          class="q-mr-xs"
         />
         <q-btn
           flat dense no-caps size="sm" icon="swap_horiz" class="q-mr-sm"

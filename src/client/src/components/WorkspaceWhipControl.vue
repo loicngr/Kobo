@@ -9,6 +9,7 @@
     :flat="!active"
     :unelevated="active"
     :label="t('whip.button')"
+    class="q-mr-xs"
     @click="toggleWhip"
   >
     <q-tooltip>{{ t('whip.tooltip') }}</q-tooltip>
