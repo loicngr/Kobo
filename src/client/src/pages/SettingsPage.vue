@@ -243,6 +243,7 @@
                 >
                   <q-tooltip>{{ $t('settings.whipEnabledHint') }}</q-tooltip>
                 </q-toggle>
+                <WhipShortcutRecorder v-if="globalWhipEnabled" v-model="globalWhipShortcut" />
               </div>
             </div>
 
@@ -2431,6 +2432,7 @@ import QRCode from 'qrcode'
 import { type QInput, useQuasar } from 'quasar'
 import FolderPickerDialog from 'src/components/FolderPickerDialog.vue'
 import PrNotificationSoundSettings from 'src/components/PrNotificationSoundSettings.vue'
+import WhipShortcutRecorder from 'src/components/WhipShortcutRecorder.vue'
 import { useOnboarding } from 'src/composables/use-onboarding'
 import { CODEX_MODEL_OPTION_DEFS, MODEL_OPTION_DEFS } from 'src/constants/models'
 import { type AgentPermissionMode, PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
@@ -2643,6 +2645,7 @@ const globalNotionUserId = ref('')
 const globalShowVerboseSystemMessages = ref(false)
 const globalShowThinkingBlocks = ref(true)
 const globalWhipEnabled = ref(false)
+const globalWhipShortcut = ref('mod+shift+x')
 
 const browserNotificationStatus = computed(() => {
   switch (browserNotificationPermission.value) {
@@ -3432,6 +3435,7 @@ function captureGlobalSnapshot(): string {
     showVerboseSystemMessages: globalShowVerboseSystemMessages.value,
     showThinkingBlocks: globalShowThinkingBlocks.value,
     whipEnabled: globalWhipEnabled.value,
+    whipShortcut: globalWhipShortcut.value,
     tags: globalTags.value,
     branchPrefixes: globalBranchPrefixes.value,
     setupScript: globalSetupScript.value,
@@ -3558,6 +3562,7 @@ function syncGlobalForm() {
   globalShowVerboseSystemMessages.value = store.showVerboseSystemMessages
   globalShowThinkingBlocks.value = store.global.showThinkingBlocks ?? true
   globalWhipEnabled.value = store.global.whipEnabled ?? false
+  globalWhipShortcut.value = store.global.whipShortcut ?? 'mod+shift+x'
   globalTags.value = Array.isArray(store.global.tags) ? [...store.global.tags] : []
   globalBranchPrefixes.value = Array.isArray(store.global.branchPrefixes) ? [...store.global.branchPrefixes] : []
   globalSetupScript.value = store.global.setupScript ?? ''
@@ -3840,6 +3845,7 @@ async function saveGlobal() {
       sentryEnabled: globalSentryEnabled.value,
       showThinkingBlocks: globalShowThinkingBlocks.value,
       whipEnabled: globalWhipEnabled.value,
+      whipShortcut: globalWhipShortcut.value,
       tags: globalTags.value,
       branchPrefixes: globalBranchPrefixes.value,
       setupScript: globalSetupScript.value,

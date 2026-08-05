@@ -149,6 +149,7 @@ interface GlobalSettings {
   sentryEnabled: boolean
   showThinkingBlocks: boolean
   whipEnabled: boolean
+  whipShortcut: string
   tags: string[]
   /**
    * User-managed git branch prefixes for the workspace creation page. Stored
@@ -256,6 +257,7 @@ export const useSettingsStore = defineStore('settings', {
       sentryEnabled: true,
       showThinkingBlocks: true,
       whipEnabled: false,
+      whipShortcut: 'mod+shift+x',
       tags: [],
       branchPrefixes: [],
       setupScript: '',
