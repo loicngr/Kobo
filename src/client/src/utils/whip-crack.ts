@@ -75,10 +75,10 @@ export function createWhipCrackCoordinator(
       if (disposed) return Promise.resolve()
       if (queued >= 2) return tail
       queued += 1
-      const current = tail.then(dispatchCrack)
-      tail = current.catch(() => undefined).finally(() => {
+      const current = tail.then(dispatchCrack).finally(() => {
         queued = Math.max(0, queued - 1)
       })
+      tail = current.catch(() => undefined)
       return current
     },
     dispose() {
