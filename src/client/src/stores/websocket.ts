@@ -1082,8 +1082,8 @@ export const useWebSocketStore = defineStore('websocket', {
           // Mirror the backend update locally so the GitPanel header and
           // diff viewer pick up the new sourceBranch without a round-trip.
           workspaceStore.updateWorkspaceFromEvent(wid, { sourceBranch: newBase })
-          // Persistent toast — the user dismisses it explicitly. Includes a
-          // shortcut to open the PR on GitHub.
+          // Includes a shortcut to open the PR on GitHub and expires after the
+          // shared notification timeout.
           const actions: Array<Record<string, unknown>> = []
           if (p.prUrl) {
             actions.push({

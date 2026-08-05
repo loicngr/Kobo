@@ -2354,6 +2354,11 @@ describe('whip feature toggle (v51)', () => {
     [2, 1],
     ['0.4', 0.4],
     [Number.NaN, 1],
+    [null, 1],
+    [false, 1],
+    ['', 1],
+    ['   ', 1],
+    [[], 1],
   ])('normalizes submitted whip volume %j to %j', (whipVolume, expected) => {
     const updated = updateGlobalSettings({ whipVolume } as unknown as Partial<GlobalSettings>)
 

@@ -1725,8 +1725,17 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     const sanitized = sanitizeBranchPrefixes(filtered.branchPrefixes)
     filtered.branchPrefixes = sanitized.length > 0 ? sanitized : settings.global.branchPrefixes
   }
+  if (filtered.whipVolume !== undefined) {
+    const rawWhipVolume = filtered.whipVolume as unknown
+    const whipVolume =
+      typeof rawWhipVolume === 'number'
+        ? rawWhipVolume
+        : typeof rawWhipVolume === 'string' && rawWhipVolume.trim().length > 0
+          ? Number(rawWhipVolume)
+          : Number.NaN
+    filtered.whipVolume = Number.isFinite(whipVolume) ? Math.max(0, Math.min(1, whipVolume)) : 1
+  }
   for (const key of [
-    'whipVolume',
     'audioNotificationVolume',
     'audioQuestionVolume',
     'audioWorkspaceCreatedVolume',
