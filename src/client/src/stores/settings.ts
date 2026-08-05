@@ -150,6 +150,7 @@ interface GlobalSettings {
   showThinkingBlocks: boolean
   whipEnabled: boolean
   whipShortcut: string
+  whipVolume: number
   tags: string[]
   /**
    * User-managed git branch prefixes for the workspace creation page. Stored
@@ -258,6 +259,7 @@ export const useSettingsStore = defineStore('settings', {
       showThinkingBlocks: true,
       whipEnabled: false,
       whipShortcut: 'mod+shift+x',
+      whipVolume: 1,
       tags: [],
       branchPrefixes: [],
       setupScript: '',

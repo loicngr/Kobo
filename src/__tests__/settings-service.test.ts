@@ -2121,7 +2121,7 @@ describe('PR notification sounds (v45)', () => {
       audioQuestionSound: 'hey.mp3',
       networkAccessToken: 'keep-me',
     })
-    expect(SETTINGS_SCHEMA_VERSION).toBe(52)
+    expect(SETTINGS_SCHEMA_VERSION).toBe(53)
   })
 
   it('adds the auto-loop retry limit while preserving existing settings', () => {
@@ -2239,7 +2239,7 @@ describe('whip feature toggle (v51)', () => {
       projects: [],
     })
 
-    expect(migrated.schemaVersion).toBe(52)
+    expect(migrated.schemaVersion).toBe(53)
     expect(migrated.global.whipEnabled).toBe(false)
     expect(migrated.global.audioNotifications).toBe(true)
   })
@@ -2287,7 +2287,7 @@ describe('whip feature toggle (v51)', () => {
       projects: [],
     })
 
-    expect(migrated.schemaVersion).toBe(52)
+    expect(migrated.schemaVersion).toBe(53)
     expect(migrated.global.whipShortcut).toBe('mod+shift+x')
     expect(migrated.global.editorCommand).toBe('zed')
   })
@@ -2319,6 +2319,46 @@ describe('whip feature toggle (v51)', () => {
 
     expect(updated.whipShortcut).toBe('alt+k')
     expect(getGlobalSettings().whipShortcut).toBe('alt+k')
+  })
+
+  it('defaults fresh installations to full whip volume', () => {
+    expect(getGlobalSettings().whipVolume).toBe(1)
+  })
+
+  it('migrates v52 settings to full whip volume without losing values', () => {
+    const migrated = runSettingsMigrations({
+      schemaVersion: 52,
+      global: { whipEnabled: true, whipShortcut: 'alt+k', editorCommand: 'zed' },
+      projects: [],
+    })
+
+    expect(migrated.schemaVersion).toBe(53)
+    expect(migrated.global.whipVolume).toBe(1)
+    expect(migrated.global.whipShortcut).toBe('alt+k')
+    expect(migrated.global.editorCommand).toBe('zed')
+  })
+
+  it.each([null, Number.NaN, -0.1, 1.1])('normalizes malformed persisted whip volume to full: %j', (whipVolume) => {
+    const migrated = runSettingsMigrations({
+      schemaVersion: 53,
+      global: { whipVolume },
+      projects: [],
+    })
+
+    expect(migrated.global.whipVolume).toBe(1)
+  })
+
+  it.each([
+    [0.35, 0.35],
+    [-1, 0],
+    [2, 1],
+    ['0.4', 0.4],
+    [Number.NaN, 1],
+  ])('normalizes submitted whip volume %j to %j', (whipVolume, expected) => {
+    const updated = updateGlobalSettings({ whipVolume } as unknown as Partial<GlobalSettings>)
+
+    expect(updated.whipVolume).toBe(expected)
+    expect(getGlobalSettings().whipVolume).toBe(expected)
   })
 })
 

@@ -335,6 +335,8 @@ export interface GlobalSettings {
   whipEnabled: boolean
   /** Portable keyboard shortcut that toggles the workspace whip overlay. */
   whipShortcut: string
+  /** Independent whip crack volume, normalized to the inclusive range 0..1. */
+  whipVolume: number
   tags: string[]
   /**
    * User-managed git branch prefixes shown on the workspace creation page.
@@ -420,6 +422,10 @@ function isValidWhipShortcut(value: unknown): value is string {
 
 function normalizeWhipShortcut(value: unknown): string {
   return isValidWhipShortcut(value) ? value : DEFAULT_WHIP_SHORTCUT
+}
+
+function normalizeWhipVolume(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1 ? value : 1
 }
 
 /**
@@ -1096,6 +1102,13 @@ const settingsMigrations: SettingsMigration[] = [
       global.whipShortcut = normalizeWhipShortcut(global.whipShortcut)
     },
   },
+  {
+    version: 53,
+    name: 'add-whip-volume',
+    migrate: ({ global }) => {
+      global.whipVolume = normalizeWhipVolume(global.whipVolume)
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -1224,6 +1237,7 @@ function defaultSettings(): Settings {
       showThinkingBlocks: true,
       whipEnabled: false,
       whipShortcut: DEFAULT_WHIP_SHORTCUT,
+      whipVolume: 1,
       tags: [...DEFAULT_WORKSPACE_TAGS],
       branchPrefixes: [...DEFAULT_BRANCH_PREFIXES],
       worktreesPath: WORKTREES_PATH,
@@ -1319,6 +1333,7 @@ export function runSettingsMigrations(raw: Record<string, unknown>): Settings {
   current.global.worktreesPath = sanitizeWorktreesPath(current.global.worktreesPath)
   current.global.whipEnabled = current.global.whipEnabled === true
   current.global.whipShortcut = normalizeWhipShortcut(current.global.whipShortcut)
+  current.global.whipVolume = normalizeWhipVolume(current.global.whipVolume)
 
   current.schemaVersion = version
   return current as unknown as Settings
@@ -1669,6 +1684,7 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'showThinkingBlocks',
     'whipEnabled',
     'whipShortcut',
+    'whipVolume',
     'tags',
     'branchPrefixes',
     'worktreesPath',
@@ -1710,6 +1726,7 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     filtered.branchPrefixes = sanitized.length > 0 ? sanitized : settings.global.branchPrefixes
   }
   for (const key of [
+    'whipVolume',
     'audioNotificationVolume',
     'audioQuestionVolume',
     'audioWorkspaceCreatedVolume',

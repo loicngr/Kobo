@@ -122,6 +122,7 @@ describe('settings store', () => {
     const store = useSettingsStore()
     expect(store.global.whipEnabled).toBe(false)
     expect(store.global.whipShortcut).toBe('mod+shift+x')
+    expect(store.global.whipVolume).toBe(1)
   })
 
   it('defaults every PR notification sound to inherit', () => {
