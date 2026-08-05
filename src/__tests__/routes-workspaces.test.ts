@@ -2894,9 +2894,7 @@ describe('POST /api/workspaces/:id/open-pr', () => {
 
     createPrMock.mockResolvedValueOnce({ url: 'https://github.com/org/repo/pull/42', number: 42 })
 
-    vi.mocked(agentManager.sendMessage).mockImplementation(() => {
-      throw new Error('No active agent session')
-    })
+    vi.mocked(agentManager.sendMessage).mockRejectedValueOnce(new Error('turn is closing'))
 
     const res = await app.request('/api/workspaces/ws-1/open-pr', { method: 'POST' })
 
@@ -5657,12 +5655,10 @@ describe('POST /api/workspaces/:id/start-ci-fix', () => {
     expect(prompt).not.toContain('- fast')
   })
 
-  it('starts a fresh resume session when sendMessage throws (no live agent)', async () => {
+  it('starts a fresh resume session when sendMessage rejects (no live agent)', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
     vi.mocked(workspaceService.getActiveSession).mockReturnValue(null)
-    vi.mocked(agentManager.sendMessage).mockImplementationOnce(() => {
-      throw new Error('no live agent')
-    })
+    vi.mocked(agentManager.sendMessage).mockRejectedValueOnce(new Error('turn is closing'))
     const prWatcher = await import('../server/services/pr-watcher-service.js')
     vi.mocked(prWatcher.refreshPrSnapshot).mockResolvedValueOnce(mockFailingCiSnapshot() as never)
     vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
@@ -5683,6 +5679,41 @@ describe('POST /api/workspaces/:id/start-ci-fix', () => {
     expect(agentManager.startAgent).toHaveBeenCalledTimes(1)
     // resume=true → 5th positional arg
     expect(vi.mocked(agentManager.startAgent).mock.calls[0][4]).toBe(true)
+  })
+})
+
+describe('POST /api/workspaces/:id/git/commit-with-agent', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('resumes the agent when commit-with-agent steering rejects asynchronously', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(gitOps.getWorkingTreeStatus).mockReturnValue({ staged: 0, modified: 1, untracked: 0 })
+    vi.mocked(agentManager.sendMessage).mockRejectedValueOnce(new Error('turn is closing'))
+
+    const res = await app.request('/api/workspaces/ws-1/git/commit-with-agent', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ ok: true, messageSent: true })
+    expect(agentManager.startAgent).toHaveBeenCalledOnce()
+  })
+})
+
+describe('POST /api/workspaces/:id/git/resolve-with-agent', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('resumes the agent when resolve-with-agent steering rejects asynchronously', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(agentManager.sendMessage).mockRejectedValueOnce(new Error('turn is closing'))
+
+    const res = await app.request('/api/workspaces/ws-1/git/resolve-with-agent', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ operation: 'merge', files: ['src/conflicted.ts'] }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ ok: true, messageSent: true })
+    expect(agentManager.startAgent).toHaveBeenCalledOnce()
   })
 })
 

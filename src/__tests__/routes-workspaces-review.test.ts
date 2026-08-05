@@ -338,10 +338,8 @@ describe('POST /api/workspaces/:id/start-review', () => {
     expect(agentManager.startAgent).not.toHaveBeenCalled()
   })
 
-  it('falls back to startAgent(resume=true) when sendMessage throws', async () => {
-    vi.mocked(agentManager.sendMessage).mockImplementation(() => {
-      throw new Error('No agent running')
-    })
+  it('falls back to startAgent(resume=true) when sendMessage rejects', async () => {
+    vi.mocked(agentManager.sendMessage).mockRejectedValueOnce(new Error('turn is closing'))
 
     const res = await app.request('/api/workspaces/ws-1/start-review', {
       method: 'POST',

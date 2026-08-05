@@ -3522,7 +3522,7 @@ When finished, report the commit SHA, its message, the files included, and the c
 
     let messageSent = false
     try {
-      agentManager.sendMessage(workspace.id, prompt)
+      await agentManager.sendMessage(workspace.id, prompt)
       messageSent = true
     } catch {
       try {
@@ -3634,7 +3634,7 @@ Start now.`
 
     let messageSent = false
     try {
-      agentManager.sendMessage(workspace.id, prompt)
+      await agentManager.sendMessage(workspace.id, prompt)
       messageSent = true
     } catch {
       try {
@@ -3963,7 +3963,7 @@ app.post('/:id/open-pr', async (c) => {
     // Send to the running agent, or resume the agent with the PR prompt
     let messageSent = false
     try {
-      agentManager.sendMessage(workspace.id, rendered)
+      await agentManager.sendMessage(workspace.id, rendered)
       messageSent = true
     } catch {
       // Agent not running — resume it with the PR prompt
@@ -4089,7 +4089,7 @@ app.post('/:id/start-review', async (c) => {
       const session = workspaceService.getActiveSession(workspace.id)
       emitSessionId = session?.id
       try {
-        agentManager.sendMessage(workspace.id, rendered)
+        await agentManager.sendMessage(workspace.id, rendered)
         messageSent = true
       } catch {
         try {
@@ -4181,7 +4181,7 @@ app.post('/:id/start-ci-fix', migrationGuard, async (c) => {
     const session = workspaceService.getActiveSession(workspace.id)
     let emitSessionId: string | undefined = session?.id
     try {
-      agentManager.sendMessage(workspace.id, rendered)
+      await agentManager.sendMessage(workspace.id, rendered)
     } catch {
       try {
         const agent = agentManager.startAgent(

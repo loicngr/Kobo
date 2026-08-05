@@ -1074,7 +1074,7 @@ export function stopAgent(workspaceId: string): void {
 }
 
 /** Write a user message to the running agent. */
-export function sendMessage(workspaceId: string, content: string, expectedSessionId?: string): void | Promise<void> {
+export async function sendMessage(workspaceId: string, content: string, expectedSessionId?: string): Promise<void> {
   const ctrl = controllers.get(workspaceId)
   if (!ctrl) {
     throw new Error(`No agent running for workspace '${workspaceId}'`)
@@ -1083,7 +1083,7 @@ export function sendMessage(workspaceId: string, content: string, expectedSessio
     throw new Error(`Session '${expectedSessionId}' is not active for workspace '${workspaceId}'`)
   }
   wakeupService.cancel(workspaceId, 'user-message')
-  return ctrl.sendMessage(content)
+  await ctrl.sendMessage(content)
 }
 
 /**

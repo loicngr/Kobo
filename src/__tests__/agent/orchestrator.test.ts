@@ -137,9 +137,9 @@ describe('Orchestrator — stop / interrupt / sendMessage', () => {
     expect(getAgentStatus(ws.id)).toBeNull()
   })
 
-  it('sendMessage throws when no agent is running', async () => {
+  it('sendMessage rejects when no agent is running', async () => {
     const { sendMessage } = await import('../../server/services/agent/orchestrator.js')
-    expect(() => sendMessage('nope', 'hi')).toThrow(/No agent running/)
+    await expect(sendMessage('nope', 'hi')).rejects.toThrow(/No agent running/)
   })
 
   it('refuses a message addressed to a session other than the active controller', async () => {
@@ -149,8 +149,8 @@ describe('Orchestrator — stop / interrupt / sendMessage', () => {
     const { agentSessionId } = startAgent(ws.id, '/tmp', 'hi')
     await flushControllerStart()
 
-    expect(() => sendMessage(ws.id, 'wrong session', 'another-session')).toThrow(/is not active/)
-    expect(() => sendMessage(ws.id, 'right session', agentSessionId)).not.toThrow()
+    await expect(sendMessage(ws.id, 'wrong session', 'another-session')).rejects.toThrow(/is not active/)
+    await expect(sendMessage(ws.id, 'right session', agentSessionId)).resolves.toBeUndefined()
   })
 
   it('getRunningCount reflects active controllers', async () => {
