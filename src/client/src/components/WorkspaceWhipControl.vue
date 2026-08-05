@@ -72,7 +72,11 @@ function activate(): void {
       )
       return isBusyStatus(workspace?.status)
     },
-    interruptAgent: (workspaceId) => workspaceStore.interruptAgent(workspaceId),
+    interruptAgent: (workspaceId) =>
+      workspaceStore.interruptAgent(workspaceId, {
+        expectedSessionId: target.sessionId,
+        disableAutoLoop: true,
+      }),
     sendMessage: (workspaceId, message, sessionId) => websocketStore.sendChatMessage(workspaceId, message, sessionId),
     wait: (milliseconds) => new Promise((resolve) => window.setTimeout(resolve, milliseconds)),
     random: Math.random,

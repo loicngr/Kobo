@@ -166,8 +166,8 @@
         <WorkspaceWhipControl
           v-if="selectedWs && !selectedWs.archivedAt"
           :workspace-id="selectedWs.id"
-          :session-id="store.selectedSessionId"
-          :running="isAgentRunning"
+          :session-id="whipRunningSessionId"
+          :running="whipRunningSessionId !== null"
         />
         <q-btn
           flat dense no-caps size="sm" icon="swap_horiz" class="q-mr-sm"
@@ -454,6 +454,7 @@ import type { AgentSession } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { copyToClipboard } from 'src/utils/clipboard'
 import { useTimeAgo } from 'src/utils/formatters'
+import { getWhipRunningSessionId } from 'src/utils/whip-session'
 import { workspacePageStyle } from 'src/utils/workspace-page-layout'
 import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -789,6 +790,7 @@ const selectedId = computed(() => store.selectedWorkspaceId)
 const selectedWs = computed(() => store.selectedWorkspace)
 
 const sessions = computed(() => store.sessions)
+const whipRunningSessionId = computed(() => getWhipRunningSessionId(store.sessions))
 const selectedSession = computed(() => store.sessions.find((session) => session.id === store.selectedSessionId) ?? null)
 const selectedSessionModel = computed(() => selectedSession.value?.model ?? null)
 const activeSessionModelLabel = computed(

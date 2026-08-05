@@ -700,10 +700,12 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
-    async interruptAgent(id: string) {
+    async interruptAgent(id: string, options: { expectedSessionId?: string; disableAutoLoop?: boolean } = {}) {
       try {
         const res = await fetch(`/api/workspaces/${id}/interrupt`, {
           method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(options),
         })
         if (!res.ok) {
           const body = await res.json().catch(() => ({}))

@@ -52,6 +52,7 @@ vi.mock('../server/services/worktree-service.js', () => ({
 vi.mock('../server/services/agent/orchestrator.js', () => ({
   startAgent: vi.fn().mockReturnValue({ agentSessionId: 'mock-agent-session-id' }),
   stopAgent: vi.fn(),
+  interruptAgent: vi.fn(),
   sendMessage: vi.fn(),
   hasController: vi.fn(() => false),
   getAgentStatus: vi.fn().mockReturnValue(null),
@@ -2149,6 +2150,47 @@ describe('POST /api/workspaces/:id/stop', () => {
 
     const res = await app.request('/api/workspaces/nonexistent/stop', { method: 'POST' })
     expect(res.status).toBe(404)
+  })
+})
+
+describe('POST /api/workspaces/:id/interrupt', () => {
+  it('forwards whip session safety options to interruptAgent', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    const res = await app.request('/api/workspaces/ws-1/interrupt', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ expectedSessionId: 'session-running', disableAutoLoop: true }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(agentManager.interruptAgent).toHaveBeenCalledWith('ws-1', {
+      expectedSessionId: 'session-running',
+      disableAutoLoop: true,
+    })
+  })
+
+  it.each([
+    [{ expectedSessionId: 42 }, 'expectedSessionId'],
+    [{ disableAutoLoop: 'yes' }, 'disableAutoLoop'],
+  ])('rejects malformed interruption options: %j', async (body, invalidField) => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    const res = await app.request('/api/workspaces/ws-1/interrupt', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: string }).error).toContain(invalidField)
+    expect(agentManager.interruptAgent).not.toHaveBeenCalled()
+  })
+
+  it('accepts an empty body as default interruption options', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    const res = await app.request('/api/workspaces/ws-1/interrupt', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(agentManager.interruptAgent).toHaveBeenCalledWith('ws-1', {})
   })
 })
 

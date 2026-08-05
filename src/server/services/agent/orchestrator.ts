@@ -41,6 +41,11 @@ export interface StartAgentResult {
   pid: number | undefined
 }
 
+export interface InterruptAgentOptions {
+  expectedSessionId?: string
+  disableAutoLoop?: boolean
+}
+
 // ── State ──────────────────────────────────────────────────────────────────────
 
 /** Actual bound port of the running backend — set at startup via setBackendPort() */
@@ -1017,16 +1022,22 @@ export function startAgent(
  * alive — the current tool call is aborted and the agent waits for the next
  * user message.
  */
-export function interruptAgent(workspaceId: string): void {
+export function interruptAgent(workspaceId: string, options: InterruptAgentOptions = {}): void {
   const ctrl = controllers.get(workspaceId)
   if (!ctrl) {
     throw new Error(`No agent running for workspace '${workspaceId}'`)
+  }
+  if (options.expectedSessionId && ctrl.agentSessionId !== options.expectedSessionId) {
+    throw new Error(`Session '${options.expectedSessionId}' is not active for workspace '${workspaceId}'`)
   }
   try {
     ctrl.interrupt()
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     throw new Error(`Failed to interrupt agent for workspace '${workspaceId}': ${message}`)
+  }
+  if (options.disableAutoLoop && autoLoopService.getStatus(workspaceId).auto_loop) {
+    autoLoopService.disable(workspaceId, 'user-action')
   }
 }
 

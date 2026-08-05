@@ -4317,7 +4317,7 @@ app.post('/:id/stop', migrationGuard, (c) => {
 })
 
 // POST /api/workspaces/:id/interrupt — soft-interrupt agent (SIGINT, like Escape in Claude Code)
-app.post('/:id/interrupt', migrationGuard, (c) => {
+app.post('/:id/interrupt', migrationGuard, async (c) => {
   try {
     const id = c.req.param('id')
 
@@ -4326,7 +4326,19 @@ app.post('/:id/interrupt', migrationGuard, (c) => {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
     }
 
-    agentManager.interruptAgent(id)
+    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>
+    if (body.expectedSessionId !== undefined && typeof body.expectedSessionId !== 'string') {
+      return c.json({ error: 'expectedSessionId must be a string when provided' }, 400)
+    }
+    if (body.disableAutoLoop !== undefined && typeof body.disableAutoLoop !== 'boolean') {
+      return c.json({ error: 'disableAutoLoop must be a boolean when provided' }, 400)
+    }
+
+    const options: agentManager.InterruptAgentOptions = {}
+    if (body.expectedSessionId !== undefined) options.expectedSessionId = body.expectedSessionId as string
+    if (body.disableAutoLoop !== undefined) options.disableAutoLoop = body.disableAutoLoop as boolean
+
+    agentManager.interruptAgent(id, options)
     return c.json({ status: 'interrupted' })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

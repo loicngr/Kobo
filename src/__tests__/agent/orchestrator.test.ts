@@ -535,9 +535,12 @@ describe('Orchestrator — interruptAgent', () => {
     expect(() => interruptAgent('nope')).toThrow(/No agent running/)
   })
 
-  it('proxies the call to the controller', async () => {
+  it('only interrupts the expected active session before disabling auto-loop', async () => {
     const { createWorkspace } = await import('../../server/services/workspace-service.js')
+    const { getDb } = await import('../../server/db/index.js')
+    const autoLoopService = await import('../../server/services/auto-loop-service.js')
     const ws = createWorkspace({ name: 'W', projectPath: '/tmp', sourceBranch: 'd', workingBranch: 'b' })
+    getDb().prepare('UPDATE workspaces SET auto_loop = 1 WHERE id = ?').run(ws.id)
     let interruptCalls = 0
     const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
     _registerEngineForTest({
@@ -563,9 +566,56 @@ describe('Orchestrator — interruptAgent', () => {
       },
     })
     const { startAgent, interruptAgent } = await import('../../server/services/agent/orchestrator.js')
-    startAgent(ws.id, '/tmp', 'hi')
+    const { agentSessionId } = startAgent(ws.id, '/tmp', 'hi')
     await flushControllerStart()
-    interruptAgent(ws.id)
+
+    expect(() => interruptAgent(ws.id, { expectedSessionId: 'stale-session', disableAutoLoop: true })).toThrow(
+      /not active/,
+    )
+    expect(interruptCalls).toBe(0)
+    expect(autoLoopService.getStatus(ws.id).auto_loop).toBe(true)
+
+    interruptAgent(ws.id, { expectedSessionId: agentSessionId, disableAutoLoop: true })
     expect(interruptCalls).toBe(1)
+    expect(autoLoopService.getStatus(ws.id).auto_loop).toBe(false)
+  })
+
+  it('keeps auto-loop enabled when the controller interrupt fails', async () => {
+    const { createWorkspace } = await import('../../server/services/workspace-service.js')
+    const { getDb } = await import('../../server/db/index.js')
+    const autoLoopService = await import('../../server/services/auto-loop-service.js')
+    const ws = createWorkspace({ name: 'W', projectPath: '/tmp', sourceBranch: 'd', workingBranch: 'b' })
+    getDb().prepare('UPDATE workspaces SET auto_loop = 1 WHERE id = ?').run(ws.id)
+    const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+    _registerEngineForTest({
+      id: 'claude-code',
+      displayName: 'Claude Code',
+      capabilities: {
+        models: [],
+        permissionModes: ['bypass'],
+        supportsResume: true,
+        supportsMcp: true,
+        supportsSkills: true,
+      },
+      async start(_opts, _onEvent) {
+        return {
+          pid: 1234,
+          engineSessionId: 'sid',
+          sendMessage() {},
+          interrupt() {
+            throw new Error('interrupt failed')
+          },
+          async stop() {},
+        }
+      },
+    })
+    const { startAgent, interruptAgent } = await import('../../server/services/agent/orchestrator.js')
+    const { agentSessionId } = startAgent(ws.id, '/tmp', 'hi')
+    await flushControllerStart()
+
+    expect(() => interruptAgent(ws.id, { expectedSessionId: agentSessionId, disableAutoLoop: true })).toThrow(
+      /Failed to interrupt agent.*interrupt failed/,
+    )
+    expect(autoLoopService.getStatus(ws.id).auto_loop).toBe(true)
   })
 })

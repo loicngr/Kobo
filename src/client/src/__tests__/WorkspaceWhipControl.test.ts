@@ -260,7 +260,10 @@ describe('WorkspaceWhipControl', () => {
     dependencies.sendMessage('ws-1', 'Move faster, tocard!', 'session-1')
     dependencies.onError()
 
-    expect(interrupt).toHaveBeenCalledWith('ws-1')
+    expect(interrupt).toHaveBeenCalledWith('ws-1', {
+      expectedSessionId: 'session-1',
+      disableAutoLoop: true,
+    })
     expect(send).toHaveBeenCalledWith('ws-1', 'Move faster, tocard!', 'session-1')
     expect(doubles.notify).toHaveBeenCalledWith(
       expect.objectContaining({ message: 'Unable to send the whip message', position: 'top' }),
