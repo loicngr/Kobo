@@ -2121,7 +2121,7 @@ describe('PR notification sounds (v45)', () => {
       audioQuestionSound: 'hey.mp3',
       networkAccessToken: 'keep-me',
     })
-    expect(SETTINGS_SCHEMA_VERSION).toBe(51)
+    expect(SETTINGS_SCHEMA_VERSION).toBe(52)
   })
 
   it('adds the auto-loop retry limit while preserving existing settings', () => {
@@ -2239,7 +2239,7 @@ describe('whip feature toggle (v51)', () => {
       projects: [],
     })
 
-    expect(migrated.schemaVersion).toBe(51)
+    expect(migrated.schemaVersion).toBe(52)
     expect(migrated.global.whipEnabled).toBe(false)
     expect(migrated.global.audioNotifications).toBe(true)
   })
@@ -2274,6 +2274,51 @@ describe('whip feature toggle (v51)', () => {
 
     expect(updated.whipEnabled).toBe(false)
     expect(getGlobalSettings().whipEnabled).toBe(false)
+  })
+
+  it('defaults fresh installations to the portable whip shortcut', () => {
+    expect(getGlobalSettings().whipShortcut).toBe('mod+shift+x')
+  })
+
+  it('migrates v51 settings to the default shortcut without losing values', () => {
+    const migrated = runSettingsMigrations({
+      schemaVersion: 51,
+      global: { whipEnabled: true, editorCommand: 'zed' },
+      projects: [],
+    })
+
+    expect(migrated.schemaVersion).toBe(52)
+    expect(migrated.global.whipShortcut).toBe('mod+shift+x')
+    expect(migrated.global.editorCommand).toBe('zed')
+  })
+
+  it.each([
+    '',
+    'mod',
+    'mod+w',
+    'mod+shift+w',
+    'ctrl+w',
+    'ctrl+shift+w',
+    'meta+w',
+    'meta+shift+w',
+    'mod++x',
+    42,
+    null,
+  ])('normalizes an invalid shortcut to the default: %j', (whipShortcut) => {
+    const migrated = runSettingsMigrations({
+      schemaVersion: 52,
+      global: { whipShortcut },
+      projects: [],
+    })
+
+    expect(migrated.global.whipShortcut).toBe('mod+shift+x')
+  })
+
+  it('persists a valid custom shortcut', () => {
+    const updated = updateGlobalSettings({ whipShortcut: 'alt+k' } as Partial<GlobalSettings>)
+
+    expect(updated.whipShortcut).toBe('alt+k')
+    expect(getGlobalSettings().whipShortcut).toBe('alt+k')
   })
 })
 

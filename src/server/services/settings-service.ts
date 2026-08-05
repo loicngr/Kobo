@@ -333,6 +333,8 @@ export interface GlobalSettings {
   showThinkingBlocks: boolean
   /** Opt-in workspace whip control. Seeded disabled by settings migration v51. */
   whipEnabled: boolean
+  /** Portable keyboard shortcut that toggles the workspace whip overlay. */
+  whipShortcut: string
   tags: string[]
   /**
    * User-managed git branch prefixes shown on the workspace creation page.
@@ -392,6 +394,33 @@ export const DEFAULT_WORKSPACE_TAGS: string[] = [
  * one pre-selected on the workspace creation page.
  */
 export const DEFAULT_BRANCH_PREFIXES: string[] = ['feature', 'fix', 'hotfix', 'chore', 'refactor', 'docs', 'test']
+export const DEFAULT_WHIP_SHORTCUT = 'mod+shift+x'
+
+const WHIP_SHORTCUT_MODIFIERS = ['mod', 'ctrl', 'meta', 'alt', 'shift'] as const
+const RESERVED_WHIP_SHORTCUTS = new Set(['mod+w', 'mod+shift+w', 'ctrl+w', 'ctrl+shift+w', 'meta+w', 'meta+shift+w'])
+
+function isValidWhipShortcut(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0 || value !== value.toLowerCase()) return false
+  if (RESERVED_WHIP_SHORTCUTS.has(value)) return false
+
+  const tokens = value.split('+')
+  if (tokens.some((token) => token.length === 0)) return false
+  const key = tokens.at(-1)
+  if (!key || !/^[a-z0-9][a-z0-9_-]*$/.test(key) || WHIP_SHORTCUT_MODIFIERS.includes(key as never)) return false
+
+  const modifiers = tokens.slice(0, -1)
+  let previousIndex = -1
+  for (const modifier of modifiers) {
+    const index = WHIP_SHORTCUT_MODIFIERS.indexOf(modifier as (typeof WHIP_SHORTCUT_MODIFIERS)[number])
+    if (index <= previousIndex) return false
+    previousIndex = index
+  }
+  return true
+}
+
+function normalizeWhipShortcut(value: unknown): string {
+  return isValidWhipShortcut(value) ? value : DEFAULT_WHIP_SHORTCUT
+}
 
 /**
  * Sanitize a raw branch-prefix list: trim, strip surrounding slashes, drop
@@ -1060,6 +1089,13 @@ const settingsMigrations: SettingsMigration[] = [
       if (typeof global.whipEnabled !== 'boolean') global.whipEnabled = false
     },
   },
+  {
+    version: 52,
+    name: 'add-whip-keyboard-shortcut',
+    migrate: ({ global }) => {
+      global.whipShortcut = normalizeWhipShortcut(global.whipShortcut)
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -1187,6 +1223,7 @@ function defaultSettings(): Settings {
       sentryEnabled: true,
       showThinkingBlocks: true,
       whipEnabled: false,
+      whipShortcut: DEFAULT_WHIP_SHORTCUT,
       tags: [...DEFAULT_WORKSPACE_TAGS],
       branchPrefixes: [...DEFAULT_BRANCH_PREFIXES],
       worktreesPath: WORKTREES_PATH,
@@ -1281,6 +1318,7 @@ export function runSettingsMigrations(raw: Record<string, unknown>): Settings {
 
   current.global.worktreesPath = sanitizeWorktreesPath(current.global.worktreesPath)
   current.global.whipEnabled = current.global.whipEnabled === true
+  current.global.whipShortcut = normalizeWhipShortcut(current.global.whipShortcut)
 
   current.schemaVersion = version
   return current as unknown as Settings
@@ -1630,6 +1668,7 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'sentryEnabled',
     'showThinkingBlocks',
     'whipEnabled',
+    'whipShortcut',
     'tags',
     'branchPrefixes',
     'worktreesPath',
@@ -1693,6 +1732,9 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
   }
   if (filtered.whipEnabled !== undefined) {
     filtered.whipEnabled = filtered.whipEnabled === true
+  }
+  if (filtered.whipShortcut !== undefined) {
+    filtered.whipShortcut = normalizeWhipShortcut(filtered.whipShortcut)
   }
   if (filtered.worktreesPath !== undefined) {
     filtered.worktreesPath = validateWorktreesPath(filtered.worktreesPath, { allowEmpty: false })
