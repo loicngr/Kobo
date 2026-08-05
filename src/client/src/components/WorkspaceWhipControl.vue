@@ -1,19 +1,4 @@
 <template>
-  <q-btn
-    v-if="showButton"
-    dense
-    no-caps
-    size="sm"
-    color="deep-orange-5"
-    icon="sports_martial_arts"
-    :flat="!active"
-    :unelevated="active"
-    :label="t('whip.button')"
-    class="q-mr-xs"
-    @click="toggleWhip"
-  >
-    <q-tooltip>{{ t('whip.tooltip') }}</q-tooltip>
-  </q-btn>
   <WhipOverlay
     v-if="active"
     :sound-enabled="settingsStore.global.audioNotifications"
@@ -30,8 +15,9 @@ import { useSettingsStore } from 'src/stores/settings'
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { createWhipCrackCoordinator, type WhipCrackCoordinator } from 'src/utils/whip-crack'
+import { detectWhipShortcutPlatform, matchesWhipShortcut } from 'src/utils/whip-shortcut'
 import { isBusyStatus } from 'src/utils/workspace-status'
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{
@@ -45,9 +31,7 @@ const workspaceStore = useWorkspaceStore()
 const websocketStore = useWebSocketStore()
 const settingsStore = useSettingsStore()
 const active = ref(false)
-const showButton = computed(
-  () => settingsStore.global.whipEnabled && (active.value || (props.running && props.sessionId !== null)),
-)
+const shortcutPlatform = detectWhipShortcutPlatform()
 const SOFT_INTERRUPT_GRACE_MS = 1_000
 let coordinator: WhipCrackCoordinator | null = null
 let stoppedTimer: number | null = null
@@ -110,6 +94,14 @@ function toggleWhip(): void {
   else activate()
 }
 
+function onShortcutKeydown(event: KeyboardEvent): void {
+  if (event.repeat || !settingsStore.global.whipEnabled) return
+  if (!matchesWhipShortcut(event, settingsStore.global.whipShortcut, shortcutPlatform)) return
+  if (!active.value && (!props.running || !props.sessionId)) return
+  event.preventDefault()
+  toggleWhip()
+}
+
 function handleCrack(): void {
   const now = Date.now()
   if (props.running) {
@@ -148,5 +140,10 @@ watch(
   },
 )
 
-onBeforeUnmount(deactivate)
+onMounted(() => window.addEventListener('keydown', onShortcutKeydown))
+
+onBeforeUnmount(() => {
+  window.removeEventListener('keydown', onShortcutKeydown)
+  deactivate()
+})
 </script>
