@@ -2256,6 +2256,25 @@ describe('whip feature toggle (v51)', () => {
     expect(updated.whipEnabled).toBe(true)
     expect(getGlobalSettings().whipEnabled).toBe(true)
   })
+
+  it.each(['false', null, 1])('normalizes invalid v51 values to disabled: %j', (whipEnabled) => {
+    const migrated = runSettingsMigrations({
+      schemaVersion: 51,
+      global: { whipEnabled },
+      projects: [],
+    })
+
+    expect(migrated.global.whipEnabled).toBe(false)
+  })
+
+  it.each(['false', null, 1])('normalizes invalid updates to disabled: %j', (whipEnabled) => {
+    updateGlobalSettings({ whipEnabled: true })
+
+    const updated = updateGlobalSettings({ whipEnabled } as unknown as Partial<GlobalSettings>)
+
+    expect(updated.whipEnabled).toBe(false)
+    expect(getGlobalSettings().whipEnabled).toBe(false)
+  })
 })
 
 describe('updateNetworkAccessSettings()', () => {

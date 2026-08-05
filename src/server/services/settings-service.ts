@@ -1280,6 +1280,7 @@ export function runSettingsMigrations(raw: Record<string, unknown>): Settings {
   }
 
   current.global.worktreesPath = sanitizeWorktreesPath(current.global.worktreesPath)
+  current.global.whipEnabled = current.global.whipEnabled === true
 
   current.schemaVersion = version
   return current as unknown as Settings
@@ -1689,6 +1690,9 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
   if (filtered.voiceTemperature !== undefined) {
     const t = Number(filtered.voiceTemperature)
     filtered.voiceTemperature = Number.isFinite(t) ? Math.max(0, Math.min(1, t)) : settings.global.voiceTemperature
+  }
+  if (filtered.whipEnabled !== undefined) {
+    filtered.whipEnabled = filtered.whipEnabled === true
   }
   if (filtered.worktreesPath !== undefined) {
     filtered.worktreesPath = validateWorktreesPath(filtered.worktreesPath, { allowEmpty: false })
