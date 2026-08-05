@@ -8,6 +8,7 @@ import type { ProviderId, UsageSnapshot } from 'src/types/usage'
 import { appendTokenToWsUrl, getToken } from 'src/utils/auth-token'
 import { openNetworkLogin } from 'src/utils/network-login-bus'
 import { resolveNotificationSoundOverride } from 'src/utils/notification-sounds'
+import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
 import { notify } from 'src/utils/notifications'
 import type { DevServerStatus } from './dev-server'
 import { useDevServerStore } from './dev-server'
@@ -1096,7 +1097,7 @@ export const useWebSocketStore = defineStore('websocket', {
           Notify.create({
             type: 'info',
             position: 'top',
-            timeout: 0,
+            timeout: DEFAULT_TOAST_TIMEOUT_MS,
             message: t('pr.baseChanged', { oldBase, newBase }),
             actions,
           })
@@ -1121,7 +1122,11 @@ export const useWebSocketStore = defineStore('websocket', {
           const presentation = {
             'pr:ci-failed': { key: 'toast.prCiFailed', type: 'negative', timeout: 4000 },
             'pr:ci-recovered': { key: 'toast.prCiRecovered', type: 'positive', timeout: 5000 },
-            'pr:merge-conflict': { key: 'toast.prMergeConflict', type: 'warning', timeout: 0 },
+            'pr:merge-conflict': {
+              key: 'toast.prMergeConflict',
+              type: 'warning',
+              timeout: DEFAULT_TOAST_TIMEOUT_MS,
+            },
             'pr:merged': { key: 'toast.prMerged', type: 'positive', timeout: 5000 },
           } as const
           const current = presentation[eventType]
@@ -1166,7 +1171,7 @@ export const useWebSocketStore = defineStore('websocket', {
           Notify.create({
             type: 'warning',
             position: 'top',
-            timeout: 0,
+            timeout: DEFAULT_TOAST_TIMEOUT_MS,
             message,
             actions,
           })

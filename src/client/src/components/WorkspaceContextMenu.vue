@@ -143,6 +143,7 @@
 import { useQuasar } from 'quasar'
 import { useSettingsStore } from 'src/stores/settings'
 import { useWorkspaceStore, type Workspace } from 'src/stores/workspace'
+import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
 import { isChangesRequestedBlocking, isCiFailed } from 'src/utils/pr-status'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -178,7 +179,7 @@ const $q = useQuasar()
 const { t } = useI18n()
 
 /**
- * Download every ws_event of the workspace as a CSV. Shows a sticky spinner
+ * Download every ws_event of the workspace as a CSV. Shows a six-second spinner
  * notification while the server prepares the file (the menu closes on click,
  * but the notification is global and outlives it).
  */
@@ -186,7 +187,7 @@ async function exportEvents() {
   const dismiss = $q.notify({
     spinner: true,
     message: t('contextMenu.exportingEvents'),
-    timeout: 0,
+    timeout: DEFAULT_TOAST_TIMEOUT_MS,
     group: false,
   })
   try {

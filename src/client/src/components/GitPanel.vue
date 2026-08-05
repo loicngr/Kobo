@@ -724,6 +724,7 @@ import PrPanel from 'src/components/PrPanel.vue'
 import { useSettingsStore } from 'src/stores/settings'
 import type { BranchCommit, ForgeInfo, GitStats, Workspace } from 'src/stores/workspace'
 import { useWorkspaceStore, WorkspaceActionError } from 'src/stores/workspace'
+import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import CompareCommitsDialog from './CompareCommitsDialog.vue'
 
@@ -1708,14 +1709,14 @@ async function handleChangeSourceBranch() {
   }).onOk(async (newBase: string) => {
     if (!newBase.trim() || !props.workspace) return
     changingSource.value = true
-    // Persistent spinner toast — the operation (full fetch + cherry-pick) can
-    // take several seconds; dismissed in `finally` once it resolves.
+    // Six-second spinner toast — the operation is also dismissed in `finally`
+    // when it resolves sooner.
     const dismissLoader = $q.notify({
       group: false,
       spinner: true,
       message: t('git.changeSourceBranchLoading'),
       position: 'top',
-      timeout: 0,
+      timeout: DEFAULT_TOAST_TIMEOUT_MS,
     })
     try {
       const res = await fetch(`/api/workspaces/${props.workspace.id}/change-source-branch`, {
