@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createWhipCrackCoordinator } from '../utils/whip-crack'
+import { createWhipCrackCoordinator, WHIP_MESSAGE_DELAY_MS } from '../utils/whip-crack'
 
 describe('whip crack coordinator', () => {
   beforeEach(() => vi.useFakeTimers())
@@ -155,6 +155,94 @@ describe('whip crack coordinator', () => {
 
     expect(interrupts).toBe(2)
     expect(sent).toEqual([])
+  })
+
+  it('coalesces cracks beyond one active and one pending dispatch', async () => {
+    let releaseFirstInterrupt!: () => void
+    let firstInterruptStarted!: () => void
+    const firstInterrupt = new Promise<void>((resolve) => {
+      releaseFirstInterrupt = resolve
+    })
+    const interruptStarted = new Promise<void>((resolve) => {
+      firstInterruptStarted = resolve
+    })
+    const sendMessage = vi.fn(() => true)
+    let interruptCalls = 0
+    let running = true
+    const coordinator = createWhipCrackCoordinator(
+      { workspaceId: 'ws-1', sessionId: 'session-1' },
+      ['Go, tocard!'],
+      {
+        isAgentRunning: () => running,
+        interruptAgent: async () => {
+          interruptCalls += 1
+          if (interruptCalls === 1) {
+            firstInterruptStarted()
+            await firstInterrupt
+          }
+        },
+        sendMessage,
+        wait: async () => {
+          running = false
+        },
+        random: () => 0,
+        now: () => 1_000,
+        onError: vi.fn(),
+      },
+    )
+
+    const first = coordinator.enqueue()
+    await interruptStarted
+    const second = coordinator.enqueue()
+    const coalesced = coordinator.enqueue()
+    releaseFirstInterrupt()
+    await Promise.all([first, second, coalesced])
+
+    expect(sendMessage).toHaveBeenCalledTimes(2)
+  })
+
+  it('cancels active and pending cracks when disposed during the message delay', async () => {
+    let releaseMessageDelay!: () => void
+    let messageDelayStarted!: () => void
+    const messageDelay = new Promise<void>((resolve) => {
+      releaseMessageDelay = resolve
+    })
+    const messageDelayHasStarted = new Promise<void>((resolve) => {
+      messageDelayStarted = resolve
+    })
+    const wait = vi.fn((milliseconds: number) => {
+      if (milliseconds === WHIP_MESSAGE_DELAY_MS) {
+        messageDelayStarted()
+        return messageDelay
+      }
+      return Promise.resolve()
+    })
+    const interruptAgent = vi.fn(async () => undefined)
+    const sendMessage = vi.fn(() => true)
+    const coordinator = createWhipCrackCoordinator(
+      { workspaceId: 'ws-1', sessionId: 'session-1' },
+      ['Go, tocard!'],
+      {
+        isAgentRunning: () => true,
+        interruptAgent,
+        sendMessage,
+        wait,
+        random: () => 0,
+        now: () => 1_000,
+        onError: vi.fn(),
+      },
+    )
+
+    const active = coordinator.enqueue()
+    const pending = coordinator.enqueue()
+    await messageDelayHasStarted
+    coordinator.dispose()
+    releaseMessageDelay()
+    await Promise.all([active, pending])
+
+    expect(interruptAgent).toHaveBeenCalledTimes(1)
+    expect(wait).toHaveBeenCalledTimes(1)
+    expect(sendMessage).not.toHaveBeenCalled()
   })
 
   it('rate-limits WebSocket errors and refuses new work after dispose', async () => {

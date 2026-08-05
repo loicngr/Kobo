@@ -31,6 +31,7 @@ export function createWhipCrackCoordinator(
   let disposed = false
   let lastErrorAt = Number.NEGATIVE_INFINITY
   let tail = Promise.resolve()
+  let queued = 0
 
   function reportError(): void {
     const now = dependencies.now()
@@ -40,17 +41,23 @@ export function createWhipCrackCoordinator(
   }
 
   async function dispatchCrack(): Promise<void> {
+    if (disposed) return
+
     if (dependencies.isAgentRunning(target.workspaceId)) {
       try {
         await dependencies.interruptAgent(target.workspaceId)
       } catch {
+        if (disposed) return
         reportError()
         return
       }
+      if (disposed) return
       await dependencies.wait(WHIP_MESSAGE_DELAY_MS)
+      if (disposed) return
       let waited = WHIP_MESSAGE_DELAY_MS
       while (dependencies.isAgentRunning(target.workspaceId) && waited < WHIP_AGENT_STOP_TIMEOUT_MS) {
         await dependencies.wait(WHIP_AGENT_STOP_POLL_MS)
+        if (disposed) return
         waited += WHIP_AGENT_STOP_POLL_MS
       }
     }
@@ -66,8 +73,12 @@ export function createWhipCrackCoordinator(
   return {
     enqueue() {
       if (disposed) return Promise.resolve()
+      if (queued >= 2) return tail
+      queued += 1
       const current = tail.then(dispatchCrack)
-      tail = current.catch(() => undefined)
+      tail = current.catch(() => undefined).finally(() => {
+        queued = Math.max(0, queued - 1)
+      })
       return current
     },
     dispose() {
