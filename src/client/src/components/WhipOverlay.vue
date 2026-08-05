@@ -1,13 +1,26 @@
 <template>
   <Teleport to="body">
-    <canvas ref="canvasRef" class="whip-overlay" />
+    <div
+      ref="overlayRef"
+      class="whip-overlay"
+      role="dialog"
+      aria-modal="true"
+      :aria-label="t('whip.overlayLabel')"
+      aria-describedby="whip-overlay-instructions"
+      tabindex="-1"
+      @keydown="handleKeydown"
+    >
+      <span id="whip-overlay-instructions" class="q-sr-only">{{ t('whip.overlayInstructions') }}</span>
+      <canvas ref="canvasRef" class="whip-canvas" aria-hidden="true" />
+    </div>
   </Teleport>
 </template>
 
 <script setup lang="ts">
 import { playWhipCrack } from 'src/utils/whip-audio'
-import { createWhip, dropWhip, stepWhip, type WhipPoint, type WhipState } from 'src/utils/whip-physics'
+import { createWhip, dropWhip, stepWhip, WHIP_CONFIG, type WhipPoint, type WhipState } from 'src/utils/whip-physics'
 import { onBeforeUnmount, onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{
   soundEnabled: boolean
@@ -20,10 +33,14 @@ const emit = defineEmits<{
 }>()
 
 const canvasRef = ref<HTMLCanvasElement | null>(null)
+const overlayRef = ref<HTMLElement | null>(null)
+const { t } = useI18n()
 const pointer = { x: window.innerWidth / 2, y: window.innerHeight / 2 }
 let context: CanvasRenderingContext2D | null = null
 let state: WhipState | null = null
 let animationFrame: number | null = null
+let previousFocusedElement: HTMLElement | null = null
+let lastCrackAt = Number.NEGATIVE_INFINITY
 
 function resizeCanvas(): void {
   const canvas = canvasRef.value
@@ -74,6 +91,11 @@ function drawWhip(): void {
   }
 }
 
+function emitCrack(): void {
+  playWhipCrack({ enabled: props.soundEnabled, volume: props.soundVolume })
+  emit('crack')
+}
+
 function animate(now: number): void {
   if (!state) return
   const result = stepWhip(state, {
@@ -83,8 +105,8 @@ function animate(now: number): void {
   })
   drawWhip()
   if (result.cracked) {
-    playWhipCrack({ enabled: props.soundEnabled, volume: props.soundVolume })
-    emit('crack')
+    lastCrackAt = now
+    emitCrack()
   }
   if (result.offscreen) {
     emit('closed')
@@ -104,10 +126,27 @@ function handlePointerDown(event: PointerEvent): void {
 }
 
 function handleKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Escape') {
+    event.stopPropagation()
+    emit('closed')
+    return
+  }
+  if (event.repeat || (event.key !== 'Enter' && event.key !== ' ')) return
+
+  const now = performance.now()
+  if (now - lastCrackAt < WHIP_CONFIG.crackCooldownMs) return
+
+  event.preventDefault()
+  lastCrackAt = now
+  emitCrack()
+}
+
+function handleDocumentKeydown(event: KeyboardEvent): void {
   if (event.key === 'Escape') emit('closed')
 }
 
 onMounted(() => {
+  previousFocusedElement = document.activeElement instanceof HTMLElement ? document.activeElement : null
   const canvas = canvasRef.value
   if (!canvas) return
   context = canvas.getContext('2d')
@@ -120,8 +159,9 @@ onMounted(() => {
   canvas.addEventListener('pointermove', handlePointerMove)
   canvas.addEventListener('pointerdown', handlePointerDown)
   window.addEventListener('resize', resizeCanvas)
-  document.addEventListener('keydown', handleKeydown)
+  document.addEventListener('keydown', handleDocumentKeydown)
   animationFrame = requestAnimationFrame(animate)
+  overlayRef.value?.focus()
 })
 
 onBeforeUnmount(() => {
@@ -129,8 +169,9 @@ onBeforeUnmount(() => {
   canvas?.removeEventListener('pointermove', handlePointerMove)
   canvas?.removeEventListener('pointerdown', handlePointerDown)
   window.removeEventListener('resize', resizeCanvas)
-  document.removeEventListener('keydown', handleKeydown)
+  document.removeEventListener('keydown', handleDocumentKeydown)
   if (animationFrame !== null) cancelAnimationFrame(animationFrame)
+  if (previousFocusedElement?.isConnected) previousFocusedElement.focus()
 })
 </script>
 
@@ -143,5 +184,9 @@ onBeforeUnmount(() => {
   z-index: 10000;
   cursor: none;
   touch-action: none;
+}
+
+.whip-canvas {
+  display: block;
 }
 </style>

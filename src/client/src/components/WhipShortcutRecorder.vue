@@ -8,6 +8,8 @@
         no-caps
         outline
         color="deep-orange-5"
+        :aria-label="accessibleLabel"
+        :aria-pressed="recording"
         @click="startRecording"
       >
         <span data-testid="whip-shortcut-value">{{ displayValue }}</span>
@@ -26,6 +28,9 @@
       >
         <q-tooltip>{{ t('settings.whipShortcutReset') }}</q-tooltip>
       </q-btn>
+    </div>
+    <div v-if="recording" role="status" aria-live="polite" class="q-sr-only">
+      {{ t('settings.whipShortcutRecording') }}
     </div>
     <div v-if="errorMessage" role="alert" class="text-negative text-caption q-mt-xs">{{ errorMessage }}</div>
   </div>
@@ -47,6 +52,11 @@ const errorMessage = ref('')
 
 const displayValue = computed(() =>
   recording.value ? t('settings.whipShortcutRecording') : formatWhipShortcut(props.modelValue, platform),
+)
+const accessibleLabel = computed(() =>
+  recording.value
+    ? t('settings.whipShortcutRecordingLabel')
+    : t('settings.whipShortcutButtonLabel', { shortcut: displayValue.value }),
 )
 
 function stopRecording(): void {

@@ -45,6 +45,20 @@ describe('WhipShortcutRecorder', () => {
     expect(wrapper.emitted('update:modelValue')).toEqual([['alt+k']])
   })
 
+  it('exposes the current shortcut and recording state to assistive technology', async () => {
+    const wrapper = mountRecorder()
+    const button = wrapper.get('[data-testid="whip-shortcut-recorder"]')
+
+    expect(button.attributes('aria-label')).toContain('Whip shortcut')
+    expect(button.attributes('aria-label')).toContain('Ctrl+Shift+X')
+    expect(button.attributes('aria-pressed')).toBe('false')
+
+    await button.trigger('click')
+
+    expect(button.attributes('aria-pressed')).toBe('true')
+    expect(wrapper.get('[role="status"]').text()).toBe('Press a shortcut…')
+  })
+
   it('cancels capture on Escape without changing the value', async () => {
     const wrapper = mountRecorder('alt+k')
     await wrapper.get('[data-testid="whip-shortcut-recorder"]').trigger('click')
