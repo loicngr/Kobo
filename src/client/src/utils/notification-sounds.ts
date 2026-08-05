@@ -32,6 +32,11 @@ export const NOTIFICATION_SOUNDS: readonly NotificationSound[] = [
   { id: 'pas-ca-zinedine.mp3', labelKey: 'settings.notificationSoundPasCaZinedine' },
   { id: 'ta-gueule.mp3', labelKey: 'settings.notificationSoundTaGueule' },
   { id: 'tu-vas-la-fermer.mp3', labelKey: 'settings.notificationSoundTuVasLaFermer' },
+  { id: 'yaaa.mp3', labelKey: 'settings.notificationSoundYaaa' },
+  {
+    id: 'mais-laisse-moi-dormir-zebi.mp3',
+    labelKey: 'settings.notificationSoundMaisLaisseMoiDormirZebi',
+  },
 ] as const
 
 export const DEFAULT_NOTIFICATION_SOUND = 'hey.mp3'

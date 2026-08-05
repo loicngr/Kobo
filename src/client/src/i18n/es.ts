@@ -464,6 +464,8 @@ export default {
   'settings.notificationSoundPasCaZinedine': 'Pas ça, Zinedine',
   'settings.notificationSoundTaGueule': 'Ta gueule',
   'settings.notificationSoundTuVasLaFermer': 'Tu vas la fermer',
+  'settings.notificationSoundYaaa': 'Yaaa',
+  'settings.notificationSoundMaisLaisseMoiDormirZebi': 'Mais laisse-moi dormir zebi',
   'settings.defaultPermissionMode': 'Modo de permisos por defecto',
   'settings.defaultPermissionModeClaude': 'Modo de permisos por defecto (Claude Code)',
   'settings.defaultPermissionModeCodex': 'Modo de permisos por defecto (OpenAI Codex)',
