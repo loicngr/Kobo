@@ -40,7 +40,6 @@ let context: CanvasRenderingContext2D | null = null
 let state: WhipState | null = null
 let animationFrame: number | null = null
 let previousFocusedElement: HTMLElement | null = null
-let lastCrackAt = Number.NEGATIVE_INFINITY
 
 function resizeCanvas(): void {
   const canvas = canvasRef.value
@@ -104,10 +103,7 @@ function animate(now: number): void {
     now,
   })
   drawWhip()
-  if (result.cracked) {
-    lastCrackAt = now
-    emitCrack()
-  }
+  if (result.cracked) emitCrack()
   if (result.offscreen) {
     emit('closed')
     return
@@ -131,13 +127,21 @@ function handleKeydown(event: KeyboardEvent): void {
     emit('closed')
     return
   }
-  if (event.repeat || (event.key !== 'Enter' && event.key !== ' ')) return
+  if (event.key === 'Tab') {
+    event.preventDefault()
+    overlayRef.value?.focus()
+    return
+  }
+
+  const isSpace = event.key === ' '
+  if (isSpace) event.preventDefault()
+  if (event.repeat || (event.key !== 'Enter' && !isSpace)) return
 
   const now = performance.now()
-  if (now - lastCrackAt < WHIP_CONFIG.crackCooldownMs) return
+  if (state && now - state.lastCrackAt < WHIP_CONFIG.crackCooldownMs) return
 
-  event.preventDefault()
-  lastCrackAt = now
+  if (!isSpace) event.preventDefault()
+  if (state) state.lastCrackAt = now
   emitCrack()
 }
 

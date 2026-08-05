@@ -4,7 +4,7 @@ import { createI18n } from 'vue-i18n'
 import WhipOverlay from '../components/WhipOverlay.vue'
 import en from '../i18n/en'
 import { playWhipCrack } from '../utils/whip-audio'
-import { dropWhip, stepWhip } from '../utils/whip-physics'
+import { dropWhip, stepWhip, WHIP_CONFIG } from '../utils/whip-physics'
 
 const physics = vi.hoisted(() => ({
   result: { cracked: false, offscreen: false },
@@ -49,13 +49,22 @@ const context = {
 }
 
 const i18n = createI18n({ legacy: false, locale: 'en', messages: { en } })
+const mountedOverlays: ReturnType<typeof mount>[] = []
 
 function mountOverlay(props = { soundEnabled: true, soundVolume: 0.4 }) {
-  return mount(WhipOverlay, {
+  const wrapper = mount(WhipOverlay, {
     attachTo: document.body,
     props,
     global: { plugins: [i18n] },
   })
+  mountedOverlays.push(wrapper)
+  return wrapper
+}
+
+function unmountOverlay(wrapper: (typeof mountedOverlays)[number]): void {
+  wrapper.unmount()
+  const index = mountedOverlays.indexOf(wrapper)
+  if (index >= 0) mountedOverlays.splice(index, 1)
 }
 
 describe('WhipOverlay', () => {
@@ -64,8 +73,10 @@ describe('WhipOverlay', () => {
 
   beforeEach(() => {
     physics.result = { cracked: false, offscreen: false }
+    physics.state.lastCrackAt = Number.NEGATIVE_INFINITY
     animationCallback = undefined
     vi.clearAllMocks()
+    vi.mocked(stepWhip).mockImplementation(() => physics.result)
     vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(context as unknown as CanvasRenderingContext2D)
     vi.stubGlobal(
       'requestAnimationFrame',
@@ -78,6 +89,7 @@ describe('WhipOverlay', () => {
   })
 
   afterEach(() => {
+    for (const wrapper of mountedOverlays.splice(0)) wrapper.unmount()
     document.body.innerHTML = ''
     vi.restoreAllMocks()
     vi.unstubAllGlobals()
@@ -123,18 +135,58 @@ describe('WhipOverlay', () => {
     expect(playWhipCrack).toHaveBeenCalledOnce()
     expect(wrapper.emitted('crack')).toHaveLength(1)
 
-    wrapper.unmount()
+    unmountOverlay(wrapper)
 
     expect(document.activeElement).toBe(previousButton)
   })
 
-  it('activates with Space once and ignores repeated keys and cooldown duplicates', () => {
+  it('traps Tab and Shift+Tab focus on the dialog', () => {
     const wrapper = mountOverlay()
     const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!
 
-    dialog.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }))
-    dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', repeat: true, bubbles: true }))
+    const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true })
+    dialog.dispatchEvent(tab)
+
+    expect(tab.defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(dialog)
+
+    const shiftTab = new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true })
+    dialog.dispatchEvent(shiftTab)
+
+    expect(shiftTab.defaultPrevented).toBe(true)
+    expect(document.activeElement).toBe(dialog)
+    expect(wrapper.emitted('crack')).toBeUndefined()
+  })
+
+  it('prevents repeated and cooldown Space keys without emitting another crack', () => {
+    const wrapper = mountOverlay()
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!
+
+    const firstSpace = new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true })
+    dialog.dispatchEvent(firstSpace)
+    const repeatedSpace = new KeyboardEvent('keydown', { key: ' ', repeat: true, bubbles: true, cancelable: true })
+    dialog.dispatchEvent(repeatedSpace)
+    const cooldownSpace = new KeyboardEvent('keydown', { key: ' ', bubbles: true, cancelable: true })
+    dialog.dispatchEvent(cooldownSpace)
+
+    expect(playWhipCrack).toHaveBeenCalledOnce()
+    expect(wrapper.emitted('crack')).toHaveLength(1)
+    expect(firstSpace.defaultPrevented).toBe(true)
+    expect(repeatedSpace.defaultPrevented).toBe(true)
+    expect(cooldownSpace.defaultPrevented).toBe(true)
+  })
+
+  it('shares the keyboard crack cooldown with the next physics frame', () => {
+    vi.spyOn(performance, 'now').mockReturnValue(100)
+    vi.mocked(stepWhip).mockImplementation((state, input) => ({
+      cracked: input.now - state.lastCrackAt >= WHIP_CONFIG.crackCooldownMs,
+      offscreen: false,
+    }))
+    const wrapper = mountOverlay()
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!
+
     dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    animationCallback?.(101)
 
     expect(playWhipCrack).toHaveBeenCalledOnce()
     expect(wrapper.emitted('crack')).toHaveLength(1)
@@ -148,7 +200,7 @@ describe('WhipOverlay', () => {
     expect(stepWhip).toHaveBeenCalled()
     expect(wrapper.emitted('closed')).toHaveLength(1)
 
-    wrapper.unmount()
+    unmountOverlay(wrapper)
     expect(cancelAnimationFrame).toHaveBeenCalledWith(42)
   })
 })
