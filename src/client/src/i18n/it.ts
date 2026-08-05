@@ -474,6 +474,8 @@ export default {
     'Modalità applicata alla creazione di un workspace. Piano = sola lettura, Bypass = senza richieste, Stretto = auto-accetta le edit con allow-list, Interattivo = chiedi prima di ogni strumento.',
   'settings.activityFeed': 'Feed attività',
   'settings.showThinkingBlocks': 'Mostra i blocchi di ragionamento degli agenti',
+  'settings.whipEnabled': 'Attiva la frusta',
+  'settings.whipEnabledHint': 'Mostra la frusta interattiva nei workspace attivi compatibili.',
   'settings.testIntegration': 'Testa connessione',
   'pwa.offline': 'Sei offline. Chat e agenti richiedono il server Kōbō.',
   'pwa.reconnecting': 'Riconnessione al server Kōbō…',

@@ -233,6 +233,16 @@
                   color="indigo-4"
                   class="text-grey-5 text-caption"
                 />
+                <q-toggle
+                  v-model="globalWhipEnabled"
+                  :label="$t('settings.whipEnabled')"
+                  dark
+                  dense
+                  color="deep-orange-5"
+                  class="text-grey-5 text-caption"
+                >
+                  <q-tooltip>{{ $t('settings.whipEnabledHint') }}</q-tooltip>
+                </q-toggle>
               </div>
             </div>
 
@@ -2632,6 +2642,7 @@ const globalNotionAssigneeProperty = ref('')
 const globalNotionUserId = ref('')
 const globalShowVerboseSystemMessages = ref(false)
 const globalShowThinkingBlocks = ref(true)
+const globalWhipEnabled = ref(false)
 
 const browserNotificationStatus = computed(() => {
   switch (browserNotificationPermission.value) {
@@ -3420,6 +3431,7 @@ function captureGlobalSnapshot(): string {
     sentryEnabled: globalSentryEnabled.value,
     showVerboseSystemMessages: globalShowVerboseSystemMessages.value,
     showThinkingBlocks: globalShowThinkingBlocks.value,
+    whipEnabled: globalWhipEnabled.value,
     tags: globalTags.value,
     branchPrefixes: globalBranchPrefixes.value,
     setupScript: globalSetupScript.value,
@@ -3545,6 +3557,7 @@ function syncGlobalForm() {
   globalSentryEnabled.value = store.global.sentryEnabled ?? true
   globalShowVerboseSystemMessages.value = store.showVerboseSystemMessages
   globalShowThinkingBlocks.value = store.global.showThinkingBlocks ?? true
+  globalWhipEnabled.value = store.global.whipEnabled ?? false
   globalTags.value = Array.isArray(store.global.tags) ? [...store.global.tags] : []
   globalBranchPrefixes.value = Array.isArray(store.global.branchPrefixes) ? [...store.global.branchPrefixes] : []
   globalSetupScript.value = store.global.setupScript ?? ''
@@ -3826,6 +3839,7 @@ async function saveGlobal() {
       notionEnabled: globalNotionEnabled.value,
       sentryEnabled: globalSentryEnabled.value,
       showThinkingBlocks: globalShowThinkingBlocks.value,
+      whipEnabled: globalWhipEnabled.value,
       tags: globalTags.value,
       branchPrefixes: globalBranchPrefixes.value,
       setupScript: globalSetupScript.value,

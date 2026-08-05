@@ -471,6 +471,8 @@ export default {
     'Modo aplicado al crear un workspace. Plan = solo lectura, Bypass = sin avisos, Estricto = auto-aceptar ediciones con allow-list, Interactivo = preguntar antes de cada herramienta.',
   'settings.activityFeed': 'Feed de actividad',
   'settings.showThinkingBlocks': 'Mostrar bloques de razonamiento de los agentes',
+  'settings.whipEnabled': 'Activar el látigo',
+  'settings.whipEnabledHint': 'Muestra el látigo interactivo en los workspaces activos compatibles.',
   'settings.testIntegration': 'Probar conexión',
   'pwa.offline': 'No tienes conexión. El chat y los agentes necesitan el servidor Kōbō.',
   'pwa.reconnecting': 'Reconectando al servidor Kōbō…',

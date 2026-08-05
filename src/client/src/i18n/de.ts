@@ -472,6 +472,8 @@ export default {
     'Modus bei der Erstellung eines neuen Workspaces. Plan = nur lesen, Bypass = keine Nachfragen, Strict = Edits automatisch akzeptieren mit allow-list, Interaktiv = vor jedem Tool fragen.',
   'settings.activityFeed': 'Aktivitätsfeed',
   'settings.showThinkingBlocks': 'Denkblöcke der Agenten anzeigen',
+  'settings.whipEnabled': 'Peitsche aktivieren',
+  'settings.whipEnabledHint': 'Zeigt die interaktive Peitsche in geeigneten laufenden Workspaces an.',
   'settings.testIntegration': 'Verbindung testen',
   'pwa.offline': 'Du bist offline. Chat und Agenten benötigen den Kōbō-Server.',
   'pwa.reconnecting': 'Verbindung zum Kōbō-Server wird wiederhergestellt…',

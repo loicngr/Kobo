@@ -44,10 +44,7 @@ const WhipOverlayStub = defineComponent({
 
 const i18n = createI18n({ legacy: false, locale: 'en', messages: { en } })
 
-function mountControl(
-  props: { workspaceId: string; sessionId: string | null; running: boolean },
-  whipEnabled = true,
-) {
+function mountControl(props: { workspaceId: string; sessionId: string | null; running: boolean }, whipEnabled = true) {
   useSettingsStore().global.whipEnabled = whipEnabled
   return mount(WorkspaceWhipControl, {
     props,

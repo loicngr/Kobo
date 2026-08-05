@@ -466,6 +466,8 @@ export default {
   'settings.activityFeed': 'Activity feed',
   'settings.verboseMessages': 'Show verbose system messages (task_progress, task_started)',
   'settings.showThinkingBlocks': 'Show agent thinking blocks',
+  'settings.whipEnabled': 'Enable whip',
+  'settings.whipEnabledHint': 'Shows the interactive whip control in eligible running workspaces.',
   'settings.testIntegration': 'Test connection',
   'pwa.offline': 'You are offline. Chat and agents require the Kōbō server.',
   'pwa.reconnecting': 'Reconnecting to the Kōbō server…',
