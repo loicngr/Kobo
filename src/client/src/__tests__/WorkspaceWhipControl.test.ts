@@ -44,7 +44,11 @@ const WhipOverlayStub = defineComponent({
 
 const i18n = createI18n({ legacy: false, locale: 'en', messages: { en } })
 
-function mountControl(props: { workspaceId: string; sessionId: string | null; running: boolean }) {
+function mountControl(
+  props: { workspaceId: string; sessionId: string | null; running: boolean },
+  whipEnabled = true,
+) {
+  useSettingsStore().global.whipEnabled = whipEnabled
   return mount(WorkspaceWhipControl, {
     props,
     global: {
@@ -78,6 +82,23 @@ describe('WorkspaceWhipControl', () => {
 
     await stopped.setProps({ sessionId: 'session-1' })
     expect(stopped.get('button').text()).toContain('Whip')
+  })
+
+  it('hides the control while the whip feature is disabled', () => {
+    const wrapper = mountControl({ workspaceId: 'ws-1', sessionId: 'session-1', running: true }, false)
+    expect(wrapper.find('button').exists()).toBe(false)
+  })
+
+  it('closes and disposes an active whip when the feature is disabled', async () => {
+    const wrapper = mountControl({ workspaceId: 'ws-1', sessionId: 'session-1', running: true })
+    await wrapper.get('button').trigger('click')
+
+    useSettingsStore().global.whipEnabled = false
+    await wrapper.vm.$nextTick()
+
+    expect(doubles.dispose).toHaveBeenCalledOnce()
+    expect(wrapper.findComponent(WhipOverlayStub).exists()).toBe(false)
+    expect(wrapper.find('button').exists()).toBe(false)
   })
 
   it('captures the target and dispatches every overlay crack', async () => {

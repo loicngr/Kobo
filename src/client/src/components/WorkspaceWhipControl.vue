@@ -45,7 +45,9 @@ const workspaceStore = useWorkspaceStore()
 const websocketStore = useWebSocketStore()
 const settingsStore = useSettingsStore()
 const active = ref(false)
-const showButton = computed(() => active.value || (props.running && props.sessionId !== null))
+const showButton = computed(
+  () => settingsStore.global.whipEnabled && (active.value || (props.running && props.sessionId !== null)),
+)
 const SOFT_INTERRUPT_GRACE_MS = 1_000
 let coordinator: WhipCrackCoordinator | null = null
 let stoppedTimer: number | null = null
@@ -136,6 +138,13 @@ watch(
     }
     if (!active.value) return
     closeWhenInterruptGraceExpires()
+  },
+)
+
+watch(
+  () => settingsStore.global.whipEnabled,
+  (enabled) => {
+    if (!enabled) deactivate()
   },
 )
 

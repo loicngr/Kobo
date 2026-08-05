@@ -118,6 +118,11 @@ describe('settings store', () => {
     expect(store.global.sentryInitialPromptTemplate).toBeDefined()
   })
 
+  it('defaults the whip feature to disabled', () => {
+    const store = useSettingsStore()
+    expect(store.global.whipEnabled).toBe(false)
+  })
+
   it('defaults every PR notification sound to inherit', () => {
     const store = useSettingsStore()
     expect(store.global).toMatchObject({
