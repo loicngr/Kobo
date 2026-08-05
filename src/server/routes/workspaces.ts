@@ -4326,9 +4326,25 @@ app.post('/:id/interrupt', migrationGuard, async (c) => {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
     }
 
-    const body = (await c.req.json().catch(() => ({}))) as Record<string, unknown>
-    if (body.expectedSessionId !== undefined && typeof body.expectedSessionId !== 'string') {
-      return c.json({ error: 'expectedSessionId must be a string when provided' }, 400)
+    const rawBody = await c.req.text()
+    let body: Record<string, unknown> = {}
+    if (rawBody.trim().length > 0) {
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(rawBody)
+      } catch {
+        return c.json({ error: 'Request body must be valid JSON' }, 400)
+      }
+      if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        return c.json({ error: 'Request body must be a JSON object' }, 400)
+      }
+      body = parsed as Record<string, unknown>
+    }
+    if (
+      body.expectedSessionId !== undefined &&
+      (typeof body.expectedSessionId !== 'string' || body.expectedSessionId.trim().length === 0)
+    ) {
+      return c.json({ error: 'expectedSessionId must be a non-empty string when provided' }, 400)
     }
     if (body.disableAutoLoop !== undefined && typeof body.disableAutoLoop !== 'boolean') {
       return c.json({ error: 'disableAutoLoop must be a boolean when provided' }, 400)

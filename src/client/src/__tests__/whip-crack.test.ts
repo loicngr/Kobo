@@ -67,9 +67,11 @@ describe('whip crack coordinator', () => {
     expect(calls).toEqual(['interrupt', 'wait:300', 'wait:50', 'send'])
   })
 
-  it('does not poll optimistic running state when interruption finds no agent', async () => {
+  it('abandons stale-session cracks and rate-limits interruption errors', async () => {
     const wait = vi.fn(async () => undefined)
     const sendMessage = vi.fn(() => true)
+    const onError = vi.fn()
+    let now = 1_000
     const coordinator = createWhipCrackCoordinator(
       { workspaceId: 'ws-1', sessionId: 'session-1' },
       ['Faster, tocard!'],
@@ -81,15 +83,20 @@ describe('whip crack coordinator', () => {
         sendMessage,
         wait,
         random: () => 0,
-        now: () => 1_000,
-        onError: vi.fn(),
+        now: () => now,
+        onError,
       },
     )
 
     await coordinator.enqueue()
+    now = 2_000
+    await coordinator.enqueue()
+    now = 6_100
+    await coordinator.enqueue()
 
     expect(wait).not.toHaveBeenCalled()
-    expect(sendMessage).toHaveBeenCalledOnce()
+    expect(sendMessage).not.toHaveBeenCalled()
+    expect(onError).toHaveBeenCalledTimes(2)
   })
 
   it('bounds polling when an interrupted agent stays marked as running', async () => {
@@ -116,7 +123,7 @@ describe('whip crack coordinator', () => {
     expect(sendMessage).toHaveBeenCalledOnce()
   })
 
-  it('still sends when interruption fails and serializes repeated cracks', async () => {
+  it('serializes repeated rejected interruptions without sending', async () => {
     let releaseFirstInterrupt!: () => void
     const firstInterrupt = new Promise<void>((resolve) => {
       releaseFirstInterrupt = resolve
@@ -146,7 +153,8 @@ describe('whip crack coordinator', () => {
     releaseFirstInterrupt()
     await Promise.all([first, second])
 
-    expect(sent).toEqual(['Go, tocard!', 'Go, tocard!'])
+    expect(interrupts).toBe(2)
+    expect(sent).toEqual([])
   })
 
   it('rate-limits WebSocket errors and refuses new work after dispose', async () => {

@@ -1027,7 +1027,7 @@ export function interruptAgent(workspaceId: string, options: InterruptAgentOptio
   if (!ctrl) {
     throw new Error(`No agent running for workspace '${workspaceId}'`)
   }
-  if (options.expectedSessionId && ctrl.agentSessionId !== options.expectedSessionId) {
+  if (options.expectedSessionId !== undefined && ctrl.agentSessionId !== options.expectedSessionId) {
     throw new Error(`Session '${options.expectedSessionId}' is not active for workspace '${workspaceId}'`)
   }
   try {

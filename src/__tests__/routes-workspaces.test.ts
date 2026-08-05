@@ -2171,6 +2171,8 @@ describe('POST /api/workspaces/:id/interrupt', () => {
 
   it.each([
     [{ expectedSessionId: 42 }, 'expectedSessionId'],
+    [{ expectedSessionId: '' }, 'expectedSessionId'],
+    [{ expectedSessionId: '   ' }, 'expectedSessionId'],
     [{ disableAutoLoop: 'yes' }, 'disableAutoLoop'],
   ])('rejects malformed interruption options: %j', async (body, invalidField) => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
@@ -2185,9 +2187,38 @@ describe('POST /api/workspaces/:id/interrupt', () => {
     expect(agentManager.interruptAgent).not.toHaveBeenCalled()
   })
 
+  it.each([
+    ['{"expectedSessionId":', 'invalid JSON'],
+    ['null', 'null'],
+    ['[]', 'array'],
+    ['"session-running"', 'primitive'],
+  ])('rejects a supplied non-object JSON body: %s', async (rawBody) => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    const res = await app.request('/api/workspaces/ws-1/interrupt', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: rawBody,
+    })
+
+    expect(res.status).toBe(400)
+    expect(agentManager.interruptAgent).not.toHaveBeenCalled()
+  })
+
   it('accepts an empty body as default interruption options', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
     const res = await app.request('/api/workspaces/ws-1/interrupt', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(agentManager.interruptAgent).toHaveBeenCalledWith('ws-1', {})
+  })
+
+  it('accepts a whitespace-only body as default interruption options', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    const res = await app.request('/api/workspaces/ws-1/interrupt', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '  \n\t ',
+    })
 
     expect(res.status).toBe(200)
     expect(agentManager.interruptAgent).toHaveBeenCalledWith('ws-1', {})

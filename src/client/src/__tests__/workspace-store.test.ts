@@ -527,6 +527,25 @@ describe('workspace store', () => {
     })
   })
 
+  describe('interruptAgent', () => {
+    it('serializes the active-session safety options as JSON', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true } as Response)
+      vi.stubGlobal('fetch', fetchMock)
+      const store = useWorkspaceStore()
+
+      await store.interruptAgent('ws-1', {
+        expectedSessionId: 'session-running',
+        disableAutoLoop: true,
+      })
+
+      expect(fetchMock).toHaveBeenCalledWith('/api/workspaces/ws-1/interrupt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expectedSessionId: 'session-running', disableAutoLoop: true }),
+      })
+    })
+  })
+
   describe('usage snapshot integration', () => {
     beforeEach(() => {
       setActivePinia(createPinia())

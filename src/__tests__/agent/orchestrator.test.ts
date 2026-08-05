@@ -569,6 +569,10 @@ describe('Orchestrator — interruptAgent', () => {
     const { agentSessionId } = startAgent(ws.id, '/tmp', 'hi')
     await flushControllerStart()
 
+    expect(() => interruptAgent(ws.id, { expectedSessionId: '', disableAutoLoop: true })).toThrow(/not active/)
+    expect(interruptCalls).toBe(0)
+    expect(autoLoopService.getStatus(ws.id).auto_loop).toBe(true)
+
     expect(() => interruptAgent(ws.id, { expectedSessionId: 'stale-session', disableAutoLoop: true })).toThrow(
       /not active/,
     )
