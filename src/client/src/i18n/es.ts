@@ -473,6 +473,7 @@ export default {
   'settings.showThinkingBlocks': 'Mostrar bloques de razonamiento de los agentes',
   'settings.whipEnabled': 'Activar el látigo',
   'settings.whipEnabledHint': 'Muestra el látigo interactivo en los workspaces activos compatibles.',
+  'settings.whipVolume': 'Volumen del látigo',
   'settings.whipShortcut': 'Atajo del látigo',
   'settings.whipShortcutHint': 'Haz clic y luego pulsa el atajo que quieras usar.',
   'settings.whipShortcutRecording': 'Pulsa un atajo…',

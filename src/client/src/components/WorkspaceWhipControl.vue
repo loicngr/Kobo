@@ -2,7 +2,7 @@
   <WhipOverlay
     v-if="active"
     :sound-enabled="settingsStore.global.audioNotifications"
-    :sound-volume="settingsStore.global.audioNotificationVolume"
+    :sound-volume="settingsStore.global.whipVolume"
     @crack="handleCrack"
     @closed="deactivate"
   />

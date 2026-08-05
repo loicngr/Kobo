@@ -477,6 +477,7 @@ export default {
   'settings.showThinkingBlocks': 'Afficher les blocs de réflexion des agents',
   'settings.whipEnabled': 'Activer le fouet',
   'settings.whipEnabledHint': 'Affiche le fouet interactif dans les workspaces actifs compatibles.',
+  'settings.whipVolume': 'Volume du fouet',
   'settings.whipShortcut': 'Raccourci du fouet',
   'settings.whipShortcutHint': 'Cliquez, puis appuyez sur le raccourci à utiliser.',
   'settings.whipShortcutRecording': 'Appuyez sur un raccourci…',

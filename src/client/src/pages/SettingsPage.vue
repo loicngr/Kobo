@@ -243,7 +243,28 @@
                 >
                   <q-tooltip>{{ $t('settings.whipEnabledHint') }}</q-tooltip>
                 </q-toggle>
-                <WhipShortcutRecorder v-if="globalWhipEnabled" v-model="globalWhipShortcut" />
+                <div v-if="globalWhipEnabled" class="column q-gutter-sm col">
+                  <WhipShortcutRecorder v-model="globalWhipShortcut" />
+                  <div class="row items-center q-gutter-sm">
+                    <div class="text-grey-5 text-caption" style="min-width: 58px;">
+                      {{ $t('settings.whipVolume') }}
+                    </div>
+                    <q-slider
+                      v-model="globalWhipVolume"
+                      :min="0"
+                      :max="1"
+                      :step="0.05"
+                      :aria-label="$t('settings.whipVolume')"
+                      dark
+                      dense
+                      color="deep-orange-5"
+                      class="col"
+                    />
+                    <div class="text-grey-5 text-caption" style="min-width: 40px; text-align: right;">
+                      {{ Math.round(globalWhipVolume * 100) }}%
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -2646,6 +2667,7 @@ const globalShowVerboseSystemMessages = ref(false)
 const globalShowThinkingBlocks = ref(true)
 const globalWhipEnabled = ref(false)
 const globalWhipShortcut = ref('mod+shift+x')
+const globalWhipVolume = ref(1)
 
 const browserNotificationStatus = computed(() => {
   switch (browserNotificationPermission.value) {
@@ -3436,6 +3458,7 @@ function captureGlobalSnapshot(): string {
     showThinkingBlocks: globalShowThinkingBlocks.value,
     whipEnabled: globalWhipEnabled.value,
     whipShortcut: globalWhipShortcut.value,
+    whipVolume: globalWhipVolume.value,
     tags: globalTags.value,
     branchPrefixes: globalBranchPrefixes.value,
     setupScript: globalSetupScript.value,
@@ -3563,6 +3586,7 @@ function syncGlobalForm() {
   globalShowThinkingBlocks.value = store.global.showThinkingBlocks ?? true
   globalWhipEnabled.value = store.global.whipEnabled ?? false
   globalWhipShortcut.value = store.global.whipShortcut ?? 'mod+shift+x'
+  globalWhipVolume.value = store.global.whipVolume ?? 1
   globalTags.value = Array.isArray(store.global.tags) ? [...store.global.tags] : []
   globalBranchPrefixes.value = Array.isArray(store.global.branchPrefixes) ? [...store.global.branchPrefixes] : []
   globalSetupScript.value = store.global.setupScript ?? ''
@@ -3846,6 +3870,7 @@ async function saveGlobal() {
       showThinkingBlocks: globalShowThinkingBlocks.value,
       whipEnabled: globalWhipEnabled.value,
       whipShortcut: globalWhipShortcut.value,
+      whipVolume: globalWhipVolume.value,
       tags: globalTags.value,
       branchPrefixes: globalBranchPrefixes.value,
       setupScript: globalSetupScript.value,

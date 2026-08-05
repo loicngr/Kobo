@@ -468,6 +468,7 @@ export default {
   'settings.showThinkingBlocks': 'Show agent thinking blocks',
   'settings.whipEnabled': 'Enable whip',
   'settings.whipEnabledHint': 'Shows the interactive whip control in eligible running workspaces.',
+  'settings.whipVolume': 'Whip volume',
   'settings.whipShortcut': 'Whip shortcut',
   'settings.whipShortcutHint': 'Click, then press the shortcut to use.',
   'settings.whipShortcutRecording': 'Press a shortcut…',

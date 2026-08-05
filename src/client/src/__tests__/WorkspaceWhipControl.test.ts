@@ -248,7 +248,8 @@ describe('WorkspaceWhipControl', () => {
     const websocketStore = useWebSocketStore()
     const settingsStore = useSettingsStore()
     settingsStore.global.audioNotifications = true
-    settingsStore.global.audioNotificationVolume = 0.4
+    settingsStore.global.audioNotificationVolume = 0.2
+    settingsStore.global.whipVolume = 0.75
     const interrupt = vi.spyOn(workspaceStore, 'interruptAgent').mockResolvedValue()
     const send = vi.spyOn(websocketStore, 'sendChatMessage').mockReturnValue(true)
     const wrapper = mountControl({ workspaceId: 'ws-1', sessionId: 'session-1', running: true })
@@ -266,7 +267,11 @@ describe('WorkspaceWhipControl', () => {
     )
     expect(wrapper.getComponent(WhipOverlayStub).props()).toMatchObject({
       soundEnabled: true,
-      soundVolume: 0.4,
+      soundVolume: 0.75,
     })
+
+    settingsStore.global.whipVolume = 0.4
+    await wrapper.vm.$nextTick()
+    expect(wrapper.getComponent(WhipOverlayStub).props('soundVolume')).toBe(0.4)
   })
 })

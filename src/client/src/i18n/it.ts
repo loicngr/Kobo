@@ -476,6 +476,7 @@ export default {
   'settings.showThinkingBlocks': 'Mostra i blocchi di ragionamento degli agenti',
   'settings.whipEnabled': 'Attiva la frusta',
   'settings.whipEnabledHint': 'Mostra la frusta interattiva nei workspace attivi compatibili.',
+  'settings.whipVolume': 'Volume della frusta',
   'settings.whipShortcut': 'Scorciatoia della frusta',
   'settings.whipShortcutHint': 'Fai clic, poi premi la scorciatoia da usare.',
   'settings.whipShortcutRecording': 'Premi una scorciatoia…',

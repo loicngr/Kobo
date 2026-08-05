@@ -474,6 +474,7 @@ export default {
   'settings.showThinkingBlocks': 'Denkblöcke der Agenten anzeigen',
   'settings.whipEnabled': 'Peitsche aktivieren',
   'settings.whipEnabledHint': 'Zeigt die interaktive Peitsche in geeigneten laufenden Workspaces an.',
+  'settings.whipVolume': 'Peitschenlautstärke',
   'settings.whipShortcut': 'Peitschen-Tastenkürzel',
   'settings.whipShortcutHint': 'Klicken Sie und drücken Sie dann das gewünschte Tastenkürzel.',
   'settings.whipShortcutRecording': 'Tastenkürzel drücken…',
