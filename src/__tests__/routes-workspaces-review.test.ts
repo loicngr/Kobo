@@ -623,9 +623,7 @@ describe('POST /api/workspaces/:id/start-review', () => {
   })
 
   it('does not emit user:message when dispatch fails (no ghost message in chat)', async () => {
-    vi.mocked(agentManager.sendMessage).mockImplementation(() => {
-      throw new Error('No agent running')
-    })
+    vi.mocked(agentManager.sendMessage).mockRejectedValueOnce(new Error('turn is closing'))
     vi.mocked(agentManager.startAgent).mockImplementation(() => {
       throw new Error('boom: cannot start')
     })

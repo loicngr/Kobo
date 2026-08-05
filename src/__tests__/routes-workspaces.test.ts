@@ -5695,6 +5695,7 @@ describe('POST /api/workspaces/:id/git/commit-with-agent', () => {
     expect(res.status).toBe(200)
     expect(await res.json()).toMatchObject({ ok: true, messageSent: true })
     expect(agentManager.startAgent).toHaveBeenCalledOnce()
+    expect(vi.mocked(agentManager.startAgent).mock.calls[0][4]).toBe(true)
   })
 })
 
@@ -5714,6 +5715,7 @@ describe('POST /api/workspaces/:id/git/resolve-with-agent', () => {
     expect(res.status).toBe(200)
     expect(await res.json()).toMatchObject({ ok: true, messageSent: true })
     expect(agentManager.startAgent).toHaveBeenCalledOnce()
+    expect(vi.mocked(agentManager.startAgent).mock.calls[0][4]).toBe(true)
   })
 })
 
