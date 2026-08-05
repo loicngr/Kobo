@@ -331,6 +331,8 @@ export interface GlobalSettings {
   sentryEnabled: boolean
   /** Whether agent thinking/reasoning blocks are displayed in the activity feed. */
   showThinkingBlocks: boolean
+  /** Opt-in workspace whip control. Seeded disabled by settings migration v51. */
+  whipEnabled: boolean
   tags: string[]
   /**
    * User-managed git branch prefixes shown on the workspace creation page.
@@ -1051,6 +1053,13 @@ const settingsMigrations: SettingsMigration[] = [
       if (typeof global.bitbucketUsername !== 'string') global.bitbucketUsername = ''
     },
   },
+  {
+    version: 51,
+    name: 'add-whip-feature-toggle',
+    migrate: ({ global }) => {
+      if (typeof global.whipEnabled !== 'boolean') global.whipEnabled = false
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -1177,6 +1186,7 @@ function defaultSettings(): Settings {
       notionEnabled: true,
       sentryEnabled: true,
       showThinkingBlocks: true,
+      whipEnabled: false,
       tags: [...DEFAULT_WORKSPACE_TAGS],
       branchPrefixes: [...DEFAULT_BRANCH_PREFIXES],
       worktreesPath: WORKTREES_PATH,
@@ -1618,6 +1628,7 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'notionEnabled',
     'sentryEnabled',
     'showThinkingBlocks',
+    'whipEnabled',
     'tags',
     'branchPrefixes',
     'worktreesPath',

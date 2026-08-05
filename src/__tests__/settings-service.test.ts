@@ -2121,7 +2121,7 @@ describe('PR notification sounds (v45)', () => {
       audioQuestionSound: 'hey.mp3',
       networkAccessToken: 'keep-me',
     })
-    expect(SETTINGS_SCHEMA_VERSION).toBe(50)
+    expect(SETTINGS_SCHEMA_VERSION).toBe(51)
   })
 
   it('adds the auto-loop retry limit while preserving existing settings', () => {
@@ -2224,6 +2224,37 @@ describe('PR notification sounds (v45)', () => {
       audioPrApprovedVolume: 0.35,
       audioPrMergedVolume: 1,
     })
+  })
+})
+
+describe('whip feature toggle (v51)', () => {
+  it('defaults fresh installations to disabled', () => {
+    expect(getGlobalSettings().whipEnabled).toBe(false)
+  })
+
+  it('migrates existing settings to disabled without losing other values', () => {
+    const migrated = runSettingsMigrations({
+      schemaVersion: 50,
+      global: { audioNotifications: true },
+      projects: [],
+    })
+
+    expect(migrated.schemaVersion).toBe(51)
+    expect(migrated.global.whipEnabled).toBe(false)
+    expect(migrated.global.audioNotifications).toBe(true)
+  })
+
+  it('preserves and persists an enabled preference', () => {
+    const migrated = runSettingsMigrations({
+      schemaVersion: 50,
+      global: { whipEnabled: true },
+      projects: [],
+    })
+    expect(migrated.global.whipEnabled).toBe(true)
+
+    const updated = updateGlobalSettings({ whipEnabled: true })
+    expect(updated.whipEnabled).toBe(true)
+    expect(getGlobalSettings().whipEnabled).toBe(true)
   })
 })
 
