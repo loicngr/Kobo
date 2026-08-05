@@ -140,10 +140,10 @@ watch(
   },
 )
 
-onMounted(() => window.addEventListener('keydown', onShortcutKeydown))
+onMounted(() => window.addEventListener('keydown', onShortcutKeydown, true))
 
 onBeforeUnmount(() => {
-  window.removeEventListener('keydown', onShortcutKeydown)
+  window.removeEventListener('keydown', onShortcutKeydown, true)
   deactivate()
 })
 </script>

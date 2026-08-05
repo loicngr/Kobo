@@ -127,10 +127,19 @@ describe('WorkspaceWhipControl', () => {
   it('works while a text input owns focus', async () => {
     const wrapper = mountControl({ workspaceId: 'ws-1', sessionId: 'session-1', running: true })
     const input = document.createElement('input')
+    input.addEventListener('keydown', (event) => event.stopPropagation())
     document.body.append(input)
     input.focus()
 
-    const event = await openWhip(wrapper)
+    const event = new KeyboardEvent('keydown', {
+      key: 'x',
+      ctrlKey: true,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    })
+    input.dispatchEvent(event)
+    await wrapper.vm.$nextTick()
 
     expect(document.activeElement).toBe(input)
     expect(event.defaultPrevented).toBe(true)
