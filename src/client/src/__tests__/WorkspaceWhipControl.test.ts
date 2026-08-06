@@ -123,19 +123,25 @@ describe('WorkspaceWhipControl', () => {
       expect(eligible.defaultPrevented).toBe(true)
       expect(competingHandler).not.toHaveBeenCalled()
 
+      const repeated = dispatchShortcut({ repeat: true })
+      await wrapper.vm.$nextTick()
+      expect(repeated.defaultPrevented).toBe(false)
+      expect(competingHandler).toHaveBeenCalledTimes(1)
+      expect(wrapper.findComponent(WhipOverlayStub).exists()).toBe(true)
+
       useSettingsStore().global.whipEnabled = false
       await wrapper.vm.$nextTick()
       dispatchShortcut()
-      expect(competingHandler).toHaveBeenCalledTimes(1)
+      expect(competingHandler).toHaveBeenCalledTimes(2)
 
       useSettingsStore().global.whipEnabled = true
       await wrapper.vm.$nextTick()
       dispatchShortcut({ key: 'j' })
-      expect(competingHandler).toHaveBeenCalledTimes(2)
+      expect(competingHandler).toHaveBeenCalledTimes(3)
 
       await wrapper.setProps({ running: false })
       dispatchShortcut()
-      expect(competingHandler).toHaveBeenCalledTimes(3)
+      expect(competingHandler).toHaveBeenCalledTimes(4)
     } finally {
       window.removeEventListener('keydown', competingHandler, true)
     }
