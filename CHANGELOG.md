@@ -4,6 +4,10 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.11.8
+
+- fix(whip): preserve delivery and shortcut handling (#24)
+
 ## 1.11.7
 
 - feat: add opt-in interactive whip (#23)
