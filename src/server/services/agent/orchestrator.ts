@@ -777,6 +777,12 @@ function handleEvent(
     clearStaleEngineSessionId(workspaceId)
   }
   if (ev.kind === 'session:ended') {
+    // A resumed replacement can deliberately reuse the same DB session row.
+    // Its predecessor may still drain a late terminal event after losing
+    // ownership; keep the routed superseded event, but do not let it finalize
+    // the replacement's row or clear the replacement's pending interaction.
+    if (hasReplacement && registeredController?.agentSessionId === agentSessionId) return
+
     const isResumeFailed = consumeResumeFailed(workspaceId, agentSessionId)
 
     const snapshot = consumeTaskProgressSnapshot(workspaceId, agentSessionId)
