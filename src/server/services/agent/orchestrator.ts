@@ -97,7 +97,7 @@ function registerSessionLifecycleOwner(
   const workspaceOwners = sessionLifecycleOwners.get(workspaceId) ?? new Map<string, SessionLifecycleOwnership>()
   const existing = workspaceOwners.get(agentSessionId)
   if (existing) {
-    existing.supersededControllers.add(existing.owner)
+    if (!existing.ownerEnded) existing.supersededControllers.add(existing.owner)
     existing.owner = controller
     existing.ownerEnded = false
   } else {
@@ -1873,6 +1873,9 @@ export function _runWatchdogForTest(): void {
 
 /** Test-only export. Not part of the public module API. */
 export const __test__ = {
+  getSessionLifecycleOwnerCount(workspaceId: string): number {
+    return sessionLifecycleOwners.get(workspaceId)?.size ?? 0
+  },
   handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent): void {
     const sourceController = controllers.get(workspaceId)
     if (sourceController && sourceController.agentSessionId !== agentSessionId) {

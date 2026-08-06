@@ -450,6 +450,58 @@ describe('orchestrator auto-loop integration', () => {
     expect(cleanupScript.onSessionEnded).not.toHaveBeenCalled()
   })
 
+  it('releases lifecycle ownership across three generations of the same session row', async () => {
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const { _registerEngineForTest } = await import('../server/services/agent/engines/registry.js')
+    await setWorkspaceExecuting(wsId)
+
+    const emitters: Array<(event: AgentEvent) => void> = []
+    _registerEngineForTest({
+      id: 'claude-code',
+      displayName: 'Claude Code',
+      capabilities: {
+        models: [],
+        permissionModes: ['bypass'],
+        supportsResume: true,
+        supportsMcp: true,
+        supportsSkills: true,
+      },
+      async start(_options, onEvent) {
+        emitters.push(onEvent)
+        return {
+          pid: emitters.length,
+          engineSessionId: 'engine-shared',
+          sendMessage() {},
+          interrupt() {},
+          async stop() {},
+        }
+      },
+    })
+
+    const first = orch.startAgent(wsId, '/tmp/p', 'first')
+    await flushControllerStart()
+    emitters[0]?.({ kind: 'session:started', engineSessionId: 'engine-shared' })
+    orch.stopAgent(wsId)
+
+    const second = orch.startAgent(wsId, '/tmp/p', 'second', undefined, true, 'bypass', first.agentSessionId)
+    await flushControllerStart()
+    emitters[1]?.({ kind: 'session:started', engineSessionId: 'engine-shared' })
+    emitters[1]?.({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+
+    const third = orch.startAgent(wsId, '/tmp/p', 'third', undefined, true, 'bypass', first.agentSessionId)
+    await flushControllerStart()
+    emitters[2]?.({ kind: 'session:started', engineSessionId: 'engine-shared' })
+    expect(second.agentSessionId).toBe(first.agentSessionId)
+    expect(third.agentSessionId).toBe(first.agentSessionId)
+    expect(orch.__test__.getSessionLifecycleOwnerCount(wsId)).toBe(1)
+
+    emitters[0]?.({ kind: 'session:ended', reason: 'killed', exitCode: null })
+    expect(orch.__test__.getSessionLifecycleOwnerCount(wsId)).toBe(1)
+
+    emitters[2]?.({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+    expect(orch.__test__.getSessionLifecycleOwnerCount(wsId)).toBe(0)
+  })
+
   it('finalizes a manually stopped session without advancing auto-loop or running cleanup', async () => {
     const orch = await import('../server/services/agent/orchestrator.js')
     const eventRouter = await import('../server/services/agent/event-router.js')
