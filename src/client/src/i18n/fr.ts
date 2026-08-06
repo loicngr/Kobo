@@ -475,6 +475,8 @@ export default {
   'settings.activityFeed': "Flux d'activité",
   'settings.verboseMessages': 'Afficher les messages système détaillés (task_progress, task_started)',
   'settings.showThinkingBlocks': 'Afficher les blocs de réflexion des agents',
+  'settings.whipSettings': 'Fouet',
+  'settings.whipSettingsHint': 'Configurez le raccourci et le volume du fouet optionnel.',
   'settings.whipEnabled': 'Activer le fouet',
   'settings.whipEnabledHint': 'Affiche le fouet interactif dans les workspaces actifs compatibles.',
   'settings.whipVolume': 'Volume du fouet',

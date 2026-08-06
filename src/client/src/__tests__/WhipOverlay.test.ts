@@ -140,10 +140,12 @@ describe('WhipOverlay', () => {
     expect(document.activeElement).toBe(dialog)
     expect(document.querySelector('canvas')?.getAttribute('aria-hidden')).toBe('true')
 
-    dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+    const enter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    dialog.dispatchEvent(enter)
 
     expect(playWhipCrack).toHaveBeenCalledOnce()
     expect(wrapper.emitted('crack')).toHaveLength(1)
+    expect(enter.defaultPrevented).toBe(true)
 
     unmountOverlay(wrapper)
 
@@ -184,6 +186,26 @@ describe('WhipOverlay', () => {
     expect(firstSpace.defaultPrevented).toBe(true)
     expect(repeatedSpace.defaultPrevented).toBe(true)
     expect(cooldownSpace.defaultPrevented).toBe(true)
+  })
+
+  it('prevents repeated Enter keys without emitting another crack', () => {
+    const wrapper = mountOverlay()
+    const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!
+
+    const firstEnter = new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true })
+    dialog.dispatchEvent(firstEnter)
+    const repeatedEnter = new KeyboardEvent('keydown', {
+      key: 'Enter',
+      repeat: true,
+      bubbles: true,
+      cancelable: true,
+    })
+    dialog.dispatchEvent(repeatedEnter)
+
+    expect(playWhipCrack).toHaveBeenCalledOnce()
+    expect(wrapper.emitted('crack')).toHaveLength(1)
+    expect(firstEnter.defaultPrevented).toBe(true)
+    expect(repeatedEnter.defaultPrevented).toBe(true)
   })
 
   it('shares the keyboard crack cooldown with the next physics frame', () => {

@@ -471,6 +471,8 @@ export default {
     'Modo aplicado al crear un workspace. Plan = solo lectura, Bypass = sin avisos, Estricto = auto-aceptar ediciones con allow-list, Interactivo = preguntar antes de cada herramienta.',
   'settings.activityFeed': 'Feed de actividad',
   'settings.showThinkingBlocks': 'Mostrar bloques de razonamiento de los agentes',
+  'settings.whipSettings': 'Látigo',
+  'settings.whipSettingsHint': 'Configura el atajo y el volumen opcionales del látigo.',
   'settings.whipEnabled': 'Activar el látigo',
   'settings.whipEnabledHint': 'Muestra el látigo interactivo en los workspaces activos compatibles.',
   'settings.whipVolume': 'Volumen del látigo',

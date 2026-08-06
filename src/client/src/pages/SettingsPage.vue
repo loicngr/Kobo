@@ -233,41 +233,47 @@
                   color="indigo-4"
                   class="text-grey-5 text-caption"
                 />
-                <q-toggle
-                  v-model="globalWhipEnabled"
-                  :label="$t('settings.whipEnabled')"
-                  dark
-                  dense
-                  color="indigo-4"
-                  class="text-grey-5 text-caption"
-                >
-                  <q-tooltip>{{ $t('settings.whipEnabledHint') }}</q-tooltip>
-                </q-toggle>
-                <div v-if="globalWhipEnabled" class="column q-gutter-sm col">
-                  <WhipShortcutRecorder v-model="globalWhipShortcut" />
-                  <div class="row items-center q-gutter-sm">
-                    <div class="text-grey-5 text-caption" style="min-width: 58px;">
-                      {{ $t('settings.whipVolume') }}
-                    </div>
-                    <q-slider
-                      v-model="globalWhipVolume"
-                      :min="0"
-                      :max="1"
-                      :step="0.05"
-                      :disable="whipVolumeAvailability.disabled"
-                      :aria-label="$t('settings.whipVolume')"
-                      dark
-                      dense
-                      color="indigo-4"
-                      class="col"
-                    />
-                    <div class="text-grey-5 text-caption" style="min-width: 40px; text-align: right;">
-                      {{ Math.round(globalWhipVolume * 100) }}%
-                    </div>
+              </div>
+            </div>
+
+            <!-- Whip settings -->
+            <div v-show="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-xs">{{ $t('settings.whipSettings') }}</div>
+              <div class="text-grey-6 text-caption q-mb-md">{{ $t('settings.whipSettingsHint') }}</div>
+              <q-toggle
+                v-model="globalWhipEnabled"
+                :label="$t('settings.whipEnabled')"
+                dark
+                dense
+                color="indigo-4"
+                class="text-grey-5 text-caption"
+              >
+                <q-tooltip>{{ $t('settings.whipEnabledHint') }}</q-tooltip>
+              </q-toggle>
+              <div v-if="globalWhipEnabled" class="column q-gutter-sm q-mt-md">
+                <WhipShortcutRecorder v-model="globalWhipShortcut" />
+                <div class="row items-center q-gutter-sm">
+                  <div class="text-grey-5 text-caption" style="min-width: 58px;">
+                    {{ $t('settings.whipVolume') }}
                   </div>
-                  <div v-if="whipVolumeAvailability.hintKey" class="text-grey-6 text-caption">
-                    {{ $t(whipVolumeAvailability.hintKey) }}
+                  <q-slider
+                    v-model="globalWhipVolume"
+                    :min="0"
+                    :max="1"
+                    :step="0.05"
+                    :disable="whipVolumeAvailability.disabled"
+                    :aria-label="$t('settings.whipVolume')"
+                    dark
+                    dense
+                    color="indigo-4"
+                    class="col"
+                  />
+                  <div class="text-grey-5 text-caption" style="min-width: 40px; text-align: right;">
+                    {{ Math.round(globalWhipVolume * 100) }}%
                   </div>
+                </div>
+                <div v-if="whipVolumeAvailability.hintKey" class="text-grey-6 text-caption">
+                  {{ $t(whipVolumeAvailability.hintKey) }}
                 </div>
               </div>
             </div>

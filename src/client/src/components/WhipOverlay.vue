@@ -133,14 +133,14 @@ function handleKeydown(event: KeyboardEvent): void {
     return
   }
 
-  const isSpace = event.key === ' '
-  if (isSpace) event.preventDefault()
-  if (event.repeat || (event.key !== 'Enter' && !isSpace)) return
+  const isCrackKey = event.key === 'Enter' || event.key === ' '
+  if (!isCrackKey) return
+  event.preventDefault()
+  if (event.repeat) return
 
   const now = performance.now()
   if (state && now - state.lastCrackAt < WHIP_CONFIG.crackCooldownMs) return
 
-  if (!isSpace) event.preventDefault()
   if (state) state.lastCrackAt = now
   emitCrack()
 }
