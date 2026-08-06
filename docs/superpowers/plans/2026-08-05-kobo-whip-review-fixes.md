@@ -976,6 +976,12 @@ After approval, rerun Task 6 and the final whole-branch review on the new HEAD.
 - [x] Clear active ownership for anonymous legacy ends and cancel session-owned queued messages during replay.
 - [x] Run focused backend/client tests, lint, type-check, and `git diff --check`, then commit the fix round for fresh review.
 
+#### Task 11 — Fix round 2: clear stale client ownership on marked termination
+
+- [x] Add a RED live test with owner A, `session:ended(A, superseded: true)`, then a normal termination for B.
+- [x] Clear A conditionally before returning from the superseded branch, without clearing B when B is already the owner.
+- [x] Run focused client lifecycle tests, lint, type-check, and `git diff --check`, then commit for a fresh re-review.
+
 ---
 
 ### Task 11: Ignore superseded session termination effects in the client

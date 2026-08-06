@@ -374,6 +374,9 @@ export function dispatchAgentEvent(
         sessionId !== activeSessionId)
     if (isSuperseded) {
       workspaceStore.cancelQueuedMessage(workspaceId, sessionId)
+      if (sessionId) {
+        workspaceStore.clearActiveAgentSession(workspaceId, sessionId)
+      }
       return
     }
     agentStream.setCompacting(workspaceId, false)

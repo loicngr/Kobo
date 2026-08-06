@@ -275,6 +275,7 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
     const { useWorkspaceStore } = await import('../stores/workspace.js')
     const ws = useWorkspaceStore()
     ws.workspaces = [workspaceFixture()]
+    ws.setActiveAgentSession('w1', 'session-A')
     ws.enqueuePending('w1', {
       kind: 'question',
       toolCallId: 'pending-A',
@@ -283,6 +284,7 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
       agentSessionId: 'session-A',
     })
     ws.queueMessage('w1', 'queued for A', 'session-A')
+    ws.queueMessage('w1', 'queued for B', 'session-B')
     ws.upsertSubagent('w1', { toolUseId: 'subagent-B', status: 'running' })
     const fetchWorkspaces = vi.spyOn(ws, 'fetchWorkspaces').mockResolvedValue()
     const finalizeRunningSubagents = vi.spyOn(ws, 'finalizeRunningSubagents')
@@ -307,6 +309,8 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
     })
     expect(ws.peekPending('w1')).toBeUndefined()
     expect(ws.getQueuedMessage('w1', 'session-A')).toBeUndefined()
+    expect(ws.getQueuedMessage('w1', 'session-B')?.content).toBe('queued for B')
+    expect(ws.activeAgentSessionIds.w1).toBeUndefined()
     expect(ws.workspaces[0]?.status).toBe('executing')
     expect(stream.isCompacting('w1')).toBe(true)
     expect(ws.subagents.w1?.['subagent-B']?.status).toBe('running')
@@ -314,6 +318,42 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
     expect(finalizeRunningSubagents).not.toHaveBeenCalled()
     expect(flushQueuedMessage).not.toHaveBeenCalled()
     expect(notify).not.toHaveBeenCalled()
+
+    dispatchAgentEvent(
+      'w1',
+      { kind: 'session:ended', reason: 'completed', exitCode: 0 },
+      undefined,
+      undefined,
+      'session-B',
+    )
+
+    expect(ws.getQueuedMessage('w1', 'session-B')).toBeUndefined()
+    expect(ws.workspaces[0]?.status).toBe('completed')
+    expect(stream.isCompacting('w1')).toBe(false)
+    expect(ws.subagents.w1?.['subagent-B']?.status).toBe('done')
+    expect(fetchWorkspaces).toHaveBeenCalledTimes(1)
+    expect(finalizeRunningSubagents).toHaveBeenCalledTimes(1)
+    expect(flushQueuedMessage).toHaveBeenCalledWith('w1', 'session-B')
+    expect(notify).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not clear a replacement owner on a marked termination from another session', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const ws = useWorkspaceStore()
+    ws.setActiveAgentSession('w1', 'session-B')
+    ws.queueMessage('w1', 'queued for A', 'session-A')
+    const { dispatchAgentEvent } = await import('../stores/websocket.js')
+
+    dispatchAgentEvent(
+      'w1',
+      { kind: 'session:ended', reason: 'completed', exitCode: 0, superseded: true },
+      undefined,
+      undefined,
+      'session-A',
+    )
+
+    expect(ws.activeAgentSessionIds.w1).toBe('session-B')
+    expect(ws.getQueuedMessage('w1', 'session-A')).toBeUndefined()
   })
 
   it('clears the active owner when an anonymous legacy session end applies global effects', async () => {
