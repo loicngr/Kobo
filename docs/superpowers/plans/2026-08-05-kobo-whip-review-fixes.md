@@ -861,8 +861,6 @@ git commit -m "fix(whip): keep session and shortcut state coherent"
 
 After this task, rerun Task 6 and the final whole-branch review on the new HEAD.
 
----
-
 ### Task 9: Make fallback delivery and slow Whip interruption lifecycle-safe
 
 **Files:**
@@ -919,3 +917,48 @@ git commit -m "fix(whip): coordinate fallback and crack lifecycles"
 ```
 
 After this task, rerun Task 6 and the final whole-branch review on the new HEAD.
+
+---
+
+### Task 10: Prevent persisted ghost prompts on Git action delivery failure
+
+**Files:**
+- Modify: `src/server/routes/workspaces.ts`
+- Modify: `src/__tests__/routes-workspaces.test.ts`
+
+**Interfaces:**
+- `deliverAgentPrompt(...)` remains the single lifecycle-safe delivery helper and returns the actual recipient `agentSessionId`.
+- `commit-with-agent`, `resolve-with-agent`, and `open-pr` persist `user:message` only after successful delivery.
+- Existing HTTP status and `messageSent` response contracts remain unchanged on delivery failure.
+
+- [x] **Step 1: Add RED route tests for non-persistence on failure**
+
+Update the three replacement-rejection tests to require `wsService.emit` not to be called. Add success assertions that the event is emitted once with the `agentSessionId` returned by the lifecycle-safe sender, and stopped/start fallback assertions that it uses the newly started session id.
+
+- [x] **Step 2: Verify RED**
+
+Run:
+
+```bash
+source /Users/enzovella/.nvm/nvm.sh && nvm use 24 >/dev/null
+npx vitest run src/__tests__/routes-workspaces.test.ts --maxWorkers=1
+```
+
+Expected: the three rejection cases expose the currently persisted ghost event, while the new session-attribution assertions fail where the routes ignore the delivery result.
+
+- [x] **Step 3: Emit only after successful delivery**
+
+Remove each pre-delivery `wsService.emit`. Await `deliverAgentPrompt`, capture its `agentSessionId`, set `messageSent = true`, then emit exactly once with the delivered prompt and that session id. On rejection, preserve each route's current response/status and do not emit.
+
+- [ ] **Step 4: Verify GREEN and regressions**
+
+Run the Task 10 targeted file, then the Task 6 focused/full gates on the new HEAD.
+
+- [ ] **Step 5: Commit and request a fresh scoped review**
+
+```bash
+git add src/server/routes/workspaces.ts src/__tests__/routes-workspaces.test.ts docs/superpowers/plans/2026-08-05-kobo-whip-review-fixes.md
+git commit -m "fix(agent): persist only delivered action prompts"
+```
+
+After approval, rerun Task 6 and the final whole-branch review on the new HEAD.

@@ -3538,14 +3538,13 @@ app.post('/:id/git/commit-with-agent', migrationGuard, async (c) => {
 
 When finished, report the commit SHA, its message, the files included, and the checks you ran.`
 
-    const session = workspaceService.getActiveSession(workspace.id)
-    wsService.emit(workspace.id, 'user:message', { content: prompt, sender: 'user' }, session?.id ?? undefined)
     wakeupService.cancel(workspace.id, 'user-message')
 
     let messageSent = false
     try {
-      await deliverAgentPrompt(workspace, workspace.worktreePath, prompt)
+      const { agentSessionId } = await deliverAgentPrompt(workspace, workspace.worktreePath, prompt)
       messageSent = true
+      wsService.emit(workspace.id, 'user:message', { content: prompt, sender: 'user' }, agentSessionId)
     } catch (deliveryErr) {
       const message = deliveryErr instanceof Error ? deliveryErr.message : String(deliveryErr)
       return c.json({ error: `Unable to ask the agent to commit: ${message}` }, 409)
@@ -3631,18 +3630,15 @@ ${fileList}
 
 Start now.`
 
-    // Persist the prompt in the chat feed so the user sees what was dispatched.
-    const session = workspaceService.getActiveSession(workspace.id)
-    wsService.emit(workspace.id, 'user:message', { content: prompt, sender: 'user' }, session?.id ?? undefined)
-
     // Cancel any pending wakeup: the user is driving this turn, the
     // scheduler should not also wake the agent a few minutes later.
     wakeupService.cancel(workspace.id, 'user-message')
 
     let messageSent = false
     try {
-      await deliverAgentPrompt(workspace, worktreePath, prompt)
+      const { agentSessionId } = await deliverAgentPrompt(workspace, worktreePath, prompt)
       messageSent = true
+      wsService.emit(workspace.id, 'user:message', { content: prompt, sender: 'user' }, agentSessionId)
     } catch (deliveryErr) {
       const deliveryMessage = deliveryErr instanceof Error ? deliveryErr.message : String(deliveryErr)
       console.warn(`[workspaces] resolve-with-agent: agent resume failed: ${deliveryMessage}`)
@@ -3945,18 +3941,15 @@ app.post('/:id/open-pr', async (c) => {
       tasks,
     })
 
-    // Emit user:message into the chat feed
-    const session = workspaceService.getActiveSession(workspace.id)
-    wsService.emit(workspace.id, 'user:message', { content: rendered, sender: 'user' }, session?.id ?? undefined)
-
     // Cancel any pending wakeup: the user is driving this turn.
     wakeupService.cancel(workspace.id, 'user-message')
 
     // Send to the running agent, or resume the agent with the PR prompt
     let messageSent = false
     try {
-      await deliverAgentPrompt(workspace, workspace.worktreePath, rendered)
+      const { agentSessionId } = await deliverAgentPrompt(workspace, workspace.worktreePath, rendered)
       messageSent = true
+      wsService.emit(workspace.id, 'user:message', { content: rendered, sender: 'user' }, agentSessionId)
     } catch (deliveryErr) {
       const deliveryMessage = deliveryErr instanceof Error ? deliveryErr.message : String(deliveryErr)
       console.warn(`[workspaces] open-pr: PR created but agent resume failed: ${deliveryMessage}`)
