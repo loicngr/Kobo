@@ -721,3 +721,70 @@ commit.
 - [ ] **Step 6: Report readiness without pushing**
 
 Report commit SHAs, verification counts, any remaining concern, and the exact push command that would update PR #23. Ask for explicit authorization before running that push.
+
+---
+
+### Task 7: Preserve the recoverable stopped-agent race and restore lint
+
+**Files:**
+- Modify: `src/server/services/agent/orchestrator.ts`
+- Modify: `src/server/routes/workspaces.ts`
+- Modify: `src/client/src/stores/workspace.ts`
+- Modify: `src/client/src/utils/whip-crack.ts`
+- Modify: `src/__tests__/agent/orchestrator.test.ts`
+- Modify: `src/__tests__/routes-workspaces.test.ts`
+- Modify: `src/client/src/__tests__/workspace-store.test.ts`
+- Modify: `src/client/src/__tests__/whip-crack.test.ts`
+
+**Interfaces:**
+- Produces a stable interrupt error discriminator across orchestrator, REST, and the workspace store: `no_agent_running | session_not_active | interrupt_failed`.
+- Preserves the captured-session WebSocket resume only for `no_agent_running`.
+- Keeps stale-session and engine/unknown interruption failures blocking and rate-limited.
+- Restores Biome cleanliness without changing behavior.
+
+- [ ] **Step 1: Add RED tests for stable interruption error codes**
+
+In the orchestrator tests, assert that missing-controller, stale-session, and engine-interrupt failures expose their exact distinct codes. In the route tests, assert the code is serialized in the JSON error body. In the workspace-store tests, assert the rejected `WorkspaceActionError` preserves the server code instead of collapsing it to an untyped `Error`.
+
+- [ ] **Step 2: Add RED coordinator tests for the recoverable race**
+
+Use structural errors with a `code` field, not message parsing. Assert:
+
+- `no_agent_running` waits the normal message delay, then sends exactly one message to the captured workspace/session;
+- `session_not_active` sends no message and reports one rate-limited error;
+- `interrupt_failed` and an untagged error send no message and remain rate-limited;
+- disposal during the recoverable delay still prevents message dispatch.
+
+- [ ] **Step 3: Run focused tests and verify RED**
+
+```bash
+source /Users/enzovella/.nvm/nvm.sh && nvm use 24 >/dev/null
+npx vitest run src/__tests__/agent/orchestrator.test.ts src/__tests__/routes-workspaces.test.ts
+(cd src/client && npx vitest run src/__tests__/workspace-store.test.ts src/__tests__/whip-crack.test.ts)
+```
+
+Expected: the server exposes only human messages, the store discards codes, and the coordinator blocks the recoverable already-stopped race.
+
+- [ ] **Step 4: Implement the minimal typed error path**
+
+Add a typed orchestrator error carrying the three stable codes. Serialize it from the interrupt route, using conflict status for missing/stale controllers and server-error status for engine interruption. Reuse the existing client `WorkspaceActionError` so the store preserves the response code. In the coordinator, inspect only the structural `code`; continue after `WHIP_MESSAGE_DELAY_MS` only for `no_agent_running`, with a disposal checkpoint after the wait. Keep all other rejections on the existing rate-limited early-return path. Never parse error text.
+
+- [ ] **Step 5: Format the affected test and verify GREEN**
+
+Apply Biome formatting only to `src/client/src/__tests__/whip-crack.test.ts`, then run:
+
+```bash
+npx vitest run src/__tests__/agent/orchestrator.test.ts src/__tests__/routes-workspaces.test.ts
+(cd src/client && npx vitest run src/__tests__/workspace-store.test.ts src/__tests__/whip-crack.test.ts)
+npx biome check src/client/src/__tests__/whip-crack.test.ts
+npm run lint
+```
+
+- [ ] **Step 6: Commit the verified recovery contract**
+
+```bash
+git add src/server/services/agent/orchestrator.ts src/server/routes/workspaces.ts src/client/src/stores/workspace.ts src/client/src/utils/whip-crack.ts src/__tests__/agent/orchestrator.test.ts src/__tests__/routes-workspaces.test.ts src/client/src/__tests__/workspace-store.test.ts src/client/src/__tests__/whip-crack.test.ts
+git commit -m "fix(whip): preserve stopped-agent recovery"
+```
+
+After this task, rerun Task 6 from Step 1 on the new HEAD before making any readiness claim.
