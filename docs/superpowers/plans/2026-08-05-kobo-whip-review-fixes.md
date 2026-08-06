@@ -860,3 +860,62 @@ git commit -m "fix(whip): keep session and shortcut state coherent"
 ```
 
 After this task, rerun Task 6 and the final whole-branch review on the new HEAD.
+
+---
+
+### Task 9: Make fallback delivery and slow Whip interruption lifecycle-safe
+
+**Files:**
+- Modify: `src/server/services/agent/orchestrator.ts`
+- Modify: `src/server/routes/workspaces.ts`
+- Modify: `src/client/src/components/WorkspaceWhipControl.vue`
+- Modify: `src/__tests__/agent/orchestrator.test.ts`
+- Modify: `src/__tests__/routes-workspaces.test.ts`
+- Modify: `src/__tests__/routes-workspaces-review.test.ts`
+- Modify: `src/client/src/__tests__/WorkspaceWhipControl.test.ts`
+
+**Interfaces:**
+- Produces `sendMessageForFallback(workspaceId, content): Promise<'sent' | 'stopped'>`.
+- Defers a fallback decision until the rejecting controller is removed or replaced; a replacement controller receives the message, while `stopped` authorizes a new resume.
+- Keeps an accepted Whip crack alive until its coordinator promise settles, even when live workspace status becomes stopped; explicit close, disable, workspace change, and unmount still cancel immediately.
+
+- [ ] **Step 1: Add RED orchestrator tests for controller turnover**
+
+Use a real registered `SessionController` whose engine `sendMessage()` rejects while the controller remains in the map. Assert the fallback promise does not resolve immediately. Emit the real `session:ended` event and assert it resolves as `stopped`. Add a replacement-controller case: once the first controller ends and a replacement is registered, the message is steered to the replacement and the result is `sent`. Add a bounded timeout case so a permanently live rejecting controller never hangs the request or authorizes `startAgent`.
+
+- [ ] **Step 2: Convert the five route fallback tests to the turnover contract**
+
+Mock `sendMessageForFallback` as `stopped` to require one resume, and as `sent` to require no resume. Keep every endpoint's existing response assertions and the no-ghost-`user:message` review assertion. The route helper must call `startAgent` only after the orchestrator returns `stopped`; a timeout/replacement send failure returns the endpoint's existing clean error instead of attempting a concurrent start.
+
+- [ ] **Step 3: Add a RED slow-interruption control test**
+
+Make the mocked coordinator `enqueue()` return a deferred Promise. Open Whip, emit a crack, switch `running` to false, and advance fake time beyond the former 1 s grace. Assert the overlay and coordinator remain alive. Resolve the accepted crack and assert the overlay closes and disposal then occurs. Also retain tests proving explicit shortcut close, setting disable, workspace/session change, and unmount dispose immediately.
+
+- [ ] **Step 4: Run focused tests and verify RED**
+
+```bash
+source /Users/enzovella/.nvm/nvm.sh && nvm use 24 >/dev/null
+npx vitest run src/__tests__/agent/orchestrator.test.ts src/__tests__/routes-workspaces.test.ts src/__tests__/routes-workspaces-review.test.ts
+(cd src/client && npx vitest run src/__tests__/WorkspaceWhipControl.test.ts)
+```
+
+- [ ] **Step 5: Implement minimal turnover delivery and crack-lifetime tracking**
+
+In the orchestrator, capture the controller used for the first send. On rejection, wait with a short bounded poll until `controllers.get(workspaceId) !== captured`. If removed, return `stopped`. If replaced, send once to the replacement and return `sent`; never start a controller inside this function. Throw a descriptive timeout if the rejecting controller remains registered.
+
+In routes, centralize the shared prompt delivery: use the new result, and call `startAgent(..., resume=true)` only for `stopped`. Update all five fallbacks to await that helper.
+
+In the control, replace the fixed one-second grace timer with per-coordinator pending-action tracking. When `running` becomes false, close immediately only if no accepted action is pending; otherwise mark close-on-settle. A `finally` tied to the same coordinator closes after the last accepted action settles. Explicit `deactivate()` still disposes immediately and stale Promise callbacks must not mutate a replacement coordinator.
+
+- [ ] **Step 6: Verify GREEN and quality gates**
+
+Run Step 4, then `npm run lint`, `npx tsc --noEmit`, `npm test`, and client `npm test` under Node 24.
+
+- [ ] **Step 7: Commit the lifecycle fixes**
+
+```bash
+git add src/server/services/agent/orchestrator.ts src/server/routes/workspaces.ts src/client/src/components/WorkspaceWhipControl.vue src/__tests__/agent/orchestrator.test.ts src/__tests__/routes-workspaces.test.ts src/__tests__/routes-workspaces-review.test.ts src/client/src/__tests__/WorkspaceWhipControl.test.ts
+git commit -m "fix(whip): coordinate fallback and crack lifecycles"
+```
+
+After this task, rerun Task 6 and the final whole-branch review on the new HEAD.
