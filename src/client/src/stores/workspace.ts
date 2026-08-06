@@ -342,6 +342,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     providerUsage: {} as Record<ProviderId, UsageSnapshot | undefined>,
     chatDraft: '',
     queuedMessages: {} as Record<string, { content: string; sessionId: string }>,
+    activeAgentSessionIds: {} as Record<string, string>,
     gitRefreshTrigger: 0,
     gitStatsCache: {} as Record<string, GitStats>,
     pendingWakeups: {} as Record<string, PendingWakeup>,
@@ -1995,6 +1996,16 @@ export const useWorkspaceStore = defineStore('workspace', {
       if (!queued) return
       this.cancelQueuedMessage(workspaceId, sessionId)
       useWebSocketStore().sendChatMessage(workspaceId, queued.content, sessionId)
+    },
+
+    setActiveAgentSession(workspaceId: string, sessionId: string) {
+      this.activeAgentSessionIds[workspaceId] = sessionId
+    },
+
+    clearActiveAgentSession(workspaceId: string, sessionId: string) {
+      if (this.activeAgentSessionIds[workspaceId] === sessionId) {
+        delete this.activeAgentSessionIds[workspaceId]
+      }
     },
 
     updateWorkspaceFromEvent(workspaceId: string, data: Partial<Workspace>) {

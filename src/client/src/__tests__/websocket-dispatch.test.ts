@@ -1,5 +1,48 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { Workspace } from '../stores/workspace'
+
+vi.mock('src/utils/notifications', () => ({ notify: vi.fn() }))
+
+import { notify } from 'src/utils/notifications'
+
+function workspaceFixture(status = 'executing'): Workspace {
+  return {
+    id: 'w1',
+    name: 'Replacement workspace',
+    projectPath: '/tmp/project',
+    sourceBranch: 'main',
+    workingBranch: 'feature/replacement',
+    status,
+    notionUrl: null,
+    sentryUrl: null,
+    notionPageId: null,
+    model: 'claude-opus-4-5',
+    engine: 'claude-code',
+    reasoningEffort: 'normal',
+    agentPermissionMode: 'bypass',
+    devServerStatus: 'stopped',
+    hasUnread: false,
+    archivedAt: null,
+    favoritedAt: null,
+    prWatchDisabledAt: null,
+    tags: [],
+    description: null,
+    agentDescription: null,
+    initialPrompt: null,
+    prChangesDismissedAt: null,
+    prCiFailureDismissedAt: null,
+    worktreePurgedAt: null,
+    worktreePurgeRestoreData: null,
+    autoLoop: false,
+    autoLoopReady: false,
+    noProgressStreak: 0,
+    worktreePath: '/tmp/project/.worktrees/feature/replacement',
+    worktreeOwned: true,
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  }
+}
 
 describe('websocket dispatch — AgentEvent side-effects to workspace store', () => {
   beforeEach(() => setActivePinia(createPinia()))
@@ -100,6 +143,130 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
 
     dispatchAgentEvent('w1', { kind: 'session:ended', reason: 'completed', exitCode: 0 })
     expect(stream.isCompacting('w1')).toBe(false)
+  })
+
+  it('ignores workspace-wide effects when a superseded session ends after its replacement starts', async () => {
+    const { useAgentStreamStore } = await import('../stores/agent-stream.js')
+    const stream = useAgentStreamStore()
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const ws = useWorkspaceStore()
+    ws.workspaces = [workspaceFixture()]
+    const fetchWorkspaces = vi.spyOn(ws, 'fetchWorkspaces').mockResolvedValue()
+    const finalizeRunningSubagents = vi.spyOn(ws, 'finalizeRunningSubagents')
+    const flushQueuedMessage = vi.spyOn(ws, 'flushQueuedMessage')
+    vi.mocked(notify).mockClear()
+    const { dispatchAgentEvent } = await import('../stores/websocket.js')
+
+    dispatchAgentEvent(
+      'w1',
+      { kind: 'session:started', engineSessionId: 'engine-A' },
+      undefined,
+      undefined,
+      'session-A',
+    )
+    dispatchAgentEvent(
+      'w1',
+      { kind: 'session:started', engineSessionId: 'engine-B' },
+      undefined,
+      undefined,
+      'session-B',
+    )
+    ws.enqueuePending('w1', {
+      kind: 'question',
+      toolCallId: 'pending-A',
+      toolName: 'AskUserQuestion',
+      input: {},
+      agentSessionId: 'session-A',
+    })
+    ws.enqueuePending('w1', {
+      kind: 'permission',
+      toolCallId: 'pending-B',
+      toolName: 'Bash',
+      toolInput: {},
+      agentSessionId: 'session-B',
+    })
+    ws.queueMessage('w1', 'queued for A', 'session-A')
+    ws.queueMessage('w1', 'queued for B', 'session-B')
+    dispatchAgentEvent(
+      'w1',
+      { kind: 'subagent:progress', toolCallId: 'subagent-B', status: 'running' },
+      undefined,
+      undefined,
+      'session-B',
+    )
+    dispatchAgentEvent('w1', { kind: 'session:compacting', active: true }, undefined, undefined, 'session-B')
+
+    dispatchAgentEvent(
+      'w1',
+      { kind: 'session:ended', reason: 'completed', exitCode: 0 },
+      undefined,
+      undefined,
+      'session-A',
+    )
+
+    const activeSessions = ws.activeAgentSessionIds
+    expect(stream.eventsFor('w1').at(-1)).toEqual({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+    expect(stream.sessionIdsFor('w1').at(-1)).toBe('session-A')
+    expect(ws.peekPending('w1')?.agentSessionId).toBe('session-B')
+    expect(ws.getQueuedMessage('w1', 'session-A')).toBeUndefined()
+    expect(ws.getQueuedMessage('w1', 'session-B')?.content).toBe('queued for B')
+    expect(ws.workspaces[0]?.status).toBe('executing')
+    expect(activeSessions.w1).toBe('session-B')
+    expect(stream.isCompacting('w1')).toBe(true)
+    expect(ws.subagents.w1?.['subagent-B']?.status).toBe('running')
+    expect(fetchWorkspaces).not.toHaveBeenCalled()
+    expect(finalizeRunningSubagents).not.toHaveBeenCalled()
+    expect(flushQueuedMessage).not.toHaveBeenCalled()
+    expect(notify).not.toHaveBeenCalled()
+
+    dispatchAgentEvent(
+      'w1',
+      { kind: 'session:ended', reason: 'completed', exitCode: 0 },
+      undefined,
+      undefined,
+      'session-B',
+    )
+
+    expect(ws.peekPending('w1')).toBeUndefined()
+    expect(ws.getQueuedMessage('w1', 'session-B')).toBeUndefined()
+    expect(ws.workspaces[0]?.status).toBe('completed')
+    expect(activeSessions.w1).toBeUndefined()
+    expect(stream.isCompacting('w1')).toBe(false)
+    expect(ws.subagents.w1?.['subagent-B']?.status).toBe('done')
+    expect(fetchWorkspaces).toHaveBeenCalledTimes(1)
+    expect(finalizeRunningSubagents).toHaveBeenCalledTimes(1)
+    expect(flushQueuedMessage).toHaveBeenCalledWith('w1', 'session-B')
+    expect(notify).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the historical termination path when no active session identity is known', async () => {
+    const { useAgentStreamStore } = await import('../stores/agent-stream.js')
+    const stream = useAgentStreamStore()
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const ws = useWorkspaceStore()
+    ws.workspaces = [workspaceFixture()]
+    ws.queueMessage('w1', 'legacy queued message', 'session-legacy')
+    const fetchWorkspaces = vi.spyOn(ws, 'fetchWorkspaces').mockResolvedValue()
+    const flushQueuedMessage = vi.spyOn(ws, 'flushQueuedMessage')
+    vi.mocked(notify).mockClear()
+    const { dispatchAgentEvent } = await import('../stores/websocket.js')
+
+    dispatchAgentEvent('w1', { kind: 'session:compacting', active: true })
+    dispatchAgentEvent(
+      'w1',
+      { kind: 'session:ended', reason: 'completed', exitCode: 0 },
+      undefined,
+      undefined,
+      'session-legacy',
+    )
+
+    expect(ws.activeAgentSessionIds.w1).toBeUndefined()
+    expect(ws.workspaces[0]?.status).toBe('completed')
+    expect(stream.isCompacting('w1')).toBe(false)
+    expect(ws.getQueuedMessage('w1', 'session-legacy')).toBeUndefined()
+    expect(flushQueuedMessage).toHaveBeenCalledWith('w1', 'session-legacy')
+    expect(fetchWorkspaces).toHaveBeenCalledTimes(1)
+    expect(notify).toHaveBeenCalledTimes(1)
   })
 
   it('sets the compacting flag when a `/compact` command is sent', async () => {
@@ -450,5 +617,47 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
       'agent-sess-B',
     )
     expect(ws.getPendingDeferred('w1')?.toolCallId).toBe('tc-1')
+  })
+
+  it('rebuilds the latest active session identity during event replay', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const ws = useWorkspaceStore()
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const socket = useWebSocketStore()
+    const event = (id: string, sessionId: string, payload: Record<string, unknown>): Record<string, unknown> => ({
+      id,
+      workspaceId: 'w1',
+      type: 'agent:event',
+      payload,
+      createdAt: `2026-01-01T00:00:0${id}.000Z`,
+      sessionId,
+    })
+
+    socket._routeMessage({
+      type: 'sync:response',
+      payload: {
+        events: [
+          event('1', 'session-A', { kind: 'session:started', engineSessionId: 'engine-A' }),
+          event('2', 'session-B', { kind: 'session:started', engineSessionId: 'engine-B' }),
+          event('3', 'session-A', { kind: 'session:ended', reason: 'completed', exitCode: 0 }),
+        ],
+      },
+    })
+
+    expect(ws.activeAgentSessionIds.w1).toBe('session-B')
+
+    socket._routeMessage({
+      type: 'sync:response',
+      payload: {
+        events: [
+          event('1', 'session-A', { kind: 'session:started', engineSessionId: 'engine-A' }),
+          event('2', 'session-B', { kind: 'session:started', engineSessionId: 'engine-B' }),
+          event('3', 'session-A', { kind: 'session:ended', reason: 'completed', exitCode: 0 }),
+          event('4', 'session-B', { kind: 'session:ended', reason: 'completed', exitCode: 0 }),
+        ],
+      },
+    })
+
+    expect(ws.activeAgentSessionIds.w1).toBeUndefined()
   })
 })

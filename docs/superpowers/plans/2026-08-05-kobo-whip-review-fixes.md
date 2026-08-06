@@ -950,15 +950,57 @@ Expected: the three rejection cases expose the currently persisted ghost event, 
 
 Remove each pre-delivery `wsService.emit`. Await `deliverAgentPrompt`, capture its `agentSessionId`, set `messageSent = true`, then emit exactly once with the delivered prompt and that session id. On rejection, preserve each route's current response/status and do not emit.
 
-- [ ] **Step 4: Verify GREEN and regressions**
+- [x] **Step 4: Verify GREEN and regressions**
 
 Run the Task 10 targeted file, then the Task 6 focused/full gates on the new HEAD.
 
-- [ ] **Step 5: Commit and request a fresh scoped review**
+- [x] **Step 5: Commit and request a fresh scoped review**
 
 ```bash
 git add src/server/routes/workspaces.ts src/__tests__/routes-workspaces.test.ts docs/superpowers/plans/2026-08-05-kobo-whip-review-fixes.md
 git commit -m "fix(agent): persist only delivered action prompts"
+```
+
+After approval, rerun Task 6 and the final whole-branch review on the new HEAD.
+
+---
+
+### Task 11: Ignore superseded session termination effects in the client
+
+**Files:**
+- Modify: `src/client/src/stores/workspace.ts`
+- Modify: `src/client/src/stores/websocket.ts`
+- Modify: `src/client/src/__tests__/websocket-dispatch.test.ts`
+
+**Interfaces:**
+- Track the latest active agent-session id per workspace from `session:started` events.
+- Always append a superseded `session:ended` to history and clear state owned specifically by that old session.
+- Apply workspace status, compacting, queued-message, subagent, refresh, notification, and Whip-affecting side effects only when the ended session is current (or the event has no usable session identity for legacy compatibility).
+
+- [x] **Step 1: Add a RED A → B → late A termination test**
+
+Dispatch `session:started(A)`, then `session:started(B)`, leave a B subagent and compacting indicator active, and dispatch `session:ended(A)`. Require the A event to remain in the stream while workspace status stays executing, B remains active, B subagents/compacting remain untouched, and no workspace refresh/notification occurs. Then end B and require the normal lifecycle effects.
+
+- [x] **Step 2: Verify RED**
+
+```bash
+source /Users/enzovella/.nvm/nvm.sh && nvm use 24 >/dev/null
+(cd src/client && npx vitest run src/__tests__/websocket-dispatch.test.ts --maxWorkers=1)
+```
+
+- [x] **Step 3: Track active session identity and gate global effects**
+
+Add transient per-workspace active-session state/actions in the workspace store. Update it on every `session:started`, including replay. For `session:ended`, perform session-local cleanup first, then return early when another session owns the workspace. Move the workspace-level compacting/status/queue/subagent/fetch/notification effects behind that identity check and clear the active id only for the current termination.
+
+- [x] **Step 4: Verify GREEN and lifecycle regressions**
+
+Run the targeted WebSocket dispatch tests, workspace store tests, Whip session/control tests, then the full Task 6 gates.
+
+- [x] **Step 5: Commit and request scoped/final reviews**
+
+```bash
+git add src/client/src/stores/workspace.ts src/client/src/stores/websocket.ts src/client/src/__tests__/websocket-dispatch.test.ts docs/superpowers/plans/2026-08-05-kobo-whip-review-fixes.md
+git commit -m "fix(client): ignore superseded session termination"
 ```
 
 After approval, rerun Task 6 and the final whole-branch review on the new HEAD.

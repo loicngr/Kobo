@@ -117,6 +117,7 @@ function _handleSessionStarted(workspaceId: string, event: AgentEvent, sessionId
   // Drop the head if it belongs to THIS session (resume reuses the original
   // agentSessionId). Siblings owned by other sessions are kept.
   if (sessionId) {
+    workspaceStore.setActiveAgentSession(workspaceId, sessionId)
     const head = workspaceStore.peekPending(workspaceId)
     if (head && head.agentSessionId === sessionId) {
       workspaceStore.dequeuePending(workspaceId)
@@ -232,12 +233,7 @@ export function dispatchAgentEvent(
 
   // Compaction is over once the boundary lands, the session ends, or the agent
   // resumes producing output (text / tool calls) — clear the live banner.
-  if (
-    event.kind === 'session:compacted' ||
-    event.kind === 'session:ended' ||
-    event.kind === 'message:text' ||
-    event.kind === 'tool:call'
-  ) {
+  if (event.kind === 'session:compacted' || event.kind === 'message:text' || event.kind === 'tool:call') {
     agentStream.setCompacting(workspaceId, false)
   }
 
@@ -368,6 +364,15 @@ export function dispatchAgentEvent(
     // preserved).
     if (sessionId) {
       workspaceStore.clearPendingForSession(workspaceId, sessionId)
+    }
+    const activeSessionId = workspaceStore.activeAgentSessionIds[workspaceId]
+    if (sessionId && activeSessionId && sessionId !== activeSessionId) {
+      workspaceStore.cancelQueuedMessage(workspaceId, sessionId)
+      return
+    }
+    agentStream.setCompacting(workspaceId, false)
+    if (sessionId) {
+      workspaceStore.clearActiveAgentSession(workspaceId, sessionId)
     }
     const currentStatus = workspaceStore.workspaces.find((w) => w.id === workspaceId)?.status
     const derivedStatus =
@@ -811,6 +816,7 @@ export const useWebSocketStore = defineStore('websocket', {
                   if (ev.kind === 'session:started') {
                     if (evSessionId) {
                       const store = useWorkspaceStore()
+                      store.setActiveAgentSession(workspaceId, evSessionId)
                       const head = store.peekPending(workspaceId)
                       if (head && head.agentSessionId === evSessionId) {
                         store.dequeuePending(workspaceId)
@@ -820,7 +826,9 @@ export const useWebSocketStore = defineStore('websocket', {
                   }
                   if (ev.kind === 'session:ended') {
                     if (evSessionId) {
-                      useWorkspaceStore().clearPendingForSession(workspaceId, evSessionId)
+                      const store = useWorkspaceStore()
+                      store.clearPendingForSession(workspaceId, evSessionId)
+                      store.clearActiveAgentSession(workspaceId, evSessionId)
                     }
                     continue
                   }
