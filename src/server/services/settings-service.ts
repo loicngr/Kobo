@@ -408,7 +408,8 @@ function isValidWhipShortcut(value: unknown): value is string {
   const tokens = value.split('+')
   if (tokens.some((token) => token.length === 0)) return false
   const key = tokens.at(-1)
-  if (!key || !/^[a-z0-9][a-z0-9_-]*$/.test(key) || WHIP_SHORTCUT_MODIFIERS.includes(key as never)) return false
+  if (!key || !/^[a-z0-9][a-z0-9_-]*$/.test(key) || key === 'control' || WHIP_SHORTCUT_MODIFIERS.includes(key as never))
+    return false
 
   const modifiers = tokens.slice(0, -1)
   let previousIndex = -1

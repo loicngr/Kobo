@@ -40,7 +40,8 @@ function parseShortcut(shortcut: string): ParsedShortcut | null {
   if (tokens.some((token) => token.length === 0)) return null
 
   const key = tokens.at(-1)
-  if (!key || !/^[a-z0-9][a-z0-9_-]*$/.test(key) || MODIFIER_KEYS.has(key) || key === 'mod') return null
+  if (!key || !/^[a-z0-9][a-z0-9_-]*$/.test(key) || MODIFIER_KEYS.has(key) || MODIFIERS.includes(key as never))
+    return null
 
   const modifiers = tokens.slice(0, -1)
   let previousIndex = -1

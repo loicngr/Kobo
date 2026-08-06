@@ -112,6 +112,35 @@ describe('WorkspaceWhipControl', () => {
     expect(wrapper.findComponent(WhipOverlayStub).exists()).toBe(false)
   })
 
+  it('exclusively consumes only eligible matching shortcuts', async () => {
+    const wrapper = mountControl({ workspaceId: 'ws-1', sessionId: 'session-1', running: true })
+    const competingHandler = vi.fn()
+    window.addEventListener('keydown', competingHandler, true)
+
+    try {
+      const eligible = dispatchShortcut()
+      await wrapper.vm.$nextTick()
+      expect(eligible.defaultPrevented).toBe(true)
+      expect(competingHandler).not.toHaveBeenCalled()
+
+      useSettingsStore().global.whipEnabled = false
+      await wrapper.vm.$nextTick()
+      dispatchShortcut()
+      expect(competingHandler).toHaveBeenCalledTimes(1)
+
+      useSettingsStore().global.whipEnabled = true
+      await wrapper.vm.$nextTick()
+      dispatchShortcut({ key: 'j' })
+      expect(competingHandler).toHaveBeenCalledTimes(2)
+
+      await wrapper.setProps({ running: false })
+      dispatchShortcut()
+      expect(competingHandler).toHaveBeenCalledTimes(3)
+    } finally {
+      window.removeEventListener('keydown', competingHandler, true)
+    }
+  })
+
   it('opens and closes the overlay with successive shortcut presses', async () => {
     const wrapper = mountControl({ workspaceId: 'ws-1', sessionId: 'session-1', running: true })
 
@@ -167,6 +196,27 @@ describe('WorkspaceWhipControl', () => {
 
     expect(event.defaultPrevented).toBe(true)
     expect(wrapper.findComponent(WhipOverlayStub).exists()).toBe(true)
+  })
+
+  it('consumes a single-key space close without reaching another handler or emitting a stray crack', async () => {
+    const wrapper = mountControl({ workspaceId: 'ws-1', sessionId: 'session-1', running: true })
+    useSettingsStore().global.whipShortcut = 'space'
+    dispatchShortcut({ key: ' ', ctrlKey: false, shiftKey: false })
+    await wrapper.vm.$nextTick()
+
+    const strayHandler = vi.fn(() => wrapper.getComponent(WhipOverlayStub).vm.$emit('crack'))
+    window.addEventListener('keydown', strayHandler, true)
+    try {
+      const closeEvent = dispatchShortcut({ key: ' ', ctrlKey: false, shiftKey: false })
+      await wrapper.vm.$nextTick()
+
+      expect(closeEvent.defaultPrevented).toBe(true)
+      expect(strayHandler).not.toHaveBeenCalled()
+      expect(doubles.enqueue).not.toHaveBeenCalled()
+      expect(wrapper.findComponent(WhipOverlayStub).exists()).toBe(false)
+    } finally {
+      window.removeEventListener('keydown', strayHandler, true)
+    }
   })
 
   it('removes its keyboard listener when unmounted', () => {

@@ -54,6 +54,37 @@ describe('workspace store', () => {
     setActivePinia(createPinia())
   })
 
+  describe('selectWorkspace', () => {
+    it('clears sessions synchronously before the replacement fetch resolves', () => {
+      const store = useWorkspaceStore()
+      store.sessions = [
+        {
+          id: 'old-session',
+          workspaceId: 'ws-1',
+          pid: null,
+          engineSessionId: null,
+          status: 'running',
+          startedAt: '2026-08-05T10:00:00Z',
+          endedAt: null,
+          name: null,
+        },
+      ]
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(() => new Promise<Response>(() => {})),
+      )
+
+      try {
+        store.selectWorkspace('ws-2')
+
+        expect(store.selectedWorkspaceId).toBe('ws-2')
+        expect(store.sessions).toEqual([])
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    })
+  })
+
   describe('isSubagentTerminalEvent(subtype, status)', () => {
     it('marks task_notification with a known terminal status as done', () => {
       // Empirically observed in Claude Code payloads:

@@ -104,6 +104,7 @@ function onShortcutKeydown(event: KeyboardEvent): void {
   if (!matchesWhipShortcut(event, settingsStore.global.whipShortcut, shortcutPlatform)) return
   if (!active.value && (!props.running || !props.sessionId)) return
   event.preventDefault()
+  event.stopImmediatePropagation()
   toggleWhip()
 }
 

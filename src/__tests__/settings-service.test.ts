@@ -2295,6 +2295,13 @@ describe('whip feature toggle (v51)', () => {
   it.each([
     '',
     'mod',
+    'control',
+    'mod+control',
+    'ctrl',
+    'mod+ctrl',
+    'meta',
+    'alt',
+    'shift',
     'mod+w',
     'mod+shift+w',
     'ctrl+w',
@@ -2312,6 +2319,22 @@ describe('whip feature toggle (v51)', () => {
     })
 
     expect(migrated.global.whipShortcut).toBe('mod+shift+x')
+  })
+
+  it.each([
+    'control',
+    'mod+control',
+    'ctrl',
+    'mod+ctrl',
+    'meta',
+    'alt',
+    'shift',
+    'mod',
+  ])('normalizes a modifier-only shortcut update to the default: %s', (whipShortcut) => {
+    const updated = updateGlobalSettings({ whipShortcut } as Partial<GlobalSettings>)
+
+    expect(updated.whipShortcut).toBe('mod+shift+x')
+    expect(getGlobalSettings().whipShortcut).toBe('mod+shift+x')
   })
 
   it('persists a valid custom shortcut', () => {

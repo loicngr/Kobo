@@ -59,6 +59,20 @@ describe('whip shortcut matching', () => {
     expect(matchesWhipShortcut(keyEvent('w', { ctrlKey: true }), 'mod+w', 'other')).toBe(false)
     expect(matchesWhipShortcut(keyEvent('x', { ctrlKey: true }), 'mod++x', 'other')).toBe(false)
   })
+
+  it.each([
+    'control',
+    'mod+control',
+    'ctrl',
+    'mod+ctrl',
+    'meta',
+    'alt',
+    'shift',
+    'mod',
+  ])('never matches a modifier-only final key persisted as %s', (shortcut) => {
+    const key = shortcut.split('+').at(-1)!
+    expect(matchesWhipShortcut(keyEvent(key, { ctrlKey: shortcut.startsWith('mod+') }), shortcut, 'other')).toBe(false)
+  })
 })
 
 describe('whip shortcut presentation', () => {

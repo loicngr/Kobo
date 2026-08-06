@@ -790,7 +790,11 @@ const selectedId = computed(() => store.selectedWorkspaceId)
 const selectedWs = computed(() => store.selectedWorkspace)
 
 const sessions = computed(() => store.sessions)
-const whipRunningSessionId = computed(() => getWhipRunningSessionId(store.sessions))
+const whipRunningSessionId = computed(() => {
+  const workspace = selectedWs.value
+  if (!workspace || !isBusyStatus(workspace.status)) return null
+  return getWhipRunningSessionId(workspace.id, store.sessions)
+})
 const selectedSession = computed(() => store.sessions.find((session) => session.id === store.selectedSessionId) ?? null)
 const selectedSessionModel = computed(() => selectedSession.value?.model ?? null)
 const activeSessionModelLabel = computed(

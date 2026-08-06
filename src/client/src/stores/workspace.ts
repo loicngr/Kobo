@@ -1066,6 +1066,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     selectWorkspace(id: string) {
       this.selectedWorkspaceId = id
       this.selectedSessionId = null
+      this.sessions = []
       this.tasks = []
       // Mark as read before fetching details so the API response already reflects the read state
       this.markRead(id)
