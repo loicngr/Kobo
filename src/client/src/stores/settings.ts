@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { DEFAULT_PR_NOTIFICATION_AUDIO_SETTINGS } from 'src/utils/notification-sounds'
 import type { ProjectColor } from 'src/utils/project-color'
+import { DEFAULT_WHIP_SHORTCUT } from 'src/utils/whip-shortcut'
 import { WORKTREES_PATH } from '../../../shared/consts'
 import type { SkillSuite } from '../../../shared/skill-suite-prompts'
 
@@ -258,7 +259,7 @@ export const useSettingsStore = defineStore('settings', {
       sentryEnabled: true,
       showThinkingBlocks: true,
       whipEnabled: false,
-      whipShortcut: 'mod+shift+x',
+      whipShortcut: DEFAULT_WHIP_SHORTCUT,
       whipVolume: 1,
       tags: [],
       branchPrefixes: [],

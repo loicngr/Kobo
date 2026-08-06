@@ -185,8 +185,6 @@ export default {
   'workspacePage.engineHandoffHint': 'Überprüfen oder bearbeiten Sie den Kontext für den neuen Agenten.',
   'workspacePage.confirmSwitchEngine': 'Engine wechseln',
   'workspacePage.switchEngineFailed': 'Engine-Wechsel fehlgeschlagen',
-  'whip.button': 'Peitsche',
-  'whip.tooltip': 'Peitsche aktivieren',
   'whip.dispatchFailed': 'Peitschen-Nachricht konnte nicht gesendet werden',
   'whip.phrase1': 'Schneller, tocard!',
   'whip.phrase2': 'Leg einen Zahn zu, tocard!',

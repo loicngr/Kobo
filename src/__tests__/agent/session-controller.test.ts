@@ -154,6 +154,48 @@ describe('SessionController', () => {
     expect(sentMessages).toEqual(['queued'])
   })
 
+  it('stops and clears a process that resolves after stop() was requested', async () => {
+    const { SessionController } = await import('../../server/services/agent/session-controller.js')
+    let releaseStart!: (process: EngineProcess) => void
+    const startGate = new Promise<EngineProcess>((resolve) => {
+      releaseStart = resolve
+    })
+    let stopCount = 0
+    const process: EngineProcess = {
+      pid: 12345,
+      sendMessage() {},
+      interrupt() {},
+      async stop() {
+        stopCount++
+      },
+    }
+    const engine: AgentEngine = {
+      id: 'codex',
+      displayName: 'Codex',
+      capabilities: {
+        models: [],
+        permissionModes: ['bypass'],
+        supportsResume: true,
+        supportsMcp: true,
+        supportsSkills: true,
+      },
+      async start() {
+        return startGate
+      },
+    }
+    const ctrl = new SessionController('w1', 'sess-1', engine, () => {})
+
+    const starting = ctrl.start(BASE_OPTS)
+    await ctrl.stop()
+    releaseStart(process)
+    await starting
+
+    expect(stopCount).toBe(1)
+    expect(ctrl.status).toBe('stopping')
+    expect(ctrl.engineProcess).toBeUndefined()
+    expect(ctrl.pid).toBeUndefined()
+  })
+
   it('throws on a second start() call (re-entrancy guard)', async () => {
     const { SessionController } = await import('../../server/services/agent/session-controller.js')
     const { engine } = fakeEngine()

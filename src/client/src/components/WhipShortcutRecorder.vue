@@ -7,7 +7,7 @@
         dense
         no-caps
         outline
-        color="deep-orange-5"
+        color="indigo-4"
         :aria-label="accessibleLabel"
         :aria-pressed="recording"
         @click="startRecording"
@@ -37,11 +37,14 @@
 </template>
 
 <script setup lang="ts">
-import { captureWhipShortcut, detectWhipShortcutPlatform, formatWhipShortcut } from 'src/utils/whip-shortcut'
+import {
+  captureWhipShortcut,
+  DEFAULT_WHIP_SHORTCUT,
+  detectWhipShortcutPlatform,
+  formatWhipShortcut,
+} from 'src/utils/whip-shortcut'
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
-
-const DEFAULT_WHIP_SHORTCUT = 'mod+shift+x'
 
 const props = defineProps<{ modelValue: string }>()
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>()

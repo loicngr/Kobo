@@ -3,6 +3,7 @@ import {
   captureWhipShortcut,
   detectWhipShortcutPlatform,
   formatWhipShortcut,
+  isValidWhipShortcut,
   matchesWhipShortcut,
 } from '../utils/whip-shortcut'
 
@@ -42,6 +43,12 @@ describe('whip shortcut capture', () => {
 })
 
 describe('whip shortcut matching', () => {
+  it('validates portable shortcuts with the shared persistence contract', () => {
+    expect(isValidWhipShortcut('mod+shift+x')).toBe(true)
+    expect(isValidWhipShortcut('mod+w')).toBe(false)
+    expect(isValidWhipShortcut('mod++x')).toBe(false)
+  })
+
   it('maps mod to the current platform primary modifier', () => {
     expect(matchesWhipShortcut(keyEvent('x', { metaKey: true, shiftKey: true }), 'mod+shift+x', 'mac')).toBe(true)
     expect(matchesWhipShortcut(keyEvent('x', { ctrlKey: true, shiftKey: true }), 'mod+shift+x', 'other')).toBe(true)

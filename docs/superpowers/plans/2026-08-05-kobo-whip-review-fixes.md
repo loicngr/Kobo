@@ -963,6 +963,48 @@ git commit -m "fix(agent): persist only delivered action prompts"
 
 After approval, rerun Task 6 and the final whole-branch review on the new HEAD.
 
+---
+
+### Task 12: Resolve final whole-branch review findings
+
+**Files:**
+- Modify: `src/server/services/agent/session-controller.ts`
+- Modify: `src/__tests__/agent/session-controller.test.ts`
+- Add: `src/shared/whip-shortcut.ts`
+- Modify: `src/server/services/settings-service.ts`
+- Modify: `src/client/src/utils/whip-shortcut.ts`
+- Modify: `src/client/src/stores/settings.ts`
+- Modify: `src/client/src/pages/SettingsPage.vue`
+- Modify: `src/client/src/components/WhipShortcutRecorder.vue`
+- Modify: `src/client/src/components/WhipOverlay.vue`
+- Modify: `src/client/src/__tests__/WhipOverlay.test.ts`
+- Modify: all five `src/client/src/i18n/*.ts` locale files
+- Modify: `package-lock.json`
+
+**Interfaces:**
+- A `SessionController` stopped before `engine.start()` resolves must stop the
+  eventual process exactly once, remain `stopping`, and expose no process/PID.
+- Shortcut validation and the default shortcut are shared by backend and
+  frontend from one pure module.
+- The full-screen canvas caps its backing-store DPR at 2.
+- Whip controls use Kōbō's standard indigo accent.
+
+- [x] Add and run a RED regression for stop-during-start, including process,
+  status, and PID assertions.
+- [x] Implement the minimal deferred-start cleanup and run the targeted backend
+  test GREEN.
+- [x] Add a RED DPR cap assertion, implement the cap, and run the overlay tests
+  GREEN.
+- [x] Consolidate the shortcut contract, replace duplicated default literals,
+  and run backend/client shortcut and settings tests.
+- [x] Replace competing deep-orange accents, remove dead `whip.button` and
+  `whip.tooltip` translations in all locales, and revert unrelated lockfile
+  churn.
+- [ ] Run focused suites, lint, type-check, full backend/client tests, build,
+  audits, and `git diff --check`.
+- [ ] Commit atomically and request a fresh scoped re-review plus a final
+  whole-branch review.
+
 #### Task 11 — Fix round 1: make session ownership authoritative across live and replay
 
 **Additional files:**

@@ -1,12 +1,21 @@
+import {
+  DEFAULT_WHIP_SHORTCUT,
+  isReservedWhipShortcut,
+  isValidWhipShortcut,
+  parseWhipShortcut,
+  WHIP_SHORTCUT_MODIFIERS,
+  type WhipShortcutModifier,
+} from '../../../shared/whip-shortcut'
+
+export { DEFAULT_WHIP_SHORTCUT, isValidWhipShortcut, parseWhipShortcut }
+
 export type WhipShortcutPlatform = 'mac' | 'other'
 
 export type ShortcutCaptureResult =
   | { status: 'accepted'; shortcut: string }
   | { status: 'cancelled' | 'pending' | 'reserved' }
 
-const MODIFIERS = ['mod', 'ctrl', 'meta', 'alt', 'shift'] as const
 const MODIFIER_KEYS = new Set(['control', 'meta', 'alt', 'shift'])
-const RESERVED_SHORTCUTS = new Set(['mod+w', 'mod+shift+w', 'ctrl+w', 'ctrl+shift+w', 'meta+w', 'meta+shift+w'])
 
 const KEY_ALIASES: Record<string, string> = {
   ' ': 'space',
@@ -24,34 +33,9 @@ const KEY_ALIASES: Record<string, string> = {
   '`': 'backquote',
 }
 
-interface ParsedShortcut {
-  modifiers: Set<string>
-  key: string
-}
-
 function normalizeKey(key: string): string | null {
   const normalized = KEY_ALIASES[key] ?? key.toLowerCase()
   return /^[a-z0-9][a-z0-9_-]*$/.test(normalized) ? normalized : null
-}
-
-function parseShortcut(shortcut: string): ParsedShortcut | null {
-  if (RESERVED_SHORTCUTS.has(shortcut)) return null
-  const tokens = shortcut.split('+')
-  if (tokens.some((token) => token.length === 0)) return null
-
-  const key = tokens.at(-1)
-  if (!key || !/^[a-z0-9][a-z0-9_-]*$/.test(key) || MODIFIER_KEYS.has(key) || MODIFIERS.includes(key as never))
-    return null
-
-  const modifiers = tokens.slice(0, -1)
-  let previousIndex = -1
-  for (const modifier of modifiers) {
-    const index = MODIFIERS.indexOf(modifier as (typeof MODIFIERS)[number])
-    if (index <= previousIndex) return null
-    previousIndex = index
-  }
-
-  return { modifiers: new Set(modifiers), key }
 }
 
 export function detectWhipShortcutPlatform(platform = globalThis.navigator?.platform ?? ''): WhipShortcutPlatform {
@@ -65,20 +49,21 @@ export function captureWhipShortcut(event: KeyboardEvent, platform: WhipShortcut
   const key = normalizeKey(event.key)
   if (!key) return { status: 'pending' }
 
-  const modifiers: string[] = []
+  const pressedModifiers = new Set<WhipShortcutModifier>()
   const primaryPressed = platform === 'mac' ? event.metaKey : event.ctrlKey
-  if (primaryPressed) modifiers.push('mod')
-  if (platform === 'mac' && event.ctrlKey) modifiers.push('ctrl')
-  if (platform === 'other' && event.metaKey) modifiers.push('meta')
-  if (event.altKey) modifiers.push('alt')
-  if (event.shiftKey) modifiers.push('shift')
+  if (primaryPressed) pressedModifiers.add('mod')
+  if (platform === 'mac' && event.ctrlKey) pressedModifiers.add('ctrl')
+  if (platform === 'other' && event.metaKey) pressedModifiers.add('meta')
+  if (event.altKey) pressedModifiers.add('alt')
+  if (event.shiftKey) pressedModifiers.add('shift')
 
+  const modifiers = WHIP_SHORTCUT_MODIFIERS.filter((modifier) => pressedModifiers.has(modifier))
   const shortcut = [...modifiers, key].join('+')
-  return RESERVED_SHORTCUTS.has(shortcut) ? { status: 'reserved' } : { status: 'accepted', shortcut }
+  return isReservedWhipShortcut(shortcut) ? { status: 'reserved' } : { status: 'accepted', shortcut }
 }
 
 export function matchesWhipShortcut(event: KeyboardEvent, shortcut: string, platform: WhipShortcutPlatform): boolean {
-  const parsed = parseShortcut(shortcut)
+  const parsed = parseWhipShortcut(shortcut)
   const eventKey = normalizeKey(event.key)
   if (!parsed || !eventKey || eventKey !== parsed.key) return false
 
@@ -105,7 +90,7 @@ function formatKey(key: string): string {
 }
 
 export function formatWhipShortcut(shortcut: string, platform: WhipShortcutPlatform): string {
-  const parsed = parseShortcut(shortcut)
+  const parsed = parseWhipShortcut(shortcut)
   if (!parsed) return shortcut
 
   if (platform === 'mac') {

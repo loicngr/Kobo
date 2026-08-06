@@ -188,8 +188,6 @@ export default {
   'workspacePage.engineHandoffHint': 'Relisez ou modifiez le contexte envoyé au nouvel agent.',
   'workspacePage.confirmSwitchEngine': 'Changer d’engine',
   'workspacePage.switchEngineFailed': 'Échec du changement d’engine',
-  'whip.button': 'Fouet',
-  'whip.tooltip': 'Activer le fouet',
   'whip.dispatchFailed': "Impossible d'envoyer le message du fouet",
   'whip.phrase1': 'Plus vite, tocard !',
   'whip.phrase2': 'Accélère le rythme, tocard !',

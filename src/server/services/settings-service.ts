@@ -3,6 +3,7 @@ import path from 'node:path'
 import { WORKTREES_PATH } from '../../shared/consts.js'
 import { isValidProjectColor, type ProjectColor } from '../../shared/project-colors.js'
 import { isValidSkillSuite, type SkillSuite } from '../../shared/skill-suite-prompts.js'
+import { DEFAULT_WHIP_SHORTCUT, isValidWhipShortcut } from '../../shared/whip-shortcut.js'
 import { listClaudeMcpEntries } from '../utils/mcp-client.js'
 import { getSettingsPath } from '../utils/paths.js'
 import {
@@ -396,30 +397,6 @@ export const DEFAULT_WORKSPACE_TAGS: string[] = [
  * one pre-selected on the workspace creation page.
  */
 export const DEFAULT_BRANCH_PREFIXES: string[] = ['feature', 'fix', 'hotfix', 'chore', 'refactor', 'docs', 'test']
-export const DEFAULT_WHIP_SHORTCUT = 'mod+shift+x'
-
-const WHIP_SHORTCUT_MODIFIERS = ['mod', 'ctrl', 'meta', 'alt', 'shift'] as const
-const RESERVED_WHIP_SHORTCUTS = new Set(['mod+w', 'mod+shift+w', 'ctrl+w', 'ctrl+shift+w', 'meta+w', 'meta+shift+w'])
-
-function isValidWhipShortcut(value: unknown): value is string {
-  if (typeof value !== 'string' || value.length === 0 || value !== value.toLowerCase()) return false
-  if (RESERVED_WHIP_SHORTCUTS.has(value)) return false
-
-  const tokens = value.split('+')
-  if (tokens.some((token) => token.length === 0)) return false
-  const key = tokens.at(-1)
-  if (!key || !/^[a-z0-9][a-z0-9_-]*$/.test(key) || key === 'control' || WHIP_SHORTCUT_MODIFIERS.includes(key as never))
-    return false
-
-  const modifiers = tokens.slice(0, -1)
-  let previousIndex = -1
-  for (const modifier of modifiers) {
-    const index = WHIP_SHORTCUT_MODIFIERS.indexOf(modifier as (typeof WHIP_SHORTCUT_MODIFIERS)[number])
-    if (index <= previousIndex) return false
-    previousIndex = index
-  }
-  return true
-}
 
 function normalizeWhipShortcut(value: unknown): string {
   return isValidWhipShortcut(value) ? value : DEFAULT_WHIP_SHORTCUT

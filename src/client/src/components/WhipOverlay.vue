@@ -44,7 +44,7 @@ let previousFocusedElement: HTMLElement | null = null
 function resizeCanvas(): void {
   const canvas = canvasRef.value
   if (!canvas || !context) return
-  const ratio = Math.max(1, window.devicePixelRatio || 1)
+  const ratio = Math.min(2, Math.max(1, window.devicePixelRatio || 1))
   canvas.width = Math.round(window.innerWidth * ratio)
   canvas.height = Math.round(window.innerHeight * ratio)
   canvas.style.width = `${window.innerWidth}px`

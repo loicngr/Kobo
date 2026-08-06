@@ -183,8 +183,6 @@ export default {
   'workspacePage.engineHandoffHint': 'Review or edit the context that will be sent to the new agent.',
   'workspacePage.confirmSwitchEngine': 'Switch engine',
   'workspacePage.switchEngineFailed': 'Failed to switch engine',
-  'whip.button': 'Whip',
-  'whip.tooltip': 'Activate the whip',
   'whip.dispatchFailed': 'Unable to send the whip message',
   'whip.phrase1': 'Move faster, tocard!',
   'whip.phrase2': 'Pick up the pace, tocard!',

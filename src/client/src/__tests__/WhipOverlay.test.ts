@@ -105,6 +105,16 @@ describe('WhipOverlay', () => {
     expect(playWhipCrack).toHaveBeenCalledWith({ enabled: true, volume: 0.4 })
   })
 
+  it('caps the canvas backing store at twice the viewport size on high-DPR displays', () => {
+    vi.stubGlobal('devicePixelRatio', 3)
+
+    mountOverlay()
+    const canvas = document.querySelector<HTMLCanvasElement>('.whip-canvas')!
+
+    expect(canvas.width).toBeLessThanOrEqual(window.innerWidth * 2)
+    expect(canvas.height).toBeLessThanOrEqual(window.innerHeight * 2)
+  })
+
   it('drops on primary pointer input and closes on Escape', () => {
     const wrapper = mountOverlay()
     const canvas = document.querySelector<HTMLCanvasElement>('.whip-canvas')

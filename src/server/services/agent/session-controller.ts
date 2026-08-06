@@ -23,7 +23,16 @@ export class SessionController {
   }
 
   private async startEngine(options: StartOptions): Promise<void> {
-    this._engineProcess = await this.engine.start(options, (ev) => this.handle(ev))
+    const process = await this.engine.start(options, (ev) => this.handle(ev))
+    this._engineProcess = process
+    if (this._status === 'stopping') {
+      try {
+        await process.stop()
+      } finally {
+        this._engineProcess = undefined
+      }
+      return
+    }
     this._status = 'running'
   }
 

@@ -238,7 +238,7 @@
                   :label="$t('settings.whipEnabled')"
                   dark
                   dense
-                  color="deep-orange-5"
+                  color="indigo-4"
                   class="text-grey-5 text-caption"
                 >
                   <q-tooltip>{{ $t('settings.whipEnabledHint') }}</q-tooltip>
@@ -258,7 +258,7 @@
                       :aria-label="$t('settings.whipVolume')"
                       dark
                       dense
-                      color="deep-orange-5"
+                      color="indigo-4"
                       class="col"
                     />
                     <div class="text-grey-5 text-caption" style="min-width: 40px; text-align: right;">
@@ -2478,6 +2478,7 @@ import {
 import { playNotificationSound } from 'src/utils/notifications'
 import { PROJECT_COLOR_PALETTE, type ProjectColor } from 'src/utils/project-color'
 import { getWhipVolumeAvailability } from 'src/utils/whip-settings'
+import { DEFAULT_WHIP_SHORTCUT } from 'src/utils/whip-shortcut'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { WORKTREES_PATH } from '../../../shared/consts'
@@ -2671,7 +2672,7 @@ const globalNotionUserId = ref('')
 const globalShowVerboseSystemMessages = ref(false)
 const globalShowThinkingBlocks = ref(true)
 const globalWhipEnabled = ref(false)
-const globalWhipShortcut = ref('mod+shift+x')
+const globalWhipShortcut = ref(DEFAULT_WHIP_SHORTCUT)
 const globalWhipVolume = ref(1)
 const whipVolumeAvailability = computed(() => getWhipVolumeAvailability(globalAudioNotifications.value))
 
@@ -3591,7 +3592,7 @@ function syncGlobalForm() {
   globalShowVerboseSystemMessages.value = store.showVerboseSystemMessages
   globalShowThinkingBlocks.value = store.global.showThinkingBlocks ?? true
   globalWhipEnabled.value = store.global.whipEnabled ?? false
-  globalWhipShortcut.value = store.global.whipShortcut ?? 'mod+shift+x'
+  globalWhipShortcut.value = store.global.whipShortcut ?? DEFAULT_WHIP_SHORTCUT
   globalWhipVolume.value = store.global.whipVolume ?? 1
   globalTags.value = Array.isArray(store.global.tags) ? [...store.global.tags] : []
   globalBranchPrefixes.value = Array.isArray(store.global.branchPrefixes) ? [...store.global.branchPrefixes] : []
