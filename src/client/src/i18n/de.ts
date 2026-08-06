@@ -477,6 +477,8 @@ export default {
   'settings.whipEnabled': 'Peitsche aktivieren',
   'settings.whipEnabledHint': 'Zeigt die interaktive Peitsche in geeigneten laufenden Workspaces an.',
   'settings.whipVolume': 'Peitschenlautstärke',
+  'settings.whipVolumeMasterAudioDisabled':
+    'Der Hauptton ist ausgeschaltet. Aktivieren Sie Audio-Benachrichtigungen, um die Peitschenlautstärke anzupassen; der gespeicherte Wert bleibt erhalten.',
   'whip.overlayLabel': 'Interaktive Peitsche',
   'whip.overlayInstructions':
     'Bewegen Sie den Zeiger, um die Peitsche zu steuern. Drücken Sie Eingabe oder Leertaste zum Knallen. Drücken Sie Escape zum Schließen.',

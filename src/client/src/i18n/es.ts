@@ -476,6 +476,8 @@ export default {
   'settings.whipEnabled': 'Activar el látigo',
   'settings.whipEnabledHint': 'Muestra el látigo interactivo en los workspaces activos compatibles.',
   'settings.whipVolume': 'Volumen del látigo',
+  'settings.whipVolumeMasterAudioDisabled':
+    'El audio principal está desactivado. Activa las notificaciones de audio para ajustar el volumen del látigo; el valor guardado se conserva.',
   'whip.overlayLabel': 'Látigo interactivo',
   'whip.overlayInstructions':
     'Mueve el puntero para controlar el látigo. Pulsa Intro o Espacio para hacerlo chasquear. Pulsa Escape para cerrar.',

@@ -471,6 +471,8 @@ export default {
   'settings.whipEnabled': 'Enable whip',
   'settings.whipEnabledHint': 'Shows the interactive whip control in eligible running workspaces.',
   'settings.whipVolume': 'Whip volume',
+  'settings.whipVolumeMasterAudioDisabled':
+    'Master audio is off. Enable audio notifications to adjust the whip volume; your saved value is preserved.',
   'whip.overlayLabel': 'Interactive whip',
   'whip.overlayInstructions':
     'Move the pointer to control the whip. Press Enter or Space to crack it. Press Escape to close.',

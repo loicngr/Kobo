@@ -2338,6 +2338,41 @@ describe('whip feature toggle (v51)', () => {
     expect(migrated.global.editorCommand).toBe('zed')
   })
 
+  it('persists normalized whip values from a malformed current-schema file', () => {
+    const current = getSettings()
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        ...current,
+        global: {
+          ...current.global,
+          whipEnabled: 'true',
+          whipShortcut: 'mod+w',
+          whipVolume: 2,
+          futureGlobalSetting: 'preserved',
+        },
+        projects: [{ path: '/future/project', futureProjectSetting: true }],
+      }),
+    )
+
+    const loaded = getSettings()
+    expect(loaded.global).toMatchObject({
+      whipEnabled: false,
+      whipShortcut: 'mod+shift+x',
+      whipVolume: 1,
+      futureGlobalSetting: 'preserved',
+    })
+
+    const persisted = JSON.parse(fs.readFileSync(settingsPath, 'utf8'))
+    expect(persisted.global).toMatchObject({
+      whipEnabled: false,
+      whipShortcut: 'mod+shift+x',
+      whipVolume: 1,
+      futureGlobalSetting: 'preserved',
+    })
+    expect(persisted.projects).toEqual([{ path: '/future/project', futureProjectSetting: true }])
+  })
+
   it.each([null, Number.NaN, -0.1, 1.1])('normalizes malformed persisted whip volume to full: %j', (whipVolume) => {
     const migrated = runSettingsMigrations({
       schemaVersion: 53,

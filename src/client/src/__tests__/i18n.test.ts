@@ -11,6 +11,7 @@ const accessibilityKeys = [
   'whip.overlayInstructions',
   'settings.whipShortcutButtonLabel',
   'settings.whipShortcutRecordingLabel',
+  'settings.whipVolumeMasterAudioDisabled',
 ] as const
 
 describe('whip accessibility translations', () => {

@@ -480,6 +480,8 @@ export default {
   'settings.whipEnabled': 'Activer le fouet',
   'settings.whipEnabledHint': 'Affiche le fouet interactif dans les workspaces actifs compatibles.',
   'settings.whipVolume': 'Volume du fouet',
+  'settings.whipVolumeMasterAudioDisabled':
+    'L’audio principal est désactivé. Activez les notifications audio pour régler le volume du fouet ; la valeur enregistrée est conservée.',
   'whip.overlayLabel': 'Fouet interactif',
   'whip.overlayInstructions':
     'Déplacez le pointeur pour contrôler le fouet. Appuyez sur Entrée ou Espace pour le faire claquer. Appuyez sur Échap pour fermer.',

@@ -479,6 +479,8 @@ export default {
   'settings.whipEnabled': 'Attiva la frusta',
   'settings.whipEnabledHint': 'Mostra la frusta interattiva nei workspace attivi compatibili.',
   'settings.whipVolume': 'Volume della frusta',
+  'settings.whipVolumeMasterAudioDisabled':
+    'L’audio principale è disattivato. Attiva le notifiche audio per regolare il volume della frusta; il valore salvato viene mantenuto.',
   'whip.overlayLabel': 'Frusta interattiva',
   'whip.overlayInstructions':
     'Muovi il puntatore per controllare la frusta. Premi Invio o Spazio per farla schioccare. Premi Esc per chiudere.',

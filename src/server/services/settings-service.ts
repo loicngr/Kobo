@@ -1365,7 +1365,9 @@ function readSettings(): Settings {
   }
 
   const originalVersion = (parsed as { schemaVersion?: number }).schemaVersion
+  const globalBeforeMigrations = JSON.stringify((parsed as { global?: unknown }).global ?? null)
   const migrated = runSettingsMigrations(parsed as Record<string, unknown>)
+  const normalizedGlobalFields = JSON.stringify(migrated.global) !== globalBeforeMigrations
 
   // Restore any global fields that may have been removed by external edits.
   // Defaults act as fallback for missing keys; existing values are preserved.
@@ -1374,8 +1376,9 @@ function readSettings(): Settings {
   migrated.global = { ...globalDefaults, ...migrated.global } as GlobalSettings
   const restoredGlobalFields = JSON.stringify(migrated.global) !== globalBeforeDefaults
 
-  // Persist if migrations bumped the version, or if global fields were restored.
-  if (migrated.schemaVersion !== originalVersion || restoredGlobalFields) {
+  // Persist if migrations bumped the version, known fields were normalized,
+  // or missing global fields were restored.
+  if (migrated.schemaVersion !== originalVersion || normalizedGlobalFields || restoredGlobalFields) {
     writeSettings(migrated)
   }
 

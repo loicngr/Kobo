@@ -254,6 +254,7 @@
                       :min="0"
                       :max="1"
                       :step="0.05"
+                      :disable="whipVolumeAvailability.disabled"
                       :aria-label="$t('settings.whipVolume')"
                       dark
                       dense
@@ -263,6 +264,9 @@
                     <div class="text-grey-5 text-caption" style="min-width: 40px; text-align: right;">
                       {{ Math.round(globalWhipVolume * 100) }}%
                     </div>
+                  </div>
+                  <div v-if="whipVolumeAvailability.hintKey" class="text-grey-6 text-caption">
+                    {{ $t(whipVolumeAvailability.hintKey) }}
                   </div>
                 </div>
               </div>
@@ -2473,6 +2477,7 @@ import {
 } from 'src/utils/notification-sounds'
 import { playNotificationSound } from 'src/utils/notifications'
 import { PROJECT_COLOR_PALETTE, type ProjectColor } from 'src/utils/project-color'
+import { getWhipVolumeAvailability } from 'src/utils/whip-settings'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { WORKTREES_PATH } from '../../../shared/consts'
@@ -2668,6 +2673,7 @@ const globalShowThinkingBlocks = ref(true)
 const globalWhipEnabled = ref(false)
 const globalWhipShortcut = ref('mod+shift+x')
 const globalWhipVolume = ref(1)
+const whipVolumeAvailability = computed(() => getWhipVolumeAvailability(globalAudioNotifications.value))
 
 const browserNotificationStatus = computed(() => {
   switch (browserNotificationPermission.value) {
