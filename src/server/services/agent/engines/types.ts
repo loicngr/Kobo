@@ -129,6 +129,7 @@ export type AgentEvent =
       kind: 'session:ended'
       reason: 'completed' | 'error' | 'killed'
       exitCode: number | null
+      superseded?: boolean
     }
   | {
       kind: 'session:user-input-requested'

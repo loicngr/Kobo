@@ -32,7 +32,17 @@ function makeChild() {
 let _child = makeChild()
 
 vi.mock('../../server/services/agent/engines/codex/spawn.js', () => ({
-  spawnAppServer: () => _child,
+  spawnAppServer: ({ signal }: { signal?: AbortSignal }) => {
+    const child = _child
+    signal?.addEventListener('abort', () => {
+      const error = Object.assign(new Error('The operation was aborted'), {
+        name: 'AbortError',
+        code: 'ABORT_ERR',
+      })
+      child.emit('error', error)
+    })
+    return child
+  },
   resolveCodexBinary: () => '/fake/codex',
 }))
 
@@ -188,6 +198,53 @@ describe('createCodexEngine — happy path', () => {
 })
 
 describe('createCodexEngine — active turn steering', () => {
+  it('queues steering until the initial Codex turn is ready', async () => {
+    resetChild()
+    let resolveEnded: () => void = () => {}
+    const ended = new Promise<void>((resolve) => {
+      resolveEnded = resolve
+    })
+    const proc = await createCodexEngine().start(BASE_OPTIONS, (event) => {
+      if (event.kind === 'session:ended') resolveEnded()
+    })
+
+    const steering = proc.sendMessage('Message en attente')
+    expect(_child._written.some((line) => JSON.parse(line).method === 'turn/steer')).toBe(false)
+
+    await flush(10)
+    pushInitializeResponse(1)
+    await flush(5)
+    pushThreadStartResponse('thr_queued', 2)
+    await flush(5)
+    pushTurnStartResponse('turn_initial', 3)
+    await flush(5)
+
+    const request = _child._written
+      .map((line) => JSON.parse(line) as { method?: string; id?: number; params?: unknown })
+      .find((message) => message.method === 'turn/steer')
+    expect(request).toMatchObject({
+      params: {
+        threadId: 'thr_queued',
+        expectedTurnId: 'turn_initial',
+      },
+    })
+    pushLine({ jsonrpc: '2.0', id: request?.id, result: { turnId: 'turn_queued' } })
+    await expect(steering).resolves.toBeUndefined()
+
+    pushNotification('turn/completed', {
+      threadId: 'thr_queued',
+      turn: {
+        id: 'turn_queued',
+        status: 'completed',
+        startedAt: null,
+        completedAt: null,
+        durationMs: null,
+        error: null,
+      },
+    })
+    await ended
+  })
+
   it('steers the running turn when a user chat message arrives', async () => {
     resetChild()
     let resolveEnded: () => void = () => {}
@@ -325,6 +382,27 @@ describe('createCodexEngine — resume', () => {
 })
 
 describe('createCodexEngine — interrupt', () => {
+  it('handles an interrupt before Codex initialization completes', async () => {
+    resetChild()
+    const events: AgentEvent[] = []
+    const sessionEndedPromise = new Promise<void>((resolve) => {
+      void createCodexEngine()
+        .start(BASE_OPTIONS, (event) => {
+          events.push(event)
+          if (event.kind === 'session:ended') resolve()
+        })
+        .then((proc) => {
+          proc.interrupt()
+          pushLine({ jsonrpc: '2.0', id: 1, error: { code: -32_000, message: 'interrupted during initialize' } })
+        })
+    })
+
+    await sessionEndedPromise
+    await flush(10)
+
+    expect(events).toContainEqual({ kind: 'session:ended', reason: 'killed', exitCode: null })
+  })
+
   it('emits session:ended with reason=killed when interrupt() is called', async () => {
     resetChild()
     const engine = createCodexEngine()
@@ -368,6 +446,69 @@ describe('createCodexEngine — interrupt', () => {
     >
     expect(sessionEnded).toBeDefined()
     expect(sessionEnded.reason).toBe('killed')
+  })
+})
+
+describe('createCodexEngine — child process errors', () => {
+  it('ends the session and rejects queued messages when app-server fails', async () => {
+    resetChild()
+    const events: AgentEvent[] = []
+    let resolveEnded!: () => void
+    const ended = new Promise<void>((resolve) => {
+      resolveEnded = resolve
+    })
+    const proc = await createCodexEngine().start(BASE_OPTIONS, (event) => {
+      events.push(event)
+      if (event.kind === 'session:ended') resolveEnded()
+    })
+    const queuedMessage = proc.sendMessage('message queued before startup')
+    void queuedMessage.catch(() => {})
+
+    await flush(10)
+    const childError = Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' })
+    _child.emit('error', childError)
+
+    const outcome = await Promise.race([ended.then(() => 'ended'), flush(100).then(() => 'timeout')])
+    if (outcome === 'timeout') {
+      pushLine({ jsonrpc: '2.0', id: 1, error: { code: -32_000, message: childError.message } })
+      await ended
+    }
+
+    expect(outcome).toBe('ended')
+    expect(events).toContainEqual({ kind: 'error', category: 'spawn_failed', message: childError.message })
+    expect(events).toContainEqual({ kind: 'session:ended', reason: 'error', exitCode: null })
+    expect(events.filter((event) => event.kind === 'error' && event.category === 'spawn_failed')).toHaveLength(1)
+    expect(events.filter((event) => event.kind === 'session:ended')).toHaveLength(1)
+    await expect(queuedMessage).rejects.toThrow(childError.message)
+  })
+
+  it('ends the session and rejects queued messages when app-server exits during startup', async () => {
+    resetChild()
+    const events: AgentEvent[] = []
+    let resolveEnded!: () => void
+    const ended = new Promise<void>((resolve) => {
+      resolveEnded = resolve
+    })
+    const proc = await createCodexEngine().start(BASE_OPTIONS, (event) => {
+      events.push(event)
+      if (event.kind === 'session:ended') resolveEnded()
+    })
+    const queuedMessage = proc.sendMessage('message queued before startup')
+    void queuedMessage.catch(() => {})
+
+    await flush(10)
+    _child.emit('exit', 1, null)
+
+    const outcome = await Promise.race([ended.then(() => 'ended'), flush(100).then(() => 'timeout')])
+
+    expect(outcome).toBe('ended')
+    expect(events).toContainEqual({
+      kind: 'error',
+      category: 'spawn_failed',
+      message: 'Codex app-server exited unexpectedly with code 1',
+    })
+    expect(events).toContainEqual({ kind: 'session:ended', reason: 'error', exitCode: null })
+    await expect(queuedMessage).rejects.toThrow('Codex app-server exited unexpectedly with code 1')
   })
 })
 

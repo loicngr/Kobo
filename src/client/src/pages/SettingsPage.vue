@@ -233,6 +233,42 @@
                   color="indigo-4"
                   class="text-grey-5 text-caption"
                 />
+                <q-toggle
+                  v-model="globalWhipEnabled"
+                  :label="$t('settings.whipEnabled')"
+                  dark
+                  dense
+                  color="indigo-4"
+                  class="text-grey-5 text-caption"
+                >
+                  <q-tooltip>{{ $t('settings.whipEnabledHint') }}</q-tooltip>
+                </q-toggle>
+                <div v-if="globalWhipEnabled" class="column q-gutter-sm col">
+                  <WhipShortcutRecorder v-model="globalWhipShortcut" />
+                  <div class="row items-center q-gutter-sm">
+                    <div class="text-grey-5 text-caption" style="min-width: 58px;">
+                      {{ $t('settings.whipVolume') }}
+                    </div>
+                    <q-slider
+                      v-model="globalWhipVolume"
+                      :min="0"
+                      :max="1"
+                      :step="0.05"
+                      :disable="whipVolumeAvailability.disabled"
+                      :aria-label="$t('settings.whipVolume')"
+                      dark
+                      dense
+                      color="indigo-4"
+                      class="col"
+                    />
+                    <div class="text-grey-5 text-caption" style="min-width: 40px; text-align: right;">
+                      {{ Math.round(globalWhipVolume * 100) }}%
+                    </div>
+                  </div>
+                  <div v-if="whipVolumeAvailability.hintKey" class="text-grey-6 text-caption">
+                    {{ $t(whipVolumeAvailability.hintKey) }}
+                  </div>
+                </div>
               </div>
             </div>
 
@@ -2421,6 +2457,7 @@ import QRCode from 'qrcode'
 import { type QInput, useQuasar } from 'quasar'
 import FolderPickerDialog from 'src/components/FolderPickerDialog.vue'
 import PrNotificationSoundSettings from 'src/components/PrNotificationSoundSettings.vue'
+import WhipShortcutRecorder from 'src/components/WhipShortcutRecorder.vue'
 import { useOnboarding } from 'src/composables/use-onboarding'
 import { CODEX_MODEL_OPTION_DEFS, MODEL_OPTION_DEFS } from 'src/constants/models'
 import { type AgentPermissionMode, PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
@@ -2440,6 +2477,8 @@ import {
 } from 'src/utils/notification-sounds'
 import { playNotificationSound } from 'src/utils/notifications'
 import { PROJECT_COLOR_PALETTE, type ProjectColor } from 'src/utils/project-color'
+import { getWhipVolumeAvailability } from 'src/utils/whip-settings'
+import { DEFAULT_WHIP_SHORTCUT } from 'src/utils/whip-shortcut'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { WORKTREES_PATH } from '../../../shared/consts'
@@ -2632,6 +2671,10 @@ const globalNotionAssigneeProperty = ref('')
 const globalNotionUserId = ref('')
 const globalShowVerboseSystemMessages = ref(false)
 const globalShowThinkingBlocks = ref(true)
+const globalWhipEnabled = ref(false)
+const globalWhipShortcut = ref(DEFAULT_WHIP_SHORTCUT)
+const globalWhipVolume = ref(1)
+const whipVolumeAvailability = computed(() => getWhipVolumeAvailability(globalAudioNotifications.value))
 
 const browserNotificationStatus = computed(() => {
   switch (browserNotificationPermission.value) {
@@ -3420,6 +3463,9 @@ function captureGlobalSnapshot(): string {
     sentryEnabled: globalSentryEnabled.value,
     showVerboseSystemMessages: globalShowVerboseSystemMessages.value,
     showThinkingBlocks: globalShowThinkingBlocks.value,
+    whipEnabled: globalWhipEnabled.value,
+    whipShortcut: globalWhipShortcut.value,
+    whipVolume: globalWhipVolume.value,
     tags: globalTags.value,
     branchPrefixes: globalBranchPrefixes.value,
     setupScript: globalSetupScript.value,
@@ -3545,6 +3591,9 @@ function syncGlobalForm() {
   globalSentryEnabled.value = store.global.sentryEnabled ?? true
   globalShowVerboseSystemMessages.value = store.showVerboseSystemMessages
   globalShowThinkingBlocks.value = store.global.showThinkingBlocks ?? true
+  globalWhipEnabled.value = store.global.whipEnabled ?? false
+  globalWhipShortcut.value = store.global.whipShortcut ?? DEFAULT_WHIP_SHORTCUT
+  globalWhipVolume.value = store.global.whipVolume ?? 1
   globalTags.value = Array.isArray(store.global.tags) ? [...store.global.tags] : []
   globalBranchPrefixes.value = Array.isArray(store.global.branchPrefixes) ? [...store.global.branchPrefixes] : []
   globalSetupScript.value = store.global.setupScript ?? ''
@@ -3826,6 +3875,9 @@ async function saveGlobal() {
       notionEnabled: globalNotionEnabled.value,
       sentryEnabled: globalSentryEnabled.value,
       showThinkingBlocks: globalShowThinkingBlocks.value,
+      whipEnabled: globalWhipEnabled.value,
+      whipShortcut: globalWhipShortcut.value,
+      whipVolume: globalWhipVolume.value,
       tags: globalTags.value,
       branchPrefixes: globalBranchPrefixes.value,
       setupScript: globalSetupScript.value,

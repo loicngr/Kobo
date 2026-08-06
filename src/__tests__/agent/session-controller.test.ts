@@ -1,7 +1,9 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { AgentEngine, AgentEvent, EngineProcess, StartOptions } from '../../server/services/agent/engines/types.js'
 
-function fakeEngine(opts: { pid?: number; engineSessionId?: string } = {}): {
+function fakeEngine(
+  opts: { pid?: number; engineSessionId?: string; sendMessage?: (text: string) => void | Promise<void> } = {},
+): {
   engine: AgentEngine
   emit: (ev: AgentEvent) => void
   process: EngineProcess
@@ -16,6 +18,7 @@ function fakeEngine(opts: { pid?: number; engineSessionId?: string } = {}): {
     engineSessionId: opts.engineSessionId,
     sendMessage(t) {
       sent.push(t)
+      return opts.sendMessage?.(t)
     },
     interrupt() {},
     async stop() {
@@ -94,8 +97,186 @@ describe('SessionController', () => {
     const { engine, sentMessages } = fakeEngine()
     const ctrl = new SessionController('w1', 'sess-1', engine, () => {})
     await ctrl.start(BASE_OPTS)
-    ctrl.sendMessage('hey')
+    await ctrl.sendMessage('hey')
     expect(sentMessages).toEqual(['hey'])
+  })
+
+  it('returns asynchronous sendMessage failures to its caller', async () => {
+    const { SessionController } = await import('../../server/services/agent/session-controller.js')
+    const { engine } = fakeEngine({
+      sendMessage: async () => {
+        throw new Error('Codex turn is closing')
+      },
+    })
+    const ctrl = new SessionController('w1', 'sess-1', engine, () => {})
+    await ctrl.start(BASE_OPTS)
+
+    await expect(ctrl.sendMessage('hey')).rejects.toThrow('Codex turn is closing')
+  })
+
+  it('queues messages until the engine process is ready', async () => {
+    const { SessionController } = await import('../../server/services/agent/session-controller.js')
+    let releaseStart!: () => void
+    const startGate = new Promise<void>((resolve) => {
+      releaseStart = resolve
+    })
+    const sentMessages: string[] = []
+    const process: EngineProcess = {
+      sendMessage(text) {
+        sentMessages.push(text)
+      },
+      interrupt() {},
+      async stop() {},
+    }
+    const engine: AgentEngine = {
+      id: 'codex',
+      displayName: 'Codex',
+      capabilities: {
+        models: [],
+        permissionModes: ['bypass'],
+        supportsResume: true,
+        supportsMcp: true,
+        supportsSkills: true,
+      },
+      async start() {
+        await startGate
+        return process
+      },
+    }
+    const ctrl = new SessionController('w1', 'sess-1', engine, () => {})
+
+    const starting = ctrl.start(BASE_OPTS)
+    const sending = ctrl.sendMessage('queued')
+    expect(sentMessages).toEqual([])
+
+    releaseStart()
+    await Promise.all([starting, sending])
+    expect(sentMessages).toEqual(['queued'])
+  })
+
+  it('rejects a queued message when stop() wins before delivery resumes', async () => {
+    const { SessionController } = await import('../../server/services/agent/session-controller.js')
+    const sendMessage = vi.fn(async () => undefined)
+    const process: EngineProcess = {
+      sendMessage,
+      interrupt() {},
+      async stop() {},
+    }
+    const engine: AgentEngine = {
+      id: 'codex',
+      displayName: 'Codex',
+      capabilities: {
+        models: [],
+        permissionModes: ['bypass'],
+        supportsResume: true,
+        supportsMcp: true,
+        supportsSkills: true,
+      },
+      async start() {
+        return process
+      },
+    }
+    const ctrl = new SessionController('w1', 'sess-1', engine, () => {})
+    await ctrl.start(BASE_OPTS)
+
+    const sending = ctrl.sendMessage('stale')
+    await ctrl.stop()
+
+    await expect(sending).rejects.toThrow(/stopping/i)
+    expect(sendMessage).not.toHaveBeenCalled()
+  })
+
+  it('stops and clears a process that resolves after stop() was requested', async () => {
+    const { SessionController } = await import('../../server/services/agent/session-controller.js')
+    let releaseStart!: (process: EngineProcess) => void
+    const startGate = new Promise<EngineProcess>((resolve) => {
+      releaseStart = resolve
+    })
+    let stopCount = 0
+    const process: EngineProcess = {
+      pid: 12345,
+      sendMessage() {},
+      interrupt() {},
+      async stop() {
+        stopCount++
+      },
+    }
+    const engine: AgentEngine = {
+      id: 'codex',
+      displayName: 'Codex',
+      capabilities: {
+        models: [],
+        permissionModes: ['bypass'],
+        supportsResume: true,
+        supportsMcp: true,
+        supportsSkills: true,
+      },
+      async start() {
+        return startGate
+      },
+    }
+    const ctrl = new SessionController('w1', 'sess-1', engine, () => {})
+
+    const starting = ctrl.start(BASE_OPTS)
+    await ctrl.stop()
+    releaseStart(process)
+    await starting
+
+    expect(stopCount).toBe(1)
+    expect(ctrl.status).toBe('stopping')
+    expect(ctrl.engineProcess).toBeUndefined()
+    expect(ctrl.pid).toBeUndefined()
+  })
+
+  it('does not stop a late process twice when stop() is requested concurrently', async () => {
+    const { SessionController } = await import('../../server/services/agent/session-controller.js')
+    let releaseStart!: (process: EngineProcess) => void
+    const startGate = new Promise<EngineProcess>((resolve) => {
+      releaseStart = resolve
+    })
+    let releaseStop!: () => void
+    const stopGate = new Promise<void>((resolve) => {
+      releaseStop = resolve
+    })
+    let stopCount = 0
+    const process: EngineProcess = {
+      sendMessage() {},
+      interrupt() {},
+      async stop() {
+        stopCount++
+        await stopGate
+      },
+    }
+    const engine: AgentEngine = {
+      id: 'codex',
+      displayName: 'Codex',
+      capabilities: {
+        models: [],
+        permissionModes: ['bypass'],
+        supportsResume: true,
+        supportsMcp: true,
+        supportsSkills: true,
+      },
+      async start() {
+        return startGate
+      },
+    }
+    const ctrl = new SessionController('w1', 'sess-1', engine, () => {})
+
+    const starting = ctrl.start(BASE_OPTS)
+    await ctrl.stop()
+    releaseStart(process)
+    await vi.waitFor(() => expect(stopCount).toBe(1))
+
+    const repeatedStop = ctrl.stop()
+    try {
+      expect(stopCount).toBe(1)
+    } finally {
+      releaseStop()
+    }
+    await Promise.all([starting, repeatedStop])
+    expect(stopCount).toBe(1)
+    expect(ctrl.engineProcess).toBeUndefined()
   })
 
   it('throws on a second start() call (re-entrancy guard)', async () => {

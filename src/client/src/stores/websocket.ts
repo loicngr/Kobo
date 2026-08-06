@@ -8,6 +8,7 @@ import type { ProviderId, UsageSnapshot } from 'src/types/usage'
 import { appendTokenToWsUrl, getToken } from 'src/utils/auth-token'
 import { openNetworkLogin } from 'src/utils/network-login-bus'
 import { resolveNotificationSoundOverride } from 'src/utils/notification-sounds'
+import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
 import { notify } from 'src/utils/notifications'
 import type { DevServerStatus } from './dev-server'
 import { useDevServerStore } from './dev-server'
@@ -116,6 +117,7 @@ function _handleSessionStarted(workspaceId: string, event: AgentEvent, sessionId
   // Drop the head if it belongs to THIS session (resume reuses the original
   // agentSessionId). Siblings owned by other sessions are kept.
   if (sessionId) {
+    workspaceStore.setActiveAgentSession(workspaceId, sessionId)
     const head = workspaceStore.peekPending(workspaceId)
     if (head && head.agentSessionId === sessionId) {
       workspaceStore.dequeuePending(workspaceId)
@@ -231,12 +233,7 @@ export function dispatchAgentEvent(
 
   // Compaction is over once the boundary lands, the session ends, or the agent
   // resumes producing output (text / tool calls) — clear the live banner.
-  if (
-    event.kind === 'session:compacted' ||
-    event.kind === 'session:ended' ||
-    event.kind === 'message:text' ||
-    event.kind === 'tool:call'
-  ) {
+  if (event.kind === 'session:compacted' || event.kind === 'message:text' || event.kind === 'tool:call') {
     agentStream.setCompacting(workspaceId, false)
   }
 
@@ -367,6 +364,26 @@ export function dispatchAgentEvent(
     // preserved).
     if (sessionId) {
       workspaceStore.clearPendingForSession(workspaceId, sessionId)
+    }
+    const activeSessionId = workspaceStore.activeAgentSessionIds[workspaceId]
+    const isSuperseded =
+      event.superseded === true ||
+      (typeof sessionId === 'string' &&
+        sessionId.length > 0 &&
+        activeSessionId !== undefined &&
+        sessionId !== activeSessionId)
+    if (isSuperseded) {
+      workspaceStore.cancelQueuedMessage(workspaceId, sessionId)
+      if (sessionId) {
+        workspaceStore.clearActiveAgentSession(workspaceId, sessionId)
+      }
+      return
+    }
+    agentStream.setCompacting(workspaceId, false)
+    if (sessionId) {
+      workspaceStore.clearActiveAgentSession(workspaceId, sessionId)
+    } else {
+      workspaceStore.clearActiveAgentSessionOwner(workspaceId)
     }
     const currentStatus = workspaceStore.workspaces.find((w) => w.id === workspaceId)?.status
     const derivedStatus =
@@ -810,6 +827,7 @@ export const useWebSocketStore = defineStore('websocket', {
                   if (ev.kind === 'session:started') {
                     if (evSessionId) {
                       const store = useWorkspaceStore()
+                      store.setActiveAgentSession(workspaceId, evSessionId)
                       const head = store.peekPending(workspaceId)
                       if (head && head.agentSessionId === evSessionId) {
                         store.dequeuePending(workspaceId)
@@ -818,8 +836,13 @@ export const useWebSocketStore = defineStore('websocket', {
                     continue
                   }
                   if (ev.kind === 'session:ended') {
+                    const store = useWorkspaceStore()
                     if (evSessionId) {
-                      useWorkspaceStore().clearPendingForSession(workspaceId, evSessionId)
+                      store.clearPendingForSession(workspaceId, evSessionId)
+                      store.cancelQueuedMessage(workspaceId, evSessionId)
+                      store.clearActiveAgentSession(workspaceId, evSessionId)
+                    } else if (ev.superseded !== true) {
+                      store.clearActiveAgentSessionOwner(workspaceId)
                     }
                     continue
                   }
@@ -1081,8 +1104,8 @@ export const useWebSocketStore = defineStore('websocket', {
           // Mirror the backend update locally so the GitPanel header and
           // diff viewer pick up the new sourceBranch without a round-trip.
           workspaceStore.updateWorkspaceFromEvent(wid, { sourceBranch: newBase })
-          // Persistent toast — the user dismisses it explicitly. Includes a
-          // shortcut to open the PR on GitHub.
+          // Includes a shortcut to open the PR on GitHub and expires after the
+          // shared notification timeout.
           const actions: Array<Record<string, unknown>> = []
           if (p.prUrl) {
             actions.push({
@@ -1096,7 +1119,7 @@ export const useWebSocketStore = defineStore('websocket', {
           Notify.create({
             type: 'info',
             position: 'top',
-            timeout: 0,
+            timeout: DEFAULT_TOAST_TIMEOUT_MS,
             message: t('pr.baseChanged', { oldBase, newBase }),
             actions,
           })
@@ -1121,7 +1144,11 @@ export const useWebSocketStore = defineStore('websocket', {
           const presentation = {
             'pr:ci-failed': { key: 'toast.prCiFailed', type: 'negative', timeout: 4000 },
             'pr:ci-recovered': { key: 'toast.prCiRecovered', type: 'positive', timeout: 5000 },
-            'pr:merge-conflict': { key: 'toast.prMergeConflict', type: 'warning', timeout: 0 },
+            'pr:merge-conflict': {
+              key: 'toast.prMergeConflict',
+              type: 'warning',
+              timeout: DEFAULT_TOAST_TIMEOUT_MS,
+            },
             'pr:merged': { key: 'toast.prMerged', type: 'positive', timeout: 5000 },
           } as const
           const current = presentation[eventType]
@@ -1166,7 +1193,7 @@ export const useWebSocketStore = defineStore('websocket', {
           Notify.create({
             type: 'warning',
             position: 'top',
-            timeout: 0,
+            timeout: DEFAULT_TOAST_TIMEOUT_MS,
             message,
             actions,
           })

@@ -32,6 +32,8 @@ const NEW_SOUND_IDS = [
   'pas-ca-zinedine.mp3',
   'ta-gueule.mp3',
   'tu-vas-la-fermer.mp3',
+  'yaaa.mp3',
+  'mais-laisse-moi-dormir-zebi.mp3',
 ] as const
 
 const testDir = path.dirname(fileURLToPath(import.meta.url))
@@ -72,12 +74,19 @@ describe('NOTIFICATION_SOUNDS', () => {
   })
 
   it('registers all notification assets and keeps every file present', () => {
-    expect(NOTIFICATION_SOUNDS).toHaveLength(20)
+    expect(NOTIFICATION_SOUNDS).toHaveLength(22)
     expect(NOTIFICATION_SOUNDS.map((sound) => sound.id)).toEqual(expect.arrayContaining([...NEW_SOUND_IDS]))
     for (const id of NEW_SOUND_IDS) {
       const asset = path.resolve(testDir, `../../public/sounds/${id}`)
       expect(fs.existsSync(asset), id).toBe(true)
+      expect(fs.statSync(asset).size, id).toBeGreaterThan(0)
     }
+  })
+
+  it.each(['yaaa.mp3', 'mais-laisse-moi-dormir-zebi.mp3'])('resolves the new sound %s', (id) => {
+    expect(isKnownSoundId(id)).toBe(true)
+    expect(resolveSoundId(id)).toBe(id)
+    expect(soundUrl(id)).toBe(`/sounds/${id}`)
   })
 })
 

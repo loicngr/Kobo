@@ -3,6 +3,7 @@ import path from 'node:path'
 import { WORKTREES_PATH } from '../../shared/consts.js'
 import { isValidProjectColor, type ProjectColor } from '../../shared/project-colors.js'
 import { isValidSkillSuite, type SkillSuite } from '../../shared/skill-suite-prompts.js'
+import { DEFAULT_WHIP_SHORTCUT, isValidWhipShortcut } from '../../shared/whip-shortcut.js'
 import { listClaudeMcpEntries } from '../utils/mcp-client.js'
 import { getSettingsPath } from '../utils/paths.js'
 import {
@@ -331,6 +332,12 @@ export interface GlobalSettings {
   sentryEnabled: boolean
   /** Whether agent thinking/reasoning blocks are displayed in the activity feed. */
   showThinkingBlocks: boolean
+  /** Opt-in workspace whip control. Seeded disabled by settings migration v51. */
+  whipEnabled: boolean
+  /** Portable keyboard shortcut that toggles the workspace whip overlay. */
+  whipShortcut: string
+  /** Independent whip crack volume, normalized to the inclusive range 0..1. */
+  whipVolume: number
   tags: string[]
   /**
    * User-managed git branch prefixes shown on the workspace creation page.
@@ -390,6 +397,14 @@ export const DEFAULT_WORKSPACE_TAGS: string[] = [
  * one pre-selected on the workspace creation page.
  */
 export const DEFAULT_BRANCH_PREFIXES: string[] = ['feature', 'fix', 'hotfix', 'chore', 'refactor', 'docs', 'test']
+
+function normalizeWhipShortcut(value: unknown): string {
+  return isValidWhipShortcut(value) ? value : DEFAULT_WHIP_SHORTCUT
+}
+
+function normalizeWhipVolume(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1 ? value : 1
+}
 
 /**
  * Sanitize a raw branch-prefix list: trim, strip surrounding slashes, drop
@@ -1051,6 +1066,27 @@ const settingsMigrations: SettingsMigration[] = [
       if (typeof global.bitbucketUsername !== 'string') global.bitbucketUsername = ''
     },
   },
+  {
+    version: 51,
+    name: 'add-whip-feature-toggle',
+    migrate: ({ global }) => {
+      if (typeof global.whipEnabled !== 'boolean') global.whipEnabled = false
+    },
+  },
+  {
+    version: 52,
+    name: 'add-whip-keyboard-shortcut',
+    migrate: ({ global }) => {
+      global.whipShortcut = normalizeWhipShortcut(global.whipShortcut)
+    },
+  },
+  {
+    version: 53,
+    name: 'add-whip-volume',
+    migrate: ({ global }) => {
+      global.whipVolume = normalizeWhipVolume(global.whipVolume)
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -1177,6 +1213,9 @@ function defaultSettings(): Settings {
       notionEnabled: true,
       sentryEnabled: true,
       showThinkingBlocks: true,
+      whipEnabled: false,
+      whipShortcut: DEFAULT_WHIP_SHORTCUT,
+      whipVolume: 1,
       tags: [...DEFAULT_WORKSPACE_TAGS],
       branchPrefixes: [...DEFAULT_BRANCH_PREFIXES],
       worktreesPath: WORKTREES_PATH,
@@ -1270,6 +1309,9 @@ export function runSettingsMigrations(raw: Record<string, unknown>): Settings {
   }
 
   current.global.worktreesPath = sanitizeWorktreesPath(current.global.worktreesPath)
+  current.global.whipEnabled = current.global.whipEnabled === true
+  current.global.whipShortcut = normalizeWhipShortcut(current.global.whipShortcut)
+  current.global.whipVolume = normalizeWhipVolume(current.global.whipVolume)
 
   current.schemaVersion = version
   return current as unknown as Settings
@@ -1301,7 +1343,9 @@ function readSettings(): Settings {
   }
 
   const originalVersion = (parsed as { schemaVersion?: number }).schemaVersion
+  const globalBeforeMigrations = JSON.stringify((parsed as { global?: unknown }).global ?? null)
   const migrated = runSettingsMigrations(parsed as Record<string, unknown>)
+  const normalizedGlobalFields = JSON.stringify(migrated.global) !== globalBeforeMigrations
 
   // Restore any global fields that may have been removed by external edits.
   // Defaults act as fallback for missing keys; existing values are preserved.
@@ -1310,8 +1354,9 @@ function readSettings(): Settings {
   migrated.global = { ...globalDefaults, ...migrated.global } as GlobalSettings
   const restoredGlobalFields = JSON.stringify(migrated.global) !== globalBeforeDefaults
 
-  // Persist if migrations bumped the version, or if global fields were restored.
-  if (migrated.schemaVersion !== originalVersion || restoredGlobalFields) {
+  // Persist if migrations bumped the version, known fields were normalized,
+  // or missing global fields were restored.
+  if (migrated.schemaVersion !== originalVersion || normalizedGlobalFields || restoredGlobalFields) {
     writeSettings(migrated)
   }
 
@@ -1618,6 +1663,9 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'notionEnabled',
     'sentryEnabled',
     'showThinkingBlocks',
+    'whipEnabled',
+    'whipShortcut',
+    'whipVolume',
     'tags',
     'branchPrefixes',
     'worktreesPath',
@@ -1658,6 +1706,16 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     const sanitized = sanitizeBranchPrefixes(filtered.branchPrefixes)
     filtered.branchPrefixes = sanitized.length > 0 ? sanitized : settings.global.branchPrefixes
   }
+  if (filtered.whipVolume !== undefined) {
+    const rawWhipVolume = filtered.whipVolume as unknown
+    const whipVolume =
+      typeof rawWhipVolume === 'number'
+        ? rawWhipVolume
+        : typeof rawWhipVolume === 'string' && rawWhipVolume.trim().length > 0
+          ? Number(rawWhipVolume)
+          : Number.NaN
+    filtered.whipVolume = Number.isFinite(whipVolume) ? Math.max(0, Math.min(1, whipVolume)) : 1
+  }
   for (const key of [
     'audioNotificationVolume',
     'audioQuestionVolume',
@@ -1678,6 +1736,12 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
   if (filtered.voiceTemperature !== undefined) {
     const t = Number(filtered.voiceTemperature)
     filtered.voiceTemperature = Number.isFinite(t) ? Math.max(0, Math.min(1, t)) : settings.global.voiceTemperature
+  }
+  if (filtered.whipEnabled !== undefined) {
+    filtered.whipEnabled = filtered.whipEnabled === true
+  }
+  if (filtered.whipShortcut !== undefined) {
+    filtered.whipShortcut = normalizeWhipShortcut(filtered.whipShortcut)
   }
   if (filtered.worktreesPath !== undefined) {
     filtered.worktreesPath = validateWorktreesPath(filtered.worktreesPath, { allowEmpty: false })

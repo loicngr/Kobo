@@ -163,10 +163,16 @@
             </span>
           </template>
         </q-select>
+        <WorkspaceWhipControl
+          v-if="selectedWs && !selectedWs.archivedAt"
+          :workspace-id="selectedWs.id"
+          :session-id="whipRunningSessionId"
+          :running="whipRunningSessionId !== null"
+        />
         <q-btn
           flat dense no-caps size="sm" icon="swap_horiz" class="q-mr-sm"
           :label="$t('workspacePage.switchEngine')"
-          :disable="!selectedWs || selectedWs.archivedAt"
+          :disable="!selectedWs || Boolean(selectedWs.archivedAt)"
           @click="openEngineSwitch"
         >
           <q-tooltip>{{ $t('workspacePage.switchEngineHint') }}</q-tooltip>
@@ -448,6 +454,7 @@ import type { AgentSession } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { copyToClipboard } from 'src/utils/clipboard'
 import { useTimeAgo } from 'src/utils/formatters'
+import { getWhipRunningSessionId } from 'src/utils/whip-session'
 import { workspacePageStyle } from 'src/utils/workspace-page-layout'
 import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -471,6 +478,7 @@ import QuotaBackoffBanner from 'src/components/QuotaBackoffBanner.vue'
 import StaleSessionBanner from 'src/components/StaleSessionBanner.vue'
 import WakeupBanner from 'src/components/WakeupBanner.vue'
 import WorkspaceHistorySearch from 'src/components/WorkspaceHistorySearch.vue'
+import WorkspaceWhipControl from 'src/components/WorkspaceWhipControl.vue'
 
 const $q = useQuasar()
 const store = useWorkspaceStore()
@@ -782,6 +790,11 @@ const selectedId = computed(() => store.selectedWorkspaceId)
 const selectedWs = computed(() => store.selectedWorkspace)
 
 const sessions = computed(() => store.sessions)
+const whipRunningSessionId = computed(() => {
+  const workspace = selectedWs.value
+  if (!workspace || !isBusyStatus(workspace.status)) return null
+  return getWhipRunningSessionId(workspace.id, store.sessions)
+})
 const selectedSession = computed(() => store.sessions.find((session) => session.id === store.selectedSessionId) ?? null)
 const selectedSessionModel = computed(() => selectedSession.value?.model ?? null)
 const activeSessionModelLabel = computed(

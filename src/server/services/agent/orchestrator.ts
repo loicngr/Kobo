@@ -41,6 +41,23 @@ export interface StartAgentResult {
   pid: number | undefined
 }
 
+export interface InterruptAgentOptions {
+  expectedSessionId?: string
+  disableAutoLoop?: boolean
+}
+
+export type InterruptAgentErrorCode = 'no_agent_running' | 'session_not_active' | 'interrupt_failed'
+
+export class InterruptAgentError extends Error {
+  constructor(
+    message: string,
+    readonly code: InterruptAgentErrorCode,
+  ) {
+    super(message)
+    this.name = 'InterruptAgentError'
+  }
+}
+
 // ── State ──────────────────────────────────────────────────────────────────────
 
 /** Actual bound port of the running backend — set at startup via setBackendPort() */
@@ -58,6 +75,80 @@ export function getBackendPort(): number {
 
 /** workspaceId -> SessionController */
 const controllers = new Map<string, SessionController>()
+
+interface SessionLifecycleOwnership {
+  owner: SessionController
+  ownerEnded: boolean
+  supersededControllers: Set<SessionController>
+}
+
+/**
+ * Latest controller generation per persisted session row. A resumed run can
+ * reuse an agentSessionId while its predecessor is still draining events, so
+ * controller-map membership alone is not a durable ownership signal.
+ */
+const sessionLifecycleOwners = new Map<string, Map<string, SessionLifecycleOwnership>>()
+
+function registerSessionLifecycleOwner(
+  workspaceId: string,
+  agentSessionId: string,
+  controller: SessionController,
+): void {
+  const workspaceOwners = sessionLifecycleOwners.get(workspaceId) ?? new Map<string, SessionLifecycleOwnership>()
+  const existing = workspaceOwners.get(agentSessionId)
+  if (existing) {
+    if (!existing.ownerEnded) existing.supersededControllers.add(existing.owner)
+    existing.owner = controller
+    existing.ownerEnded = false
+  } else {
+    workspaceOwners.set(agentSessionId, {
+      owner: controller,
+      ownerEnded: false,
+      supersededControllers: new Set(),
+    })
+  }
+  sessionLifecycleOwners.set(workspaceId, workspaceOwners)
+}
+
+function getSessionLifecycleOwnership(
+  workspaceId: string,
+  agentSessionId: string,
+): SessionLifecycleOwnership | undefined {
+  return sessionLifecycleOwners.get(workspaceId)?.get(agentSessionId)
+}
+
+function deleteSessionLifecycleOwnershipIfSettled(workspaceId: string, agentSessionId: string): void {
+  const workspaceOwners = sessionLifecycleOwners.get(workspaceId)
+  const ownership = workspaceOwners?.get(agentSessionId)
+  if (!workspaceOwners || !ownership?.ownerEnded || ownership.supersededControllers.size > 0) return
+  workspaceOwners.delete(agentSessionId)
+  if (workspaceOwners.size === 0) sessionLifecycleOwners.delete(workspaceId)
+}
+
+function markSessionLifecycleOwnerEnded(
+  workspaceId: string,
+  agentSessionId: string,
+  controller: SessionController | undefined,
+): void {
+  const ownership = getSessionLifecycleOwnership(workspaceId, agentSessionId)
+  if (!controller || !ownership || ownership.owner !== controller) return
+  ownership.ownerEnded = true
+  deleteSessionLifecycleOwnershipIfSettled(workspaceId, agentSessionId)
+}
+
+function settleSupersededSessionController(
+  workspaceId: string,
+  agentSessionId: string,
+  controller: SessionController,
+): void {
+  const ownership = getSessionLifecycleOwnership(workspaceId, agentSessionId)
+  if (!ownership) return
+  ownership.supersededControllers.delete(controller)
+  deleteSessionLifecycleOwnershipIfSettled(workspaceId, agentSessionId)
+}
+
+export const FALLBACK_CONTROLLER_TURNOVER_TIMEOUT_MS = 2_000
+export const FALLBACK_CONTROLLER_TURNOVER_POLL_MS = 25
 
 /** workspaceId -> last engine session ID (for resume) */
 const sessionIds = new Map<string, string>()
@@ -190,8 +281,8 @@ let availableSkills: string[] = (() => {
 /** workspaceId -> retry count (for quota backoff) */
 const retryCounts = new Map<string, number>()
 
-/** Tracks workspaces where the current session failed due to a stale --resume session ID. */
-const resumeFailedSet = new Set<string>()
+/** Tracks agent sessions that failed due to a stale --resume session ID. */
+const resumeFailedSessions = new Map<string, Set<string>>()
 
 // ── Watchdog ──────────────────────────────────────────────────────────────────
 
@@ -536,8 +627,42 @@ function reuseOrCreateFreshSession(
  * at `session:ended` for auto-loop stall detection. A task moved to
  * `in_progress` is meaningful progress even if it is not done yet.
  */
-const tasksDoneSnapshot = new Map<string, number>()
-const taskStateSnapshot = new Map<string, string>()
+interface TaskProgressSnapshot {
+  doneCount: number
+  stateSignature: string
+}
+
+const taskProgressSnapshots = new Map<string, Map<string, TaskProgressSnapshot>>()
+
+function rememberTaskProgressSnapshot(workspaceId: string, agentSessionId: string): void {
+  const workspaceSnapshots = taskProgressSnapshots.get(workspaceId) ?? new Map<string, TaskProgressSnapshot>()
+  workspaceSnapshots.set(agentSessionId, {
+    doneCount: getDoneTaskCount(workspaceId),
+    stateSignature: getTaskStateSignature(workspaceId),
+  })
+  taskProgressSnapshots.set(workspaceId, workspaceSnapshots)
+}
+
+function consumeTaskProgressSnapshot(workspaceId: string, agentSessionId: string): TaskProgressSnapshot | undefined {
+  const workspaceSnapshots = taskProgressSnapshots.get(workspaceId)
+  const snapshot = workspaceSnapshots?.get(agentSessionId)
+  workspaceSnapshots?.delete(agentSessionId)
+  if (workspaceSnapshots?.size === 0) taskProgressSnapshots.delete(workspaceId)
+  return snapshot
+}
+
+function rememberResumeFailed(workspaceId: string, agentSessionId: string): void {
+  const workspaceSessions = resumeFailedSessions.get(workspaceId) ?? new Set<string>()
+  workspaceSessions.add(agentSessionId)
+  resumeFailedSessions.set(workspaceId, workspaceSessions)
+}
+
+function consumeResumeFailed(workspaceId: string, agentSessionId: string): boolean {
+  const workspaceSessions = resumeFailedSessions.get(workspaceId)
+  const hadResumeFailure = workspaceSessions?.delete(agentSessionId) ?? false
+  if (workspaceSessions?.size === 0) resumeFailedSessions.delete(workspaceId)
+  return hadResumeFailure
+}
 
 function getDoneTaskCount(workspaceId: string): number {
   try {
@@ -569,13 +694,12 @@ function getTaskStateSignature(workspaceId: string): string {
 
 /** Clear the in-memory done-count snapshot for a workspace (called on delete). */
 export function forgetTasksDoneSnapshot(workspaceId: string): void {
-  tasksDoneSnapshot.delete(workspaceId)
-  taskStateSnapshot.delete(workspaceId)
+  taskProgressSnapshots.delete(workspaceId)
 }
 
 /** Drop the resume-failed flag for a workspace (called on delete). */
 export function forgetResumeFailed(workspaceId: string): void {
-  resumeFailedSet.delete(workspaceId)
+  resumeFailedSessions.delete(workspaceId)
 }
 
 /** Drop the pending question/permission queue for a workspace (called on delete). */
@@ -591,10 +715,37 @@ export function forgetPreAwaitStatus(workspaceId: string): void {
 /** Drop the cached engine session id for a workspace (called on delete). */
 export function forgetSessionId(workspaceId: string): void {
   sessionIds.delete(workspaceId)
+  sessionLifecycleOwners.delete(workspaceId)
 }
 
-function handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent): void {
-  routeEvent(workspaceId, agentSessionId, ev)
+function handleEvent(
+  workspaceId: string,
+  agentSessionId: string,
+  sourceController: SessionController | undefined,
+  ev: AgentEvent,
+): void {
+  const registeredController = controllers.get(workspaceId)
+  const hasReplacement =
+    sourceController !== undefined && registeredController !== undefined && registeredController !== sourceController
+  const sourceNoLongerOwnsWorkspace = sourceController !== undefined && registeredController !== sourceController
+  const lifecycleOwnership = getSessionLifecycleOwnership(workspaceId, agentSessionId)
+  const sourceIsSuperseded =
+    sourceController !== undefined &&
+    lifecycleOwnership !== undefined &&
+    lifecycleOwnership.owner !== sourceController &&
+    lifecycleOwnership.supersededControllers.has(sourceController)
+
+  // A stopped controller can continue draining buffered engine events after it
+  // has lost ownership. Drop every stale non-terminal event before it reaches
+  // persistence/live delivery, including the gap where no replacement is
+  // registered yet. A terminal event still records session-local history; it
+  // carries a durable marker only when a different controller now owns the
+  // workspace, or when the latest owner already ended, so replay does not
+  // depend on transient browser state.
+  if (sourceNoLongerOwnsWorkspace && ev.kind !== 'session:ended') return
+  const routedEvent =
+    ev.kind === 'session:ended' && (hasReplacement || sourceIsSuperseded) ? { ...ev, superseded: true } : ev
+  routeEvent(workspaceId, agentSessionId, routedEvent)
 
   if (ev.kind === 'rate_limit') {
     latestRateLimitInfo.set(workspaceId, ev.info)
@@ -603,8 +754,7 @@ function handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent
   // Snapshot the done-count at session start so the session:ended hook below
   // can compute a delta for auto-loop stall detection.
   if (ev.kind === 'session:started') {
-    tasksDoneSnapshot.set(workspaceId, getDoneTaskCount(workspaceId))
-    taskStateSnapshot.set(workspaceId, getTaskStateSignature(workspaceId))
+    rememberTaskProgressSnapshot(workspaceId, agentSessionId)
   }
 
   // Legacy fallback: the built-in `ScheduleWakeup` tool (CLI tradition) isn't
@@ -703,20 +853,25 @@ function handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent
     void handleTransientAutoLoopFailure(workspaceId)
   }
   if (ev.kind === 'error' && ev.category === 'resume_failed') {
-    resumeFailedSet.add(workspaceId)
+    rememberResumeFailed(workspaceId, agentSessionId)
     clearStaleEngineSessionId(workspaceId)
   }
   if (ev.kind === 'session:ended') {
-    const isResumeFailed = resumeFailedSet.delete(workspaceId)
+    if (sourceIsSuperseded && sourceController) {
+      settleSupersededSessionController(workspaceId, agentSessionId, sourceController)
+      return
+    }
+    markSessionLifecycleOwnerEnded(workspaceId, agentSessionId, sourceController)
 
-    const before = tasksDoneSnapshot.get(workspaceId) ?? getDoneTaskCount(workspaceId)
+    const isResumeFailed = consumeResumeFailed(workspaceId, agentSessionId)
+
+    const snapshot = consumeTaskProgressSnapshot(workspaceId, agentSessionId)
+    const before = snapshot?.doneCount ?? getDoneTaskCount(workspaceId)
     const after = getDoneTaskCount(workspaceId)
     const completedDelta = Math.max(0, after - before)
-    const taskStateBefore = taskStateSnapshot.get(workspaceId) ?? getTaskStateSignature(workspaceId)
+    const taskStateBefore = snapshot?.stateSignature ?? getTaskStateSignature(workspaceId)
     const taskStateAfter = getTaskStateSignature(workspaceId)
     const progressDelta = completedDelta > 0 || taskStateBefore !== taskStateAfter ? 1 : 0
-    tasksDoneSnapshot.delete(workspaceId)
-    taskStateSnapshot.delete(workspaceId)
 
     clearPendingForSession(workspaceId, agentSessionId)
     // A completed/failed SDK session cannot resolve canUseTool anymore. Drop
@@ -727,7 +882,16 @@ function handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent
     // Must run BEFORE autoLoopService.onSessionEnded → spawnNextIteration →
     // startAgent, otherwise startAgent throws "Agent already running" because
     // the just-ended controller is still in the map.
-    onSessionEnded(workspaceId, agentSessionId, ev.exitCode, ev.reason, isResumeFailed)
+    const ownsWorkspaceLifecycle = onSessionEnded(
+      workspaceId,
+      agentSessionId,
+      sourceController,
+      ev.exitCode,
+      ev.reason,
+      isResumeFailed,
+    )
+
+    if (!ownsWorkspaceLifecycle) return
 
     // resume_failed exits with an error but the workspace is fine (stale id
     // cleared, next iteration will start fresh) — report 'completed' to
@@ -796,27 +960,11 @@ function handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent
 function onSessionEnded(
   workspaceId: string,
   agentSessionId: string,
+  sourceController: SessionController | undefined,
   exitCode: number | null,
   reason: 'completed' | 'error' | 'killed',
   resumeFailed = false,
-): void {
-  const currentWorkspace = getWs(workspaceId)
-  const preserveQuotaBackoff = currentWorkspace?.status === 'quota'
-  const ctrl = controllers.get(workspaceId)
-  const wasStopping = ctrl?.status === 'stopping'
-
-  // Identity-preserving cleanup: only remove the controller if the map still
-  // points to this exact instance (a new controller may have been started in
-  // the meantime via stop-then-start).
-  if (ctrl && controllers.get(workspaceId) === ctrl) {
-    controllers.delete(workspaceId)
-  }
-
-  unregisterProcess(workspaceId)
-  if (!preserveQuotaBackoff) {
-    retryCounts.delete(workspaceId)
-  }
-
+): boolean {
   // Update the agent_sessions row
   try {
     const db = getDb()
@@ -829,7 +977,25 @@ function onSessionEnded(
     console.error('[orchestrator] Failed to update agent_sessions on exit:', err)
   }
 
-  if (wasStopping) return
+  const registeredController = controllers.get(workspaceId)
+  const isSuperseded =
+    sourceController !== undefined && registeredController !== undefined && registeredController !== sourceController
+  if (isSuperseded) return false
+
+  const currentWorkspace = getWs(workspaceId)
+  const preserveQuotaBackoff = currentWorkspace?.status === 'quota'
+  const wasStopping = sourceController?.status === 'stopping'
+
+  if (registeredController === sourceController) {
+    controllers.delete(workspaceId)
+  }
+
+  unregisterProcess(workspaceId)
+  if (!preserveQuotaBackoff) {
+    retryCounts.delete(workspaceId)
+  }
+
+  if (wasStopping) return false
 
   // When the session hit quota, handleQuota() already transitioned the
   // workspace to `quota` and armed the retry via quotaBackoffService.
@@ -846,7 +1012,7 @@ function onSessionEnded(
     } catch {
       // best-effort
     }
-    return
+    return true
   }
 
   // `reason` is authoritative (with the SDK engine `exitCode` is often null,
@@ -875,6 +1041,7 @@ function onSessionEnded(
   } catch {
     // best-effort
   }
+  return true
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -975,9 +1142,11 @@ export function startAgent(
     env: ws ? buildAgentEnv(ws.projectPath) : undefined,
   }
 
-  const controller = new SessionController(workspaceId, agentSessionId, engine, (ev) =>
-    handleEvent(workspaceId, agentSessionId, ev),
+  let controller: SessionController
+  controller = new SessionController(workspaceId, agentSessionId, engine, (ev) =>
+    handleEvent(workspaceId, agentSessionId, controller, ev),
   )
+  registerSessionLifecycleOwner(workspaceId, agentSessionId, controller)
   controllers.set(workspaceId, controller)
 
   // Kick off engine.start asynchronously. Errors surface as error events.
@@ -997,12 +1166,12 @@ export function startAgent(
     .catch((err) => {
       console.error('[orchestrator] engine.start failed:', err)
       const message = err instanceof Error ? err.message : String(err)
-      handleEvent(workspaceId, agentSessionId, {
+      handleEvent(workspaceId, agentSessionId, controller, {
         kind: 'error',
         category: 'spawn_failed',
         message,
       })
-      handleEvent(workspaceId, agentSessionId, {
+      handleEvent(workspaceId, agentSessionId, controller, {
         kind: 'session:ended',
         reason: 'error',
         exitCode: null,
@@ -1017,16 +1186,28 @@ export function startAgent(
  * alive — the current tool call is aborted and the agent waits for the next
  * user message.
  */
-export function interruptAgent(workspaceId: string): void {
+export function interruptAgent(workspaceId: string, options: InterruptAgentOptions = {}): void {
   const ctrl = controllers.get(workspaceId)
   if (!ctrl) {
-    throw new Error(`No agent running for workspace '${workspaceId}'`)
+    throw new InterruptAgentError(`No agent running for workspace '${workspaceId}'`, 'no_agent_running')
+  }
+  if (options.expectedSessionId !== undefined && ctrl.agentSessionId !== options.expectedSessionId) {
+    throw new InterruptAgentError(
+      `Session '${options.expectedSessionId}' is not active for workspace '${workspaceId}'`,
+      'session_not_active',
+    )
   }
   try {
     ctrl.interrupt()
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    throw new Error(`Failed to interrupt agent for workspace '${workspaceId}': ${message}`)
+    throw new InterruptAgentError(
+      `Failed to interrupt agent for workspace '${workspaceId}': ${message}`,
+      'interrupt_failed',
+    )
+  }
+  if (options.disableAutoLoop && autoLoopService.getStatus(workspaceId).auto_loop) {
+    autoLoopService.disable(workspaceId, 'user-action')
   }
 }
 
@@ -1074,7 +1255,7 @@ export function stopAgent(workspaceId: string): void {
 }
 
 /** Write a user message to the running agent. */
-export function sendMessage(workspaceId: string, content: string, expectedSessionId?: string): void | Promise<void> {
+export async function sendMessage(workspaceId: string, content: string, expectedSessionId?: string): Promise<void> {
   const ctrl = controllers.get(workspaceId)
   if (!ctrl) {
     throw new Error(`No agent running for workspace '${workspaceId}'`)
@@ -1083,7 +1264,41 @@ export function sendMessage(workspaceId: string, content: string, expectedSessio
     throw new Error(`Session '${expectedSessionId}' is not active for workspace '${workspaceId}'`)
   }
   wakeupService.cancel(workspaceId, 'user-message')
-  return ctrl.sendMessage(content)
+  await ctrl.sendMessage(content)
+}
+
+/**
+ * Deliver a prompt without racing a controller that is already shutting down.
+ * A failed steering attempt is ambiguous until the captured controller leaves
+ * the registry: only its removal authorizes a caller to start a resume.
+ */
+export type FallbackDeliveryResult = { status: 'sent'; sessionId: string } | { status: 'stopped' }
+
+export async function sendMessageForFallback(workspaceId: string, content: string): Promise<FallbackDeliveryResult> {
+  const capturedController = controllers.get(workspaceId)
+  if (!capturedController) return { status: 'stopped' }
+
+  wakeupService.cancel(workspaceId, 'user-message')
+  try {
+    await capturedController.sendMessage(content)
+    return { status: 'sent', sessionId: capturedController.agentSessionId }
+  } catch {
+    const deadline = Date.now() + FALLBACK_CONTROLLER_TURNOVER_TIMEOUT_MS
+    while (controllers.get(workspaceId) === capturedController) {
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) {
+        throw new Error(`Timed out waiting for agent controller turnover for workspace '${workspaceId}'`)
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, Math.min(FALLBACK_CONTROLLER_TURNOVER_POLL_MS, remaining))
+      })
+    }
+
+    const replacementController = controllers.get(workspaceId)
+    if (!replacementController) return { status: 'stopped' }
+    await replacementController.sendMessage(content)
+    return { status: 'sent', sessionId: replacementController.agentSessionId }
+  }
 }
 
 /**
@@ -1437,10 +1652,9 @@ export function forgetRateLimitInfo(workspaceId: string): void {
 }
 
 /**
- * Null out the engine_session_id on all agent_sessions rows for a workspace
- * and clear the in-memory sessionIds cache. Called when a --resume attempt
- * fails ("No conversation found with session ID") so that the next startAgent
- * call starts a fresh conversation instead of retrying the stale ID.
+ * Null out every engine_session_id for the workspace and clear its cache.
+ * This runs only while the failing session owns the workspace, ensuring a
+ * future resume cannot fall back to an older stale engine session.
  */
 function clearStaleEngineSessionId(workspaceId: string): void {
   try {
@@ -1658,4 +1872,16 @@ export function _runWatchdogForTest(): void {
 }
 
 /** Test-only export. Not part of the public module API. */
-export const __test__ = { handleEvent, handleQuota }
+export const __test__ = {
+  getSessionLifecycleOwnerCount(workspaceId: string): number {
+    return sessionLifecycleOwners.get(workspaceId)?.size ?? 0
+  },
+  handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent): void {
+    const sourceController = controllers.get(workspaceId)
+    if (sourceController && sourceController.agentSessionId !== agentSessionId) {
+      throw new Error(`Session '${agentSessionId}' is not active for workspace '${workspaceId}'`)
+    }
+    handleEvent(workspaceId, agentSessionId, sourceController, ev)
+  },
+  handleQuota,
+}

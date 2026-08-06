@@ -3,6 +3,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
+const { MockInterruptAgentError } = vi.hoisted(() => ({
+  MockInterruptAgentError: class extends Error {
+    constructor(
+      message: string,
+      readonly code: 'no_agent_running' | 'session_not_active' | 'interrupt_failed',
+    ) {
+      super(message)
+      this.name = 'InterruptAgentError'
+    }
+  },
+}))
+
 vi.mock('../server/services/workspace-service.js', () => ({
   createWorkspace: vi.fn(),
   getWorkspace: vi.fn(),
@@ -50,9 +62,12 @@ vi.mock('../server/services/worktree-service.js', () => ({
 }))
 
 vi.mock('../server/services/agent/orchestrator.js', () => ({
+  InterruptAgentError: MockInterruptAgentError,
   startAgent: vi.fn().mockReturnValue({ agentSessionId: 'mock-agent-session-id' }),
   stopAgent: vi.fn(),
+  interruptAgent: vi.fn(),
   sendMessage: vi.fn(),
+  sendMessageForFallback: vi.fn().mockResolvedValue({ status: 'sent', sessionId: 'delivered-session-id' }),
   hasController: vi.fn(() => false),
   getAgentStatus: vi.fn().mockReturnValue(null),
   getActiveSessionId: vi.fn().mockReturnValue('active-session-id'),
@@ -2152,6 +2167,106 @@ describe('POST /api/workspaces/:id/stop', () => {
   })
 })
 
+describe('POST /api/workspaces/:id/interrupt', () => {
+  it('forwards whip session safety options to interruptAgent', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    const res = await app.request('/api/workspaces/ws-1/interrupt', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ expectedSessionId: 'session-running', disableAutoLoop: true }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(agentManager.interruptAgent).toHaveBeenCalledWith('ws-1', {
+      expectedSessionId: 'session-running',
+      disableAutoLoop: true,
+    })
+  })
+
+  it.each([
+    [{ expectedSessionId: 42 }, 'expectedSessionId'],
+    [{ expectedSessionId: '' }, 'expectedSessionId'],
+    [{ expectedSessionId: '   ' }, 'expectedSessionId'],
+    [{ disableAutoLoop: 'yes' }, 'disableAutoLoop'],
+  ])('rejects malformed interruption options: %j', async (body, invalidField) => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    const res = await app.request('/api/workspaces/ws-1/interrupt', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: string }).error).toContain(invalidField)
+    expect(agentManager.interruptAgent).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['{"expectedSessionId":', 'invalid JSON'],
+    ['null', 'null'],
+    ['[]', 'array'],
+    ['"session-running"', 'primitive'],
+  ])('rejects a supplied non-object JSON body: %s', async (rawBody) => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    const res = await app.request('/api/workspaces/ws-1/interrupt', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: rawBody,
+    })
+
+    expect(res.status).toBe(400)
+    expect(agentManager.interruptAgent).not.toHaveBeenCalled()
+  })
+
+  it('accepts an empty body as default interruption options', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    const res = await app.request('/api/workspaces/ws-1/interrupt', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(agentManager.interruptAgent).toHaveBeenCalledWith('ws-1', {})
+  })
+
+  it('accepts a whitespace-only body as default interruption options', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    const res = await app.request('/api/workspaces/ws-1/interrupt', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '  \n\t ',
+    })
+
+    expect(res.status).toBe(200)
+    expect(agentManager.interruptAgent).toHaveBeenCalledWith('ws-1', {})
+  })
+
+  it.each([
+    ['no_agent_running', 409],
+    ['session_not_active', 409],
+    ['interrupt_failed', 500],
+  ] as const)('serializes %s interruption failures with status %i', async (code, status) => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(agentManager.interruptAgent).mockImplementation(() => {
+      throw new MockInterruptAgentError(`interruption failed: ${code}`, code)
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/interrupt', { method: 'POST' })
+
+    expect(res.status).toBe(status)
+    expect(await res.json()).toEqual({ error: `interruption failed: ${code}`, code })
+  })
+
+  it('returns an untagged 500 response for an untyped interruption failure', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(agentManager.interruptAgent).mockImplementation(() => {
+      throw new Error('unexpected interruption failure')
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/interrupt', { method: 'POST' })
+
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ error: 'unexpected interruption failure' })
+  })
+})
+
 describe('DELETE /api/workspaces/:id', () => {
   it('deletes workspace with full cleanup', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
@@ -2674,7 +2789,11 @@ describe('POST /api/workspaces/:id/pull', () => {
 describe('POST /api/workspaces/:id/open-pr', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.mocked(agentManager.sendMessage).mockReset()
+    vi.mocked(agentManager.sendMessageForFallback).mockReset()
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValue({
+      status: 'sent',
+      sessionId: 'delivered-session-id',
+    })
     execFilePromiseMock.mockReset()
     createPrMock.mockReset()
     vi.mocked(workspaceService.getWorkspace).mockReturnValue({
@@ -2812,9 +2931,11 @@ describe('POST /api/workspaces/:id/open-pr', () => {
       'ws-1',
       'user:message',
       expect.objectContaining({ content: 'RENDERED PROMPT', sender: 'user' }),
-      's-1',
+      'delivered-session-id',
     )
-    expect(vi.mocked(agentManager.sendMessage)).toHaveBeenCalledWith('ws-1', 'RENDERED PROMPT')
+    expect(vi.mocked(emit)).toHaveBeenCalledOnce()
+    expect(vi.mocked(agentManager.sendMessageForFallback)).toHaveBeenCalledWith('ws-1', 'RENDERED PROMPT')
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
   })
 
   it('returns messageSent: false when template is empty (PR still created)', async () => {
@@ -2838,7 +2959,7 @@ describe('POST /api/workspaces/:id/open-pr', () => {
     const data = await res.json()
     expect(data.prNumber).toBe(42)
     expect(data.messageSent).toBe(false)
-    expect(vi.mocked(agentManager.sendMessage)).not.toHaveBeenCalled()
+    expect(vi.mocked(agentManager.sendMessageForFallback)).not.toHaveBeenCalled()
   })
 
   it('returns 500 when createPr fails', async () => {
@@ -2879,7 +3000,7 @@ describe('POST /api/workspaces/:id/open-pr', () => {
     expect(data.code).toBe('forge_unsupported')
   })
 
-  it('resumes agent when sendMessage fails (PR already created)', async () => {
+  it('resumes agent when lifecycle-safe delivery reports stopped (PR already created)', async () => {
     vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
       model: 'auto',
       dangerouslySkipPermissions: true,
@@ -2894,9 +3015,7 @@ describe('POST /api/workspaces/:id/open-pr', () => {
 
     createPrMock.mockResolvedValueOnce({ url: 'https://github.com/org/repo/pull/42', number: 42 })
 
-    vi.mocked(agentManager.sendMessage).mockImplementation(() => {
-      throw new Error('No active agent session')
-    })
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({ status: 'stopped' })
 
     const res = await app.request('/api/workspaces/ws-1/open-pr', { method: 'POST' })
 
@@ -2907,6 +3026,36 @@ describe('POST /api/workspaces/:id/open-pr', () => {
     // Agent is resumed with the PR prompt
     expect(data.messageSent).toBe(true)
     expect(agentManager.startAgent).toHaveBeenCalled()
+    expect(wsService.emit).toHaveBeenCalledOnce()
+    expect(wsService.emit).toHaveBeenCalledWith(
+      'ws-1',
+      'user:message',
+      expect.objectContaining({ sender: 'user' }),
+      'mock-agent-session-id',
+    )
+  })
+
+  it('keeps the created PR response without a ghost prompt when lifecycle-safe delivery rejects', async () => {
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
+      model: 'auto',
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: 'template',
+      gitConventions: '',
+      sourceBranch: 'main',
+      devServer: null,
+      setupScript: '',
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
+    })
+    createPrMock.mockResolvedValueOnce({ url: 'https://github.com/org/repo/pull/42', number: 42 })
+    vi.mocked(agentManager.sendMessageForFallback).mockRejectedValueOnce(new Error('replacement rejected'))
+
+    const res = await app.request('/api/workspaces/ws-1/open-pr', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ ok: true, prNumber: 42, messageSent: false })
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+    expect(wsService.emit).not.toHaveBeenCalled()
   })
 })
 
@@ -5649,20 +5798,25 @@ describe('POST /api/workspaces/:id/start-ci-fix', () => {
     expect(body.ok).toBe(true)
     expect(body.failedChecksCount).toBe(2)
 
-    expect(agentManager.sendMessage).toHaveBeenCalledTimes(1)
-    const [, prompt] = vi.mocked(agentManager.sendMessage).mock.calls[0]
+    expect(agentManager.sendMessageForFallback).toHaveBeenCalledTimes(1)
+    const [, prompt] = vi.mocked(agentManager.sendMessageForFallback).mock.calls[0]
     expect(prompt).toContain('https://github.com/org/repo/pull/42')
     expect(prompt).toContain('- lint')
     expect(prompt).toContain('- tests')
     expect(prompt).not.toContain('- fast')
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+    expect(wsService.emit).toHaveBeenCalledWith(
+      'ws-1',
+      'user:message',
+      expect.objectContaining({ content: prompt, sender: 'user' }),
+      'delivered-session-id',
+    )
   })
 
-  it('starts a fresh resume session when sendMessage throws (no live agent)', async () => {
+  it('starts a fresh resume session when lifecycle-safe delivery reports stopped', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
     vi.mocked(workspaceService.getActiveSession).mockReturnValue(null)
-    vi.mocked(agentManager.sendMessage).mockImplementationOnce(() => {
-      throw new Error('no live agent')
-    })
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({ status: 'stopped' })
     const prWatcher = await import('../server/services/pr-watcher-service.js')
     vi.mocked(prWatcher.refreshPrSnapshot).mockResolvedValueOnce(mockFailingCiSnapshot() as never)
     vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
@@ -5683,6 +5837,166 @@ describe('POST /api/workspaces/:id/start-ci-fix', () => {
     expect(agentManager.startAgent).toHaveBeenCalledTimes(1)
     // resume=true → 5th positional arg
     expect(vi.mocked(agentManager.startAgent).mock.calls[0][4]).toBe(true)
+    expect(wsService.emit).toHaveBeenCalledWith(
+      'ws-1',
+      'user:message',
+      expect.objectContaining({ sender: 'user' }),
+      'mock-agent-session-id',
+    )
+  })
+
+  it('returns a clean error without a ghost message or concurrent start when delivery rejects', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
+    vi.mocked(workspaceService.getActiveSession).mockReturnValue(null)
+    vi.mocked(agentManager.sendMessageForFallback).mockRejectedValueOnce(new Error('replacement rejected'))
+    const prWatcher = await import('../server/services/pr-watcher-service.js')
+    vi.mocked(prWatcher.refreshPrSnapshot).mockResolvedValueOnce(mockFailingCiSnapshot() as never)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
+      model: 'auto',
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      ciFixPromptTemplate: 'fix it',
+      gitConventions: '',
+      sourceBranch: 'main',
+      devServer: null,
+      setupScript: '',
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
+    } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/start-ci-fix', { method: 'POST' })
+
+    expect(res.status).toBe(500)
+    expect((await res.json()).error).toBe('Failed to dispatch CI-fix prompt: replacement rejected')
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+    expect(wsService.emit).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/workspaces/:id/git/commit-with-agent', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('does not resume when commit-with-agent delivery reaches a live controller', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(gitOps.getWorkingTreeStatus).mockReturnValue({ staged: 0, modified: 1, untracked: 0 })
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({
+      status: 'sent',
+      sessionId: 'delivered-session-id',
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/git/commit-with-agent', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ ok: true, messageSent: true })
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+    expect(wsService.emit).toHaveBeenCalledOnce()
+    expect(wsService.emit).toHaveBeenCalledWith(
+      'ws-1',
+      'user:message',
+      expect.objectContaining({ sender: 'user' }),
+      'delivered-session-id',
+    )
+  })
+
+  it('resumes the agent when commit-with-agent delivery reports stopped', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(gitOps.getWorkingTreeStatus).mockReturnValue({ staged: 0, modified: 1, untracked: 0 })
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({ status: 'stopped' })
+
+    const res = await app.request('/api/workspaces/ws-1/git/commit-with-agent', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ ok: true, messageSent: true })
+    expect(agentManager.startAgent).toHaveBeenCalledOnce()
+    expect(vi.mocked(agentManager.startAgent).mock.calls[0][4]).toBe(true)
+    expect(wsService.emit).toHaveBeenCalledOnce()
+    expect(wsService.emit).toHaveBeenCalledWith(
+      'ws-1',
+      'user:message',
+      expect.objectContaining({ sender: 'user' }),
+      'mock-agent-session-id',
+    )
+  })
+
+  it('returns 409 without starting or persisting a ghost prompt when commit delivery rejects', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(gitOps.getWorkingTreeStatus).mockReturnValue({ staged: 0, modified: 1, untracked: 0 })
+    vi.mocked(agentManager.sendMessageForFallback).mockRejectedValueOnce(new Error('replacement rejected'))
+
+    const res = await app.request('/api/workspaces/ws-1/git/commit-with-agent', { method: 'POST' })
+
+    expect(res.status).toBe(409)
+    expect((await res.json()).error).toBe('Unable to ask the agent to commit: replacement rejected')
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+    expect(wsService.emit).not.toHaveBeenCalled()
+  })
+})
+
+describe('POST /api/workspaces/:id/git/resolve-with-agent', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('does not resume when resolve-with-agent delivery reaches a live controller', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({
+      status: 'sent',
+      sessionId: 'delivered-session-id',
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/git/resolve-with-agent', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ operation: 'merge', files: ['src/conflicted.ts'] }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ ok: true, messageSent: true })
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+    expect(wsService.emit).toHaveBeenCalledOnce()
+    expect(wsService.emit).toHaveBeenCalledWith(
+      'ws-1',
+      'user:message',
+      expect.objectContaining({ sender: 'user' }),
+      'delivered-session-id',
+    )
+  })
+
+  it('resumes the agent when resolve-with-agent delivery reports stopped', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({ status: 'stopped' })
+
+    const res = await app.request('/api/workspaces/ws-1/git/resolve-with-agent', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ operation: 'merge', files: ['src/conflicted.ts'] }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ ok: true, messageSent: true })
+    expect(agentManager.startAgent).toHaveBeenCalledOnce()
+    expect(vi.mocked(agentManager.startAgent).mock.calls[0][4]).toBe(true)
+    expect(wsService.emit).toHaveBeenCalledOnce()
+    expect(wsService.emit).toHaveBeenCalledWith(
+      'ws-1',
+      'user:message',
+      expect.objectContaining({ sender: 'user' }),
+      'mock-agent-session-id',
+    )
+  })
+
+  it('reports messageSent false without starting or persisting a ghost prompt when delivery rejects', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(agentManager.sendMessageForFallback).mockRejectedValueOnce(new Error('replacement rejected'))
+
+    const res = await app.request('/api/workspaces/ws-1/git/resolve-with-agent', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ operation: 'merge', files: ['src/conflicted.ts'] }),
+    })
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({ ok: true, messageSent: false })
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+    expect(wsService.emit).not.toHaveBeenCalled()
   })
 })
 

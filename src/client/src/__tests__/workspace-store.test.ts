@@ -1,7 +1,13 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useWebSocketStore } from '../stores/websocket'
-import { isSubagentTerminalEvent, type PrSnapshot, useWorkspaceStore, type Workspace } from '../stores/workspace'
+import {
+  isSubagentTerminalEvent,
+  type PrSnapshot,
+  useWorkspaceStore,
+  type Workspace,
+  WorkspaceActionError,
+} from '../stores/workspace'
 
 /** Build a fully-typed Workspace fixture, overrides take precedence. */
 function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
@@ -46,6 +52,37 @@ function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
 describe('workspace store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
+  })
+
+  describe('selectWorkspace', () => {
+    it('clears sessions synchronously before the replacement fetch resolves', () => {
+      const store = useWorkspaceStore()
+      store.sessions = [
+        {
+          id: 'old-session',
+          workspaceId: 'ws-1',
+          pid: null,
+          engineSessionId: null,
+          status: 'running',
+          startedAt: '2026-08-05T10:00:00Z',
+          endedAt: null,
+          name: null,
+        },
+      ]
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(() => new Promise<Response>(() => {})),
+      )
+
+      try {
+        store.selectWorkspace('ws-2')
+
+        expect(store.selectedWorkspaceId).toBe('ws-2')
+        expect(store.sessions).toEqual([])
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    })
   })
 
   describe('isSubagentTerminalEvent(subtype, status)', () => {
@@ -524,6 +561,117 @@ describe('workspace store', () => {
       } as Response)
 
       await expect(store.disableAutoLoop('ws-1')).rejects.toThrow('stop failed')
+    })
+  })
+
+  describe('interruptAgent', () => {
+    it('serializes the active-session safety options as JSON', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({ ok: true } as Response)
+      vi.stubGlobal('fetch', fetchMock)
+      const store = useWorkspaceStore()
+
+      await store.interruptAgent('ws-1', {
+        expectedSessionId: 'session-running',
+        disableAutoLoop: true,
+      })
+
+      expect(fetchMock).toHaveBeenCalledWith('/api/workspaces/ws-1/interrupt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expectedSessionId: 'session-running', disableAutoLoop: true }),
+      })
+    })
+
+    it.each([
+      'no_agent_running',
+      'session_not_active',
+      'interrupt_failed',
+    ])('preserves the %s server code in a WorkspaceActionError', async (code) => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: false,
+          status: code === 'interrupt_failed' ? 500 : 409,
+          json: async () => ({ error: `interruption failed: ${code}`, code }),
+        } as Response),
+      )
+      const store = useWorkspaceStore()
+
+      const rejection = store.interruptAgent('ws-1')
+
+      await expect(rejection).rejects.toMatchObject({
+        name: 'WorkspaceActionError',
+        message: `interruption failed: ${code}`,
+        code,
+      })
+      await expect(rejection).rejects.toBeInstanceOf(WorkspaceActionError)
+    })
+
+    it.each([
+      { status: 409, body: null, expectedMessage: 'HTTP 409', label: 'null body' },
+      { status: 409, body: [], expectedMessage: 'HTTP 409', label: 'array body' },
+      { status: 409, body: 'invalid response', expectedMessage: 'HTTP 409', label: 'primitive body' },
+      {
+        status: 409,
+        body: { error: 'unknown code', code: 'unknown_code' },
+        expectedMessage: 'unknown code',
+        label: 'unknown code',
+      },
+      {
+        status: 409,
+        body: { error: 'invalid code type', code: 42 },
+        expectedMessage: 'invalid code type',
+        label: 'non-string code',
+      },
+      {
+        status: 500,
+        body: { error: 'incoherent no-agent code', code: 'no_agent_running' },
+        expectedMessage: 'incoherent no-agent code',
+        label: 'no_agent_running under HTTP 500',
+      },
+      {
+        status: 409,
+        body: { error: 'incoherent engine code', code: 'interrupt_failed' },
+        expectedMessage: 'incoherent engine code',
+        label: 'interrupt_failed under HTTP 409',
+      },
+    ])('rejects $label as an untagged WorkspaceActionError', async ({ status, body, expectedMessage }) => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: false,
+          status,
+          json: async () => body,
+        } as Response),
+      )
+      const store = useWorkspaceStore()
+
+      const rejection = store.interruptAgent('ws-1')
+
+      await expect(rejection).rejects.toBeInstanceOf(WorkspaceActionError)
+      await expect(rejection).rejects.toMatchObject({
+        name: 'WorkspaceActionError',
+        message: expectedMessage,
+        code: undefined,
+      })
+    })
+
+    it('uses the HTTP fallback for a non-string error message while preserving a coherent code', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: false,
+          status: 500,
+          json: async () => ({ error: 42, code: 'interrupt_failed' }),
+        } as Response),
+      )
+      const store = useWorkspaceStore()
+
+      await expect(store.interruptAgent('ws-1')).rejects.toMatchObject({
+        name: 'WorkspaceActionError',
+        message: 'HTTP 500',
+        code: 'interrupt_failed',
+      })
     })
   })
 

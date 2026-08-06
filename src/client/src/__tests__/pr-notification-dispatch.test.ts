@@ -73,6 +73,19 @@ describe('PR notification WebSocket dispatch', () => {
     expect(Notify.create).toHaveBeenCalledWith(expect.objectContaining({ timeout: 4000 }))
   })
 
+  it.each([
+    'pr:merge-conflict',
+    'pr:changes-requested',
+  ] as const)('expires the formerly sticky %s toast after six seconds', (type) => {
+    useWebSocketStore()._routeMessage({
+      type,
+      workspaceId: 'w1',
+      payload: { prNumber: 42 },
+    })
+
+    expect(Notify.create).toHaveBeenLastCalledWith(expect.objectContaining({ timeout: 6000 }))
+  })
+
   it('uses the approved event volume instead of the general volume', () => {
     const settings = useSettingsStore().global
     settings.audioNotificationVolume = 0.9

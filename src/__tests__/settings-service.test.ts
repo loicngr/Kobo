@@ -2121,7 +2121,7 @@ describe('PR notification sounds (v45)', () => {
       audioQuestionSound: 'hey.mp3',
       networkAccessToken: 'keep-me',
     })
-    expect(SETTINGS_SCHEMA_VERSION).toBe(50)
+    expect(SETTINGS_SCHEMA_VERSION).toBe(53)
   })
 
   it('adds the auto-loop retry limit while preserving existing settings', () => {
@@ -2224,6 +2224,219 @@ describe('PR notification sounds (v45)', () => {
       audioPrApprovedVolume: 0.35,
       audioPrMergedVolume: 1,
     })
+  })
+})
+
+describe('whip feature toggle (v51)', () => {
+  it('defaults fresh installations to disabled', () => {
+    expect(getGlobalSettings().whipEnabled).toBe(false)
+  })
+
+  it('migrates existing settings to disabled without losing other values', () => {
+    const migrated = runSettingsMigrations({
+      schemaVersion: 50,
+      global: { audioNotifications: true },
+      projects: [],
+    })
+
+    expect(migrated.schemaVersion).toBe(53)
+    expect(migrated.global.whipEnabled).toBe(false)
+    expect(migrated.global.audioNotifications).toBe(true)
+  })
+
+  it('preserves and persists an enabled preference', () => {
+    const migrated = runSettingsMigrations({
+      schemaVersion: 50,
+      global: { whipEnabled: true },
+      projects: [],
+    })
+    expect(migrated.global.whipEnabled).toBe(true)
+
+    const updated = updateGlobalSettings({ whipEnabled: true })
+    expect(updated.whipEnabled).toBe(true)
+    expect(getGlobalSettings().whipEnabled).toBe(true)
+  })
+
+  it.each(['false', null, 1])('normalizes invalid v51 values to disabled: %j', (whipEnabled) => {
+    const migrated = runSettingsMigrations({
+      schemaVersion: 51,
+      global: { whipEnabled },
+      projects: [],
+    })
+
+    expect(migrated.global.whipEnabled).toBe(false)
+  })
+
+  it.each(['false', null, 1])('normalizes invalid updates to disabled: %j', (whipEnabled) => {
+    updateGlobalSettings({ whipEnabled: true })
+
+    const updated = updateGlobalSettings({ whipEnabled } as unknown as Partial<GlobalSettings>)
+
+    expect(updated.whipEnabled).toBe(false)
+    expect(getGlobalSettings().whipEnabled).toBe(false)
+  })
+
+  it('defaults fresh installations to the portable whip shortcut', () => {
+    expect(getGlobalSettings().whipShortcut).toBe('mod+shift+x')
+  })
+
+  it('migrates v51 settings to the default shortcut without losing values', () => {
+    const migrated = runSettingsMigrations({
+      schemaVersion: 51,
+      global: { whipEnabled: true, editorCommand: 'zed' },
+      projects: [],
+    })
+
+    expect(migrated.schemaVersion).toBe(53)
+    expect(migrated.global.whipShortcut).toBe('mod+shift+x')
+    expect(migrated.global.editorCommand).toBe('zed')
+  })
+
+  it.each([
+    '',
+    'mod',
+    'control',
+    'mod+control',
+    'ctrl',
+    'mod+ctrl',
+    'meta',
+    'alt',
+    'shift',
+    'mod+w',
+    'mod+shift+w',
+    'ctrl+w',
+    'ctrl+shift+w',
+    'meta+w',
+    'meta+shift+w',
+    'mod++x',
+    42,
+    null,
+  ])('normalizes an invalid shortcut to the default: %j', (whipShortcut) => {
+    const migrated = runSettingsMigrations({
+      schemaVersion: 52,
+      global: { whipShortcut },
+      projects: [],
+    })
+
+    expect(migrated.global.whipShortcut).toBe('mod+shift+x')
+  })
+
+  it.each([
+    'control',
+    'mod+control',
+    'ctrl',
+    'mod+ctrl',
+    'meta',
+    'alt',
+    'shift',
+    'mod',
+  ])('normalizes a modifier-only shortcut update to the default: %s', (whipShortcut) => {
+    const updated = updateGlobalSettings({ whipShortcut } as Partial<GlobalSettings>)
+
+    expect(updated.whipShortcut).toBe('mod+shift+x')
+    expect(getGlobalSettings().whipShortcut).toBe('mod+shift+x')
+  })
+
+  it('persists a valid custom shortcut', () => {
+    const updated = updateGlobalSettings({ whipShortcut: 'alt+k' } as Partial<GlobalSettings>)
+
+    expect(updated.whipShortcut).toBe('alt+k')
+    expect(getGlobalSettings().whipShortcut).toBe('alt+k')
+  })
+
+  it('defaults fresh installations to full whip volume', () => {
+    expect(getGlobalSettings().whipVolume).toBe(1)
+  })
+
+  it('migrates v52 settings to full whip volume without losing values', () => {
+    const migrated = runSettingsMigrations({
+      schemaVersion: 52,
+      global: { whipEnabled: true, whipShortcut: 'alt+k', editorCommand: 'zed' },
+      projects: [],
+    })
+
+    expect(migrated.schemaVersion).toBe(53)
+    expect(migrated.global.whipVolume).toBe(1)
+    expect(migrated.global.whipShortcut).toBe('alt+k')
+    expect(migrated.global.editorCommand).toBe('zed')
+  })
+
+  it('persists normalized whip values from a malformed current-schema file', () => {
+    const current = getSettings()
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        ...current,
+        global: {
+          ...current.global,
+          whipEnabled: 'true',
+          whipShortcut: 'mod+w',
+          whipVolume: 2,
+          futureGlobalSetting: 'preserved',
+        },
+        projects: [{ path: '/future/project', futureProjectSetting: true }],
+      }),
+    )
+
+    const loaded = getSettings()
+    expect(loaded.global).toMatchObject({
+      whipEnabled: false,
+      whipShortcut: 'mod+shift+x',
+      whipVolume: 1,
+      futureGlobalSetting: 'preserved',
+    })
+
+    const persisted = JSON.parse(fs.readFileSync(settingsPath, 'utf8'))
+    expect(persisted.global).toMatchObject({
+      whipEnabled: false,
+      whipShortcut: 'mod+shift+x',
+      whipVolume: 1,
+      futureGlobalSetting: 'preserved',
+    })
+    expect(persisted.projects).toEqual([{ path: '/future/project', futureProjectSetting: true }])
+
+    const repairedTimestamp = new Date('2000-01-01T00:00:00.000Z')
+    fs.utimesSync(settingsPath, repairedTimestamp, repairedTimestamp)
+    const mtimeBeforeSecondRead = fs.statSync(settingsPath).mtimeMs
+
+    const loadedAgain = getSettings()
+
+    expect(loadedAgain.global).toMatchObject({
+      whipEnabled: false,
+      whipShortcut: 'mod+shift+x',
+      whipVolume: 1,
+      futureGlobalSetting: 'preserved',
+    })
+    expect(loadedAgain.projects).toEqual([{ path: '/future/project', futureProjectSetting: true }])
+    expect(fs.statSync(settingsPath).mtimeMs).toBe(mtimeBeforeSecondRead)
+  })
+
+  it.each([null, Number.NaN, -0.1, 1.1])('normalizes malformed persisted whip volume to full: %j', (whipVolume) => {
+    const migrated = runSettingsMigrations({
+      schemaVersion: 53,
+      global: { whipVolume },
+      projects: [],
+    })
+
+    expect(migrated.global.whipVolume).toBe(1)
+  })
+
+  it.each([
+    [0.35, 0.35],
+    [-1, 0],
+    [2, 1],
+    ['0.4', 0.4],
+    [Number.NaN, 1],
+    [null, 1],
+    [false, 1],
+    ['', 1],
+    ['   ', 1],
+    [[], 1],
+  ])('normalizes submitted whip volume %j to %j', (whipVolume, expected) => {
+    const updated = updateGlobalSettings({ whipVolume } as unknown as Partial<GlobalSettings>)
+
+    expect(updated.whipVolume).toBe(expected)
+    expect(getGlobalSettings().whipVolume).toBe(expected)
   })
 })
 

@@ -342,6 +342,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     providerUsage: {} as Record<ProviderId, UsageSnapshot | undefined>,
     chatDraft: '',
     queuedMessages: {} as Record<string, { content: string; sessionId: string }>,
+    activeAgentSessionIds: {} as Record<string, string>,
     gitRefreshTrigger: 0,
     gitStatsCache: {} as Record<string, GitStats>,
     pendingWakeups: {} as Record<string, PendingWakeup>,
@@ -700,14 +701,27 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
-    async interruptAgent(id: string) {
+    async interruptAgent(id: string, options: { expectedSessionId?: string; disableAutoLoop?: boolean } = {}) {
       try {
         const res = await fetch(`/api/workspaces/${id}/interrupt`, {
           method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(options),
         })
         if (!res.ok) {
-          const body = await res.json().catch(() => ({}))
-          throw new Error(body.error ?? `HTTP ${res.status}`)
+          const body: unknown = await res.json().catch(() => undefined)
+          const errorBody =
+            typeof body === 'object' && body !== null && !Array.isArray(body)
+              ? (body as Record<string, unknown>)
+              : undefined
+          const message = typeof errorBody?.error === 'string' ? errorBody.error : `HTTP ${res.status}`
+          const responseCode = errorBody?.code
+          const code =
+            (res.status === 409 && (responseCode === 'no_agent_running' || responseCode === 'session_not_active')) ||
+            (res.status === 500 && responseCode === 'interrupt_failed')
+              ? responseCode
+              : undefined
+          throw new WorkspaceActionError(message, code)
         }
       } catch (err) {
         console.error('[workspace store] interruptAgent failed:', err)
@@ -1053,6 +1067,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     selectWorkspace(id: string) {
       this.selectedWorkspaceId = id
       this.selectedSessionId = null
+      this.sessions = []
       this.tasks = []
       // Mark as read before fetching details so the API response already reflects the read state
       this.markRead(id)
@@ -1981,6 +1996,20 @@ export const useWorkspaceStore = defineStore('workspace', {
       if (!queued) return
       this.cancelQueuedMessage(workspaceId, sessionId)
       useWebSocketStore().sendChatMessage(workspaceId, queued.content, sessionId)
+    },
+
+    setActiveAgentSession(workspaceId: string, sessionId: string) {
+      this.activeAgentSessionIds[workspaceId] = sessionId
+    },
+
+    clearActiveAgentSession(workspaceId: string, sessionId: string) {
+      if (this.activeAgentSessionIds[workspaceId] === sessionId) {
+        delete this.activeAgentSessionIds[workspaceId]
+      }
+    },
+
+    clearActiveAgentSessionOwner(workspaceId: string) {
+      delete this.activeAgentSessionIds[workspaceId]
     },
 
     updateWorkspaceFromEvent(workspaceId: string, data: Partial<Workspace>) {

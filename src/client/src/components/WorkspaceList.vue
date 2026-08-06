@@ -813,6 +813,7 @@ import { useWebSocketStore } from 'src/stores/websocket'
 import type { Workspace } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { useTimeAgo } from 'src/utils/formatters'
+import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
 import type { ProjectColor } from 'src/utils/project-color'
 import { projectColorFor, projectNameFor, projectNameForPath, projectTextColorFor } from 'src/utils/project-color'
 import { getAttentionReasons } from 'src/utils/workspace-attention'
@@ -983,14 +984,14 @@ async function confirmDelete() {
 
     // Backend succeeded on the DB side but a side-effect (worktree / branch)
     // failed — typically Docker left root-owned files the git remove couldn't
-    // touch. Show a persistent notification per warning with the command to
+    // touch. Show a six-second notification per warning with the command to
     // copy, so the user can recover in one paste without digging in the logs.
     for (const message of warnings) {
       $q.notify({
         type: 'warning',
         message,
         position: 'top',
-        timeout: 0, // sticky until user dismisses
+        timeout: DEFAULT_TOAST_TIMEOUT_MS,
         multiLine: true,
         classes: 'workspace-delete-warning',
         actions: [
@@ -1042,7 +1043,7 @@ async function confirmBulkDeleteArchived() {
         type: 'warning',
         message,
         position: 'top',
-        timeout: 0, // sticky until user dismisses
+        timeout: DEFAULT_TOAST_TIMEOUT_MS,
         multiLine: true,
         classes: 'workspace-delete-warning',
         actions: [
@@ -1104,7 +1105,7 @@ function onPurgeWorktreeClick(ws: Workspace, event: Event) {
           type: 'warning',
           message,
           position: 'top',
-          timeout: 0,
+          timeout: DEFAULT_TOAST_TIMEOUT_MS,
           multiLine: true,
           classes: 'workspace-delete-warning',
           actions: [

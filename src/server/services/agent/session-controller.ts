@@ -2,6 +2,7 @@ import type { AgentEngine, AgentEvent, EngineProcess, StartOptions } from './eng
 
 export class SessionController {
   private _engineProcess?: EngineProcess
+  private _startPromise?: Promise<void>
   private _status: 'running' | 'stopping' = 'running'
 
   get engineProcess(): EngineProcess | undefined {
@@ -16,14 +17,28 @@ export class SessionController {
   ) {}
 
   async start(options: StartOptions): Promise<void> {
-    if (this._engineProcess) throw new Error('SessionController already started')
-    this._engineProcess = await this.engine.start(options, (ev) => this.handle(ev))
+    if (this._startPromise) throw new Error('SessionController already started')
+    this._startPromise = this.startEngine(options)
+    await this._startPromise
+  }
+
+  private async startEngine(options: StartOptions): Promise<void> {
+    const process = await this.engine.start(options, (ev) => this.handle(ev))
+    this._engineProcess = process
+    if (this._status === 'stopping') {
+      this._engineProcess = undefined
+      await process.stop()
+      return
+    }
     this._status = 'running'
   }
 
-  sendMessage(content: string): void | Promise<void> {
+  async sendMessage(content: string): Promise<void> {
+    if (!this._startPromise) throw new Error('SessionController not started')
+    await this._startPromise
+    if (this._status === 'stopping') throw new Error('SessionController is stopping')
     if (!this._engineProcess) throw new Error('SessionController not started')
-    this._engineProcess.sendMessage(content)
+    await this._engineProcess.sendMessage(content)
   }
 
   interrupt(): void {

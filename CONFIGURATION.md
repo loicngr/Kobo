@@ -121,6 +121,9 @@ Settings are managed live from the **Settings** page in the UI and persisted to 
 | `editorCommand` | `string` | Command used by the "Open in editor" action (e.g. `code`, `phpstorm`, `cursor`). The worktree path is appended as the last argument. |
 | `browserNotifications` | `boolean` | Trigger Web Notifications when an agent finishes a turn. |
 | `audioNotifications` | `boolean` | Play a sound when an agent finishes a turn. |
+| `whipEnabled` | `boolean` | Enable the interactive whip. Default `false`. |
+| `whipShortcut` | `string` | Portable whip shortcut. Default `mod+shift+x`. |
+| `whipVolume` | `number` | Independent whip volume from `0` to `1`. Default `1`; master `audioNotifications` still mutes playback. |
 | `audioNotificationSound` | `string` | Identifier of the chosen sound. |
 | `audioQuestionSound` | `string` | Sound used when an agent asks a question. |
 | `audioPrCiFailedSound` | `string` | Sound used when CI enters `FAILURE`. |

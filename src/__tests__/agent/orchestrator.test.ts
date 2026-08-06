@@ -137,9 +137,9 @@ describe('Orchestrator — stop / interrupt / sendMessage', () => {
     expect(getAgentStatus(ws.id)).toBeNull()
   })
 
-  it('sendMessage throws when no agent is running', async () => {
+  it('sendMessage rejects when no agent is running', async () => {
     const { sendMessage } = await import('../../server/services/agent/orchestrator.js')
-    expect(() => sendMessage('nope', 'hi')).toThrow(/No agent running/)
+    await expect(sendMessage('nope', 'hi')).rejects.toThrow(/No agent running/)
   })
 
   it('refuses a message addressed to a session other than the active controller', async () => {
@@ -149,8 +149,8 @@ describe('Orchestrator — stop / interrupt / sendMessage', () => {
     const { agentSessionId } = startAgent(ws.id, '/tmp', 'hi')
     await flushControllerStart()
 
-    expect(() => sendMessage(ws.id, 'wrong session', 'another-session')).toThrow(/is not active/)
-    expect(() => sendMessage(ws.id, 'right session', agentSessionId)).not.toThrow()
+    await expect(sendMessage(ws.id, 'wrong session', 'another-session')).rejects.toThrow(/is not active/)
+    await expect(sendMessage(ws.id, 'right session', agentSessionId)).resolves.toBeUndefined()
   })
 
   it('getRunningCount reflects active controllers', async () => {
@@ -162,6 +162,353 @@ describe('Orchestrator — stop / interrupt / sendMessage', () => {
     expect(getRunningCount()).toBe(1)
     stopAgent(ws.id)
     expect(getRunningCount()).toBe(0)
+  })
+})
+
+describe('Orchestrator — lifecycle-safe fallback delivery', () => {
+  beforeEach(async () => {
+    vi.resetModules()
+    vi.useRealTimers()
+    await resetDb()
+  })
+
+  it('identifies the active controller session when the first send succeeds', async () => {
+    const { createWorkspace } = await import('../../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'W', projectPath: '/tmp', sourceBranch: 'd', workingBranch: 'b' })
+    const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+    _registerEngineForTest({
+      id: 'claude-code',
+      displayName: 'Claude Code',
+      capabilities: {
+        models: [],
+        permissionModes: ['bypass'],
+        supportsResume: true,
+        supportsMcp: true,
+        supportsSkills: true,
+      },
+      async start() {
+        return {
+          pid: 1,
+          engineSessionId: 'sid-active',
+          sendMessage() {},
+          interrupt() {},
+          async stop() {},
+        }
+      },
+    })
+    const { sendMessageForFallback, startAgent } = await import('../../server/services/agent/orchestrator.js')
+    const active = startAgent(ws.id, '/tmp', 'hi')
+    await flushControllerStart()
+
+    await expect(sendMessageForFallback(ws.id, 'follow up')).resolves.toEqual({
+      status: 'sent',
+      sessionId: active.agentSessionId,
+    })
+  })
+
+  it('reports stopped when stopAgent wins before fallback delivery resumes', async () => {
+    const { createWorkspace } = await import('../../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'W', projectPath: '/tmp', sourceBranch: 'd', workingBranch: 'b' })
+    const sendMessage = vi.fn(async () => undefined)
+    const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+    _registerEngineForTest({
+      id: 'claude-code',
+      displayName: 'Claude Code',
+      capabilities: {
+        models: [],
+        permissionModes: ['bypass'],
+        supportsResume: true,
+        supportsMcp: true,
+        supportsSkills: true,
+      },
+      async start() {
+        return {
+          pid: 1,
+          engineSessionId: 'sid-stopping',
+          sendMessage,
+          interrupt() {},
+          async stop() {},
+        }
+      },
+    })
+    const { sendMessageForFallback, startAgent, stopAgent } = await import(
+      '../../server/services/agent/orchestrator.js'
+    )
+    startAgent(ws.id, '/tmp', 'hi')
+    await flushControllerStart()
+
+    const delivery = sendMessageForFallback(ws.id, 'follow up')
+    stopAgent(ws.id)
+
+    await expect(delivery).resolves.toEqual({ status: 'stopped' })
+    expect(sendMessage).not.toHaveBeenCalled()
+  })
+
+  it('waits for the rejecting controller to end before reporting the agent as stopped', async () => {
+    vi.useFakeTimers()
+    try {
+      const { createWorkspace } = await import('../../server/services/workspace-service.js')
+      const ws = createWorkspace({ name: 'W', projectPath: '/tmp', sourceBranch: 'd', workingBranch: 'b' })
+      let emitEvent: (event: AgentEvent) => void = () => {}
+      const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+      _registerEngineForTest({
+        id: 'claude-code',
+        displayName: 'Claude Code',
+        capabilities: {
+          models: [],
+          permissionModes: ['bypass'],
+          supportsResume: true,
+          supportsMcp: true,
+          supportsSkills: true,
+        },
+        async start(_options, onEvent) {
+          emitEvent = onEvent
+          return {
+            pid: 1,
+            engineSessionId: 'sid-rejecting',
+            async sendMessage() {
+              throw new Error('engine rejected steering')
+            },
+            interrupt() {},
+            async stop() {},
+          }
+        },
+      })
+      const { FALLBACK_CONTROLLER_TURNOVER_POLL_MS, sendMessageForFallback, startAgent } = await import(
+        '../../server/services/agent/orchestrator.js'
+      )
+      startAgent(ws.id, '/tmp', 'hi')
+      await flushControllerStart()
+
+      const delivery = sendMessageForFallback(ws.id, 'follow up')
+      let settled = false
+      void delivery.then(
+        () => {
+          settled = true
+        },
+        () => {
+          settled = true
+        },
+      )
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(settled).toBe(false)
+
+      emitEvent({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+      await vi.advanceTimersByTimeAsync(FALLBACK_CONTROLLER_TURNOVER_POLL_MS)
+
+      await expect(delivery).resolves.toEqual({ status: 'stopped' })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('sends once to a replacement controller after the rejecting controller ends', async () => {
+    vi.useFakeTimers()
+    try {
+      const { createWorkspace } = await import('../../server/services/workspace-service.js')
+      const ws = createWorkspace({ name: 'W', projectPath: '/tmp', sourceBranch: 'd', workingBranch: 'b' })
+      let firstEmitEvent: (event: AgentEvent) => void = () => {}
+      const firstSend = vi.fn(async () => {
+        throw new Error('engine rejected steering')
+      })
+      const replacementSend = vi.fn(async () => undefined)
+      let starts = 0
+      const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+      _registerEngineForTest({
+        id: 'claude-code',
+        displayName: 'Claude Code',
+        capabilities: {
+          models: [],
+          permissionModes: ['bypass'],
+          supportsResume: true,
+          supportsMcp: true,
+          supportsSkills: true,
+        },
+        async start(_options, onEvent) {
+          starts += 1
+          if (starts === 1) firstEmitEvent = onEvent
+          return {
+            pid: starts,
+            engineSessionId: `sid-${starts}`,
+            sendMessage: starts === 1 ? firstSend : replacementSend,
+            interrupt() {},
+            async stop() {},
+          }
+        },
+      })
+      const { FALLBACK_CONTROLLER_TURNOVER_POLL_MS, sendMessageForFallback, startAgent } = await import(
+        '../../server/services/agent/orchestrator.js'
+      )
+      startAgent(ws.id, '/tmp', 'hi')
+      await flushControllerStart()
+
+      const delivery = sendMessageForFallback(ws.id, 'follow up')
+      await vi.advanceTimersByTimeAsync(0)
+      firstEmitEvent({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+      const replacement = startAgent(ws.id, '/tmp', 'replacement')
+      await flushControllerStart()
+      await vi.advanceTimersByTimeAsync(FALLBACK_CONTROLLER_TURNOVER_POLL_MS)
+
+      await expect(delivery).resolves.toEqual({ status: 'sent', sessionId: replacement.agentSessionId })
+      expect(firstSend).toHaveBeenCalledOnce()
+      expect(replacementSend).toHaveBeenCalledOnce()
+      expect(replacementSend).toHaveBeenCalledWith('follow up')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('times out while the same rejecting controller remains registered', async () => {
+    vi.useFakeTimers()
+    try {
+      const { createWorkspace } = await import('../../server/services/workspace-service.js')
+      const ws = createWorkspace({ name: 'W', projectPath: '/tmp', sourceBranch: 'd', workingBranch: 'b' })
+      const send = vi.fn(async () => {
+        throw new Error('engine rejected steering')
+      })
+      const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+      _registerEngineForTest({
+        id: 'claude-code',
+        displayName: 'Claude Code',
+        capabilities: {
+          models: [],
+          permissionModes: ['bypass'],
+          supportsResume: true,
+          supportsMcp: true,
+          supportsSkills: true,
+        },
+        async start() {
+          return {
+            pid: 1,
+            engineSessionId: 'sid-stuck',
+            sendMessage: send,
+            interrupt() {},
+            async stop() {},
+          }
+        },
+      })
+      const {
+        FALLBACK_CONTROLLER_TURNOVER_POLL_MS,
+        FALLBACK_CONTROLLER_TURNOVER_TIMEOUT_MS,
+        getRunningCount,
+        sendMessageForFallback,
+        startAgent,
+      } = await import('../../server/services/agent/orchestrator.js')
+      startAgent(ws.id, '/tmp', 'hi')
+      await flushControllerStart()
+
+      const delivery = sendMessageForFallback(ws.id, 'follow up')
+      const rejection = expect(delivery).rejects.toThrow(/timed out waiting for agent controller turnover/i)
+      await vi.advanceTimersByTimeAsync(FALLBACK_CONTROLLER_TURNOVER_TIMEOUT_MS + FALLBACK_CONTROLLER_TURNOVER_POLL_MS)
+
+      await rejection
+      expect(send).toHaveBeenCalledOnce()
+      expect(getRunningCount()).toBe(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('propagates a replacement controller send rejection without retrying or removing it', async () => {
+    vi.useFakeTimers()
+    try {
+      const { createWorkspace } = await import('../../server/services/workspace-service.js')
+      const ws = createWorkspace({ name: 'W', projectPath: '/tmp', sourceBranch: 'd', workingBranch: 'b' })
+      let firstEmitEvent: (event: AgentEvent) => void = () => {}
+      const firstSend = vi.fn(async () => {
+        throw new Error('first controller rejected')
+      })
+      const replacementSend = vi.fn(async () => {
+        throw new Error('replacement rejected')
+      })
+      let starts = 0
+      const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+      _registerEngineForTest({
+        id: 'claude-code',
+        displayName: 'Claude Code',
+        capabilities: {
+          models: [],
+          permissionModes: ['bypass'],
+          supportsResume: true,
+          supportsMcp: true,
+          supportsSkills: true,
+        },
+        async start(_options, onEvent) {
+          starts += 1
+          if (starts === 1) firstEmitEvent = onEvent
+          return {
+            pid: starts,
+            engineSessionId: `sid-${starts}`,
+            sendMessage: starts === 1 ? firstSend : replacementSend,
+            interrupt() {},
+            async stop() {},
+          }
+        },
+      })
+      const { FALLBACK_CONTROLLER_TURNOVER_POLL_MS, _getControllers, sendMessageForFallback, startAgent } =
+        await import('../../server/services/agent/orchestrator.js')
+      startAgent(ws.id, '/tmp', 'hi')
+      await flushControllerStart()
+
+      const delivery = sendMessageForFallback(ws.id, 'follow up')
+      const rejection = expect(delivery).rejects.toThrow('replacement rejected')
+      await vi.advanceTimersByTimeAsync(0)
+      firstEmitEvent({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+      const replacement = startAgent(ws.id, '/tmp', 'replacement')
+      await flushControllerStart()
+      await vi.advanceTimersByTimeAsync(FALLBACK_CONTROLLER_TURNOVER_POLL_MS)
+
+      await rejection
+      expect(firstSend).toHaveBeenCalledOnce()
+      expect(replacementSend).toHaveBeenCalledOnce()
+      expect(_getControllers().get(ws.id)?.agentSessionId).toBe(replacement.agentSessionId)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps a replacement registered when the stopped controller emits session:ended late', async () => {
+    const { createWorkspace } = await import('../../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'W', projectPath: '/tmp', sourceBranch: 'd', workingBranch: 'b' })
+    let firstEmitEvent: (event: AgentEvent) => void = () => {}
+    let starts = 0
+    const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+    _registerEngineForTest({
+      id: 'claude-code',
+      displayName: 'Claude Code',
+      capabilities: {
+        models: [],
+        permissionModes: ['bypass'],
+        supportsResume: true,
+        supportsMcp: true,
+        supportsSkills: true,
+      },
+      async start(_options, onEvent) {
+        starts += 1
+        if (starts === 1) firstEmitEvent = onEvent
+        return {
+          pid: starts,
+          engineSessionId: `sid-${starts}`,
+          sendMessage() {},
+          interrupt() {},
+          async stop() {},
+        }
+      },
+    })
+    const { _getControllers, getRunningCount, startAgent, stopAgent } = await import(
+      '../../server/services/agent/orchestrator.js'
+    )
+    startAgent(ws.id, '/tmp', 'first')
+    await flushControllerStart()
+
+    stopAgent(ws.id)
+    const replacement = startAgent(ws.id, '/tmp', 'replacement')
+    await flushControllerStart()
+    firstEmitEvent({ kind: 'session:ended', reason: 'killed', exitCode: null })
+
+    expect(getRunningCount()).toBe(1)
+    expect(_getControllers().get(ws.id)?.agentSessionId).toBe(replacement.agentSessionId)
   })
 })
 
@@ -531,13 +878,27 @@ describe('Orchestrator — interruptAgent', () => {
   })
 
   it('throws when no agent is running for the workspace', async () => {
-    const { interruptAgent } = await import('../../server/services/agent/orchestrator.js')
-    expect(() => interruptAgent('nope')).toThrow(/No agent running/)
+    const { interruptAgent, InterruptAgentError } = await import('../../server/services/agent/orchestrator.js')
+    let thrown: unknown
+    try {
+      interruptAgent('nope')
+    } catch (err) {
+      thrown = err
+    }
+
+    expect(thrown).toBeInstanceOf(InterruptAgentError)
+    expect(thrown).toMatchObject({
+      code: 'no_agent_running',
+      message: expect.stringMatching(/No agent running/),
+    })
   })
 
-  it('proxies the call to the controller', async () => {
+  it('only interrupts the expected active session before disabling auto-loop', async () => {
     const { createWorkspace } = await import('../../server/services/workspace-service.js')
+    const { getDb } = await import('../../server/db/index.js')
+    const autoLoopService = await import('../../server/services/auto-loop-service.js')
     const ws = createWorkspace({ name: 'W', projectPath: '/tmp', sourceBranch: 'd', workingBranch: 'b' })
+    getDb().prepare('UPDATE workspaces SET auto_loop = 1 WHERE id = ?').run(ws.id)
     let interruptCalls = 0
     const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
     _registerEngineForTest({
@@ -562,10 +923,81 @@ describe('Orchestrator — interruptAgent', () => {
         }
       },
     })
-    const { startAgent, interruptAgent } = await import('../../server/services/agent/orchestrator.js')
-    startAgent(ws.id, '/tmp', 'hi')
+    const { startAgent, interruptAgent, InterruptAgentError } = await import(
+      '../../server/services/agent/orchestrator.js'
+    )
+    const { agentSessionId } = startAgent(ws.id, '/tmp', 'hi')
     await flushControllerStart()
-    interruptAgent(ws.id)
+
+    expect(() => interruptAgent(ws.id, { expectedSessionId: '', disableAutoLoop: true })).toThrow(/not active/)
+    expect(interruptCalls).toBe(0)
+    expect(autoLoopService.getStatus(ws.id).auto_loop).toBe(true)
+
+    let thrown: unknown
+    try {
+      interruptAgent(ws.id, { expectedSessionId: 'stale-session', disableAutoLoop: true })
+    } catch (err) {
+      thrown = err
+    }
+    expect(thrown).toBeInstanceOf(InterruptAgentError)
+    expect(thrown).toMatchObject({
+      code: 'session_not_active',
+      message: expect.stringMatching(/not active/),
+    })
+    expect(interruptCalls).toBe(0)
+    expect(autoLoopService.getStatus(ws.id).auto_loop).toBe(true)
+
+    interruptAgent(ws.id, { expectedSessionId: agentSessionId, disableAutoLoop: true })
     expect(interruptCalls).toBe(1)
+    expect(autoLoopService.getStatus(ws.id).auto_loop).toBe(false)
+  })
+
+  it('keeps auto-loop enabled when the controller interrupt fails', async () => {
+    const { createWorkspace } = await import('../../server/services/workspace-service.js')
+    const { getDb } = await import('../../server/db/index.js')
+    const autoLoopService = await import('../../server/services/auto-loop-service.js')
+    const ws = createWorkspace({ name: 'W', projectPath: '/tmp', sourceBranch: 'd', workingBranch: 'b' })
+    getDb().prepare('UPDATE workspaces SET auto_loop = 1 WHERE id = ?').run(ws.id)
+    const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+    _registerEngineForTest({
+      id: 'claude-code',
+      displayName: 'Claude Code',
+      capabilities: {
+        models: [],
+        permissionModes: ['bypass'],
+        supportsResume: true,
+        supportsMcp: true,
+        supportsSkills: true,
+      },
+      async start(_opts, _onEvent) {
+        return {
+          pid: 1234,
+          engineSessionId: 'sid',
+          sendMessage() {},
+          interrupt() {
+            throw new Error('interrupt failed')
+          },
+          async stop() {},
+        }
+      },
+    })
+    const { startAgent, interruptAgent, InterruptAgentError } = await import(
+      '../../server/services/agent/orchestrator.js'
+    )
+    const { agentSessionId } = startAgent(ws.id, '/tmp', 'hi')
+    await flushControllerStart()
+
+    let thrown: unknown
+    try {
+      interruptAgent(ws.id, { expectedSessionId: agentSessionId, disableAutoLoop: true })
+    } catch (err) {
+      thrown = err
+    }
+    expect(thrown).toBeInstanceOf(InterruptAgentError)
+    expect(thrown).toMatchObject({
+      code: 'interrupt_failed',
+      message: expect.stringMatching(/Failed to interrupt agent.*interrupt failed/),
+    })
+    expect(autoLoopService.getStatus(ws.id).auto_loop).toBe(true)
   })
 })

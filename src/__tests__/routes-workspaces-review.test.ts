@@ -47,6 +47,7 @@ vi.mock('../server/services/agent/orchestrator.js', () => ({
   startAgent: vi.fn().mockReturnValue({ agentSessionId: 'mock-agent-session-id' }),
   stopAgent: vi.fn(),
   sendMessage: vi.fn(),
+  sendMessageForFallback: vi.fn().mockResolvedValue({ status: 'sent', sessionId: 'delivered-session-id' }),
   getAgentStatus: vi.fn().mockReturnValue(null),
   getActiveSessionId: vi.fn().mockReturnValue('active-session-id'),
 }))
@@ -303,8 +304,11 @@ describe('POST /api/workspaces/:id/start-review', () => {
     expect(data.error).toContain("Workspace 'missing' not found")
   })
 
-  it('happy path with running agent dispatches via sendMessage and emits user:message', async () => {
-    vi.mocked(agentManager.sendMessage).mockReturnValue(undefined as never)
+  it('dispatches through the lifecycle-safe sender and emits user:message without resuming', async () => {
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({
+      status: 'sent',
+      sessionId: 'recipient-session',
+    })
 
     const res = await app.request('/api/workspaces/ws-1/start-review', {
       method: 'POST',
@@ -316,9 +320,8 @@ describe('POST /api/workspaces/:id/start-review', () => {
     const data = await res.json()
     expect(data).toEqual({ ok: true, messageSent: true, newSession: false })
 
-    // sendMessage called with rendered prompt (non-empty string)
-    expect(agentManager.sendMessage).toHaveBeenCalledTimes(1)
-    const [wsId, prompt] = vi.mocked(agentManager.sendMessage).mock.calls[0]
+    expect(agentManager.sendMessageForFallback).toHaveBeenCalledTimes(1)
+    const [wsId, prompt] = vi.mocked(agentManager.sendMessageForFallback).mock.calls[0]
     expect(wsId).toBe('ws-1')
     expect(typeof prompt).toBe('string')
     expect((prompt as string).length).toBeGreaterThan(0)
@@ -328,7 +331,7 @@ describe('POST /api/workspaces/:id/start-review', () => {
       'ws-1',
       'user:message',
       expect.objectContaining({ content: prompt, sender: 'user' }),
-      'sess-1',
+      'recipient-session',
     )
 
     // wakeupService.cancel called
@@ -338,10 +341,8 @@ describe('POST /api/workspaces/:id/start-review', () => {
     expect(agentManager.startAgent).not.toHaveBeenCalled()
   })
 
-  it('falls back to startAgent(resume=true) when sendMessage throws', async () => {
-    vi.mocked(agentManager.sendMessage).mockImplementation(() => {
-      throw new Error('No agent running')
-    })
+  it('falls back to startAgent(resume=true) only when delivery reports stopped', async () => {
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({ status: 'stopped' })
 
     const res = await app.request('/api/workspaces/ws-1/start-review', {
       method: 'POST',
@@ -367,12 +368,16 @@ describe('POST /api/workspaces/:id/start-review', () => {
     expect(args[7]).toBe(fakeWorkspace.reasoningEffort)
 
     expect(workspaceService.updateWorkspaceStatus).toHaveBeenCalledWith('ws-1', 'executing')
+    expect(wsService.emit).toHaveBeenCalledWith(
+      'ws-1',
+      'user:message',
+      expect.objectContaining({ sender: 'user' }),
+      'mock-agent-session-id',
+    )
   })
 
-  it('returns 500 when both sendMessage and startAgent fail', async () => {
-    vi.mocked(agentManager.sendMessage).mockImplementation(() => {
-      throw new Error('No agent running')
-    })
+  it('returns 500 when stopped delivery cannot start a resume', async () => {
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({ status: 'stopped' })
     vi.mocked(agentManager.startAgent).mockImplementation(() => {
       throw new Error('boom: cannot start')
     })
@@ -409,7 +414,7 @@ describe('POST /api/workspaces/:id/start-review', () => {
     expect(data).toEqual({ ok: true, messageSent: true, newSession: true })
 
     expect(callOrder).toEqual(['stopAgent', 'startAgent'])
-    expect(agentManager.sendMessage).not.toHaveBeenCalled()
+    expect(agentManager.sendMessageForFallback).not.toHaveBeenCalled()
 
     const args = vi.mocked(agentManager.startAgent).mock.calls[0]
     expect(args[4]).toBe(false) // resume=false
@@ -482,7 +487,10 @@ describe('POST /api/workspaces/:id/start-review', () => {
       customAutoLoopGroomingIntro: '',
       customQaPromptTemplate: '',
     } as never)
-    vi.mocked(agentManager.sendMessage).mockReturnValue(undefined as never)
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({
+      status: 'sent',
+      sessionId: 'delivered-session-id',
+    })
 
     const res = await app.request('/api/workspaces/ws-1/start-review', {
       method: 'POST',
@@ -491,7 +499,7 @@ describe('POST /api/workspaces/:id/start-review', () => {
     })
 
     expect(res.status).toBe(200)
-    const [, prompt] = vi.mocked(agentManager.sendMessage).mock.calls[0]
+    const [, prompt] = vi.mocked(agentManager.sendMessageForFallback).mock.calls[0]
     expect(prompt as string).toContain('PROJECT TEMPLATE')
     expect(prompt as string).toContain('feature/test')
     expect(prompt as string).toContain('abc1234deadbeef')
@@ -510,7 +518,10 @@ describe('POST /api/workspaces/:id/start-review', () => {
       notionStatusProperty: '',
       notionInProgressStatus: '',
     })
-    vi.mocked(agentManager.sendMessage).mockReturnValue(undefined as never)
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({
+      status: 'sent',
+      sessionId: 'delivered-session-id',
+    })
 
     const res = await app.request('/api/workspaces/ws-1/start-review', {
       method: 'POST',
@@ -519,7 +530,7 @@ describe('POST /api/workspaces/:id/start-review', () => {
     })
 
     expect(res.status).toBe(200)
-    const [, prompt] = vi.mocked(agentManager.sendMessage).mock.calls[0]
+    const [, prompt] = vi.mocked(agentManager.sendMessageForFallback).mock.calls[0]
     // DEFAULT template starts with "You are reviewing code changes…"
     expect(prompt as string).toContain('You are reviewing code changes')
     expect(prompt as string).toContain('Test Workspace')
@@ -548,7 +559,7 @@ describe('POST /api/workspaces/:id/start-review', () => {
     expect(data.error).toContain('ambiguous argument')
 
     // Pipeline never reached the dispatch stage
-    expect(agentManager.sendMessage).not.toHaveBeenCalled()
+    expect(agentManager.sendMessageForFallback).not.toHaveBeenCalled()
     expect(agentManager.startAgent).not.toHaveBeenCalled()
     // And no user:message ghost in the chat
     expect(wsService.emit).not.toHaveBeenCalled()
@@ -556,7 +567,10 @@ describe('POST /api/workspaces/:id/start-review', () => {
 
   it('inserts the working-tree separator only when working-tree stats are non-empty', async () => {
     vi.mocked(gitOps.getWorkingTreeDiffStats).mockReturnValue(' src/foo.ts | 5 +++--\n')
-    vi.mocked(agentManager.sendMessage).mockReturnValue(undefined as never)
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({
+      status: 'sent',
+      sessionId: 'delivered-session-id',
+    })
 
     const res = await app.request('/api/workspaces/ws-1/start-review', {
       method: 'POST',
@@ -565,14 +579,17 @@ describe('POST /api/workspaces/:id/start-review', () => {
     })
 
     expect(res.status).toBe(200)
-    const [, prompt] = vi.mocked(agentManager.sendMessage).mock.calls[0]
+    const [, prompt] = vi.mocked(agentManager.sendMessageForFallback).mock.calls[0]
     expect(prompt as string).toContain('— Working tree (uncommitted) —')
     expect(prompt as string).toContain('src/foo.ts | 5 +++--')
   })
 
   it('omits the working-tree separator when working-tree stats are empty', async () => {
     vi.mocked(gitOps.getWorkingTreeDiffStats).mockReturnValue('')
-    vi.mocked(agentManager.sendMessage).mockReturnValue(undefined as never)
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({
+      status: 'sent',
+      sessionId: 'delivered-session-id',
+    })
 
     const res = await app.request('/api/workspaces/ws-1/start-review', {
       method: 'POST',
@@ -581,12 +598,15 @@ describe('POST /api/workspaces/:id/start-review', () => {
     })
 
     expect(res.status).toBe(200)
-    const [, prompt] = vi.mocked(agentManager.sendMessage).mock.calls[0]
+    const [, prompt] = vi.mocked(agentManager.sendMessageForFallback).mock.calls[0]
     expect(prompt as string).not.toContain('— Working tree (uncommitted) —')
   })
 
   it('trims whitespace from additionalInstructions before rendering', async () => {
-    vi.mocked(agentManager.sendMessage).mockReturnValue(undefined as never)
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({
+      status: 'sent',
+      sessionId: 'delivered-session-id',
+    })
 
     const res = await app.request('/api/workspaces/ws-1/start-review', {
       method: 'POST',
@@ -595,7 +615,7 @@ describe('POST /api/workspaces/:id/start-review', () => {
     })
 
     expect(res.status).toBe(200)
-    const [, prompt] = vi.mocked(agentManager.sendMessage).mock.calls[0]
+    const [, prompt] = vi.mocked(agentManager.sendMessageForFallback).mock.calls[0]
     expect(prompt as string).toContain('focus on perf')
     expect(prompt as string).not.toContain('   focus on perf   ')
   })
@@ -625,12 +645,9 @@ describe('POST /api/workspaces/:id/start-review', () => {
   })
 
   it('does not emit user:message when dispatch fails (no ghost message in chat)', async () => {
-    vi.mocked(agentManager.sendMessage).mockImplementation(() => {
-      throw new Error('No agent running')
-    })
-    vi.mocked(agentManager.startAgent).mockImplementation(() => {
-      throw new Error('boom: cannot start')
-    })
+    vi.mocked(agentManager.sendMessageForFallback).mockRejectedValueOnce(
+      new Error('Timed out waiting for agent controller turnover'),
+    )
 
     const res = await app.request('/api/workspaces/ws-1/start-review', {
       method: 'POST',
@@ -639,6 +656,10 @@ describe('POST /api/workspaces/:id/start-review', () => {
     })
 
     expect(res.status).toBe(500)
+    expect((await res.json()).error).toBe(
+      'Failed to dispatch review prompt: Timed out waiting for agent controller turnover',
+    )
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
     expect(wsService.emit).not.toHaveBeenCalled()
   })
 })

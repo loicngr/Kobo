@@ -76,6 +76,14 @@ export function createCodexEngine(): AgentEngine {
       let activeTurnId: string | undefined
       let steerChain: Promise<void> = Promise.resolve()
       let gracefulInterruptPromise: Promise<void> | undefined
+      let readySettled = false
+      let resolveReady!: () => void
+      let rejectReady!: (error: Error) => void
+      const readyPromise = new Promise<void>((resolve, reject) => {
+        resolveReady = resolve
+        rejectReady = reject
+      })
+      void readyPromise.catch(() => {})
 
       const emitDirect = (ev: AgentEvent): void => {
         try {
@@ -87,7 +95,28 @@ export function createCodexEngine(): AgentEngine {
       const streamingBatcher = createStreamingBatcher(emitDirect)
       const safeEmit = (ev: AgentEvent): void => streamingBatcher.push(ev)
 
+      let rejectChildFailure!: (error: Error) => void
+      const childFailurePromise = new Promise<never>((_resolve, reject) => {
+        rejectChildFailure = reject
+      })
+      void childFailurePromise.catch(() => {})
+
       const child = spawnAppServer({ cwd: options.workingDir, env: options.env, signal: abortController.signal })
+
+      child.on('error', (error: NodeJS.ErrnoException) => {
+        const isExpectedAbort =
+          abortController.signal.aborted && (error.code === 'ABORT_ERR' || error.name === 'AbortError')
+        if (isExpectedAbort) return
+        console.error('[codex] child process error:', error)
+        rejectChildFailure(error)
+      })
+      child.once('exit', (code, signal) => {
+        if (!iteratorRunning || abortController.signal.aborted) return
+        const detail = code === null ? `signal ${signal ?? 'unknown'}` : `code ${code}`
+        rejectChildFailure(new Error(`Codex app-server exited unexpectedly with ${detail}`))
+      })
+
+      const waitForChild = <T>(operation: Promise<T>): Promise<T> => Promise.race([operation, childFailurePromise])
 
       if (child.stderr) {
         child.stderr.setEncoding('utf8')
@@ -115,6 +144,7 @@ export function createCodexEngine(): AgentEngine {
           rejectTurnDone(new CodexTurnTimeoutError())
         },
       })
+      void turnDonePromise.catch(() => {})
       abortController.signal.addEventListener('abort', () => {
         const err = new Error('AbortError')
         err.name = 'AbortError'
@@ -245,23 +275,25 @@ export function createCodexEngine(): AgentEngine {
       const iteratorPromise = (async () => {
         iteratorRunning = true
         try {
-          await client.connect()
+          await waitForChild(client.connect())
 
           if (isResume && options.resumeFromEngineSessionId) {
-            await client.resumeThread({
-              threadId: options.resumeFromEngineSessionId,
-              cwd: options.workingDir,
-              persistExtendedHistory: false,
-              ...(threadParams.model != null ? { model: threadParams.model } : {}),
-              ...(threadParams.approvalPolicy != null ? { approvalPolicy: threadParams.approvalPolicy } : {}),
-              ...(threadParams.sandbox != null ? { sandbox: threadParams.sandbox } : {}),
-              ...(threadParams.modelReasoningEffort != null
-                ? { modelReasoningEffort: threadParams.modelReasoningEffort }
-                : {}),
-              ...(threadParams.config != null ? { config: threadParams.config } : {}),
-            })
+            await waitForChild(
+              client.resumeThread({
+                threadId: options.resumeFromEngineSessionId,
+                cwd: options.workingDir,
+                persistExtendedHistory: false,
+                ...(threadParams.model != null ? { model: threadParams.model } : {}),
+                ...(threadParams.approvalPolicy != null ? { approvalPolicy: threadParams.approvalPolicy } : {}),
+                ...(threadParams.sandbox != null ? { sandbox: threadParams.sandbox } : {}),
+                ...(threadParams.modelReasoningEffort != null
+                  ? { modelReasoningEffort: threadParams.modelReasoningEffort }
+                  : {}),
+                ...(threadParams.config != null ? { config: threadParams.config } : {}),
+              }),
+            )
           } else {
-            const startResp = await client.startThread(threadParams)
+            const startResp = await waitForChild(client.startThread(threadParams))
             discoveredSessionId = startResp.thread.id
           }
 
@@ -269,15 +301,19 @@ export function createCodexEngine(): AgentEngine {
 
           // collaborationMode is sticky server-side — always send it explicitly,
           // never omit (would leave a Bypass turn stuck in a previous Plan mode).
-          const initialTurn = await client.startTurn({
-            threadId: discoveredSessionId!,
-            input,
-            collaborationMode,
-          })
+          const initialTurn = await waitForChild(
+            client.startTurn({
+              threadId: discoveredSessionId!,
+              input,
+              collaborationMode,
+            }),
+          )
           activeTurnId = initialTurn.turnId
           turnLiveness.start()
+          readySettled = true
+          resolveReady()
 
-          await turnDonePromise
+          await waitForChild(turnDonePromise)
           turnLiveness.stop()
 
           const reason: 'error' | 'killed' | 'completed' = mapperState.sawErrorResult
@@ -294,6 +330,10 @@ export function createCodexEngine(): AgentEngine {
           turnLiveness.stop()
           const error = err as Error
           const message = error.message ?? String(err)
+          if (!readySettled) {
+            readySettled = true
+            rejectReady(error)
+          }
           const isAbort = userInterrupted || error.name === 'AbortError' || abortController.signal.aborted
           const isResumeAttempt = options.resumeFromEngineSessionId !== undefined
 
@@ -336,6 +376,7 @@ export function createCodexEngine(): AgentEngine {
         },
         sendMessage(text: string): Promise<void> {
           const steer = async (): Promise<void> => {
+            await readyPromise
             if (!discoveredSessionId || !activeTurnId) {
               throw new Error('Codex session is not ready to receive a message')
             }

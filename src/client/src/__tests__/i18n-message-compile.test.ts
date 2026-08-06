@@ -12,6 +12,7 @@ import itLocale from '../i18n/it'
 // when first resolved. We resolve EVERY key in EVERY locale here so a bad
 // string fails the suite instead of breaking the UI in the browser.
 const locales = { en, fr, de, es, it: itLocale } as const
+const whipPhraseKeys = [1, 2, 3, 4, 5].map((n) => `whip.phrase${n}`)
 
 describe('i18n message compilation', () => {
   for (const [locale, messages] of Object.entries(locales)) {
@@ -33,5 +34,12 @@ describe('i18n message compilation', () => {
   it("renders the cron advanced hint with a literal @ (escaped via {'@'})", () => {
     const i18n = createI18n({ legacy: false, locale: 'en', messages: { en } })
     expect((i18n.global.t as (k: string) => string)('schedule.advancedHint')).toContain('@hourly/@daily')
+  })
+
+  it.each(Object.entries(locales))("keeps literal 'tocard' in every %s whip phrase", (_locale, messages) => {
+    const dictionary = messages as Record<string, string>
+    for (const key of whipPhraseKeys) {
+      expect(dictionary[key]).toContain('tocard')
+    }
   })
 })

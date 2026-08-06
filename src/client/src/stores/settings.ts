@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { DEFAULT_PR_NOTIFICATION_AUDIO_SETTINGS } from 'src/utils/notification-sounds'
 import type { ProjectColor } from 'src/utils/project-color'
+import { DEFAULT_WHIP_SHORTCUT } from 'src/utils/whip-shortcut'
 import { WORKTREES_PATH } from '../../../shared/consts'
 import type { SkillSuite } from '../../../shared/skill-suite-prompts'
 
@@ -148,6 +149,9 @@ interface GlobalSettings {
   notionEnabled: boolean
   sentryEnabled: boolean
   showThinkingBlocks: boolean
+  whipEnabled: boolean
+  whipShortcut: string
+  whipVolume: number
   tags: string[]
   /**
    * User-managed git branch prefixes for the workspace creation page. Stored
@@ -254,6 +258,9 @@ export const useSettingsStore = defineStore('settings', {
       notionEnabled: true,
       sentryEnabled: true,
       showThinkingBlocks: true,
+      whipEnabled: false,
+      whipShortcut: DEFAULT_WHIP_SHORTCUT,
+      whipVolume: 1,
       tags: [],
       branchPrefixes: [],
       setupScript: '',
