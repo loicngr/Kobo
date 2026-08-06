@@ -366,13 +366,21 @@ export function dispatchAgentEvent(
       workspaceStore.clearPendingForSession(workspaceId, sessionId)
     }
     const activeSessionId = workspaceStore.activeAgentSessionIds[workspaceId]
-    if (sessionId && activeSessionId && sessionId !== activeSessionId) {
+    const isSuperseded =
+      event.superseded === true ||
+      (typeof sessionId === 'string' &&
+        sessionId.length > 0 &&
+        activeSessionId !== undefined &&
+        sessionId !== activeSessionId)
+    if (isSuperseded) {
       workspaceStore.cancelQueuedMessage(workspaceId, sessionId)
       return
     }
     agentStream.setCompacting(workspaceId, false)
     if (sessionId) {
       workspaceStore.clearActiveAgentSession(workspaceId, sessionId)
+    } else {
+      workspaceStore.clearActiveAgentSessionOwner(workspaceId)
     }
     const currentStatus = workspaceStore.workspaces.find((w) => w.id === workspaceId)?.status
     const derivedStatus =
@@ -825,10 +833,13 @@ export const useWebSocketStore = defineStore('websocket', {
                     continue
                   }
                   if (ev.kind === 'session:ended') {
+                    const store = useWorkspaceStore()
                     if (evSessionId) {
-                      const store = useWorkspaceStore()
                       store.clearPendingForSession(workspaceId, evSessionId)
+                      store.cancelQueuedMessage(workspaceId, evSessionId)
                       store.clearActiveAgentSession(workspaceId, evSessionId)
+                    } else if (ev.superseded !== true) {
+                      store.clearActiveAgentSessionOwner(workspaceId)
                     }
                     continue
                   }

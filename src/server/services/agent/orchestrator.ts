@@ -652,16 +652,20 @@ function handleEvent(
   sourceController: SessionController | undefined,
   ev: AgentEvent,
 ): void {
-  routeEvent(workspaceId, agentSessionId, ev)
-
   const registeredController = controllers.get(workspaceId)
-  const isSuperseded =
+  const hasReplacement =
     sourceController !== undefined && registeredController !== undefined && registeredController !== sourceController
+  const sourceNoLongerOwnsWorkspace = sourceController !== undefined && registeredController !== sourceController
 
-  // Once a replacement owns the workspace, stale non-terminal events remain
-  // visible in the old session feed but cannot mutate replacement-owned state.
-  // session:ended is handled below because it still has session-local cleanup.
-  if (isSuperseded && ev.kind !== 'session:ended') return
+  // A stopped controller can continue draining buffered engine events after it
+  // has lost ownership. Drop every stale non-terminal event before it reaches
+  // persistence/live delivery, including the gap where no replacement is
+  // registered yet. A terminal event still records session-local history; it
+  // carries a durable marker only when a different controller now owns the
+  // workspace, so replay does not depend on transient browser state.
+  if (sourceNoLongerOwnsWorkspace && ev.kind !== 'session:ended') return
+  const routedEvent = ev.kind === 'session:ended' && hasReplacement ? { ...ev, superseded: true } : ev
+  routeEvent(workspaceId, agentSessionId, routedEvent)
 
   if (ev.kind === 'rate_limit') {
     latestRateLimitInfo.set(workspaceId, ev.info)

@@ -2008,6 +2008,10 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
+    clearActiveAgentSessionOwner(workspaceId: string) {
+      delete this.activeAgentSessionIds[workspaceId]
+    },
+
     updateWorkspaceFromEvent(workspaceId: string, data: Partial<Workspace>) {
       const idx = this.workspaces.findIndex((w) => w.id === workspaceId)
       if (idx >= 0) {

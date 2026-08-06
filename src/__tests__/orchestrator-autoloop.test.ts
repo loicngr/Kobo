@@ -224,6 +224,7 @@ describe('orchestrator auto-loop integration', () => {
 
   it('isolates a replacement lifecycle from the stopped controller late session:ended', async () => {
     const orch = await import('../server/services/agent/orchestrator.js')
+    const eventRouter = await import('../server/services/agent/event-router.js')
     const autoLoop = await import('../server/services/auto-loop-service.js')
     const cleanupScript = await import('../server/services/cleanup-script-service.js')
     const processTracker = await import('../server/utils/process-tracker.js')
@@ -276,8 +277,16 @@ describe('orchestrator auto-loop integration', () => {
     quotaBackoff.arm(wsId, 60_000, { resetsAt: null, source: 'fallback_ladder' })
     vi.clearAllMocks()
 
+    emitters[0]?.({ kind: 'session:started', engineSessionId: 'late-engine-1' })
     emitters[0]?.({ kind: 'session:ended', reason: 'killed', exitCode: null })
 
+    expect(eventRouter.routeEvent).toHaveBeenCalledOnce()
+    expect(eventRouter.routeEvent).toHaveBeenCalledWith(wsId, first.agentSessionId, {
+      kind: 'session:ended',
+      reason: 'killed',
+      exitCode: null,
+      superseded: true,
+    })
     expect(orch._getControllers().get(wsId)?.agentSessionId).toBe(replacement.agentSessionId)
     expect(getWorkspace(wsId)).toMatchObject({ status: 'executing', hasUnread: false })
     expect(orch._getRetryCounts().get(wsId)).toBe(2)
@@ -307,6 +316,7 @@ describe('orchestrator auto-loop integration', () => {
 
   it('finalizes a manually stopped session without advancing auto-loop or running cleanup', async () => {
     const orch = await import('../server/services/agent/orchestrator.js')
+    const eventRouter = await import('../server/services/agent/event-router.js')
     const autoLoop = await import('../server/services/auto-loop-service.js')
     const cleanupScript = await import('../server/services/cleanup-script-service.js')
     const processTracker = await import('../server/utils/process-tracker.js')
@@ -343,8 +353,15 @@ describe('orchestrator auto-loop integration', () => {
     orch.stopAgent(wsId)
     vi.clearAllMocks()
 
+    emitEvent({ kind: 'session:started', engineSessionId: 'late-manual-stop-engine' })
     emitEvent({ kind: 'session:ended', reason: 'killed', exitCode: null })
 
+    expect(eventRouter.routeEvent).toHaveBeenCalledOnce()
+    expect(eventRouter.routeEvent).toHaveBeenCalledWith(wsId, session.agentSessionId, {
+      kind: 'session:ended',
+      reason: 'killed',
+      exitCode: null,
+    })
     expect(orch._getControllers().has(wsId)).toBe(false)
     expect(orch._getRetryCounts().has(wsId)).toBe(false)
     expect(processTracker.unregisterProcess).toHaveBeenCalledOnce()

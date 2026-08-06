@@ -269,6 +269,69 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
     expect(notify).toHaveBeenCalledTimes(1)
   })
 
+  it('honors a durable superseded marker without relying on local ownership context', async () => {
+    const { useAgentStreamStore } = await import('../stores/agent-stream.js')
+    const stream = useAgentStreamStore()
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const ws = useWorkspaceStore()
+    ws.workspaces = [workspaceFixture()]
+    ws.enqueuePending('w1', {
+      kind: 'question',
+      toolCallId: 'pending-A',
+      toolName: 'AskUserQuestion',
+      input: {},
+      agentSessionId: 'session-A',
+    })
+    ws.queueMessage('w1', 'queued for A', 'session-A')
+    ws.upsertSubagent('w1', { toolUseId: 'subagent-B', status: 'running' })
+    const fetchWorkspaces = vi.spyOn(ws, 'fetchWorkspaces').mockResolvedValue()
+    const finalizeRunningSubagents = vi.spyOn(ws, 'finalizeRunningSubagents')
+    const flushQueuedMessage = vi.spyOn(ws, 'flushQueuedMessage')
+    vi.mocked(notify).mockClear()
+    const { dispatchAgentEvent } = await import('../stores/websocket.js')
+    dispatchAgentEvent('w1', { kind: 'session:compacting', active: true })
+
+    dispatchAgentEvent(
+      'w1',
+      { kind: 'session:ended', reason: 'completed', exitCode: 0, superseded: true },
+      undefined,
+      undefined,
+      'session-A',
+    )
+
+    expect(stream.eventsFor('w1').at(-1)).toEqual({
+      kind: 'session:ended',
+      reason: 'completed',
+      exitCode: 0,
+      superseded: true,
+    })
+    expect(ws.peekPending('w1')).toBeUndefined()
+    expect(ws.getQueuedMessage('w1', 'session-A')).toBeUndefined()
+    expect(ws.workspaces[0]?.status).toBe('executing')
+    expect(stream.isCompacting('w1')).toBe(true)
+    expect(ws.subagents.w1?.['subagent-B']?.status).toBe('running')
+    expect(fetchWorkspaces).not.toHaveBeenCalled()
+    expect(finalizeRunningSubagents).not.toHaveBeenCalled()
+    expect(flushQueuedMessage).not.toHaveBeenCalled()
+    expect(notify).not.toHaveBeenCalled()
+  })
+
+  it('clears the active owner when an anonymous legacy session end applies global effects', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const ws = useWorkspaceStore()
+    ws.workspaces = [workspaceFixture()]
+    ws.setActiveAgentSession('w1', 'session-B')
+    vi.spyOn(ws, 'fetchWorkspaces').mockResolvedValue()
+    vi.mocked(notify).mockClear()
+    const { dispatchAgentEvent } = await import('../stores/websocket.js')
+
+    dispatchAgentEvent('w1', { kind: 'session:ended', reason: 'completed', exitCode: 0 })
+
+    expect(ws.activeAgentSessionIds.w1).toBeUndefined()
+    expect(ws.workspaces[0]?.status).toBe('completed')
+    expect(notify).toHaveBeenCalledTimes(1)
+  })
+
   it('sets the compacting flag when a `/compact` command is sent', async () => {
     const { useAgentStreamStore } = await import('../stores/agent-stream.js')
     const stream = useAgentStreamStore()
@@ -654,6 +717,66 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
           event('2', 'session-B', { kind: 'session:started', engineSessionId: 'engine-B' }),
           event('3', 'session-A', { kind: 'session:ended', reason: 'completed', exitCode: 0 }),
           event('4', 'session-B', { kind: 'session:ended', reason: 'completed', exitCode: 0 }),
+        ],
+      },
+    })
+
+    expect(ws.activeAgentSessionIds.w1).toBeUndefined()
+  })
+
+  it('removes only ended-session queued messages while replaying persisted events', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const ws = useWorkspaceStore()
+    ws.queueMessage('w1', 'queued for A', 'session-A')
+    ws.queueMessage('w1', 'queued for B', 'session-B')
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+
+    useWebSocketStore()._routeMessage({
+      type: 'sync:response',
+      payload: {
+        events: [
+          {
+            id: '1',
+            workspaceId: 'w1',
+            type: 'agent:event',
+            payload: { kind: 'session:started', engineSessionId: 'engine-B' },
+            createdAt: '2026-01-01T00:00:01.000Z',
+            sessionId: 'session-B',
+          },
+          {
+            id: '2',
+            workspaceId: 'w1',
+            type: 'agent:event',
+            payload: { kind: 'session:ended', reason: 'completed', exitCode: 0, superseded: true },
+            createdAt: '2026-01-01T00:00:02.000Z',
+            sessionId: 'session-A',
+          },
+        ],
+      },
+    })
+
+    expect(ws.getQueuedMessage('w1', 'session-A')).toBeUndefined()
+    expect(ws.getQueuedMessage('w1', 'session-B')?.content).toBe('queued for B')
+    expect(ws.activeAgentSessionIds.w1).toBe('session-B')
+  })
+
+  it('clears replay ownership when a persisted legacy session end has no session id', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const ws = useWorkspaceStore()
+    ws.setActiveAgentSession('w1', 'session-B')
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+
+    useWebSocketStore()._routeMessage({
+      type: 'sync:response',
+      payload: {
+        events: [
+          {
+            id: '1',
+            workspaceId: 'w1',
+            type: 'agent:event',
+            payload: { kind: 'session:ended', reason: 'completed', exitCode: 0 },
+            createdAt: '2026-01-01T00:00:01.000Z',
+          },
         ],
       },
     })

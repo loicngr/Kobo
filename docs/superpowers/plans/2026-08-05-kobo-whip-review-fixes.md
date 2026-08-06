@@ -963,6 +963,19 @@ git commit -m "fix(agent): persist only delivered action prompts"
 
 After approval, rerun Task 6 and the final whole-branch review on the new HEAD.
 
+#### Task 11 — Fix round 1: make session ownership authoritative across live and replay
+
+**Additional files:**
+- Modify: `src/server/services/agent/engines/types.ts`
+- Modify: `src/server/services/agent/orchestrator.ts`
+- Modify: `src/__tests__/orchestrator-autoloop.test.ts`
+
+- [x] Add RED tests proving that a late `session:started(A)` is not routed after B owns the workspace, and that the persisted late `session:ended(A)` is marked superseded.
+- [x] Add RED client tests for a superseded marker without replay context, a legacy anonymous end clearing the owner, and replay queue cleanup that removes A while preserving B.
+- [x] Suppress stale non-terminal events before `routeEvent`, annotate stale terminal events with `superseded: true`, and gate client effects on that durable marker.
+- [x] Clear active ownership for anonymous legacy ends and cancel session-owned queued messages during replay.
+- [x] Run focused backend/client tests, lint, type-check, and `git diff --check`, then commit the fix round for fresh review.
+
 ---
 
 ### Task 11: Ignore superseded session termination effects in the client
