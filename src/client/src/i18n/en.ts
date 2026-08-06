@@ -466,6 +466,8 @@ export default {
   'settings.activityFeed': 'Activity feed',
   'settings.verboseMessages': 'Show verbose system messages (task_progress, task_started)',
   'settings.showThinkingBlocks': 'Show agent thinking blocks',
+  'settings.whipSettings': 'Whip',
+  'settings.whipSettingsHint': 'Configure the optional whip shortcut and volume.',
   'settings.whipEnabled': 'Enable whip',
   'settings.whipEnabledHint': 'Shows the interactive whip control in eligible running workspaces.',
   'settings.whipVolume': 'Whip volume',

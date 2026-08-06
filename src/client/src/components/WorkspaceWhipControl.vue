@@ -48,6 +48,17 @@ function deactivate(): void {
   coordinator = null
 }
 
+function suspendAfterSessionEnd(): void {
+  active.value = false
+  const currentCoordinator = coordinator
+  const lifecycle = currentCoordinator ? coordinatorLifecycles.get(currentCoordinator) : undefined
+  if (!currentCoordinator || !lifecycle || lifecycle.pendingActions.size === 0) {
+    deactivate()
+    return
+  }
+  lifecycle.closeOnSettle = true
+}
+
 function trackAction(owner: WhipCrackCoordinator, action: Promise<void>): void {
   const lifecycle = coordinatorLifecycles.get(owner)
   if (!lifecycle || lifecycle.pendingActions.has(action)) return
@@ -103,11 +114,11 @@ function toggleWhip(): void {
 }
 
 function onShortcutKeydown(event: KeyboardEvent): void {
-  if (event.repeat || !settingsStore.global.whipEnabled) return
+  if (!settingsStore.global.whipEnabled) return
   if (!matchesWhipShortcut(event, settingsStore.global.whipShortcut, shortcutPlatform)) return
-  if (!active.value && (!props.running || !props.sessionId)) return
   event.preventDefault()
   event.stopImmediatePropagation()
+  if (event.repeat || (!active.value && (!props.running || !props.sessionId))) return
   toggleWhip()
 }
 
@@ -128,7 +139,16 @@ function handleCrack(): void {
 watch(
   () => [props.workspaceId, props.sessionId] as const,
   ([workspaceId, sessionId], [previousWorkspaceId, previousSessionId]) => {
-    if (workspaceId !== previousWorkspaceId || sessionId !== previousSessionId) deactivate()
+    if (workspaceId !== previousWorkspaceId) {
+      deactivate()
+      return
+    }
+    if (sessionId === previousSessionId) return
+    if (sessionId === null && previousSessionId !== null) {
+      suspendAfterSessionEnd()
+      return
+    }
+    deactivate()
   },
 )
 

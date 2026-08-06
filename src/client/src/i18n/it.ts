@@ -474,6 +474,8 @@ export default {
     'Modalità applicata alla creazione di un workspace. Piano = sola lettura, Bypass = senza richieste, Stretto = auto-accetta le edit con allow-list, Interattivo = chiedi prima di ogni strumento.',
   'settings.activityFeed': 'Feed attività',
   'settings.showThinkingBlocks': 'Mostra i blocchi di ragionamento degli agenti',
+  'settings.whipSettings': 'Frusta',
+  'settings.whipSettingsHint': 'Configura la scorciatoia e il volume opzionali della frusta.',
   'settings.whipEnabled': 'Attiva la frusta',
   'settings.whipEnabledHint': 'Mostra la frusta interattiva nei workspace attivi compatibili.',
   'settings.whipVolume': 'Volume della frusta',

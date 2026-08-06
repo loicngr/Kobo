@@ -38,8 +38,10 @@ const WhipOverlayStub = defineComponent({
 
 const i18n = createI18n({ legacy: false, locale: 'en', messages: { en } })
 const wrappers: VueWrapper[] = []
+type WhipControlProps = { workspaceId: string; sessionId: string | null; running: boolean }
+type WhipControlWrapper = VueWrapper<{ $props: WhipControlProps }>
 
-function mountControl(props: { workspaceId: string; sessionId: string | null; running: boolean }, whipEnabled = true) {
+function mountControl(props: WhipControlProps, whipEnabled = true): WhipControlWrapper {
   const settings = useSettingsStore()
   settings.global.whipEnabled = whipEnabled
   settings.global.whipShortcut = 'mod+shift+x'
@@ -49,7 +51,7 @@ function mountControl(props: { workspaceId: string; sessionId: string | null; ru
       plugins: [i18n],
       stubs: { WhipOverlay: WhipOverlayStub },
     },
-  })
+  }) as unknown as WhipControlWrapper
   wrappers.push(wrapper)
   return wrapper
 }
@@ -100,11 +102,11 @@ describe('WorkspaceWhipControl', () => {
     expect(wrapper.find('button').exists()).toBe(false)
 
     const stoppedEvent = dispatchShortcut()
-    expect(stoppedEvent.defaultPrevented).toBe(false)
+    expect(stoppedEvent.defaultPrevented).toBe(true)
 
     await wrapper.setProps({ running: true, sessionId: null })
     const missingSessionEvent = dispatchShortcut()
-    expect(missingSessionEvent.defaultPrevented).toBe(false)
+    expect(missingSessionEvent.defaultPrevented).toBe(true)
 
     await wrapper.setProps({ sessionId: 'session-1' })
     const eligibleEvent = dispatchShortcut()
@@ -135,23 +137,23 @@ describe('WorkspaceWhipControl', () => {
 
       const repeated = dispatchShortcut({ repeat: true })
       await wrapper.vm.$nextTick()
-      expect(repeated.defaultPrevented).toBe(false)
-      expect(competingHandler).toHaveBeenCalledTimes(1)
+      expect(repeated.defaultPrevented).toBe(true)
+      expect(competingHandler).not.toHaveBeenCalled()
       expect(wrapper.findComponent(WhipOverlayStub).exists()).toBe(true)
 
       useSettingsStore().global.whipEnabled = false
       await wrapper.vm.$nextTick()
       dispatchShortcut()
-      expect(competingHandler).toHaveBeenCalledTimes(2)
+      expect(competingHandler).toHaveBeenCalledOnce()
 
       useSettingsStore().global.whipEnabled = true
       await wrapper.vm.$nextTick()
       dispatchShortcut({ key: 'j' })
-      expect(competingHandler).toHaveBeenCalledTimes(3)
+      expect(competingHandler).toHaveBeenCalledTimes(2)
 
       await wrapper.setProps({ running: false })
       dispatchShortcut()
-      expect(competingHandler).toHaveBeenCalledTimes(4)
+      expect(competingHandler).toHaveBeenCalledTimes(2)
     } finally {
       window.removeEventListener('keydown', competingHandler, true)
     }
@@ -198,7 +200,7 @@ describe('WorkspaceWhipControl', () => {
     const repeated = dispatchShortcut({ repeat: true })
     const nonMatching = dispatchShortcut({ key: 'j' })
 
-    expect(repeated.defaultPrevented).toBe(false)
+    expect(repeated.defaultPrevented).toBe(true)
     expect(nonMatching.defaultPrevented).toBe(false)
     expect(wrapper.findComponent(WhipOverlayStub).exists()).toBe(false)
   })
@@ -332,6 +334,25 @@ describe('WorkspaceWhipControl', () => {
 
     expect(doubles.dispose).toHaveBeenCalledOnce()
     expect(wrapper.findComponent(WhipOverlayStub).exists()).toBe(false)
+  })
+
+  it('keeps a pending crack alive while the stopped session id is cleared', async () => {
+    const deferred = deferredPromise()
+    doubles.enqueue.mockReturnValueOnce(deferred.promise)
+    const wrapper = mountControl({ workspaceId: 'ws-1', sessionId: 'session-1', running: true })
+    await openWhip(wrapper)
+    wrapper.getComponent(WhipOverlayStub).vm.$emit('crack')
+
+    await wrapper.setProps({ sessionId: null, running: false })
+
+    expect(doubles.dispose).not.toHaveBeenCalled()
+    expect(wrapper.findComponent(WhipOverlayStub).exists()).toBe(false)
+
+    deferred.resolve()
+    await deferred.promise
+    await wrapper.vm.$nextTick()
+
+    expect(doubles.dispose).toHaveBeenCalledOnce()
   })
 
   it('keeps a stopped overlay alive beyond one second until all accepted crack work settles', async () => {
