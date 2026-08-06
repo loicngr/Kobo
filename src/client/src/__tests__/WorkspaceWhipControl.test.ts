@@ -8,6 +8,7 @@ import en from '../i18n/en'
 import { useSettingsStore } from '../stores/settings'
 import { useWebSocketStore } from '../stores/websocket'
 import { useWorkspaceStore } from '../stores/workspace'
+import { DEFAULT_TOAST_TIMEOUT_MS } from '../utils/notification-timeout'
 import { createWhipCrackCoordinator } from '../utils/whip-crack'
 
 const doubles = vi.hoisted(() => ({
@@ -265,9 +266,12 @@ describe('WorkspaceWhipControl', () => {
       disableAutoLoop: true,
     })
     expect(send).toHaveBeenCalledWith('ws-1', 'Move faster, tocard!', 'session-1')
-    expect(doubles.notify).toHaveBeenCalledWith(
-      expect.objectContaining({ message: 'Unable to send the whip message', position: 'top' }),
-    )
+    expect(doubles.notify).toHaveBeenCalledWith({
+      type: 'negative',
+      message: 'Unable to send the whip message',
+      position: 'top',
+      timeout: DEFAULT_TOAST_TIMEOUT_MS,
+    })
     expect(wrapper.getComponent(WhipOverlayStub).props()).toMatchObject({
       soundEnabled: true,
       soundVolume: 0.75,

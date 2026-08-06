@@ -2371,6 +2371,21 @@ describe('whip feature toggle (v51)', () => {
       futureGlobalSetting: 'preserved',
     })
     expect(persisted.projects).toEqual([{ path: '/future/project', futureProjectSetting: true }])
+
+    const repairedTimestamp = new Date('2000-01-01T00:00:00.000Z')
+    fs.utimesSync(settingsPath, repairedTimestamp, repairedTimestamp)
+    const mtimeBeforeSecondRead = fs.statSync(settingsPath).mtimeMs
+
+    const loadedAgain = getSettings()
+
+    expect(loadedAgain.global).toMatchObject({
+      whipEnabled: false,
+      whipShortcut: 'mod+shift+x',
+      whipVolume: 1,
+      futureGlobalSetting: 'preserved',
+    })
+    expect(loadedAgain.projects).toEqual([{ path: '/future/project', futureProjectSetting: true }])
+    expect(fs.statSync(settingsPath).mtimeMs).toBe(mtimeBeforeSecondRead)
   })
 
   it.each([null, Number.NaN, -0.1, 1.1])('normalizes malformed persisted whip volume to full: %j', (whipVolume) => {
