@@ -76,6 +76,9 @@ export function getBackendPort(): number {
 /** workspaceId -> SessionController */
 const controllers = new Map<string, SessionController>()
 
+export const FALLBACK_CONTROLLER_TURNOVER_TIMEOUT_MS = 2_000
+export const FALLBACK_CONTROLLER_TURNOVER_POLL_MS = 25
+
 /** workspaceId -> last engine session ID (for resume) */
 const sessionIds = new Map<string, string>()
 
@@ -1113,6 +1116,38 @@ export async function sendMessage(workspaceId: string, content: string, expected
   }
   wakeupService.cancel(workspaceId, 'user-message')
   await ctrl.sendMessage(content)
+}
+
+/**
+ * Deliver a prompt without racing a controller that is already shutting down.
+ * A failed steering attempt is ambiguous until the captured controller leaves
+ * the registry: only its removal authorizes a caller to start a resume.
+ */
+export async function sendMessageForFallback(workspaceId: string, content: string): Promise<'sent' | 'stopped'> {
+  const capturedController = controllers.get(workspaceId)
+  if (!capturedController) return 'stopped'
+
+  wakeupService.cancel(workspaceId, 'user-message')
+  try {
+    await capturedController.sendMessage(content)
+    return 'sent'
+  } catch {
+    const deadline = Date.now() + FALLBACK_CONTROLLER_TURNOVER_TIMEOUT_MS
+    while (controllers.get(workspaceId) === capturedController) {
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) {
+        throw new Error(`Timed out waiting for agent controller turnover for workspace '${workspaceId}'`)
+      }
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, Math.min(FALLBACK_CONTROLLER_TURNOVER_POLL_MS, remaining))
+      })
+    }
+
+    const replacementController = controllers.get(workspaceId)
+    if (!replacementController) return 'stopped'
+    await replacementController.sendMessage(content)
+    return 'sent'
+  }
 }
 
 /**

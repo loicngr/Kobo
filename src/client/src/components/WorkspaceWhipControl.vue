@@ -33,40 +33,41 @@ const websocketStore = useWebSocketStore()
 const settingsStore = useSettingsStore()
 const active = ref(false)
 const shortcutPlatform = detectWhipShortcutPlatform()
-const SOFT_INTERRUPT_GRACE_MS = 1_000
 let coordinator: WhipCrackCoordinator | null = null
-let stoppedTimer: number | null = null
-let allowStoppedUntil = 0
-
-function clearStoppedTimer(): void {
-  if (stoppedTimer === null) return
-  window.clearTimeout(stoppedTimer)
-  stoppedTimer = null
-}
+const coordinatorLifecycles = new Map<
+  WhipCrackCoordinator,
+  { pendingActions: Set<Promise<void>>; closeOnSettle: boolean }
+>()
 
 function deactivate(): void {
-  clearStoppedTimer()
-  allowStoppedUntil = 0
   active.value = false
-  coordinator?.dispose()
+  if (coordinator) {
+    coordinatorLifecycles.delete(coordinator)
+    coordinator.dispose()
+  }
   coordinator = null
 }
 
-function closeWhenInterruptGraceExpires(): void {
-  clearStoppedTimer()
-  const remaining = allowStoppedUntil - Date.now()
-  if (remaining <= 0) {
-    deactivate()
-    return
+function trackAction(owner: WhipCrackCoordinator, action: Promise<void>): void {
+  const lifecycle = coordinatorLifecycles.get(owner)
+  if (!lifecycle || lifecycle.pendingActions.has(action)) return
+  lifecycle.pendingActions.add(action)
+
+  const settle = () => {
+    const currentLifecycle = coordinatorLifecycles.get(owner)
+    if (!currentLifecycle?.pendingActions.delete(action)) return
+    if (currentLifecycle.pendingActions.size === 0 && currentLifecycle.closeOnSettle && coordinator === owner) {
+      deactivate()
+    }
   }
-  stoppedTimer = window.setTimeout(deactivate, remaining)
+  void action.then(settle, settle).catch(() => undefined)
 }
 
 function activate(): void {
   if (!props.running || !props.sessionId) return
   const target = { workspaceId: props.workspaceId, sessionId: props.sessionId }
   const phrases = [1, 2, 3, 4, 5].map((number) => t(`whip.phrase${number}`))
-  coordinator = createWhipCrackCoordinator(target, phrases, {
+  const activatedCoordinator = createWhipCrackCoordinator(target, phrases, {
     isAgentRunning(workspaceId) {
       const workspace = [...workspaceStore.workspaces, ...workspaceStore.archivedWorkspaces].find(
         (candidate) => candidate.id === workspaceId,
@@ -91,6 +92,8 @@ function activate(): void {
       })
     },
   })
+  coordinator = activatedCoordinator
+  coordinatorLifecycles.set(activatedCoordinator, { pendingActions: new Set(), closeOnSettle: false })
   active.value = true
 }
 
@@ -109,15 +112,17 @@ function onShortcutKeydown(event: KeyboardEvent): void {
 }
 
 function handleCrack(): void {
-  const now = Date.now()
-  if (props.running) {
-    allowStoppedUntil = now + SOFT_INTERRUPT_GRACE_MS
-  } else if (now > allowStoppedUntil) {
+  const owner = coordinator
+  if (!owner) return
+  const lifecycle = coordinatorLifecycles.get(owner)
+  if (!lifecycle) return
+  if (!props.running && lifecycle.pendingActions.size === 0) {
     deactivate()
     return
   }
-  if (!props.running) closeWhenInterruptGraceExpires()
-  void coordinator?.enqueue()
+  const action = owner.enqueue()
+  trackAction(owner, action)
+  if (!props.running) lifecycle.closeOnSettle = true
 }
 
 watch(
@@ -130,12 +135,15 @@ watch(
 watch(
   () => props.running,
   (running) => {
-    if (running) {
-      clearStoppedTimer()
+    if (running) return
+    if (!active.value) return
+    const currentCoordinator = coordinator
+    const lifecycle = currentCoordinator ? coordinatorLifecycles.get(currentCoordinator) : undefined
+    if (!lifecycle || lifecycle.pendingActions.size === 0) {
+      deactivate()
       return
     }
-    if (!active.value) return
-    closeWhenInterruptGraceExpires()
+    lifecycle.closeOnSettle = true
   },
 )
 

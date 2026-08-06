@@ -165,6 +165,180 @@ describe('Orchestrator — stop / interrupt / sendMessage', () => {
   })
 })
 
+describe('Orchestrator — lifecycle-safe fallback delivery', () => {
+  beforeEach(async () => {
+    vi.resetModules()
+    vi.useRealTimers()
+    await resetDb()
+  })
+
+  it('waits for the rejecting controller to end before reporting the agent as stopped', async () => {
+    vi.useFakeTimers()
+    try {
+      const { createWorkspace } = await import('../../server/services/workspace-service.js')
+      const ws = createWorkspace({ name: 'W', projectPath: '/tmp', sourceBranch: 'd', workingBranch: 'b' })
+      let emitEvent: (event: AgentEvent) => void = () => {}
+      const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+      _registerEngineForTest({
+        id: 'claude-code',
+        displayName: 'Claude Code',
+        capabilities: {
+          models: [],
+          permissionModes: ['bypass'],
+          supportsResume: true,
+          supportsMcp: true,
+          supportsSkills: true,
+        },
+        async start(_options, onEvent) {
+          emitEvent = onEvent
+          return {
+            pid: 1,
+            engineSessionId: 'sid-rejecting',
+            async sendMessage() {
+              throw new Error('engine rejected steering')
+            },
+            interrupt() {},
+            async stop() {},
+          }
+        },
+      })
+      const { FALLBACK_CONTROLLER_TURNOVER_POLL_MS, sendMessageForFallback, startAgent } = await import(
+        '../../server/services/agent/orchestrator.js'
+      )
+      startAgent(ws.id, '/tmp', 'hi')
+      await flushControllerStart()
+
+      const delivery = sendMessageForFallback(ws.id, 'follow up')
+      let settled = false
+      void delivery.then(
+        () => {
+          settled = true
+        },
+        () => {
+          settled = true
+        },
+      )
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(settled).toBe(false)
+
+      emitEvent({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+      await vi.advanceTimersByTimeAsync(FALLBACK_CONTROLLER_TURNOVER_POLL_MS)
+
+      await expect(delivery).resolves.toBe('stopped')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('sends once to a replacement controller after the rejecting controller ends', async () => {
+    vi.useFakeTimers()
+    try {
+      const { createWorkspace } = await import('../../server/services/workspace-service.js')
+      const ws = createWorkspace({ name: 'W', projectPath: '/tmp', sourceBranch: 'd', workingBranch: 'b' })
+      let firstEmitEvent: (event: AgentEvent) => void = () => {}
+      const firstSend = vi.fn(async () => {
+        throw new Error('engine rejected steering')
+      })
+      const replacementSend = vi.fn(async () => undefined)
+      let starts = 0
+      const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+      _registerEngineForTest({
+        id: 'claude-code',
+        displayName: 'Claude Code',
+        capabilities: {
+          models: [],
+          permissionModes: ['bypass'],
+          supportsResume: true,
+          supportsMcp: true,
+          supportsSkills: true,
+        },
+        async start(_options, onEvent) {
+          starts += 1
+          if (starts === 1) firstEmitEvent = onEvent
+          return {
+            pid: starts,
+            engineSessionId: `sid-${starts}`,
+            sendMessage: starts === 1 ? firstSend : replacementSend,
+            interrupt() {},
+            async stop() {},
+          }
+        },
+      })
+      const { FALLBACK_CONTROLLER_TURNOVER_POLL_MS, sendMessageForFallback, startAgent } = await import(
+        '../../server/services/agent/orchestrator.js'
+      )
+      startAgent(ws.id, '/tmp', 'hi')
+      await flushControllerStart()
+
+      const delivery = sendMessageForFallback(ws.id, 'follow up')
+      await vi.advanceTimersByTimeAsync(0)
+      firstEmitEvent({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+      startAgent(ws.id, '/tmp', 'replacement')
+      await flushControllerStart()
+      await vi.advanceTimersByTimeAsync(FALLBACK_CONTROLLER_TURNOVER_POLL_MS)
+
+      await expect(delivery).resolves.toBe('sent')
+      expect(firstSend).toHaveBeenCalledOnce()
+      expect(replacementSend).toHaveBeenCalledOnce()
+      expect(replacementSend).toHaveBeenCalledWith('follow up')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('times out while the same rejecting controller remains registered', async () => {
+    vi.useFakeTimers()
+    try {
+      const { createWorkspace } = await import('../../server/services/workspace-service.js')
+      const ws = createWorkspace({ name: 'W', projectPath: '/tmp', sourceBranch: 'd', workingBranch: 'b' })
+      const send = vi.fn(async () => {
+        throw new Error('engine rejected steering')
+      })
+      const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+      _registerEngineForTest({
+        id: 'claude-code',
+        displayName: 'Claude Code',
+        capabilities: {
+          models: [],
+          permissionModes: ['bypass'],
+          supportsResume: true,
+          supportsMcp: true,
+          supportsSkills: true,
+        },
+        async start() {
+          return {
+            pid: 1,
+            engineSessionId: 'sid-stuck',
+            sendMessage: send,
+            interrupt() {},
+            async stop() {},
+          }
+        },
+      })
+      const {
+        FALLBACK_CONTROLLER_TURNOVER_POLL_MS,
+        FALLBACK_CONTROLLER_TURNOVER_TIMEOUT_MS,
+        getRunningCount,
+        sendMessageForFallback,
+        startAgent,
+      } = await import('../../server/services/agent/orchestrator.js')
+      startAgent(ws.id, '/tmp', 'hi')
+      await flushControllerStart()
+
+      const delivery = sendMessageForFallback(ws.id, 'follow up')
+      const rejection = expect(delivery).rejects.toThrow(/timed out waiting for agent controller turnover/i)
+      await vi.advanceTimersByTimeAsync(FALLBACK_CONTROLLER_TURNOVER_TIMEOUT_MS + FALLBACK_CONTROLLER_TURNOVER_POLL_MS)
+
+      await rejection
+      expect(send).toHaveBeenCalledOnce()
+      expect(getRunningCount()).toBe(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
 describe('Orchestrator — event dispatch', () => {
   beforeEach(async () => {
     vi.resetModules()

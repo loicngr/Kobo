@@ -48,7 +48,7 @@ import * as terminalService from '../services/terminal-service.js'
 import * as wakeupService from '../services/wakeup-service.js'
 import * as wsService from '../services/websocket-service.js'
 import * as permissionPolicyService from '../services/workspace-permission-policy-service.js'
-import type { AgentPermissionMode, WorkspaceStatus } from '../services/workspace-service.js'
+import type { AgentPermissionMode, Workspace, WorkspaceStatus } from '../services/workspace-service.js'
 import * as workspaceService from '../services/workspace-service.js'
 import * as purgeWorktreeService from '../services/worktree-purge-service.js'
 import * as worktreeService from '../services/worktree-service.js'
@@ -67,6 +67,28 @@ const VALID_AGENT_PERMISSION_MODES: AgentPermissionMode[] = ['plan', 'bypass', '
 
 function isAgentPermissionMode(value: unknown): value is AgentPermissionMode {
   return typeof value === 'string' && (VALID_AGENT_PERMISSION_MODES as string[]).includes(value)
+}
+
+async function deliverPromptWithLifecycleFallback(
+  workspace: Workspace,
+  workingDir: string,
+  prompt: string,
+): Promise<{ agentSessionId?: string }> {
+  const delivery = await agentManager.sendMessageForFallback(workspace.id, prompt)
+  if (delivery === 'sent') return {}
+
+  const agent = agentManager.startAgent(
+    workspace.id,
+    workingDir,
+    prompt,
+    workspace.model,
+    true,
+    workspace.agentPermissionMode,
+    undefined,
+    workspace.reasoningEffort,
+  )
+  workspaceService.updateWorkspaceStatus(workspace.id, 'executing')
+  return { agentSessionId: agent?.agentSessionId }
 }
 
 /**
@@ -3522,26 +3544,11 @@ When finished, report the commit SHA, its message, the files included, and the c
 
     let messageSent = false
     try {
-      await agentManager.sendMessage(workspace.id, prompt)
+      await deliverPromptWithLifecycleFallback(workspace, workspace.worktreePath, prompt)
       messageSent = true
-    } catch {
-      try {
-        agentManager.startAgent(
-          workspace.id,
-          workspace.worktreePath,
-          prompt,
-          workspace.model,
-          true,
-          workspace.agentPermissionMode,
-          undefined,
-          workspace.reasoningEffort,
-        )
-        workspaceService.updateWorkspaceStatus(workspace.id, 'executing')
-        messageSent = true
-      } catch (resumeErr) {
-        const message = resumeErr instanceof Error ? resumeErr.message : String(resumeErr)
-        return c.json({ error: `Unable to ask the agent to commit: ${message}` }, 409)
-      }
+    } catch (deliveryErr) {
+      const message = deliveryErr instanceof Error ? deliveryErr.message : String(deliveryErr)
+      return c.json({ error: `Unable to ask the agent to commit: ${message}` }, 409)
     }
 
     return c.json({ ok: true, messageSent })
@@ -3634,26 +3641,11 @@ Start now.`
 
     let messageSent = false
     try {
-      await agentManager.sendMessage(workspace.id, prompt)
+      await deliverPromptWithLifecycleFallback(workspace, worktreePath, prompt)
       messageSent = true
-    } catch {
-      try {
-        agentManager.startAgent(
-          workspace.id,
-          worktreePath,
-          prompt,
-          workspace.model,
-          true,
-          workspace.agentPermissionMode,
-          undefined,
-          workspace.reasoningEffort,
-        )
-        workspaceService.updateWorkspaceStatus(workspace.id, 'executing')
-        messageSent = true
-      } catch (resumeErr) {
-        const resumeMsg = resumeErr instanceof Error ? resumeErr.message : String(resumeErr)
-        console.warn(`[workspaces] resolve-with-agent: agent resume failed: ${resumeMsg}`)
-      }
+    } catch (deliveryErr) {
+      const deliveryMessage = deliveryErr instanceof Error ? deliveryErr.message : String(deliveryErr)
+      console.warn(`[workspaces] resolve-with-agent: agent resume failed: ${deliveryMessage}`)
     }
 
     return c.json({ ok: true, operation, files, messageSent })
@@ -3963,28 +3955,11 @@ app.post('/:id/open-pr', async (c) => {
     // Send to the running agent, or resume the agent with the PR prompt
     let messageSent = false
     try {
-      await agentManager.sendMessage(workspace.id, rendered)
+      await deliverPromptWithLifecycleFallback(workspace, workspace.worktreePath, rendered)
       messageSent = true
-    } catch {
-      // Agent not running — resume it with the PR prompt
-      try {
-        const worktreePathForResume = workspace.worktreePath
-        agentManager.startAgent(
-          workspace.id,
-          worktreePathForResume,
-          rendered,
-          workspace.model,
-          true,
-          workspace.agentPermissionMode,
-          undefined,
-          workspace.reasoningEffort,
-        )
-        workspaceService.updateWorkspaceStatus(workspace.id, 'executing')
-        messageSent = true
-      } catch (resumeErr) {
-        const resumeMsg = resumeErr instanceof Error ? resumeErr.message : String(resumeErr)
-        console.warn(`[workspaces] open-pr: PR created but agent resume failed: ${resumeMsg}`)
-      }
+    } catch (deliveryErr) {
+      const deliveryMessage = deliveryErr instanceof Error ? deliveryErr.message : String(deliveryErr)
+      console.warn(`[workspaces] open-pr: PR created but agent resume failed: ${deliveryMessage}`)
     }
 
     return c.json({ ok: true, prNumber, prUrl, messageSent })
@@ -4089,27 +4064,12 @@ app.post('/:id/start-review', async (c) => {
       const session = workspaceService.getActiveSession(workspace.id)
       emitSessionId = session?.id
       try {
-        await agentManager.sendMessage(workspace.id, rendered)
+        const delivery = await deliverPromptWithLifecycleFallback(workspace, worktreePath, rendered)
+        emitSessionId = delivery.agentSessionId ?? emitSessionId
         messageSent = true
-      } catch {
-        try {
-          const agent = agentManager.startAgent(
-            workspace.id,
-            worktreePath,
-            rendered,
-            workspace.model,
-            true /* resume */,
-            workspace.agentPermissionMode,
-            undefined,
-            workspace.reasoningEffort,
-          )
-          workspaceService.updateWorkspaceStatus(workspace.id, 'executing')
-          emitSessionId = agent?.agentSessionId ?? emitSessionId
-          messageSent = true
-        } catch (resumeErr) {
-          const msg = resumeErr instanceof Error ? resumeErr.message : String(resumeErr)
-          return c.json({ error: `Failed to dispatch review prompt: ${msg}` }, 500)
-        }
+      } catch (deliveryErr) {
+        const message = deliveryErr instanceof Error ? deliveryErr.message : String(deliveryErr)
+        return c.json({ error: `Failed to dispatch review prompt: ${message}` }, 500)
       }
     }
 
@@ -4181,25 +4141,11 @@ app.post('/:id/start-ci-fix', migrationGuard, async (c) => {
     const session = workspaceService.getActiveSession(workspace.id)
     let emitSessionId: string | undefined = session?.id
     try {
-      await agentManager.sendMessage(workspace.id, rendered)
-    } catch {
-      try {
-        const agent = agentManager.startAgent(
-          workspace.id,
-          workspace.worktreePath,
-          rendered,
-          workspace.model,
-          true /* resume */,
-          workspace.agentPermissionMode,
-          undefined,
-          workspace.reasoningEffort,
-        )
-        workspaceService.updateWorkspaceStatus(workspace.id, 'executing')
-        emitSessionId = agent?.agentSessionId ?? emitSessionId
-      } catch (resumeErr) {
-        const msg = resumeErr instanceof Error ? resumeErr.message : String(resumeErr)
-        return c.json({ error: `Failed to dispatch CI-fix prompt: ${msg}` }, 500)
-      }
+      const delivery = await deliverPromptWithLifecycleFallback(workspace, workspace.worktreePath, rendered)
+      emitSessionId = delivery.agentSessionId ?? emitSessionId
+    } catch (deliveryErr) {
+      const message = deliveryErr instanceof Error ? deliveryErr.message : String(deliveryErr)
+      return c.json({ error: `Failed to dispatch CI-fix prompt: ${message}` }, 500)
     }
 
     wsService.emit(workspace.id, 'user:message', { content: rendered, sender: 'user' }, emitSessionId)

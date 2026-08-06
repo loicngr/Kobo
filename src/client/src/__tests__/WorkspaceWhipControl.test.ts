@@ -72,6 +72,16 @@ async function openWhip(wrapper: VueWrapper): Promise<KeyboardEvent> {
   return event
 }
 
+function deferredPromise(): { promise: Promise<void>; resolve: () => void; reject: (error: Error) => void } {
+  let resolve!: () => void
+  let reject!: (error: Error) => void
+  const promise = new Promise<void>((resolvePromise, rejectPromise) => {
+    resolve = resolvePromise
+    reject = rejectPromise
+  })
+  return { promise, resolve, reject }
+}
+
 describe('WorkspaceWhipControl', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -234,6 +244,15 @@ describe('WorkspaceWhipControl', () => {
     expect(event.defaultPrevented).toBe(false)
   })
 
+  it('disposes an active coordinator immediately when unmounted', async () => {
+    const wrapper = mountControl({ workspaceId: 'ws-1', sessionId: 'session-1', running: true })
+    await openWhip(wrapper)
+
+    wrapper.unmount()
+
+    expect(doubles.dispose).toHaveBeenCalledOnce()
+  })
+
   it('closes and disposes an active whip when the feature is disabled', async () => {
     const wrapper = mountControl({ workspaceId: 'ws-1', sessionId: 'session-1', running: true })
     await openWhip(wrapper)
@@ -275,6 +294,16 @@ describe('WorkspaceWhipControl', () => {
     expect(wrapper.findComponent(WhipOverlayStub).exists()).toBe(false)
   })
 
+  it('closes and disposes when the target session changes', async () => {
+    const wrapper = mountControl({ workspaceId: 'ws-1', sessionId: 'session-1', running: true })
+    await openWhip(wrapper)
+
+    await wrapper.setProps({ sessionId: 'session-2' })
+
+    expect(doubles.dispose).toHaveBeenCalledOnce()
+    expect(wrapper.findComponent(WhipOverlayStub).exists()).toBe(false)
+  })
+
   it('closes when the agent stops naturally', async () => {
     const wrapper = mountControl({ workspaceId: 'ws-1', sessionId: 'session-1', running: true })
     await openWhip(wrapper)
@@ -285,8 +314,33 @@ describe('WorkspaceWhipControl', () => {
     expect(wrapper.findComponent(WhipOverlayStub).exists()).toBe(false)
   })
 
-  it('allows the shortcut to close the overlay during a soft interrupt grace period', async () => {
+  it('keeps a stopped overlay alive beyond one second until all accepted crack work settles', async () => {
     vi.useFakeTimers()
+    const deferred = deferredPromise()
+    doubles.enqueue.mockReturnValueOnce(deferred.promise).mockReturnValueOnce(deferred.promise)
+    const wrapper = mountControl({ workspaceId: 'ws-1', sessionId: 'session-1', running: true })
+    await openWhip(wrapper)
+    const overlay = wrapper.getComponent(WhipOverlayStub)
+    overlay.vm.$emit('crack')
+    overlay.vm.$emit('crack')
+
+    await wrapper.setProps({ running: false })
+    await vi.advanceTimersByTimeAsync(1_500)
+
+    expect(wrapper.findComponent(WhipOverlayStub).exists()).toBe(true)
+    expect(doubles.dispose).not.toHaveBeenCalled()
+
+    deferred.resolve()
+    await deferred.promise
+    await wrapper.vm.$nextTick()
+
+    expect(doubles.dispose).toHaveBeenCalledOnce()
+    expect(wrapper.findComponent(WhipOverlayStub).exists()).toBe(false)
+  })
+
+  it('allows the shortcut to close the overlay while accepted crack work is pending', async () => {
+    const deferred = deferredPromise()
+    doubles.enqueue.mockReturnValueOnce(deferred.promise)
     const wrapper = mountControl({ workspaceId: 'ws-1', sessionId: 'session-1', running: true })
     await openWhip(wrapper)
     wrapper.getComponent(WhipOverlayStub).vm.$emit('crack')
@@ -297,6 +351,51 @@ describe('WorkspaceWhipControl', () => {
     const event = dispatchShortcut()
     await wrapper.vm.$nextTick()
     expect(event.defaultPrevented).toBe(true)
+    expect(wrapper.findComponent(WhipOverlayStub).exists()).toBe(false)
+    deferred.resolve()
+    await deferred.promise
+  })
+
+  it('does not let a stale crack settlement close a replacement coordinator', async () => {
+    const deferred = deferredPromise()
+    const firstDispose = vi.fn()
+    const replacementDispose = vi.fn()
+    vi.mocked(createWhipCrackCoordinator)
+      .mockImplementationOnce(() => ({ enqueue: () => deferred.promise, dispose: firstDispose }))
+      .mockImplementationOnce(() => ({ enqueue: vi.fn(async () => undefined), dispose: replacementDispose }))
+    const wrapper = mountControl({ workspaceId: 'ws-1', sessionId: 'session-1', running: true })
+    await openWhip(wrapper)
+    wrapper.getComponent(WhipOverlayStub).vm.$emit('crack')
+    await wrapper.setProps({ running: false })
+
+    dispatchShortcut()
+    await wrapper.vm.$nextTick()
+    expect(firstDispose).toHaveBeenCalledOnce()
+
+    await wrapper.setProps({ running: true })
+    await openWhip(wrapper)
+    deferred.resolve()
+    await deferred.promise
+    await wrapper.vm.$nextTick()
+
+    expect(replacementDispose).not.toHaveBeenCalled()
+    expect(wrapper.findComponent(WhipOverlayStub).exists()).toBe(true)
+  })
+
+  it('closes after rejected crack work without leaking the rejection', async () => {
+    const deferred = deferredPromise()
+    doubles.enqueue.mockReturnValueOnce(deferred.promise)
+    const wrapper = mountControl({ workspaceId: 'ws-1', sessionId: 'session-1', running: true })
+    await openWhip(wrapper)
+    wrapper.getComponent(WhipOverlayStub).vm.$emit('crack')
+    await wrapper.setProps({ running: false })
+
+    const rejection = expect(deferred.promise).rejects.toThrow('dispatch failed')
+    deferred.reject(new Error('dispatch failed'))
+    await rejection
+    await wrapper.vm.$nextTick()
+
+    expect(doubles.dispose).toHaveBeenCalledOnce()
     expect(wrapper.findComponent(WhipOverlayStub).exists()).toBe(false)
   })
 
