@@ -1017,6 +1017,9 @@ After approval, rerun Task 6 and the final whole-branch review on the new HEAD.
   are corrupted by the superseded end.
 - [x] Keep the superseded event in history while rejecting its lifecycle side
   effects when the replacement owns the same session row.
+- [x] Add the adversarial order where the replacement ends before its
+  predecessor, and retain generation ownership until every predecessor has
+  drained its terminal event.
 - [x] Run the targeted lifecycle suite GREEN, then rerun all tests, lint,
   backend/client type checks, build, audits, and `git diff --check`.
 - [x] Request an independent scoped re-review of the final fix.
