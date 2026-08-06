@@ -26,11 +26,8 @@ export class SessionController {
     const process = await this.engine.start(options, (ev) => this.handle(ev))
     this._engineProcess = process
     if (this._status === 'stopping') {
-      try {
-        await process.stop()
-      } finally {
-        this._engineProcess = undefined
-      }
+      this._engineProcess = undefined
+      await process.stop()
       return
     }
     this._status = 'running'

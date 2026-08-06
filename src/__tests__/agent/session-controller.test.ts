@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type { AgentEngine, AgentEvent, EngineProcess, StartOptions } from '../../server/services/agent/engines/types.js'
 
 function fakeEngine(
@@ -194,6 +194,57 @@ describe('SessionController', () => {
     expect(ctrl.status).toBe('stopping')
     expect(ctrl.engineProcess).toBeUndefined()
     expect(ctrl.pid).toBeUndefined()
+  })
+
+  it('does not stop a late process twice when stop() is requested concurrently', async () => {
+    const { SessionController } = await import('../../server/services/agent/session-controller.js')
+    let releaseStart!: (process: EngineProcess) => void
+    const startGate = new Promise<EngineProcess>((resolve) => {
+      releaseStart = resolve
+    })
+    let releaseStop!: () => void
+    const stopGate = new Promise<void>((resolve) => {
+      releaseStop = resolve
+    })
+    let stopCount = 0
+    const process: EngineProcess = {
+      sendMessage() {},
+      interrupt() {},
+      async stop() {
+        stopCount++
+        await stopGate
+      },
+    }
+    const engine: AgentEngine = {
+      id: 'codex',
+      displayName: 'Codex',
+      capabilities: {
+        models: [],
+        permissionModes: ['bypass'],
+        supportsResume: true,
+        supportsMcp: true,
+        supportsSkills: true,
+      },
+      async start() {
+        return startGate
+      },
+    }
+    const ctrl = new SessionController('w1', 'sess-1', engine, () => {})
+
+    const starting = ctrl.start(BASE_OPTS)
+    await ctrl.stop()
+    releaseStart(process)
+    await vi.waitFor(() => expect(stopCount).toBe(1))
+
+    const repeatedStop = ctrl.stop()
+    try {
+      expect(stopCount).toBe(1)
+    } finally {
+      releaseStop()
+    }
+    await Promise.all([starting, repeatedStop])
+    expect(stopCount).toBe(1)
+    expect(ctrl.engineProcess).toBeUndefined()
   })
 
   it('throws on a second start() call (re-entrancy guard)', async () => {
