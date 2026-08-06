@@ -36,6 +36,7 @@ export class SessionController {
   async sendMessage(content: string): Promise<void> {
     if (!this._startPromise) throw new Error('SessionController not started')
     await this._startPromise
+    if (this._status === 'stopping') throw new Error('SessionController is stopping')
     if (!this._engineProcess) throw new Error('SessionController not started')
     await this._engineProcess.sendMessage(content)
   }

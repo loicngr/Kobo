@@ -206,6 +206,44 @@ describe('Orchestrator — lifecycle-safe fallback delivery', () => {
     })
   })
 
+  it('reports stopped when stopAgent wins before fallback delivery resumes', async () => {
+    const { createWorkspace } = await import('../../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'W', projectPath: '/tmp', sourceBranch: 'd', workingBranch: 'b' })
+    const sendMessage = vi.fn(async () => undefined)
+    const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+    _registerEngineForTest({
+      id: 'claude-code',
+      displayName: 'Claude Code',
+      capabilities: {
+        models: [],
+        permissionModes: ['bypass'],
+        supportsResume: true,
+        supportsMcp: true,
+        supportsSkills: true,
+      },
+      async start() {
+        return {
+          pid: 1,
+          engineSessionId: 'sid-stopping',
+          sendMessage,
+          interrupt() {},
+          async stop() {},
+        }
+      },
+    })
+    const { sendMessageForFallback, startAgent, stopAgent } = await import(
+      '../../server/services/agent/orchestrator.js'
+    )
+    startAgent(ws.id, '/tmp', 'hi')
+    await flushControllerStart()
+
+    const delivery = sendMessageForFallback(ws.id, 'follow up')
+    stopAgent(ws.id)
+
+    await expect(delivery).resolves.toEqual({ status: 'stopped' })
+    expect(sendMessage).not.toHaveBeenCalled()
+  })
+
   it('waits for the rejecting controller to end before reporting the agent as stopped', async () => {
     vi.useFakeTimers()
     try {

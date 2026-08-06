@@ -154,6 +154,38 @@ describe('SessionController', () => {
     expect(sentMessages).toEqual(['queued'])
   })
 
+  it('rejects a queued message when stop() wins before delivery resumes', async () => {
+    const { SessionController } = await import('../../server/services/agent/session-controller.js')
+    const sendMessage = vi.fn(async () => undefined)
+    const process: EngineProcess = {
+      sendMessage,
+      interrupt() {},
+      async stop() {},
+    }
+    const engine: AgentEngine = {
+      id: 'codex',
+      displayName: 'Codex',
+      capabilities: {
+        models: [],
+        permissionModes: ['bypass'],
+        supportsResume: true,
+        supportsMcp: true,
+        supportsSkills: true,
+      },
+      async start() {
+        return process
+      },
+    }
+    const ctrl = new SessionController('w1', 'sess-1', engine, () => {})
+    await ctrl.start(BASE_OPTS)
+
+    const sending = ctrl.sendMessage('stale')
+    await ctrl.stop()
+
+    await expect(sending).rejects.toThrow(/stopping/i)
+    expect(sendMessage).not.toHaveBeenCalled()
+  })
+
   it('stops and clears a process that resolves after stop() was requested', async () => {
     const { SessionController } = await import('../../server/services/agent/session-controller.js')
     let releaseStart!: (process: EngineProcess) => void
