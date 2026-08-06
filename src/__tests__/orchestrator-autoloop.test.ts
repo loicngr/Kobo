@@ -385,6 +385,71 @@ describe('orchestrator auto-loop integration', () => {
     expect(cleanupScript.onSessionEnded).not.toHaveBeenCalled()
   })
 
+  it('keeps a resumed session finalized when its predecessor ends even later', async () => {
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const eventRouter = await import('../server/services/agent/event-router.js')
+    const autoLoop = await import('../server/services/auto-loop-service.js')
+    const cleanupScript = await import('../server/services/cleanup-script-service.js')
+    const { getDb } = await import('../server/db/index.js')
+    const { _registerEngineForTest } = await import('../server/services/agent/engines/registry.js')
+    await setWorkspaceExecuting(wsId)
+
+    const emitters: Array<(event: AgentEvent) => void> = []
+    _registerEngineForTest({
+      id: 'claude-code',
+      displayName: 'Claude Code',
+      capabilities: {
+        models: [],
+        permissionModes: ['bypass'],
+        supportsResume: true,
+        supportsMcp: true,
+        supportsSkills: true,
+      },
+      async start(_options, onEvent) {
+        emitters.push(onEvent)
+        return {
+          pid: emitters.length,
+          engineSessionId: 'engine-shared',
+          sendMessage() {},
+          interrupt() {},
+          async stop() {},
+        }
+      },
+    })
+
+    const first = orch.startAgent(wsId, '/tmp/p', 'first')
+    await flushControllerStart()
+    emitters[0]?.({ kind: 'session:started', engineSessionId: 'engine-shared' })
+    orch.stopAgent(wsId)
+
+    const replacement = orch.startAgent(wsId, '/tmp/p', 'replacement', undefined, true, 'bypass', first.agentSessionId)
+    await flushControllerStart()
+    emitters[1]?.({ kind: 'session:started', engineSessionId: 'engine-shared' })
+    emitters[1]?.({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+
+    expect(replacement.agentSessionId).toBe(first.agentSessionId)
+    const finalized = getDb()
+      .prepare('SELECT status, ended_at FROM agent_sessions WHERE id = ?')
+      .get(first.agentSessionId) as { status: string; ended_at: string | null }
+    expect(finalized.status).toBe('completed')
+    expect(finalized.ended_at).not.toBeNull()
+    vi.clearAllMocks()
+
+    emitters[0]?.({ kind: 'session:ended', reason: 'killed', exitCode: null })
+
+    expect(
+      getDb().prepare('SELECT status, ended_at FROM agent_sessions WHERE id = ?').get(first.agentSessionId),
+    ).toEqual(finalized)
+    expect(eventRouter.routeEvent).toHaveBeenCalledWith(wsId, first.agentSessionId, {
+      kind: 'session:ended',
+      reason: 'killed',
+      exitCode: null,
+      superseded: true,
+    })
+    expect(autoLoop.onSessionEnded).not.toHaveBeenCalled()
+    expect(cleanupScript.onSessionEnded).not.toHaveBeenCalled()
+  })
+
   it('finalizes a manually stopped session without advancing auto-loop or running cleanup', async () => {
     const orch = await import('../server/services/agent/orchestrator.js')
     const eventRouter = await import('../server/services/agent/event-router.js')

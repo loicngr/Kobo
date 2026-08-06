@@ -76,6 +76,77 @@ export function getBackendPort(): number {
 /** workspaceId -> SessionController */
 const controllers = new Map<string, SessionController>()
 
+interface SessionLifecycleOwnership {
+  owner: SessionController
+  ownerEnded: boolean
+  supersededControllers: Set<SessionController>
+}
+
+/**
+ * Latest controller generation per persisted session row. A resumed run can
+ * reuse an agentSessionId while its predecessor is still draining events, so
+ * controller-map membership alone is not a durable ownership signal.
+ */
+const sessionLifecycleOwners = new Map<string, Map<string, SessionLifecycleOwnership>>()
+
+function registerSessionLifecycleOwner(
+  workspaceId: string,
+  agentSessionId: string,
+  controller: SessionController,
+): void {
+  const workspaceOwners = sessionLifecycleOwners.get(workspaceId) ?? new Map<string, SessionLifecycleOwnership>()
+  const existing = workspaceOwners.get(agentSessionId)
+  if (existing) {
+    existing.supersededControllers.add(existing.owner)
+    existing.owner = controller
+    existing.ownerEnded = false
+  } else {
+    workspaceOwners.set(agentSessionId, {
+      owner: controller,
+      ownerEnded: false,
+      supersededControllers: new Set(),
+    })
+  }
+  sessionLifecycleOwners.set(workspaceId, workspaceOwners)
+}
+
+function getSessionLifecycleOwnership(
+  workspaceId: string,
+  agentSessionId: string,
+): SessionLifecycleOwnership | undefined {
+  return sessionLifecycleOwners.get(workspaceId)?.get(agentSessionId)
+}
+
+function deleteSessionLifecycleOwnershipIfSettled(workspaceId: string, agentSessionId: string): void {
+  const workspaceOwners = sessionLifecycleOwners.get(workspaceId)
+  const ownership = workspaceOwners?.get(agentSessionId)
+  if (!workspaceOwners || !ownership?.ownerEnded || ownership.supersededControllers.size > 0) return
+  workspaceOwners.delete(agentSessionId)
+  if (workspaceOwners.size === 0) sessionLifecycleOwners.delete(workspaceId)
+}
+
+function markSessionLifecycleOwnerEnded(
+  workspaceId: string,
+  agentSessionId: string,
+  controller: SessionController | undefined,
+): void {
+  const ownership = getSessionLifecycleOwnership(workspaceId, agentSessionId)
+  if (!controller || !ownership || ownership.owner !== controller) return
+  ownership.ownerEnded = true
+  deleteSessionLifecycleOwnershipIfSettled(workspaceId, agentSessionId)
+}
+
+function settleSupersededSessionController(
+  workspaceId: string,
+  agentSessionId: string,
+  controller: SessionController,
+): void {
+  const ownership = getSessionLifecycleOwnership(workspaceId, agentSessionId)
+  if (!ownership) return
+  ownership.supersededControllers.delete(controller)
+  deleteSessionLifecycleOwnershipIfSettled(workspaceId, agentSessionId)
+}
+
 export const FALLBACK_CONTROLLER_TURNOVER_TIMEOUT_MS = 2_000
 export const FALLBACK_CONTROLLER_TURNOVER_POLL_MS = 25
 
@@ -644,6 +715,7 @@ export function forgetPreAwaitStatus(workspaceId: string): void {
 /** Drop the cached engine session id for a workspace (called on delete). */
 export function forgetSessionId(workspaceId: string): void {
   sessionIds.delete(workspaceId)
+  sessionLifecycleOwners.delete(workspaceId)
 }
 
 function handleEvent(
@@ -656,15 +728,23 @@ function handleEvent(
   const hasReplacement =
     sourceController !== undefined && registeredController !== undefined && registeredController !== sourceController
   const sourceNoLongerOwnsWorkspace = sourceController !== undefined && registeredController !== sourceController
+  const lifecycleOwnership = getSessionLifecycleOwnership(workspaceId, agentSessionId)
+  const sourceIsSuperseded =
+    sourceController !== undefined &&
+    lifecycleOwnership !== undefined &&
+    lifecycleOwnership.owner !== sourceController &&
+    lifecycleOwnership.supersededControllers.has(sourceController)
 
   // A stopped controller can continue draining buffered engine events after it
   // has lost ownership. Drop every stale non-terminal event before it reaches
   // persistence/live delivery, including the gap where no replacement is
   // registered yet. A terminal event still records session-local history; it
   // carries a durable marker only when a different controller now owns the
-  // workspace, so replay does not depend on transient browser state.
+  // workspace, or when the latest owner already ended, so replay does not
+  // depend on transient browser state.
   if (sourceNoLongerOwnsWorkspace && ev.kind !== 'session:ended') return
-  const routedEvent = ev.kind === 'session:ended' && hasReplacement ? { ...ev, superseded: true } : ev
+  const routedEvent =
+    ev.kind === 'session:ended' && (hasReplacement || sourceIsSuperseded) ? { ...ev, superseded: true } : ev
   routeEvent(workspaceId, agentSessionId, routedEvent)
 
   if (ev.kind === 'rate_limit') {
@@ -777,11 +857,11 @@ function handleEvent(
     clearStaleEngineSessionId(workspaceId)
   }
   if (ev.kind === 'session:ended') {
-    // A resumed replacement can deliberately reuse the same DB session row.
-    // Its predecessor may still drain a late terminal event after losing
-    // ownership; keep the routed superseded event, but do not let it finalize
-    // the replacement's row or clear the replacement's pending interaction.
-    if (hasReplacement && registeredController?.agentSessionId === agentSessionId) return
+    if (sourceIsSuperseded && sourceController) {
+      settleSupersededSessionController(workspaceId, agentSessionId, sourceController)
+      return
+    }
+    markSessionLifecycleOwnerEnded(workspaceId, agentSessionId, sourceController)
 
     const isResumeFailed = consumeResumeFailed(workspaceId, agentSessionId)
 
@@ -1066,6 +1146,7 @@ export function startAgent(
   controller = new SessionController(workspaceId, agentSessionId, engine, (ev) =>
     handleEvent(workspaceId, agentSessionId, controller, ev),
   )
+  registerSessionLifecycleOwner(workspaceId, agentSessionId, controller)
   controllers.set(workspaceId, controller)
 
   // Kick off engine.start asynchronously. Errors surface as error events.
