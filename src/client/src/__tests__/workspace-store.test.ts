@@ -575,6 +575,73 @@ describe('workspace store', () => {
       })
       await expect(rejection).rejects.toBeInstanceOf(WorkspaceActionError)
     })
+
+    it.each([
+      { status: 409, body: null, expectedMessage: 'HTTP 409', label: 'null body' },
+      { status: 409, body: [], expectedMessage: 'HTTP 409', label: 'array body' },
+      { status: 409, body: 'invalid response', expectedMessage: 'HTTP 409', label: 'primitive body' },
+      {
+        status: 409,
+        body: { error: 'unknown code', code: 'unknown_code' },
+        expectedMessage: 'unknown code',
+        label: 'unknown code',
+      },
+      {
+        status: 409,
+        body: { error: 'invalid code type', code: 42 },
+        expectedMessage: 'invalid code type',
+        label: 'non-string code',
+      },
+      {
+        status: 500,
+        body: { error: 'incoherent no-agent code', code: 'no_agent_running' },
+        expectedMessage: 'incoherent no-agent code',
+        label: 'no_agent_running under HTTP 500',
+      },
+      {
+        status: 409,
+        body: { error: 'incoherent engine code', code: 'interrupt_failed' },
+        expectedMessage: 'incoherent engine code',
+        label: 'interrupt_failed under HTTP 409',
+      },
+    ])('rejects $label as an untagged WorkspaceActionError', async ({ status, body, expectedMessage }) => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: false,
+          status,
+          json: async () => body,
+        } as Response),
+      )
+      const store = useWorkspaceStore()
+
+      const rejection = store.interruptAgent('ws-1')
+
+      await expect(rejection).rejects.toBeInstanceOf(WorkspaceActionError)
+      await expect(rejection).rejects.toMatchObject({
+        name: 'WorkspaceActionError',
+        message: expectedMessage,
+        code: undefined,
+      })
+    })
+
+    it('uses the HTTP fallback for a non-string error message while preserving a coherent code', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: false,
+          status: 500,
+          json: async () => ({ error: 42, code: 'interrupt_failed' }),
+        } as Response),
+      )
+      const store = useWorkspaceStore()
+
+      await expect(store.interruptAgent('ws-1')).rejects.toMatchObject({
+        name: 'WorkspaceActionError',
+        message: 'HTTP 500',
+        code: 'interrupt_failed',
+      })
+    })
   })
 
   describe('usage snapshot integration', () => {

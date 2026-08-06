@@ -708,8 +708,19 @@ export const useWorkspaceStore = defineStore('workspace', {
           body: JSON.stringify(options),
         })
         if (!res.ok) {
-          const body = await res.json().catch(() => ({}))
-          throw new WorkspaceActionError(body.error ?? `HTTP ${res.status}`, body.code)
+          const body: unknown = await res.json().catch(() => undefined)
+          const errorBody =
+            typeof body === 'object' && body !== null && !Array.isArray(body)
+              ? (body as Record<string, unknown>)
+              : undefined
+          const message = typeof errorBody?.error === 'string' ? errorBody.error : `HTTP ${res.status}`
+          const responseCode = errorBody?.code
+          const code =
+            (res.status === 409 && (responseCode === 'no_agent_running' || responseCode === 'session_not_active')) ||
+            (res.status === 500 && responseCode === 'interrupt_failed')
+              ? responseCode
+              : undefined
+          throw new WorkspaceActionError(message, code)
         }
       } catch (err) {
         console.error('[workspace store] interruptAgent failed:', err)

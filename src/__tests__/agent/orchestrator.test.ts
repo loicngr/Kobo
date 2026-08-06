@@ -531,7 +531,7 @@ describe('Orchestrator — interruptAgent', () => {
   })
 
   it('throws when no agent is running for the workspace', async () => {
-    const { interruptAgent } = await import('../../server/services/agent/orchestrator.js')
+    const { interruptAgent, InterruptAgentError } = await import('../../server/services/agent/orchestrator.js')
     let thrown: unknown
     try {
       interruptAgent('nope')
@@ -539,6 +539,7 @@ describe('Orchestrator — interruptAgent', () => {
       thrown = err
     }
 
+    expect(thrown).toBeInstanceOf(InterruptAgentError)
     expect(thrown).toMatchObject({
       code: 'no_agent_running',
       message: expect.stringMatching(/No agent running/),
@@ -575,7 +576,9 @@ describe('Orchestrator — interruptAgent', () => {
         }
       },
     })
-    const { startAgent, interruptAgent } = await import('../../server/services/agent/orchestrator.js')
+    const { startAgent, interruptAgent, InterruptAgentError } = await import(
+      '../../server/services/agent/orchestrator.js'
+    )
     const { agentSessionId } = startAgent(ws.id, '/tmp', 'hi')
     await flushControllerStart()
 
@@ -589,6 +592,7 @@ describe('Orchestrator — interruptAgent', () => {
     } catch (err) {
       thrown = err
     }
+    expect(thrown).toBeInstanceOf(InterruptAgentError)
     expect(thrown).toMatchObject({
       code: 'session_not_active',
       message: expect.stringMatching(/not active/),
@@ -630,7 +634,9 @@ describe('Orchestrator — interruptAgent', () => {
         }
       },
     })
-    const { startAgent, interruptAgent } = await import('../../server/services/agent/orchestrator.js')
+    const { startAgent, interruptAgent, InterruptAgentError } = await import(
+      '../../server/services/agent/orchestrator.js'
+    )
     const { agentSessionId } = startAgent(ws.id, '/tmp', 'hi')
     await flushControllerStart()
 
@@ -640,6 +646,7 @@ describe('Orchestrator — interruptAgent', () => {
     } catch (err) {
       thrown = err
     }
+    expect(thrown).toBeInstanceOf(InterruptAgentError)
     expect(thrown).toMatchObject({
       code: 'interrupt_failed',
       message: expect.stringMatching(/Failed to interrupt agent.*interrupt failed/),

@@ -2252,6 +2252,18 @@ describe('POST /api/workspaces/:id/interrupt', () => {
     expect(res.status).toBe(status)
     expect(await res.json()).toEqual({ error: `interruption failed: ${code}`, code })
   })
+
+  it('returns an untagged 500 response for an untyped interruption failure', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(agentManager.interruptAgent).mockImplementation(() => {
+      throw new Error('unexpected interruption failure')
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/interrupt', { method: 'POST' })
+
+    expect(res.status).toBe(500)
+    expect(await res.json()).toEqual({ error: 'unexpected interruption failure' })
+  })
 })
 
 describe('DELETE /api/workspaces/:id', () => {
