@@ -1002,7 +1002,7 @@ After approval, rerun Task 6 and the final whole-branch review on the new HEAD.
   transitive dependency versions in the lockfile.
 - [x] Run focused suites, lint, type-check, full backend/client tests, build,
   audits, and `git diff --check`.
-- [ ] Commit atomically and request a fresh scoped re-review plus a final
+- [x] Commit atomically and request a fresh scoped re-review plus a final
   whole-branch review.
 
 #### Task 11 — Fix round 1: make session ownership authoritative across live and replay
