@@ -1005,6 +1005,22 @@ After approval, rerun Task 6 and the final whole-branch review on the new HEAD.
 - [x] Commit atomically and request a fresh scoped re-review plus a final
   whole-branch review.
 
+#### Task 12 — Final adversarial fix: preserve resumed-session ownership
+
+**Additional files:**
+- Modify: `src/server/services/agent/orchestrator.ts`
+- Modify: `src/__tests__/orchestrator-autoloop.test.ts`
+
+- [x] Reproduce a late terminal event from a stopped controller after its
+  replacement resumes the same `agentSessionId`.
+- [x] Add a RED regression proving the active DB row and pending interaction
+  are corrupted by the superseded end.
+- [x] Keep the superseded event in history while rejecting its lifecycle side
+  effects when the replacement owns the same session row.
+- [x] Run the targeted lifecycle suite GREEN, then rerun all tests, lint,
+  backend/client type checks, build, audits, and `git diff --check`.
+- [x] Request an independent scoped re-review of the final fix.
+
 #### Task 11 — Fix round 1: make session ownership authoritative across live and replay
 
 **Additional files:**
