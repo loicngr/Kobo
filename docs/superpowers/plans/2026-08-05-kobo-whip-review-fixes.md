@@ -998,9 +998,9 @@ After approval, rerun Task 6 and the final whole-branch review on the new HEAD.
 - [x] Consolidate the shortcut contract, replace duplicated default literals,
   and run backend/client shortcut and settings tests.
 - [x] Replace competing deep-orange accents, remove dead `whip.button` and
-  `whip.tooltip` translations in all locales, and revert unrelated lockfile
-  churn.
-- [ ] Run focused suites, lint, type-check, full backend/client tests, build,
+  `whip.tooltip` translations in all locales, and keep the audited patched
+  transitive dependency versions in the lockfile.
+- [x] Run focused suites, lint, type-check, full backend/client tests, build,
   audits, and `git diff --check`.
 - [ ] Commit atomically and request a fresh scoped re-review plus a final
   whole-branch review.
