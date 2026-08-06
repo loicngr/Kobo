@@ -788,3 +788,75 @@ git commit -m "fix(whip): preserve stopped-agent recovery"
 ```
 
 After this task, rerun Task 6 from Step 1 on the new HEAD before making any readiness claim.
+
+---
+
+### Task 8: Keep Whip eligibility live and consume only valid shortcuts
+
+**Files:**
+- Modify: `src/client/src/stores/workspace.ts`
+- Modify: `src/client/src/pages/WorkspacePage.vue`
+- Modify: `src/client/src/utils/whip-session.ts`
+- Modify: `src/client/src/components/WorkspaceWhipControl.vue`
+- Modify: `src/server/services/settings-service.ts`
+- Modify: `src/client/src/__tests__/workspace-store.test.ts`
+- Modify: `src/client/src/__tests__/whip-session.test.ts`
+- Modify: `src/client/src/__tests__/WorkspaceWhipControl.test.ts`
+- Modify: `src/__tests__/settings-service.test.ts`
+- Modify: `src/client/src/__tests__/whip-shortcut.test.ts`
+
+**Interfaces:**
+- Changes `getWhipRunningSessionId` to select the sole running session for an explicit workspace id.
+- Requires both a live busy workspace status and a workspace-matching running session before enabling Whip.
+- Consumes an eligible Whip shortcut exclusively before toggling the overlay.
+- Normalizes modifier-only final keys identically on the server and client.
+
+- [ ] **Step 1: Add RED tests for workspace/session freshness**
+
+Add pure helper cases proving that a running session from another workspace is ignored and that only one running session for the requested workspace is returned. Add a store test proving `selectWorkspace(newId)` clears the previous `sessions` synchronously before the replacement fetch resolves.
+
+In `WorkspacePage.vue`, the final implementation must pass `null` whenever the selected workspace is not in a busy live status, even if a stale session row still says `running`. This makes the existing `WorkspaceWhipControl` prop watchers close the overlay on `session:ended` and on workspace changes.
+
+- [ ] **Step 2: Add RED tests for exclusive shortcut consumption**
+
+In `WorkspaceWhipControl.test.ts`, register a competing global keydown handler and prove a valid eligible Whip shortcut does not reach it, while an ineligible/disabled/non-matching event still propagates. Add a single-key `space` case proving a consumed close does not reach a simulated overlay/global handler or emit a stray crack.
+
+- [ ] **Step 3: Add RED server/client modifier-key validation tests**
+
+Extend the server invalid-shortcut migration/update cases with `control`, `mod+control`, `ctrl`, `mod+ctrl`, `meta`, `alt`, `shift`, and `mod` as final keys. Extend client matching tests to prove those persisted forms never match. Expected normalization remains `mod+shift+x`.
+
+- [ ] **Step 4: Run focused tests and verify RED**
+
+```bash
+source /Users/enzovella/.nvm/nvm.sh && nvm use 24 >/dev/null
+npx vitest run src/__tests__/settings-service.test.ts -t "shortcut"
+(cd src/client && npx vitest run src/__tests__/workspace-store.test.ts src/__tests__/whip-session.test.ts src/__tests__/WorkspaceWhipControl.test.ts src/__tests__/whip-shortcut.test.ts)
+```
+
+- [ ] **Step 5: Implement the minimal eligibility and shortcut fixes**
+
+Clear `sessions` synchronously in `selectWorkspace`. Make `getWhipRunningSessionId(workspaceId, sessions)` filter by `session.workspaceId` before requiring exactly one `running` result. In `WorkspacePage.vue`, return a Whip session id only when `selectedWs` exists and `isBusyStatus(selectedWs.status)` is true.
+
+After an eligible shortcut passes every guard, call `event.preventDefault()` and `event.stopImmediatePropagation()` before toggling. Do not consume disabled, repeated, unmatched, or ineligible events.
+
+Make server validation reject `control` as a final key in addition to the canonical modifiers it already rejects; keep the frontend parser aligned and covered. Never accept or persist a modifier-only shortcut.
+
+- [ ] **Step 6: Verify GREEN and quality gates**
+
+Run the focused commands from Step 4, then:
+
+```bash
+npm run lint
+npx tsc --noEmit
+npm test
+(cd src/client && npm test)
+```
+
+- [ ] **Step 7: Commit the final interaction fixes**
+
+```bash
+git add src/client/src/stores/workspace.ts src/client/src/pages/WorkspacePage.vue src/client/src/utils/whip-session.ts src/client/src/components/WorkspaceWhipControl.vue src/server/services/settings-service.ts src/client/src/__tests__/workspace-store.test.ts src/client/src/__tests__/whip-session.test.ts src/client/src/__tests__/WorkspaceWhipControl.test.ts src/__tests__/settings-service.test.ts src/client/src/__tests__/whip-shortcut.test.ts
+git commit -m "fix(whip): keep session and shortcut state coherent"
+```
+
+After this task, rerun Task 6 and the final whole-branch review on the new HEAD.
