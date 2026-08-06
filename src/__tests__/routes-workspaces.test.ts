@@ -3,6 +3,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
+const { MockInterruptAgentError } = vi.hoisted(() => ({
+  MockInterruptAgentError: class extends Error {
+    constructor(
+      message: string,
+      readonly code: 'no_agent_running' | 'session_not_active' | 'interrupt_failed',
+    ) {
+      super(message)
+      this.name = 'InterruptAgentError'
+    }
+  },
+}))
+
 vi.mock('../server/services/workspace-service.js', () => ({
   createWorkspace: vi.fn(),
   getWorkspace: vi.fn(),
@@ -50,6 +62,7 @@ vi.mock('../server/services/worktree-service.js', () => ({
 }))
 
 vi.mock('../server/services/agent/orchestrator.js', () => ({
+  InterruptAgentError: MockInterruptAgentError,
   startAgent: vi.fn().mockReturnValue({ agentSessionId: 'mock-agent-session-id' }),
   stopAgent: vi.fn(),
   interruptAgent: vi.fn(),
@@ -2222,6 +2235,22 @@ describe('POST /api/workspaces/:id/interrupt', () => {
 
     expect(res.status).toBe(200)
     expect(agentManager.interruptAgent).toHaveBeenCalledWith('ws-1', {})
+  })
+
+  it.each([
+    ['no_agent_running', 409],
+    ['session_not_active', 409],
+    ['interrupt_failed', 500],
+  ] as const)('serializes %s interruption failures with status %i', async (code, status) => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(agentManager.interruptAgent).mockImplementation(() => {
+      throw new MockInterruptAgentError(`interruption failed: ${code}`, code)
+    })
+
+    const res = await app.request('/api/workspaces/ws-1/interrupt', { method: 'POST' })
+
+    expect(res.status).toBe(status)
+    expect(await res.json()).toEqual({ error: `interruption failed: ${code}`, code })
   })
 })
 

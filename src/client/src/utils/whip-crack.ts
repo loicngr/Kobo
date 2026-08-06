@@ -23,6 +23,10 @@ export interface WhipCrackCoordinator {
   dispose(): void
 }
 
+function hasErrorCode(error: unknown, code: string): boolean {
+  return typeof error === 'object' && error !== null && 'code' in error && error.code === code
+}
+
 export function createWhipCrackCoordinator(
   target: Readonly<WhipTarget>,
   phrases: readonly string[],
@@ -44,18 +48,22 @@ export function createWhipCrackCoordinator(
     if (disposed) return
 
     if (dependencies.isAgentRunning(target.workspaceId)) {
+      let interrupted = false
       try {
         await dependencies.interruptAgent(target.workspaceId)
-      } catch {
+        interrupted = true
+      } catch (err) {
         if (disposed) return
-        reportError()
-        return
+        if (!hasErrorCode(err, 'no_agent_running')) {
+          reportError()
+          return
+        }
       }
       if (disposed) return
       await dependencies.wait(WHIP_MESSAGE_DELAY_MS)
       if (disposed) return
       let waited = WHIP_MESSAGE_DELAY_MS
-      while (dependencies.isAgentRunning(target.workspaceId) && waited < WHIP_AGENT_STOP_TIMEOUT_MS) {
+      while (interrupted && dependencies.isAgentRunning(target.workspaceId) && waited < WHIP_AGENT_STOP_TIMEOUT_MS) {
         await dependencies.wait(WHIP_AGENT_STOP_POLL_MS)
         if (disposed) return
         waited += WHIP_AGENT_STOP_POLL_MS

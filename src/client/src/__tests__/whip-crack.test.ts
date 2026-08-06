@@ -1,9 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import {
-  createWhipCrackCoordinator,
-  WHIP_AGENT_STOP_POLL_MS,
-  WHIP_MESSAGE_DELAY_MS,
-} from '../utils/whip-crack'
+import { createWhipCrackCoordinator, WHIP_AGENT_STOP_POLL_MS, WHIP_MESSAGE_DELAY_MS } from '../utils/whip-crack'
 
 describe('whip crack coordinator', () => {
   beforeEach(() => vi.useFakeTimers())
@@ -82,7 +78,7 @@ describe('whip crack coordinator', () => {
       {
         isAgentRunning: () => true,
         interruptAgent: async () => {
-          throw new Error('No agent running')
+          throw Object.assign(new Error('Session is not active'), { code: 'session_not_active' })
         },
         sendMessage,
         wait,
@@ -103,8 +99,117 @@ describe('whip crack coordinator', () => {
     expect(onError).toHaveBeenCalledTimes(2)
   })
 
-  it('bounds polling when an interrupted agent stays marked as running', async () => {
+  it('waits once, then sends to the captured session when the agent already stopped', async () => {
     const wait = vi.fn(async () => undefined)
+    const sendMessage = vi.fn(() => true)
+    const onError = vi.fn()
+    const coordinator = createWhipCrackCoordinator(
+      { workspaceId: 'ws-captured', sessionId: 'session-captured' },
+      ['Faster, tocard!'],
+      {
+        isAgentRunning: () => true,
+        interruptAgent: async () => {
+          throw Object.assign(new Error('No agent running'), { code: 'no_agent_running' })
+        },
+        sendMessage,
+        wait,
+        random: () => 0,
+        now: () => 1_000,
+        onError,
+      },
+    )
+
+    await coordinator.enqueue()
+
+    expect(wait).toHaveBeenCalledOnce()
+    expect(wait).toHaveBeenCalledWith(WHIP_MESSAGE_DELAY_MS)
+    expect(sendMessage).toHaveBeenCalledOnce()
+    expect(sendMessage).toHaveBeenCalledWith('ws-captured', 'Faster, tocard!', 'session-captured')
+    expect(onError).not.toHaveBeenCalled()
+  })
+
+  it.each([
+    ['session_not_active', 'Session is not active'],
+    ['interrupt_failed', 'Engine interruption failed'],
+    [undefined, 'Unknown interruption failure'],
+  ])('blocks %s interruption failures and rate-limits the error', async (code, message) => {
+    const wait = vi.fn(async () => undefined)
+    const sendMessage = vi.fn(() => true)
+    const onError = vi.fn()
+    let now = 1_000
+    const coordinator = createWhipCrackCoordinator(
+      { workspaceId: 'ws-1', sessionId: 'session-1' },
+      ['Faster, tocard!'],
+      {
+        isAgentRunning: () => true,
+        interruptAgent: async () => {
+          const error = new Error(message)
+          if (code !== undefined) Object.assign(error, { code })
+          throw error
+        },
+        sendMessage,
+        wait,
+        random: () => 0,
+        now: () => now,
+        onError,
+      },
+    )
+
+    await coordinator.enqueue()
+    now = 2_000
+    await coordinator.enqueue()
+
+    expect(wait).not.toHaveBeenCalled()
+    expect(sendMessage).not.toHaveBeenCalled()
+    expect(onError).toHaveBeenCalledOnce()
+  })
+
+  it('does not send when disposed during the recoverable stopped-agent delay', async () => {
+    let releaseDelay!: () => void
+    let delayStarted!: () => void
+    const delay = new Promise<void>((resolve) => {
+      releaseDelay = resolve
+    })
+    const delayHasStarted = new Promise<void>((resolve) => {
+      delayStarted = resolve
+    })
+    const wait = vi.fn(async () => {
+      delayStarted()
+      await delay
+    })
+    const sendMessage = vi.fn(() => true)
+    const coordinator = createWhipCrackCoordinator(
+      { workspaceId: 'ws-1', sessionId: 'session-1' },
+      ['Faster, tocard!'],
+      {
+        isAgentRunning: () => true,
+        interruptAgent: async () => {
+          throw Object.assign(new Error('No agent running'), { code: 'no_agent_running' })
+        },
+        sendMessage,
+        wait,
+        random: () => 0,
+        now: () => 1_000,
+        onError: vi.fn(),
+      },
+    )
+
+    const active = coordinator.enqueue()
+    const firstOutcome = await Promise.race([
+      delayHasStarted.then(() => 'delay-started'),
+      active.then(() => 'dispatch-completed'),
+    ])
+    expect(firstOutcome).toBe('delay-started')
+    coordinator.dispose()
+    releaseDelay()
+    await active
+
+    expect(wait).toHaveBeenCalledWith(WHIP_MESSAGE_DELAY_MS)
+    expect(sendMessage).not.toHaveBeenCalled()
+  })
+
+  it('bounds polling when an interrupted agent stays marked as running', async () => {
+    const wait = vi.fn(async (_milliseconds: number) => undefined)
     const sendMessage = vi.fn(() => true)
     const coordinator = createWhipCrackCoordinator(
       { workspaceId: 'ws-1', sessionId: 'session-1' },
@@ -139,7 +244,7 @@ describe('whip crack coordinator', () => {
       interruptAgent: async () => {
         interrupts += 1
         if (interrupts === 1) await firstInterrupt
-        throw new Error('No agent running')
+        throw Object.assign(new Error('Session is not active'), { code: 'session_not_active' })
       },
       sendMessage: (_workspaceId, message) => {
         sent.push(message)
@@ -173,27 +278,23 @@ describe('whip crack coordinator', () => {
     const sendMessage = vi.fn(() => true)
     let interruptCalls = 0
     let running = true
-    const coordinator = createWhipCrackCoordinator(
-      { workspaceId: 'ws-1', sessionId: 'session-1' },
-      ['Go, tocard!'],
-      {
-        isAgentRunning: () => running,
-        interruptAgent: async () => {
-          interruptCalls += 1
-          if (interruptCalls === 1) {
-            firstInterruptStarted()
-            await firstInterrupt
-          }
-        },
-        sendMessage,
-        wait: async () => {
-          running = false
-        },
-        random: () => 0,
-        now: () => 1_000,
-        onError: vi.fn(),
+    const coordinator = createWhipCrackCoordinator({ workspaceId: 'ws-1', sessionId: 'session-1' }, ['Go, tocard!'], {
+      isAgentRunning: () => running,
+      interruptAgent: async () => {
+        interruptCalls += 1
+        if (interruptCalls === 1) {
+          firstInterruptStarted()
+          await firstInterrupt
+        }
       },
-    )
+      sendMessage,
+      wait: async () => {
+        running = false
+      },
+      random: () => 0,
+      now: () => 1_000,
+      onError: vi.fn(),
+    })
 
     const first = coordinator.enqueue()
     await interruptStarted
@@ -219,26 +320,22 @@ describe('whip crack coordinator', () => {
     })
     let running = false
     let sent = 0
-    const coordinator = createWhipCrackCoordinator(
-      { workspaceId: 'ws-1', sessionId: 'session-1' },
-      ['Go, tocard!'],
-      {
-        isAgentRunning: () => running,
-        interruptAgent: async () => {
-          secondInterruptStarted()
-          await secondInterrupt
-        },
-        sendMessage: () => {
-          sent += 1
-          running = true
-          return true
-        },
-        wait: async () => undefined,
-        random: () => 0,
-        now: () => 1_000,
-        onError: vi.fn(),
+    const coordinator = createWhipCrackCoordinator({ workspaceId: 'ws-1', sessionId: 'session-1' }, ['Go, tocard!'], {
+      isAgentRunning: () => running,
+      interruptAgent: async () => {
+        secondInterruptStarted()
+        await secondInterrupt
       },
-    )
+      sendMessage: () => {
+        sent += 1
+        running = true
+        return true
+      },
+      wait: async () => undefined,
+      random: () => 0,
+      now: () => 1_000,
+      onError: vi.fn(),
+    })
 
     const first = coordinator.enqueue()
     const pending = coordinator.enqueue()
@@ -269,19 +366,15 @@ describe('whip crack coordinator', () => {
     })
     const interruptAgent = vi.fn(async () => undefined)
     const sendMessage = vi.fn(() => true)
-    const coordinator = createWhipCrackCoordinator(
-      { workspaceId: 'ws-1', sessionId: 'session-1' },
-      ['Go, tocard!'],
-      {
-        isAgentRunning: () => true,
-        interruptAgent,
-        sendMessage,
-        wait,
-        random: () => 0,
-        now: () => 1_000,
-        onError: vi.fn(),
-      },
-    )
+    const coordinator = createWhipCrackCoordinator({ workspaceId: 'ws-1', sessionId: 'session-1' }, ['Go, tocard!'], {
+      isAgentRunning: () => true,
+      interruptAgent,
+      sendMessage,
+      wait,
+      random: () => 0,
+      now: () => 1_000,
+      onError: vi.fn(),
+    })
 
     const active = coordinator.enqueue()
     const pending = coordinator.enqueue()
@@ -310,19 +403,15 @@ describe('whip crack coordinator', () => {
     })
     const wait = vi.fn(async () => undefined)
     const sendMessage = vi.fn(() => true)
-    const coordinator = createWhipCrackCoordinator(
-      { workspaceId: 'ws-1', sessionId: 'session-1' },
-      ['Go, tocard!'],
-      {
-        isAgentRunning: () => true,
-        interruptAgent,
-        sendMessage,
-        wait,
-        random: () => 0,
-        now: () => 1_000,
-        onError: vi.fn(),
-      },
-    )
+    const coordinator = createWhipCrackCoordinator({ workspaceId: 'ws-1', sessionId: 'session-1' }, ['Go, tocard!'], {
+      isAgentRunning: () => true,
+      interruptAgent,
+      sendMessage,
+      wait,
+      random: () => 0,
+      now: () => 1_000,
+      onError: vi.fn(),
+    })
 
     const active = coordinator.enqueue()
     const pending = coordinator.enqueue()
@@ -354,19 +443,15 @@ describe('whip crack coordinator', () => {
     })
     const interruptAgent = vi.fn(async () => undefined)
     const sendMessage = vi.fn(() => true)
-    const coordinator = createWhipCrackCoordinator(
-      { workspaceId: 'ws-1', sessionId: 'session-1' },
-      ['Go, tocard!'],
-      {
-        isAgentRunning: () => true,
-        interruptAgent,
-        sendMessage,
-        wait,
-        random: () => 0,
-        now: () => 1_000,
-        onError: vi.fn(),
-      },
-    )
+    const coordinator = createWhipCrackCoordinator({ workspaceId: 'ws-1', sessionId: 'session-1' }, ['Go, tocard!'], {
+      isAgentRunning: () => true,
+      interruptAgent,
+      sendMessage,
+      wait,
+      random: () => 0,
+      now: () => 1_000,
+      onError: vi.fn(),
+    })
 
     const active = coordinator.enqueue()
     const pending = coordinator.enqueue()
@@ -399,19 +484,15 @@ describe('whip crack coordinator', () => {
     const wait = vi.fn(async () => undefined)
     const sendMessage = vi.fn(() => true)
     const onError = vi.fn()
-    const coordinator = createWhipCrackCoordinator(
-      { workspaceId: 'ws-1', sessionId: 'session-1' },
-      ['Go, tocard!'],
-      {
-        isAgentRunning: () => true,
-        interruptAgent,
-        sendMessage,
-        wait,
-        random: () => 0,
-        now: () => 1_000,
-        onError,
-      },
-    )
+    const coordinator = createWhipCrackCoordinator({ workspaceId: 'ws-1', sessionId: 'session-1' }, ['Go, tocard!'], {
+      isAgentRunning: () => true,
+      interruptAgent,
+      sendMessage,
+      wait,
+      random: () => 0,
+      now: () => 1_000,
+      onError,
+    })
 
     const active = coordinator.enqueue()
     const pending = coordinator.enqueue()

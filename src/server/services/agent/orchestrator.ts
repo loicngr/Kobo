@@ -46,6 +46,18 @@ export interface InterruptAgentOptions {
   disableAutoLoop?: boolean
 }
 
+export type InterruptAgentErrorCode = 'no_agent_running' | 'session_not_active' | 'interrupt_failed'
+
+export class InterruptAgentError extends Error {
+  constructor(
+    message: string,
+    readonly code: InterruptAgentErrorCode,
+  ) {
+    super(message)
+    this.name = 'InterruptAgentError'
+  }
+}
+
 // ── State ──────────────────────────────────────────────────────────────────────
 
 /** Actual bound port of the running backend — set at startup via setBackendPort() */
@@ -1025,16 +1037,22 @@ export function startAgent(
 export function interruptAgent(workspaceId: string, options: InterruptAgentOptions = {}): void {
   const ctrl = controllers.get(workspaceId)
   if (!ctrl) {
-    throw new Error(`No agent running for workspace '${workspaceId}'`)
+    throw new InterruptAgentError(`No agent running for workspace '${workspaceId}'`, 'no_agent_running')
   }
   if (options.expectedSessionId !== undefined && ctrl.agentSessionId !== options.expectedSessionId) {
-    throw new Error(`Session '${options.expectedSessionId}' is not active for workspace '${workspaceId}'`)
+    throw new InterruptAgentError(
+      `Session '${options.expectedSessionId}' is not active for workspace '${workspaceId}'`,
+      'session_not_active',
+    )
   }
   try {
     ctrl.interrupt()
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    throw new Error(`Failed to interrupt agent for workspace '${workspaceId}': ${message}`)
+    throw new InterruptAgentError(
+      `Failed to interrupt agent for workspace '${workspaceId}': ${message}`,
+      'interrupt_failed',
+    )
   }
   if (options.disableAutoLoop && autoLoopService.getStatus(workspaceId).auto_loop) {
     autoLoopService.disable(workspaceId, 'user-action')

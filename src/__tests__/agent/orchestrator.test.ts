@@ -532,7 +532,17 @@ describe('Orchestrator — interruptAgent', () => {
 
   it('throws when no agent is running for the workspace', async () => {
     const { interruptAgent } = await import('../../server/services/agent/orchestrator.js')
-    expect(() => interruptAgent('nope')).toThrow(/No agent running/)
+    let thrown: unknown
+    try {
+      interruptAgent('nope')
+    } catch (err) {
+      thrown = err
+    }
+
+    expect(thrown).toMatchObject({
+      code: 'no_agent_running',
+      message: expect.stringMatching(/No agent running/),
+    })
   })
 
   it('only interrupts the expected active session before disabling auto-loop', async () => {
@@ -573,9 +583,16 @@ describe('Orchestrator — interruptAgent', () => {
     expect(interruptCalls).toBe(0)
     expect(autoLoopService.getStatus(ws.id).auto_loop).toBe(true)
 
-    expect(() => interruptAgent(ws.id, { expectedSessionId: 'stale-session', disableAutoLoop: true })).toThrow(
-      /not active/,
-    )
+    let thrown: unknown
+    try {
+      interruptAgent(ws.id, { expectedSessionId: 'stale-session', disableAutoLoop: true })
+    } catch (err) {
+      thrown = err
+    }
+    expect(thrown).toMatchObject({
+      code: 'session_not_active',
+      message: expect.stringMatching(/not active/),
+    })
     expect(interruptCalls).toBe(0)
     expect(autoLoopService.getStatus(ws.id).auto_loop).toBe(true)
 
@@ -617,9 +634,16 @@ describe('Orchestrator — interruptAgent', () => {
     const { agentSessionId } = startAgent(ws.id, '/tmp', 'hi')
     await flushControllerStart()
 
-    expect(() => interruptAgent(ws.id, { expectedSessionId: agentSessionId, disableAutoLoop: true })).toThrow(
-      /Failed to interrupt agent.*interrupt failed/,
-    )
+    let thrown: unknown
+    try {
+      interruptAgent(ws.id, { expectedSessionId: agentSessionId, disableAutoLoop: true })
+    } catch (err) {
+      thrown = err
+    }
+    expect(thrown).toMatchObject({
+      code: 'interrupt_failed',
+      message: expect.stringMatching(/Failed to interrupt agent.*interrupt failed/),
+    })
     expect(autoLoopService.getStatus(ws.id).auto_loop).toBe(true)
   })
 })

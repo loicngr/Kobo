@@ -1,7 +1,13 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { useWebSocketStore } from '../stores/websocket'
-import { isSubagentTerminalEvent, type PrSnapshot, useWorkspaceStore, type Workspace } from '../stores/workspace'
+import {
+  isSubagentTerminalEvent,
+  type PrSnapshot,
+  useWorkspaceStore,
+  type Workspace,
+  WorkspaceActionError,
+} from '../stores/workspace'
 
 /** Build a fully-typed Workspace fixture, overrides take precedence. */
 function makeWorkspace(overrides: Partial<Workspace> = {}): Workspace {
@@ -543,6 +549,31 @@ describe('workspace store', () => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ expectedSessionId: 'session-running', disableAutoLoop: true }),
       })
+    })
+
+    it.each([
+      'no_agent_running',
+      'session_not_active',
+      'interrupt_failed',
+    ])('preserves the %s server code in a WorkspaceActionError', async (code) => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: false,
+          status: code === 'interrupt_failed' ? 500 : 409,
+          json: async () => ({ error: `interruption failed: ${code}`, code }),
+        } as Response),
+      )
+      const store = useWorkspaceStore()
+
+      const rejection = store.interruptAgent('ws-1')
+
+      await expect(rejection).rejects.toMatchObject({
+        name: 'WorkspaceActionError',
+        message: `interruption failed: ${code}`,
+        code,
+      })
+      await expect(rejection).rejects.toBeInstanceOf(WorkspaceActionError)
     })
   })
 

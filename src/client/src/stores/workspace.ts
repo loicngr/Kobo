@@ -709,7 +709,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         })
         if (!res.ok) {
           const body = await res.json().catch(() => ({}))
-          throw new Error(body.error ?? `HTTP ${res.status}`)
+          throw new WorkspaceActionError(body.error ?? `HTTP ${res.status}`, body.code)
         }
       } catch (err) {
         console.error('[workspace store] interruptAgent failed:', err)

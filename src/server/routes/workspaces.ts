@@ -4358,6 +4358,10 @@ app.post('/:id/interrupt', migrationGuard, async (c) => {
     return c.json({ status: 'interrupted' })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
+    if (err instanceof agentManager.InterruptAgentError) {
+      const status = err.code === 'interrupt_failed' ? 500 : 409
+      return c.json({ error: message, code: err.code }, status)
+    }
     return c.json({ error: message }, 500)
   }
 })
