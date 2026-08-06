@@ -172,7 +172,7 @@
         <q-btn
           flat dense no-caps size="sm" icon="swap_horiz" class="q-mr-sm"
           :label="$t('workspacePage.switchEngine')"
-          :disable="!selectedWs || selectedWs.archivedAt"
+          :disable="!selectedWs || Boolean(selectedWs.archivedAt)"
           @click="openEngineSwitch"
         >
           <q-tooltip>{{ $t('workspacePage.switchEngineHint') }}</q-tooltip>

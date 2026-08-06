@@ -12,7 +12,7 @@ import { DEFAULT_TOAST_TIMEOUT_MS } from '../utils/notification-timeout'
 import { createWhipCrackCoordinator } from '../utils/whip-crack'
 
 const doubles = vi.hoisted(() => ({
-  enqueue: vi.fn(async () => undefined),
+  enqueue: vi.fn<() => Promise<void>>(async () => undefined),
   dispose: vi.fn(),
   notify: vi.fn(),
 }))
