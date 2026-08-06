@@ -69,13 +69,13 @@ function isAgentPermissionMode(value: unknown): value is AgentPermissionMode {
   return typeof value === 'string' && (VALID_AGENT_PERMISSION_MODES as string[]).includes(value)
 }
 
-async function deliverPromptWithLifecycleFallback(
+async function deliverAgentPrompt(
   workspace: Workspace,
   workingDir: string,
   prompt: string,
-): Promise<{ agentSessionId?: string }> {
+): Promise<{ agentSessionId: string }> {
   const delivery = await agentManager.sendMessageForFallback(workspace.id, prompt)
-  if (delivery === 'sent') return {}
+  if (delivery.status === 'sent') return { agentSessionId: delivery.sessionId }
 
   const agent = agentManager.startAgent(
     workspace.id,
@@ -88,7 +88,7 @@ async function deliverPromptWithLifecycleFallback(
     workspace.reasoningEffort,
   )
   workspaceService.updateWorkspaceStatus(workspace.id, 'executing')
-  return { agentSessionId: agent?.agentSessionId }
+  return { agentSessionId: agent.agentSessionId }
 }
 
 /**
@@ -3544,7 +3544,7 @@ When finished, report the commit SHA, its message, the files included, and the c
 
     let messageSent = false
     try {
-      await deliverPromptWithLifecycleFallback(workspace, workspace.worktreePath, prompt)
+      await deliverAgentPrompt(workspace, workspace.worktreePath, prompt)
       messageSent = true
     } catch (deliveryErr) {
       const message = deliveryErr instanceof Error ? deliveryErr.message : String(deliveryErr)
@@ -3641,7 +3641,7 @@ Start now.`
 
     let messageSent = false
     try {
-      await deliverPromptWithLifecycleFallback(workspace, worktreePath, prompt)
+      await deliverAgentPrompt(workspace, worktreePath, prompt)
       messageSent = true
     } catch (deliveryErr) {
       const deliveryMessage = deliveryErr instanceof Error ? deliveryErr.message : String(deliveryErr)
@@ -3955,7 +3955,7 @@ app.post('/:id/open-pr', async (c) => {
     // Send to the running agent, or resume the agent with the PR prompt
     let messageSent = false
     try {
-      await deliverPromptWithLifecycleFallback(workspace, workspace.worktreePath, rendered)
+      await deliverAgentPrompt(workspace, workspace.worktreePath, rendered)
       messageSent = true
     } catch (deliveryErr) {
       const deliveryMessage = deliveryErr instanceof Error ? deliveryErr.message : String(deliveryErr)
@@ -4064,8 +4064,8 @@ app.post('/:id/start-review', async (c) => {
       const session = workspaceService.getActiveSession(workspace.id)
       emitSessionId = session?.id
       try {
-        const delivery = await deliverPromptWithLifecycleFallback(workspace, worktreePath, rendered)
-        emitSessionId = delivery.agentSessionId ?? emitSessionId
+        const delivery = await deliverAgentPrompt(workspace, worktreePath, rendered)
+        emitSessionId = delivery.agentSessionId
         messageSent = true
       } catch (deliveryErr) {
         const message = deliveryErr instanceof Error ? deliveryErr.message : String(deliveryErr)
@@ -4141,8 +4141,8 @@ app.post('/:id/start-ci-fix', migrationGuard, async (c) => {
     const session = workspaceService.getActiveSession(workspace.id)
     let emitSessionId: string | undefined = session?.id
     try {
-      const delivery = await deliverPromptWithLifecycleFallback(workspace, workspace.worktreePath, rendered)
-      emitSessionId = delivery.agentSessionId ?? emitSessionId
+      const delivery = await deliverAgentPrompt(workspace, workspace.worktreePath, rendered)
+      emitSessionId = delivery.agentSessionId
     } catch (deliveryErr) {
       const message = deliveryErr instanceof Error ? deliveryErr.message : String(deliveryErr)
       return c.json({ error: `Failed to dispatch CI-fix prompt: ${message}` }, 500)

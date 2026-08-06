@@ -613,7 +613,12 @@ export function forgetSessionId(workspaceId: string): void {
   sessionIds.delete(workspaceId)
 }
 
-function handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent): void {
+function handleEvent(
+  workspaceId: string,
+  agentSessionId: string,
+  sourceController: SessionController,
+  ev: AgentEvent,
+): void {
   routeEvent(workspaceId, agentSessionId, ev)
 
   if (ev.kind === 'rate_limit') {
@@ -747,7 +752,7 @@ function handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent
     // Must run BEFORE autoLoopService.onSessionEnded → spawnNextIteration →
     // startAgent, otherwise startAgent throws "Agent already running" because
     // the just-ended controller is still in the map.
-    onSessionEnded(workspaceId, agentSessionId, ev.exitCode, ev.reason, isResumeFailed)
+    onSessionEnded(workspaceId, agentSessionId, sourceController, ev.exitCode, ev.reason, isResumeFailed)
 
     // resume_failed exits with an error but the workspace is fine (stale id
     // cleared, next iteration will start fresh) — report 'completed' to
@@ -816,19 +821,19 @@ function handleEvent(workspaceId: string, agentSessionId: string, ev: AgentEvent
 function onSessionEnded(
   workspaceId: string,
   agentSessionId: string,
+  sourceController: SessionController,
   exitCode: number | null,
   reason: 'completed' | 'error' | 'killed',
   resumeFailed = false,
 ): void {
   const currentWorkspace = getWs(workspaceId)
   const preserveQuotaBackoff = currentWorkspace?.status === 'quota'
-  const ctrl = controllers.get(workspaceId)
-  const wasStopping = ctrl?.status === 'stopping'
+  const wasStopping = sourceController.status === 'stopping'
 
   // Identity-preserving cleanup: only remove the controller if the map still
   // points to this exact instance (a new controller may have been started in
   // the meantime via stop-then-start).
-  if (ctrl && controllers.get(workspaceId) === ctrl) {
+  if (controllers.get(workspaceId) === sourceController) {
     controllers.delete(workspaceId)
   }
 
@@ -995,8 +1000,9 @@ export function startAgent(
     env: ws ? buildAgentEnv(ws.projectPath) : undefined,
   }
 
-  const controller = new SessionController(workspaceId, agentSessionId, engine, (ev) =>
-    handleEvent(workspaceId, agentSessionId, ev),
+  let controller: SessionController
+  controller = new SessionController(workspaceId, agentSessionId, engine, (ev) =>
+    handleEvent(workspaceId, agentSessionId, controller, ev),
   )
   controllers.set(workspaceId, controller)
 
@@ -1017,12 +1023,12 @@ export function startAgent(
     .catch((err) => {
       console.error('[orchestrator] engine.start failed:', err)
       const message = err instanceof Error ? err.message : String(err)
-      handleEvent(workspaceId, agentSessionId, {
+      handleEvent(workspaceId, agentSessionId, controller, {
         kind: 'error',
         category: 'spawn_failed',
         message,
       })
-      handleEvent(workspaceId, agentSessionId, {
+      handleEvent(workspaceId, agentSessionId, controller, {
         kind: 'session:ended',
         reason: 'error',
         exitCode: null,
@@ -1123,14 +1129,16 @@ export async function sendMessage(workspaceId: string, content: string, expected
  * A failed steering attempt is ambiguous until the captured controller leaves
  * the registry: only its removal authorizes a caller to start a resume.
  */
-export async function sendMessageForFallback(workspaceId: string, content: string): Promise<'sent' | 'stopped'> {
+export type FallbackDeliveryResult = { status: 'sent'; sessionId: string } | { status: 'stopped' }
+
+export async function sendMessageForFallback(workspaceId: string, content: string): Promise<FallbackDeliveryResult> {
   const capturedController = controllers.get(workspaceId)
-  if (!capturedController) return 'stopped'
+  if (!capturedController) return { status: 'stopped' }
 
   wakeupService.cancel(workspaceId, 'user-message')
   try {
     await capturedController.sendMessage(content)
-    return 'sent'
+    return { status: 'sent', sessionId: capturedController.agentSessionId }
   } catch {
     const deadline = Date.now() + FALLBACK_CONTROLLER_TURNOVER_TIMEOUT_MS
     while (controllers.get(workspaceId) === capturedController) {
@@ -1144,9 +1152,9 @@ export async function sendMessageForFallback(workspaceId: string, content: strin
     }
 
     const replacementController = controllers.get(workspaceId)
-    if (!replacementController) return 'stopped'
+    if (!replacementController) return { status: 'stopped' }
     await replacementController.sendMessage(content)
-    return 'sent'
+    return { status: 'sent', sessionId: replacementController.agentSessionId }
   }
 }
 

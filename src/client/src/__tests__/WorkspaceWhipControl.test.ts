@@ -245,23 +245,33 @@ describe('WorkspaceWhipControl', () => {
   })
 
   it('disposes an active coordinator immediately when unmounted', async () => {
+    const deferred = deferredPromise()
+    doubles.enqueue.mockReturnValueOnce(deferred.promise)
     const wrapper = mountControl({ workspaceId: 'ws-1', sessionId: 'session-1', running: true })
     await openWhip(wrapper)
+    wrapper.getComponent(WhipOverlayStub).vm.$emit('crack')
 
     wrapper.unmount()
 
     expect(doubles.dispose).toHaveBeenCalledOnce()
+    deferred.resolve()
+    await deferred.promise
   })
 
   it('closes and disposes an active whip when the feature is disabled', async () => {
+    const deferred = deferredPromise()
+    doubles.enqueue.mockReturnValueOnce(deferred.promise)
     const wrapper = mountControl({ workspaceId: 'ws-1', sessionId: 'session-1', running: true })
     await openWhip(wrapper)
+    wrapper.getComponent(WhipOverlayStub).vm.$emit('crack')
 
     useSettingsStore().global.whipEnabled = false
     await wrapper.vm.$nextTick()
 
     expect(doubles.dispose).toHaveBeenCalledOnce()
     expect(wrapper.findComponent(WhipOverlayStub).exists()).toBe(false)
+    deferred.resolve()
+    await deferred.promise
   })
 
   it('captures the target and dispatches every overlay crack', async () => {
@@ -280,8 +290,11 @@ describe('WorkspaceWhipControl', () => {
   })
 
   it('closes and disposes when the target workspace changes or the overlay closes', async () => {
+    const deferred = deferredPromise()
+    doubles.enqueue.mockReturnValueOnce(deferred.promise)
     const wrapper = mountControl({ workspaceId: 'ws-1', sessionId: 'session-1', running: true })
     await openWhip(wrapper)
+    wrapper.getComponent(WhipOverlayStub).vm.$emit('crack')
 
     await wrapper.setProps({ workspaceId: 'ws-2' })
     expect(doubles.dispose).toHaveBeenCalledOnce()
@@ -292,16 +305,23 @@ describe('WorkspaceWhipControl', () => {
     await wrapper.vm.$nextTick()
     expect(doubles.dispose).toHaveBeenCalledTimes(2)
     expect(wrapper.findComponent(WhipOverlayStub).exists()).toBe(false)
+    deferred.resolve()
+    await deferred.promise
   })
 
   it('closes and disposes when the target session changes', async () => {
+    const deferred = deferredPromise()
+    doubles.enqueue.mockReturnValueOnce(deferred.promise)
     const wrapper = mountControl({ workspaceId: 'ws-1', sessionId: 'session-1', running: true })
     await openWhip(wrapper)
+    wrapper.getComponent(WhipOverlayStub).vm.$emit('crack')
 
     await wrapper.setProps({ sessionId: 'session-2' })
 
     expect(doubles.dispose).toHaveBeenCalledOnce()
     expect(wrapper.findComponent(WhipOverlayStub).exists()).toBe(false)
+    deferred.resolve()
+    await deferred.promise
   })
 
   it('closes when the agent stops naturally', async () => {
@@ -316,8 +336,9 @@ describe('WorkspaceWhipControl', () => {
 
   it('keeps a stopped overlay alive beyond one second until all accepted crack work settles', async () => {
     vi.useFakeTimers()
-    const deferred = deferredPromise()
-    doubles.enqueue.mockReturnValueOnce(deferred.promise).mockReturnValueOnce(deferred.promise)
+    const first = deferredPromise()
+    const second = deferredPromise()
+    doubles.enqueue.mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
     const wrapper = mountControl({ workspaceId: 'ws-1', sessionId: 'session-1', running: true })
     await openWhip(wrapper)
     const overlay = wrapper.getComponent(WhipOverlayStub)
@@ -330,8 +351,15 @@ describe('WorkspaceWhipControl', () => {
     expect(wrapper.findComponent(WhipOverlayStub).exists()).toBe(true)
     expect(doubles.dispose).not.toHaveBeenCalled()
 
-    deferred.resolve()
-    await deferred.promise
+    first.resolve()
+    await first.promise
+    await wrapper.vm.$nextTick()
+
+    expect(doubles.dispose).not.toHaveBeenCalled()
+    expect(wrapper.findComponent(WhipOverlayStub).exists()).toBe(true)
+
+    second.resolve()
+    await second.promise
     await wrapper.vm.$nextTick()
 
     expect(doubles.dispose).toHaveBeenCalledOnce()

@@ -172,6 +172,40 @@ describe('Orchestrator — lifecycle-safe fallback delivery', () => {
     await resetDb()
   })
 
+  it('identifies the active controller session when the first send succeeds', async () => {
+    const { createWorkspace } = await import('../../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'W', projectPath: '/tmp', sourceBranch: 'd', workingBranch: 'b' })
+    const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+    _registerEngineForTest({
+      id: 'claude-code',
+      displayName: 'Claude Code',
+      capabilities: {
+        models: [],
+        permissionModes: ['bypass'],
+        supportsResume: true,
+        supportsMcp: true,
+        supportsSkills: true,
+      },
+      async start() {
+        return {
+          pid: 1,
+          engineSessionId: 'sid-active',
+          sendMessage() {},
+          interrupt() {},
+          async stop() {},
+        }
+      },
+    })
+    const { sendMessageForFallback, startAgent } = await import('../../server/services/agent/orchestrator.js')
+    const active = startAgent(ws.id, '/tmp', 'hi')
+    await flushControllerStart()
+
+    await expect(sendMessageForFallback(ws.id, 'follow up')).resolves.toEqual({
+      status: 'sent',
+      sessionId: active.agentSessionId,
+    })
+  })
+
   it('waits for the rejecting controller to end before reporting the agent as stopped', async () => {
     vi.useFakeTimers()
     try {
@@ -225,7 +259,7 @@ describe('Orchestrator — lifecycle-safe fallback delivery', () => {
       emitEvent({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
       await vi.advanceTimersByTimeAsync(FALLBACK_CONTROLLER_TURNOVER_POLL_MS)
 
-      await expect(delivery).resolves.toBe('stopped')
+      await expect(delivery).resolves.toEqual({ status: 'stopped' })
     } finally {
       vi.useRealTimers()
     }
@@ -274,11 +308,11 @@ describe('Orchestrator — lifecycle-safe fallback delivery', () => {
       const delivery = sendMessageForFallback(ws.id, 'follow up')
       await vi.advanceTimersByTimeAsync(0)
       firstEmitEvent({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
-      startAgent(ws.id, '/tmp', 'replacement')
+      const replacement = startAgent(ws.id, '/tmp', 'replacement')
       await flushControllerStart()
       await vi.advanceTimersByTimeAsync(FALLBACK_CONTROLLER_TURNOVER_POLL_MS)
 
-      await expect(delivery).resolves.toBe('sent')
+      await expect(delivery).resolves.toEqual({ status: 'sent', sessionId: replacement.agentSessionId })
       expect(firstSend).toHaveBeenCalledOnce()
       expect(replacementSend).toHaveBeenCalledOnce()
       expect(replacementSend).toHaveBeenCalledWith('follow up')
@@ -336,6 +370,107 @@ describe('Orchestrator — lifecycle-safe fallback delivery', () => {
     } finally {
       vi.useRealTimers()
     }
+  })
+
+  it('propagates a replacement controller send rejection without retrying or removing it', async () => {
+    vi.useFakeTimers()
+    try {
+      const { createWorkspace } = await import('../../server/services/workspace-service.js')
+      const ws = createWorkspace({ name: 'W', projectPath: '/tmp', sourceBranch: 'd', workingBranch: 'b' })
+      let firstEmitEvent: (event: AgentEvent) => void = () => {}
+      const firstSend = vi.fn(async () => {
+        throw new Error('first controller rejected')
+      })
+      const replacementSend = vi.fn(async () => {
+        throw new Error('replacement rejected')
+      })
+      let starts = 0
+      const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+      _registerEngineForTest({
+        id: 'claude-code',
+        displayName: 'Claude Code',
+        capabilities: {
+          models: [],
+          permissionModes: ['bypass'],
+          supportsResume: true,
+          supportsMcp: true,
+          supportsSkills: true,
+        },
+        async start(_options, onEvent) {
+          starts += 1
+          if (starts === 1) firstEmitEvent = onEvent
+          return {
+            pid: starts,
+            engineSessionId: `sid-${starts}`,
+            sendMessage: starts === 1 ? firstSend : replacementSend,
+            interrupt() {},
+            async stop() {},
+          }
+        },
+      })
+      const { FALLBACK_CONTROLLER_TURNOVER_POLL_MS, _getControllers, sendMessageForFallback, startAgent } =
+        await import('../../server/services/agent/orchestrator.js')
+      startAgent(ws.id, '/tmp', 'hi')
+      await flushControllerStart()
+
+      const delivery = sendMessageForFallback(ws.id, 'follow up')
+      const rejection = expect(delivery).rejects.toThrow('replacement rejected')
+      await vi.advanceTimersByTimeAsync(0)
+      firstEmitEvent({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+      const replacement = startAgent(ws.id, '/tmp', 'replacement')
+      await flushControllerStart()
+      await vi.advanceTimersByTimeAsync(FALLBACK_CONTROLLER_TURNOVER_POLL_MS)
+
+      await rejection
+      expect(firstSend).toHaveBeenCalledOnce()
+      expect(replacementSend).toHaveBeenCalledOnce()
+      expect(_getControllers().get(ws.id)?.agentSessionId).toBe(replacement.agentSessionId)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps a replacement registered when the stopped controller emits session:ended late', async () => {
+    const { createWorkspace } = await import('../../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'W', projectPath: '/tmp', sourceBranch: 'd', workingBranch: 'b' })
+    let firstEmitEvent: (event: AgentEvent) => void = () => {}
+    let starts = 0
+    const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+    _registerEngineForTest({
+      id: 'claude-code',
+      displayName: 'Claude Code',
+      capabilities: {
+        models: [],
+        permissionModes: ['bypass'],
+        supportsResume: true,
+        supportsMcp: true,
+        supportsSkills: true,
+      },
+      async start(_options, onEvent) {
+        starts += 1
+        if (starts === 1) firstEmitEvent = onEvent
+        return {
+          pid: starts,
+          engineSessionId: `sid-${starts}`,
+          sendMessage() {},
+          interrupt() {},
+          async stop() {},
+        }
+      },
+    })
+    const { _getControllers, getRunningCount, startAgent, stopAgent } = await import(
+      '../../server/services/agent/orchestrator.js'
+    )
+    startAgent(ws.id, '/tmp', 'first')
+    await flushControllerStart()
+
+    stopAgent(ws.id)
+    const replacement = startAgent(ws.id, '/tmp', 'replacement')
+    await flushControllerStart()
+    firstEmitEvent({ kind: 'session:ended', reason: 'killed', exitCode: null })
+
+    expect(getRunningCount()).toBe(1)
+    expect(_getControllers().get(ws.id)?.agentSessionId).toBe(replacement.agentSessionId)
   })
 })
 

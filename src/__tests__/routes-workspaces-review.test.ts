@@ -47,7 +47,7 @@ vi.mock('../server/services/agent/orchestrator.js', () => ({
   startAgent: vi.fn().mockReturnValue({ agentSessionId: 'mock-agent-session-id' }),
   stopAgent: vi.fn(),
   sendMessage: vi.fn(),
-  sendMessageForFallback: vi.fn().mockResolvedValue('sent'),
+  sendMessageForFallback: vi.fn().mockResolvedValue({ status: 'sent', sessionId: 'delivered-session-id' }),
   getAgentStatus: vi.fn().mockReturnValue(null),
   getActiveSessionId: vi.fn().mockReturnValue('active-session-id'),
 }))
@@ -305,7 +305,10 @@ describe('POST /api/workspaces/:id/start-review', () => {
   })
 
   it('dispatches through the lifecycle-safe sender and emits user:message without resuming', async () => {
-    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce('sent')
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({
+      status: 'sent',
+      sessionId: 'recipient-session',
+    })
 
     const res = await app.request('/api/workspaces/ws-1/start-review', {
       method: 'POST',
@@ -328,7 +331,7 @@ describe('POST /api/workspaces/:id/start-review', () => {
       'ws-1',
       'user:message',
       expect.objectContaining({ content: prompt, sender: 'user' }),
-      'sess-1',
+      'recipient-session',
     )
 
     // wakeupService.cancel called
@@ -339,7 +342,7 @@ describe('POST /api/workspaces/:id/start-review', () => {
   })
 
   it('falls back to startAgent(resume=true) only when delivery reports stopped', async () => {
-    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce('stopped')
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({ status: 'stopped' })
 
     const res = await app.request('/api/workspaces/ws-1/start-review', {
       method: 'POST',
@@ -365,10 +368,16 @@ describe('POST /api/workspaces/:id/start-review', () => {
     expect(args[7]).toBe(fakeWorkspace.reasoningEffort)
 
     expect(workspaceService.updateWorkspaceStatus).toHaveBeenCalledWith('ws-1', 'executing')
+    expect(wsService.emit).toHaveBeenCalledWith(
+      'ws-1',
+      'user:message',
+      expect.objectContaining({ sender: 'user' }),
+      'mock-agent-session-id',
+    )
   })
 
   it('returns 500 when stopped delivery cannot start a resume', async () => {
-    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce('stopped')
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({ status: 'stopped' })
     vi.mocked(agentManager.startAgent).mockImplementation(() => {
       throw new Error('boom: cannot start')
     })
@@ -478,7 +487,10 @@ describe('POST /api/workspaces/:id/start-review', () => {
       customAutoLoopGroomingIntro: '',
       customQaPromptTemplate: '',
     } as never)
-    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce('sent')
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({
+      status: 'sent',
+      sessionId: 'delivered-session-id',
+    })
 
     const res = await app.request('/api/workspaces/ws-1/start-review', {
       method: 'POST',
@@ -506,7 +518,10 @@ describe('POST /api/workspaces/:id/start-review', () => {
       notionStatusProperty: '',
       notionInProgressStatus: '',
     })
-    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce('sent')
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({
+      status: 'sent',
+      sessionId: 'delivered-session-id',
+    })
 
     const res = await app.request('/api/workspaces/ws-1/start-review', {
       method: 'POST',
@@ -552,7 +567,10 @@ describe('POST /api/workspaces/:id/start-review', () => {
 
   it('inserts the working-tree separator only when working-tree stats are non-empty', async () => {
     vi.mocked(gitOps.getWorkingTreeDiffStats).mockReturnValue(' src/foo.ts | 5 +++--\n')
-    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce('sent')
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({
+      status: 'sent',
+      sessionId: 'delivered-session-id',
+    })
 
     const res = await app.request('/api/workspaces/ws-1/start-review', {
       method: 'POST',
@@ -568,7 +586,10 @@ describe('POST /api/workspaces/:id/start-review', () => {
 
   it('omits the working-tree separator when working-tree stats are empty', async () => {
     vi.mocked(gitOps.getWorkingTreeDiffStats).mockReturnValue('')
-    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce('sent')
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({
+      status: 'sent',
+      sessionId: 'delivered-session-id',
+    })
 
     const res = await app.request('/api/workspaces/ws-1/start-review', {
       method: 'POST',
@@ -582,7 +603,10 @@ describe('POST /api/workspaces/:id/start-review', () => {
   })
 
   it('trims whitespace from additionalInstructions before rendering', async () => {
-    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce('sent')
+    vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({
+      status: 'sent',
+      sessionId: 'delivered-session-id',
+    })
 
     const res = await app.request('/api/workspaces/ws-1/start-review', {
       method: 'POST',
@@ -632,6 +656,9 @@ describe('POST /api/workspaces/:id/start-review', () => {
     })
 
     expect(res.status).toBe(500)
+    expect((await res.json()).error).toBe(
+      'Failed to dispatch review prompt: Timed out waiting for agent controller turnover',
+    )
     expect(agentManager.startAgent).not.toHaveBeenCalled()
     expect(wsService.emit).not.toHaveBeenCalled()
   })
