@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { cronExpressionFromPicker } from '../utils/cron-expression'
+import { cronDaysHasMonthBoundaryDrift, cronExpressionFromPicker } from '../utils/cron-expression'
 
 describe('cronExpressionFromPicker', () => {
   it('builds an every-N-minutes expression', () => {
@@ -17,5 +17,17 @@ describe('cronExpressionFromPicker', () => {
   it('clamps N to a minimum of 1 and floors fractions', () => {
     expect(cronExpressionFromPicker('minutes', 0)).toBe('*/1 * * * *')
     expect(cronExpressionFromPicker('minutes', 2.9)).toBe('*/2 * * * *')
+  })
+})
+
+describe('cronDaysHasMonthBoundaryDrift', () => {
+  it('is false for an exact daily interval', () => {
+    expect(cronDaysHasMonthBoundaryDrift(1)).toBe(false)
+  })
+
+  it('is true for any interval greater than 1, since day-of-month resets every month', () => {
+    expect(cronDaysHasMonthBoundaryDrift(2)).toBe(true)
+    expect(cronDaysHasMonthBoundaryDrift(3)).toBe(true)
+    expect(cronDaysHasMonthBoundaryDrift(7)).toBe(true)
   })
 })

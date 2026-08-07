@@ -33,6 +33,28 @@ describe('spawnMcpProcess(command, args, env)', () => {
   })
 })
 
+describe('spawnMcpProcess — process group', () => {
+  it.skipIf(process.platform === 'win32')('spawns the MCP process as the leader of its own process group', () => {
+    // spawnMcpProcess passes env verbatim to child_process.spawn (see
+    // baseEnv() note above), so PATH must be included or `node` cannot be
+    // resolved and spawn fails with ENOENT before a pid is ever assigned.
+    const proc = spawnMcpProcess('node', ['-e', 'setTimeout(() => {}, 5000)'], { ...process.env } as Record<
+      string,
+      string
+    >)
+    try {
+      // A detached child is its own process-group leader: its pid equals
+      // its own process-group id, which we can confirm by sending signal 0
+      // (a no-op existence check) to the negated pid — it must not throw
+      // ESRCH, proving the group exists and node belongs to it.
+      expect(proc.pid).toBeDefined()
+      expect(() => process.kill(-(proc.pid as number), 0)).not.toThrow()
+    } finally {
+      if (proc.pid) process.kill(-proc.pid, 'SIGKILL')
+    }
+  })
+})
+
 describe('unwrapMcpResult', () => {
   it('parses JSON-string text content', () => {
     const mcp = { content: [{ type: 'text', text: '{"foo":"bar"}' }] }

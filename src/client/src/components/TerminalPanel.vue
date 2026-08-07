@@ -96,6 +96,7 @@ interface TerminalEntry {
   error: string | null
   container: HTMLDivElement // persistent DOM container for this terminal
   opened: boolean // whether terminal.open() has been called
+  onDataDisposable?: { dispose: () => void }
 }
 
 // Singleton map — survives component remount
@@ -187,7 +188,12 @@ function connectWs(wid: string, entry: TerminalEntry) {
     bumpState()
   }
 
-  entry.terminal.onData((data: string) => {
+  // Dispose any listener from a previous connectWs() call on this same
+  // xterm.Terminal instance — the terminal itself is reused across
+  // reconnects (only `entry.ws` is replaced), so without this a reconnect
+  // stacks a second onData listener and every keystroke gets sent twice.
+  entry.onDataDisposable?.dispose()
+  entry.onDataDisposable = entry.terminal.onData((data: string) => {
     if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
       entry.ws.send(new TextEncoder().encode(data))
     }
@@ -250,6 +256,7 @@ function closeTerminal() {
   if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
     entry.ws.close()
   }
+  entry.onDataDisposable?.dispose()
   entry.terminal.dispose()
   terminalMap.delete(wid)
   bumpState()

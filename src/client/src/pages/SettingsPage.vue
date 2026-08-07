@@ -4072,6 +4072,22 @@ function addNewProject() {
 
 // Select a project from the list
 function selectProject(index: number) {
+  if (isProjectDirty.value) {
+    $q.dialog({
+      title: t('settings.unsavedChanges.title'),
+      message: t('settings.unsavedChanges.message'),
+      dark: true,
+      persistent: true,
+      ok: { flat: true, label: t('settings.unsavedChanges.discard'), color: 'negative' },
+      cancel: { flat: true, label: t('settings.unsavedChanges.cancel'), color: 'grey-5' },
+    }).onOk(() => {
+      isNewProject.value = false
+      selectedProjectIndex.value = index
+      copyFromPath.value = null
+      previousCopyFromPath.value = null
+    })
+    return
+  }
   isNewProject.value = false
   selectedProjectIndex.value = index
   copyFromPath.value = null

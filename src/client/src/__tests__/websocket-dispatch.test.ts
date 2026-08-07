@@ -824,3 +824,30 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
     expect(ws.activeAgentSessionIds.w1).toBeUndefined()
   })
 })
+
+describe('_routeMessage — workspace:worktree-purged', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
+
+  it('refreshes the archived workspace list on a worktree-purged event', async () => {
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const wsStore = useWebSocketStore()
+    const workspaceStore = useWorkspaceStore()
+    workspaceStore.archivedLoaded = true
+    const fetchArchivedSpy = vi.spyOn(workspaceStore, 'fetchArchivedWorkspaces').mockResolvedValue(undefined)
+    const fetchSpy = vi.spyOn(workspaceStore, 'fetchWorkspaces').mockResolvedValue(undefined)
+
+    // _routeMessage is a private-by-convention action (prefixed `_`) but is
+    // still a public Pinia action — callable directly in tests.
+    ;(wsStore as unknown as { _routeMessage: (msg: unknown) => void })._routeMessage({
+      type: 'workspace:worktree-purged',
+      workspaceId: 'ws_1',
+      payload: { worktreePurgedAt: '2026-08-07T00:00:00.000Z' },
+    })
+
+    expect(fetchSpy).toHaveBeenCalled()
+    expect(fetchArchivedSpy).toHaveBeenCalled()
+  })
+})

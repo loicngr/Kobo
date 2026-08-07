@@ -136,8 +136,12 @@ async function load() {
     if ((err as Error)?.name === 'AbortError') return
     error.value = t('git.divergence.failed')
   } finally {
-    if (inflightController === controller) inflightController = null
-    loading.value = false
+    // Same superseded-request guard as GitPanel.loadGitStats: only the
+    // still-current request may clear the loading flag.
+    if (inflightController === controller) {
+      inflightController = null
+      loading.value = false
+    }
   }
 }
 

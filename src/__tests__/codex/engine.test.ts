@@ -52,7 +52,7 @@ vi.mock('../../server/utils/paths.js', async (importOriginal) => {
 })
 
 // Import AFTER mocks are installed
-import { createCodexEngine } from '../../server/services/agent/engines/codex/engine.js'
+import { CODEX_TURN_IDLE_TIMEOUT_MS, createCodexEngine } from '../../server/services/agent/engines/codex/engine.js'
 import type { AgentEvent, StartOptions } from '../../server/services/agent/engines/types.js'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -781,5 +781,75 @@ describe('createCodexEngine — engineSessionId', () => {
     await flush(10)
 
     expect(proc?.engineSessionId).toBe('thr_id_check')
+  })
+})
+
+describe('createCodexEngine — turn liveness with multiple pending approvals', () => {
+  it('does not resume the idle timer until every pending approval is resolved', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true })
+    resetChild()
+    const engine = createCodexEngine()
+    const events: AgentEvent[] = []
+    let proc: Awaited<ReturnType<typeof engine.start>> | undefined
+
+    void engine
+      .start(BASE_OPTIONS, (ev) => events.push(ev))
+      .then((p) => {
+        proc = p
+      })
+
+    await flush(5)
+    pushInitializeResponse(1)
+    await flush(5)
+    pushThreadStartResponse('thr_multi', 2)
+    await flush(5)
+    pushTurnStartResponse('turn_1', 3)
+    await flush(5)
+
+    // Two commands need approval in the same turn.
+    pushLine({
+      jsonrpc: '2.0',
+      id: 100,
+      method: 'item/commandExecution/requestApproval',
+      params: {
+        callId: 'call_a',
+        threadId: 'thr_multi',
+        turnId: 'turn_1',
+        itemId: 'item_a',
+        command: 'ls',
+        cwd: '/workspace',
+        reason: null,
+      },
+    })
+    await flush(5)
+    pushLine({
+      jsonrpc: '2.0',
+      id: 101,
+      method: 'item/commandExecution/requestApproval',
+      params: {
+        callId: 'call_b',
+        threadId: 'thr_multi',
+        turnId: 'turn_1',
+        itemId: 'item_b',
+        command: 'pwd',
+        cwd: '/workspace',
+        reason: null,
+      },
+    })
+    await flush(5)
+
+    expect(proc).toBeDefined()
+    // Resolve only the first approval — the second is still pending.
+    proc!.resolvePendingUserInput('call_a', { kind: 'permission-allow' })
+    await flush(5)
+
+    // Jump past the 120s idle timeout: the turn must NOT time out, since a
+    // human decision on call_b is still outstanding.
+    await vi.advanceTimersByTimeAsync(CODEX_TURN_IDLE_TIMEOUT_MS + 1_000)
+
+    const timeoutError = events.find((e) => e.kind === 'error' && e.message.includes('stopped reporting activity'))
+    expect(timeoutError).toBeUndefined()
+
+    vi.useRealTimers()
   })
 })

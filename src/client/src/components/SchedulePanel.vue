@@ -56,6 +56,12 @@
           style="min-width: 110px"
         />
       </div>
+      <div
+        v-if="cronUnit === 'days' && cronDaysHasMonthBoundaryDrift(cronN)"
+        class="text-caption text-warning q-mt-xs"
+      >
+        {{ $t('schedule.daysDriftWarning') }}
+      </div>
       <q-input
         v-model="cronAdvanced"
         dense dark outlined
@@ -90,7 +96,7 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
 import { useWorkspaceStore } from 'src/stores/workspace'
-import { type CronUnit, cronExpressionFromPicker } from 'src/utils/cron-expression'
+import { type CronUnit, cronDaysHasMonthBoundaryDrift, cronExpressionFromPicker } from 'src/utils/cron-expression'
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 

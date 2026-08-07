@@ -165,6 +165,15 @@ describe('POST /api/dev-server/:workspaceId/start', () => {
     const data = await res.json()
     expect(data.error).toBe('Docker not running')
   })
+
+  it('returns 409 when startDevServer reports the workspace is already starting', async () => {
+    vi.mocked(getWorkspace).mockReturnValue({ id: 'ws-1' } as never)
+    vi.mocked(devServerService.startDevServer).mockImplementation(() => {
+      throw new Error(`Dev server for workspace 'ws-1' is already starting`)
+    })
+    const res = await app.request('/api/dev-server/ws-1/start', { method: 'POST' })
+    expect(res.status).toBe(409)
+  })
 })
 
 describe('POST /api/dev-server/:workspaceId/stop', () => {

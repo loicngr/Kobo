@@ -51,10 +51,22 @@ export function runScript(opts: RunScriptOptions): Promise<{ exitCode: number }>
         PROJECT_PATH: env?.projectPath ?? '',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
+      // Detached so this is the leader of its own process group: a script
+      // that backgrounds a child (`npm run dev &`) would otherwise leave
+      // that child running after a timeout kill, since SIGKILL on `proc`
+      // alone only reaches the `bash` process itself.
+      detached: true,
     })
 
     const timeout = setTimeout(() => {
-      proc.kill('SIGKILL')
+      // Kill the whole process group (-pid), not just `proc` — otherwise a
+      // backgrounded child of the script survives the timeout as an orphan.
+      try {
+        if (proc.pid) process.kill(-proc.pid, 'SIGKILL')
+        else proc.kill('SIGKILL')
+      } catch {
+        proc.kill('SIGKILL')
+      }
       // Destroy pipes so the 'close' event fires immediately even if
       // child processes (e.g. sleep) inherited the file descriptors.
       proc.stdout?.destroy()

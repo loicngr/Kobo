@@ -1390,6 +1390,57 @@ describe('workspace store', () => {
       expect(store.gitStatsCache['ws-1']).toMatchObject({ commitCount: 8, computedAt: 300 })
     })
 
+    it('does not let a stale fetchWorkspacesInfo response overwrite a fresher prSnapshot', async () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [{ id: 'ws_1', name: 'Test' } as Workspace]
+
+      // Two overlapping polls: the first (older) resolves AFTER the second
+      // (newer) — simulate with two manually-controlled promises.
+      let resolveFirst!: (v: unknown) => void
+      let resolveSecond!: (v: unknown) => void
+      const firstResponse = new Promise((r) => {
+        resolveFirst = r
+      })
+      const secondResponse = new Promise((r) => {
+        resolveSecond = r
+      })
+      const fetchMock = vi
+        .fn()
+        .mockImplementationOnce(() => firstResponse)
+        .mockImplementationOnce(() => secondResponse)
+      vi.stubGlobal('fetch', fetchMock)
+
+      const firstCall = store.fetchWorkspacesInfo()
+      const secondCall = store.fetchWorkspacesInfo()
+
+      // Second (newer) call's network response lands first.
+      resolveSecond({
+        ok: true,
+        json: async () => ({
+          workspaces: [{ id: 'ws_1', name: 'Test', status: 'executing' }],
+          prSnapshots: { ws_1: { number: 2, updatedAt: '2026-08-07T00:01:00.000Z' } },
+          gitStats: {},
+        }),
+      })
+      await secondCall
+
+      // First (older, now-stale) call's response lands after.
+      resolveFirst({
+        ok: true,
+        json: async () => ({
+          workspaces: [{ id: 'ws_1', name: 'Test', status: 'idle' }],
+          prSnapshots: { ws_1: { number: 1, updatedAt: '2026-08-07T00:00:00.000Z' } },
+          gitStats: {},
+        }),
+      })
+      await firstCall
+
+      // The fresher (second) response must win, not the last-to-resolve
+      // (first) one.
+      expect(store.workspaces[0]?.status).toBe('executing')
+      expect(store.prSnapshots.ws_1?.number).toBe(2)
+    })
+
     it('refreshPrSnapshot clears the entry when the server returns 404', async () => {
       const fetchMock = vi.fn().mockResolvedValue({
         ok: false,

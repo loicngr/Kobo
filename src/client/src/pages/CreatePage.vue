@@ -1613,6 +1613,12 @@ function validate(): string | null {
 
 // Submit form
 async function handleCreate() {
+  // The Ctrl/Cmd+Enter shortcut calls this directly, bypassing the submit
+  // button's `:disable="submitting"` — guard here too, or a key-repeat /
+  // fast double-press fires two concurrent POST /api/workspaces calls,
+  // creating two duplicate workspaces from one user action.
+  if (submitting.value) return
+
   const error = validate()
   if (error) {
     $q.notify({ type: 'negative', message: error, position: 'top' })

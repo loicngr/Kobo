@@ -1324,6 +1324,11 @@ export default {
   'settings.network.noUrls': 'Keine LAN-Adresse erkannt.',
   'settings.network.loadFailed': 'Netzwerkzugriff-Einstellungen konnten nicht geladen werden.',
   'settings.network.updateFailed': 'Netzwerkzugriff-Einstellungen konnten nicht aktualisiert werden.',
+  'settings.unsavedChanges.title': 'Nicht gespeicherte Änderungen',
+  'settings.unsavedChanges.message':
+    'Dieses Projekt hat nicht gespeicherte Änderungen. Ein Projektwechsel verwirft sie.',
+  'settings.unsavedChanges.discard': 'Verwerfen und wechseln',
+  'settings.unsavedChanges.cancel': 'Abbrechen',
   'health.title': 'Status',
   'health.tooltip': 'Systemstatus',
   'changelog.title': 'Änderungsprotokoll',
@@ -1424,6 +1429,7 @@ export default {
   'schedule.unitMinutes': 'Minuten',
   'schedule.unitHours': 'Stunden',
   'schedule.unitDays': 'Tage',
+  'schedule.daysDriftWarning': 'Das Intervall kann sich am Monatsende auf 1 Tag verkürzen (Cron-Einschränkung).',
   'schedule.advancedExpression': 'Erweiterter Ausdruck (optional)',
   'schedule.advancedHint':
     "Roher Cron (z. B. */15 * * * *) oder {'@'}hourly/{'@'}daily — überschreibt die Auswahl, wenn gesetzt.",
