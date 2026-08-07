@@ -1082,7 +1082,8 @@ export const useWebSocketStore = defineStore('websocket', {
 
         case 'workspace:archived':
         case 'workspace:unarchived':
-        case 'workspace:worktree-restored': {
+        case 'workspace:worktree-restored':
+        case 'workspace:worktree-purged': {
           // WorkspacePage redirects home when its selectedWorkspaceId goes null,
           // so this drops the user off the page when their workspace gets archived
           // from any source (manual, auto-archive on PR merge, another tab).

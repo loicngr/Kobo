@@ -681,6 +681,7 @@
     <q-dialog v-model="showDiff" maximized>
       <DiffViewer
         v-if="workspace"
+        :key="workspace.id"
         :workspace-id="workspace.id"
         :initial-review-mode="diffInitialReview"
         :compare-from="compareFrom"
@@ -1061,8 +1062,13 @@ async function loadGitStats(opts: { freshFetch?: boolean } = {}) {
     if ((err as Error)?.name === 'AbortError') return
     gitStats.value = null
   } finally {
-    if (inflightController === controller) inflightController = null
-    loadingStats.value = false
+    // Only the still-current request may clear the loading flag — a
+    // superseded (aborted) request finishing here must not flip the spinner
+    // off while a newer request it was replaced by is still in flight.
+    if (inflightController === controller) {
+      inflightController = null
+      loadingStats.value = false
+    }
   }
 }
 

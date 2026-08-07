@@ -210,6 +210,14 @@ export function startDevServer(workspaceId: string): DevServerStatus {
     throw new Error('No dev-server start command configured')
   }
 
+  // Reject a second concurrent start for the same workspace instead of
+  // silently overwriting the tracked process — the first process would
+  // otherwise become untrackable (never killed by stopDevServer) and its
+  // exit handler could later clobber state set by the second process.
+  if (trackedProcesses.has(workspaceId)) {
+    throw new Error(`Dev server for workspace '${workspaceId}' is already starting`)
+  }
+
   const instanceName = sanitizeBranchName(workspace.workingBranch)
 
   // Execute as bash script (supports multi-line scripts)

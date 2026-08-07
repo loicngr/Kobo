@@ -172,6 +172,9 @@ function setEditRef(taskId: string, el: unknown) {
 }
 
 function startAdd() {
+  // Guard against a stray double-click wiping text already typed into an
+  // already-open inline-add input.
+  if (adding.value) return
   adding.value = true
   newTitle.value = ''
   // autofocus prop on q-input handles focusing
@@ -242,6 +245,11 @@ async function removeTask(task: Task) {
 async function toggleTask(task: Task) {
   if (!props.workspace?.id) return
   const newStatus = task.status === 'done' ? 'pending' : 'done'
+  // Capture the workspace id being patched now — if the user switches
+  // workspaces while this request is in flight, the refresh below must
+  // still target the workspace that actually changed, not whatever is
+  // selected by the time the PATCH resolves.
+  const workspaceIdAtStart = task.workspaceId
   try {
     const res = await fetch(`/api/workspaces/${task.workspaceId}/tasks/${task.id}`, {
       method: 'PATCH',
@@ -249,7 +257,7 @@ async function toggleTask(task: Task) {
       body: JSON.stringify({ status: newStatus }),
     })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    store.fetchWorkspaceDetails(props.workspace.id)
+    store.fetchWorkspaceDetails(workspaceIdAtStart)
   } catch (err) {
     console.error('Failed to toggle task:', err)
   }

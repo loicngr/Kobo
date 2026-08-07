@@ -418,6 +418,44 @@ describe('startDevServer', () => {
       }),
     )
   })
+
+  it('throws instead of silently orphaning the first process on a double start', () => {
+    vi.mocked(getWorkspace).mockReturnValue({
+      id: 'ws_double',
+      name: 'Test',
+      projectPath: '/project',
+      sourceBranch: 'main',
+      workingBranch: 'feature/test',
+      status: 'executing',
+      notionUrl: null,
+      notionPageId: null,
+      model: 'auto',
+      createdAt: '',
+      updatedAt: '',
+    })
+    vi.mocked(getProjectSettings).mockReturnValue({
+      path: '/project',
+      displayName: 'Test',
+      defaultSourceBranch: 'main',
+      defaultModel: 'auto',
+      prPromptTemplate: '',
+      devServer: { startCommand: 'make dev-server', stopCommand: '' },
+    })
+
+    const mockProc = {
+      on: vi.fn(),
+      kill: vi.fn(),
+      stdout: null,
+      stderr: null,
+      pid: 1234,
+    }
+    vi.mocked(spawn).mockReturnValue(mockProc as unknown as ReturnType<typeof spawn>)
+
+    const first = startDevServer('ws_double')
+    expect(first.status).toBe('starting')
+
+    expect(() => startDevServer('ws_double')).toThrow(/already starting/i)
+  })
 })
 
 // ── stopDevServer ──────────────────────────────────────────────────────────────

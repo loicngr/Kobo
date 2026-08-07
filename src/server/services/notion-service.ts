@@ -342,7 +342,12 @@ export async function extractNotionPage(notionUrl: string): Promise<NotionPageCo
     return { title, ticketId, status, goal, todos, gherkinFeatures }
   } finally {
     mcpProcess.stdin?.end()
-    mcpProcess.kill()
+    try {
+      if (mcpProcess.pid) process.kill(-mcpProcess.pid, 'SIGTERM')
+      else mcpProcess.kill()
+    } catch {
+      mcpProcess.kill()
+    }
   }
 }
 
@@ -374,7 +379,12 @@ export async function testNotionConnection(): Promise<IntegrationTestResult> {
     }
   } finally {
     mcpProcess.stdin?.end()
-    mcpProcess.kill()
+    try {
+      if (mcpProcess.pid) process.kill(-mcpProcess.pid, 'SIGTERM')
+      else mcpProcess.kill()
+    } catch {
+      mcpProcess.kill()
+    }
   }
 }
 
@@ -425,7 +435,12 @@ export async function listNotionUsers(): Promise<NotionUser[]> {
     return collected
   } finally {
     mcpProcess.stdin?.end()
-    mcpProcess.kill()
+    try {
+      if (mcpProcess.pid) process.kill(-mcpProcess.pid, 'SIGTERM')
+      else mcpProcess.kill()
+    } catch {
+      mcpProcess.kill()
+    }
   }
 }
 
@@ -489,7 +504,12 @@ export async function assignNotionPageToSelf(
     return { assigned: false, reason: err instanceof Error ? err.message : String(err) }
   } finally {
     mcpProcess.stdin?.end()
-    mcpProcess.kill()
+    try {
+      if (mcpProcess.pid) process.kill(-mcpProcess.pid, 'SIGTERM')
+      else mcpProcess.kill()
+    } catch {
+      mcpProcess.kill()
+    }
   }
 }
 
@@ -526,6 +546,11 @@ export async function updateNotionStatus(notionUrl: string, propertyName: string
     console.error('[notion] Failed to update status:', err instanceof Error ? err.message : err)
   } finally {
     mcpProcess.stdin?.end()
-    mcpProcess.kill()
+    try {
+      if (mcpProcess.pid) process.kill(-mcpProcess.pid, 'SIGTERM')
+      else mcpProcess.kill()
+    } catch {
+      mcpProcess.kill()
+    }
   }
 }

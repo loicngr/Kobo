@@ -314,6 +314,12 @@ const MAX_FEED_ITEMS = 5000
 const PR_SNAPSHOTS_DEBOUNCE_MS = 500
 let _prSnapshotsDebounceTimer: ReturnType<typeof setTimeout> | null = null
 
+// Monotonic request counter for `fetchWorkspacesInfo` out-of-order response
+// guarding — internal bookkeeping unrelated to reactive store state, so it
+// lives as a module-level variable rather than a Pinia state field (mirrors
+// `_prSnapshotsDebounceTimer` above).
+let _workspacesInfoRequestToken = 0
+
 function engineToProviderId(engine: string | undefined): ProviderId | null {
   if (engine === 'claude-code') return 'claude-code'
   return null
@@ -1359,6 +1365,12 @@ export const useWorkspaceStore = defineStore('workspace', {
      * shot so every non-archived workspace stays ≤30s fresh.
      */
     async fetchWorkspacesInfo(): Promise<void> {
+      // Overlapping polls (a slow prior request still in flight when the
+      // next 30s tick fires) can resolve out of order. Only the response
+      // to the MOST RECENTLY issued request is allowed to write state —
+      // otherwise a late-arriving stale response can revert workspaces/
+      // prSnapshots that a WebSocket event already brought up to date.
+      const requestToken = ++_workspacesInfoRequestToken
       try {
         const res = await fetch('/api/workspaces/info', { cache: 'no-store' })
         if (!res.ok) return
@@ -1367,6 +1379,7 @@ export const useWorkspaceStore = defineStore('workspace', {
           prSnapshots: Record<string, PrSnapshot>
           gitStats: Record<string, GitStats>
         }
+        if (requestToken !== _workspacesInfoRequestToken) return
         this.workspaces = data.workspaces
         for (const ws of this.workspaces) {
           if (['completed', 'idle', 'error', 'quota'].includes(ws.status)) {

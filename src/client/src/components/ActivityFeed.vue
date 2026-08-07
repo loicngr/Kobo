@@ -424,7 +424,7 @@ async function focusHistoryEvent(event: Event): Promise<void> {
     if (detail.sessionId) params.set('session', detail.sessionId)
     const response = await fetch(`/api/workspaces/${props.workspaceId}/events?${params}`)
     if (!response.ok) return
-    const body = (await response.json()) as { events: FetchedEvent[] }
+    const body = (await response.json()) as { events: FetchedEvent[]; hasMore?: boolean }
     const fetched = body.events ?? []
     const agentEvents = fetched.filter((item) => item.type === 'agent:event' && item.workspaceId === props.workspaceId)
     const userEvents = fetched.filter((item) => item.type === 'user:message' && item.workspaceId === props.workspaceId)
@@ -435,7 +435,10 @@ async function focusHistoryEvent(event: Event): Promise<void> {
       agentEvents.map((item) => item.createdAt),
       {
         oldestId: fetched[0]?.id,
-        hasMoreOlder: false,
+        // Use the backend's real answer instead of hardcoding false — a
+        // search deep-link into a long history otherwise permanently blocks
+        // further scroll-up with no indication why.
+        hasMoreOlder: body.hasMore ?? false,
         sessionIds: agentEvents.map((item) => item.sessionId),
         eventIds: agentEvents.map((item) => item.id),
       },

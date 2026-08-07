@@ -57,7 +57,8 @@ app.post('/:workspaceId/start', migrationGuard, (c) => {
     return c.json(status)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    const status = message.includes('already starting') ? 409 : 500
+    return c.json({ error: message }, status)
   }
 })
 

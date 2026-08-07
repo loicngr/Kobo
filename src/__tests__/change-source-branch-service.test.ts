@@ -39,14 +39,16 @@ vi.mock('node:child_process', async () => {
 })
 
 /** Build a fake ChildProcess-like emitter that resolves to `exitCode` after one tick. */
-function fakeChildProcess(exitCode: number, stderr = ''): EventEmitter {
+function fakeChildProcess(exitCode: number, stderr = '', pid = 4242): EventEmitter {
   const cp = new EventEmitter() as EventEmitter & {
     stdout: EventEmitter
     stderr: EventEmitter
+    pid: number
     kill: () => void
   }
   cp.stdout = new EventEmitter()
   cp.stderr = new EventEmitter()
+  cp.pid = pid
   cp.kill = () => {}
   setImmediate(() => {
     if (stderr) cp.stderr.emit('data', Buffer.from(stderr))
@@ -55,6 +57,31 @@ function fakeChildProcess(exitCode: number, stderr = ''): EventEmitter {
   })
   return cp
 }
+
+/** Build a fake ChildProcess-like emitter that never exits on its own — the caller drives `exit`. */
+function fakePendingChildProcess(
+  pid = 4242,
+): EventEmitter & { stdout: EventEmitter; stderr: EventEmitter; pid: number; kill: () => void } {
+  const cp = new EventEmitter() as EventEmitter & {
+    stdout: EventEmitter
+    stderr: EventEmitter
+    pid: number
+    kill: () => void
+  }
+  cp.stdout = new EventEmitter()
+  cp.stderr = new EventEmitter()
+  cp.pid = pid
+  cp.kill = () => {}
+  return cp
+}
+
+/** Flush pending microtasks (e.g. the PR-lookup await preceding `spawn()`) under fake timers. */
+async function flushMicrotasks(): Promise<void> {
+  for (let i = 0; i < 5; i++) await Promise.resolve()
+}
+
+/** Mirrors the private `SCRIPT_TIMEOUT_MS` constant in change-source-branch-service.ts. */
+const SCRIPT_TIMEOUT_MS = 5 * 60 * 1000
 
 import { execFileSync } from 'node:child_process'
 import { changeSourceBranch } from '../server/services/change-source-branch-service.js'
@@ -226,6 +253,38 @@ describe('changeSourceBranch', () => {
     expect(updateSourceMock).toHaveBeenCalledWith('w1', 'develop')
   })
 
+  it('reports a structured conflict instead of throwing when the post-reset stash pop conflicts', async () => {
+    g(repo, ['checkout', '-q', '-b', 'feature']) // sits on main, 0 own commits (aligned)
+    // develop (the new base) modifies base.txt's tracked line and commits it.
+    g(repo, ['checkout', '-q', 'develop'])
+    writeFileSync(join(repo, 'base.txt'), 'develop version\n')
+    g(repo, ['commit', '-q', '-am', 'change base.txt on develop'])
+    g(repo, ['push', '-q', 'origin', 'develop'])
+    // Back on feature (aligned with the OLD base), dirty the same tracked
+    // line without committing so the stash pop conflicts after the hard
+    // reset lands develop's content.
+    g(repo, ['checkout', '-q', 'feature'])
+    writeFileSync(join(repo, 'base.txt'), 'local uncommitted edit\n')
+    getWorkspaceMock.mockReturnValue({
+      id: 'w1',
+      sourceBranch: 'main',
+      workingBranch: 'feature',
+      worktreePath: repo,
+      projectPath: repo,
+    })
+
+    const res = await changeSourceBranch('w1', 'develop')
+
+    expect(res.status).toBe('conflict')
+    // The DB must still be updated to the new base even though the stash
+    // pop needs manual resolution — the worktree is already on `develop`.
+    expect(updateSourceMock).toHaveBeenCalledWith('w1', 'develop')
+    // The stash must still exist (not silently dropped) so the user can
+    // resolve it manually.
+    const stashList = g(repo, ['stash', 'list'])
+    expect(stashList.trim().length).toBeGreaterThan(0)
+  })
+
   it('returns "conflict" and still records the new base when the cherry-pick conflicts', async () => {
     // develop diverges on base.txt …
     g(repo, ['checkout', '-q', 'develop'])
@@ -289,6 +348,96 @@ describe('changeSourceBranch', () => {
     expect(opts.env.KOBO_FORGE).toBe('none')
     // No PR open by default → empty value, never undefined.
     expect(opts.env.KOBO_PR_NUMBER).toBe('')
+  })
+
+  it('spawns the custom script detached so a background child does not outlive the timeout kill', async () => {
+    g(repo, ['checkout', '-q', '-b', 'feature'])
+    getEffectiveSettingsMock.mockReturnValue({ changeSourceBranchScript: 'echo running' })
+    spawnMock.mockReturnValue(fakeChildProcess(0))
+    getWorkspaceMock.mockReturnValue({
+      id: 'w1',
+      name: 'Refactor auth',
+      sourceBranch: 'main',
+      workingBranch: 'feature',
+      worktreePath: repo,
+      projectPath: repo,
+    })
+
+    await changeSourceBranch('w1', 'develop')
+
+    expect(spawnMock).toHaveBeenCalledWith('bash', ['-c', 'echo running'], expect.objectContaining({ detached: true }))
+  })
+
+  it('kills the process group with SIGTERM when the script has not exited by SCRIPT_TIMEOUT_MS', async () => {
+    vi.useFakeTimers()
+    try {
+      g(repo, ['checkout', '-q', '-b', 'feature'])
+      getEffectiveSettingsMock.mockReturnValue({ changeSourceBranchScript: 'sleep 999' })
+      const child = fakePendingChildProcess(4242)
+      spawnMock.mockReturnValue(child)
+      getWorkspaceMock.mockReturnValue({
+        id: 'w1',
+        sourceBranch: 'main',
+        workingBranch: 'feature',
+        worktreePath: repo,
+        projectPath: repo,
+      })
+      const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true)
+
+      const pending = changeSourceBranch('w1', 'develop')
+      pending.catch(() => {}) // settled below once the child "exits"
+
+      // Flush the PR-lookup microtask hop that precedes spawn().
+      await flushMicrotasks()
+      expect(spawnMock).toHaveBeenCalledTimes(1)
+      expect(killSpy).not.toHaveBeenCalled()
+
+      // Advance past the watchdog window without the child ever exiting.
+      await vi.advanceTimersByTimeAsync(SCRIPT_TIMEOUT_MS)
+
+      expect(killSpy).toHaveBeenCalledWith(-4242, 'SIGTERM')
+
+      // Let the child exit so the pending promise settles and nothing leaks.
+      child.emit('exit', 0, null)
+      await pending
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('clears the group-kill timer (no process.kill) when the script exits before SCRIPT_TIMEOUT_MS', async () => {
+    vi.useFakeTimers()
+    try {
+      g(repo, ['checkout', '-q', '-b', 'feature'])
+      getEffectiveSettingsMock.mockReturnValue({ changeSourceBranchScript: 'echo running' })
+      const child = fakePendingChildProcess(4242)
+      spawnMock.mockReturnValue(child)
+      getWorkspaceMock.mockReturnValue({
+        id: 'w1',
+        sourceBranch: 'main',
+        workingBranch: 'feature',
+        worktreePath: repo,
+        projectPath: repo,
+      })
+      const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true)
+
+      const pending = changeSourceBranch('w1', 'develop')
+
+      // Flush the PR-lookup microtask hop that precedes spawn(), then exit
+      // normally well before the watchdog would ever fire.
+      await flushMicrotasks()
+      expect(spawnMock).toHaveBeenCalledTimes(1)
+      child.emit('exit', 0, null)
+      await pending
+
+      // Advance past the full timeout window — clearTimeout should have
+      // cancelled the watchdog, so process.kill must never fire.
+      await vi.advanceTimersByTimeAsync(SCRIPT_TIMEOUT_MS)
+
+      expect(killSpy).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('exposes KOBO_PR_NUMBER when the forge reports an open PR for the working branch', async () => {

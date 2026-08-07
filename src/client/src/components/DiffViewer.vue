@@ -1143,7 +1143,28 @@ function sendSelectionToChat() {
 
 // ── Watchers ─────────────────────────────────────────────────────────────────
 
+// Guards against the `selectedFile.value = previousPath` revert below
+// re-triggering this same watcher: without it, clicking Cancel on the
+// unsaved-changes dialog reopens the same dialog forever, since `dirty`
+// is still true when the watcher re-fires on the reverted assignment.
+//
+// This single boolean assumes only one watcher invocation is ever in
+// flight at a time. That holds today because the `$q.dialog({ persistent:
+// true })` backdrop blocks every other UI path from mutating
+// `selectedFile` while a dialog is pending — there's no way to trigger a
+// second, overlapping watcher run. If a future change ever lets
+// `selectedFile` change from a non-modal-gated source while a dialog is
+// open, this guard would need to become an identity check (compare
+// against the specific reverted path) or a counter instead of a bare
+// boolean.
+let revertingSelection = false
+
 watch(selectedFile, async (filePath, previousPath) => {
+  if (revertingSelection) {
+    revertingSelection = false
+    return
+  }
+
   if (dirty.value && previousPath) {
     const proceed = await new Promise<'save' | 'cancel'>((resolve) => {
       $q.dialog({
@@ -1160,6 +1181,7 @@ watch(selectedFile, async (filePath, previousPath) => {
     if (proceed === 'save') {
       const result = await saveCurrentFile()
       if (!result.ok) {
+        revertingSelection = true
         selectedFile.value = previousPath
         if (result.status === 412) {
           showConflictDialog()
@@ -1169,6 +1191,7 @@ watch(selectedFile, async (filePath, previousPath) => {
         return
       }
     } else if (proceed === 'cancel') {
+      revertingSelection = true
       selectedFile.value = previousPath
       return
     }

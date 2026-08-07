@@ -92,12 +92,34 @@ export async function changeSourceBranch(workspaceId: string, newBase: string): 
       updateWorkspaceSourceBranch(workspaceId, trimmedNew)
       return { status: 'conflict', forcePushNeeded, commitCount: commits.length }
     }
+    // Non-conflict failure (e.g. the `reset --hard` itself failed) — best
+    // effort restore of the stash before letting the error propagate, same
+    // as the original `finally` did, so the user doesn't lose uncommitted
+    // work on an unrelated failure.
+    if (stashed) {
+      try {
+        gitOps.stashPop(worktreePath)
+      } catch {
+        /* best-effort — the original error is more relevant than this one */
+      }
+    }
     throw err
-  } finally {
-    if (stashed) gitOps.stashPop(worktreePath)
   }
 
+  // The reset/reconstruct already landed on disk at this point. Update the
+  // DB's source_branch BEFORE attempting the stash pop: if the pop conflicts
+  // (the stashed local edits collide with the new base's content), the
+  // worktree and DB must not disagree about which base it's on — the user
+  // resolves the stash conflict manually, same as a cherry-pick conflict.
   updateWorkspaceSourceBranch(workspaceId, trimmedNew)
+
+  if (stashed) {
+    try {
+      gitOps.stashPop(worktreePath)
+    } catch {
+      return { status: 'conflict', forcePushNeeded, commitCount: commits.length }
+    }
+  }
 
   try {
     const provider = getForgeProvider(resolveForge(workspace.projectPath))
@@ -146,8 +168,24 @@ async function runCustomScript(
         KOBO_FORGE: forgeId,
         KOBO_PR_NUMBER: prNumber,
       },
+      // Detached so `child` leads its own process group. Node's native
+      // `timeout` option below only signals `child` itself — without this,
+      // a script that backgrounds a long-running command (`docker compose
+      // up -d &`) leaves it running as an orphan after the timeout fires.
+      detached: true,
       timeout: SCRIPT_TIMEOUT_MS,
+      killSignal: 'SIGTERM',
     })
+
+    // Node's `timeout` option kills only `child`. Mirror that same signal to
+    // the whole process group so a backgrounded child dies with it.
+    const groupKillTimer = setTimeout(() => {
+      try {
+        if (child.pid) process.kill(-child.pid, 'SIGTERM')
+      } catch {
+        /* process group already gone */
+      }
+    }, SCRIPT_TIMEOUT_MS)
 
     let stderrBuf = ''
     child.stderr?.on('data', (chunk: Buffer) => {
@@ -156,10 +194,12 @@ async function runCustomScript(
     })
 
     child.on('error', (err) => {
+      clearTimeout(groupKillTimer)
       reject(new Error(`Custom change-source-branch script failed to spawn: ${err.message}`))
     })
 
     child.on('exit', (code, signal) => {
+      clearTimeout(groupKillTimer)
       if (code === 0) {
         updateWorkspaceSourceBranch(workspace.id, newBase)
         resolve({ status: 'done', forcePushNeeded: false, commitCount: 0 })

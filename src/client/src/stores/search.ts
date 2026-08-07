@@ -18,6 +18,7 @@ interface SearchState {
   results: SearchResult[]
   loading: boolean
   error: string
+  _requestToken: number
 }
 
 export const useSearchStore = defineStore('search', {
@@ -27,6 +28,7 @@ export const useSearchStore = defineStore('search', {
     results: [],
     loading: false,
     error: '',
+    _requestToken: 0,
   }),
 
   actions: {
@@ -38,11 +40,14 @@ export const useSearchStore = defineStore('search', {
     async search(): Promise<void> {
       const q = this.query.trim()
       if (!q) {
+        this._requestToken++
         this.results = []
         this.error = ''
+        this.loading = false
         return
       }
 
+      const requestToken = ++this._requestToken
       this.loading = true
       this.error = ''
       try {
@@ -59,19 +64,26 @@ export const useSearchStore = defineStore('search', {
           }
           throw new Error(message)
         }
-        this.results = (await res.json()) as SearchResult[]
+        const results = (await res.json()) as SearchResult[]
+        // A newer search may have started while this one was in flight —
+        // only the most recently issued request is allowed to write.
+        if (requestToken !== this._requestToken) return
+        this.results = results
       } catch (err) {
+        if (requestToken !== this._requestToken) return
         this.error = err instanceof Error ? err.message : String(err)
         this.results = []
       } finally {
-        this.loading = false
+        if (requestToken === this._requestToken) this.loading = false
       }
     },
 
     clear(): void {
+      this._requestToken++
       this.query = ''
       this.results = []
       this.error = ''
+      this.loading = false
     },
   },
 })

@@ -2019,7 +2019,7 @@ app.get('/:id/events', (c) => {
     // Check if there are more older events beyond what we returned
     let hasMore = false
     if (rows.length > 0) {
-      if (before) {
+      if (before || around) {
         const firstRow = db.prepare('SELECT rowid FROM ws_events WHERE id = ?').get(rows[0].id) as
           | { rowid: number }
           | undefined

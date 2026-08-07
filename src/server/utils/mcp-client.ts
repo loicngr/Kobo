@@ -85,6 +85,10 @@ export function spawnMcpProcess(command: string, args: string[], env: Record<str
   const mcpProcess = spawn(command, args, {
     stdio: ['pipe', 'pipe', 'pipe'],
     env,
+    // Detached: `command` is frequently `npx`, which spawns its own `node`
+    // child to run the actual MCP server. Without this, `mcpProcess.kill()`
+    // only reaches the `npx` wrapper and can leave the real server running.
+    detached: true,
   })
 
   // Defensive default 'error' listener: a ChildProcess that emits 'error'

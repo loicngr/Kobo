@@ -423,7 +423,10 @@ export function createCodexEngine(): AgentEngine {
           const pending = pendingByCallId.get(callId)
           if (!pending) return false
           pendingByCallId.delete(callId)
-          turnLiveness.resume()
+          // Only resume the idle-timeout clock once every outstanding
+          // approval has been answered — a sibling request may still be
+          // waiting on a human decision.
+          if (pendingByCallId.size === 0) turnLiveness.resume()
           const result = buildResponseForResolve(pending, response)
           client.peer.respond(pending.requestId, result)
           return true

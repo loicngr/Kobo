@@ -1319,6 +1319,10 @@ export default {
   'settings.network.noUrls': 'Nessun indirizzo LAN rilevato.',
   'settings.network.loadFailed': 'Impossibile caricare le impostazioni di accesso di rete.',
   'settings.network.updateFailed': 'Impossibile aggiornare le impostazioni di accesso di rete.',
+  'settings.unsavedChanges.title': 'Modifiche non salvate',
+  'settings.unsavedChanges.message': 'Questo progetto ha modifiche non salvate. Cambiando progetto andranno perse.',
+  'settings.unsavedChanges.discard': 'Scarta e cambia',
+  'settings.unsavedChanges.cancel': 'Annulla',
   'health.title': 'Stato',
   'health.tooltip': 'Stato del sistema',
   'changelog.title': 'Changelog',
@@ -1419,6 +1423,7 @@ export default {
   'schedule.unitMinutes': 'minuti',
   'schedule.unitHours': 'ore',
   'schedule.unitDays': 'giorni',
+  'schedule.daysDriftWarning': "L'intervallo può ridursi a 1 giorno a fine mese (limite di cron).",
   'schedule.advancedExpression': 'Espressione avanzata (opzionale)',
   'schedule.advancedHint':
     "Cron grezzo (es. */15 * * * *) o {'@'}hourly/{'@'}daily — sostituisce il selettore se compilato.",

@@ -46,13 +46,20 @@ const query = ref('')
 const results = ref<SearchResult[]>([])
 const searchInput = ref<{ focus: () => void } | null>(null)
 
+let requestToken = 0
+
 watch(query, async (value) => {
   const search = value ?? ''
   if (search.trim().length < 2) {
+    requestToken += 1
     results.value = []
     return
   }
+  const token = ++requestToken
   const response = await fetch(`/api/workspaces/${props.workspaceId}/history-search?q=${encodeURIComponent(search)}`)
+  // A newer keystroke may have started its own request while this one was
+  // in flight — only the most recently issued request may write results.
+  if (token !== requestToken) return
   if (!response.ok) return
   results.value = ((await response.json()) as { results: SearchResult[] }).results
 })

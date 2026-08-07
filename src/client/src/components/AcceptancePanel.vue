@@ -168,6 +168,10 @@ function statusColor(status: string): string {
 
 async function toggleTask(task: Task) {
   const newStatus = task.status === 'done' ? 'pending' : 'done'
+  // Capture the workspace id being patched now — if the user switches
+  // workspaces while this request is in flight, the refresh below must
+  // still target the workspace that actually changed.
+  const workspaceIdAtStart = task.workspaceId
   try {
     const res = await fetch(`/api/workspaces/${task.workspaceId}/tasks/${task.id}`, {
       method: 'PATCH',
@@ -175,16 +179,16 @@ async function toggleTask(task: Task) {
       body: JSON.stringify({ status: newStatus }),
     })
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    // Refresh tasks
-    if (store.selectedWorkspaceId) {
-      store.fetchWorkspaceDetails(store.selectedWorkspaceId)
-    }
+    store.fetchWorkspaceDetails(workspaceIdAtStart)
   } catch (err) {
     console.error('Failed to update task:', err)
   }
 }
 
 function startAdd() {
+  // Guard against a stray double-click wiping text already typed into an
+  // already-open inline-add input.
+  if (adding.value) return
   adding.value = true
   newTitle.value = ''
   // autofocus prop on q-input handles focusing
