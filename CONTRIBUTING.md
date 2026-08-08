@@ -4,15 +4,15 @@ Thanks for considering a contribution. This guide covers the from-source setup, 
 
 ## Prerequisites
 
-Node.js ≥ 24.15.
+Node.js ≥ 24.15. The repository's `.nvmrc` pins the tested version; run
+`nvm use` when using nvm.
 
 ## Setup
 
 ```bash
 git clone https://github.com/loicngr/Kobo.git
 cd Kobo
-npm install
-(cd src/client && npm install)   # or: npm run install-all
+npm run install-all   # root + client + PWA build dependencies
 npm run dev:all   # backend :3300 + client :8080
 ```
 

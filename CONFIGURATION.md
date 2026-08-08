@@ -217,6 +217,11 @@ new service worker is ready; it never reloads an active page automatically.
 The development client (`npm run dev:client`) intentionally uses Quasar's
 normal dev server and is not installable.
 
+When working from source, `npm run install-all` installs the root, client, and
+`src/client/src-pwa` dependency trees. The third tree contains Quasar's
+build-only Workbox dependencies and is required by `npm run build`, but not by
+the normal development client.
+
 ## Custom change-source-branch script
 
 The **Change source branch** action defaults to Kōbō's built-in cherry-pick of
@@ -529,9 +534,9 @@ once) and the same core volume set; they differ in network topology and which op
 
 ### The image
 
-Multi-stage `Dockerfile`, `node:24-slim` base:
+Multi-stage `Dockerfile`, `node:24.19.0-slim` base:
 
-- **Build stage**: installs root + client deps, runs `npm run build` (client via Quasar, server via `tsc`).
+- **Build stage**: installs root, client, and PWA deps, then runs `npm run build` (client via Quasar, server via `tsc`).
 - **Runtime stage**: production deps only, plus OS tooling the agents and forge CLIs need — `git`, `openssh-client` + `openssh-server`, `ripgrep`, `fd-find`, `jq`, `curl`, Python + build tools, the Docker CLI (talks to a mounted host socket, see [Volumes](#volumes)), `gh`, `glab`, `tmux`, `vim`/`nano`, and more for interactive shell use.
 - **Global CLIs**: `@anthropic-ai/claude-code` and `@openai/codex` are installed globally for interactive login (`claude /login`, `codex login` over SSH) — separate from Kōbō's own bundled SDK/subprocess usage, which needs no global install.
 - **`git config --system --add safe.directory '*'`**: the container runs as root, but bind-mounted project repos keep the *host* user's UID on disk. Git's ownership check (CVE-2022-24765 mitigation) refuses to touch a repo it doesn't "own" unless told otherwise. This line pre-trusts every mounted path — fine for a single-user dev container, not something you'd do on a multi-tenant host.

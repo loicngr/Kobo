@@ -9,8 +9,8 @@
 #   make release     # CI gates + build + version-not-yet-published guard
 #   make test        # backend + client tests only
 #   make lint        # biome lint only
-#   make audit       # npm audit on both trees
-#   make install     # `npm ci` on both trees (CI-equivalent install)
+#   make audit       # npm audit on all three trees
+#   make install     # `npm ci` on all three trees (CI-equivalent install)
 #   make build       # production build (client + server)
 #   make clean       # rm dist/
 
@@ -31,8 +31,8 @@ help:
 	@echo "Targets:"
 	@echo "  make ci         Run the full PR pipeline (install + audit + lint + tsc + tests)"
 	@echo "  make release    Run CI + build + verify version is not already published"
-	@echo "  make install    npm ci on both trees"
-	@echo "  make audit      npm audit --audit-level=high on both trees"
+	@echo "  make install    npm ci on all three trees"
+	@echo "  make audit      npm audit --audit-level=high on all three trees"
 	@echo "  make lint       biome check"
 	@echo "  make typecheck  tsc --noEmit (backend)"
 	@echo "  make test       backend + client vitest suites"

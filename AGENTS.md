@@ -26,6 +26,7 @@ Single-user dev tool, local by default. The server binds `127.0.0.1` unless the 
 # Install
 npm install                         # root
 (cd src/client && npm install)      # client — separate tree
+(cd src/client/src-pwa && npm install) # Quasar PWA build — separate tree
 
 # Develop
 npm run dev                         # backend only (tsx watch on src/server/index.ts)
