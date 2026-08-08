@@ -5,6 +5,11 @@ import type { CreatePrOptions, ForgeAvailability, ForgeProvider, PrCiCheck, PrSn
 import { deriveReadyToMerge } from '../types.js'
 
 const execFileAsync = promisify(execFile)
+const CLI_TIMEOUT_MS = 30_000
+
+function cliOptions(repoPath: string) {
+  return { cwd: repoPath, encoding: 'utf-8' as const, timeout: CLI_TIMEOUT_MS }
+}
 
 /** Shape of the relevant fields in `glab mr view --output json`. */
 interface RawGlabMr {
@@ -127,10 +132,7 @@ function mapGlabJobToCheck(job: RawGlabJob): PrCiCheck {
  */
 async function fetchGlabCi(repoPath: string, branch: string): Promise<PrSnapshot['ci']> {
   try {
-    const { stdout } = await execFileAsync('glab', ['ci', 'get', '-b', branch, '-F', 'json'], {
-      cwd: repoPath,
-      encoding: 'utf-8',
-    })
+    const { stdout } = await execFileAsync('glab', ['ci', 'get', '-b', branch, '-F', 'json'], cliOptions(repoPath))
     const raw = stdout.trim()
     if (!raw) return { rollup: null, checks: [] }
     const pipeline = JSON.parse(raw) as { status?: string; jobs?: RawGlabJob[] }
@@ -165,7 +167,7 @@ export const gitlabProvider: ForgeProvider = {
 
   async isAvailable(repoPath: string): Promise<ForgeAvailability> {
     try {
-      await execFileAsync('glab', ['auth', 'status'], { cwd: repoPath, encoding: 'utf-8' })
+      await execFileAsync('glab', ['auth', 'status'], cliOptions(repoPath))
       return { available: true }
     } catch (err) {
       return availabilityFromError(err)
@@ -174,10 +176,7 @@ export const gitlabProvider: ForgeProvider = {
 
   async getPrStatus(repoPath: string, branch: string): Promise<PrSnapshot | null> {
     try {
-      const { stdout } = await execFileAsync('glab', ['mr', 'view', branch, '--output', 'json'], {
-        cwd: repoPath,
-        encoding: 'utf-8',
-      })
+      const { stdout } = await execFileAsync('glab', ['mr', 'view', branch, '--output', 'json'], cliOptions(repoPath))
       const raw = stdout.trim()
       if (!raw) return null
       const snapshot = mapGlabMrToSnapshot(JSON.parse(raw) as RawGlabMr)
@@ -205,7 +204,7 @@ export const gitlabProvider: ForgeProvider = {
         opts.body,
         '--yes',
       ],
-      { cwd: repoPath, encoding: 'utf-8' },
+      cliOptions(repoPath),
     )
     const match = stdout.match(/https?:\/\/[^\s]+\/-\/merge_requests\/(\d+)/)
     if (!match) throw new Error('Could not parse MR URL from glab output')
@@ -213,13 +212,13 @@ export const gitlabProvider: ForgeProvider = {
   },
 
   async changePrBase(repoPath: string, base: string): Promise<void> {
-    await execFileAsync('glab', ['mr', 'update', '--target-branch', base], { cwd: repoPath, encoding: 'utf-8' })
+    await execFileAsync('glab', ['mr', 'update', '--target-branch', base], cliOptions(repoPath))
   },
 
   async mergeRequest(repoPath: string, number: number): Promise<void> {
-    await execFileAsync('glab', ['mr', 'merge', String(number), '--yes'], { cwd: repoPath, encoding: 'utf-8' })
+    await execFileAsync('glab', ['mr', 'merge', String(number), '--yes'], cliOptions(repoPath))
   },
   async deleteRemoteBranch(repoPath: string, branch: string): Promise<void> {
-    await execFileAsync('git', ['push', 'origin', '--delete', branch], { cwd: repoPath, encoding: 'utf-8' })
+    await execFileAsync('git', ['push', 'origin', '--delete', branch], cliOptions(repoPath))
   },
 }

@@ -158,13 +158,14 @@ function bktEnv(): NodeJS.ProcessEnv {
 }
 
 function bktOptions(repoPath: string) {
-  return { cwd: repoPath, encoding: 'utf-8' as const, env: bktEnv() }
+  return { cwd: repoPath, encoding: 'utf-8' as const, env: bktEnv(), timeout: 30_000 }
 }
 
 async function resolveTarget(repoPath: string): Promise<BitbucketTarget> {
   const { stdout } = await execFileAsync('git', ['remote', 'get-url', 'origin'], {
     cwd: repoPath,
     encoding: 'utf-8',
+    timeout: 30_000,
   })
   const target = parseBitbucketRemote(stdout)
   if (!target) throw new Error('Could not determine Bitbucket workspace and repository from the origin remote')
@@ -172,20 +173,14 @@ async function resolveTarget(repoPath: string): Promise<BitbucketTarget> {
   // keyring and context access, which cannot prompt from the Kobo server.
   if (bktEnv().BKT_TOKEN) return { ...target, context: null }
 
-  const { stdout: contextOutput } = await execFileAsync('bkt', ['context', 'list', '--json'], {
-    cwd: repoPath,
-    encoding: 'utf-8',
-  })
+  const { stdout: contextOutput } = await execFileAsync('bkt', ['context', 'list', '--json'], bktOptions(repoPath))
   const contexts = record(JSON.parse(contextOutput)).contexts
   const existing = (Array.isArray(contexts) ? contexts : [])
     .map(record)
     .find((context) => string(context.workspace) === target.workspace && string(context.default_repo) === target.repo)
   if (existing && string(existing.name)) return { ...target, context: string(existing.name) }
 
-  const { stdout: authOutput } = await execFileAsync('bkt', ['auth', 'status', '--json'], {
-    cwd: repoPath,
-    encoding: 'utf-8',
-  })
+  const { stdout: authOutput } = await execFileAsync('bkt', ['auth', 'status', '--json'], bktOptions(repoPath))
   const hosts = record(JSON.parse(authOutput)).hosts
   const host = (Array.isArray(hosts) ? hosts : []).map(record).find((item) => string(item.kind) === 'cloud')
   const hostKey = string(host?.key)
@@ -195,7 +190,7 @@ async function resolveTarget(repoPath: string): Promise<BitbucketTarget> {
   await execFileAsync(
     'bkt',
     ['context', 'create', context, '--host', hostKey, '--workspace', target.workspace, '--repo', target.repo],
-    { cwd: repoPath, encoding: 'utf-8' },
+    bktOptions(repoPath),
   )
   return { ...target, context }
 }
@@ -326,6 +321,6 @@ export const bitbucketProvider: ForgeProvider = {
   },
 
   async deleteRemoteBranch(repoPath: string, branchName: string): Promise<void> {
-    await execFileAsync('git', ['push', 'origin', '--delete', branchName], { cwd: repoPath, encoding: 'utf-8' })
+    await execFileAsync('git', ['push', 'origin', '--delete', branchName], bktOptions(repoPath))
   },
 }

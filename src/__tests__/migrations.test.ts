@@ -42,8 +42,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 33', () => {
-    expect(SCHEMA_VERSION).toBe(33)
+  it('exporte SCHEMA_VERSION = 34', () => {
+    expect(SCHEMA_VERSION).toBe(34)
   })
 
   it('migration v33 records and backfills the engine on agent sessions', () => {
@@ -74,6 +74,56 @@ describe('runMigrations(db)', () => {
     )
     expect(columns).toContain('engine')
     expect(db.prepare("SELECT engine FROM agent_sessions WHERE id = 'session-1'").get()).toEqual({ engine: 'codex' })
+    db.close()
+  })
+
+  it('migration v34 backfills and maintains per-session event metrics', () => {
+    const db = new Database(':memory:')
+    db.pragma('foreign_keys = ON')
+    db.exec(`
+      CREATE TABLE workspaces (id TEXT PRIMARY KEY);
+      CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id));
+      CREATE TABLE ws_events (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+        type TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        session_id TEXT,
+        created_at TEXT NOT NULL
+      );
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+      INSERT INTO workspaces VALUES ('ws-1');
+      INSERT INTO agent_sessions VALUES ('session-1', 'ws-1');
+      INSERT INTO ws_events VALUES
+        ('e1', 'ws-1', 'agent:event', '{"kind":"tool:call"}', 'session-1', 'now'),
+        ('e2', 'ws-1', 'agent:event', '{"kind":"usage","inputTokens":120,"outputTokens":30}', 'session-1', 'now');
+    `)
+    for (let version = 1; version <= 33; version++) {
+      db.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(version, `v${version}`, 'now')
+    }
+
+    runMigrations(db)
+    expect(db.prepare('SELECT * FROM session_event_metrics').get()).toMatchObject({
+      workspace_id: 'ws-1',
+      session_id: 'session-1',
+      tool_calls: 1,
+      errors: 0,
+      input_tokens: 120,
+      output_tokens: 30,
+    })
+
+    db.prepare('INSERT INTO ws_events VALUES (?, ?, ?, ?, ?, ?)').run(
+      'e3',
+      'ws-1',
+      'agent:event',
+      JSON.stringify({ kind: 'tool:result', isError: true }),
+      'session-1',
+      'now',
+    )
+    expect((db.prepare('SELECT errors FROM session_event_metrics').get() as { errors: number }).errors).toBe(1)
+
+    db.prepare("DELETE FROM ws_events WHERE id = 'e3'").run()
+    expect((db.prepare('SELECT errors FROM session_event_metrics').get() as { errors: number }).errors).toBe(0)
     db.close()
   })
 
@@ -212,6 +262,31 @@ describe('runMigrations(db)', () => {
     const history = getMigrationHistory(db)
     expect(history.length).toBe(1 + migrations.length)
     db.close()
+  })
+
+  it('rolls back both schema changes and history when a migration fails', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    const failingVersion = SCHEMA_VERSION + 1
+    migrations.push({
+      version: failingVersion,
+      name: 'test-failing-migration',
+      migrate(database) {
+        database.exec('CREATE TABLE should_be_rolled_back (id TEXT)')
+        throw new Error('injected migration failure')
+      },
+    })
+    try {
+      expect(() => runMigrations(db)).toThrow('injected migration failure')
+      const table = db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'should_be_rolled_back'")
+        .get()
+      expect(table).toBeUndefined()
+      expect(db.prepare('SELECT version FROM schema_migrations WHERE version = ?').get(failingVersion)).toBeUndefined()
+    } finally {
+      migrations.pop()
+      db.close()
+    }
   })
 
   it("n'applique pas une migration déjà présente", () => {

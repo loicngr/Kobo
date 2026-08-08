@@ -98,5 +98,5 @@ body:
       options:
         - label: I have searched existing issues for duplicates
           required: true
-        - label: I am on a supported Node.js version (≥ 20)
+        - label: I am on a supported Node.js version (≥ 24.15)
           required: true

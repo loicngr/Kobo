@@ -73,18 +73,34 @@ describe('PR notification WebSocket dispatch', () => {
     expect(Notify.create).toHaveBeenCalledWith(expect.objectContaining({ timeout: 4000 }))
   })
 
-  it.each([
-    'pr:merge-conflict',
-    'pr:changes-requested',
-  ] as const)('expires the formerly sticky %s toast after six seconds', (type) => {
+  it('keeps workspace and dismiss actions on CI-failure toasts', () => {
     useWebSocketStore()._routeMessage({
-      type,
+      type: 'pr:ci-failed',
       workspaceId: 'w1',
       payload: { prNumber: 42 },
     })
 
-    expect(Notify.create).toHaveBeenLastCalledWith(expect.objectContaining({ timeout: 6000 }))
+    const call = vi.mocked(Notify.create).mock.calls.at(-1)?.[0] as {
+      actions?: Array<{ label?: string; handler?: () => void }>
+    }
+    expect(call.actions?.map((action) => action.label)).toEqual(['Open workspace', 'Dismiss'])
+
+    call.actions?.[0]?.handler?.()
+    expect(window.location.hash).toBe('#/workspace/w1')
   })
+
+  it.each(['pr:merge-conflict', 'pr:changes-requested'] as const)(
+    'expires the formerly sticky %s toast after six seconds',
+    (type) => {
+      useWebSocketStore()._routeMessage({
+        type,
+        workspaceId: 'w1',
+        payload: { prNumber: 42 },
+      })
+
+      expect(Notify.create).toHaveBeenLastCalledWith(expect.objectContaining({ timeout: 6000 }))
+    },
+  )
 
   it('uses the approved event volume instead of the general volume', () => {
     const settings = useSettingsStore().global

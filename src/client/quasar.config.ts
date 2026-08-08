@@ -1,7 +1,7 @@
-import { defineConfig } from '#q-app/wrappers'
+import { defineConfig } from '#q-app'
 
-export default defineConfig(() => {
-  const backendPort = process.env.KOBO_BACKEND_PORT || '3300'
+export default defineConfig((ctx) => {
+  const backendPort = import.meta.env.KOBO_BACKEND_PORT || '3300'
   const apiTarget = `http://localhost:${backendPort}`
   const wsTarget = `ws://localhost:${backendPort}`
 
@@ -13,9 +13,12 @@ export default defineConfig(() => {
     extras: ['roboto-font', 'material-icons'],
 
     build: {
+      alias: {
+        src: ctx.appPaths.srcDir,
+      },
       target: {
         browser: ['es2022', 'firefox115', 'chrome115', 'safari14'],
-        node: 'node20',
+        node: 'node24',
       },
       vueRouterMode: 'hash',
     },
@@ -24,7 +27,7 @@ export default defineConfig(() => {
       workboxMode: 'GenerateSW',
       // Keep live workspace data network-only: Workbox only precaches the
       // versioned application shell and does not install API runtime caching.
-      extendGenerateSWOptions(config) {
+      extendPWAGenerateSWOptions(config) {
         config.skipWaiting = false
         config.clientsClaim = true
       },

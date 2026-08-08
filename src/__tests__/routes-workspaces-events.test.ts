@@ -188,4 +188,29 @@ describe('GET /:id/events — pre-existing before / session behavior (regression
 
     expect(body.hasMore).toBe(true)
   })
+
+  it('no-cursor without a session returns the newest window and reports older history', async () => {
+    const { getDb } = await import('../server/db/index.js')
+    const db = getDb()
+    const ids: string[] = []
+    for (let i = 0; i < 10; i++) ids.push(insertEvent(db, { workspaceId }))
+
+    const app = await getApp()
+    const res = await app.request(`/${workspaceId}/events?limit=3`)
+    const body = (await res.json()) as { events: Array<{ id: string }>; hasMore: boolean }
+
+    expect(body.events.map((event) => event.id)).toEqual(ids.slice(-3))
+    expect(body.hasMore).toBe(true)
+  })
+
+  it('clamps a negative limit instead of returning the complete history', async () => {
+    const { getDb } = await import('../server/db/index.js')
+    const db = getDb()
+    for (let i = 0; i < 10; i++) insertEvent(db, { workspaceId })
+
+    const app = await getApp()
+    const res = await app.request(`/${workspaceId}/events?limit=-1`)
+    const body = (await res.json()) as { events: unknown[] }
+    expect(body.events).toHaveLength(1)
+  })
 })

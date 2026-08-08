@@ -64,9 +64,24 @@ const app = new Hono()
 const setupScriptRunning = new Set<string>()
 
 const VALID_AGENT_PERMISSION_MODES: AgentPermissionMode[] = ['plan', 'bypass', 'strict', 'interactive']
+const VALID_WORKSPACE_STATUSES: WorkspaceStatus[] = [
+  'created',
+  'extracting',
+  'brainstorming',
+  'executing',
+  'awaiting-user',
+  'completed',
+  'idle',
+  'error',
+  'quota',
+]
 
 function isAgentPermissionMode(value: unknown): value is AgentPermissionMode {
   return typeof value === 'string' && (VALID_AGENT_PERMISSION_MODES as string[]).includes(value)
+}
+
+function isWorkspaceStatus(value: unknown): value is WorkspaceStatus {
+  return typeof value === 'string' && (VALID_WORKSPACE_STATUSES as string[]).includes(value)
 }
 
 async function deliverAgentPrompt(
@@ -1864,27 +1879,26 @@ app.get('/:id/session-metrics', (c) => {
         { sessionId: session.id, toolCalls: 0, errors: 0, inputTokens: 0, outputTokens: 0 },
       ]),
     )
-    const events = db
+    const rows = db
       .prepare(
-        "SELECT session_id, payload FROM ws_events WHERE workspace_id = ? AND type = 'agent:event' AND session_id IS NOT NULL",
+        `SELECT session_id, tool_calls, errors, input_tokens, output_tokens
+         FROM session_event_metrics
+         WHERE workspace_id = ?`,
       )
-      .all(id) as Array<{ session_id: string; payload: string }>
-    for (const row of events) {
+      .all(id) as Array<{
+      session_id: string
+      tool_calls: number
+      errors: number
+      input_tokens: number
+      output_tokens: number
+    }>
+    for (const row of rows) {
       const metric = metrics.get(row.session_id)
       if (!metric) continue
-      try {
-        const event = JSON.parse(row.payload) as Record<string, unknown>
-        if (event.kind === 'tool:call') metric.toolCalls++
-        if (event.kind === 'error' || (event.kind === 'tool:result' && event.isError === true)) metric.errors++
-        if (event.kind === 'usage') {
-          if (typeof event.inputTokens === 'number')
-            metric.inputTokens = Math.max(metric.inputTokens, event.inputTokens)
-          if (typeof event.outputTokens === 'number')
-            metric.outputTokens = Math.max(metric.outputTokens, event.outputTokens)
-        }
-      } catch {
-        // Corrupt historical events are intentionally ignored in diagnostics.
-      }
+      metric.toolCalls = row.tool_calls
+      metric.errors = row.errors
+      metric.inputTokens = row.input_tokens
+      metric.outputTokens = row.output_tokens
     }
     return c.json({ sessions, metrics: [...metrics.values()] })
   } catch (err) {
@@ -1936,7 +1950,8 @@ app.get('/:id/events', (c) => {
     // optional: scope to a session view. Session views also include
     // workspace-level rows where session_id IS NULL (legacy/pre-session items).
     const session = c.req.query('session')
-    const limit = Math.min(parseInt(c.req.query('limit') ?? '100', 10) || 100, 500)
+    const parsedLimit = parseInt(c.req.query('limit') ?? '100', 10)
+    const limit = Math.max(1, Math.min(Number.isFinite(parsedLimit) ? parsedLimit : 100, 500))
 
     const db = getDb()
     let rows: Array<{
@@ -1991,13 +2006,13 @@ app.get('/:id/events', (c) => {
             )
             .all(id, session, limit) as typeof rows)
         : (db
-            .prepare('SELECT * FROM ws_events WHERE workspace_id = ? ORDER BY rowid ASC LIMIT ?')
+            .prepare('SELECT * FROM ws_events WHERE workspace_id = ? ORDER BY rowid DESC LIMIT ?')
             .all(id, limit) as typeof rows)
     }
 
     // Reverse to chronological order (we queried DESC for "before" pagination,
     // or for the "session + no cursor" case where we fetched the newest first).
-    if (before || (session && !around)) rows.reverse()
+    if (!around) rows.reverse()
 
     const events = rows.map((row) => {
       let parsedPayload: unknown
@@ -2035,12 +2050,14 @@ app.get('/:id/events', (c) => {
                 .get(id, firstRow.rowid) as { c: number })
           hasMore = older.c > 0
         }
-      } else if (session) {
-        const total = db
-          .prepare(
-            'SELECT COUNT(*) as c FROM ws_events WHERE workspace_id = ? AND (session_id = ? OR session_id IS NULL)',
-          )
-          .get(id, session) as { c: number }
+      } else {
+        const total = session
+          ? (db
+              .prepare(
+                'SELECT COUNT(*) as c FROM ws_events WHERE workspace_id = ? AND (session_id = ? OR session_id IS NULL)',
+              )
+              .get(id, session) as { c: number })
+          : (db.prepare('SELECT COUNT(*) as c FROM ws_events WHERE workspace_id = ?').get(id) as { c: number })
         hasMore = total.c > rows.length
       }
     }
@@ -2265,14 +2282,11 @@ app.put('/:id/tags', async (c) => {
 app.patch('/:id', migrationGuard, async (c) => {
   try {
     const id = c.req.param('id')
-    const body = await c.req.json<{
-      status?: WorkspaceStatus
-      model?: string
-      reasoningEffort?: string
-      agentPermissionMode?: AgentPermissionMode
-      name?: string
-      description?: string | null
-    }>()
+    const parsed: unknown = await c.req.json()
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      return c.json({ error: 'Request body must be a JSON object' }, 400)
+    }
+    const body = parsed as Record<string, unknown>
 
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) {
@@ -2284,12 +2298,14 @@ app.patch('/:id', migrationGuard, async (c) => {
       return c.json({ error: 'agent_description must be set via the agent MCP tool, not via the API' }, 400)
     }
 
-    let updated = workspace
-    if (body.model !== undefined) {
-      updated = workspaceService.updateWorkspaceModel(id, body.model)
+    if (body.model !== undefined && (typeof body.model !== 'string' || !body.model.trim())) {
+      return c.json({ error: 'model must be a non-empty string' }, 400)
     }
-    if (body.reasoningEffort !== undefined) {
-      updated = workspaceService.updateWorkspaceReasoningEffort(id, body.reasoningEffort)
+    if (
+      body.reasoningEffort !== undefined &&
+      (typeof body.reasoningEffort !== 'string' || !body.reasoningEffort.trim())
+    ) {
+      return c.json({ error: 'reasoningEffort must be a non-empty string' }, 400)
     }
     if (body.agentPermissionMode !== undefined) {
       if (!isAgentPermissionMode(body.agentPermissionMode)) {
@@ -2312,26 +2328,26 @@ app.patch('/:id', migrationGuard, async (c) => {
           400,
         )
       }
-      updated = workspaceService.updateAgentPermissionMode(id, body.agentPermissionMode)
     }
-    if (body.status) {
+    if (body.status !== undefined) {
+      if (!isWorkspaceStatus(body.status)) {
+        return c.json({ error: `Invalid status. Must be one of: ${VALID_WORKSPACE_STATUSES.join(', ')}` }, 400)
+      }
       if (body.status === 'idle' && agentManager.hasController(id)) {
         return c.json({ error: 'Cannot mark an active agent workspace idle; end or stop the agent session first' }, 409)
       }
-      updated = workspaceService.updateWorkspaceStatus(id, body.status)
     }
-    if (body.name !== undefined) {
-      updated = workspaceService.updateWorkspaceName(id, body.name)
+    if (body.name !== undefined && typeof body.name !== 'string') {
+      return c.json({ error: 'name must be a string' }, 400)
     }
     if ('description' in body) {
       const desc = body.description
       if (desc !== null && typeof desc !== 'string') {
         return c.json({ error: 'description must be a string or null' }, 400)
       }
-      updated = workspaceService.updateWorkspaceDescription(id, desc)
     }
     if (
-      !body.status &&
+      body.status === undefined &&
       body.model === undefined &&
       body.reasoningEffort === undefined &&
       body.agentPermissionMode === undefined &&
@@ -2344,7 +2360,7 @@ app.patch('/:id', migrationGuard, async (c) => {
       )
     }
 
-    return c.json(updated)
+    return c.json(workspaceService.updateWorkspaceFields(id, body as workspaceService.WorkspaceFieldUpdates))
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     if (message.includes('not found')) {
@@ -2553,7 +2569,7 @@ app.post('/:id/run-setup-script', async (c) => {
 })
 
 // POST /api/workspaces/:id/archive — mark workspace as archived (soft-delete)
-app.post('/:id/archive', migrationGuard, (c) => {
+app.post('/:id/archive', migrationGuard, async (c) => {
   try {
     const id = c.req.param('id')
     const workspace = workspaceService.getWorkspace(id)
@@ -2571,7 +2587,7 @@ app.post('/:id/archive', migrationGuard, (c) => {
     }
 
     try {
-      devServerService.stopDevServer(id)
+      await devServerService.stopDevServer(id)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       console.error(`[workspaces] stopDevServer during archive failed: ${message}`)
@@ -2656,10 +2672,10 @@ type WorkspaceRow = NonNullable<ReturnType<typeof workspaceService.getWorkspace>
 // Every side-effect is best-effort — failures are collected as warnings
 // rather than thrown, so a bulk delete never aborts mid-batch. Returns the
 // list of user-facing warning messages (empty when everything was clean).
-function deleteWorkspaceWithSideEffects(
+async function deleteWorkspaceWithSideEffects(
   workspace: WorkspaceRow,
   opts: { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean },
-): string[] {
+): Promise<string[]> {
   // Stop agent if running (best-effort)
   try {
     agentManager.stopAgent(workspace.id)
@@ -2670,7 +2686,7 @@ function deleteWorkspaceWithSideEffects(
   // Stop dev server if it was running. The processSpawn would otherwise
   // outlive the workspace (and keep its port + docker containers alive).
   try {
-    devServerService.stopDevServer(workspace.id)
+    await devServerService.stopDevServer(workspace.id)
   } catch (err) {
     console.error(`[workspaces] stopDevServer during delete failed for '${workspace.name}':`, err)
   }
@@ -2766,7 +2782,7 @@ app.delete('/archived', migrationGuard, async (c) => {
 
     for (const workspace of archived) {
       try {
-        warnings.push(...deleteWorkspaceWithSideEffects(workspace, body))
+        warnings.push(...(await deleteWorkspaceWithSideEffects(workspace, body)))
         deleted++
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
@@ -2800,7 +2816,7 @@ app.delete('/:id', migrationGuard, async (c) => {
       }>()
       .catch(() => ({}) as { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean })
 
-    const warnings = deleteWorkspaceWithSideEffects(workspace, body)
+    const warnings = await deleteWorkspaceWithSideEffects(workspace, body)
 
     // When everything worked cleanly we keep the legacy 204 response so
     // existing clients aren't surprised by a JSON body. Warnings promote the
@@ -2824,6 +2840,9 @@ app.post('/:id/start', migrationGuard, async (c) => {
     if (!workspace) {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
     }
+
+    if (workspace.archivedAt) return c.json({ error: `Workspace '${id}' is archived` }, 409)
+    if (workspace.worktreePurgedAt) return c.json({ error: `Workspace '${id}' worktree is purged` }, 409)
 
     // If the workspace declares an engine, ensure it is still registered.
     // Otherwise startAgent() would throw from deep inside resolveEngine and
@@ -3713,7 +3732,7 @@ app.post('/:id/merge-pr', async (c) => {
     }
 
     const snapshot = await provider.getPrStatus(workspace.worktreePath, workspace.workingBranch)
-    if (!snapshot || snapshot.state !== 'OPEN') {
+    if (snapshot?.state !== 'OPEN') {
       return c.json({ error: 'No open PR found for this workspace', code: 'pr_not_open' }, 409)
     }
     if (!snapshot.readyToMerge) {
@@ -4097,7 +4116,7 @@ app.post('/:id/start-ci-fix', migrationGuard, async (c) => {
     if (!snapshot) {
       snapshot = getAllPrSnapshots()[id] ?? null
     }
-    if (!snapshot || snapshot.state !== 'OPEN' || snapshot.ci.rollup !== 'FAILURE') {
+    if (snapshot?.state !== 'OPEN' || snapshot.ci.rollup !== 'FAILURE') {
       return c.json({ error: 'No failing CI detected on this workspace' }, 400)
     }
 

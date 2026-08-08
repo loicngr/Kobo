@@ -230,6 +230,7 @@ describe('emit()', () => {
     expect(received.type).toBe('agent:output')
     expect(received.workspaceId).toBe('ws-bc-1')
     expect(received.payload).toEqual({ data: 'test' })
+    expect(received.replayable).toBe(true)
   })
 
   it("n'envoie pas aux clients dont le readyState n'est pas OPEN", async () => {
@@ -310,6 +311,7 @@ describe('handleSyncRequest()', () => {
     expect(ws.sentMessages.length).toBe(1)
     const syncResponse = JSON.parse(ws.sentMessages[0])
     expect(syncResponse.type).toBe('sync:response')
+    expect(syncResponse.payload.mode).toBe('delta')
     expect(syncResponse.payload.events.length).toBe(2)
     expect(syncResponse.payload.events[0].type).toBe('event:2')
     expect(syncResponse.payload.events[1].type).toBe('event:3')
@@ -338,7 +340,26 @@ describe('handleSyncRequest()', () => {
 
     const syncResponse = JSON.parse(ws.sentMessages[0])
     expect(syncResponse.type).toBe('sync:response')
+    expect(syncResponse.payload.mode).toBe('snapshot')
     expect(syncResponse.payload.events.length).toBe(2)
+  })
+
+  it('retombe sur un snapshot quand le curseur ne correspond pas à un événement persisté', async () => {
+    const { emit, handleSyncRequest } = await import('../server/services/websocket-service.js')
+    const { getDb } = await import('../server/db/index.js')
+    const db = getDb()
+    const now = new Date().toISOString()
+    db.prepare(
+      'INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, status, model, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    ).run('ws-stale-cursor', 'Test', '/tmp', 'main', 'feat', 'created', 'claude-opus-4-6', now, now)
+    emit('ws-stale-cursor', 'event:1', { n: 1 })
+
+    const ws = new MockWebSocket()
+    handleSyncRequest(ws as unknown as import('ws').WebSocket, 'ephemeral-id', ['ws-stale-cursor'])
+
+    const response = JSON.parse(ws.sentMessages[0])
+    expect(response.payload.mode).toBe('snapshot')
+    expect(response.payload.events).toHaveLength(1)
   })
 
   it("envoie sync:empty si le client n'a aucun abonnement", async () => {

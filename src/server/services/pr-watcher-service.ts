@@ -29,9 +29,25 @@ import { purgeWorktree } from './worktree-purge-service.js'
 // unarchived workspaces.
 
 const POLL_INTERVAL_MS = 30 * 1000 // 30 seconds
+const WORKSPACE_CHECK_CONCURRENCY = 4
 
 let timer: ReturnType<typeof setTimeout> | null = null
 let checking = false
+
+async function runBounded<T>(
+  items: readonly T[],
+  concurrency: number,
+  worker: (item: T) => Promise<void>,
+): Promise<void> {
+  let nextIndex = 0
+  const workers = Array.from({ length: Math.min(concurrency, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const item = items[nextIndex++]
+      await worker(item)
+    }
+  })
+  await Promise.all(workers)
+}
 
 /** Tracks the last known PR snapshot per workspace, used to detect transitions
  *  (state, base, reviewDecision). */
@@ -128,10 +144,10 @@ export async function checkPrStatuses(): Promise<void> {
     }
   }
 
-  for (const ws of workspaces) {
+  await runBounded(workspaces, WORKSPACE_CHECK_CONCURRENCY, async (ws) => {
     // Without this guard, every git/forge spawn below fails with ENOENT and
     // floods the logs when a worktree was deleted externally.
-    if (!fs.existsSync(ws.worktreePath)) continue
+    if (!fs.existsSync(ws.worktreePath)) return
 
     try {
       // Opt-out: skip the forge call entirely for a workspace with PR-watch
@@ -164,7 +180,7 @@ export async function checkPrStatuses(): Promise<void> {
             )
             // Leave the cache untouched so the next tick retries — and skip
             // stats too, since they'd be computed against the stale base.
-            continue
+            return
           }
         }
       }
@@ -179,7 +195,7 @@ export async function checkPrStatuses(): Promise<void> {
         console.error(`[pr-watcher] computeGitStats failed for '${ws.name}':`, err instanceof Error ? err.message : err)
       }
 
-      if (!pr) continue
+      if (!pr) return
 
       const prev = lastKnownPr.get(ws.id)
       // We delay updating `lastKnownPr` until after the actions succeed.
@@ -202,14 +218,14 @@ export async function checkPrStatuses(): Promise<void> {
           // (The defensive base preservation from the no-base branch doesn't apply here
           // because we ARE in the OPEN→MERGED/CLOSED branch which always has a base.)
           lastKnownPr.set(ws.id, pr)
-          continue
+          return
         }
         console.log(`[pr-watcher] PR ${pr.state.toLowerCase()} for workspace '${ws.name}' — archiving`)
 
         // Best-effort cleanup (same as manual archive): stop dev server + terminal.
         // Agent is already not running here (guarded above).
         try {
-          stopDevServer(ws.id)
+          await stopDevServer(ws.id)
         } catch (err) {
           console.error(`[pr-watcher] stopDevServer failed for '${ws.name}':`, err instanceof Error ? err.message : err)
         }
@@ -246,7 +262,7 @@ export async function checkPrStatuses(): Promise<void> {
             )
           }
         }
-        continue // do not run base-change detection on a workspace we just archived
+        return // do not run base-change detection on a workspace we just archived
       }
 
       // Review, CI, mergeability, and readiness transitions (only on OPEN PRs;
@@ -286,7 +302,7 @@ export async function checkPrStatuses(): Promise<void> {
       if (pr.state !== 'OPEN' || !pr.base) {
         const next: PrSnapshot = pr.base ? pr : { ...pr, base: prev?.base ?? pr.base }
         lastKnownPr.set(ws.id, next)
-        continue
+        return
       }
       lastKnownPr.set(ws.id, pr)
 
@@ -307,7 +323,7 @@ export async function checkPrStatuses(): Promise<void> {
         err instanceof Error ? err.message : err,
       )
     }
-  }
+  })
 }
 
 /**

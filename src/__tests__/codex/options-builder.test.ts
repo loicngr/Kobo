@@ -192,17 +192,16 @@ describe('buildCodexOptions — collaborationMode', () => {
     expect(result.collaborationMode.settings.reasoning_effort).toBe('high')
   })
 
-  it.each([
-    'bypass',
-    'strict',
-    'interactive',
-  ] as const)('forces collaborationMode { mode: "default" } when Kōbō permission mode is %s (sticky reset)', (mode) => {
-    // CollaborationMode is sticky server-side: after a `plan` turn, every
-    // subsequent turn stays in plan unless we explicitly send `default`.
-    // We therefore always emit the field, never null.
-    const result = buildCodexOptions({ ...BASE_INPUT, agentPermissionMode: mode })
-    expect(result.collaborationMode.mode).toBe('default')
-  })
+  it.each(['bypass', 'strict', 'interactive'] as const)(
+    'forces collaborationMode { mode: "default" } when Kōbō permission mode is %s (sticky reset)',
+    (mode) => {
+      // CollaborationMode is sticky server-side: after a `plan` turn, every
+      // subsequent turn stays in plan unless we explicitly send `default`.
+      // We therefore always emit the field, never null.
+      const result = buildCodexOptions({ ...BASE_INPUT, agentPermissionMode: mode })
+      expect(result.collaborationMode.mode).toBe('default')
+    },
+  )
 
   it('echoes model/effort in non-plan modes as well (so the override does not blank them)', () => {
     const result = buildCodexOptions({

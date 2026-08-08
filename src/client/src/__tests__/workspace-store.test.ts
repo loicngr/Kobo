@@ -1,5 +1,6 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useAgentStreamStore } from '../stores/agent-stream'
 import { useWebSocketStore } from '../stores/websocket'
 import {
   isSubagentTerminalEvent,
@@ -523,6 +524,25 @@ describe('workspace store', () => {
       expect(store.archivedWorkspaces).toEqual([])
     })
 
+    it('clears every per-workspace cache including the normalized agent stream', async () => {
+      const store = useWorkspaceStore()
+      const stream = useAgentStreamStore()
+      store.archivedWorkspaces = [{ ...archivedA }]
+      store.gitStatsCache.a1 = { commitCount: 1 } as never
+      store.pendingWakeups.a1 = { targetAt: '2026-05-01T00:00:00Z' }
+      stream.append('a1', { kind: 'message:text', messageId: 'm1', text: 'retained', streaming: false })
+      vi.mocked(fetch).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ ok: true, deleted: 1, warnings: [] }),
+      } as Response)
+
+      await store.deleteAllArchived()
+
+      expect(stream.eventsFor('a1')).toEqual([])
+      expect(store.gitStatsCache.a1).toBeUndefined()
+      expect(store.pendingWakeups.a1).toBeUndefined()
+    })
+
     it('surfaces best-effort warnings returned by the backend', async () => {
       const store = useWorkspaceStore()
       store.archivedWorkspaces = [{ ...archivedA }]
@@ -582,30 +602,29 @@ describe('workspace store', () => {
       })
     })
 
-    it.each([
-      'no_agent_running',
-      'session_not_active',
-      'interrupt_failed',
-    ])('preserves the %s server code in a WorkspaceActionError', async (code) => {
-      vi.stubGlobal(
-        'fetch',
-        vi.fn().mockResolvedValue({
-          ok: false,
-          status: code === 'interrupt_failed' ? 500 : 409,
-          json: async () => ({ error: `interruption failed: ${code}`, code }),
-        } as Response),
-      )
-      const store = useWorkspaceStore()
+    it.each(['no_agent_running', 'session_not_active', 'interrupt_failed'])(
+      'preserves the %s server code in a WorkspaceActionError',
+      async (code) => {
+        vi.stubGlobal(
+          'fetch',
+          vi.fn().mockResolvedValue({
+            ok: false,
+            status: code === 'interrupt_failed' ? 500 : 409,
+            json: async () => ({ error: `interruption failed: ${code}`, code }),
+          } as Response),
+        )
+        const store = useWorkspaceStore()
 
-      const rejection = store.interruptAgent('ws-1')
+        const rejection = store.interruptAgent('ws-1')
 
-      await expect(rejection).rejects.toMatchObject({
-        name: 'WorkspaceActionError',
-        message: `interruption failed: ${code}`,
-        code,
-      })
-      await expect(rejection).rejects.toBeInstanceOf(WorkspaceActionError)
-    })
+        await expect(rejection).rejects.toMatchObject({
+          name: 'WorkspaceActionError',
+          message: `interruption failed: ${code}`,
+          code,
+        })
+        await expect(rejection).rejects.toBeInstanceOf(WorkspaceActionError)
+      },
+    )
 
     it.each([
       { status: 409, body: null, expectedMessage: 'HTTP 409', label: 'null body' },
@@ -957,6 +976,66 @@ describe('workspace store', () => {
       } finally {
         vi.unstubAllGlobals()
       }
+    })
+
+    it('applies the response by workspace id when the list is reordered in flight', async () => {
+      const store = useWorkspaceStore()
+      const first = makeWorkspace({ id: 'w1', description: null })
+      const second = makeWorkspace({ id: 'w2', description: 'second' })
+      store.workspaces = [first, second]
+      let resolve!: (response: Response) => void
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(() => new Promise<Response>((r) => (resolve = r))),
+      )
+
+      try {
+        const update = store.updateWorkspaceDescription('w1', 'updated')
+        store.workspaces = [second, { ...first, description: 'updated' }]
+        resolve({ ok: true, json: async () => ({ ...first, description: 'server value' }) } as Response)
+        await update
+
+        expect(store.workspaces.find((workspace) => workspace.id === 'w1')?.description).toBe('server value')
+        expect(store.workspaces.find((workspace) => workspace.id === 'w2')?.description).toBe('second')
+      } finally {
+        vi.unstubAllGlobals()
+      }
+    })
+  })
+
+  describe('fetchSessions ordering', () => {
+    it('ignores an older response for the same workspace when requests overlap', async () => {
+      const store = useWorkspaceStore()
+      store.selectedWorkspaceId = 'w1'
+      let resolveFirst!: (response: Response) => void
+      let resolveSecond!: (response: Response) => void
+      vi.stubGlobal(
+        'fetch',
+        vi
+          .fn()
+          .mockImplementationOnce(() => new Promise<Response>((resolve) => (resolveFirst = resolve)))
+          .mockImplementationOnce(() => new Promise<Response>((resolve) => (resolveSecond = resolve))),
+      )
+      const session = (id: string) => ({
+        id,
+        workspaceId: 'w1',
+        pid: null,
+        engineSessionId: null,
+        status: 'completed',
+        startedAt: '2026-01-01T00:00:00Z',
+        endedAt: '2026-01-01T00:00:01Z',
+        name: null,
+      })
+
+      const first = store.fetchSessions('w1')
+      const second = store.fetchSessions('w1')
+      resolveSecond({ ok: true, json: async () => [session('new')] } as Response)
+      await second
+      resolveFirst({ ok: true, json: async () => [session('old')] } as Response)
+      await first
+
+      expect(store.sessions.map((item) => item.id)).toEqual(['new'])
+      vi.unstubAllGlobals()
     })
   })
 
@@ -1439,6 +1518,64 @@ describe('workspace store', () => {
       // (first) one.
       expect(store.workspaces[0]?.status).toBe('executing')
       expect(store.prSnapshots.ws_1?.number).toBe(2)
+    })
+
+    it('does not overwrite a WebSocket workspace update received while the poll is in flight', async () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'ws-live', status: 'idle' })]
+      let resolve!: (response: Response) => void
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(() => new Promise<Response>((r) => (resolve = r))),
+      )
+
+      const poll = store.fetchWorkspacesInfo()
+      store.updateWorkspaceFromEvent('ws-live', { status: 'executing' })
+      resolve({
+        ok: true,
+        json: async () => ({
+          workspaces: [makeWorkspace({ id: 'ws-live', status: 'idle' })],
+          prSnapshots: {},
+          gitStats: {},
+        }),
+      } as Response)
+      await poll
+
+      expect(store.workspaces[0]?.status).toBe('executing')
+    })
+
+    it('does not overwrite a refreshed PR snapshot received while the bulk poll is in flight', async () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'ws-live', status: 'idle' })]
+      let resolvePoll!: (response: Response) => void
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((input: string | URL | Request) => {
+          const url = String(input)
+          if (url === '/api/workspaces/info') return new Promise<Response>((resolve) => (resolvePoll = resolve))
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              snapshot: { number: 2, state: 'OPEN', updatedAt: '2026-08-07T00:01:00.000Z' },
+            }),
+          } as Response)
+        }),
+      )
+
+      const poll = store.fetchWorkspacesInfo()
+      await store.refreshPrSnapshot('ws-live')
+      resolvePoll({
+        ok: true,
+        json: async () => ({
+          workspaces: [makeWorkspace({ id: 'ws-live', status: 'idle' })],
+          prSnapshots: { 'ws-live': { number: 1, state: 'OPEN', updatedAt: '2026-08-07T00:00:00.000Z' } },
+          gitStats: {},
+        }),
+      } as Response)
+      await poll
+
+      expect(store.prSnapshots['ws-live']?.number).toBe(2)
     })
 
     it('refreshPrSnapshot clears the entry when the server returns 404', async () => {

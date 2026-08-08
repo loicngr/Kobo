@@ -42,13 +42,15 @@ export async function computeGitStats(
   prSnapshot: Pick<PrSnapshot, 'url' | 'state'> | null,
 ): Promise<GitStatsResult> {
   const { worktreePath, sourceBranch, workingBranch, projectPath } = workspace
-  const commitCount = gitOps.getCommitCount(worktreePath, sourceBranch, workingBranch)
-  const behindCount = gitOps.getCommitsBehind(worktreePath, sourceBranch, workingBranch)
-  const diffStats = gitOps.getStructuredDiffStatsBetween(worktreePath, sourceBranch, workingBranch)
-  const unpushedCount = await gitOps.getUnpushedCountAsync(worktreePath, workingBranch)
-  const workingTree = gitOps.getWorkingTreeStatus(worktreePath)
   const forgeProvider = getForgeProvider(resolveForge(projectPath))
-  const availability = await forgeProvider.isAvailable(worktreePath)
+  const [commitCount, behindCount, diffStats, unpushedCount, workingTree, availability] = await Promise.all([
+    gitOps.getCommitCountAsync(worktreePath, sourceBranch, workingBranch),
+    gitOps.getCommitsBehindAsync(worktreePath, sourceBranch, workingBranch),
+    gitOps.getStructuredDiffStatsBetweenAsync(worktreePath, sourceBranch, workingBranch),
+    gitOps.getUnpushedCountAsync(worktreePath, workingBranch),
+    gitOps.getWorkingTreeStatusAsync(worktreePath),
+    forgeProvider.isAvailable(worktreePath),
+  ])
   return {
     commitCount,
     behindCount,

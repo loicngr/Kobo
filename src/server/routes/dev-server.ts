@@ -8,7 +8,7 @@ import { getWorkspace } from '../services/workspace-service.js'
 const app = new Hono()
 
 // GET /api/dev-server/:workspaceId/status
-app.get('/:workspaceId/status', (c) => {
+app.get('/:workspaceId/status', async (c) => {
   try {
     const workspaceId = c.req.param('workspaceId')
     const workspace = getWorkspace(workspaceId)
@@ -31,7 +31,7 @@ app.get('/:workspaceId/status', (c) => {
       })
     }
 
-    const status = getStatus(workspace.projectPath, workspace.workingBranch, workspaceId)
+    const status = await getStatus(workspace.projectPath, workspace.workingBranch, workspaceId)
     // If runtime detection returns unknown, use persisted status from DB
     if (status.status === 'unknown' && workspace.devServerStatus && workspace.devServerStatus !== 'stopped') {
       status.status = workspace.devServerStatus as typeof status.status
@@ -63,7 +63,7 @@ app.post('/:workspaceId/start', migrationGuard, (c) => {
 })
 
 // POST /api/dev-server/:workspaceId/stop
-app.post('/:workspaceId/stop', migrationGuard, (c) => {
+app.post('/:workspaceId/stop', migrationGuard, async (c) => {
   try {
     const workspaceId = c.req.param('workspaceId')
     const workspace = getWorkspace(workspaceId)
@@ -72,7 +72,7 @@ app.post('/:workspaceId/stop', migrationGuard, (c) => {
       return c.json({ error: `Workspace '${workspaceId}' not found` }, 404)
     }
 
-    const status = stopDevServer(workspaceId)
+    const status = await stopDevServer(workspaceId)
     return c.json(status)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -81,7 +81,7 @@ app.post('/:workspaceId/stop', migrationGuard, (c) => {
 })
 
 // GET /api/dev-server/:workspaceId/logs
-app.get('/:workspaceId/logs', (c) => {
+app.get('/:workspaceId/logs', async (c) => {
   try {
     const workspaceId = c.req.param('workspaceId')
     const workspace = getWorkspace(workspaceId)
@@ -90,8 +90,9 @@ app.get('/:workspaceId/logs', (c) => {
       return c.json({ error: `Workspace '${workspaceId}' not found` }, 404)
     }
 
-    const tail = parseInt(c.req.query('tail') ?? '200', 10)
-    const logs = getDevServerLogs(workspaceId, tail)
+    const parsedTail = parseInt(c.req.query('tail') ?? '200', 10)
+    const tail = Math.max(1, Math.min(Number.isFinite(parsedTail) ? parsedTail : 200, 1000))
+    const logs = await getDevServerLogs(workspaceId, tail)
     return c.json({ logs })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

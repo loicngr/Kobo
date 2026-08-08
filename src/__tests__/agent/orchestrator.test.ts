@@ -99,6 +99,16 @@ describe('Orchestrator — startAgent', () => {
     startAgent(ws.id, '/tmp', 'hi')
     expect(() => startAgent(ws.id, '/tmp', 'hi')).toThrow(/already running/i)
   })
+
+  it('refuses to start an archived workspace even when called outside the HTTP route', async () => {
+    const { archiveWorkspace, createWorkspace } = await import('../../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'W', projectPath: '/tmp', sourceBranch: 'develop', workingBranch: 'b' })
+    archiveWorkspace(ws.id)
+    const { startAgent, _getControllers } = await import('../../server/services/agent/orchestrator.js')
+
+    expect(() => startAgent(ws.id, '/tmp', 'hi')).toThrow(/archived/i)
+    expect(_getControllers().has(ws.id)).toBe(false)
+  })
 })
 
 describe('Orchestrator — stop / interrupt / sendMessage', () => {

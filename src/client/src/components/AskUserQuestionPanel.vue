@@ -179,7 +179,7 @@ const store = useWorkspaceStore()
 // the sibling PermissionRequestPanel.
 const pending = computed(() => {
   const head = store.peekPending(props.workspaceId)
-  if (!head || head.kind !== 'question') return undefined
+  if (head?.kind !== 'question') return undefined
   return head
 })
 

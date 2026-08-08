@@ -4,7 +4,7 @@ Thanks for considering a contribution. This guide covers the from-source setup, 
 
 ## Prerequisites
 
-Node.js ≥ 20.
+Node.js ≥ 24.15.
 
 ## Setup
 

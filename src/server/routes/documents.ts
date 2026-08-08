@@ -1,7 +1,8 @@
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs'
 import path from 'node:path'
 import { Hono } from 'hono'
 import * as workspaceService from '../services/workspace-service.js'
+import { isPathInside, resolveExistingPathInside } from '../utils/safe-path.js'
 
 /** Hono sub-router for workspace document browsing (read-only). */
 const app = new Hono()
@@ -21,6 +22,7 @@ const MD_EXT = '.md'
 
 /** Depth cap to keep recursion bounded even on pathological symlink loops. */
 const MAX_DEPTH = 8
+const MAX_DOCUMENT_SIZE = 1024 * 1024
 
 interface DocumentFile {
   path: string
@@ -40,12 +42,13 @@ function walkMarkdownFiles(rootAbs: string, rootRel: string, out: DocumentFile[]
     if (entry.startsWith('.') && entry !== '.ai') continue // skip hidden except `.ai`
     const absEntry = path.join(rootAbs, entry)
     const relEntry = `${rootRel}/${entry}`
-    let stat: ReturnType<typeof statSync>
+    let stat: ReturnType<typeof lstatSync>
     try {
-      stat = statSync(absEntry)
+      stat = lstatSync(absEntry)
     } catch {
       continue
     }
+    if (stat.isSymbolicLink()) continue
     if (stat.isDirectory()) {
       walkMarkdownFiles(absEntry, relEntry, out, depth + 1)
     } else if (stat.isFile() && entry.endsWith(MD_EXT)) {
@@ -73,6 +76,13 @@ app.get('/:id/documents', (c) => {
     for (const dir of DOCUMENT_DIRS) {
       const absDir = path.join(worktreePath, dir)
       if (!existsSync(absDir)) continue
+      const dirStat = lstatSync(absDir)
+      if (dirStat.isSymbolicLink() || !dirStat.isDirectory()) continue
+      try {
+        resolveExistingPathInside(worktreePath, absDir)
+      } catch {
+        continue
+      }
       walkMarkdownFiles(absDir, dir, documents)
     }
 
@@ -120,7 +130,20 @@ app.get('/:id/document', (c) => {
       return c.json({ error: `Document not found: ${normalized}` }, 404)
     }
 
-    const content = readFileSync(absPath, 'utf-8')
+    const fileStat = lstatSync(absPath)
+    if (fileStat.isSymbolicLink()) return c.json({ error: 'Symbolic links are not allowed' }, 400)
+    if (!fileStat.isFile()) return c.json({ error: `Document not found: ${normalized}` }, 404)
+    const realWorktree = realpathSync(worktreePath)
+    const realFile = resolveExistingPathInside(worktreePath, absPath)
+    const allowed = DOCUMENT_DIRS.some((dir) => {
+      const allowedRoot = path.join(worktreePath, dir)
+      if (!existsSync(allowedRoot) || lstatSync(allowedRoot).isSymbolicLink()) return false
+      return isPathInside(realpathSync(allowedRoot), realFile)
+    })
+    if (!isPathInside(realWorktree, realFile) || !allowed) return c.json({ error: 'Path escapes allowed root' }, 400)
+    if (fileStat.size > MAX_DOCUMENT_SIZE) return c.json({ error: 'Document exceeds the 1 MB size limit' }, 413)
+
+    const content = readFileSync(realFile, 'utf-8')
     return c.json({ content, path: normalized })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

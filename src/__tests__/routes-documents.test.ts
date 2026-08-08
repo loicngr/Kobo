@@ -115,6 +115,18 @@ describe('GET /api/workspaces/:id/documents', () => {
     const res = await app.request('/api/workspaces/unknown/documents')
     expect(res.status).toBe(404)
   })
+
+  it('does not follow a symlinked directory outside the worktree', async () => {
+    const outside = path.join(tmpDir, 'outside')
+    fs.mkdirSync(outside)
+    fs.writeFileSync(path.join(outside, 'secret.md'), 'outside secret')
+    fs.mkdirSync(path.join(worktreePath, 'docs'), { recursive: true })
+    fs.symlinkSync(outside, path.join(worktreePath, 'docs', 'plans'))
+
+    const res = await app.request('/api/workspaces/ws-1/documents')
+    const body = await res.json()
+    expect(body.documents).toEqual([])
+  })
 })
 
 describe('GET /api/workspaces/:id/document', () => {
@@ -195,5 +207,17 @@ describe('GET /api/workspaces/:id/document', () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
     const res = await app.request('/api/workspaces/unknown/document?path=docs/plans/x.md')
     expect(res.status).toBe(404)
+  })
+
+  it('rejects a markdown symlink that resolves outside the worktree', async () => {
+    const outside = path.join(tmpDir, 'secret.txt')
+    fs.writeFileSync(outside, 'outside secret')
+    const plansDir = path.join(worktreePath, 'docs', 'plans')
+    fs.mkdirSync(plansDir, { recursive: true })
+    fs.symlinkSync(outside, path.join(plansDir, 'secret.md'))
+
+    const res = await app.request('/api/workspaces/ws-1/document?path=docs/plans/secret.md')
+    expect(res.status).toBe(400)
+    expect(await res.text()).not.toContain('outside secret')
   })
 })

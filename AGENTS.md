@@ -10,7 +10,7 @@ Single-user dev tool, local by default. The server binds `127.0.0.1` unless the 
 
 ## Tech stack
 
-**Backend**: Node.js ≥ 20, Hono (HTTP), `ws` (WebSocket), better-sqlite3 (WAL mode), nanoid, `@modelcontextprotocol/sdk`. TypeScript throughout, `tsx` for dev, `tsc` for production build.
+**Backend**: Node.js ≥ 24.15, Hono (HTTP), `ws` (WebSocket), better-sqlite3 (WAL mode), nanoid, `@modelcontextprotocol/sdk`. TypeScript throughout, `tsx` for dev, `tsc` for production build.
 
 **Frontend**: Vue 3, Quasar 2, Pinia, vue-router, marked + dompurify for markdown rendering. Vite via `@quasar/app-vite`, built and served as a Progressive Web App in production.
 

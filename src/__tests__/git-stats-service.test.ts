@@ -1,11 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('../server/utils/git-ops.js', () => ({
-  getCommitCount: vi.fn(() => 3),
-  getCommitsBehind: vi.fn(() => 1),
-  getStructuredDiffStatsBetween: vi.fn(() => ({ filesChanged: 5, insertions: 40, deletions: 12 })),
+  getCommitCountAsync: vi.fn(() => Promise.resolve(3)),
+  getCommitsBehindAsync: vi.fn(() => Promise.resolve(1)),
+  getStructuredDiffStatsBetweenAsync: vi.fn(() => Promise.resolve({ filesChanged: 5, insertions: 40, deletions: 12 })),
   getUnpushedCountAsync: vi.fn(() => Promise.resolve(2)),
-  getWorkingTreeStatus: vi.fn(() => ({ staged: 1, modified: 2, untracked: 0 })),
+  getWorkingTreeStatusAsync: vi.fn(() => Promise.resolve({ staged: 1, modified: 2, untracked: 0 })),
 }))
 vi.mock('../server/services/forge/resolve.js', () => ({ resolveForge: vi.fn(() => 'github') }))
 vi.mock('../server/services/forge/registry.js', () => ({

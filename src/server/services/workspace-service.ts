@@ -389,20 +389,30 @@ export function updateWorkspaceStatus(id: string, status: WorkspaceStatus): Work
 
 const WORKSPACE_NAME_MAX_LENGTH = 200
 
-/** Update a workspace's display name. */
-export function updateWorkspaceName(id: string, name: string): Workspace {
-  // Strip control characters (incl. newlines) and collapse whitespace
+function sanitizeWorkspaceName(name: string): string {
   const noControl = Array.from(name, (c) => {
     const code = c.charCodeAt(0)
     return code < 32 || code === 127 ? ' ' : c
   }).join('')
   const sanitized = noControl.replace(/\s+/g, ' ').trim()
-  if (!sanitized) {
-    throw new Error('Workspace name cannot be empty')
-  }
+  if (!sanitized) throw new Error('Workspace name cannot be empty')
   if (sanitized.length > WORKSPACE_NAME_MAX_LENGTH) {
     throw new Error(`Workspace name cannot exceed ${WORKSPACE_NAME_MAX_LENGTH} characters`)
   }
+  return sanitized
+}
+
+function normalizeWorkspaceDescription(description: string | null): string | null {
+  const trimmed = description == null ? null : description.trim()
+  if (trimmed !== null && trimmed.length > 200) {
+    throw new Error(`Description must be 200 characters or fewer (got ${trimmed.length})`)
+  }
+  return trimmed && trimmed.length > 0 ? trimmed : null
+}
+
+/** Update a workspace's display name. */
+export function updateWorkspaceName(id: string, name: string): Workspace {
+  const sanitized = sanitizeWorkspaceName(name)
   const db = getDb()
   const now = new Date().toISOString()
   const result = db.prepare('UPDATE workspaces SET name = ?, updated_at = ? WHERE id = ?').run(sanitized, now, id)
@@ -552,11 +562,7 @@ export function updateAgentPermissionMode(id: string, mode: AgentPermissionMode)
  *   does not exist.
  */
 export function updateWorkspaceDescription(id: string, description: string | null): Workspace {
-  const trimmed = description == null ? null : description.trim()
-  if (trimmed !== null && trimmed.length > 200) {
-    throw new Error(`Description must be 200 characters or fewer (got ${trimmed.length})`)
-  }
-  const stored = trimmed && trimmed.length > 0 ? trimmed : null
+  const stored = normalizeWorkspaceDescription(description)
   const db = getDb()
   const result = db
     .prepare('UPDATE workspaces SET description = ?, updated_at = ? WHERE id = ?')
@@ -565,6 +571,80 @@ export function updateWorkspaceDescription(id: string, description: string | nul
     throw new Error(`Workspace '${id}' not found`)
   }
   emitEphemeral(id, 'workspace:description-updated', { description: stored })
+  return getWorkspace(id) as Workspace
+}
+
+export interface WorkspaceFieldUpdates {
+  status?: WorkspaceStatus
+  model?: string
+  reasoningEffort?: string
+  agentPermissionMode?: AgentPermissionMode
+  name?: string
+  description?: string | null
+}
+
+/** Validate and persist a multi-field API update with one atomic SQL statement. */
+export function updateWorkspaceFields(id: string, fields: WorkspaceFieldUpdates): Workspace {
+  const workspace = getWorkspace(id)
+  if (!workspace) throw new Error(`Workspace '${id}' not found`)
+
+  const assignments: string[] = []
+  const values: unknown[] = []
+  if (fields.model !== undefined) {
+    if (typeof fields.model !== 'string' || !fields.model.trim()) throw new Error('model must be a non-empty string')
+    assignments.push('model = ?')
+    values.push(fields.model.trim())
+  }
+  if (fields.reasoningEffort !== undefined) {
+    if (typeof fields.reasoningEffort !== 'string' || !fields.reasoningEffort.trim()) {
+      throw new Error('reasoningEffort must be a non-empty string')
+    }
+    assignments.push('reasoning_effort = ?')
+    values.push(fields.reasoningEffort.trim())
+  }
+  if (fields.agentPermissionMode !== undefined) {
+    if (!['plan', 'bypass', 'strict', 'interactive'].includes(fields.agentPermissionMode)) {
+      throw new Error('Invalid agentPermissionMode')
+    }
+    const legacyMode = fields.agentPermissionMode === 'plan' ? 'plan' : 'auto-accept'
+    const legacyProfile = fields.agentPermissionMode === 'plan' ? 'bypass' : fields.agentPermissionMode
+    assignments.push('agent_permission_mode = ?', 'permission_mode = ?', 'permission_profile = ?')
+    values.push(fields.agentPermissionMode, legacyMode, legacyProfile)
+  }
+  if (fields.status !== undefined) {
+    const allowed = VALID_TRANSITIONS[workspace.status]
+    if (!allowed || (fields.status !== workspace.status && !allowed.includes(fields.status))) {
+      throw new Error(
+        `Invalid status transition from '${workspace.status}' to '${fields.status}'. Allowed: ${allowed?.join(', ') ?? ''}`,
+      )
+    }
+    assignments.push('status = ?')
+    values.push(fields.status)
+  }
+  if (fields.name !== undefined) {
+    if (typeof fields.name !== 'string') throw new Error('name must be a string')
+    assignments.push('name = ?')
+    values.push(sanitizeWorkspaceName(fields.name))
+  }
+  const hasDescription = Object.hasOwn(fields, 'description')
+  let storedDescription: string | null | undefined
+  if (hasDescription) {
+    if (fields.description !== null && typeof fields.description !== 'string') {
+      throw new Error('description must be a string or null')
+    }
+    storedDescription = normalizeWorkspaceDescription(fields.description ?? null)
+    assignments.push('description = ?')
+    values.push(storedDescription)
+  }
+  if (assignments.length === 0) return workspace
+
+  assignments.push('updated_at = ?')
+  values.push(new Date().toISOString(), id)
+  const result = getDb()
+    .prepare(`UPDATE workspaces SET ${assignments.join(', ')} WHERE id = ?`)
+    .run(...values)
+  if (result.changes === 0) throw new Error(`Workspace '${id}' not found`)
+  if (hasDescription) emitEphemeral(id, 'workspace:description-updated', { description: storedDescription ?? null })
   return getWorkspace(id) as Workspace
 }
 

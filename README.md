@@ -41,7 +41,7 @@ Kōbō runs multiple coding agents in parallel, each isolated in its own git wor
 
 ## Quick start
 
-Requires Node.js ≥ 20 and a logged-in Claude Code **or** Codex CLI.
+Requires Node.js ≥ 24.15 and a logged-in Claude Code **or** Codex CLI.
 
 ```bash
 npx @loicngr/kobo@latest

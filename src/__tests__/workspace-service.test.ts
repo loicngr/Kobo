@@ -691,6 +691,43 @@ describe('updateWorkspaceReasoningEffort()', () => {
   })
 })
 
+describe('updateWorkspaceFields()', () => {
+  it('updates multiple fields in one operation', async () => {
+    const { createWorkspace, updateWorkspaceFields } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'Original', projectPath: '/p', sourceBranch: 'main', workingBranch: 'b' })
+
+    const updated = updateWorkspaceFields(ws.id, {
+      model: 'new-model',
+      reasoningEffort: 'high',
+      name: '  New   name  ',
+      description: '  concise  ',
+    })
+
+    expect(updated).toMatchObject({
+      model: 'new-model',
+      reasoningEffort: 'high',
+      name: 'New name',
+      description: 'concise',
+    })
+  })
+
+  it('does not persist an earlier field when a later field is invalid', async () => {
+    const { createWorkspace, getWorkspace, updateWorkspaceFields } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const ws = createWorkspace({
+      name: 'Original',
+      projectPath: '/p',
+      sourceBranch: 'main',
+      workingBranch: 'b',
+      model: 'original-model',
+    })
+
+    expect(() => updateWorkspaceFields(ws.id, { model: 'new-model', description: 'x'.repeat(201) })).toThrow(/200/)
+    expect(getWorkspace(ws.id)?.model).toBe('original-model')
+  })
+})
+
 describe('updateAgentPermissionMode() throws when workspace not found', () => {
   it("lève une erreur si le workspace n'existe pas", async () => {
     const { updateAgentPermissionMode } = await import('../server/services/workspace-service.js')

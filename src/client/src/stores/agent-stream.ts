@@ -2,6 +2,8 @@ import { defineStore } from 'pinia'
 import { ref } from 'vue'
 import type { AgentEvent } from '../types/agent-event'
 
+export const MAX_LIVE_EVENTS_PER_WORKSPACE = 5000
+
 /**
  * Per-workspace AgentEvent stream. Keeps the Map stable and uses a monotonic
  * `version` counter as the reactive dependency (reads establish the
@@ -79,6 +81,7 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
     const tsList = timestamps.value.get(workspaceId) ?? []
     const sList = sessionIds.value.get(workspaceId) ?? []
     const idList = eventIds.value.get(workspaceId) ?? []
+    if (eventId && idList.includes(eventId)) return
     const isFirst = list.length === 0
     list.push(event)
     tsList.push(ts ?? new Date().toISOString())
@@ -91,7 +94,66 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
     if (isFirst && eventId) {
       oldestIds.value.set(workspaceId, eventId)
     }
+    trimOldestLiveEvents(workspaceId, list, tsList, sList, idList)
     version.value++
+  }
+
+  function trimOldestLiveEvents(
+    workspaceId: string,
+    list: AgentEvent[],
+    tsList: string[],
+    sList: Array<string | null>,
+    idList: Array<string | null>,
+  ): void {
+    const overflow = list.length - MAX_LIVE_EVENTS_PER_WORKSPACE
+    if (overflow <= 0) return
+    list.splice(0, overflow)
+    tsList.splice(0, overflow)
+    sList.splice(0, overflow)
+    idList.splice(0, overflow)
+    const firstPersistedId = idList.find((id): id is string => typeof id === 'string')
+    if (firstPersistedId) oldestIds.value.set(workspaceId, firstPersistedId)
+    else oldestIds.value.delete(workspaceId)
+    hasMoreOlder.value.set(workspaceId, true)
+  }
+
+  /** Merge a reconnect delta, preserving existing history and ignoring duplicates. */
+  function merge(
+    workspaceId: string,
+    incomingEvents: AgentEvent[],
+    incomingTimestamps: string[],
+    meta: { sessionIds: Array<string | null>; eventIds: Array<string | null> },
+  ): number[] {
+    const list = events.value.get(workspaceId) ?? []
+    const tsList = timestamps.value.get(workspaceId) ?? []
+    const sList = sessionIds.value.get(workspaceId) ?? []
+    const idList = eventIds.value.get(workspaceId) ?? []
+    const knownIds = new Set(idList.filter((id): id is string => typeof id === 'string'))
+    const addedIndexes: number[] = []
+    for (let i = 0; i < incomingEvents.length; i++) {
+      const event = incomingEvents[i]
+      if (!event) continue
+      const eventId = meta.eventIds[i] ?? null
+      if (eventId && knownIds.has(eventId)) continue
+      list.push(event)
+      tsList.push(incomingTimestamps[i] ?? new Date().toISOString())
+      sList.push(meta.sessionIds[i] ?? null)
+      idList.push(eventId)
+      if (eventId) knownIds.add(eventId)
+      addedIndexes.push(i)
+    }
+    if (addedIndexes.length === 0) return addedIndexes
+    events.value.set(workspaceId, list)
+    timestamps.value.set(workspaceId, tsList)
+    sessionIds.value.set(workspaceId, sList)
+    eventIds.value.set(workspaceId, idList)
+    if (!oldestIds.value.has(workspaceId)) {
+      const firstPersistedId = idList.find((id): id is string => typeof id === 'string')
+      if (firstPersistedId) oldestIds.value.set(workspaceId, firstPersistedId)
+    }
+    trimOldestLiveEvents(workspaceId, list, tsList, sList, idList)
+    version.value++
+    return addedIndexes
   }
 
   function reset(
@@ -194,6 +256,7 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
     isCompacting,
     setCompacting,
     append,
+    merge,
     reset,
     prepend,
     removeByEventId,

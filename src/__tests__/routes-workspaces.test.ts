@@ -27,6 +27,7 @@ vi.mock('../server/services/workspace-service.js', () => ({
   updateWorkspaceModel: vi.fn(),
   updateWorkspaceReasoningEffort: vi.fn(),
   updateWorkspaceDescription: vi.fn(),
+  updateWorkspaceFields: vi.fn(),
   updateAgentPermissionMode: vi.fn(),
   deleteWorkspace: vi.fn(),
   createTask: vi.fn(),
@@ -191,11 +192,15 @@ vi.mock('../server/utils/git-ops.js', () => ({
   getCommitsBetween: vi.fn().mockReturnValue(''),
   getDiffStatsBetween: vi.fn().mockReturnValue(''),
   getCommitCount: vi.fn().mockReturnValue(0),
+  getCommitCountAsync: vi.fn().mockResolvedValue(0),
   getCommitsBehind: vi.fn().mockReturnValue(0),
+  getCommitsBehindAsync: vi.fn().mockResolvedValue(0),
   getStructuredDiffStatsBetween: vi.fn().mockReturnValue({ filesChanged: 0, insertions: 0, deletions: 0 }),
+  getStructuredDiffStatsBetweenAsync: vi.fn().mockResolvedValue({ filesChanged: 0, insertions: 0, deletions: 0 }),
   getUnpushedCount: vi.fn().mockReturnValue(0),
   getUnpushedCountAsync: vi.fn().mockResolvedValue(0),
   getWorkingTreeStatus: vi.fn().mockReturnValue({ staged: 0, modified: 0, untracked: 0 }),
+  getWorkingTreeStatusAsync: vi.fn().mockResolvedValue({ staged: 0, modified: 0, untracked: 0 }),
   getChangedFiles: vi.fn().mockReturnValue([]),
   getChangedFilesBetween: vi.fn().mockReturnValue([]),
   commitExists: vi.fn().mockReturnValue(true),
@@ -433,6 +438,10 @@ beforeEach(() => {
     worktreesPath: '.worktrees',
     worktreesPrefixByProject: false,
   })
+  vi.mocked(workspaceService.updateWorkspaceFields).mockImplementation((_id, fields) => ({
+    ...fakeWorkspace,
+    ...fields,
+  }))
 })
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -1783,10 +1792,6 @@ describe('POST /api/workspaces/:id/tasks/:taskId/notify-done', () => {
 
   it('updates workspace reasoning effort', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(workspaceService.updateWorkspaceReasoningEffort).mockReturnValue({
-      ...fakeWorkspace,
-      reasoningEffort: 'high',
-    } as any)
 
     const res = await app.request('/api/workspaces/ws-1', {
       method: 'PATCH',
@@ -1795,7 +1800,7 @@ describe('POST /api/workspaces/:id/tasks/:taskId/notify-done', () => {
     })
 
     expect(res.status).toBe(200)
-    expect(workspaceService.updateWorkspaceReasoningEffort).toHaveBeenCalledWith('ws-1', 'high')
+    expect(workspaceService.updateWorkspaceFields).toHaveBeenCalledWith('ws-1', { reasoningEffort: 'high' })
   })
 })
 
@@ -1901,6 +1906,30 @@ describe('PATCH /api/workspaces/:id', () => {
     expect(data.error).toContain('Missing field: status, model, reasoningEffort, agentPermissionMode,')
   })
 
+  it('validates the complete payload before applying any field', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+
+    const res = await app.request('/api/workspaces/ws-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'new-model', agentPermissionMode: 'invalid' }),
+    })
+
+    expect(res.status).toBe(400)
+    expect(workspaceService.updateWorkspaceFields).not.toHaveBeenCalled()
+  })
+
+  it('rejects non-string model values at runtime', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    const res = await app.request('/api/workspaces/ws-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 42 }),
+    })
+    expect(res.status).toBe(400)
+    expect(workspaceService.updateWorkspaceFields).not.toHaveBeenCalled()
+  })
+
   it('returns 404 for unknown workspace', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
 
@@ -1945,12 +1974,14 @@ describe('PATCH /api/workspaces/:id — description', () => {
     expect(res.status).toBe(200)
     const body = (await res.json()) as { description: string }
     expect(body.description).toBe('Investigating SERVICE-1600')
-    expect(workspaceService.updateWorkspaceDescription).toHaveBeenCalledWith('ws-1', 'Investigating SERVICE-1600')
+    expect(workspaceService.updateWorkspaceFields).toHaveBeenCalledWith('ws-1', {
+      description: 'Investigating SERVICE-1600',
+    })
   })
 
   it('returns 400 when description exceeds 200 chars', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(workspaceService.updateWorkspaceDescription).mockImplementation(() => {
+    vi.mocked(workspaceService.updateWorkspaceFields).mockImplementation(() => {
       throw new Error('Description must be 200 characters or fewer (got 201)')
     })
 
@@ -1993,7 +2024,7 @@ describe('PATCH /api/workspaces/:id — description', () => {
     expect(res.status).toBe(200)
     const body = (await res.json()) as { description: string | null }
     expect(body.description).toBeNull()
-    expect(workspaceService.updateWorkspaceDescription).toHaveBeenCalledWith('ws-1', null)
+    expect(workspaceService.updateWorkspaceFields).toHaveBeenCalledWith('ws-1', { description: null })
   })
 })
 
@@ -2114,6 +2145,30 @@ describe('POST /api/workspaces/:id/start', () => {
 
     const res = await app.request('/api/workspaces/nonexistent/start', { method: 'POST' })
     expect(res.status).toBe(404)
+  })
+
+  it('refuses to start an archived workspace', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      archivedAt: '2026-01-02T00:00:00.000Z',
+    } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/start', { method: 'POST' })
+
+    expect(res.status).toBe(409)
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+  })
+
+  it('refuses to start a workspace whose worktree was purged', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      worktreePurgedAt: '2026-01-02T00:00:00.000Z',
+    } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/start', { method: 'POST' })
+
+    expect(res.status).toBe(409)
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
   })
 
   it('returns 400 when the workspace engine is no longer registered', async () => {
@@ -3231,8 +3286,8 @@ describe('GET /api/workspaces/:id/git-stats', () => {
       sourceBranch: 'main',
       workingBranch: 'feature/test',
     } as never)
-    vi.mocked(gitOps.getCommitCount).mockReturnValue(5)
-    vi.mocked(gitOps.getStructuredDiffStatsBetween).mockReturnValue({
+    vi.mocked(gitOps.getCommitCountAsync).mockResolvedValue(5)
+    vi.mocked(gitOps.getStructuredDiffStatsBetweenAsync).mockResolvedValue({
       filesChanged: 3,
       insertions: 42,
       deletions: 7,
@@ -3259,12 +3314,33 @@ describe('GET /api/workspaces/:id/git-stats', () => {
   })
 })
 
+describe('GET /api/workspaces/:id/session-metrics', () => {
+  it('reads pre-aggregated metrics instead of scanning every persisted event', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(workspaceService.listSessions).mockReturnValue([{ id: 'session-1' }] as never)
+    const prepare = vi.fn().mockReturnValue({
+      all: vi
+        .fn()
+        .mockReturnValue([{ session_id: 'session-1', tool_calls: 4, errors: 1, input_tokens: 120, output_tokens: 30 }]),
+    })
+    vi.mocked(getDb).mockReturnValueOnce({ prepare } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/session-metrics')
+
+    expect(res.status).toBe(200)
+    await expect(res.json()).resolves.toMatchObject({
+      metrics: [{ sessionId: 'session-1', toolCalls: 4, errors: 1, inputTokens: 120, outputTokens: 30 }],
+    })
+    expect(prepare).toHaveBeenCalledWith(expect.stringContaining('FROM session_event_metrics'))
+  })
+})
+
 describe('GET /:id/git-stats — extended', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('includes behindCount in the response payload', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(gitOps.getCommitsBehind).mockReturnValue(7)
+    vi.mocked(gitOps.getCommitsBehindAsync).mockResolvedValue(7)
     const res = await app.request('/api/workspaces/ws-1/git-stats')
     expect(res.status).toBe(200)
     const data = await res.json()
@@ -3334,9 +3410,9 @@ describe('GET /api/workspaces/:id/git-stats — forge block', () => {
 
   it('git-stats response includes the resolved forge block', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(gitOps.getCommitCount).mockReturnValue(0)
-    vi.mocked(gitOps.getCommitsBehind).mockReturnValue(0)
-    vi.mocked(gitOps.getStructuredDiffStatsBetween).mockReturnValue({
+    vi.mocked(gitOps.getCommitCountAsync).mockResolvedValue(0)
+    vi.mocked(gitOps.getCommitsBehindAsync).mockResolvedValue(0)
+    vi.mocked(gitOps.getStructuredDiffStatsBetweenAsync).mockResolvedValue({
       filesChanged: 0,
       insertions: 0,
       deletions: 0,
