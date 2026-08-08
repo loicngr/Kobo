@@ -93,6 +93,19 @@ describe('image-service', () => {
       const entries = JSON.parse(fs.readFileSync(indexPath, 'utf-8'))
       expect(entries).toHaveLength(extensions.length)
     })
+
+    it('rejects a symlinked images directory that escapes the worktree', async () => {
+      const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'kobo-img-outside-'))
+      try {
+        fs.mkdirSync(path.join(tmpDir, '.ai'), { recursive: true })
+        fs.symlinkSync(outside, path.join(tmpDir, '.ai', 'images'))
+
+        await expect(saveImage(tmpDir, Buffer.from('secret'), 'photo.png')).rejects.toThrow(/symbolic link/i)
+        expect(fs.readdirSync(outside)).toEqual([])
+      } finally {
+        fs.rmSync(outside, { recursive: true, force: true })
+      }
+    })
   })
 
   describe('deleteImage', () => {

@@ -1,8 +1,8 @@
-import { boot } from 'quasar/wrappers'
 import { getToken, setToken, shouldAttachToken } from 'src/utils/auth-token'
 import { openNetworkLogin } from 'src/utils/network-login-bus'
+import { defineBoot } from '#q-app'
 
-export default boot(() => {
+export default defineBoot(() => {
   // 1. One-scan QR connect: a `?token=` in the URL → store it then strip it.
   const params = new URLSearchParams(window.location.search)
   const urlToken = params.get('token')

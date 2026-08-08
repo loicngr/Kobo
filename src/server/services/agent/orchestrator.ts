@@ -1062,6 +1062,11 @@ export function startAgent(
   existingSessionId?: string,
   reasoningEffort?: string,
 ): StartAgentResult {
+  const workspace = getWs(workspaceId)
+  if (!workspace) throw new Error(`Workspace '${workspaceId}' not found`)
+  if (workspace.archivedAt) throw new Error(`Workspace '${workspaceId}' is archived`)
+  if (workspace.worktreePurgedAt) throw new Error(`Workspace '${workspaceId}' worktree is purged`)
+
   // "For this turn" never survives a new agent session.
   permissionPolicyService.clearTurnPermissions(workspaceId)
   // Zombie detection: an SDK iterator hung on a never-resolved canUseTool
@@ -1597,7 +1602,7 @@ export function _getPendingDeferred(): Map<
   const out = new Map<string, { toolCallId: string; toolName: string; input: unknown; agentSessionId: string }>()
   for (const [wid, arr] of pendingQueue) {
     const head = arr[0]
-    if (!head || head.kind !== 'question') continue
+    if (head?.kind !== 'question') continue
     out.set(wid, {
       toolCallId: head.toolCallId,
       toolName: head.toolName,

@@ -35,7 +35,7 @@ export async function purgeWorktree(workspaceId: string): Promise<PurgeResult> {
     console.error(`[purge] stopAgent failed for '${workspace.name}':`, msg)
   }
   try {
-    devServerService.stopDevServer(workspaceId)
+    await devServerService.stopDevServer(workspaceId)
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     console.error(`[purge] stopDevServer failed for '${workspace.name}':`, msg)

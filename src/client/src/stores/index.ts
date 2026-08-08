@@ -1,7 +1,7 @@
 import { createPinia } from 'pinia'
-import { store } from 'quasar/wrappers'
+import { defineStore } from '#q-app'
 
-export default store(() => {
+export default defineStore(() => {
   const pinia = createPinia()
   return pinia
 })

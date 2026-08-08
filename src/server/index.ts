@@ -475,11 +475,9 @@ setMessageHandler(async (type, payload) => {
   }
 
   if (type === 'devserver:stop' && p?.workspaceId) {
-    try {
-      stopDevServer(p.workspaceId)
-    } catch (err) {
+    void stopDevServer(p.workspaceId).catch((err) => {
       console.error('[ws] Failed to stop dev-server:', err)
-    }
+    })
   }
 })
 
@@ -526,17 +524,22 @@ server.on('upgrade', (request, socket, head) => {
 // Graceful shutdown handler
 let isShuttingDown = false
 
-function gracefulShutdown(signal: string): void {
+async function gracefulShutdown(signal: string): Promise<void> {
   if (isShuttingDown) return
   isShuttingDown = true
 
   console.log(`\n[kobo] Received ${signal}, shutting down gracefully…`)
 
-  // Stop accepting new connections
-  wss.close(() => {
-    console.log('[kobo] WebSocket server closed')
-  })
-  terminalWss.close()
+  const forceExitTimer = setTimeout(() => {
+    console.error('[kobo] Graceful shutdown timed out; forcing exit')
+    process.exit(1)
+  }, 5_000)
+  forceExitTimer.unref()
+
+  // Ask WebSocket clients to leave so their upgraded HTTP connections do not
+  // keep server.close() waiting indefinitely.
+  for (const client of wss.clients) client.close(1001, 'Server shutting down')
+  for (const client of terminalWss.clients) client.close(1001, 'Server shutting down')
 
   try {
     destroyAllTerminals()
@@ -544,10 +547,6 @@ function gracefulShutdown(signal: string): void {
   } catch {
     // Best-effort
   }
-
-  server.close(() => {
-    console.log('[kobo] HTTP server closed')
-  })
 
   // Stop background services
   try {
@@ -576,20 +575,28 @@ function gracefulShutdown(signal: string): void {
     // Best-effort
   }
 
-  // Close database
+  // Stop accepting new HTTP/WS work, then let in-flight handlers finish before
+  // closing SQLite. Closing the DB earlier makes those handlers fail midway.
   try {
-    closeDb()
-    console.log('[kobo] Database closed')
-  } catch {
-    // Best-effort
+    await Promise.all([
+      new Promise<void>((resolve) => server.close(() => resolve())),
+      new Promise<void>((resolve) => wss.close(() => resolve())),
+      new Promise<void>((resolve) => terminalWss.close(() => resolve())),
+    ])
+    console.log('[kobo] HTTP and WebSocket servers closed')
+  } finally {
+    try {
+      closeDb()
+      console.log('[kobo] Database closed')
+    } catch {
+      // Best-effort
+    }
   }
 
-  // Give a short grace period for in-flight requests, then exit
-  setTimeout(() => {
-    console.log('[kobo] Shutdown complete')
-    process.exit(0)
-  }, 2000).unref()
+  clearTimeout(forceExitTimer)
+  console.log('[kobo] Shutdown complete')
+  process.exit(0)
 }
 
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'))
-process.on('SIGINT', () => gracefulShutdown('SIGINT'))
+process.on('SIGTERM', () => void gracefulShutdown('SIGTERM'))
+process.on('SIGINT', () => void gracefulShutdown('SIGINT'))

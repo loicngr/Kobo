@@ -5,7 +5,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // Mock child_process before importing the module under test
 vi.mock('node:child_process', () => ({
-  execSync: vi.fn(),
+  execFile: vi.fn(),
   spawn: vi.fn(),
 }))
 
@@ -23,7 +23,7 @@ vi.mock('../server/services/websocket-service.js', () => ({
   emitEphemeral: vi.fn(),
 }))
 
-import { execSync, spawn } from 'node:child_process'
+import { execFile, spawn } from 'node:child_process'
 import {
   _resetTrackedProcessesForTests,
   getDevServerLogs,
@@ -43,6 +43,22 @@ beforeEach(() => {
   vi.clearAllMocks()
   _resetTrackedProcessesForTests()
 })
+
+function mockCommandOutput(output: string): void {
+  vi.mocked(execFile).mockImplementation(((...args: unknown[]) => {
+    const callback = args.at(-1) as (err: Error | null, stdout: string, stderr: string) => void
+    callback(null, output, '')
+    return {}
+  }) as never)
+}
+
+function mockCommandFailure(error: Error): void {
+  vi.mocked(execFile).mockImplementation(((...args: unknown[]) => {
+    const callback = args.at(-1) as (err: Error | null, stdout: string, stderr: string) => void
+    callback(error, '', '')
+    return {}
+  }) as never)
+}
 
 // ── sanitizeBranchName ─────────────────────────────────────────────────────────
 
@@ -148,6 +164,13 @@ describe('resolveInstance', () => {
     expect(result).toBeNull()
   })
 
+  it('ignores a matching instance with no Docker project name', () => {
+    const instancesDir = path.join(tmpDir, '.container', 'instances')
+    fs.mkdirSync(instancesDir, { recursive: true })
+    fs.writeFileSync(path.join(instancesDir, 'broken.env'), 'INSTANCE_NAME=feature-tk-123\nHTTP_PORT=8080')
+    expect(resolveInstance(tmpDir, 'feature/TK-123')).toBeNull()
+  })
+
   it('skips non-env files', () => {
     const instancesDir = path.join(tmpDir, '.container', 'instances')
     fs.mkdirSync(instancesDir, { recursive: true })
@@ -164,29 +187,27 @@ describe('resolveInstance', () => {
 // ── listRunningContainers ──────────────────────────────────────────────────────
 
 describe('listRunningContainers', () => {
-  it('parses docker ps output into array', () => {
-    vi.mocked(execSync).mockReturnValue('container-a\ncontainer-b\ncontainer-c\n')
-    const result = listRunningContainers()
+  it('parses docker ps output into array', async () => {
+    mockCommandOutput('container-a\ncontainer-b\ncontainer-c\n')
+    const result = await listRunningContainers()
     expect(result).toEqual(['container-a', 'container-b', 'container-c'])
   })
 
-  it('returns empty array when docker command fails', () => {
-    vi.mocked(execSync).mockImplementation(() => {
-      throw new Error('docker not found')
-    })
-    const result = listRunningContainers()
+  it('returns empty array when docker command fails', async () => {
+    mockCommandFailure(new Error('docker not found'))
+    const result = await listRunningContainers()
     expect(result).toEqual([])
   })
 
-  it('handles empty output', () => {
-    vi.mocked(execSync).mockReturnValue('')
-    const result = listRunningContainers()
+  it('handles empty output', async () => {
+    mockCommandOutput('')
+    const result = await listRunningContainers()
     expect(result).toEqual([])
   })
 
-  it('trims whitespace from container names', () => {
-    vi.mocked(execSync).mockReturnValue('  container-a  \n  container-b  \n')
-    const result = listRunningContainers()
+  it('trims whitespace from container names', async () => {
+    mockCommandOutput('  container-a  \n  container-b  \n')
+    const result = await listRunningContainers()
     expect(result).toEqual(['container-a', 'container-b'])
   })
 })
@@ -200,7 +221,7 @@ describe('getStatus', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'at-devserver-status-'))
   })
 
-  it('returns running status when containers match', () => {
+  it('returns running status when containers match', async () => {
     const instancesDir = path.join(tmpDir, '.container', 'instances')
     fs.mkdirSync(instancesDir, { recursive: true })
     fs.writeFileSync(
@@ -208,9 +229,9 @@ describe('getStatus', () => {
       'INSTANCE_NAME=feature-test\nPROJECT_NAME=myapp\nHTTP_PORT=3000',
     )
 
-    vi.mocked(execSync).mockReturnValue('myapp-web-1\nmyapp-db-1\nother-app-1\n')
+    mockCommandOutput('myapp-web-1\nmyapp-db-1\nother-app-1\n')
 
-    const status = getStatus(tmpDir, 'feature/test')
+    const status = await getStatus(tmpDir, 'feature/test')
     expect(status.status).toBe('running')
     expect(status.containers).toEqual(['myapp-web-1', 'myapp-db-1'])
     expect(status.url).toBe('http://localhost:3000')
@@ -218,7 +239,7 @@ describe('getStatus', () => {
     expect(status.projectName).toBe('myapp')
   })
 
-  it('returns stopped status when no containers match', () => {
+  it('returns stopped status when no containers match', async () => {
     const instancesDir = path.join(tmpDir, '.container', 'instances')
     fs.mkdirSync(instancesDir, { recursive: true })
     fs.writeFileSync(
@@ -226,22 +247,31 @@ describe('getStatus', () => {
       'INSTANCE_NAME=feature-test\nPROJECT_NAME=myapp\nHTTP_PORT=3000',
     )
 
-    vi.mocked(execSync).mockReturnValue('other-app-1\nunrelated-service\n')
+    mockCommandOutput('other-app-1\nunrelated-service\n')
 
-    const status = getStatus(tmpDir, 'feature/test')
+    const status = await getStatus(tmpDir, 'feature/test')
     expect(status.status).toBe('stopped')
     expect(status.containers).toEqual([])
     expect(status.url).toBe('')
   })
 
-  it('returns unknown status when no instance config found', () => {
-    const status = getStatus(tmpDir, 'feature/nonexistent')
+  it('does not match a project name as a substring of another project', async () => {
+    const instancesDir = path.join(tmpDir, '.container', 'instances')
+    fs.mkdirSync(instancesDir, { recursive: true })
+    fs.writeFileSync(path.join(instancesDir, 'app.env'), 'INSTANCE_NAME=feature-test\nPROJECT_NAME=app\nHTTP_PORT=3000')
+    mockCommandOutput('myapp-web-1\nunrelated-app-worker\n')
+
+    expect((await getStatus(tmpDir, 'feature/test')).status).toBe('stopped')
+  })
+
+  it('returns unknown status when no instance config found', async () => {
+    const status = await getStatus(tmpDir, 'feature/nonexistent')
     expect(status.status).toBe('unknown')
     expect(status.instanceName).toBe('')
     expect(status.containers).toEqual([])
   })
 
-  it('returns starting when a start process is in flight and no containers visible yet', () => {
+  it('returns starting when a start process is in flight and no containers visible yet', async () => {
     const instancesDir = path.join(tmpDir, '.container', 'instances')
     fs.mkdirSync(instancesDir, { recursive: true })
     fs.writeFileSync(
@@ -277,26 +307,26 @@ describe('getStatus', () => {
     startDevServer('ws-build')
 
     // 2) Polling hits getStatus() mid-build — docker ps still shows nothing matching.
-    vi.mocked(execSync).mockReturnValue('other-container\n')
+    mockCommandOutput('other-container\n')
 
-    const status = getStatus(tmpDir, 'feature/test', 'ws-build')
+    const status = await getStatus(tmpDir, 'feature/test', 'ws-build')
     expect(status.status).toBe('starting')
   })
 
-  it('returns stopped when no tracked process and no containers match', () => {
+  it('returns stopped when no tracked process and no containers match', async () => {
     const instancesDir = path.join(tmpDir, '.container', 'instances')
     fs.mkdirSync(instancesDir, { recursive: true })
     fs.writeFileSync(
       path.join(instancesDir, 'app.env'),
       'INSTANCE_NAME=feature-test\nPROJECT_NAME=myapp\nHTTP_PORT=3000',
     )
-    vi.mocked(execSync).mockReturnValue('other-app\n')
+    mockCommandOutput('other-app\n')
 
-    const status = getStatus(tmpDir, 'feature/test', 'ws-not-tracked')
+    const status = await getStatus(tmpDir, 'feature/test', 'ws-not-tracked')
     expect(status.status).toBe('stopped')
   })
 
-  it('prefers running over starting when containers are visible even if a process is tracked', () => {
+  it('prefers running over starting when containers are visible even if a process is tracked', async () => {
     const instancesDir = path.join(tmpDir, '.container', 'instances')
     fs.mkdirSync(instancesDir, { recursive: true })
     fs.writeFileSync(
@@ -329,9 +359,9 @@ describe('getStatus', () => {
     vi.mocked(spawn).mockReturnValue(mockProc as unknown as ReturnType<typeof spawn>)
     startDevServer('ws-running')
 
-    vi.mocked(execSync).mockReturnValue('myapp-web-1\n')
+    mockCommandOutput('myapp-web-1\n')
 
-    const status = getStatus(tmpDir, 'feature/test', 'ws-running')
+    const status = await getStatus(tmpDir, 'feature/test', 'ws-running')
     expect(status.status).toBe('running')
   })
 })
@@ -461,12 +491,12 @@ describe('startDevServer', () => {
 // ── stopDevServer ──────────────────────────────────────────────────────────────
 
 describe('stopDevServer', () => {
-  it('throws when workspace not found', () => {
+  it('throws when workspace not found', async () => {
     vi.mocked(getWorkspace).mockReturnValue(null)
-    expect(() => stopDevServer('ws-1')).toThrow("Workspace 'ws-1' not found")
+    await expect(stopDevServer('ws-1')).rejects.toThrow("Workspace 'ws-1' not found")
   })
 
-  it('emits stopped status', () => {
+  it('emits stopped status', async () => {
     vi.mocked(getWorkspace).mockReturnValue({
       id: 'ws-1',
       name: 'Test',
@@ -482,7 +512,7 @@ describe('stopDevServer', () => {
     })
     vi.mocked(getProjectSettings).mockReturnValue(null)
 
-    const status = stopDevServer('ws-1')
+    const status = await stopDevServer('ws-1')
 
     expect(status.status).toBe('stopped')
     expect(emitEphemeral).toHaveBeenCalledWith(
@@ -498,13 +528,13 @@ describe('stopDevServer', () => {
 // ── getDevServerLogs ───────────────────────────────────────────────────────────
 
 describe('getDevServerLogs', () => {
-  it('returns message when workspace not found', () => {
+  it('returns message when workspace not found', async () => {
     vi.mocked(getWorkspace).mockReturnValue(null)
-    const logs = getDevServerLogs('ws-1')
+    const logs = await getDevServerLogs('ws-1')
     expect(logs).toBe('Workspace not found')
   })
 
-  it('returns message when no instance config', () => {
+  it('returns message when no instance config', async () => {
     vi.mocked(getWorkspace).mockReturnValue({
       id: 'ws-1',
       name: 'Test',
@@ -518,7 +548,7 @@ describe('getDevServerLogs', () => {
       createdAt: '',
       updatedAt: '',
     })
-    const logs = getDevServerLogs('ws-1')
+    const logs = await getDevServerLogs('ws-1')
     expect(logs).toBe('No dev-server instance found')
   })
 })

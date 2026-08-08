@@ -85,6 +85,28 @@ function notifyPr(message: string, workspaceId: string, event: PrNotificationEve
   )
 }
 
+function prToastActions(workspaceId: string, prUrl?: string): Array<Record<string, unknown>> {
+  const actions: Array<Record<string, unknown>> = []
+  if (prUrl) {
+    actions.push({
+      label: t('pr.openPr'),
+      color: 'white',
+      noDismiss: true,
+      handler: () => window.open(prUrl, '_blank'),
+    })
+  }
+  actions.push({
+    label: t('pr.openWorkspace'),
+    color: 'white',
+    noDismiss: true,
+    handler: () => {
+      window.location.hash = `#/workspace/${workspaceId}`
+    },
+  })
+  actions.push({ label: t('pr.dismiss'), color: 'white' })
+  return actions
+}
+
 // Module-level variables — must NOT be reactive (Vue Proxy breaks WebSocket)
 let _ws: WebSocket | null = null
 let _reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -642,15 +664,17 @@ export const useWebSocketStore = defineStore('websocket', {
       type: string
       payload?: Record<string, unknown>
       createdAt?: string
+      sessionId?: string | null
+      replayable?: boolean
       // Legacy/direct format
       eventId?: string
     }) {
       const workspaceStore = useWorkspaceStore()
 
       // Track event ID for sync — server sends WsEvent with 'id' field
-      if (msg.id) {
+      if (msg.replayable !== false && msg.id) {
         this.lastEventId = msg.id
-      } else if (msg.eventId) {
+      } else if (msg.replayable !== false && msg.eventId) {
         this.lastEventId = msg.eventId
       }
 
@@ -745,7 +769,9 @@ export const useWebSocketStore = defineStore('websocket', {
                 payload: Record<string, unknown>
                 createdAt: string
                 sessionId?: string | null
+                replayable?: boolean
               }>) ?? []
+            const syncMode = payload.mode === 'delta' ? 'delta' : 'snapshot'
             // Group agent:event payloads per workspace for bulk reset (O(1)
             // reactivity instead of O(n) append notifications), then route
             // every other event through the normal dispatcher.
@@ -787,20 +813,26 @@ export const useWebSocketStore = defineStore('websocket', {
               ] of grouped) {
                 // `hasMoreOlder` starts true optimistically — the infinite
                 // scroll fetch will learn the real answer on its first hit.
-                streamStore.reset(workspaceId, list, tsList, {
-                  oldestId,
-                  hasMoreOlder: true,
-                  sessionIds: sList,
-                  eventIds: eList,
-                })
+                const replayIndexes =
+                  syncMode === 'delta'
+                    ? streamStore.merge(workspaceId, list, tsList, { sessionIds: sList, eventIds: eList })
+                    : list.map((_, index) => index)
+                if (syncMode === 'snapshot') {
+                  streamStore.reset(workspaceId, list, tsList, {
+                    oldestId,
+                    hasMoreOlder: true,
+                    sessionIds: sList,
+                    eventIds: eList,
+                  })
+                }
                 // The "Agent todos" panel is rebuilt from the replayed tool
                 // calls below — clear it first so deletions/state replay onto a
                 // clean slate (mirrors the stream reset above).
-                useWorkspaceStore().updateAgentTodos(workspaceId, [])
+                if (syncMode === 'snapshot') useWorkspaceStore().updateAgentTodos(workspaceId, [])
                 // Replay side-effects (usage/rate_limit/subagent/pending) in
                 // order, mirroring live-event semantics. Append was already
                 // handled by reset().
-                for (let i = 0; i < list.length; i++) {
+                for (const i of replayIndexes) {
                   const ev = list[i]
                   if (!ev) continue
                   const evSessionId = sList[i] ?? null
@@ -872,6 +904,10 @@ export const useWebSocketStore = defineStore('websocket', {
                 }
               }
             }
+            const newestReplayable = events.findLast(
+              (event) => event.replayable !== false && typeof event.id === 'string',
+            )
+            if (newestReplayable) this.lastEventId = newestReplayable.id
           } finally {
             this._replaying = false
             _setReplayingForDispatch(false)
@@ -916,7 +952,8 @@ export const useWebSocketStore = defineStore('websocket', {
           workspaceStore.addActivityItem(wid, {
             id: msg.id ?? `setup-complete-${Date.now()}`,
             type: 'text',
-            content: msg.payload?.hadOutput === false ? t('chat.scriptDone') : '[setup] Complete',
+            content:
+              msg.payload?.hadOutput === false ? t('chat.scriptDone') : t('chat.scriptComplete', { phase: 'setup' }),
             timestamp: msg.createdAt ?? new Date().toISOString(),
             meta: { sender: 'setup' },
           })
@@ -926,7 +963,10 @@ export const useWebSocketStore = defineStore('websocket', {
           workspaceStore.addActivityItem(wid, {
             id: msg.id ?? `setup-error-${Date.now()}`,
             type: 'text',
-            content: `[setup] Error: ${msg.payload?.message ?? 'unknown'}`,
+            content: t('chat.scriptError', {
+              phase: 'setup',
+              message: msg.payload?.message ?? t('chat.unknownError'),
+            }),
             timestamp: msg.createdAt ?? new Date().toISOString(),
             meta: { sender: 'setup' },
           })
@@ -946,7 +986,8 @@ export const useWebSocketStore = defineStore('websocket', {
           workspaceStore.addActivityItem(wid, {
             id: msg.id ?? `cleanup-complete-${Date.now()}`,
             type: 'text',
-            content: msg.payload?.hadOutput === false ? t('chat.scriptDone') : '[cleanup] Complete',
+            content:
+              msg.payload?.hadOutput === false ? t('chat.scriptDone') : t('chat.scriptComplete', { phase: 'cleanup' }),
             timestamp: msg.createdAt ?? new Date().toISOString(),
             meta: { sender: 'cleanup' },
           })
@@ -956,7 +997,10 @@ export const useWebSocketStore = defineStore('websocket', {
           workspaceStore.addActivityItem(wid, {
             id: msg.id ?? `cleanup-error-${Date.now()}`,
             type: 'text',
-            content: `[cleanup] Error: ${msg.payload?.message ?? 'unknown'}`,
+            content: t('chat.scriptError', {
+              phase: 'cleanup',
+              message: msg.payload?.message ?? t('chat.unknownError'),
+            }),
             timestamp: msg.createdAt ?? new Date().toISOString(),
             meta: { sender: 'cleanup' },
           })
@@ -976,7 +1020,8 @@ export const useWebSocketStore = defineStore('websocket', {
           workspaceStore.addActivityItem(wid, {
             id: msg.id ?? `archive-complete-${Date.now()}`,
             type: 'text',
-            content: msg.payload?.hadOutput === false ? t('chat.scriptDone') : '[archive] Complete',
+            content:
+              msg.payload?.hadOutput === false ? t('chat.scriptDone') : t('chat.scriptComplete', { phase: 'archive' }),
             timestamp: msg.createdAt ?? new Date().toISOString(),
             meta: { sender: 'archive' },
           })
@@ -986,7 +1031,10 @@ export const useWebSocketStore = defineStore('websocket', {
           workspaceStore.addActivityItem(wid, {
             id: msg.id ?? `archive-error-${Date.now()}`,
             type: 'text',
-            content: `[archive] Error: ${msg.payload?.message ?? 'unknown'}`,
+            content: t('chat.scriptError', {
+              phase: 'archive',
+              message: msg.payload?.message ?? t('chat.unknownError'),
+            }),
             timestamp: msg.createdAt ?? new Date().toISOString(),
             meta: { sender: 'archive' },
           })
@@ -1107,22 +1155,12 @@ export const useWebSocketStore = defineStore('websocket', {
           workspaceStore.updateWorkspaceFromEvent(wid, { sourceBranch: newBase })
           // Includes a shortcut to open the PR on GitHub and expires after the
           // shared notification timeout.
-          const actions: Array<Record<string, unknown>> = []
-          if (p.prUrl) {
-            actions.push({
-              label: t('pr.openPr'),
-              color: 'white',
-              noDismiss: true,
-              handler: () => window.open(p.prUrl, '_blank'),
-            })
-          }
-          actions.push({ label: t('pr.dismiss'), color: 'white' })
           Notify.create({
             type: 'info',
             position: 'top',
             timeout: DEFAULT_TOAST_TIMEOUT_MS,
             message: t('pr.baseChanged', { oldBase, newBase }),
-            actions,
+            actions: prToastActions(wid, p.prUrl),
           })
           // Also fire a system-level notification so the user sees the change
           // when Kobo isn't the focused tab — consistent with other workspace
@@ -1160,6 +1198,7 @@ export const useWebSocketStore = defineStore('websocket', {
             position: 'top',
             timeout: current.timeout,
             message,
+            actions: prToastActions(wid, p.prUrl),
           })
           notifyPr(message, wid, eventType)
           if (eventType !== 'pr:merged') {
@@ -1173,30 +1212,12 @@ export const useWebSocketStore = defineStore('websocket', {
           const p = payload as { prNumber?: number; prUrl?: string }
           const prNumber = p.prNumber ?? 0
           const message = t('toast.prChangesRequested', { n: prNumber })
-          const actions: Array<Record<string, unknown>> = []
-          if (p.prUrl) {
-            actions.push({
-              label: t('pr.openPr'),
-              color: 'white',
-              noDismiss: true,
-              handler: () => window.open(p.prUrl, '_blank'),
-            })
-          }
-          actions.push({
-            label: t('pr.openWorkspace'),
-            color: 'white',
-            noDismiss: true,
-            handler: () => {
-              window.location.hash = `#/workspace/${wid}`
-            },
-          })
-          actions.push({ label: t('pr.dismiss'), color: 'white' })
           Notify.create({
             type: 'warning',
             position: 'top',
             timeout: DEFAULT_TOAST_TIMEOUT_MS,
             message,
-            actions,
+            actions: prToastActions(wid, p.prUrl),
           })
           notifyPr(message, wid, 'pr:changes-requested')
           // Refresh the local snapshot so the icon flips immediately without
@@ -1215,6 +1236,7 @@ export const useWebSocketStore = defineStore('websocket', {
             position: 'top',
             timeout: 5000,
             message,
+            actions: prToastActions(wid, p.prUrl),
           })
           notifyPr(message, wid, 'pr:approved')
           void workspaceStore.refreshPrSnapshot(wid)
@@ -1231,6 +1253,7 @@ export const useWebSocketStore = defineStore('websocket', {
             position: 'top',
             timeout: 5000,
             message,
+            actions: prToastActions(wid, p.prUrl),
           })
           notifyPr(message, wid, 'pr:ready-to-merge')
           void workspaceStore.refreshPrSnapshot(wid)

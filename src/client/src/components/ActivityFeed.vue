@@ -663,8 +663,9 @@ onMounted(() => {
 // First-populate + live-follow watcher. Fires on any new event (including
 // streaming chunks). Skips auto-scroll while `loadOlder` is prepending —
 // that path preserves the user's visual position on its own.
-let firstPopulateDone = false
+let firstPopulateDone = eventCount.value > 0
 watch(eventCount, async (newLen, oldLen) => {
+  if (loadingOlder.value) return
   if (!firstPopulateDone && newLen > 0) {
     firstPopulateDone = true
     await armInitialScroll()
@@ -687,7 +688,7 @@ watch(
   () => props.workspaceId,
   () => {
     stickToBottom.value = true
-    firstPopulateDone = false
+    firstPopulateDone = eventCount.value > 0
     initialScrollDone = false
     void showSwitchingSpinner()
     if (eventCount.value > 0) void armInitialScroll()

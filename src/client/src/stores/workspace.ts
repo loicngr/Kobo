@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import type { ProviderId, UsageSnapshot } from '../types/usage'
 import { hasPrAttention } from '../utils/pr-status'
 import { isBusyStatus } from '../utils/workspace-status'
+import { useAgentStreamStore } from './agent-stream'
 import { useWebSocketStore } from './websocket'
 
 export interface Workspace {
@@ -319,6 +320,36 @@ let _prSnapshotsDebounceTimer: ReturnType<typeof setTimeout> | null = null
 // lives as a module-level variable rather than a Pinia state field (mirrors
 // `_prSnapshotsDebounceTimer` above).
 let _workspacesInfoRequestToken = 0
+let _prSnapshotsRequestToken = 0
+const _workspaceEventVersions = new Map<string, number>()
+const _prSnapshotVersions = new Map<string, number>()
+const _sessionsRequestVersions = new Map<string, number>()
+
+function markPrSnapshotChanged(workspaceId: string): void {
+  _prSnapshotVersions.set(workspaceId, (_prSnapshotVersions.get(workspaceId) ?? 0) + 1)
+}
+
+function mergePrSnapshots(
+  incoming: Record<string, PrSnapshot>,
+  current: Record<string, PrSnapshot>,
+  versionsAtStart: Map<string, number>,
+): Record<string, PrSnapshot> {
+  const next = { ...incoming }
+  const ids = new Set([...Object.keys(incoming), ...Object.keys(current)])
+  for (const id of ids) {
+    const existing = current[id]
+    const candidate = incoming[id]
+    const changedDuringRequest = (_prSnapshotVersions.get(id) ?? 0) !== (versionsAtStart.get(id) ?? 0)
+    const existingTimestamp = existing ? Date.parse(existing.updatedAt) : Number.NaN
+    const candidateTimestamp = candidate ? Date.parse(candidate.updatedAt) : Number.NaN
+    const existingIsNewer = Number.isFinite(existingTimestamp) && existingTimestamp > candidateTimestamp
+    if (changedDuringRequest || existingIsNewer) {
+      if (existing) next[id] = existing
+      else delete next[id]
+    }
+  }
+  return next
+}
 
 function engineToProviderId(engine: string | undefined): ProviderId | null {
   if (engine === 'claude-code') return 'claude-code'
@@ -446,6 +477,32 @@ export const useWorkspaceStore = defineStore('workspace', {
   },
 
   actions: {
+    clearWorkspaceLocalState(id: string) {
+      delete this.activityFeeds[id]
+      delete this.activityFeedIds[id]
+      delete this.activityCounts[id]
+      delete this.subagents[id]
+      delete this.agentTodos[id]
+      delete this.hasMoreEvents[id]
+      delete this.gitStatsCache[id]
+      delete this.pendingWakeups[id]
+      delete this.pendingQuotaBackoffs[id]
+      delete this.pendingDeferred[id]
+      delete this.pendingQueue[id]
+      delete this.prSnapshots[id]
+      delete this.autoLoopStates[id]
+      delete this.crons[id]
+      delete this.activeAgentSessionIds[id]
+      for (const key of Object.keys(this.queuedMessages)) {
+        if (key.startsWith(`${id}:`)) delete this.queuedMessages[key]
+      }
+      _workspaceEventVersions.delete(id)
+      _prSnapshotVersions.delete(id)
+      _sessionsRequestVersions.delete(id)
+      useAgentStreamStore().clear(id)
+      localStorage.removeItem(`kobo:session:${id}`)
+    },
+
     async toggleFavorite(id: string) {
       // Resolve by id both before and after the network call — the workspace
       // array can be reordered (or the workspace removed) by a concurrent
@@ -485,6 +542,7 @@ export const useWorkspaceStore = defineStore('workspace', {
           const updated = (await res.json()) as Workspace
           this.workspaces = this.workspaces.map((w) => (w.id === id ? updated : w))
           delete this.prSnapshots[id]
+          markPrSnapshotChanged(id)
         } else {
           const { workspace, prSnapshot } = (await res.json()) as {
             workspace: Workspace
@@ -493,6 +551,7 @@ export const useWorkspaceStore = defineStore('workspace', {
           this.workspaces = this.workspaces.map((w) => (w.id === id ? workspace : w))
           if (prSnapshot) this.prSnapshots[id] = prSnapshot
           else delete this.prSnapshots[id]
+          markPrSnapshotChanged(id)
         }
       } catch (err) {
         this.workspaces = this.workspaces.map((w) =>
@@ -760,11 +819,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         // so we must also drop it from that list — otherwise the entry lingers
         // after the backend row is gone.
         this.archivedWorkspaces = this.archivedWorkspaces.filter((w) => w.id !== id)
-        delete this.activityFeeds[id]
-        delete this.activityFeedIds[id]
-        delete this.activityCounts[id]
-        delete this.subagents[id]
-        delete this.agentTodos[id]
+        this.clearWorkspaceLocalState(id)
         if (this.selectedWorkspaceId === id) {
           this.selectedWorkspaceId = null
           this.tasks = []
@@ -804,11 +859,7 @@ export const useWorkspaceStore = defineStore('workspace', {
 
         this.archivedWorkspaces = []
         for (const id of ids) {
-          delete this.activityFeeds[id]
-          delete this.activityFeedIds[id]
-          delete this.activityCounts[id]
-          delete this.subagents[id]
-          delete this.agentTodos[id]
+          this.clearWorkspaceLocalState(id)
           if (this.selectedWorkspaceId === id) {
             this.selectedWorkspaceId = null
             this.tasks = []
@@ -856,11 +907,15 @@ export const useWorkspaceStore = defineStore('workspace', {
           throw new Error(body.error ?? `HTTP ${res.status}`)
         }
         const updated = (await res.json()) as Workspace
-        this.workspaces[idx] = { ...this.workspaces[idx], ...updated }
+        this.workspaces = this.workspaces.map((workspace) =>
+          workspace.id === id ? { ...workspace, ...updated } : workspace,
+        )
       } catch (err) {
         // Revert optimistic update.
         const cur = this.workspaces.findIndex((w) => w.id === id)
-        if (cur >= 0) this.workspaces[cur] = { ...this.workspaces[cur], description: previous }
+        if (cur >= 0 && this.workspaces[cur].description === description) {
+          this.workspaces[cur] = { ...this.workspaces[cur], description: previous }
+        }
         throw err
       }
     },
@@ -1095,15 +1150,19 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async fetchSessions(workspaceId: string, forceSelectId?: string) {
+      const requestVersion = (_sessionsRequestVersions.get(workspaceId) ?? 0) + 1
+      _sessionsRequestVersions.set(workspaceId, requestVersion)
       try {
         const res = await fetch(`/api/workspaces/${workspaceId}/sessions`)
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
 
         // Guard against stale response: user may have switched workspace while
         // this request was in flight.
-        if (this.selectedWorkspaceId !== workspaceId) return
+        const sessions = (await res.json()) as AgentSession[]
+        if (this.selectedWorkspaceId !== workspaceId || _sessionsRequestVersions.get(workspaceId) !== requestVersion)
+          return
 
-        this.sessions = await res.json()
+        this.sessions = sessions
 
         // When auto-loop starts a new session, force-switch to it.
         if (forceSelectId && this.sessions.some((s) => s.id === forceSelectId)) {
@@ -1241,7 +1300,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         if (idx >= 0) this.workspaces[idx] = updated
       }
       await this.fetchSessions(workspaceId)
-      if (wasSelected) this.selectSession(this.sessions[0]?.id ?? null)
+      if (wasSelected && this.selectedWorkspaceId === workspaceId) this.selectSession(this.sessions[0]?.id ?? null)
     },
 
     addActivityItem(workspaceId: string, item: ActivityItem) {
@@ -1349,11 +1408,14 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async fetchPrSnapshots(): Promise<void> {
+      const requestToken = ++_prSnapshotsRequestToken
+      const versionsAtStart = new Map(_prSnapshotVersions)
       try {
         const res = await fetch('/api/workspaces/pr-states', { cache: 'no-store' })
         if (!res.ok) return
         const data = (await res.json()) as Record<string, PrSnapshot>
-        this.prSnapshots = data
+        if (requestToken !== _prSnapshotsRequestToken) return
+        this.prSnapshots = mergePrSnapshots(data, this.prSnapshots, versionsAtStart)
       } catch (err) {
         console.error('[workspace-store] fetchPrSnapshots failed:', err)
       }
@@ -1371,6 +1433,8 @@ export const useWorkspaceStore = defineStore('workspace', {
       // otherwise a late-arriving stale response can revert workspaces/
       // prSnapshots that a WebSocket event already brought up to date.
       const requestToken = ++_workspacesInfoRequestToken
+      const eventVersionsAtStart = new Map(_workspaceEventVersions)
+      const prVersionsAtStart = new Map(_prSnapshotVersions)
       try {
         const res = await fetch('/api/workspaces/info', { cache: 'no-store' })
         if (!res.ok) return
@@ -1380,13 +1444,19 @@ export const useWorkspaceStore = defineStore('workspace', {
           gitStats: Record<string, GitStats>
         }
         if (requestToken !== _workspacesInfoRequestToken) return
-        this.workspaces = data.workspaces
+        const currentById = new Map(this.workspaces.map((workspace) => [workspace.id, workspace]))
+        this.workspaces = data.workspaces.map((incoming) => {
+          const current = currentById.get(incoming.id)
+          const changedDuringRequest =
+            (_workspaceEventVersions.get(incoming.id) ?? 0) !== (eventVersionsAtStart.get(incoming.id) ?? 0)
+          return current && changedDuringRequest ? { ...incoming, ...current } : incoming
+        })
         for (const ws of this.workspaces) {
           if (['completed', 'idle', 'error', 'quota'].includes(ws.status)) {
             this.finalizeRunningSubagents(ws.id)
           }
         }
-        this.prSnapshots = data.prSnapshots
+        this.prSnapshots = mergePrSnapshots(data.prSnapshots, this.prSnapshots, prVersionsAtStart)
         // Monotonic merge: the server's git-stats cache (lastKnownGitStats) lags
         // up to one pr-watcher tick (~30s) behind a just-completed git op, so a
         // freshly fetched on-demand snapshot can be newer than what this poll
@@ -1413,6 +1483,7 @@ export const useWorkspaceStore = defineStore('workspace', {
           const next = { ...this.prSnapshots }
           delete next[workspaceId]
           this.prSnapshots = next
+          markPrSnapshotChanged(workspaceId)
           return null
         }
         if (!res.ok) {
@@ -1421,6 +1492,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         }
         const data = (await res.json()) as { snapshot: PrSnapshot }
         this.prSnapshots = { ...this.prSnapshots, [workspaceId]: data.snapshot }
+        markPrSnapshotChanged(workspaceId)
         return data.snapshot
       } catch (err) {
         console.error('[workspace-store] refreshPrSnapshot failed:', err)
@@ -1705,7 +1777,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     /** @deprecated use `peekPending` instead — returns the head only if it is a question. */
     getPendingDeferred(workspaceId: string): PendingDeferredToolUse | undefined {
       const head = this.peekPending(workspaceId)
-      if (!head || head.kind !== 'question') return undefined
+      if (head?.kind !== 'question') return undefined
       return {
         toolCallId: head.toolCallId,
         toolName: head.toolName,
@@ -2026,6 +2098,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     updateWorkspaceFromEvent(workspaceId: string, data: Partial<Workspace>) {
+      _workspaceEventVersions.set(workspaceId, (_workspaceEventVersions.get(workspaceId) ?? 0) + 1)
       const idx = this.workspaces.findIndex((w) => w.id === workspaceId)
       if (idx >= 0) {
         this.workspaces[idx] = { ...this.workspaces[idx], ...data }

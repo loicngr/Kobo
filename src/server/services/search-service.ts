@@ -7,7 +7,7 @@ export interface SearchResult {
   workspaceId: string
   workspaceName: string
   archived: boolean
-  /** `'user:message'` or `'agent:output'`. */
+  /** Persisted event type that supplied the readable text. */
   type: string
   /** ISO timestamp of the event (ws_events.created_at). */
   timestamp: string
@@ -23,7 +23,7 @@ export interface SearchOptions {
 }
 
 /** Event types that carry user-authored or assistant-authored readable text. */
-const SEARCHABLE_TYPES = ['user:message', 'agent:output'] as const
+const SEARCHABLE_TYPES = ['user:message', 'agent:event', 'agent:output'] as const
 
 const SNIPPET_CONTEXT = 100 // chars on each side of the match
 
@@ -53,6 +53,10 @@ function extractReadableText(type: string, payload: unknown): string | null {
       }
       return parts.length > 0 ? parts.join('\n') : null
     }
+  }
+
+  if (type === 'agent:event' && p.kind === 'message:text') {
+    return typeof p.text === 'string' ? p.text : null
   }
 
   return null
@@ -96,53 +100,69 @@ export function searchEvents(query: string, options: SearchOptions = {}): Search
   const db = getDb()
   const typePlaceholders = SEARCHABLE_TYPES.map(() => '?').join(', ')
   const archiveFilter = includeArchived ? '' : 'AND w.archived_at IS NULL'
-  const likePattern = `%${trimmed}%`
-
-  // Over-fetch a bit so post-filter rejects don't shrink us below `limit` on
-  // realistic datasets, without scanning the entire table.
-  const dbLimit = Math.max(limit * 3, 100)
-
-  const rows = db
-    .prepare(
-      `SELECT e.id, e.workspace_id, e.session_id, e.type, e.created_at, e.payload,
-              w.name AS workspace_name, w.archived_at
-       FROM ws_events e
-       JOIN workspaces w ON e.workspace_id = w.id
-       WHERE e.type IN (${typePlaceholders})
-         AND e.payload LIKE ?
-         ${archiveFilter}
-       ORDER BY e.created_at DESC
-       LIMIT ?`,
-    )
-    .all(...SEARCHABLE_TYPES, likePattern, dbLimit) as Row[]
+  const escapedQuery = trimmed.replace(/[\\%_]/g, '\\$&')
+  const likePattern = `%${escapedQuery}%`
 
   const needle = trimmed.toLowerCase()
   const results: SearchResult[] = []
+  const batchSize = Math.min(Math.max(limit * 3, 100), 500)
+  const statement = db.prepare(
+    `SELECT e.id, e.workspace_id, e.session_id, e.type, e.created_at, e.payload,
+            w.name AS workspace_name, w.archived_at
+     FROM ws_events e
+     JOIN workspaces w ON e.workspace_id = w.id
+     WHERE e.type IN (${typePlaceholders})
+       AND e.payload LIKE ? ESCAPE '\\'
+       ${archiveFilter}
+       AND (? IS NULL OR e.created_at < ? OR (e.created_at = ? AND e.id < ?))
+     ORDER BY e.created_at DESC, e.id DESC
+     LIMIT ?`,
+  )
+  let cursorCreatedAt: string | null = null
+  let cursorId: string | null = null
 
-  for (const row of rows) {
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(row.payload)
-    } catch {
-      continue
+  while (results.length < limit) {
+    const rows = statement.all(
+      ...SEARCHABLE_TYPES,
+      likePattern,
+      cursorCreatedAt,
+      cursorCreatedAt,
+      cursorCreatedAt,
+      cursorId,
+      batchSize,
+    ) as Row[]
+
+    for (const row of rows) {
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(row.payload)
+      } catch {
+        continue
+      }
+      const text = extractReadableText(row.type, parsed)
+      if (!text) continue
+      const idx = text.toLowerCase().indexOf(needle)
+      if (idx < 0) continue
+
+      results.push({
+        eventId: row.id,
+        sessionId: row.session_id,
+        workspaceId: row.workspace_id,
+        workspaceName: row.workspace_name,
+        archived: row.archived_at !== null,
+        type: row.type,
+        timestamp: row.created_at,
+        snippet: buildSnippet(text, idx, trimmed),
+      })
+
+      if (results.length >= limit) break
     }
-    const text = extractReadableText(row.type, parsed)
-    if (!text) continue
-    const idx = text.toLowerCase().indexOf(needle)
-    if (idx < 0) continue
 
-    results.push({
-      eventId: row.id,
-      sessionId: row.session_id,
-      workspaceId: row.workspace_id,
-      workspaceName: row.workspace_name,
-      archived: row.archived_at !== null,
-      type: row.type,
-      timestamp: row.created_at,
-      snippet: buildSnippet(text, idx, trimmed),
-    })
-
-    if (results.length >= limit) break
+    if (rows.length < batchSize) break
+    const last = rows.at(-1)
+    if (!last) break
+    cursorCreatedAt = last.created_at
+    cursorId = last.id
   }
 
   return results

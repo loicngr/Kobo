@@ -1003,7 +1003,7 @@ async function confirmDelete() {
               void navigator.clipboard.writeText(message)
             },
           },
-          { label: 'OK', color: 'white', handler: () => undefined },
+          { label: t('common.ok'), color: 'white', handler: () => undefined },
         ],
       })
     }
@@ -1055,7 +1055,7 @@ async function confirmBulkDeleteArchived() {
               void navigator.clipboard.writeText(message)
             },
           },
-          { label: 'OK', color: 'white', handler: () => undefined },
+          { label: t('common.ok'), color: 'white', handler: () => undefined },
         ],
       })
     }
@@ -1117,7 +1117,7 @@ function onPurgeWorktreeClick(ws: Workspace, event: Event) {
                 void navigator.clipboard.writeText(message)
               },
             },
-            { label: 'OK', color: 'white', handler: () => undefined },
+            { label: t('common.ok'), color: 'white', handler: () => undefined },
           ],
         })
       }

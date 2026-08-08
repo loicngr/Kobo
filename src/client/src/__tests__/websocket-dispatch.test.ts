@@ -764,6 +764,57 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
     expect(ws.activeAgentSessionIds.w1).toBeUndefined()
   })
 
+  it('appends a reconnect delta without replacing the existing stream and advances the cursor', async () => {
+    const { useAgentStreamStore } = await import('../stores/agent-stream.js')
+    const stream = useAgentStreamStore()
+    stream.reset(
+      'w1',
+      [{ kind: 'message:text', messageId: 'old', text: 'before disconnect', streaming: false }],
+      ['2026-01-01T00:00:00.000Z'],
+      { oldestId: '10', hasMoreOlder: true, sessionIds: ['session-A'], eventIds: ['10'] },
+    )
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const socket = useWebSocketStore()
+    socket.lastEventId = '10'
+
+    socket._routeMessage({
+      type: 'sync:response',
+      payload: {
+        mode: 'delta',
+        events: [
+          {
+            id: '11',
+            workspaceId: 'w1',
+            type: 'agent:event',
+            payload: { kind: 'message:text', messageId: 'new', text: 'after reconnect', streaming: false },
+            createdAt: '2026-01-01T00:00:01.000Z',
+            sessionId: 'session-A',
+          },
+        ],
+      },
+    })
+
+    expect(stream.eventsFor('w1')).toHaveLength(2)
+    expect(stream.eventIdsFor('w1')).toEqual(['10', '11'])
+    expect(socket.lastEventId).toBe('11')
+  })
+
+  it('does not use an ephemeral event id as the replay cursor', async () => {
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const socket = useWebSocketStore()
+    socket.lastEventId = 'persisted-1'
+
+    socket._routeMessage({
+      id: 'ephemeral-2',
+      replayable: false,
+      workspaceId: 'w1',
+      type: 'workspace:unread',
+      payload: { hasUnread: true },
+    } as never)
+
+    expect(socket.lastEventId).toBe('persisted-1')
+  })
+
   it('removes only ended-session queued messages while replaying persisted events', async () => {
     const { useWorkspaceStore } = await import('../stores/workspace.js')
     const ws = useWorkspaceStore()

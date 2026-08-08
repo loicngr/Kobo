@@ -13,6 +13,7 @@ export interface WsEvent {
   payload: unknown
   sessionId?: string
   createdAt: string
+  replayable: boolean
 }
 
 /** Incoming message from a WebSocket client. */
@@ -150,6 +151,7 @@ export function handleConnection(ws: WebSocket): void {
 export function emit(workspaceId: string, type: string, payload: unknown, sessionId?: string): string {
   const id = nanoid()
   const createdAt = new Date().toISOString()
+  let replayable = false
 
   // Best-effort persist — don't let FK violation (deleted workspace) break the broadcast
   try {
@@ -157,12 +159,13 @@ export function emit(workspaceId: string, type: string, payload: unknown, sessio
     db.prepare(
       'INSERT INTO ws_events (id, workspace_id, type, payload, session_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
     ).run(id, workspaceId, type, JSON.stringify(payload), sessionId ?? null, createdAt)
+    replayable = true
   } catch (err) {
     console.error(`[websocket-service] Failed to persist event (workspace=${workspaceId}, type=${type}):`, err)
   }
 
   // Build the event object to send
-  const event: WsEvent = { id, workspaceId, type, payload, sessionId, createdAt }
+  const event: WsEvent = { id, workspaceId, type, payload, sessionId, createdAt, replayable }
   const message = JSON.stringify(event)
 
   // Broadcast to subscribed clients. Wrap `.send` in try/catch so a dropped
@@ -191,7 +194,7 @@ export function emit(workspaceId: string, type: string, payload: unknown, sessio
 export function emitEphemeral(workspaceId: string, type: string, payload: unknown): void {
   const id = nanoid()
   const createdAt = new Date().toISOString()
-  const event: WsEvent = { id, workspaceId, type, payload, createdAt }
+  const event: WsEvent = { id, workspaceId, type, payload, createdAt, replayable: false }
   const message = JSON.stringify(event)
 
   let sendErrorLogged = false
@@ -250,6 +253,7 @@ export function handleSyncRequest(ws: WebSocket, lastEventId: string, workspaceI
   // thousands of events without ever deleting anything from the DB.
   const INITIAL_WINDOW = 300
 
+  let mode: 'snapshot' | 'delta' = 'snapshot'
   if (lastEventId) {
     // Resume path: replay every event strictly after the cursor (delta
     // since last seen). If the cursor is stale/unknown, fall back to the
@@ -259,6 +263,7 @@ export function handleSyncRequest(ws: WebSocket, lastEventId: string, workspaceI
       | undefined
 
     if (lastRow) {
+      mode = 'delta'
       rows = db
         .prepare(`SELECT * FROM ws_events WHERE workspace_id IN (${placeholders}) AND rowid > ? ORDER BY rowid ASC`)
         .all(...resolvedIds, lastRow.rowid) as typeof rows
@@ -295,10 +300,11 @@ export function handleSyncRequest(ws: WebSocket, lastEventId: string, workspaceI
       payload: parsedPayload,
       sessionId: row.session_id ?? undefined,
       createdAt: row.created_at,
+      replayable: true,
     }
   })
 
-  ws.send(JSON.stringify({ type: 'sync:response', payload: { events } }))
+  ws.send(JSON.stringify({ type: 'sync:response', payload: { events, mode } }))
 }
 
 // ── Utilities ──────────────────────────────────────────────────────────────────

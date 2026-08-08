@@ -22,6 +22,27 @@ const INDEX_FILE = 'index.json'
 // Per-worktree lock to serialize index.json writes
 const locks = new Map<string, Promise<void>>()
 
+function ensureRealImagesDirectory(worktreePath: string): string {
+  const realWorktree = fs.realpathSync(worktreePath)
+  let current = worktreePath
+  for (const segment of ['.ai', 'images']) {
+    current = path.join(current, segment)
+    if (fs.existsSync(current)) {
+      const stat = fs.lstatSync(current)
+      if (stat.isSymbolicLink()) throw new Error(`Symbolic links are not allowed in image storage: ${current}`)
+      if (!stat.isDirectory()) throw new Error(`Image storage path is not a directory: ${current}`)
+    } else {
+      fs.mkdirSync(current)
+    }
+    const realCurrent = fs.realpathSync(current)
+    const relative = path.relative(realWorktree, realCurrent)
+    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+      throw new Error('Image storage path escapes the worktree')
+    }
+  }
+  return fs.realpathSync(current)
+}
+
 function withLock<T>(worktreePath: string, fn: () => T): Promise<T> {
   const prev = locks.get(worktreePath) ?? Promise.resolve()
   // The second argument to .then() means: even if the previous operation in the
@@ -40,6 +61,7 @@ function withLock<T>(worktreePath: string, fn: () => T): Promise<T> {
 function readIndex(imagesDir: string): ImageIndexEntry[] {
   const indexPath = path.join(imagesDir, INDEX_FILE)
   if (!fs.existsSync(indexPath)) return []
+  if (fs.lstatSync(indexPath).isSymbolicLink()) throw new Error('Symbolic links are not allowed for image index')
   try {
     return JSON.parse(fs.readFileSync(indexPath, 'utf-8'))
   } catch (err) {
@@ -49,7 +71,13 @@ function readIndex(imagesDir: string): ImageIndexEntry[] {
 }
 
 function writeIndex(imagesDir: string, entries: ImageIndexEntry[]): void {
-  fs.writeFileSync(path.join(imagesDir, INDEX_FILE), JSON.stringify(entries, null, 2))
+  const indexPath = path.join(imagesDir, INDEX_FILE)
+  if (fs.existsSync(indexPath) && fs.lstatSync(indexPath).isSymbolicLink()) {
+    throw new Error('Symbolic links are not allowed for image index')
+  }
+  const tempPath = path.join(imagesDir, `.index-${process.pid}.tmp`)
+  fs.writeFileSync(tempPath, JSON.stringify(entries, null, 2))
+  fs.renameSync(tempPath, indexPath)
 }
 
 /** Save an image buffer to `.ai/images/` and update the index. Returns the UID and relative path. */
@@ -63,9 +91,7 @@ export async function saveImage(worktreePath: string, fileBuffer: Buffer, origin
   }
 
   const uid = nanoid(10)
-  const imagesDir = path.join(worktreePath, IMAGES_DIR)
-  // mkdirSync is idempotent — safe to call outside the lock
-  fs.mkdirSync(imagesDir, { recursive: true })
+  const imagesDir = ensureRealImagesDirectory(worktreePath)
 
   const filename = `${uid}.${ext}`
 
@@ -83,7 +109,7 @@ export async function saveImage(worktreePath: string, fileBuffer: Buffer, origin
 
 /** Delete an image by UID from disk and the index. */
 export async function deleteImage(worktreePath: string, uid: string): Promise<void> {
-  const imagesDir = path.join(worktreePath, IMAGES_DIR)
+  const imagesDir = ensureRealImagesDirectory(worktreePath)
 
   await withLock(worktreePath, () => {
     const entries = readIndex(imagesDir)

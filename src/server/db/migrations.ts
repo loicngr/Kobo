@@ -476,6 +476,139 @@ export const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 34,
+    name: 'add-session-event-metrics',
+    migrate: (db) => {
+      const tables = new Set(
+        (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map(
+          (row) => row.name,
+        ),
+      )
+      if (!tables.has('workspaces') || !tables.has('agent_sessions') || !tables.has('ws_events')) return
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS session_event_metrics (
+          workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+          session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+          tool_calls INTEGER NOT NULL DEFAULT 0,
+          errors INTEGER NOT NULL DEFAULT 0,
+          input_tokens INTEGER NOT NULL DEFAULT 0,
+          output_tokens INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (workspace_id, session_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_ws_events_workspace_type_session
+          ON ws_events(workspace_id, type, session_id, created_at);
+        CREATE INDEX IF NOT EXISTS idx_ws_events_type_created
+          ON ws_events(type, created_at DESC, id DESC);
+
+        CREATE TRIGGER IF NOT EXISTS trg_ws_events_metrics_insert
+        AFTER INSERT ON ws_events
+        WHEN NEW.type = 'agent:event'
+          AND NEW.session_id IS NOT NULL
+          AND json_valid(NEW.payload)
+          AND EXISTS (
+            SELECT 1 FROM agent_sessions
+            WHERE id = NEW.session_id AND workspace_id = NEW.workspace_id
+          )
+        BEGIN
+          INSERT INTO session_event_metrics (
+            workspace_id, session_id, tool_calls, errors, input_tokens, output_tokens
+          ) VALUES (
+            NEW.workspace_id,
+            NEW.session_id,
+            CASE WHEN json_extract(NEW.payload, '$.kind') = 'tool:call' THEN 1 ELSE 0 END,
+            CASE
+              WHEN json_extract(NEW.payload, '$.kind') = 'error'
+                OR (json_extract(NEW.payload, '$.kind') = 'tool:result'
+                  AND json_extract(NEW.payload, '$.isError') = 1)
+              THEN 1 ELSE 0
+            END,
+            CASE
+              WHEN json_extract(NEW.payload, '$.kind') = 'usage'
+                AND json_type(NEW.payload, '$.inputTokens') IN ('integer', 'real')
+              THEN CAST(json_extract(NEW.payload, '$.inputTokens') AS INTEGER) ELSE 0
+            END,
+            CASE
+              WHEN json_extract(NEW.payload, '$.kind') = 'usage'
+                AND json_type(NEW.payload, '$.outputTokens') IN ('integer', 'real')
+              THEN CAST(json_extract(NEW.payload, '$.outputTokens') AS INTEGER) ELSE 0
+            END
+          )
+          ON CONFLICT(workspace_id, session_id) DO UPDATE SET
+            tool_calls = tool_calls + excluded.tool_calls,
+            errors = errors + excluded.errors,
+            input_tokens = MAX(input_tokens, excluded.input_tokens),
+            output_tokens = MAX(output_tokens, excluded.output_tokens);
+        END;
+
+        CREATE TRIGGER IF NOT EXISTS trg_ws_events_metrics_delete
+        AFTER DELETE ON ws_events
+        WHEN OLD.type = 'agent:event' AND OLD.session_id IS NOT NULL
+        BEGIN
+          DELETE FROM session_event_metrics
+          WHERE workspace_id = OLD.workspace_id AND session_id = OLD.session_id;
+
+          INSERT INTO session_event_metrics (
+            workspace_id, session_id, tool_calls, errors, input_tokens, output_tokens
+          )
+          SELECT
+            e.workspace_id,
+            e.session_id,
+            SUM(CASE WHEN json_extract(e.payload, '$.kind') = 'tool:call' THEN 1 ELSE 0 END),
+            SUM(CASE
+              WHEN json_extract(e.payload, '$.kind') = 'error'
+                OR (json_extract(e.payload, '$.kind') = 'tool:result'
+                  AND json_extract(e.payload, '$.isError') = 1)
+              THEN 1 ELSE 0
+            END),
+            MAX(CASE
+              WHEN json_extract(e.payload, '$.kind') = 'usage'
+                AND json_type(e.payload, '$.inputTokens') IN ('integer', 'real')
+              THEN CAST(json_extract(e.payload, '$.inputTokens') AS INTEGER) ELSE 0
+            END),
+            MAX(CASE
+              WHEN json_extract(e.payload, '$.kind') = 'usage'
+                AND json_type(e.payload, '$.outputTokens') IN ('integer', 'real')
+              THEN CAST(json_extract(e.payload, '$.outputTokens') AS INTEGER) ELSE 0
+            END)
+          FROM ws_events e
+          JOIN agent_sessions s ON s.id = e.session_id AND s.workspace_id = e.workspace_id
+          WHERE e.workspace_id = OLD.workspace_id
+            AND e.session_id = OLD.session_id
+            AND e.type = 'agent:event'
+            AND json_valid(e.payload)
+          GROUP BY e.workspace_id, e.session_id;
+        END;
+
+        INSERT INTO session_event_metrics (
+          workspace_id, session_id, tool_calls, errors, input_tokens, output_tokens
+        )
+        SELECT
+          e.workspace_id,
+          e.session_id,
+          SUM(CASE WHEN json_extract(e.payload, '$.kind') = 'tool:call' THEN 1 ELSE 0 END),
+          SUM(CASE
+            WHEN json_extract(e.payload, '$.kind') = 'error'
+              OR (json_extract(e.payload, '$.kind') = 'tool:result'
+                AND json_extract(e.payload, '$.isError') = 1)
+            THEN 1 ELSE 0
+          END),
+          MAX(CASE WHEN json_extract(e.payload, '$.kind') = 'usage'
+            THEN COALESCE(CAST(json_extract(e.payload, '$.inputTokens') AS INTEGER), 0) ELSE 0 END),
+          MAX(CASE WHEN json_extract(e.payload, '$.kind') = 'usage'
+            THEN COALESCE(CAST(json_extract(e.payload, '$.outputTokens') AS INTEGER), 0) ELSE 0 END)
+        FROM ws_events e
+        JOIN agent_sessions s ON s.id = e.session_id AND s.workspace_id = e.workspace_id
+        WHERE e.type = 'agent:event' AND e.session_id IS NOT NULL AND json_valid(e.payload)
+        GROUP BY e.workspace_id, e.session_id
+        ON CONFLICT(workspace_id, session_id) DO UPDATE SET
+          tool_calls = excluded.tool_calls,
+          errors = excluded.errors,
+          input_tokens = excluded.input_tokens,
+          output_tokens = excluded.output_tokens;
+      `)
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */
@@ -513,27 +646,28 @@ export function runMigrations(db: Database.Database): void {
     const legacyRow = db.prepare('SELECT version FROM schema_version LIMIT 1').get() as { version: number } | undefined
     const legacyVersion = legacyRow?.version ?? 0
 
-    // Back-fill history for all migrations that were already applied under the old system.
-    if (legacyVersion >= 1) {
-      const now = new Date().toISOString()
-      // Version 1 = initSchema (always applied if legacyVersion >= 1)
-      db.prepare('INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(
-        1,
-        'init-schema',
-        now,
-      )
-      for (const m of migrations) {
-        if (m.version <= legacyVersion) {
-          db.prepare('INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(
-            m.version,
-            m.name,
-            now,
-          )
+    db.transaction(() => {
+      // Back-fill history for all migrations that were already applied under the old system.
+      if (legacyVersion >= 1) {
+        const now = new Date().toISOString()
+        // Version 1 = initSchema (always applied if legacyVersion >= 1)
+        db.prepare('INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(
+          1,
+          'init-schema',
+          now,
+        )
+        for (const m of migrations) {
+          if (m.version <= legacyVersion) {
+            db.prepare('INSERT OR IGNORE INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(
+              m.version,
+              m.name,
+              now,
+            )
+          }
         }
       }
-    }
-
-    db.exec('DROP TABLE schema_version')
+      db.exec('DROP TABLE schema_version')
+    })()
   }
 
   // ── Determine current state ────────────────────────────────────────────────
@@ -543,29 +677,37 @@ export function runMigrations(db: Database.Database): void {
 
   // Fresh install — no migrations applied yet.
   if (!applied.has(1)) {
-    initSchema(db)
-    const now = new Date().toISOString()
-    db.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(1, 'init-schema', now)
-    // Mark all incremental migrations as applied (initSchema creates the latest shape).
-    for (const m of migrations) {
+    db.transaction(() => {
+      initSchema(db)
+      const now = new Date().toISOString()
       db.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(
-        m.version,
-        m.name,
+        1,
+        'init-schema',
         now,
       )
-    }
+      // Mark all incremental migrations as applied (initSchema creates the latest shape).
+      for (const m of migrations) {
+        db.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(
+          m.version,
+          m.name,
+          now,
+        )
+      }
+    })()
     return
   }
 
   // Apply pending migrations sequentially.
   for (const m of migrations) {
     if (!applied.has(m.version)) {
-      m.migrate(db)
-      db.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(
-        m.version,
-        m.name,
-        new Date().toISOString(),
-      )
+      db.transaction(() => {
+        m.migrate(db)
+        db.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(
+          m.version,
+          m.name,
+          new Date().toISOString(),
+        )
+      })()
     }
   }
 

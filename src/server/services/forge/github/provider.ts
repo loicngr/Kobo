@@ -5,6 +5,11 @@ import type { CreatePrOptions, ForgeAvailability, ForgeProvider, PrCiCheck, PrRe
 import { deriveReadyToMerge } from '../types.js'
 
 const execFileAsync = promisify(execFile)
+const CLI_TIMEOUT_MS = 30_000
+
+function cliOptions(repoPath: string) {
+  return { cwd: repoPath, encoding: 'utf-8' as const, timeout: CLI_TIMEOUT_MS }
+}
 
 // NOTE: `reviewThreads` is intentionally NOT in this list.
 // `gh pr view --json reviewThreads` is rejected with `Unknown JSON field`
@@ -121,7 +126,7 @@ export const githubProvider: ForgeProvider = {
 
   async isAvailable(repoPath: string): Promise<ForgeAvailability> {
     try {
-      await execFileAsync('gh', ['auth', 'status'], { cwd: repoPath, encoding: 'utf-8' })
+      await execFileAsync('gh', ['auth', 'status'], cliOptions(repoPath))
       return { available: true }
     } catch (err) {
       return availabilityFromError(err)
@@ -130,10 +135,7 @@ export const githubProvider: ForgeProvider = {
 
   async getPrStatus(repoPath: string, branch: string): Promise<PrSnapshot | null> {
     try {
-      const { stdout } = await execFileAsync('gh', ['pr', 'view', branch, '--json', GH_PR_FIELDS], {
-        cwd: repoPath,
-        encoding: 'utf-8',
-      })
+      const { stdout } = await execFileAsync('gh', ['pr', 'view', branch, '--json', GH_PR_FIELDS], cliOptions(repoPath))
       const raw = stdout.trim()
       if (!raw) return null
       return mapGhPrToSnapshot(JSON.parse(raw) as RawGhPr)
@@ -146,7 +148,7 @@ export const githubProvider: ForgeProvider = {
     const { stdout } = await execFileAsync(
       'gh',
       ['pr', 'create', '--base', opts.base, '--head', opts.head, '--title', opts.title, '--body', opts.body],
-      { cwd: repoPath, encoding: 'utf-8' },
+      cliOptions(repoPath),
     )
     const match = stdout.match(/https:\/\/github\.com\/[^\s]+\/pull\/(\d+)/)
     if (!match) throw new Error('Could not parse PR URL from gh output')
@@ -154,13 +156,13 @@ export const githubProvider: ForgeProvider = {
   },
 
   async changePrBase(repoPath: string, base: string): Promise<void> {
-    await execFileAsync('gh', ['pr', 'edit', '--base', base], { cwd: repoPath, encoding: 'utf-8' })
+    await execFileAsync('gh', ['pr', 'edit', '--base', base], cliOptions(repoPath))
   },
 
   async mergeRequest(repoPath: string, number: number): Promise<void> {
-    await execFileAsync('gh', ['pr', 'merge', String(number), '--merge'], { cwd: repoPath, encoding: 'utf-8' })
+    await execFileAsync('gh', ['pr', 'merge', String(number), '--merge'], cliOptions(repoPath))
   },
   async deleteRemoteBranch(repoPath: string, branch: string): Promise<void> {
-    await execFileAsync('git', ['push', 'origin', '--delete', branch], { cwd: repoPath, encoding: 'utf-8' })
+    await execFileAsync('git', ['push', 'origin', '--delete', branch], cliOptions(repoPath))
   },
 }

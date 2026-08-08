@@ -3,6 +3,7 @@ import path from 'node:path'
 import { Hono } from 'hono'
 import * as imageService from '../services/image-service.js'
 import * as workspaceService from '../services/workspace-service.js'
+import { isPathInside } from '../utils/safe-path.js'
 
 /** Maximum allowed upload size for a single image (10 MB). */
 const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
@@ -83,7 +84,7 @@ app.get('/:id/images/file', async (c) => {
 
     // Allowlist: only the upload storage layout is served. No symlink escape
     // either — we resolve and check containment.
-    if (!/^(\.ai\/images\/|images\/)[^/]/.test(requested) || requested.includes('..')) {
+    if (!/^\.ai\/images\/[^/]+$/.test(requested) || requested.includes('..')) {
       return c.json({ error: 'Invalid or disallowed image path' }, 400)
     }
 
@@ -96,9 +97,22 @@ app.get('/:id/images/file', async (c) => {
       return c.json({ error: 'Path escapes images root' }, 400)
     }
 
+    if (!fs.existsSync(imagesRoot) || fs.lstatSync(imagesRoot).isSymbolicLink()) {
+      return c.json({ error: 'Invalid images root' }, 400)
+    }
+    if (!fs.existsSync(fullPath)) return c.json({ error: 'Image not found' }, 404)
+    const fileStat = fs.lstatSync(fullPath)
+    if (fileStat.isSymbolicLink()) return c.json({ error: 'Symbolic links are not allowed' }, 400)
+    const realWorktree = await fs.promises.realpath(worktreePath)
+    const realImagesRoot = await fs.promises.realpath(imagesRoot)
+    const realFile = await fs.promises.realpath(fullPath)
+    if (!isPathInside(realWorktree, realImagesRoot) || !isPathInside(realImagesRoot, realFile)) {
+      return c.json({ error: 'Path escapes images root' }, 400)
+    }
+
     let buffer: Buffer
     try {
-      buffer = await fs.promises.readFile(fullPath)
+      buffer = await fs.promises.readFile(realFile)
     } catch {
       return c.json({ error: 'Image not found' }, 404)
     }

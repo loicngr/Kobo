@@ -1,718 +1,452 @@
 <template>
-  <q-page class="create-page flex flex-center column">
-    <div class="create-inner">
-      <!-- Title -->
-      <div class="create-title text-center text-weight-bold q-mb-lg text-grey-3">
-        {{ $t('createPage.title') }}
-      </div>
+  <q-page class="create-page">
+    <div class="create-inner q-mx-auto">
+      <header class="q-mb-lg">
+        <div class="create-title text-weight-bold text-grey-2">{{ $t('createPage.title') }}</div>
+        <div class="text-body1 text-grey-5 q-mt-xs">{{ $t('createPage.subtitle') }}</div>
+      </header>
 
-      <!-- Input card -->
-      <div class="create-card rounded-borders">
-        <!-- Top bar: model badge + Notion toggle -->
-        <div class="card-top-bar row items-center q-px-md q-py-xs">
-          <span class="model-badge cursor-default row items-center q-gutter-xs">
-            <q-icon name="auto_awesome" size="14px" color="indigo-4" />
-            <span class="text-indigo-3 text-weight-medium text-caption">
-              {{ selectedEngine?.displayName ?? $t('createPage.claudeCode') }}
-            </span>
-          </span>
-          <q-space />
-          <q-btn
-            v-if="settingsStore.global.notionEnabled"
-            flat
-            dense
-            no-caps
-            size="sm"
-            :color="useNotion ? 'green-4' : 'grey-5'"
-            class="notion-toggle-btn text-caption rounded-borders"
-            :disable="useExistingWorktree"
-            @click="toggleNotion"
-          >
-            <q-icon name="description" size="14px" class="q-mr-xs" />
-            {{ useNotion ? $t('createPage.notionEnabled') : $t('createPage.importNotion') }}
-          </q-btn>
-          <q-btn
-            v-if="settingsStore.global.sentryEnabled"
-            flat
-            dense
-            no-caps
-            size="sm"
-            :color="useSentry ? 'red-4' : 'grey-5'"
-            class="sentry-toggle-btn text-caption rounded-borders q-ml-sm"
-            :disable="useExistingWorktree"
-            @click="toggleSentry"
-          >
-            <q-icon name="bug_report" size="14px" class="q-mr-xs" />
-            {{ useSentry ? $t('createPage.sentryEnabled') : $t('createPage.importSentry') }}
-          </q-btn>
-        </div>
+      <div class="create-sections column">
+        <q-card flat bordered class="create-section-card">
+          <q-card-section class="row items-start no-wrap q-gutter-md">
+            <q-avatar color="indigo-9" text-color="indigo-2" icon="assignment" size="42px" />
+            <div>
+              <div class="text-subtitle1 text-weight-medium text-grey-2">{{ $t('createPage.sectionMission') }}</div>
+              <div class="text-body2 text-grey-6">{{ $t('createPage.sectionMissionHint') }}</div>
+            </div>
+          </q-card-section>
 
-        <q-separator color="grey-9" />
+          <q-separator dark />
 
-        <!-- Notion URL input (when toggled) -->
-        <transition name="slide">
-          <div v-if="useNotion" class="notion-url-wrap">
+          <q-card-section class="column q-gutter-y-md">
             <q-input
-              v-model="notionUrl"
-              borderless
+              v-model="workspaceName"
+              dark
               dense
-              :placeholder="$t('createPage.notionPlaceholder')"
-              class="notion-url-input"
-              input-class="notion-url-input-inner"
-            >
-              <template #prepend>
-                <q-icon name="link" size="16px" :color="isValidNotionUrl ? 'green-4' : 'grey-6'" />
-              </template>
-            </q-input>
-            <div v-if="notionUrl.trim() && !isValidNotionUrl" class="notion-error text-caption q-px-md q-pb-xs text-red-5">
-              {{ $t('createPage.notionValidation') }}
-            </div>
-            <div v-if="isValidNotionUrl" class="notion-valid text-caption q-px-md q-pb-xs text-green-4">
-              {{ $t('createPage.notionAutoExtract') }}
-            </div>
-            <div v-if="isValidNotionUrl && notionUrlHasPanelPeek" class="notion-peek-choice q-px-md q-pb-sm">
-              <div class="text-caption text-grey-4 q-mb-sm">
-                <q-icon name="info" size="14px" color="indigo-4" class="q-mr-xs" />
-                {{ $t('createPage.notionPanelChoiceLabel') }}
-              </div>
-              <div class="row q-gutter-sm">
-                <button
-                  type="button"
-                  class="peek-card col"
-                  :class="{ 'peek-card--active': notionPageChoice === 'panel' }"
-                  @click="notionPageChoice = 'panel'"
-                >
-                  <q-icon name="article" size="22px" class="peek-card-icon" />
-                  <div class="peek-card-text">
-                    <div class="peek-card-title">{{ $t('createPage.notionPanelOption') }}</div>
-                    <div class="peek-card-desc">{{ $t('createPage.notionPanelOptionDesc') }}</div>
-                  </div>
-                  <q-icon
-                    v-if="notionPageChoice === 'panel'"
-                    name="check_circle"
-                    size="18px"
-                    color="indigo-4"
-                    class="peek-card-check"
-                  />
-                </button>
-                <button
-                  type="button"
-                  class="peek-card col"
-                  :class="{ 'peek-card--active': notionPageChoice === 'parent' }"
-                  @click="notionPageChoice = 'parent'"
-                >
-                  <q-icon name="folder_open" size="22px" class="peek-card-icon" />
-                  <div class="peek-card-text">
-                    <div class="peek-card-title">{{ $t('createPage.notionParentOption') }}</div>
-                    <div class="peek-card-desc">{{ $t('createPage.notionParentOptionDesc') }}</div>
-                  </div>
-                  <q-icon
-                    v-if="notionPageChoice === 'parent'"
-                    name="check_circle"
-                    size="18px"
-                    color="indigo-4"
-                    class="peek-card-check"
-                  />
-                </button>
-              </div>
-            </div>
-          </div>
-        </transition>
-
-        <q-separator v-if="useNotion" color="grey-9" />
-
-        <!-- Sentry URL input (when toggled) -->
-        <transition name="slide">
-          <div v-if="useSentry" class="sentry-url-wrap">
-            <q-input
-              v-model="sentryUrl"
-              borderless
-              dense
-              :placeholder="$t('createPage.sentryPlaceholder')"
-              class="sentry-url-input"
-              input-class="sentry-url-input-inner"
-            >
-              <template #prepend>
-                <q-icon name="link" size="16px" :color="isValidSentryUrl ? 'red-4' : 'grey-6'" />
-              </template>
-            </q-input>
-            <div v-if="sentryUrl.trim() && !isValidSentryUrl" class="sentry-error text-caption q-px-md q-pb-xs text-red-5">
-              {{ $t('createPage.sentryValidation') }}
-            </div>
-            <div v-if="isValidSentryUrl" class="sentry-valid text-caption q-px-md q-pb-xs text-red-4">
-              {{ $t('createPage.sentryAutoExtract') }}
-            </div>
-          </div>
-        </transition>
-
-        <q-separator v-if="useSentry" color="grey-9" />
-
-        <!-- Workspace name -->
-        <div class="card-name-wrap">
-          <q-input
-            v-model="workspaceName"
-            borderless
-            dense
-            :placeholder="useNotion && isValidNotionUrl ? $t('createPage.workspaceName') : $t('createPage.workspaceNamePlaceholder')"
-            class="name-input"
-            input-class="name-input-inner"
-          />
-        </div>
-
-        <q-separator color="grey-9" />
-
-        <!-- Textarea (description / additional instructions). Wrapped in a
-             relative container so the slash-autocomplete popup can be
-             positioned above the input via `position: absolute`. -->
-        <div class="card-textarea-wrap">
-          <q-input
-            ref="descriptionRef"
-            v-model="description"
-            type="textarea"
-            borderless
-            autogrow
-            :rows="3"
-            :placeholder="useNotion ? $t('createPage.instructions') : $t('createPage.instructionsPlaceholder')"
-            class="create-textarea"
-            input-class="create-textarea-input"
-            @keydown="onDescriptionKeydown"
-            @keydown.ctrl.enter="handleCreate"
-            @keydown.meta.enter="handleCreate"
-          />
-          <div class="row items-center justify-end q-px-sm q-pb-xs q-gutter-sm">
-            <div v-if="isCreateVoiceTranscribing" class="row items-center text-caption text-amber-6">
-              <q-spinner-dots size="14px" color="amber-6" class="q-mr-xs" />
-              <span>{{ $t('voice.transcribing') }}</span>
-            </div>
-            <q-btn
-              flat
-              dense
-              size="sm"
-              :icon="isCreateVoiceTranscribing ? 'hourglass_top' : isCreateVoiceRecording ? 'mic' : 'mic_none'"
-              :color="isCreateVoiceRecording ? 'red-5' : isCreateVoiceTranscribing ? 'amber-6' : 'grey-6'"
-              :disable="!createVoiceEnabled || isCreateVoiceTranscribing"
-              :class="{ 'voice-btn--recording': isCreateVoiceRecording }"
-              @mousedown.prevent="startCreateVoiceCapture"
-              @mouseup.prevent="stopCreateVoiceCapture"
-              @mouseleave.prevent="stopCreateVoiceCapture"
-              @touchstart.prevent="startCreateVoiceCapture"
-              @touchend.prevent="stopCreateVoiceCapture"
-            >
-              <q-tooltip>
-                {{
-                  isCreateVoiceTranscribing
-                    ? $t('voice.transcribing')
-                    : isCreateVoiceRecording
-                      ? $t('voice.recording')
-                      : $t('voice.holdToTalk')
-                }}
-              </q-tooltip>
-            </q-btn>
-          </div>
-          <SlashSuggestionsPopup
-            v-if="showSlashPopup && slashFlat.length > 0"
-            class="create-slash-popup"
-            :grouped-dropdown="slashGrouped"
-            :flat-dropdown="slashFlat"
-            :selected-index="slashIndex"
-            @select="onSlashSelect"
-          />
-        </div>
-
-        <q-separator color="grey-9" />
-
-        <!-- Manual tasks / criteria (when no Notion ticket) -->
-        <template v-if="showManualSections">
-          <div class="manual-hint q-px-md q-py-sm text-caption text-grey-6">
-            {{ $t('createPage.manualHint') }}
-          </div>
-
-          <q-expansion-item
-            dark
-            dense
-            :label="$t('createPage.tasks', { count: manualTasks.length })"
-            header-class="text-grey-4 manual-expansion-header"
-            class="manual-expansion q-mx-sm"
-          >
-            <div class="q-pa-sm manual-section-body">
-              <div class="row items-center q-gutter-sm q-mb-sm">
-                <q-input
-                  v-model="newManualTask"
-                  dark
-                  dense
-                  borderless
-                  :placeholder="$t('createPage.addTask')"
-                  class="col manual-input"
-                  input-class="manual-input-inner"
-                  @keydown.enter.prevent="addManualTask"
-                />
-                <q-btn
-                  flat
-                  dense
-                  round
-                  icon="add"
-                  color="indigo-4"
-                  :disable="!newManualTask.trim()"
-                  @click="addManualTask"
-                >
-                  <q-tooltip>{{ $t('tooltip.addTask') }}</q-tooltip>
-                </q-btn>
-              </div>
-              <div
-                v-for="(task, idx) in manualTasks"
-                :key="`task-${idx}`"
-                class="row items-center q-py-xs manual-item"
-              >
-                <span class="col text-caption text-grey-4">{{ task }}</span>
-                <q-btn
-                  flat
-                  dense
-                  round
-                  icon="close"
-                  size="xs"
-                  color="grey-6"
-                  @click="removeManualTask(idx)"
-                >
-                  <q-tooltip>{{ $t('tooltip.removeTask') }}</q-tooltip>
-                </q-btn>
-              </div>
-            </div>
-          </q-expansion-item>
-
-          <q-expansion-item
-            dark
-            dense
-            :label="$t('createPage.acceptanceCriteria', { count: manualCriteria.length })"
-            header-class="text-grey-4 manual-expansion-header"
-            class="manual-expansion q-mx-sm q-mb-sm"
-          >
-            <div class="q-pa-sm manual-section-body">
-              <div class="row items-center q-gutter-sm q-mb-sm">
-                <q-input
-                  v-model="newManualCriterion"
-                  dark
-                  dense
-                  borderless
-                  :placeholder="$t('createPage.addCriterion')"
-                  class="col manual-input"
-                  input-class="manual-input-inner"
-                  @keydown.enter.prevent="addManualCriterion"
-                />
-                <q-btn
-                  flat
-                  dense
-                  round
-                  icon="add"
-                  color="indigo-4"
-                  :disable="!newManualCriterion.trim()"
-                  @click="addManualCriterion"
-                >
-                  <q-tooltip>{{ $t('tooltip.addCriterion') }}</q-tooltip>
-                </q-btn>
-              </div>
-              <div
-                v-for="(crit, idx) in manualCriteria"
-                :key="`crit-${idx}`"
-                class="row items-center q-py-xs manual-item"
-              >
-                <span class="col text-caption text-grey-4">{{ crit }}</span>
-                <q-btn
-                  flat
-                  dense
-                  round
-                  icon="close"
-                  size="xs"
-                  color="grey-6"
-                  @click="removeManualCriterion(idx)"
-                >
-                  <q-tooltip>{{ $t('tooltip.removeCriterion') }}</q-tooltip>
-                </q-btn>
-              </div>
-            </div>
-          </q-expansion-item>
-
-          <q-separator color="grey-9" />
-        </template>
-
-        <!-- Bottom bar: agent config (row 1) + git config (row 2) -->
-        <div class="card-bottom-bar">
-
-        <!-- Row 1: agent configuration (engine, model, reasoning, permission) -->
-        <div class="row q-col-gutter-xs q-px-xs">
-          <div
-              v-if="engineSelectOptions.length > 0"
-              class="col-12 col-sm-6 col-md-3"
-          >
-            <!-- Engine selector — dynamically populated from /api/engines -->
-            <q-select
-                v-model="selectedEngineId"
-                :options="engineSelectOptions"
-                dense
-                borderless
-                class="bottom-select rounded-borders"
-                hide-dropdown-icon
-                emit-value
-                map-options
-                option-value="value"
-                option-label="label"
-            >
-              <template #selected>
-              <span class="bottom-select-label row items-center no-wrap">
-                <q-icon name="hub" size="12px" color="grey-5" class="q-mr-xs" />
-                {{ engineSelectOptions.find((e) => e.value === selectedEngineId)?.label ?? selectedEngineId }}
-                <q-icon name="expand_more" size="12px" color="grey-5" />
-              </span>
-              </template>
-              <q-tooltip>{{ $t('engine.select') }}</q-tooltip>
-            </q-select>
-          </div>
-
-          <div class="col-12 col-sm-6 col-md-3">
-            <!-- Model selector -->
-            <q-select
-                v-model="model"
-                :options="modelOptions"
-                dense
-                borderless
-                class="bottom-select rounded-borders model-select"
-                hide-dropdown-icon
-                emit-value
-                map-options
-                option-value="value"
-                option-label="label"
-            >
-              <template #selected>
-              <span class="bottom-select-label row items-center no-wrap">
-                <span v-if="autoLoop" class="text-grey-5 q-mr-xs">{{ $t('autoLoop.executionModelPrefix') }}</span>
-                {{ modelOptions.find(m => m.value === model)?.label ?? model }}
-                <q-icon name="expand_more" size="12px" color="grey-5" />
-              </span>
-              </template>
-              <template #option="{ opt, itemProps }">
-                <q-item v-bind="itemProps" class="model-option">
-                  <q-item-section>
-                    <q-item-label class="text-white">{{ opt.label }}</q-item-label>
-                    <q-item-label caption class="text-grey-5">{{ opt.description }}</q-item-label>
-                  </q-item-section>
-                </q-item>
-              </template>
-              <q-tooltip>{{ $t(autoLoop ? 'autoLoop.executionModelTooltip' : 'model.tooltip') }}</q-tooltip>
-            </q-select>
-          </div>
-
-          <div class="col-12 col-sm-6 col-md-3">
-            <!-- Reasoning effort selector -->
-            <q-select
-                v-model="reasoningEffort"
-                :options="reasoningOptions"
-                dense
-                borderless
-                class="bottom-select rounded-borders"
-                hide-dropdown-icon
-                emit-value
-                map-options
-                option-value="value"
-                option-label="label"
-            >
-              <template #selected>
-              <span class="bottom-select-label row items-center no-wrap">
-                <q-icon name="psychology" size="12px" color="grey-5" class="q-mr-xs" />
-                {{ reasoningOptions.find(r => r.value === reasoningEffort)?.label ?? reasoningEffort }}
-                <q-icon name="expand_more" size="12px" color="grey-5" />
-              </span>
-              </template>
-              <template #option="{ opt, itemProps }">
-                <q-item v-bind="itemProps">
-                  <q-item-section>
-                    <q-item-label class="text-white">{{ opt.label }}</q-item-label>
-                    <q-item-label caption class="text-grey-5">{{ opt.description }}</q-item-label>
-                  </q-item-section>
-                </q-item>
-              </template>
-              <q-tooltip>{{ $t('reasoning.tooltip') }}</q-tooltip>
-            </q-select>
-          </div>
-
-          <div class="col-12 col-md-3">
-            <!-- Locked to `bypass` when auto-loop is on (loop needs MCP +
-                 edits with no permission gates). -->
-            <q-select
-                v-model="agentPermissionMode"
-                :options="agentPermissionModeOptions"
-                :disable="autoLoop"
-                dense
-                borderless
-                class="bottom-select rounded-borders"
-                hide-dropdown-icon
-                emit-value
-                map-options
-                option-value="value"
-                option-label="label"
-                :option-disable="isOptionDisabled"
-            >
-              <template #selected>
-              <span class="bottom-select-label row items-center no-wrap">
-                <q-icon
-                    :name="agentPermissionModeIcon"
-                    size="12px"
-                    color="amber-6"
-                    class="q-mr-xs"
-                />
-                {{ agentPermissionModeOptions.find((p) => p.value === agentPermissionMode)?.label ?? agentPermissionMode }}
-                <q-icon v-if="!autoLoop" name="expand_more" size="12px" color="grey-5" />
-              </span>
-              </template>
-              <q-tooltip>{{ autoLoop ? $t('agentPermissionMode.autoLoopLocked') : $t('agentPermissionMode.tooltip') }}</q-tooltip>
-            </q-select>
-          </div>
-        </div>
-
-        <!-- Row 1b: auto-loop toggle + its session-mode selector, alone on their own row -->
-        <div class="column q-pa-xs col-12 items-center">
-          <div class="row q-col-gutter-xs items-center justify-center">
-          <div class="col-12 col-md-auto">
-            <!-- Auto-loop toggle -->
-            <q-btn
-                flat
-                dense
-                size="sm"
-                no-caps
-                :icon="autoLoop ? 'autorenew' : 'sync_disabled'"
-                :color="autoLoop ? 'amber-4' : 'grey-5'"
-                :label="$t('autoLoop.startInMode')"
-                class="skip-setup-btn"
-                @click="toggleAutoLoop"
-            >
-              <q-tooltip>{{ $t('autoLoop.startInMode') }}</q-tooltip>
-            </q-btn>
-          </div>
-
-          <div v-if="autoLoop" class="col-12 row justify-center q-mt-xs">
-            <!-- Auto-loop session mode: per-task (fresh session each iteration) vs continuous (resume) -->
-            <div class="auto-loop-session-panel row items-center no-wrap q-gutter-xs">
-              <span class="auto-loop-session-label">{{ $t('autoLoop.sessionMode.label') }}</span>
-              <q-btn-toggle
-                  v-model="autoLoopSessionMode"
-                  dense
-                  no-caps
-                  size="sm"
-                  toggle-color="indigo-8"
-                  color="grey-9"
-                  text-color="grey-5"
-                  :options="[
-                    { label: $t('autoLoop.sessionMode.perTask'), value: 'per_task', icon: 'restart_alt' },
-                    { label: $t('autoLoop.sessionMode.continuous'), value: 'continuous', icon: 'link' },
-                  ]"
-              >
-                <q-tooltip>
-                  {{
-                    autoLoopSessionMode === 'continuous'
-                      ? $t('autoLoop.sessionMode.continuousTooltip')
-                      : $t('autoLoop.sessionMode.perTaskTooltip')
-                  }}
-                </q-tooltip>
-              </q-btn-toggle>
-            </div>
-          </div>
-          </div>
-
-          <div v-if="autoLoop" class="auto-loop-brainstorm-panel row items-center q-gutter-xs q-mt-xs">
-            <span class="auto-loop-brainstorm-label">{{ $t('autoLoop.brainstormModelPrefix') }}</span>
-            <!-- Brainstorming-session model override: used once, for the
-                 very first session, before the auto-loop takes over with
-                 the main model select above. -->
-            <q-select
-                v-model="brainstormModel"
-                :options="modelOptions"
-                dense
-                borderless
-                class="bottom-select rounded-borders model-select"
-                hide-dropdown-icon
-                emit-value
-                map-options
-                option-value="value"
-                option-label="label"
-            >
-              <template #selected>
-              <span class="bottom-select-label row items-center no-wrap">
-                <q-icon name="tips_and_updates" size="12px" color="amber-6" class="q-mr-xs" />
-                <span class="text-grey-5 q-mr-xs">{{ $t('autoLoop.brainstormModelPrefix') }}</span>
-                {{ modelOptions.find(m => m.value === brainstormModel)?.label ?? brainstormModel }}
-                <q-icon name="expand_more" size="12px" color="grey-5" />
-              </span>
-              </template>
-              <template #option="{ opt, itemProps }">
-                <q-item v-bind="itemProps" class="model-option">
-                  <q-item-section>
-                    <q-item-label class="text-white">{{ opt.label }}</q-item-label>
-                    <q-item-label caption class="text-grey-5">{{ opt.description }}</q-item-label>
-                  </q-item-section>
-                </q-item>
-              </template>
-              <q-tooltip>{{ $t('autoLoop.brainstormModelTooltip') }}</q-tooltip>
-            </q-select>
-
-            <q-select
-              v-model="brainstormReasoningEffort"
-              :options="reasoningOptions"
-              dense borderless class="bottom-select rounded-borders" hide-dropdown-icon
-              emit-value map-options option-value="value" option-label="label"
-            >
-              <template #selected>
-                <span class="bottom-select-label row items-center no-wrap">
-                  <q-icon name="psychology" size="12px" color="amber-6" class="q-mr-xs" />
-                  <span class="text-grey-5 q-mr-xs">{{ $t('autoLoop.brainstormReasoningPrefix') }}</span>
-                  {{ reasoningOptions.find(r => r.value === brainstormReasoningEffort)?.label ?? brainstormReasoningEffort }}
-                  <q-icon name="expand_more" size="12px" color="grey-5" />
-                </span>
-              </template>
-              <template #option="{ opt, itemProps }">
-                <q-item v-bind="itemProps"><q-item-section><q-item-label class="text-white">{{ opt.label }}</q-item-label><q-item-label caption class="text-grey-5">{{ opt.description }}</q-item-label></q-item-section></q-item>
-              </template>
-              <q-tooltip>{{ $t('autoLoop.brainstormReasoningTooltip') }}</q-tooltip>
-            </q-select>
-          </div>
-        </div>
-
-        <!-- Row 1c: remaining action toggles (skip-setup, attach-worktree) -->
-        <div class="row q-col-gutter-xs q-pa-xs col-12 items-center justify-center">
-          <div class="col-12 col-md-auto">
-            <!-- Skip-setup toggle -->
-            <q-btn
-                flat
-                dense
-                size="sm"
-                no-caps
-                :icon="skipSetupScript ? 'play_disabled' : 'play_circle'"
-                :color="skipSetupScript ? 'orange-4' : 'grey-5'"
-                :label="$t('createPage.skipSetupScript')"
-                class="skip-setup-btn"
-                @click="skipSetupScript = !skipSetupScript"
-            >
-              <q-tooltip>{{ $t('createPage.skipSetupScript') }}</q-tooltip>
-            </q-btn>
-          </div>
-
-          <div class="col-12 col-md-auto">
-            <!-- Attach existing worktree toggle -->
-            <q-btn
-                flat
-                dense
-                size="sm"
-                no-caps
-                icon="folder_open"
-                :color="useExistingWorktree ? 'cyan-4' : 'grey-5'"
-                :label="useExistingWorktree ? $t('createPage.attachWorktreeEnabled') : $t('createPage.attachWorktreeToggle')"
-                class="skip-setup-btn"
-                @click="toggleExistingWorktree"
+              outlined
+              stack-label
+              :label="$t('createPage.workspaceNameLabel')"
+              :placeholder="useNotion && isValidNotionUrl ? $t('createPage.workspaceName') : $t('createPage.workspaceNamePlaceholder')"
             />
-          </div>
-        </div>
 
-        <!-- Row 2: git configuration (repo path, branch type, source branch) -->
-        <div class="row q-col-gutter-xs q-px-xs bottom-row-git">
-          <div class="col-12 col-md-4">
-            <!-- Repo path input with suggestions -->
-            <q-select
-                v-model="projectPath"
-                :options="pathFilterOptions"
+            <div class="card-textarea-wrap">
+              <q-input
+                ref="descriptionRef"
+                v-model="description"
+                dark
                 dense
-                borderless
-                use-input
-                fill-input
-                hide-selected
-                input-debounce="0"
-                new-value-mode="add"
-                class="bottom-select rounded-borders repo-select"
-                hide-dropdown-icon
-                :input-class="!projectPath ? 'repo-input-empty' : ''"
-                :placeholder="$t('createPage.projectPath')"
-                :behavior="settingsStore.projectPaths.length > 0 ? 'menu' : 'dialog'"
-                :option-label="(opt: string) => (opt ? projectNameForPath(opt) : '')"
-                @filter="filterProjectPaths"
-                @input-value="onProjectPathInput"
-            >
-              <template #prepend>
-                <q-icon name="folder" size="14px" color="grey-5" />
-              </template>
-              <template #option="{ opt, itemProps }">
-                <q-item v-bind="itemProps">
-                  <q-item-section>
-                    <q-item-label>{{ projectNameForPath(opt) }}</q-item-label>
-                    <q-item-label caption>{{ opt }}</q-item-label>
-                  </q-item-section>
-                </q-item>
-              </template>
-              <template #no-option>
-                <q-item>
-                  <q-item-section class="text-grey-6 text-caption">
-                    {{ $t('createPage.enterPath') }}
-                  </q-item-section>
-                </q-item>
-              </template>
-            </q-select>
-          </div>
+                outlined
+                stack-label
+                type="textarea"
+                autogrow
+                :rows="6"
+                :label="$t('createPage.descriptionLabel')"
+                :placeholder="useNotion ? $t('createPage.instructions') : $t('createPage.instructionsPlaceholder')"
+                class="create-textarea"
+                @keydown="onDescriptionKeydown"
+                @keydown.ctrl.enter="handleCreate"
+                @keydown.meta.enter="handleCreate"
+              >
+                <template #append>
+                  <div class="column items-center self-end q-pb-xs">
+                    <q-spinner-dots v-if="isCreateVoiceTranscribing" size="18px" color="amber-6" />
+                    <q-btn
+                      flat
+                      dense
+                      round
+                      size="sm"
+                      :icon="isCreateVoiceTranscribing ? 'hourglass_top' : isCreateVoiceRecording ? 'mic' : 'mic_none'"
+                      :color="isCreateVoiceRecording ? 'red-5' : isCreateVoiceTranscribing ? 'amber-6' : 'grey-6'"
+                      :disable="!createVoiceEnabled || isCreateVoiceTranscribing"
+                      :class="{ 'voice-btn--recording': isCreateVoiceRecording }"
+                      @mousedown.prevent="startCreateVoiceCapture"
+                      @mouseup.prevent="stopCreateVoiceCapture"
+                      @mouseleave.prevent="stopCreateVoiceCapture"
+                      @touchstart.prevent="startCreateVoiceCapture"
+                      @touchend.prevent="stopCreateVoiceCapture"
+                    >
+                      <q-tooltip>
+                        {{
+                          isCreateVoiceTranscribing
+                            ? $t('voice.transcribing')
+                            : isCreateVoiceRecording
+                              ? $t('voice.recording')
+                              : $t('voice.holdToTalk')
+                        }}
+                      </q-tooltip>
+                    </q-btn>
+                  </div>
+                </template>
+              </q-input>
+              <SlashSuggestionsPopup
+                v-if="showSlashPopup && slashFlat.length > 0"
+                class="create-slash-popup"
+                :grouped-dropdown="slashGrouped"
+                :flat-dropdown="slashFlat"
+                :selected-index="slashIndex"
+                @select="onSlashSelect"
+              />
+            </div>
 
-          <div
-              v-if="!useExistingWorktree"
-              class="col-12 col-md-4"
-          >
-            <!-- Branch type selector (feature / fix / hotfix / …) -->
-            <q-select
-                v-model="branchType"
-                :options="branchTypeOptions"
-                emit-value
-                map-options
+            <div
+              v-if="settingsStore.global.notionEnabled || settingsStore.global.sentryEnabled"
+              class="column q-gutter-y-sm"
+            >
+              <div class="text-caption text-weight-medium text-grey-5">{{ $t('createPage.sources') }}</div>
+              <div class="row q-gutter-sm">
+                <q-btn
+                  v-if="settingsStore.global.notionEnabled"
+                  dense
+                  outline
+                  no-caps
+                  icon="description"
+                  :color="useNotion ? 'green-4' : 'grey-5'"
+                  :label="useNotion ? $t('createPage.notionEnabled') : $t('createPage.importNotion')"
+                  :disable="useExistingWorktree"
+                  @click="toggleNotion"
+                />
+                <q-btn
+                  v-if="settingsStore.global.sentryEnabled"
+                  dense
+                  outline
+                  no-caps
+                  icon="bug_report"
+                  :color="useSentry ? 'red-4' : 'grey-5'"
+                  :label="useSentry ? $t('createPage.sentryEnabled') : $t('createPage.importSentry')"
+                  :disable="useExistingWorktree"
+                  @click="toggleSentry"
+                />
+              </div>
+            </div>
+
+            <transition name="slide">
+              <div v-if="useNotion" class="source-panel column q-gutter-y-sm q-pa-md rounded-borders">
+                <q-input
+                  v-model="notionUrl"
+                  dark
+                  outlined
+                  dense
+                  stack-label
+                  :label="$t('createPage.importNotion')"
+                  :placeholder="$t('createPage.notionPlaceholder')"
+                  :error="Boolean(notionUrl.trim()) && !isValidNotionUrl"
+                  :error-message="$t('createPage.notionValidation')"
+                  :hint="isValidNotionUrl ? $t('createPage.notionAutoExtract') : undefined"
+                >
+                  <template #prepend>
+                    <q-icon name="link" :color="isValidNotionUrl ? 'green-4' : 'grey-6'" />
+                  </template>
+                </q-input>
+                <div v-if="isValidNotionUrl && notionUrlHasPanelPeek">
+                  <div class="text-body2 text-grey-4 q-mb-sm">
+                    <q-icon name="info" color="indigo-4" class="q-mr-xs" />
+                    {{ $t('createPage.notionPanelChoiceLabel') }}
+                  </div>
+                  <div class="responsive-fields responsive-fields--sm row q-col-gutter-x-sm">
+                    <div class="col-12 col-sm-6">
+                      <q-card
+                        flat
+                        bordered
+                        class="peek-card full-height cursor-pointer"
+                        :class="{ 'peek-card--active': notionPageChoice === 'panel' }"
+                        @click="notionPageChoice = 'panel'"
+                      >
+                        <q-card-section class="row items-center no-wrap q-gutter-sm q-pa-sm">
+                          <q-icon name="article" size="24px" class="peek-card-icon" />
+                          <div class="col">
+                            <div class="text-body2 text-weight-medium">{{ $t('createPage.notionPanelOption') }}</div>
+                            <div class="text-caption text-grey-6">{{ $t('createPage.notionPanelOptionDesc') }}</div>
+                          </div>
+                          <q-icon v-if="notionPageChoice === 'panel'" name="check_circle" color="indigo-4" />
+                        </q-card-section>
+                      </q-card>
+                    </div>
+                    <div class="col-12 col-sm-6">
+                      <q-card
+                        flat
+                        bordered
+                        class="peek-card full-height cursor-pointer"
+                        :class="{ 'peek-card--active': notionPageChoice === 'parent' }"
+                        @click="notionPageChoice = 'parent'"
+                      >
+                        <q-card-section class="row items-center no-wrap q-gutter-sm q-pa-sm">
+                          <q-icon name="folder_open" size="24px" class="peek-card-icon" />
+                          <div class="col">
+                            <div class="text-body2 text-weight-medium">{{ $t('createPage.notionParentOption') }}</div>
+                            <div class="text-caption text-grey-6">{{ $t('createPage.notionParentOptionDesc') }}</div>
+                          </div>
+                          <q-icon v-if="notionPageChoice === 'parent'" name="check_circle" color="indigo-4" />
+                        </q-card-section>
+                      </q-card>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </transition>
+
+            <transition name="slide">
+              <div v-if="useSentry" class="source-panel q-pa-md rounded-borders">
+                <q-input
+                  v-model="sentryUrl"
+                  dark
+                  outlined
+                  dense
+                  stack-label
+                  :label="$t('createPage.importSentry')"
+                  :placeholder="$t('createPage.sentryPlaceholder')"
+                  :error="Boolean(sentryUrl.trim()) && !isValidSentryUrl"
+                  :error-message="$t('createPage.sentryValidation')"
+                  :hint="isValidSentryUrl ? $t('createPage.sentryAutoExtract') : undefined"
+                >
+                  <template #prepend>
+                    <q-icon name="link" :color="isValidSentryUrl ? 'red-4' : 'grey-6'" />
+                  </template>
+                </q-input>
+              </div>
+            </transition>
+
+            <div v-if="showManualSections" class="responsive-fields row q-col-gutter-x-md">
+              <div class="col-12 col-md-6">
+                <q-expansion-item
+                  dark
+                  dense
+                  expand-separator
+                  icon="checklist"
+                  :label="$t('createPage.tasks', { count: manualTasks.length })"
+                  class="manual-expansion rounded-borders"
+                >
+                  <div class="q-pa-md column q-gutter-y-sm">
+                    <q-input
+                      v-model="newManualTask"
+                      dark
+                      dense
+                      outlined
+                      :placeholder="$t('createPage.addTask')"
+                      @keydown.enter.prevent="addManualTask"
+                    >
+                      <template #append>
+                        <q-btn
+                          flat
+                          dense
+                          round
+                          icon="add"
+                          color="indigo-4"
+                          :disable="!newManualTask.trim()"
+                          @click="addManualTask"
+                        >
+                          <q-tooltip>{{ $t('tooltip.addTask') }}</q-tooltip>
+                        </q-btn>
+                      </template>
+                    </q-input>
+                    <div v-if="manualTasks.length" class="row q-gutter-xs">
+                      <q-chip
+                        v-for="(task, idx) in manualTasks"
+                        :key="`task-${idx}`"
+                        dark
+                        dense
+                        removable
+                        color="grey-9"
+                        text-color="grey-3"
+                        @remove="removeManualTask(idx)"
+                      >
+                        {{ task }}
+                      </q-chip>
+                    </div>
+                  </div>
+                </q-expansion-item>
+              </div>
+              <div class="col-12 col-md-6">
+                <q-expansion-item
+                  dark
+                  dense
+                  expand-separator
+                  icon="fact_check"
+                  :label="$t('createPage.acceptanceCriteria', { count: manualCriteria.length })"
+                  class="manual-expansion rounded-borders"
+                >
+                  <div class="q-pa-md column q-gutter-y-sm">
+                    <q-input
+                      v-model="newManualCriterion"
+                      dark
+                      dense
+                      outlined
+                      :placeholder="$t('createPage.addCriterion')"
+                      @keydown.enter.prevent="addManualCriterion"
+                    >
+                      <template #append>
+                        <q-btn
+                          flat
+                          dense
+                          round
+                          icon="add"
+                          color="indigo-4"
+                          :disable="!newManualCriterion.trim()"
+                          @click="addManualCriterion"
+                        >
+                          <q-tooltip>{{ $t('tooltip.addCriterion') }}</q-tooltip>
+                        </q-btn>
+                      </template>
+                    </q-input>
+                    <div v-if="manualCriteria.length" class="row q-gutter-xs">
+                      <q-chip
+                        v-for="(criterion, idx) in manualCriteria"
+                        :key="`criterion-${idx}`"
+                        dark
+                        dense
+                        removable
+                        color="grey-9"
+                        text-color="grey-3"
+                        @remove="removeManualCriterion(idx)"
+                      >
+                        {{ criterion }}
+                      </q-chip>
+                    </div>
+                  </div>
+                </q-expansion-item>
+              </div>
+            </div>
+          </q-card-section>
+        </q-card>
+
+        <q-card flat bordered class="create-section-card">
+          <q-card-section class="row items-start no-wrap q-gutter-md">
+            <q-avatar color="blue-grey-9" text-color="blue-grey-2" icon="account_tree" size="42px" />
+            <div>
+              <div class="text-subtitle1 text-weight-medium text-grey-2">{{ $t('createPage.sectionGit') }}</div>
+              <div class="text-body2 text-grey-6">{{ $t('createPage.sectionGitHint') }}</div>
+            </div>
+          </q-card-section>
+
+          <q-separator dark />
+
+          <q-card-section class="column q-gutter-y-md">
+            <div>
+              <div class="text-caption text-weight-medium text-grey-5 q-mb-sm">{{ $t('createPage.worktreeMode') }}</div>
+              <q-btn-toggle
+                :model-value="useExistingWorktree ? 'existing' : 'new'"
                 dense
-                borderless
-                class="bottom-select rounded-borders branch-type-select"
-                hide-dropdown-icon
-            >
-              <template #selected>
-              <span class="bottom-select-label row items-center no-wrap">
-                <q-icon name="account_tree" size="12px" color="grey-5" class="q-mr-xs" />
-                {{ branchType }}/
-                <q-icon name="expand_more" size="12px" color="grey-5" />
-              </span>
-              </template>
-              <q-tooltip>{{ $t('createPage.branchType') }}</q-tooltip>
-            </q-select>
-          </div>
+                spread
+                no-caps
+                unelevated
+                toggle-color="indigo-7"
+                color="grey-9"
+                text-color="grey-4"
+                :options="[
+                  { label: $t('createPage.worktreeNew'), value: 'new', icon: 'add_box' },
+                  { label: $t('createPage.worktreeExisting'), value: 'existing', icon: 'folder_open' },
+                ]"
+                @update:model-value="setWorktreeMode"
+              />
+            </div>
 
-          <div
+            <div class="responsive-fields row q-col-gutter-x-md">
+              <div class="col-12 col-md-6">
+                <q-select
+                  v-model="projectPath"
+                  :options="pathFilterOptions"
+                  dark
+                  dense
+                  outlined
+                  stack-label
+                  use-input
+                  fill-input
+                  hide-selected
+                  input-debounce="0"
+                  new-value-mode="add"
+                  :label="$t('createPage.projectLabel')"
+                  :placeholder="$t('createPage.projectPath')"
+                  :behavior="settingsStore.projectPaths.length > 0 ? 'menu' : 'dialog'"
+                  :option-label="(opt: string) => (opt ? projectNameForPath(opt) : '')"
+                  @filter="filterProjectPaths"
+                  @input-value="onProjectPathInput"
+                >
+                  <template #prepend><q-icon name="folder" /></template>
+                  <template #option="{ opt, itemProps }">
+                    <q-item v-bind="itemProps">
+                      <q-item-section>
+                        <q-item-label>{{ projectNameForPath(opt) }}</q-item-label>
+                        <q-item-label caption>{{ opt }}</q-item-label>
+                      </q-item-section>
+                    </q-item>
+                  </template>
+                  <template #no-option>
+                    <q-item><q-item-section class="text-grey-6">{{ $t('createPage.enterPath') }}</q-item-section></q-item>
+                  </template>
+                </q-select>
+              </div>
+              <div class="col-12 col-md-6">
+                <q-select
+                  v-model="branch"
+                  :options="branchFilterOptions"
+                  dark
+                  dense
+                  outlined
+                  stack-label
+                  use-input
+                  input-debounce="0"
+                  :label="$t('createPage.sourceBranch')"
+                  :loading="loadingBranches"
+                  :disable="!projectPath.trim() || loadingBranches"
+                  @filter="filterBranches"
+                >
+                  <template #prepend><q-icon name="call_split" /></template>
+                  <template #no-option>
+                    <q-item>
+                      <q-item-section class="text-grey-6">
+                        {{ projectPath.trim() ? $t('createPage.noBranches') : $t('createPage.enterPath') }}
+                      </q-item-section>
+                    </q-item>
+                  </template>
+                </q-select>
+              </div>
+            </div>
+
+            <div v-if="!useExistingWorktree" class="responsive-fields row q-col-gutter-x-md">
+              <div class="col-12 col-md-4">
+                <q-select
+                  v-model="branchType"
+                  :options="branchTypeOptions"
+                  dark
+                  dense
+                  outlined
+                  stack-label
+                  emit-value
+                  map-options
+                  :label="$t('createPage.branchType')"
+                >
+                  <template #prepend><q-icon name="account_tree" /></template>
+                </q-select>
+              </div>
+              <div class="col-12 col-md-8">
+                <q-field dark dense outlined stack-label readonly :label="$t('createPage.workingBranchPreview')">
+                  <template #control>
+                    <div class="self-center full-width no-outline text-grey-4 ellipsis" tabindex="0">
+                      {{ workingBranchPreview }}
+                    </div>
+                  </template>
+                  <template #prepend><q-icon name="fork_right" /></template>
+                </q-field>
+              </div>
+            </div>
+
+            <q-select
               v-if="useExistingWorktree"
-              class="col-12 col-md-4"
-          >
-            <!-- Existing-worktree picker (only when reuse toggle is on).
-               Sits before the source-branch picker; selecting a worktree
-               auto-fills `branch` with its `suggestedSourceBranch`, but the
-               user can still override that via the branch picker below. -->
-            <q-select
-                v-model="selectedWorktreePath"
-                :options="orphanWorktrees"
-                option-label="branch"
-                option-value="path"
-                emit-value
-                map-options
-                use-input
-                dense
-                borderless
-                class="bottom-select rounded-borders worktree-select"
-                hide-dropdown-icon
-                :loading="loadingOrphanWorktrees"
-                :disable="!projectPath.trim() || loadingOrphanWorktrees"
+              v-model="selectedWorktreePath"
+              :options="orphanWorktrees"
+              dark
+              dense
+              outlined
+              stack-label
+              option-label="branch"
+              option-value="path"
+              emit-value
+              map-options
+              use-input
+              :label="$t('createPage.worktreePickerLabel')"
+              :loading="loadingOrphanWorktrees"
+              :disable="!projectPath.trim() || loadingOrphanWorktrees"
             >
-              <template #selected>
-              <span class="bottom-select-label row items-center no-wrap">
-                <q-icon name="folder_open" size="12px" color="cyan-5" class="q-mr-xs" />
-                {{
-                  selectedWorktreePath
-                      ? orphanWorktrees.find((w) => w.path === selectedWorktreePath)?.branch ?? selectedWorktreePath
-                      : $t('createPage.worktreePickerLabel')
-                }}
-                <q-icon name="expand_more" size="12px" color="grey-5" />
-              </span>
-              </template>
+              <template #prepend><q-icon name="folder_open" color="cyan-5" /></template>
               <template #option="scope">
                 <q-item v-bind="scope.itemProps">
                   <q-item-section>
@@ -723,68 +457,245 @@
               </template>
               <template #no-option>
                 <q-item>
-                  <q-item-section class="text-grey-6 text-caption">
+                  <q-item-section class="text-grey-6">
                     {{ projectPath.trim() ? $t('createPage.noOrphanWorktrees') : $t('createPage.enterPath') }}
                   </q-item-section>
                 </q-item>
               </template>
             </q-select>
-          </div>
+          </q-card-section>
+        </q-card>
 
-          <div class="col-12 col-md-4">
-            <!-- Branch selector (source branch) -->
-            <q-select
-                v-model="branch"
-                :options="branchFilterOptions"
+        <q-card flat bordered class="create-section-card">
+          <q-card-section class="row items-start no-wrap q-gutter-md">
+            <q-avatar color="deep-purple-9" text-color="deep-purple-2" icon="smart_toy" size="42px" />
+            <div class="col">
+              <div class="text-subtitle1 text-weight-medium text-grey-2">{{ $t('createPage.sectionAgent') }}</div>
+              <div class="text-body2 text-grey-6">{{ $t('createPage.sectionAgentHint') }}</div>
+            </div>
+            <q-toggle
+              :model-value="autoLoop"
+              dense
+              color="amber-6"
+              icon="autorenew"
+              :label="$t('autoLoop.toggle')"
+              left-label
+              @update:model-value="toggleAutoLoop"
+            />
+          </q-card-section>
+
+          <q-separator dark />
+
+          <q-expansion-item
+            dark
+            dense
+            expand-separator
+            icon="tune"
+            :label="$t('createPage.configureAgent')"
+            header-class="agent-config-header"
+          >
+            <template #header>
+              <q-item-section avatar><q-icon name="tune" color="indigo-3" /></q-item-section>
+              <q-item-section>
+                <q-item-label>{{ $t('createPage.configureAgent') }}</q-item-label>
+                <q-item-label caption class="agent-summary row q-gutter-x-xs q-mt-xs">
+                  <q-chip dense color="grey-9" text-color="grey-3" icon="hub">
+                    {{ selectedEngine?.displayName ?? selectedEngineId }}
+                  </q-chip>
+                  <q-chip dense color="grey-9" text-color="grey-3">
+                    {{ modelOptions.find((item) => item.value === model)?.label ?? model }}
+                  </q-chip>
+                  <q-chip dense color="grey-9" text-color="grey-3" icon="psychology">
+                    {{ reasoningOptions.find((item) => item.value === reasoningEffort)?.label ?? reasoningEffort }}
+                  </q-chip>
+                  <q-chip dense color="grey-9" text-color="grey-3" :icon="agentPermissionModeIcon">
+                    {{ agentPermissionModeOptions.find((item) => item.value === agentPermissionMode)?.label ?? agentPermissionMode }}
+                  </q-chip>
+                </q-item-label>
+              </q-item-section>
+            </template>
+
+            <q-card-section class="responsive-fields row q-col-gutter-x-md q-pt-md">
+              <div v-if="engineSelectOptions.length > 0" class="col-12 col-sm-6">
+                <q-select
+                  v-model="selectedEngineId"
+                  :options="engineSelectOptions"
+                  dark
+                  dense
+                  outlined
+                  stack-label
+                  emit-value
+                  map-options
+                  option-value="value"
+                  option-label="label"
+                  :label="$t('engine.select')"
+                />
+              </div>
+              <div class="col-12 col-sm-6">
+                <q-select
+                  v-model="model"
+                  :options="modelOptions"
+                  dark
+                  dense
+                  outlined
+                  stack-label
+                  emit-value
+                  map-options
+                  option-value="value"
+                  option-label="label"
+                  :label="$t('engine.model')"
+                >
+                  <template #option="{ opt, itemProps }">
+                    <q-item v-bind="itemProps">
+                      <q-item-section>
+                        <q-item-label>{{ opt.label }}</q-item-label>
+                        <q-item-label caption>{{ opt.description }}</q-item-label>
+                      </q-item-section>
+                    </q-item>
+                  </template>
+                </q-select>
+              </div>
+              <div class="col-12 col-sm-6">
+                <q-select
+                  v-model="reasoningEffort"
+                  :options="reasoningOptions"
+                  dark
+                  dense
+                  outlined
+                  stack-label
+                  emit-value
+                  map-options
+                  option-value="value"
+                  option-label="label"
+                  :label="$t('engine.effort')"
+                >
+                  <template #option="{ opt, itemProps }">
+                    <q-item v-bind="itemProps">
+                      <q-item-section>
+                        <q-item-label>{{ opt.label }}</q-item-label>
+                        <q-item-label caption>{{ opt.description }}</q-item-label>
+                      </q-item-section>
+                    </q-item>
+                  </template>
+                </q-select>
+              </div>
+              <div class="col-12 col-sm-6">
+                <q-select
+                  v-model="agentPermissionMode"
+                  :options="agentPermissionModeOptions"
+                  dark
+                  dense
+                  outlined
+                  stack-label
+                  emit-value
+                  map-options
+                  option-value="value"
+                  option-label="label"
+                  :option-disable="isOptionDisabled"
+                  :disable="autoLoop"
+                  :label="$t('agentPermissionMode.label')"
+                  :hint="autoLoop ? $t('agentPermissionMode.autoLoopLocked') : undefined"
+                />
+              </div>
+            </q-card-section>
+          </q-expansion-item>
+
+          <transition name="slide">
+            <q-card-section v-if="autoLoop" class="auto-loop-panel column">
+              <div class="text-subtitle2 text-amber-3">{{ $t('autoLoop.startInMode') }}</div>
+              <q-btn-toggle
+                v-model="autoLoopSessionMode"
                 dense
-                borderless
-                class="bottom-select rounded-borders branch-select"
-                hide-dropdown-icon
-                use-input
-                input-debounce="0"
-                :loading="loadingBranches"
-                :disable="!projectPath.trim() || loadingBranches"
-                @filter="filterBranches"
-            >
-              <template #selected>
-              <span class="bottom-select-label row items-center no-wrap">
-                <q-icon name="call_split" size="12px" color="grey-5" class="q-mr-xs" />
-                {{ branch ?? $t('createPage.branch') }}
-                <q-icon name="expand_more" size="12px" color="grey-5" />
-              </span>
-              </template>
-              <template #no-option>
-                <q-item>
-                  <q-item-section class="text-grey-6 text-caption">
-                    {{ projectPath.trim() ? $t('createPage.noBranches') : $t('createPage.enterPath') }}
-                  </q-item-section>
-                </q-item>
-              </template>
-            </q-select>
-          </div>
-        </div>
-      </div>
+                size="sm"
+                spread
+                no-caps
+                unelevated
+                class="auto-loop-session-toggle"
+                toggle-color="indigo-7"
+                color="grey-9"
+                text-color="grey-4"
+                :options="[
+                  { label: $t('autoLoop.sessionMode.perTask'), value: 'per_task', icon: 'restart_alt' },
+                  { label: $t('autoLoop.sessionMode.continuous'), value: 'continuous', icon: 'link' },
+                ]"
+              />
+              <div class="responsive-fields row q-col-gutter-x-md">
+                <div class="col-12 col-sm-6">
+                  <q-select
+                    v-model="brainstormModel"
+                    :options="modelOptions"
+                    dark
+                    dense
+                    outlined
+                    stack-label
+                    emit-value
+                    map-options
+                    option-value="value"
+                    option-label="label"
+                    :label="$t('autoLoop.brainstormModelPrefix')"
+                  />
+                </div>
+                <div class="col-12 col-sm-6">
+                  <q-select
+                    v-model="brainstormReasoningEffort"
+                    :options="reasoningOptions"
+                    dark
+                    dense
+                    outlined
+                    stack-label
+                    emit-value
+                    map-options
+                    option-value="value"
+                    option-label="label"
+                    :label="$t('autoLoop.brainstormReasoningPrefix')"
+                  />
+                </div>
+              </div>
+            </q-card-section>
+          </transition>
+        </q-card>
 
-        <!-- Create button (centered, full-width row below the bottom bar) -->
-        <div class="row justify-center q-px-sm q-py-sm">
-          <q-btn
-            :label="$t('createPage.create')"
-            no-caps
-            unelevated
-            class="create-btn text-weight-bold rounded-borders"
-            :loading="submitting"
-            :disable="submitting || (useExistingWorktree && !selectedWorktreePath)"
-            @click="handleCreate"
-          />
-        </div>
-      </div>
+        <q-expansion-item
+          dark
+          dense
+          expand-separator
+          icon="settings"
+          :label="$t('createPage.advancedOptions')"
+          class="advanced-options rounded-borders"
+        >
+          <q-card-section>
+            <q-toggle
+              v-model="skipSetupScript"
+              dense
+              color="orange-5"
+              icon="play_disabled"
+              :label="$t('createPage.skipSetupScript')"
+              :disable="useExistingWorktree"
+            />
+          </q-card-section>
+        </q-expansion-item>
 
-      <!-- Hint text -->
-      <div class="create-hint text-center text-body2 q-mt-md text-grey-8">
-        {{ useNotion
-          ? $t('createPage.notionExtractHint')
-          : $t('createPage.notionImportHint')
-        }}
+        <q-card flat bordered class="create-actions-card">
+          <q-card-section class="row items-center justify-between q-gutter-md">
+            <div class="text-caption text-grey-6">
+              {{ useNotion ? $t('createPage.notionExtractHint') : $t('createPage.keyboardHint') }}
+            </div>
+            <div class="row q-gutter-sm create-actions">
+              <q-btn flat dense no-caps color="grey-5" :label="$t('common.cancel')" @click="router.back()" />
+              <q-btn
+                unelevated
+                dense
+                no-caps
+                color="indigo-6"
+                icon-right="arrow_forward"
+                :label="$t('createPage.createWorkspace')"
+                :loading="submitting"
+                :disable="submitting || (useExistingWorktree && !selectedWorktreePath)"
+                @click="handleCreate"
+              />
+            </div>
+          </q-card-section>
+        </q-card>
       </div>
     </div>
   </q-page>
@@ -1347,6 +1258,11 @@ function toggleExistingWorktree() {
   }
 }
 
+function setWorktreeMode(mode: string | number | null) {
+  const shouldUseExisting = mode === 'existing'
+  if (shouldUseExisting !== useExistingWorktree.value) toggleExistingWorktree()
+}
+
 watch(projectPath, () => {
   selectedWorktreePath.value = null
   if (useExistingWorktree.value) {
@@ -1595,6 +1511,15 @@ function branchNameFromNotionUrl(url: string): string {
   return raw.substring(0, 50) || `task-${Date.now()}`
 }
 
+const workingBranchPreview = computed(() => {
+  if (useNotion.value && isValidNotionUrl.value) {
+    return `${branchType.value}/${branchNameFromNotionUrl(getEffectiveNotionUrl())}`
+  }
+  const name = getFinalName()
+  const slug = name === 'workspace' ? t('createPage.branchNamePending') : toKebabCase(name)
+  return `${branchType.value}/${slug}`
+})
+
 // Form validation
 function validate(): string | null {
   if (useNotion.value && !isValidNotionUrl.value) return t('createPage.validationNotionUrl')
@@ -1743,184 +1668,81 @@ async function handleCreate() {
 
 <style lang="scss" scoped>
 .create-page {
-  background-color: #1a1a2e;
   min-height: 100%;
-  padding: 48px 24px;
+  padding: 48px 24px 80px;
+  background: #1a1a2e;
 }
 
 .create-inner {
   width: 100%;
-  max-width: 700px;
+  max-width: 960px;
 }
 
 .create-title {
-  font-size: 24px;
-  line-height: 1.3;
+  font-size: 30px;
+  line-height: 1.2;
+  letter-spacing: -0.02em;
 }
 
-.create-card {
-  background: #222244;
-  border: 1px solid #444;
-  overflow: hidden;
+.create-sections {
+  gap: 24px;
 }
 
-.card-top-bar {
-  min-height: 36px;
-  background: #1e1e3a;
-}
+.responsive-fields {
+  row-gap: 16px;
 
-.card-name-wrap {
-  padding: 8px 16px 4px;
-  background: #222244;
-
-  :deep(.q-field__control) {
-    padding: 0;
-    height: 32px;
-    min-height: 32px;
+  &--sm {
+    row-gap: 8px;
   }
+}
 
-  :deep(input) {
-    font-size: 15px;
-    font-weight: 500;
-    color: #e0e0e0;
-
-    &::placeholder {
-      color: #555;
-    }
-  }
+.create-section-card,
+.create-actions-card {
+  background: #22223f;
+  border-color: rgba(255, 255, 255, 0.12);
 }
 
 .card-textarea-wrap {
-  background: #222244;
-  position: relative; // anchor for the slash-autocomplete popup
+  position: relative;
 }
 
-// Slash-autocomplete popup positioning. CreatePage has plenty of empty
-// space below the textarea, so we float the dropdown DOWNWARDS (unlike
-// ChatInput where it must go up because the textarea sits at the bottom
-// of the viewport). Anchored 4 px under the textarea, flush with its
-// horizontal padding.
+.create-textarea {
+  :deep(.q-field__control) {
+    min-height: 220px;
+  }
+
+  :deep(textarea) {
+    min-height: 180px !important;
+    line-height: 1.6;
+    resize: vertical;
+  }
+}
+
 .create-slash-popup {
   position: absolute;
   top: calc(100% + 4px);
   left: 12px;
   right: 12px;
-  z-index: 9999;
+  z-index: 20;
 }
 
-.repo-select {
-  min-width: 160px;
-  max-width: 260px;
-
-  :deep(.q-field__prepend) {
-    padding-top: 0;
-    height: auto;
-    align-items: center;
-  }
-}
-
-.create-textarea {
-  width: 100%;
-  padding: 12px 16px 4px;
-  color: #d0d0d0;
-
-  :deep(.q-field__control) {
-    padding: 0;
-  }
-
-  :deep(textarea) {
-    color: #d0d0d0;
-    font-size: 14px;
-    line-height: 1.6;
-    resize: none;
-    min-height: 100px;
-
-    &::placeholder {
-      color: #666;
-    }
-  }
-}
-
-.voice-btn--recording {
-  animation: voice-pulse 1.1s ease-in-out infinite;
-}
-
-@keyframes voice-pulse {
-  0% {
-    transform: scale(1);
-    opacity: 1;
-  }
-  50% {
-    transform: scale(1.06);
-    opacity: 0.86;
-  }
-  100% {
-    transform: scale(1);
-    opacity: 1;
-  }
-}
-
-.notion-toggle-btn {
-  padding: 2px 10px;
-  background: #333;
-}
-
-.notion-url-wrap {
-  background: #1e1e3a;
-  padding: 8px 0 0;
-}
-
-.notion-url-input {
-  padding: 0 12px;
-
-  :deep(.q-field__control) {
-    padding: 0;
-    height: 36px;
-    min-height: 36px;
-  }
-
-  :deep(input) {
-    font-size: 13px;
-    color: #d0d0d0;
-
-    &::placeholder {
-      color: #555;
-      font-size: 12px;
-    }
-  }
-}
-
-.notion-error {
-  padding-bottom: 6px;
-}
-
-.notion-valid {
-  padding-bottom: 6px;
-}
-
-.notion-peek-choice {
-  padding-top: 4px;
+.source-panel {
+  background: #1e1e38;
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .peek-card {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 12px;
-  background: rgba(255, 255, 255, 0.03);
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  border-radius: 8px;
-  cursor: pointer;
-  text-align: left;
-  color: #e0e0e0;
-  font-family: inherit;
-  font-size: inherit;
-  transition: background 0.15s, border-color 0.15s, transform 0.1s;
+  color: #ddd;
+  background: rgba(255, 255, 255, 0.025);
+  border-color: rgba(255, 255, 255, 0.1);
+  transition:
+    background 0.15s ease,
+    border-color 0.15s ease,
+    transform 0.1s ease;
 
   &:hover {
     background: rgba(255, 255, 255, 0.06);
-    border-color: rgba(108, 99, 255, 0.4);
+    border-color: rgba(129, 140, 248, 0.5);
   }
 
   &:active {
@@ -1928,303 +1750,140 @@ async function handleCreate() {
   }
 
   &--active {
-    background: rgba(108, 99, 255, 0.12);
-    border-color: rgba(108, 99, 255, 0.85);
-    box-shadow: 0 0 0 1px rgba(108, 99, 255, 0.4);
+    background: rgba(99, 102, 241, 0.14);
+    border-color: #818cf8;
+    box-shadow: inset 0 0 0 1px rgba(129, 140, 248, 0.35);
 
     .peek-card-icon {
-      color: #8a82ff;
-    }
-
-    .peek-card-title {
-      color: #ffffff;
+      color: #a5b4fc;
     }
   }
 }
 
 .peek-card-icon {
   flex-shrink: 0;
-  color: #999;
-}
-
-.peek-card-text {
-  flex: 1;
-  min-width: 0;
-  line-height: 1.25;
-}
-
-.peek-card-title {
-  font-size: 12px;
-  font-weight: 600;
-  color: #d0d0d0;
-}
-
-.peek-card-desc {
-  font-size: 10.5px;
   color: #888;
-  margin-top: 2px;
 }
 
-.peek-card-check {
-  flex-shrink: 0;
-}
+.manual-expansion,
+.advanced-options {
+  overflow: hidden;
+  background: #1e1e38;
+  border: 1px solid rgba(255, 255, 255, 0.1);
 
-.sentry-toggle-btn {
-  padding: 2px 10px;
-  background: #333;
-}
-
-.sentry-url-wrap {
-  background: #1e1e3a;
-  padding: 8px 0 0;
-}
-
-.sentry-url-input {
-  padding: 0 12px;
-
-  :deep(.q-field__control) {
-    padding: 0;
-    height: 36px;
-    min-height: 36px;
-  }
-
-  :deep(input) {
-    font-size: 13px;
-    color: #d0d0d0;
-
-    &::placeholder {
-      color: #555;
-      font-size: 12px;
-    }
+  :deep(.q-expansion-item__content) {
+    background: #19192f;
   }
 }
 
-.sentry-error {
-  padding-bottom: 6px;
+.manual-expansion {
+  :deep(.q-chip) {
+    max-width: 100%;
+    height: auto;
+    min-height: 32px;
+  }
+
+  :deep(.q-chip__content) {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
 }
 
-.sentry-valid {
-  padding-bottom: 6px;
+.auto-loop-panel {
+  gap: 16px;
+  background: rgba(245, 158, 11, 0.06);
+  border-top: 1px solid rgba(245, 158, 11, 0.22);
 }
 
-// Slide transition for Notion URL
+.auto-loop-session-toggle {
+  :deep(.q-btn) {
+    min-height: 32px;
+    padding-top: 4px;
+    padding-bottom: 4px;
+  }
+}
+
+:deep(.agent-config-header) {
+  min-height: 56px;
+  padding-top: 6px;
+  padding-bottom: 8px;
+}
+
+.agent-summary {
+  row-gap: 4px;
+
+  :deep(.q-chip) {
+    margin: 0;
+  }
+}
+
+.create-actions-card {
+  position: sticky;
+  bottom: 16px;
+  z-index: 10;
+  box-shadow: 0 10px 36px rgba(0, 0, 0, 0.38);
+}
+
+.voice-btn--recording {
+  animation: voice-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes voice-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+
+  50% {
+    transform: scale(1.06);
+    opacity: 0.86;
+  }
+}
+
 .slide-enter-active,
 .slide-leave-active {
-  transition: all 0.2s ease;
   overflow: hidden;
+  transition:
+    max-height 0.2s ease,
+    opacity 0.2s ease;
 }
+
 .slide-enter-from,
 .slide-leave-to {
   max-height: 0;
   opacity: 0;
 }
+
 .slide-enter-to,
 .slide-leave-from {
-  max-height: 120px;
+  max-height: 900px;
   opacity: 1;
 }
 
-.card-bottom-bar {
-  background: #1e1e3a;
-}
-
-.skip-setup-btn {
-  font-size: 11px;
-  padding: 2px 10px;
-  min-height: 28px;
-}
-.skip-setup-btn :deep(.q-btn__content) {
-  gap: 4px;
-}
-.skip-setup-btn :deep(.q-icon) {
-  font-size: 14px;
-}
-
-// Width split is handled by Quasar's grid (col-12 / col-md-4 on each
-// selector). Just truncate long labels instead of wrapping them.
-.bottom-row-git {
-  .bottom-select-label {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-}
-
-.bottom-row-git .bottom-select.repo-select :deep(input) {
-  font-size: 11px;
-  color: #bbb;
-  padding: 0 4px;
-}
-.bottom-row-git .bottom-select.repo-select :deep(input::placeholder) {
-  color: #666;
-  font-style: italic;
-}
-
-.bottom-select {
-  background: #333;
-  padding: 0 6px;
-  //min-width: 60px;
-  height: 28px;
-
-  :deep(.q-field__control) {
-    height: 28px;
-    min-height: 28px;
-    padding: 0;
+@media (max-width: 599px) {
+  .create-page {
+    padding: 28px 12px 56px;
   }
 
-  :deep(.q-field__native) {
-    padding: 0;
-    min-height: unset;
-  }
-}
-
-.auto-loop-brainstorm-panel {
-  background: rgba(255, 193, 7, 0.08);
-  border: 1px solid rgba(255, 193, 7, 0.28);
-  border-radius: 4px;
-  padding: 4px 6px;
-}
-
-.auto-loop-session-panel {
-  background: rgba(79, 70, 229, 0.1);
-  border: 1px solid rgba(99, 102, 241, 0.3);
-  border-radius: 4px;
-  padding: 3px 5px;
-}
-
-.auto-loop-session-label {
-  color: #a5b4fc;
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.auto-loop-brainstorm-label {
-  color: #f6c343;
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.bottom-select-label {
-  font-size: 11px;
-  color: #bbb;
-  gap: 2px;
-}
-
-.bottom-sep {
-  color: #555;
-  font-size: 12px;
-  line-height: 1;
-  padding: 0 2px;
-}
-
-.repo-path-wrap {
-  background: #333;
-  border-radius: 6px;
-  padding: 0 8px;
-  height: 28px;
-}
-
-.repo-input {
-  min-width: 140px;
-
-  :deep(.q-field__control) {
-    height: 28px;
-    min-height: 28px;
-    padding: 0;
+  .create-title {
+    font-size: 26px;
   }
 
-  :deep(input) {
-    font-size: 11px;
-    color: #bbb;
+  .create-actions-card {
+    bottom: 8px;
 
-    &::placeholder {
-      color: #666;
-      font-size: 11px;
+    :deep(.q-card__section) {
+      align-items: stretch;
     }
   }
-}
 
-.branch-select {
-  min-width: 80px;
-}
+  .create-actions {
+    width: 100%;
 
-.create-btn {
-  background: #4f46e5;
-  color: #fff;
-  font-size: 13px;
-  height: 32px;
-  min-width: 220px;
-  padding: 0 32px;
-
-  :deep(.q-btn__content) {
-    height: 32px;
-  }
-}
-
-.create-hint {
-  line-height: 1.5;
-}
-
-// Fade transition for Notion badge
-.fade-enter-active,
-.fade-leave-active {
-  transition: opacity 0.2s ease;
-}
-.fade-enter-from,
-.fade-leave-to {
-  opacity: 0;
-}
-
-// Manual tasks / criteria sections
-.manual-hint {
-  background: #1e1e3a;
-  line-height: 1.4;
-}
-
-.manual-expansion {
-  background: #1e1e3a;
-  border: 1px solid #333;
-  border-radius: 4px;
-  margin-top: 6px;
-  overflow: hidden;
-
-  :deep(.manual-expansion-header) {
-    min-height: 32px;
-    padding: 4px 10px;
-    font-size: 12px;
-  }
-
-  :deep(.q-expansion-item__content) {
-    background: #1a1a2e;
-  }
-}
-
-.manual-section-body {
-  background: #1a1a2e;
-}
-
-.manual-input {
-  :deep(.q-field__control) {
-    padding: 0;
-    height: 26px;
-    min-height: 26px;
-  }
-
-  :deep(input) {
-    font-size: 12px;
-    color: #e0e0e0;
-
-    &::placeholder {
-      color: #555;
+    .q-btn:last-child {
+      flex: 1;
     }
-  }
-}
-
-.manual-item {
-  border-top: 1px solid rgba(255, 255, 255, 0.04);
-
-  &:first-child {
-    border-top: none;
   }
 }
 </style>

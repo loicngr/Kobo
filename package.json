@@ -1,6 +1,6 @@
 {
   "name": "@loicngr/kobo",
-  "version": "1.11.9",
+  "version": "1.11.10",
   "description": "Kōbō — multi-workspace agent manager for Claude Code. Orchestrates isolated git worktrees with dev servers, Notion integration, and MCP tools.",
   "type": "module",
   "license": "GPL-3.0-or-later",
@@ -45,7 +45,7 @@
     "quasar"
   ],
   "engines": {
-    "node": ">=20"
+    "node": ">=24.15.0"
   },
   "scripts": {
     "dev": "KOBO_ENFORCE_LOCAL_HOME=1 KOBO_HOME=./data PORT=3300 tsx watch src/server/index.ts",
@@ -54,7 +54,7 @@
     "build:client": "cd src/client && npx quasar build -m pwa",
     "build:server": "npx tsc && chmod +x dist/server/index.js",
     "build": "npm run build:client && npm run build:server",
-    "install-all": "npm install && cd src/client && npm install",
+    "install-all": "npm install && cd src/client && npm install && cd src-pwa && npm install",
     "start": "node dist/server/index.js",
     "test": "vitest run --config vitest.config.ts --root .",
     "test:watch": "vitest --config vitest.config.ts --root .",
@@ -67,32 +67,32 @@
     "prepublishOnly": "npm run build"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.183",
-    "@emnapi/core": "^1.11.1",
-    "@emnapi/runtime": "^1.11.1",
-    "@hono/node-server": "^2.0.11",
-    "@modelcontextprotocol/sdk": "^1.29.0",
-    "@openai/codex": "^0.145.0",
-    "better-sqlite3": "^12.11.1",
-    "cron-parser": "^5.5.0",
-    "hono": "^4.12.26",
-    "nanoid": "^5.1.14",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.226",
+    "@emnapi/core": "^1.11.3",
+    "@emnapi/runtime": "^1.11.3",
+    "@hono/node-server": "^2.1.0",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "@openai/codex": "^0.147.0",
+    "better-sqlite3": "^13.0.3",
+    "cron-parser": "^5.7.0",
+    "hono": "^4.13.1",
+    "nanoid": "^6.0.1",
     "node-pty": "^1.1.0",
-    "ws": "^8.21.0"
+    "ws": "^8.21.3"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.4.10",
-    "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^26.0.0",
+    "@biomejs/biome": "2.5.7",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^26.2.0",
     "@types/ws": "^8.18.1",
-    "@vitest/runner": "^4.1.9",
-    "concurrently": "^10.0.3",
-    "tsx": "^4.22.4",
+    "@vitest/runner": "^4.1.10",
+    "concurrently": "^10.0.4",
+    "tsx": "^4.23.11",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.9"
+    "vitest": "^4.1.10"
   },
   "overrides": {
-    "@hono/node-server": "^2.0.11",
+    "@hono/node-server": "^2.1.0",
     "shell-quote": "^1.10.0"
   }
 }

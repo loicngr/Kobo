@@ -9,8 +9,8 @@
 #   make release     # CI gates + build + version-not-yet-published guard
 #   make test        # backend + client tests only
 #   make lint        # biome lint only
-#   make audit       # npm audit on both trees
-#   make install     # `npm ci` on both trees (CI-equivalent install)
+#   make audit       # npm audit on all three trees
+#   make install     # `npm ci` on all three trees (CI-equivalent install)
 #   make build       # production build (client + server)
 #   make clean       # rm dist/
 
@@ -19,6 +19,7 @@ SHELL := /usr/bin/env bash
 .SHELLFLAGS := -eu -o pipefail -c
 
 CLIENT_DIR := src/client
+PWA_DIR := $(CLIENT_DIR)/src-pwa
 PACKAGE_NAME := @loicngr/kobo
 
 .DEFAULT_GOAL := help
@@ -30,8 +31,8 @@ help:
 	@echo "Targets:"
 	@echo "  make ci         Run the full PR pipeline (install + audit + lint + tsc + tests)"
 	@echo "  make release    Run CI + build + verify version is not already published"
-	@echo "  make install    npm ci on both trees"
-	@echo "  make audit      npm audit --audit-level=high on both trees"
+	@echo "  make install    npm ci on all three trees"
+	@echo "  make audit      npm audit --audit-level=high on all three trees"
 	@echo "  make lint       biome check"
 	@echo "  make typecheck  tsc --noEmit (backend)"
 	@echo "  make test       backend + client vitest suites"
@@ -42,8 +43,8 @@ help:
 
 # ── Install ────────────────────────────────────────────────────────────────────
 
-.PHONY: install install-root install-client
-install: install-root install-client
+.PHONY: install install-root install-client install-pwa
+install: install-root install-client install-pwa
 
 install-root:
 	npm ci
@@ -51,33 +52,36 @@ install-root:
 install-client:
 	cd $(CLIENT_DIR) && npm ci
 
+install-pwa:
+	cd $(PWA_DIR) && npm ci
+
 # ── Audit (mirrors CI `--audit-level=high`) ────────────────────────────────────
 
-.PHONY: audit audit-root audit-client
-audit: audit-root audit-client
+.PHONY: audit audit-root audit-client audit-pwa
+audit: audit-root audit-client audit-pwa
 
 audit-root:
 	npm audit --audit-level=high
 
 audit-client:
-	# --omit=dev: the remaining high-severity findings here are all
-	# transitive dev/build tooling (@vue/test-utils, @quasar/app-vite's
-	# archiver chain) — not shipped in the production bundle. Fixing them
-	# requires major breaking bumps (@quasar/app-vite 2→3) that broke the
-	# client build/typecheck when tried; scope the gate to what actually
-	# ships instead of forcing that upgrade blind.
-	# The high-severity gate is the CI contract; keep the JSON report out of
-	# the normal successful CI output (it is available on demand via `make audit`).
-	cd $(CLIENT_DIR) && npm audit --omit=dev --audit-level=high --json >/dev/null
+	cd $(CLIENT_DIR) && npm audit --audit-level=high
+
+audit-pwa:
+	cd $(PWA_DIR) && npm audit --audit-level=high
 
 # ── Lint / typecheck ───────────────────────────────────────────────────────────
 
-.PHONY: lint typecheck
+.PHONY: lint typecheck typecheck-back typecheck-front
 lint:
 	npm run lint
 
-typecheck:
+typecheck: typecheck-back typecheck-front
+
+typecheck-back:
 	npx tsc --noEmit
+
+typecheck-front:
+	cd $(CLIENT_DIR) && npm run type-check
 
 # ── Tests ──────────────────────────────────────────────────────────────────────
 
@@ -104,7 +108,7 @@ clean:
 
 # Mirrors `.github/workflows/ci.yml` step-for-step.
 .PHONY: ci
-ci: audit lint typecheck test
+ci: install audit lint typecheck test
 	@echo ""
 	@echo "✓ CI pipeline passed locally."
 

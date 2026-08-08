@@ -25,5 +25,6 @@ describe('getWhipRunningSessionId', () => {
       ],
     ],
   ])('refuses an absent or ambiguous running session: %j', (sessions) =>
-    expect(getWhipRunningSessionId('ws-1', sessions)).toBeNull())
+    expect(getWhipRunningSessionId('ws-1', sessions)).toBeNull(),
+  )
 })

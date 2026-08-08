@@ -1,5 +1,6 @@
-import { spawnSync } from 'node:child_process'
+import { execFile as execFileCb } from 'node:child_process'
 import fs from 'node:fs'
+import { promisify } from 'node:util'
 import { Hono } from 'hono'
 import { getDb } from '../db/index.js'
 import { SCHEMA_VERSION } from '../db/migrations.js'
@@ -10,6 +11,7 @@ import { slugifyProjectName } from '../utils/project-slug.js'
 import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 
 const app = new Hono()
+const execFileAsync = promisify(execFileCb)
 
 interface WorktreeCheck {
   workspaceId: string
@@ -94,22 +96,22 @@ interface HealthReport {
   }
 }
 
-function checkClaudeCli(): { available: boolean; version: string | null } {
+async function checkCli(binary: string): Promise<{ available: boolean; version: string | null }> {
   try {
-    const r = spawnSync('claude', ['--version'], { encoding: 'utf-8' })
-    if (r.error || r.status !== 0) return { available: false, version: null }
-    return { available: true, version: (r.stdout ?? '').trim() || null }
+    const { stdout } = await execFileAsync(binary, ['--version'], { encoding: 'utf-8', timeout: 2_000 })
+    return { available: true, version: stdout.trim() || null }
   } catch {
     return { available: false, version: null }
   }
 }
 
-function checkCodexCli(): { available: boolean; version: string | null } {
+function checkClaudeCli(): Promise<{ available: boolean; version: string | null }> {
+  return checkCli('claude')
+}
+
+async function checkCodexCli(): Promise<{ available: boolean; version: string | null }> {
   try {
-    const bin = resolveCodexBinary()
-    const r = spawnSync(bin, ['--version'], { encoding: 'utf-8' })
-    if (r.error || r.status !== 0) return { available: false, version: null }
-    return { available: true, version: (r.stdout ?? '').trim() || null }
+    return await checkCli(resolveCodexBinary())
   } catch {
     return { available: false, version: null }
   }
@@ -133,10 +135,11 @@ function safeFileSize(p: string): number | null {
 }
 
 // GET /api/health/report — detailed health diagnostics for the Health panel.
-app.get('/report', (c) => {
+app.get('/report', async (c) => {
   const db = getDb()
   const dbPath = getDbPath()
   const home = getKoboHome()
+  const cliChecks = Promise.all([checkClaudeCli(), checkCodexCli()])
 
   // DB schema version
   const row = db.prepare('SELECT MAX(version) as v FROM schema_migrations').get() as { v: number | null }
@@ -250,6 +253,7 @@ app.get('/report', (c) => {
     n: number
   }
 
+  const [claudeCli, codexCli] = await cliChecks
   const report: HealthReport = {
     version: getPackageVersion(),
     koboHome: home,
@@ -260,8 +264,8 @@ app.get('/report', (c) => {
       currentSchemaVersion: SCHEMA_VERSION,
     },
     settings: { schemaVersion: SETTINGS_SCHEMA_VERSION },
-    claudeCli: checkClaudeCli(),
-    codexCli: checkCodexCli(),
+    claudeCli,
+    codexCli,
     workspaces: {
       total: settingsRow.n,
       archived: archivedRow.n,

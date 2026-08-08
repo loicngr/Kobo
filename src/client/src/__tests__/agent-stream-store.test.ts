@@ -31,4 +31,17 @@ describe('agent-stream store', () => {
     store.clear('w1')
     expect(store.eventsFor('w1')).toEqual([])
   })
+
+  it('bounds live append history while retaining a cursor for older pagination', async () => {
+    const { MAX_LIVE_EVENTS_PER_WORKSPACE, useAgentStreamStore } = await import('../stores/agent-stream.js')
+    const store = useAgentStreamStore()
+    for (let i = 0; i <= MAX_LIVE_EVENTS_PER_WORKSPACE; i++) {
+      store.append('w1', { kind: 'message:end', messageId: `m-${i}` }, undefined, `event-${i}`)
+    }
+
+    expect(store.eventsFor('w1')).toHaveLength(MAX_LIVE_EVENTS_PER_WORKSPACE)
+    expect(store.eventIdsFor('w1')[0]).toBe('event-1')
+    expect(store.oldestIdFor('w1')).toBe('event-1')
+    expect(store.hasMoreOlderFor('w1')).toBe(true)
+  })
 })

@@ -1,4 +1,4 @@
-import { type ChildProcess, execSync, spawn } from 'node:child_process'
+import { type ChildProcess, execFile, spawn } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { getProjectSettings } from './settings-service.js'
@@ -11,6 +11,19 @@ import { getWorkspace, updateDevServerStatus } from './workspace-service.js'
 function cleanEnv(): Record<string, string | undefined> {
   const { PORT, SERVER_PORT, ...rest } = process.env
   return rest
+}
+
+function runCommand(
+  command: string,
+  args: string[],
+  options: { cwd?: string; env?: NodeJS.ProcessEnv; timeout?: number } = {},
+): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { ...options, encoding: 'utf-8', maxBuffer: 10 * 1024 * 1024 }, (err, stdout) => {
+      if (err) reject(err)
+      else resolve(stdout)
+    })
+  })
 }
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -97,10 +110,15 @@ export function resolveInstance(projectPath: string, workingBranch: string): Ins
     const content = readFileSync(path.join(instancesDir, file), 'utf-8')
     const parsed = parseEnvFile(content)
 
-    if (parsed.INSTANCE_NAME && parsed.INSTANCE_NAME.toLowerCase() === sanitized) {
+    if (
+      parsed.INSTANCE_NAME &&
+      parsed.INSTANCE_NAME.toLowerCase() === sanitized &&
+      parsed.PROJECT_NAME &&
+      /^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(parsed.PROJECT_NAME)
+    ) {
       return {
         instanceName: parsed.INSTANCE_NAME,
-        projectName: parsed.PROJECT_NAME ?? '',
+        projectName: parsed.PROJECT_NAME,
         httpPort: parsed.HTTP_PORT ?? '',
       }
     }
@@ -109,19 +127,21 @@ export function resolveInstance(projectPath: string, workingBranch: string): Ins
   return null
 }
 
+function containerBelongsToProject(containerName: string, projectName: string): boolean {
+  const name = containerName.toLowerCase()
+  const project = projectName.toLowerCase()
+  return name === project || name.startsWith(`${project}-`) || name.startsWith(`${project}_`)
+}
+
 // ── Docker helpers ─────────────────────────────────────────────────────────────
 
 /**
  * List all running Docker container names.
- * Note: uses execSync with shell because docker ps --format requires
- * Go template syntax with `{{}}`. Input is a static string, no injection risk.
+ * Uses execFile so Docker inspection cannot block the Node event loop.
  */
-export function listRunningContainers(): string[] {
+export async function listRunningContainers(): Promise<string[]> {
   try {
-    const output = execSync('docker ps --format "{{.Names}}"', {
-      encoding: 'utf-8',
-      timeout: 10000,
-    })
+    const output = await runCommand('docker', ['ps', '--format', '{{.Names}}'], { timeout: 10_000 })
     return output
       .split('\n')
       .map((s) => s.trim())
@@ -142,7 +162,11 @@ export function listRunningContainers(): string[] {
  * in `docker ps` yet. This prevents the UI from flashing to `'stopped'` during
  * long build phases.
  */
-export function getStatus(projectPath: string, workingBranch: string, workspaceId?: string): DevServerStatus {
+export async function getStatus(
+  projectPath: string,
+  workingBranch: string,
+  workspaceId?: string,
+): Promise<DevServerStatus> {
   const config = resolveInstance(projectPath, workingBranch)
 
   if (!config) {
@@ -156,8 +180,8 @@ export function getStatus(projectPath: string, workingBranch: string, workspaceI
     }
   }
 
-  const running = listRunningContainers()
-  const matching = running.filter((name) => name.toLowerCase().includes(config.projectName.toLowerCase()))
+  const running = await listRunningContainers()
+  const matching = running.filter((name) => containerBelongsToProject(name, config.projectName))
 
   if (matching.length > 0) {
     return {
@@ -246,9 +270,14 @@ export function startDevServer(workspaceId: string): DevServerStatus {
 
   proc.on('exit', (code) => {
     trackedProcesses.delete(workspaceId)
-    const currentStatus = getStatus(workspace.projectPath, workspace.workingBranch)
-    updateDevServerStatus(workspaceId, currentStatus.status)
-    emitEphemeral(workspaceId, 'devserver:status', currentStatus)
+    void getStatus(workspace.projectPath, workspace.workingBranch)
+      .then((currentStatus) => {
+        updateDevServerStatus(workspaceId, currentStatus.status)
+        emitEphemeral(workspaceId, 'devserver:status', currentStatus)
+      })
+      .catch((err) => {
+        console.error(`[dev-server] Failed to refresh status for workspace ${workspaceId}:`, err)
+      })
     if (code !== 0) {
       console.error(`[dev-server] Process exited with code ${code} for workspace ${workspaceId}`)
     }
@@ -288,7 +317,7 @@ export function startDevServer(workspaceId: string): DevServerStatus {
 /**
  * Stop the dev-server for a workspace.
  */
-export function stopDevServer(workspaceId: string): DevServerStatus {
+export async function stopDevServer(workspaceId: string): Promise<DevServerStatus> {
   const workspace = getWorkspace(workspaceId)
   if (!workspace) {
     throw new Error(`Workspace '${workspaceId}' not found`)
@@ -317,18 +346,15 @@ export function stopDevServer(workspaceId: string): DevServerStatus {
   const settings = getProjectSettings(workspace.projectPath)
 
   if (settings?.devServer.stopCommand) {
-    // Custom stop script — run synchronously with instance context in env
     try {
-      execSync(settings.devServer.stopCommand, {
+      await runCommand('bash', ['-c', settings.devServer.stopCommand], {
         cwd,
         env: {
           ...cleanEnv(),
           INSTANCE: instanceName,
           PROJECT_NAME: config?.projectName ?? '',
         },
-        encoding: 'utf-8',
-        timeout: 30000,
-        shell: 'bash',
+        timeout: 30_000,
       })
     } catch (err) {
       console.error(`[dev-server] Stop command failed:`, err instanceof Error ? err.message : err)
@@ -339,11 +365,7 @@ export function stopDevServer(workspaceId: string): DevServerStatus {
   // (handles cases where custom stop command doesn't use -p flag)
   if (config?.projectName) {
     try {
-      execSync(`docker compose -p "${config.projectName}" down`, {
-        cwd: cwd,
-        encoding: 'utf-8',
-        timeout: 30000,
-      })
+      await runCommand('docker', ['compose', '-p', config.projectName, 'down'], { cwd, timeout: 30_000 })
     } catch {
       // May already be stopped by the custom command — ignore
     }
@@ -367,10 +389,9 @@ export function stopDevServer(workspaceId: string): DevServerStatus {
 
 /**
  * Get logs from running dev-server containers for a workspace.
- * Note: uses execSync for `docker logs` — container names come from
- * `docker ps` output (not user input), so no injection risk.
+ * Docker log reads run concurrently without blocking the Node event loop.
  */
-export function getDevServerLogs(workspaceId: string, tail = 200): string {
+export async function getDevServerLogs(workspaceId: string, tail = 200): Promise<string> {
   const workspace = getWorkspace(workspaceId)
   if (!workspace) {
     return 'Workspace not found'
@@ -381,27 +402,24 @@ export function getDevServerLogs(workspaceId: string, tail = 200): string {
     return 'No dev-server instance found'
   }
 
-  const running = listRunningContainers()
-  const matching = running.filter((name) => name.toLowerCase().includes(config.projectName.toLowerCase()))
+  const running = await listRunningContainers()
+  const matching = running.filter((name) => containerBelongsToProject(name, config.projectName))
 
   if (matching.length === 0) {
     return 'No running containers found'
   }
 
-  const outputs: string[] = []
-
-  for (const container of matching) {
-    try {
-      const logs = execSync(`docker logs --tail ${tail} ${container}`, {
-        encoding: 'utf-8',
-        timeout: 10000,
-      })
-      outputs.push(`=== ${container} ===\n${logs}`)
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err)
-      outputs.push(`=== ${container} ===\n[Error fetching logs: ${message}]`)
-    }
-  }
+  const outputs = await Promise.all(
+    matching.map(async (container) => {
+      try {
+        const logs = await runCommand('docker', ['logs', '--tail', String(tail), container], { timeout: 10_000 })
+        return `=== ${container} ===\n${logs}`
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        return `=== ${container} ===\n[Error fetching logs: ${message}]`
+      }
+    }),
+  )
 
   return outputs.join('\n\n')
 }

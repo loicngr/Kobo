@@ -1,5 +1,5 @@
 # ── Build stage ──────────────────────────────────────────────────────────────
-FROM node:24-slim AS build
+FROM node:24.19.0-slim AS build
 WORKDIR /app
 
 # node-pty ships no prebuilt binary for this platform and compiles from
@@ -17,13 +17,14 @@ RUN npm ci
 # (quasar.config.js etc.), not just package.json, so copy sources first.
 COPY . .
 RUN cd src/client && npm ci
+RUN cd src/client/src-pwa && npm ci
 
 # Build (mirrors `npm run build`: build:client → quasar build,
 # build:server → tsc).
 RUN npm run build
 
 # ── Runtime stage ────────────────────────────────────────────────────────────
-FROM node:24-slim AS runtime
+FROM node:24.19.0-slim AS runtime
 WORKDIR /app
 
 # OS-level tools the agents and forge CLIs need, plus a Docker CLI (talks to

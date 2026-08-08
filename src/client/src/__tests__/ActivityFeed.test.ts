@@ -143,6 +143,53 @@ describe('ActivityFeed.vue', () => {
     expect(fetch).toHaveBeenCalledWith('/api/workspaces/ws-1/events?before=cursor-1&limit=200&session=sess-1')
   })
 
+  it('keeps the reading position when older events are prepended to an already hydrated stream', async () => {
+    const workspaceStore = useWorkspaceStore()
+    const streamStore = useAgentStreamStore()
+    workspaceStore.selectedWorkspaceId = 'ws-1'
+    workspaceStore.selectedSessionId = null
+    streamStore.reset(
+      'ws-1',
+      [{ kind: 'message:text', messageId: 'current', text: 'current', streaming: false }],
+      ['2026-01-01T00:00:02Z'],
+      { oldestId: 'cursor-2', hasMoreOlder: true, sessionIds: [null], eventIds: ['cursor-2'] },
+    )
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        events: [
+          {
+            id: 'cursor-1',
+            workspaceId: 'ws-1',
+            type: 'agent:event',
+            payload: { kind: 'message:text', messageId: 'older', text: 'older', streaming: false },
+            sessionId: null,
+            createdAt: '2026-01-01T00:00:01Z',
+          },
+        ],
+        hasMore: false,
+      }),
+    } as Response)
+
+    const wrapper = mount(ActivityFeed, {
+      props: { workspaceId: 'ws-1' },
+      global: { plugins: [i18n], stubs: globalStubs },
+    })
+    await vi.advanceTimersByTimeAsync(250)
+    await nextTick()
+    const scroll = wrapper.findComponent({ name: 'QScrollArea' })
+    const setScrollPosition = scroll.vm.$.exposed?.setScrollPosition as ReturnType<typeof vi.fn>
+    setScrollPosition.mockClear()
+
+    scroll.vm.$emit('scroll', { verticalPosition: 0, verticalSize: 1000, verticalContainerSize: 400 })
+    await nextTick()
+    await vi.advanceTimersByTimeAsync(700)
+    await nextTick()
+
+    expect(streamStore.eventIdsFor('ws-1')).toEqual(['cursor-1', 'cursor-2'])
+    expect(setScrollPosition).not.toHaveBeenCalledWith('vertical', 1000, expect.any(Number))
+  })
+
   it('hydrates a selected session with workspace-level user messages from the fetch response', async () => {
     const workspaceStore = useWorkspaceStore()
     const streamStore = useAgentStreamStore()

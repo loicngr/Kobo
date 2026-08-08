@@ -73,7 +73,7 @@ const store = useWorkspaceStore()
 
 const pending = computed(() => {
   const head = store.peekPending(props.workspaceId)
-  if (!head || head.kind !== 'permission') return undefined
+  if (head?.kind !== 'permission') return undefined
   return head
 })
 

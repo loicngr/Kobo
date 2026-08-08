@@ -112,7 +112,7 @@ export function enable(workspaceId: string): void {
  */
 export function disable(workspaceId: string, reason: DisableReason): void {
   const row = getRow(workspaceId)
-  if (!row || row.auto_loop !== 1) return
+  if (row?.auto_loop !== 1) return
   const db = getDb()
   db.prepare('UPDATE workspaces SET auto_loop = 0 WHERE id = ?').run(workspaceId)
   const diagnostic = {

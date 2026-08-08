@@ -304,7 +304,7 @@ describe('upsertProject()', () => {
     })
     const got = getProjectSettings('/tmp/p3')
     expect(got?.e2e).toEqual({ framework: 'cypress', skill: 'cy', prompt: 'go' })
-    expect((got?.e2e as Record<string, unknown>).malicious).toBeUndefined()
+    expect((got?.e2e as Record<string, unknown> | undefined)?.malicious).toBeUndefined()
   })
 
   it('round-trips finalization settings via upsertProject + getProjectSettings', () => {
@@ -335,7 +335,7 @@ describe('upsertProject()', () => {
     })
     const got = getProjectSettings('/tmp/p-finalization-3')
     expect(got?.finalization).toEqual({ prompt: 'do stuff' })
-    expect((got?.finalization as Record<string, unknown>).malicious).toBeUndefined()
+    expect((got?.finalization as Record<string, unknown> | undefined)?.malicious).toBeUndefined()
   })
 })
 
@@ -2321,21 +2321,15 @@ describe('whip feature toggle (v51)', () => {
     expect(migrated.global.whipShortcut).toBe('mod+shift+x')
   })
 
-  it.each([
-    'control',
-    'mod+control',
-    'ctrl',
-    'mod+ctrl',
-    'meta',
-    'alt',
-    'shift',
-    'mod',
-  ])('normalizes a modifier-only shortcut update to the default: %s', (whipShortcut) => {
-    const updated = updateGlobalSettings({ whipShortcut } as Partial<GlobalSettings>)
+  it.each(['control', 'mod+control', 'ctrl', 'mod+ctrl', 'meta', 'alt', 'shift', 'mod'])(
+    'normalizes a modifier-only shortcut update to the default: %s',
+    (whipShortcut) => {
+      const updated = updateGlobalSettings({ whipShortcut } as Partial<GlobalSettings>)
 
-    expect(updated.whipShortcut).toBe('mod+shift+x')
-    expect(getGlobalSettings().whipShortcut).toBe('mod+shift+x')
-  })
+      expect(updated.whipShortcut).toBe('mod+shift+x')
+      expect(getGlobalSettings().whipShortcut).toBe('mod+shift+x')
+    },
+  )
 
   it('persists a valid custom shortcut', () => {
     const updated = updateGlobalSettings({ whipShortcut: 'alt+k' } as Partial<GlobalSettings>)

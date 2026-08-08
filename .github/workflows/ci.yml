@@ -16,11 +16,12 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: 24
+          node-version: 24.19.0
           cache: npm
           cache-dependency-path: |
             package-lock.json
             src/client/package-lock.json
+            src/client/src-pwa/package-lock.json
 
       - name: Install root dependencies
         run: npm ci
@@ -29,21 +30,30 @@ jobs:
         working-directory: src/client
         run: npm ci
 
+      - name: Install PWA dependencies
+        working-directory: src/client/src-pwa
+        run: npm ci
+
       - name: Audit root dependencies
         run: npm audit --audit-level=high
 
       - name: Audit client dependencies
         working-directory: src/client
-        # --omit=dev: remaining high-severity findings are transitive dev/build
-        # tooling only (@vue/test-utils, @quasar/app-vite's archiver chain), not
-        # shipped in the production bundle — see Makefile's audit-client target.
-        run: npm audit --omit=dev --audit-level=high
+        run: npm audit --audit-level=high
+
+      - name: Audit PWA dependencies
+        working-directory: src/client/src-pwa
+        run: npm audit --audit-level=high
 
       - name: Lint (biome)
         run: npm run lint
 
       - name: Type check (server)
         run: npx tsc --noEmit
+
+      - name: Type check (client)
+        working-directory: src/client
+        run: npm run type-check
 
       - name: Run backend tests
         run: npm test

@@ -91,6 +91,29 @@ describe('searchEvents', () => {
     expect(results[0].snippet).toContain('migration')
   })
 
+  it('finds matches in normalized agent:event message text', () => {
+    seedWorkspace('ws-1', 'Work')
+    seedEvent('ws-1', 'agent:event', {
+      kind: 'message:text',
+      messageId: 'm-1',
+      text: 'The websocket cursor is now persisted safely',
+      streaming: false,
+    })
+
+    const results = searchEvents('cursor')
+    expect(results).toHaveLength(1)
+    expect(results[0].type).toBe('agent:event')
+    expect(results[0].snippet).toContain('cursor')
+  })
+
+  it('treats LIKE wildcard characters as literal search text', () => {
+    seedWorkspace('ws-1', 'Work')
+    for (let i = 0; i < 160; i++) seedEvent('ws-1', 'user:message', { content: `unrelated message ${i}` })
+    seedEvent('ws-1', 'user:message', { content: 'CPU reached 90% during the run' }, '2020-01-01T00:00:00Z')
+
+    expect(searchEvents('%')).toHaveLength(1)
+  })
+
   it('ignores events that are not user:message or agent:output', () => {
     seedWorkspace('ws-1', 'Work')
     seedEvent('ws-1', 'agent:status', { status: 'executing' })
@@ -119,6 +142,19 @@ describe('searchEvents', () => {
     // "assistant" appears in the JSON structure but NOT in the readable text
     const results = searchEvents('assistant')
     expect(results).toHaveLength(0)
+  })
+
+  it('keeps paging past JSON-only false positives to find older readable matches', () => {
+    seedWorkspace('ws-1', 'Work')
+    seedEvent('ws-1', 'user:message', { content: 'the assistant found the actual answer' }, '2020-01-01T00:00:00Z')
+    for (let i = 0; i < 180; i++) {
+      seedEvent('ws-1', 'agent:output', {
+        type: 'assistant',
+        message: { content: [{ type: 'text', text: `unrelated response ${i}` }] },
+      })
+    }
+
+    expect(searchEvents('assistant')).toHaveLength(1)
   })
 
   it('builds a snippet with context around the match', () => {

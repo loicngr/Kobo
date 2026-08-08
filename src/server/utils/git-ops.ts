@@ -4,6 +4,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 
 const execFileAsync = promisify(execFileCb)
+const READ_ONLY_GIT_TIMEOUT_MS = 15_000
 
 function git(repoPath: string, args: string[]): string {
   // `trimEnd` (not `trim`): some git outputs are column-aligned and the LEADING
@@ -14,6 +15,16 @@ function git(repoPath: string, args: string[]): string {
   // (e.g. `front/foo` → `ront/foo`). Trailing whitespace (the final `\n` git
   // always appends) still goes — that's what every caller expects.
   return execFileSync('git', args, { cwd: repoPath, encoding: 'utf-8' }).trimEnd()
+}
+
+async function gitAsync(repoPath: string, args: string[], timeout = READ_ONLY_GIT_TIMEOUT_MS): Promise<string> {
+  const { stdout } = await execFileAsync('git', args, {
+    cwd: repoPath,
+    encoding: 'utf-8',
+    timeout,
+    maxBuffer: 10 * 1024 * 1024,
+  })
+  return stdout.trimEnd()
 }
 
 /** Return the name of the currently checked-out branch. */
@@ -961,25 +972,28 @@ export interface WorkingTreeStatus {
 /** Parse `git status --porcelain` into counts of staged, modified, and untracked files. */
 export function getWorkingTreeStatus(repoPath: string): WorkingTreeStatus {
   try {
-    const output = git(repoPath, ['status', '--porcelain'])
-    let staged = 0
-    let modified = 0
-    let untracked = 0
-    for (const line of output.split('\n')) {
-      if (!line) continue
-      const x = line[0] // index status
-      const y = line[1] // worktree status
-      if (x === '?' && y === '?') {
-        untracked++
-      } else {
-        if (x !== ' ' && x !== '?') staged++
-        if (y !== ' ' && y !== '?') modified++
-      }
-    }
-    return { staged, modified, untracked }
+    return parseWorkingTreeStatus(git(repoPath, ['status', '--porcelain']))
   } catch {
     return { staged: 0, modified: 0, untracked: 0 }
   }
+}
+
+function parseWorkingTreeStatus(output: string): WorkingTreeStatus {
+  let staged = 0
+  let modified = 0
+  let untracked = 0
+  for (const line of output.split('\n')) {
+    if (!line) continue
+    const x = line[0]
+    const y = line[1]
+    if (x === '?' && y === '?') {
+      untracked++
+    } else {
+      if (x !== ' ' && x !== '?') staged++
+      if (y !== ' ' && y !== '?') modified++
+    }
+  }
+  return { staged, modified, untracked }
 }
 
 /** A single uncommitted working-tree entry. `staged`/`modified` can both be true (porcelain `MM`). */
@@ -1116,6 +1130,61 @@ export function getWorkingTreeDiffStats(repoPath: string): string {
 // ── Async versions ───────────────────────────────────────────────────────────
 // Non-blocking alternatives for hot paths (route handlers).
 
+async function resolveBaseAsync(repoPath: string, base: string): Promise<string> {
+  try {
+    await gitAsync(repoPath, ['rev-parse', '--verify', `origin/${base}`])
+    return `origin/${base}`
+  } catch {
+    return base
+  }
+}
+
+/** Non-blocking commit count for request and polling hot paths. */
+export async function getCommitCountAsync(repoPath: string, base: string, head: string): Promise<number> {
+  try {
+    const ref = await resolveBaseAsync(repoPath, base)
+    const output = await gitAsync(repoPath, ['rev-list', '--count', `${ref}..${head}`])
+    return parseInt(output, 10) || 0
+  } catch {
+    return 0
+  }
+}
+
+/** Non-blocking behind count for request and polling hot paths. */
+export async function getCommitsBehindAsync(repoPath: string, base: string, head: string): Promise<number> {
+  try {
+    const ref = await resolveBaseAsync(repoPath, base)
+    const output = await gitAsync(repoPath, ['rev-list', '--count', `${head}..${ref}`])
+    const count = parseInt(output, 10)
+    return Number.isFinite(count) ? count : 0
+  } catch {
+    return 0
+  }
+}
+
+/** Non-blocking diff summary for request and polling hot paths. */
+export async function getStructuredDiffStatsBetweenAsync(
+  repoPath: string,
+  base: string,
+  head: string,
+): Promise<{ filesChanged: number; insertions: number; deletions: number }> {
+  try {
+    const ref = await resolveBaseAsync(repoPath, base)
+    return parseDiffShortstat(await gitAsync(repoPath, ['diff', '--shortstat', `${ref}...${head}`]))
+  } catch {
+    return { filesChanged: 0, insertions: 0, deletions: 0 }
+  }
+}
+
+/** Non-blocking working-tree summary for request and polling hot paths. */
+export async function getWorkingTreeStatusAsync(repoPath: string): Promise<WorkingTreeStatus> {
+  try {
+    return parseWorkingTreeStatus(await gitAsync(repoPath, ['status', '--porcelain']))
+  } catch {
+    return { staged: 0, modified: 0, untracked: 0 }
+  }
+}
+
 /**
  * Async version of `getUnpushedCount`. Same `origin/<workingBranch>` semantic:
  * returns `-1` when the remote ref does not exist (never pushed), `0` when
@@ -1124,7 +1193,10 @@ export function getWorkingTreeDiffStats(repoPath: string): string {
 export async function getUnpushedCountAsync(repoPath: string, workingBranch: string): Promise<number> {
   const remoteRef = `origin/${workingBranch}`
   try {
-    await execFileAsync('git', ['rev-parse', '--verify', remoteRef], { cwd: repoPath })
+    await execFileAsync('git', ['rev-parse', '--verify', remoteRef], {
+      cwd: repoPath,
+      timeout: READ_ONLY_GIT_TIMEOUT_MS,
+    })
   } catch {
     return -1 // branch never pushed (no remote ref)
   }
@@ -1132,6 +1204,7 @@ export async function getUnpushedCountAsync(repoPath: string, workingBranch: str
     const { stdout } = await execFileAsync('git', ['rev-list', `${remoteRef}..HEAD`, '--count'], {
       cwd: repoPath,
       encoding: 'utf-8',
+      timeout: READ_ONLY_GIT_TIMEOUT_MS,
     })
     return parseInt(stdout.trim(), 10) || 0
   } catch {
@@ -1149,7 +1222,7 @@ export async function getUnpushedCountAsync(repoPath: string, workingBranch: str
  */
 export async function fetchSourceBranchAsync(repoPath: string, branch: string, remote = 'origin'): Promise<void> {
   try {
-    await execFileAsync('git', ['fetch', remote, branch], { cwd: repoPath })
+    await execFileAsync('git', ['fetch', remote, branch], { cwd: repoPath, timeout: 30_000 })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     console.warn(`[git-ops] fetchSourceBranchAsync(${remote}/${branch}) failed: ${msg}`)

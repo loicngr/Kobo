@@ -68,7 +68,7 @@ beforeEach(() => {
 describe('GET /api/dev-server/:workspaceId/status', () => {
   it('returns dev-server status', async () => {
     vi.mocked(getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(devServerService.getStatus).mockReturnValue(fakeStatus)
+    vi.mocked(devServerService.getStatus).mockResolvedValue(fakeStatus)
 
     const res = await app.request('/api/dev-server/ws-1/status')
     expect(res.status).toBe(200)
@@ -98,7 +98,7 @@ describe('GET /api/dev-server/:workspaceId/status', () => {
       ...fakeWorkspace,
       devServerStatus: 'running',
     })
-    vi.mocked(devServerService.getStatus).mockReturnValue({
+    vi.mocked(devServerService.getStatus).mockResolvedValue({
       ...fakeStatus,
       status: 'unknown',
     })
@@ -114,7 +114,7 @@ describe('GET /api/dev-server/:workspaceId/status', () => {
       ...fakeWorkspace,
       devServerStatus: 'stopped',
     })
-    vi.mocked(devServerService.getStatus).mockReturnValue({
+    vi.mocked(devServerService.getStatus).mockResolvedValue({
       ...fakeStatus,
       status: 'unknown',
     })
@@ -180,7 +180,7 @@ describe('POST /api/dev-server/:workspaceId/stop', () => {
   it('stops dev-server and returns status', async () => {
     const stoppedStatus = { ...fakeStatus, status: 'stopped' as const }
     vi.mocked(getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(devServerService.stopDevServer).mockReturnValue(stoppedStatus)
+    vi.mocked(devServerService.stopDevServer).mockResolvedValue(stoppedStatus)
 
     const res = await app.request('/api/dev-server/ws-1/stop', { method: 'POST' })
     expect(res.status).toBe(200)
@@ -200,7 +200,7 @@ describe('POST /api/dev-server/:workspaceId/stop', () => {
 describe('GET /api/dev-server/:workspaceId/logs', () => {
   it('returns logs with default tail (200)', async () => {
     vi.mocked(getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(devServerService.getDevServerLogs).mockReturnValue('line1\nline2\n')
+    vi.mocked(devServerService.getDevServerLogs).mockResolvedValue('line1\nline2\n')
 
     const res = await app.request('/api/dev-server/ws-1/logs')
     expect(res.status).toBe(200)
@@ -211,13 +211,23 @@ describe('GET /api/dev-server/:workspaceId/logs', () => {
 
   it('returns logs with custom tail parameter', async () => {
     vi.mocked(getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(devServerService.getDevServerLogs).mockReturnValue('line1\n')
+    vi.mocked(devServerService.getDevServerLogs).mockResolvedValue('line1\n')
 
     const res = await app.request('/api/dev-server/ws-1/logs?tail=50')
     expect(res.status).toBe(200)
     const data = await res.json()
     expect(data.logs).toBe('line1\n')
     expect(devServerService.getDevServerLogs).toHaveBeenCalledWith('ws-1', 50)
+  })
+
+  it('clamps the tail parameter to a safe range', async () => {
+    vi.mocked(getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(devServerService.getDevServerLogs).mockResolvedValue('line')
+
+    await app.request('/api/dev-server/ws-1/logs?tail=-1')
+    expect(devServerService.getDevServerLogs).toHaveBeenLastCalledWith('ws-1', 1)
+    await app.request('/api/dev-server/ws-1/logs?tail=999999')
+    expect(devServerService.getDevServerLogs).toHaveBeenLastCalledWith('ws-1', 1000)
   })
 
   it('returns 404 for unknown workspace', async () => {

@@ -337,11 +337,17 @@
 </template>
 
 <script setup lang="ts">
+import EditorWorker from 'monaco-editor/editor/editor.worker.js?worker'
+import CssWorker from 'monaco-editor/language/css/css.worker.js?worker'
+import HtmlWorker from 'monaco-editor/language/html/html.worker.js?worker'
+import JsonWorker from 'monaco-editor/language/json/json.worker.js?worker'
+import TypeScriptWorker from 'monaco-editor/language/typescript/ts.worker.js?worker'
 import { useQuasar } from 'quasar'
 import { type ReviewComment, useReviewDraft } from 'src/composables/use-review-draft'
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { buildPathTree, countLeaves, type PathTreeNode } from 'src/utils/build-path-tree'
+import { monacoLanguageForPath } from 'src/utils/monaco-language'
 import { takePendingDiffOpen } from 'src/utils/pending-diff-open'
 import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -840,28 +846,18 @@ async function loadFileDiff(filePath: string) {
       self.MonacoEnvironment = {
         getWorker(_workerId: string, label: string) {
           if (label === 'json') {
-            return new Worker(new URL('monaco-editor/esm/vs/language/json/json.worker.js', import.meta.url), {
-              type: 'module',
-            })
+            return new JsonWorker()
           }
           if (label === 'css' || label === 'scss' || label === 'less') {
-            return new Worker(new URL('monaco-editor/esm/vs/language/css/css.worker.js', import.meta.url), {
-              type: 'module',
-            })
+            return new CssWorker()
           }
           if (label === 'html' || label === 'handlebars' || label === 'razor') {
-            return new Worker(new URL('monaco-editor/esm/vs/language/html/html.worker.js', import.meta.url), {
-              type: 'module',
-            })
+            return new HtmlWorker()
           }
           if (label === 'typescript' || label === 'javascript') {
-            return new Worker(new URL('monaco-editor/esm/vs/language/typescript/ts.worker.js', import.meta.url), {
-              type: 'module',
-            })
+            return new TypeScriptWorker()
           }
-          return new Worker(new URL('monaco-editor/esm/vs/editor/editor.worker.js', import.meta.url), {
-            type: 'module',
-          })
+          return new EditorWorker()
         },
       }
       monaco = await import('monaco-editor')
@@ -884,27 +880,7 @@ async function loadFileDiff(filePath: string) {
     if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = await res.json()
 
-    const ext = filePath.split('.').pop() ?? ''
-    const langMap: Record<string, string> = {
-      ts: 'typescript',
-      tsx: 'typescript',
-      js: 'javascript',
-      jsx: 'javascript',
-      vue: 'html',
-      html: 'html',
-      css: 'css',
-      scss: 'scss',
-      json: 'json',
-      md: 'markdown',
-      yaml: 'yaml',
-      yml: 'yaml',
-      sh: 'shell',
-      sql: 'sql',
-      py: 'python',
-      rs: 'rust',
-      go: 'go',
-    }
-    const language = langMap[ext] ?? 'plaintext'
+    const language = monacoLanguageForPath(filePath)
 
     disposeEditor()
 
