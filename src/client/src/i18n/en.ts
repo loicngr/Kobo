@@ -393,6 +393,12 @@ export default {
   'settings.skillSuite.superpowersGstack': 'Superpowers + gstack',
   'settings.skillSuite.superpowersGstackHint':
     'Both suites stack — superpowers for process discipline (brainstorm / TDD / plans / principles-level review), gstack for concrete workflows (/review, /qa, /browse, /design-review, /investigate).',
+  'settings.skillSuite.ecc': 'ECC',
+  'settings.skillSuite.eccHint':
+    "affaan-m's agent-harness framework — agents, skills, rules and hooks for planning, testing, implementing, reviewing and memorizing (github.com/affaan-m/ECC).",
+  'settings.skillSuite.allThree': 'Superpowers + gstack + ECC',
+  'settings.skillSuite.allThreeHint':
+    'All three stack — superpowers for process discipline, gstack for concrete workflows, ECC for structured multi-agent review/implementation passes.',
   'settings.skillSuite.customHint': 'Edit the four prompts below yourself. Starts from the agnostic baseline.',
   'settings.skillSuite.reloadDefaults': 'Reload defaults',
   'settings.skillSuite.reloadDefaultsConfirm': 'Replace the four custom prompts with the agnostic defaults?',

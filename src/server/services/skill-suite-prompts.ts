@@ -4,7 +4,9 @@ import {
   AGNOSTIC_BRAINSTORMING_INSTRUCTION,
   AGNOSTIC_QA_PROMPT_TEMPLATE,
   AGNOSTIC_REVIEW_TEMPLATE,
+  GROOMING_INTRO_ALL,
   GROOMING_INTRO_COMBINED,
+  GROOMING_INTRO_ECC,
   GROOMING_INTRO_GSTACK,
   GROOMING_INTRO_SUPERPOWERS,
   type SkillSuite,
@@ -118,6 +120,24 @@ For reproducible regression coverage that runs on every PR, prefer **Cypress** s
     '4. Wait for explicit user approval on the final plan before announcing brainstorming is done.',
 }
 
+export const ECC_PROMPTS: SuitePrompts = {
+  reviewTemplate:
+    REVIEW_HEADER +
+    'If a code-review skill is available (e.g. `ecc:code-review`, or dispatch a subagent via the Task tool with `subagent_type: "ecc:code-reviewer"`), invoke it to drive this review. Otherwise follow the steps below directly.\n\n' +
+    REVIEW_BODY,
+  autoLoopReviewGate:
+    'Code review gate — BEFORE marking the task done, dispatch an independent code-reviewer subagent via the Task tool with `subagent_type: "ecc:code-reviewer"` (or run the `ecc:code-review` / `ecc:quality-gate` skill if you prefer a driven workflow over a bare subagent). Brief the reviewer with: what you just implemented, the task title, and the commit SHA (via `git rev-parse HEAD`). Ask specifically whether the change matches the task scope, whether edge cases are handled, and whether the commit is clean.',
+  autoLoopGroomingIntro: GROOMING_INTRO_ECC,
+  qaPromptTemplate:
+    'QA pass for workspace "{{workspace_name}}" in project {{project_name}}.\n\nBranch: {{branch_name}}\nStaging URL: {{staging_url}}\n\nIf a QA-style skill is available in this environment (e.g. `ecc:browser-qa`, or dispatch a subagent via the Task tool with `subagent_type: "ecc:e2e-runner"`), use it to exercise the staging URL. Otherwise, fall back to manually scripting the smoke checks and recording your findings as a bug report.',
+  brainstormingInstruction:
+    'Brainstorm the implementation approach using the ECC pipeline:\n' +
+    '1. Run the `ecc:plan` skill (or dispatch a subagent via the Task tool with `subagent_type: "ecc:planner"`) — it expands the request into a full spec with features, sprints, and evaluation criteria before any code. Ask clarifying questions and wait for explicit user approval on the design before moving on.\n' +
+    '2. Use `ecc:tdd-workflow` to shape the approved design into a test-first implementation plan.\n' +
+    '3. If you encounter a bug or unexpected behaviour during exploration, dispatch a subagent via the Task tool with `subagent_type: "ecc:architect"` (or the relevant language-specific `ecc:*-reviewer` agent) rather than guessing.\n' +
+    "Do NOT skip the skills or rationalise around them — that's how the rigour gets lost.",
+}
+
 export const AGNOSTIC_PROMPTS: SuitePrompts = {
   reviewTemplate: AGNOSTIC_REVIEW_TEMPLATE,
   autoLoopReviewGate: AGNOSTIC_AUTO_LOOP_REVIEW_GATE,
@@ -183,6 +203,65 @@ For reproducible regression coverage that runs on every PR, prefer **Cypress** s
     '5. Wait for explicit user approval on the final reviewed plan before announcing brainstorming is done.',
 }
 
+// ── Triple combo: superpowers + gstack + ecc ─────────────────────────────────
+// For users who install all three suites. Extends the two-suite COMBINED_PROMPTS
+// "pick by intent" pattern with a third branch per field.
+
+export const ALL_THREE_PROMPTS: SuitePrompts = {
+  reviewTemplate:
+    REVIEW_HEADER +
+    'Three complementary review paths are available — pick by intent:\n' +
+    '- `/review` (gstack Staff Engineer) for tactical bug-hunting that finds issues passing CI but blowing up in production. Auto-fixes the obvious ones.\n' +
+    '- `superpowers:requesting-code-review` for principles-level critique — silent failures, test-design soundness, surface-area discipline.\n' +
+    "- `ecc:code-review` (or a Task-dispatched `ecc:code-reviewer` subagent) for ECC's structured multi-agent review pass.\n" +
+    'You can run more than one on the same diff if the change is large. If none is available, fall back to the manual checklist below.\n\n' +
+    REVIEW_BODY,
+  autoLoopReviewGate:
+    'Code review gate — BEFORE marking the task done, pick the appropriate review path (three are installed):\n' +
+    '- Default to `/review` (gstack Staff Engineer) for tactical code-level bugs and auto-fixes.\n' +
+    '- Use `superpowers:requesting-code-review` instead when the task introduces tests, refactors, or design decisions worth a principles-level critique.\n' +
+    "- Use a Task-dispatched `ecc:code-reviewer` subagent (or the `ecc:quality-gate` skill) when you want ECC's structured multi-agent pass.\n\n" +
+    'Brief the chosen reviewer with: what you just implemented, the task title, and the commit SHA (via `git rev-parse HEAD`). Ask specifically whether the change matches the task scope, whether edge cases are handled, and whether the commit is clean. If the reviewer auto-fixes minor issues, accept the fixes via an amend or fix-up commit, then re-run step 3 checks.',
+  autoLoopGroomingIntro: GROOMING_INTRO_ALL,
+  qaPromptTemplate: `QA pass for workspace "{{workspace_name}}" in project {{project_name}}.
+
+Branch: {{branch_name}}
+Staging URL: {{staging_url}}
+
+Pick the right tool for the situation. gstack covers interactive QA, ECC covers structured/automated QA, superpowers covers low-level browser control as a fallback.
+
+gstack QA toolkit (preferred for interactive QA):
+- \`/browse\` — Headless navigation: URL → interactions → screenshots. Use for quick dogfooding a flow or sanity-checking a PR.
+- \`/qa {{staging_url}}\` — Systematic QA with automatic bug fixing. Three tiers (invoke as \`/qa Quick\`, \`/qa Standard\`, or \`/qa Exhaustive\`):
+  - **Quick** — critical and high-severity bugs only.
+  - **Standard** — adds medium-severity bugs.
+  - **Exhaustive** — adds cosmetic issues.
+- \`/qa-only {{staging_url}}\` — Same methodology as \`/qa\` but report only, no code changes.
+- \`/design-review\` — Visual audit (consistency, spacing, hierarchy, AI slop). Commits atomic fixes with before/after screenshots.
+
+ECC toolkit:
+- \`ecc:browser-qa\` skill — structured browser-driven QA pass.
+- Task-dispatched \`ecc:e2e-runner\` subagent — generates, maintains, and runs E2E tests; manages flaky-test quarantine and artifact capture.
+
+Superpowers alternative (low-level browser control):
+- \`superpowers-chrome:browsing\` — Direct Chrome DevTools Protocol control over an existing Chrome session: multi-tab management, form automation, content extraction. Use when you need fine-grained control beyond what \`/browse\` exposes.
+
+For reproducible regression coverage that runs on every PR, prefer **Cypress** specs in \`test/cypress/\` instead of any interactive QA skill. Reserve the tools above for exploration, dogfooding, and one-shot visual debugging.`,
+  brainstormingInstruction:
+    'Brainstorm using all three suites — each plays to its strength:\n' +
+    '1. Early product framing: prefer gstack `/office-hours` for product-shaped work (six forcing questions + design doc), or `ecc:plan` (or `subagent_type: "ecc:planner"`) for ECC-style spec expansion (features, sprints, evaluation criteria). Fall back to `superpowers:brainstorming` for purely infra/refactor work where neither product lens applies.\n' +
+    '2. Plan construction — pick whichever fits the work better:\n' +
+    '   - gstack `/autoplan` for the chained CEO/design/eng/DX pipeline (auto-detects which apply).\n' +
+    '   - `superpowers:writing-plans` for a TDD-shaped multi-step plan that maps cleanly onto subagent dispatch.\n' +
+    '   - `ecc:tdd-workflow` when the project follows ECC conventions and you want its test-first shaping.\n' +
+    '3. For debugging during exploration, prefer `/investigate` (gstack — root-cause methodology), `superpowers:systematic-debugging`, or a Task-dispatched `ecc:architect` subagent — whichever you reach for first.\n' +
+    '4. Plan review gate (MANDATORY before announcing brainstorming is done): once the plan is ready, it MUST pass the gstack plan-review skills before you proceed.\n' +
+    '   - If you built the plan via `/autoplan`, you have ALREADY passed the chained reviews — skip this step.\n' +
+    '   - Otherwise (plan came from `superpowers:writing-plans`, `ecc:tdd-workflow`, or any other path), run `/autoplan` now on the existing plan to chain the reviews, OR invoke the relevant ones individually: `/plan-ceo-review` (scope challenge), `/plan-eng-review` (architecture / edge cases / tests), `/plan-design-review` (UI / AI slop, when there is UI scope), `/plan-devex-review` (when the work has developer-facing surface).\n' +
+    '   - Apply any changes the reviews recommend before moving on.\n' +
+    '5. Wait for explicit user approval on the final reviewed plan before announcing brainstorming is done.',
+}
+
 /**
  * Resolve the suite prompts to use right now, given the global `skillSuite`
  * and the four user-editable `custom*` fields (only consulted in `custom` mode).
@@ -191,7 +270,9 @@ For reproducible regression coverage that runs on every PR, prefer **Cypress** s
 export function getSuitePrompts(suite: SkillSuite, overrides: Partial<SuitePrompts>): SuitePrompts {
   if (suite === 'superpowers') return SUPERPOWERS_PROMPTS
   if (suite === 'gstack') return GSTACK_PROMPTS
+  if (suite === 'ecc') return ECC_PROMPTS
   if (suite === 'superpowers+gstack') return COMBINED_PROMPTS
+  if (suite === 'superpowers+gstack+ecc') return ALL_THREE_PROMPTS
   // custom mode: per-field fallback to AGNOSTIC when the override is missing/blank
   const pick = <K extends keyof SuitePrompts>(k: K): string => {
     const value = overrides[k]

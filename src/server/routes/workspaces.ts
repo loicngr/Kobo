@@ -939,7 +939,11 @@ app.post('/', migrationGuard, async (c) => {
       // active skill suite includes gstack, and only if the user has actually
       // installed gstack locally (the binary may be absent — skip silently).
       // Fast + idempotent; safe to run on every workspace boot.
-      if (globalSettings.skillSuite === 'gstack' || globalSettings.skillSuite === 'superpowers+gstack') {
+      if (
+        globalSettings.skillSuite === 'gstack' ||
+        globalSettings.skillSuite === 'superpowers+gstack' ||
+        globalSettings.skillSuite === 'superpowers+gstack+ecc'
+      ) {
         brainstormPrompt += `\n\nIMPORTANT (gstack): Before brainstorming, check whether \`~/.claude/skills/gstack/bin/gstack-brain-sync\` exists. If it does, run it with \`--once\` to load gstack learnings (project-specific patterns, pitfalls, and preferences from prior sessions) into memory. If the binary is missing (gstack not installed in this environment), skip silently and continue — do NOT install anything and do NOT mention the absence. Fast and idempotent when present.`
       }
 

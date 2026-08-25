@@ -1811,6 +1811,16 @@ describe('migration v22 — add-skill-suite-selector', () => {
     expect(getSettings().global.skillSuite).toBe('custom')
   })
 
+  it('updateGlobalSettings accepts skillSuite=ecc', () => {
+    updateGlobalSettings({ skillSuite: 'ecc' })
+    expect(getSettings().global.skillSuite).toBe('ecc')
+  })
+
+  it('updateGlobalSettings accepts skillSuite=superpowers+gstack+ecc', () => {
+    updateGlobalSettings({ skillSuite: 'superpowers+gstack+ecc' })
+    expect(getSettings().global.skillSuite).toBe('superpowers+gstack+ecc')
+  })
+
   it('updateGlobalSettings rejects invalid skillSuite values (previous value preserved)', () => {
     updateGlobalSettings({ skillSuite: 'gstack' })
     updateGlobalSettings({ skillSuite: 'not-a-suite' as never })

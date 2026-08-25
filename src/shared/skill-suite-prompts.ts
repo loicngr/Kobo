@@ -13,10 +13,17 @@
  * - `custom`: prompts come from the user-editable `custom*` fields in settings,
  *    initialised to the AGNOSTIC defaults below.
  */
-export type SkillSuite = 'superpowers' | 'gstack' | 'superpowers+gstack' | 'custom'
+export type SkillSuite = 'superpowers' | 'gstack' | 'ecc' | 'superpowers+gstack' | 'superpowers+gstack+ecc' | 'custom'
 
 export function isValidSkillSuite(value: unknown): value is SkillSuite {
-  return value === 'superpowers' || value === 'gstack' || value === 'superpowers+gstack' || value === 'custom'
+  return (
+    value === 'superpowers' ||
+    value === 'gstack' ||
+    value === 'ecc' ||
+    value === 'superpowers+gstack' ||
+    value === 'superpowers+gstack+ecc' ||
+    value === 'custom'
+  )
 }
 
 // ── Agnostic prompt strings ───────────────────────────────────────────────────
@@ -90,6 +97,12 @@ export const GROOMING_INTRO_GSTACK =
 export const GROOMING_INTRO_COMBINED =
   'You are preparing this workspace for Kōbō auto-loop mode. This is a GROOMING session only — DO NOT implement anything, DO NOT write or edit code, DO NOT run tests or builds, DO NOT invoke `superpowers:executing-plans`, `/ship`, `/autoplan`, `/land-and-deploy`, or any other implementation, planning, or release skill. Your ONLY job is to curate the Kōbō task list via MCP tools.'
 
+export const GROOMING_INTRO_ECC =
+  'You are preparing this workspace for Kōbō auto-loop mode. This is a GROOMING session only — DO NOT implement anything, DO NOT write or edit code, DO NOT run tests or builds, DO NOT invoke `ecc:feature-dev`, `ecc:tdd-workflow`, `ecc:plan`, or any other implementation, planning, or release skill. Your ONLY job is to curate the Kōbō task list via MCP tools.'
+
+export const GROOMING_INTRO_ALL =
+  'You are preparing this workspace for Kōbō auto-loop mode. This is a GROOMING session only — DO NOT implement anything, DO NOT write or edit code, DO NOT run tests or builds, DO NOT invoke `superpowers:executing-plans`, `/ship`, `/autoplan`, `/land-and-deploy`, `ecc:feature-dev`, `ecc:tdd-workflow`, `ecc:plan`, or any other implementation, planning, or release skill. Your ONLY job is to curate the Kōbō task list via MCP tools.'
+
 /**
  * Resolve the grooming intro for the given suite. In `custom` mode, the
  * user-provided override is used (or AGNOSTIC if the override is empty/blank).
@@ -99,7 +112,9 @@ export function getGroomingIntro(suite: SkillSuite, customOverride?: string): st
     const trimmed = (customOverride ?? '').trim()
     return trimmed || AGNOSTIC_AUTO_LOOP_GROOMING_INTRO
   }
+  if (suite === 'superpowers+gstack+ecc') return GROOMING_INTRO_ALL
   if (suite === 'superpowers+gstack') return GROOMING_INTRO_COMBINED
+  if (suite === 'ecc') return GROOMING_INTRO_ECC
   if (suite === 'gstack') return GROOMING_INTRO_GSTACK
   return GROOMING_INTRO_SUPERPOWERS
 }

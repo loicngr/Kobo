@@ -80,7 +80,9 @@
                 :options="[
                   { label: $t('settings.skillSuite.superpowers'),         value: 'superpowers' },
                   { label: $t('settings.skillSuite.gstack'),              value: 'gstack' },
+                  { label: $t('settings.skillSuite.ecc'),                 value: 'ecc' },
                   { label: $t('settings.skillSuite.superpowersGstack'),   value: 'superpowers+gstack' },
+                  { label: $t('settings.skillSuite.allThree'),            value: 'superpowers+gstack+ecc' },
                   { label: $t('settings.skillSuite.custom'),              value: 'custom' },
                 ]"
                 type="radio"
@@ -2867,8 +2869,12 @@ const skillSuiteHintKey = computed(() => {
   switch (globalSkillSuite.value) {
     case 'gstack':
       return 'settings.skillSuite.gstackHint'
+    case 'ecc':
+      return 'settings.skillSuite.eccHint'
     case 'superpowers+gstack':
       return 'settings.skillSuite.superpowersGstackHint'
+    case 'superpowers+gstack+ecc':
+      return 'settings.skillSuite.allThreeHint'
     case 'custom':
       return 'settings.skillSuite.customHint'
     default:
