@@ -399,6 +399,12 @@ export default {
   'settings.skillSuite.superpowersGstack': 'Superpowers + gstack',
   'settings.skillSuite.superpowersGstackHint':
     'Le due suite si combinano — superpowers per la metodologia (brainstorm / TDD / piani / review a livello di principi), gstack per i flussi concreti (/review, /qa, /browse, /design-review, /investigate).',
+  'settings.skillSuite.ecc': 'ECC',
+  'settings.skillSuite.eccHint':
+    'Framework agentico di affaan-m — agents, skills, rules e hooks per pianificare, testare, implementare, rivedere e memorizzare (github.com/affaan-m/ECC).',
+  'settings.skillSuite.allThree': 'Superpowers + gstack + ECC',
+  'settings.skillSuite.allThreeHint':
+    'Le tre suite si combinano — superpowers per la metodologia, gstack per i flussi concreti, ECC per passaggi di review/implementazione multi-agente strutturati.',
   'settings.skillSuite.customHint': 'Modifica i quattro prompt qui sotto tu stesso. Parte dalla base agnostica.',
   'settings.skillSuite.reloadDefaults': 'Ripristina predefiniti',
   'settings.skillSuite.reloadDefaultsConfirm':
