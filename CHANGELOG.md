@@ -4,6 +4,10 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.11.12
+
+- ✨ develop - feat(engines): Garder les sessions ouvertes pour les subagents en arrière-plan
+
 ## 1.11.11
 
 - feat(settings): add ECC as a skill suite option (#27)
