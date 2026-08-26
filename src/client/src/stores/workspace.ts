@@ -324,6 +324,7 @@ let _prSnapshotsRequestToken = 0
 const _workspaceEventVersions = new Map<string, number>()
 const _prSnapshotVersions = new Map<string, number>()
 const _sessionsRequestVersions = new Map<string, number>()
+const _workspaceDetailsRequestVersions = new Map<string, number>()
 
 function markPrSnapshotChanged(workspaceId: string): void {
   _prSnapshotVersions.set(workspaceId, (_prSnapshotVersions.get(workspaceId) ?? 0) + 1)
@@ -499,6 +500,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       _workspaceEventVersions.delete(id)
       _prSnapshotVersions.delete(id)
       _sessionsRequestVersions.delete(id)
+      _workspaceDetailsRequestVersions.delete(id)
       useAgentStreamStore().clear(id)
       localStorage.removeItem(`kobo:session:${id}`)
     },
@@ -626,6 +628,8 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async fetchWorkspaceDetails(id: string) {
+      const requestVersion = (_workspaceDetailsRequestVersions.get(id) ?? 0) + 1
+      _workspaceDetailsRequestVersions.set(id, requestVersion)
       try {
         const res = await fetch(`/api/workspaces/${id}`)
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -633,7 +637,7 @@ export const useWorkspaceStore = defineStore('workspace', {
 
         // Guard against stale response: user may have switched workspace while
         // this request was in flight.
-        if (this.selectedWorkspaceId !== id) return
+        if (this.selectedWorkspaceId !== id || _workspaceDetailsRequestVersions.get(id) !== requestVersion) return
 
         // Update workspace in whichever list it lives in (active or archived).
         const incoming = data.workspace ?? data

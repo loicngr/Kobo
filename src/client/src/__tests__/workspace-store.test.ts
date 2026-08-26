@@ -1062,6 +1062,39 @@ describe('workspace store', () => {
     })
   })
 
+  describe('fetchWorkspaceDetails ordering', () => {
+    it('ignores an older overlapping response for the selected workspace', async () => {
+      const store = useWorkspaceStore()
+      store.selectedWorkspaceId = 'w1'
+      store.workspaces = [makeWorkspace({ id: 'w1', name: 'initial' })]
+      let resolveFirst!: (response: Response) => void
+      let resolveSecond!: (response: Response) => void
+      vi.stubGlobal(
+        'fetch',
+        vi
+          .fn()
+          .mockImplementationOnce(() => new Promise<Response>((resolve) => (resolveFirst = resolve)))
+          .mockImplementationOnce(() => new Promise<Response>((resolve) => (resolveSecond = resolve))),
+      )
+
+      const first = store.fetchWorkspaceDetails('w1')
+      const second = store.fetchWorkspaceDetails('w1')
+      resolveSecond({
+        ok: true,
+        json: async () => ({ workspace: makeWorkspace({ id: 'w1', name: 'new' }), tasks: [] }),
+      } as Response)
+      await second
+      resolveFirst({
+        ok: true,
+        json: async () => ({ workspace: makeWorkspace({ id: 'w1', name: 'old' }), tasks: [] }),
+      } as Response)
+      await first
+
+      expect(store.workspaces[0]?.name).toBe('new')
+      vi.unstubAllGlobals()
+    })
+  })
+
   describe('workspace:description-updated WS handler', () => {
     it('updates the matching workspace in state', () => {
       const store = useWorkspaceStore()

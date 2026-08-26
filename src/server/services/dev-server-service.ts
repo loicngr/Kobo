@@ -3,7 +3,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { getProjectSettings } from './settings-service.js'
 import { emitEphemeral } from './websocket-service.js'
-import { getWorkspace, updateDevServerStatus } from './workspace-service.js'
+import { getWorkspace, listWorkspaces, updateDevServerStatus } from './workspace-service.js'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -383,6 +383,20 @@ export async function stopDevServer(workspaceId: string): Promise<DevServerStatu
   updateDevServerStatus(workspaceId, 'stopped')
   emitEphemeral(workspaceId, 'devserver:status', status)
   return status
+}
+
+/** Stop direct and Docker dev servers for every persisted workspace. */
+export async function stopAllDevServers(): Promise<void> {
+  const workspaceIds = new Set([...listWorkspaces(true).map((workspace) => workspace.id), ...trackedProcesses.keys()])
+  await Promise.all(
+    [...workspaceIds].map(async (workspaceId) => {
+      try {
+        await stopDevServer(workspaceId)
+      } catch (err) {
+        console.error(`[dev-server] Failed to stop '${workspaceId}' during shutdown:`, err)
+      }
+    }),
+  )
 }
 
 // ── Logs ───────────────────────────────────────────────────────────────────────

@@ -14,7 +14,8 @@ interface WsEventRow {
 
 /** Quote a CSV cell when it contains a delimiter, quote, or newline (RFC 4180). */
 function csvCell(value: string): string {
-  return /[",\r\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value
+  const safeValue = /^[\s]*[=+\-@]/.test(value) ? `'${value}` : value
+  return /[",\r\n]/.test(safeValue) ? `"${safeValue.replace(/"/g, '""')}"` : safeValue
 }
 
 function csvRow(values: string[]): string {

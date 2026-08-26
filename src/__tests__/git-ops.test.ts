@@ -787,6 +787,18 @@ describe('rollbackFile(repoPath, branchName, filePath)', () => {
     expect(target).toBe('deleted')
     rmSync(repo, { recursive: true, force: true })
   })
+
+  it('refuses an untracked symlink that points outside the repository', () => {
+    const repo = setupRepoNoRemote('at-rollback-symlink-')
+    const outside = path.join(path.dirname(repo), 'outside.txt')
+    writeFileSync(outside, 'must remain')
+    fs.symlinkSync(outside, path.join(repo, 'outside-link.txt'))
+
+    expect(() => rollbackFile(repo, 'main', 'outside-link.txt')).toThrow(/escapes allowed root/)
+    expect(fs.readFileSync(outside, 'utf-8')).toBe('must remain')
+    rmSync(repo, { recursive: true, force: true })
+    rmSync(outside, { force: true })
+  })
 })
 
 describe('getCommitsBehind', () => {

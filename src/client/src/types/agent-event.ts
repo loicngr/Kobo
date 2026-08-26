@@ -46,6 +46,8 @@ export type AgentEvent =
   | {
       kind: 'subagent:progress'
       toolCallId: string
+      /** Claude SDK task id, used by stopTask; Codex has no equivalent. */
+      taskId?: string
       status: 'running' | 'done'
       description?: string
       taskType?: string

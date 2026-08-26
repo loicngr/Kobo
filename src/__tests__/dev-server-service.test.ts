@@ -12,6 +12,7 @@ vi.mock('node:child_process', () => ({
 // Mock workspace and settings services
 vi.mock('../server/services/workspace-service.js', () => ({
   getWorkspace: vi.fn(),
+  listWorkspaces: vi.fn(),
   updateDevServerStatus: vi.fn(),
 }))
 
@@ -33,11 +34,12 @@ import {
   resolveInstance,
   sanitizeBranchName,
   startDevServer,
+  stopAllDevServers,
   stopDevServer,
 } from '../server/services/dev-server-service.js'
 import { getProjectSettings } from '../server/services/settings-service.js'
 import { emitEphemeral } from '../server/services/websocket-service.js'
-import { getWorkspace } from '../server/services/workspace-service.js'
+import { getWorkspace, listWorkspaces } from '../server/services/workspace-service.js'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -521,6 +523,29 @@ describe('stopDevServer', () => {
       expect.objectContaining({
         status: 'stopped',
       }),
+    )
+  })
+
+  it('stops every persisted workspace during shutdown', async () => {
+    const workspaces = [
+      { id: 'ws-1', projectPath: '/tmp/one', workingBranch: 'feature/one', worktreePath: '/tmp/one' },
+      { id: 'ws-2', projectPath: '/tmp/two', workingBranch: 'feature/two', worktreePath: '/tmp/two' },
+    ]
+    vi.mocked(listWorkspaces).mockReturnValue(workspaces as never)
+    vi.mocked(getWorkspace).mockImplementation((id) => workspaces.find((workspace) => workspace.id === id) as never)
+    vi.mocked(getProjectSettings).mockReturnValue(null)
+
+    await stopAllDevServers()
+
+    expect(emitEphemeral).toHaveBeenCalledWith(
+      'ws-1',
+      'devserver:status',
+      expect.objectContaining({ status: 'stopped' }),
+    )
+    expect(emitEphemeral).toHaveBeenCalledWith(
+      'ws-2',
+      'devserver:status',
+      expect.objectContaining({ status: 'stopped' }),
     )
   })
 })

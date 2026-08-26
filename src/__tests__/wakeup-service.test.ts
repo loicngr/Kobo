@@ -183,7 +183,7 @@ describe('wakeup-service', () => {
       expect(callArgs[6]).toBe('sess-original')
     })
 
-    it('skips fire and emits wakeup:skipped when a controller is already active', async () => {
+    it('defers fire when a controller is already active and retries after 15 seconds', async () => {
       const wakeupService = await import('../server/services/wakeup-service.js')
       const orch = await import('../server/services/agent/orchestrator.js')
       const ws = await import('../server/services/websocket-service.js')
@@ -193,11 +193,21 @@ describe('wakeup-service', () => {
       await vi.advanceTimersByTimeAsync(60_000)
 
       expect(orch.startAgent).not.toHaveBeenCalled()
-      expect(ws.emitEphemeral).toHaveBeenCalledWith(wsId, 'wakeup:skipped', { reason: 'session-active' })
+      expect(ws.emitEphemeral).toHaveBeenCalledWith(
+        wsId,
+        'wakeup:scheduled',
+        expect.objectContaining({ reason: undefined }),
+      )
+      expect(wakeupService.getPending(wsId)).toEqual({ targetAt: expect.any(String), reason: undefined })
+
+      ;(orch.hasController as ReturnType<typeof vi.fn>).mockReturnValue(false)
+      await vi.advanceTimersByTimeAsync(15_000)
+
+      expect(orch.startAgent).toHaveBeenCalledTimes(1)
       expect(wakeupService.getPending(wsId)).toBeNull()
     })
 
-    it('emits wakeup:skipped with fire-failed when startAgent throws', async () => {
+    it('keeps the wakeup pending and retries when startAgent throws', async () => {
       const wakeupService = await import('../server/services/wakeup-service.js')
       const orch = await import('../server/services/agent/orchestrator.js')
       const ws = await import('../server/services/websocket-service.js')
@@ -209,7 +219,13 @@ describe('wakeup-service', () => {
       wakeupService.schedule(wsId, 60, 'do stuff', undefined)
       await vi.advanceTimersByTimeAsync(60_000)
 
-      expect(ws.emitEphemeral).toHaveBeenCalledWith(wsId, 'wakeup:skipped', { reason: 'fire-failed' })
+      expect(ws.emitEphemeral).toHaveBeenCalledWith(wsId, 'wakeup:scheduled', expect.any(Object))
+      expect(wakeupService.getPending(wsId)).toEqual({ targetAt: expect.any(String), reason: undefined })
+
+      ;(orch.startAgent as ReturnType<typeof vi.fn>).mockReturnValue(undefined)
+      await vi.advanceTimersByTimeAsync(15_000)
+
+      expect(orch.startAgent).toHaveBeenCalledTimes(2)
       expect(wakeupService.getPending(wsId)).toBeNull()
     })
 

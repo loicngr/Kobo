@@ -509,6 +509,16 @@ describe('MCP tasks server handlers', () => {
       fs.writeFileSync(path.join(worktreePath, 'src', 'README.md'), '# NO')
       expect(listDocumentsHandler(worktreePath)).toEqual([])
     })
+
+    it('ignore les liens symboliques vers des documents hors du worktree', () => {
+      const plansDir = path.join(worktreePath, 'docs', 'plans')
+      const outside = path.join(tmpDir, 'outside.md')
+      fs.mkdirSync(plansDir, { recursive: true })
+      fs.writeFileSync(outside, '# Private')
+      fs.symlinkSync(outside, path.join(plansDir, 'outside.md'))
+
+      expect(listDocumentsHandler(worktreePath)).toEqual([])
+    })
   })
 
   describe('readDocumentHandler', () => {
@@ -541,6 +551,20 @@ describe('MCP tasks server handlers', () => {
 
     it('throw si le fichier est absent', () => {
       expect(() => readDocumentHandler(worktreePath, 'docs/plans/ghost.md')).toThrow(/not found/)
+    })
+
+    it('rejette un lien symbolique vers un fichier hors du worktree', () => {
+      const outside = path.join(tmpDir, 'outside.md')
+      fs.writeFileSync(outside, '# Private')
+      fs.symlinkSync(outside, path.join(worktreePath, 'docs', 'plans', 'outside.md'))
+
+      expect(() => readDocumentHandler(worktreePath, 'docs/plans/outside.md')).toThrow(/Path escapes allowed root/)
+    })
+
+    it('rejette un document de plus de 1 Mo', () => {
+      fs.writeFileSync(path.join(worktreePath, 'docs', 'plans', 'large.md'), 'x'.repeat(1024 * 1024 + 1))
+
+      expect(() => readDocumentHandler(worktreePath, 'docs/plans/large.md')).toThrow(/too large/)
     })
   })
 

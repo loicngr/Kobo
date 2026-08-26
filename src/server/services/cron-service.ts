@@ -238,9 +238,8 @@ function fireOrSkip(id: string): void {
       return
     }
 
-    let status: 'fired' | 'skipped-active' = 'skipped-active'
+    let status: 'fired' | 'skipped-active' | 'start-failed' = 'skipped-active'
     if (!orchestrator.hasController(row.workspace_id)) {
-      status = 'fired'
       try {
         const globalSettings = settingsService.getGlobalSettings()
         const projectSettings = settingsService.getProjectSettings(wsRow.project_path)
@@ -272,8 +271,10 @@ function fireOrSkip(id: string): void {
           row.agent_session_id ?? undefined,
           wsRow.reasoning_effort,
         )
+        status = 'fired'
       } catch (err) {
         console.error(`[cron-service] startAgent at fire time failed for cron '${id}':`, err)
+        status = 'start-failed'
       }
     }
 

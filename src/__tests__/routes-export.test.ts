@@ -91,6 +91,22 @@ describe('GET /api/workspaces/:id/events.csv', () => {
     expect(body).toContain('"a, ""b""\nc"')
   })
 
+  it('neutralizes spreadsheet formulas in text and raw payload cells', async () => {
+    await insertEvent(
+      'user:message',
+      { content: '  =HYPERLINK("https://evil")' },
+      'sess-1',
+      '2026-05-15T10:00:00Z',
+      'e1',
+    )
+
+    const res = await app.request(`/api/workspaces/${wsId}/events.csv`)
+    const body = await res.text()
+
+    expect(body).toContain(`'  =HYPERLINK`)
+    expect(body).not.toContain(',  =HYPERLINK')
+  })
+
   it('leaves the text column empty for events with no textual payload', async () => {
     await insertEvent('task:updated', { taskId: 't1', done: true }, 'sess-1', '2026-05-15T10:00:00Z', 'e1')
 

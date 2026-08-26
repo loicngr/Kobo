@@ -2,6 +2,7 @@ import { execFile as execFileCb, execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { promisify } from 'node:util'
+import { resolvePathInside } from './safe-path.js'
 
 const execFileAsync = promisify(execFileCb)
 const READ_ONLY_GIT_TIMEOUT_MS = 15_000
@@ -910,6 +911,7 @@ export function rollbackFile(
   filePath: string,
   remote = 'origin',
 ): RollbackTarget {
+  const absPath = resolvePathInside(repoPath, filePath)
   const remoteRef = `${remote}/${branchName}`
   let remoteRefExists = false
   try {
@@ -937,7 +939,6 @@ export function rollbackFile(
     // with a previous rollback, stale UI list, manual rm), we still return
     // 'deleted' since the end state matches the user's intent. `rmSync`
     // over `git clean -f` keeps the action narrow to one file.
-    const absPath = join(repoPath, filePath)
     if (existsSync(absPath)) {
       rmSync(absPath, { force: true })
     }
@@ -951,7 +952,7 @@ export const rollbackFileToRemote = rollbackFile
 /** Get the current content of a file in the worktree. Returns null if the file doesn't exist. */
 export function getFileContent(repoPath: string, filePath: string): string | null {
   try {
-    return readFileSync(join(repoPath, filePath), 'utf-8')
+    return readFileSync(resolvePathInside(repoPath, filePath), 'utf-8')
   } catch {
     return null
   }

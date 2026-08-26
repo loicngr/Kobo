@@ -4027,6 +4027,13 @@ describe('GET /api/workspaces/:id/diff-file', () => {
     const res = await app.request('/api/workspaces/w1/diff-file')
     expect(res.status).toBe(400)
   })
+
+  it('rejects a traversal path before reading either Git or the worktree', async () => {
+    const res = await app.request('/api/workspaces/w1/diff-file?path=../../etc/passwd')
+    expect(res.status).toBe(400)
+    expect(gitOps.getFileAtRef).not.toHaveBeenCalled()
+    expect(gitOps.getFileContent).not.toHaveBeenCalled()
+  })
 })
 
 describe('GET /api/workspaces/:id/commits', () => {

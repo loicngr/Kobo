@@ -21,6 +21,7 @@ interface PendingWakeupRow {
 
 const MIN_DELAY_SECONDS = 60
 const MAX_DELAY_SECONDS = 21600
+const ACTIVE_SESSION_RETRY_MS = 15_000
 const STALE_WAKEUP_GRACE_MS = 5 * 60 * 1000
 const AUTONOMOUS_LOOP_SENTINEL = '<<autonomous-loop-dynamic>>'
 const AUTONOMOUS_LOOP_FALLBACK_PROMPT = 'Continue where you left off.'
@@ -35,6 +36,17 @@ function clamp(n: number, lo: number, hi: number): number {
 function rowToPending(row: PendingWakeupRow | undefined): PendingWakeup | null {
   if (!row) return null
   return { targetAt: row.target_at, reason: row.reason ?? undefined }
+}
+
+/** Keep a claimed wakeup durable while the session is still unavailable. */
+function defer(workspaceId: string, row: PendingWakeupRow): void {
+  const targetAt = new Date(Date.now() + ACTIVE_SESSION_RETRY_MS).toISOString()
+  getDb().prepare('UPDATE pending_wakeups SET target_at = ? WHERE workspace_id = ?').run(targetAt, workspaceId)
+
+  const timeout = setTimeout(() => fire(workspaceId), ACTIVE_SESSION_RETRY_MS)
+  timeout.unref?.()
+  timers.set(workspaceId, timeout)
+  emitEphemeral(workspaceId, 'wakeup:scheduled', { targetAt, reason: row.reason ?? undefined })
 }
 
 /** Schedule a wakeup for the given workspace. Replaces any existing pending wakeup. */
@@ -157,25 +169,16 @@ function fire(workspaceId: string): void {
   try {
     const db = getDb()
 
-    // Atomic claim: SELECT + DELETE in a single transaction so a concurrent
-    // cancel() can't race us between the read and the act. If we come out
-    // with a row, it's ours exclusively; no other caller will ever see it.
-    const row = db.transaction(() => {
-      const r = db.prepare('SELECT * FROM pending_wakeups WHERE workspace_id = ?').get(workspaceId) as
-        | PendingWakeupRow
-        | undefined
-      if (r) {
-        db.prepare('DELETE FROM pending_wakeups WHERE workspace_id = ?').run(workspaceId)
-      }
-      return r
-    })()
+    const row = db.prepare('SELECT * FROM pending_wakeups WHERE workspace_id = ?').get(workspaceId) as
+      | PendingWakeupRow
+      | undefined
 
     timers.delete(workspaceId)
 
     if (!row) return
 
     if (orchestrator.hasController(workspaceId)) {
-      emitEphemeral(workspaceId, 'wakeup:skipped', { reason: 'session-active' })
+      defer(workspaceId, row)
       return
     }
 
@@ -224,11 +227,12 @@ function fire(workspaceId: string): void {
         row.agent_session_id ?? undefined,
         wsRow.reasoning_effort,
       )
+      db.prepare('DELETE FROM pending_wakeups WHERE workspace_id = ?').run(workspaceId)
       emitEphemeral(workspaceId, 'wakeup:fired', {})
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       console.error(`[wakeup-service] startAgent at fire time failed for '${workspaceId}':`, message)
-      emitEphemeral(workspaceId, 'wakeup:skipped', { reason: 'fire-failed' })
+      defer(workspaceId, row)
     }
   } catch (err) {
     console.error('[wakeup-service] fire failed:', err)

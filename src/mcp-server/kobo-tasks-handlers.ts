@@ -5,6 +5,7 @@ import { nanoid } from 'nanoid'
 import * as cronService from '../server/services/cron-service.js'
 import * as settingsService from '../server/services/settings-service.js'
 import { slugifyProjectName } from '../server/utils/project-slug.js'
+import { resolveExistingPathInside } from '../server/utils/safe-path.js'
 import { resolveWorkspaceWorktreePath } from '../server/utils/worktree-paths.js'
 
 /** Allowed task status values. */
@@ -466,6 +467,7 @@ export const DOCUMENT_DIRS = ['docs/plans', 'docs/superpowers', '.ai/thoughts'] 
 
 /** Depth cap to keep recursion bounded even on pathological symlink loops. */
 const DOC_MAX_DEPTH = 8
+const DOC_MAX_FILE_BYTES = 1024 * 1024
 
 /** Metadata for a markdown document surfaced by the documents tools. */
 export interface DocumentDto {
@@ -492,12 +494,13 @@ function walkMarkdownFiles(rootAbs: string, rootRel: string, out: DocumentDto[],
     if (entry.startsWith('.') && entry !== '.ai') continue
     const absEntry = path.join(rootAbs, entry)
     const relEntry = `${rootRel}/${entry}`
-    let stat: ReturnType<typeof fs.statSync>
+    let stat: ReturnType<typeof fs.lstatSync>
     try {
-      stat = fs.statSync(absEntry)
+      stat = fs.lstatSync(absEntry)
     } catch {
       continue
     }
+    if (stat.isSymbolicLink()) continue
     if (stat.isDirectory()) {
       walkMarkdownFiles(absEntry, relEntry, out, depth + 1)
     } else if (stat.isFile() && entry.endsWith('.md')) {
@@ -515,7 +518,12 @@ export function listDocumentsHandler(worktreePath: string): DocumentDto[] {
   for (const dir of DOCUMENT_DIRS) {
     const absDir = path.join(worktreePath, dir)
     if (!fs.existsSync(absDir)) continue
-    walkMarkdownFiles(absDir, dir, documents)
+    try {
+      if (fs.lstatSync(absDir).isSymbolicLink()) continue
+      walkMarkdownFiles(resolveExistingPathInside(worktreePath, absDir), dir, documents)
+    } catch {
+      // A document directory outside the worktree is never eligible.
+    }
   }
   documents.sort((a, b) => new Date(b.modifiedAt).getTime() - new Date(a.modifiedAt).getTime())
   return documents
@@ -542,7 +550,19 @@ export function readDocumentHandler(worktreePath: string, relPath: string): Docu
   if (!fs.existsSync(abs)) {
     throw new Error(`Document not found: ${normalized}`)
   }
-  return { path: normalized, content: fs.readFileSync(abs, 'utf-8') }
+  const lstat = fs.lstatSync(abs)
+  if (lstat.isSymbolicLink()) {
+    // Resolve for a consistent error if the link escapes; internal links are
+    // rejected too so list/read share the same no-symlink contract.
+    resolveExistingPathInside(worktreePath, abs)
+    throw new Error('Symbolic links are not allowed in documents')
+  }
+  const safeAbs = resolveExistingPathInside(worktreePath, abs)
+  const stat = fs.statSync(safeAbs)
+  if (stat.size > DOC_MAX_FILE_BYTES) {
+    throw new Error(`Document too large (max ${DOC_MAX_FILE_BYTES / 1024 / 1024} MB)`)
+  }
+  return { path: normalized, content: fs.readFileSync(safeAbs, 'utf-8') }
 }
 
 /**

@@ -20,6 +20,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
           yield {
             type: 'system',
             subtype: 'task_started',
+            task_id: 'task-review-1',
             tool_use_id: 'review-1',
             description: 'Full PR review',
           }
@@ -41,6 +42,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
           yield {
             type: 'system',
             subtype: 'task_notification',
+            task_id: 'task-review-1',
             tool_use_id: 'review-1',
             status: 'completed',
           }
@@ -258,7 +260,7 @@ describe('claude-code engine — result drain watchdog', () => {
       await vi.advanceTimersByTimeAsync(1_000)
       process.interrupt()
 
-      expect(stopTaskMock).toHaveBeenCalledWith('review-1')
+      expect(stopTaskMock).toHaveBeenCalledWith('task-review-1')
     } finally {
       completeSubagent?.()
       await vi.advanceTimersByTimeAsync(0)

@@ -133,6 +133,7 @@ describe('event-mapper', () => {
           type: 'system',
           subtype: 'task_started',
           session_id: 's',
+          task_id: 'task-1',
           tool_use_id: 'tool-1',
           description: 'doing the thing',
           task_type: 'general',
@@ -142,6 +143,7 @@ describe('event-mapper', () => {
       expect(events).toEqual([
         {
           kind: 'subagent:progress',
+          taskId: 'task-1',
           toolCallId: 'tool-1',
           status: 'running',
           description: 'doing the thing',
@@ -213,12 +215,18 @@ describe('event-mapper', () => {
       expect(events[0]).toMatchObject({ kind: 'subagent:progress', status: 'done' })
     })
 
-    it('drops task events without a tool_use_id', () => {
+    it('uses task_id as the UI fallback when task events omit tool_use_id', () => {
       const events = mapSdkMessage(
-        asMsg({ type: 'system', subtype: 'task_started', session_id: 's', description: 'no tool id' }),
+        asMsg({
+          type: 'system',
+          subtype: 'task_started',
+          session_id: 's',
+          task_id: 'task-1',
+          description: 'no tool id',
+        }),
         createMapperState(),
       )
-      expect(events).toEqual([])
+      expect(events).toMatchObject([{ kind: 'subagent:progress', taskId: 'task-1', toolCallId: 'task-1' }])
     })
   })
 

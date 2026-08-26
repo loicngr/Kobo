@@ -122,7 +122,9 @@ export function createClaudeCodeEngine(): AgentEngine {
     async start(options: StartOptions, onEvent): Promise<EngineProcess> {
       const abortController = new AbortController()
       const mapperState = createMapperState()
-      const activeSubagentToolCallIds = new Set<string>()
+      // UI/tool ids can differ from the SDK task id. Key by the stable UI id
+      // so a terminal notification that omits task_id still clears the task.
+      const activeSubagentTaskIds = new Map<string, string>()
 
       // Pending canUseTool callbacks, keyed by SDK ctx.toolUseID.
       const pendingResolvers = new Map<string, PendingResolver>()
@@ -353,7 +355,7 @@ export function createClaudeCodeEngine(): AgentEngine {
           console.warn(
             `[claude-engine] Subagent(s) still tracked active ${SUBAGENT_STALL_TIMEOUT_MS}ms after the last turn ended — forcing session drain.`,
           )
-          activeSubagentToolCallIds.clear()
+          activeSubagentTaskIds.clear()
           // This is a forced, unclean termination (the subagent may still be
           // alive server-side) — never report it as a normal completion, so
           // auto-loop doesn't treat an orphaned run as forward progress.
@@ -371,8 +373,8 @@ export function createClaudeCodeEngine(): AgentEngine {
             const events = mapSdkMessage(msg, mapperState)
             for (const ev of events) {
               if (ev.kind !== 'subagent:progress') continue
-              if (ev.status === 'running') activeSubagentToolCallIds.add(ev.toolCallId)
-              else activeSubagentToolCallIds.delete(ev.toolCallId)
+              if (ev.status === 'running') activeSubagentTaskIds.set(ev.toolCallId, ev.taskId ?? ev.toolCallId)
+              else activeSubagentTaskIds.delete(ev.toolCallId)
             }
             // The stall watchdog is only armed while we're waiting purely on
             // background subagents (no further SDK turn expected unless one
@@ -380,7 +382,7 @@ export function createClaudeCodeEngine(): AgentEngine {
             // waiting for a 'result' message that may never come.
             if (
               subagentStallTimer &&
-              activeSubagentToolCallIds.size === 0 &&
+              activeSubagentTaskIds.size === 0 &&
               !inputStream.hasUnansweredInput(completedResponses)
             ) {
               clearSubagentStallWatchdog()
@@ -403,7 +405,7 @@ export function createClaudeCodeEngine(): AgentEngine {
               completedResponses++
               // A queued forced message starts the next response on this same SDK stream.
               if (!inputStream.hasUnansweredInput(completedResponses)) {
-                if (activeSubagentToolCallIds.size === 0) {
+                if (activeSubagentTaskIds.size === 0) {
                   clearSubagentStallWatchdog()
                   inputStream.close()
                   armResultDrainWatchdog()
@@ -493,7 +495,7 @@ export function createClaudeCodeEngine(): AgentEngine {
           // background subagent task keeps running unless told to stop via
           // its own API, which would otherwise leave the Stop button
           // appearing to do nothing for up to SUBAGENT_STALL_TIMEOUT_MS.
-          for (const taskId of activeSubagentToolCallIds) {
+          for (const taskId of activeSubagentTaskIds.values()) {
             try {
               void q.stopTask(taskId).catch(() => {
                 /* best-effort */

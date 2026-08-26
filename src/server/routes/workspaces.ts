@@ -55,6 +55,7 @@ import * as worktreeService from '../services/worktree-service.js'
 import { resolveUniqueBranchAndPath } from '../utils/branch-resolver.js'
 import * as gitOps from '../utils/git-ops.js'
 import { slugifyProjectName } from '../utils/project-slug.js'
+import * as safePath from '../utils/safe-path.js'
 import { resolveSiblingWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 
 /** Hono sub-router for workspace CRUD, tasks, agent lifecycle, git operations, and PR creation. */
@@ -3046,6 +3047,12 @@ app.get('/:id/diff-file', (c) => {
     }
 
     const worktreePath = workspace.worktreePath
+    try {
+      safePath.assertPathInside(worktreePath, filePath)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return c.json({ error: message }, 400)
+    }
 
     if (c.req.query('mode') === 'commits') {
       const from = c.req.query('from')
@@ -3107,6 +3114,13 @@ app.post('/:id/rollback-file', async (c) => {
     const filePath = typeof body?.path === 'string' ? body.path.trim() : ''
     if (!filePath) {
       return c.json({ error: 'Missing or invalid `path` field' }, 400)
+    }
+
+    try {
+      safePath.assertPathInside(workspace.worktreePath, filePath)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return c.json({ error: message }, 400)
     }
 
     let target: gitOps.RollbackTarget

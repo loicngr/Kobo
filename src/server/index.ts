@@ -34,13 +34,14 @@ import {
   startAgent,
   startWatchdog,
   stopAgent,
+  stopAllAgents,
   stopWatchdog,
 } from './services/agent/orchestrator.js'
 import * as autoLoopService from './services/auto-loop-service.js'
 import { runContentMigrationIfNeeded } from './services/content-migration-service.js'
 import * as cronService from './services/cron-service.js'
 import { createDailyDbBackupIfNeeded, createPreMigrationBackup } from './services/db-backup-service.js'
-import { startDevServer, stopDevServer } from './services/dev-server-service.js'
+import { startDevServer, stopAllDevServers, stopDevServer } from './services/dev-server-service.js'
 import {
   authorizeWsUpgrade,
   generateToken,
@@ -58,7 +59,6 @@ import * as wakeupService from './services/wakeup-service.js'
 import { emit, emitEphemeral, handleConnection, setMessageHandler } from './services/websocket-service.js'
 import { getActiveSession, getWorkspace, updateWorkspaceStatus } from './services/workspace-service.js'
 import { getClientSpaPath, getDbPath, getKoboHome, getPackageVersion } from './utils/paths.js'
-import { initProcessCleanup, killAll as killAllTrackedProcesses } from './utils/process-tracker.js'
 
 console.log(`[kobo] Kōbō home: ${getKoboHome()}`)
 
@@ -93,7 +93,6 @@ void createDailyDbBackupIfNeeded(db, getDbPath()).then((r) => {
 })
 
 // Initialize process cleanup, agent watchdog, PR watcher, and wakeup rehydration
-initProcessCleanup()
 reconcileOrphanSessions()
 startWatchdog()
 wakeupService.rehydrate()
@@ -567,10 +566,10 @@ async function gracefulShutdown(signal: string): Promise<void> {
     // Best-effort
   }
 
-  // Kill all tracked child processes (agents, dev servers)
+  // Stop managed agents and both direct/Docker dev servers before closing DB.
   try {
-    killAllTrackedProcesses()
-    console.log('[kobo] Tracked processes killed')
+    await Promise.all([stopAllAgents(), stopAllDevServers()])
+    console.log('[kobo] Agents and dev servers stopped')
   } catch {
     // Best-effort
   }

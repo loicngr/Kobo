@@ -147,6 +147,20 @@ describe('Orchestrator — stop / interrupt / sendMessage', () => {
     expect(getAgentStatus(ws.id)).toBeNull()
   })
 
+  it('stopAllAgents waits for and removes every live controller', async () => {
+    const { createWorkspace } = await import('../../server/services/workspace-service.js')
+    const first = createWorkspace({ name: 'First', projectPath: '/tmp', sourceBranch: 'd', workingBranch: 'first' })
+    const second = createWorkspace({ name: 'Second', projectPath: '/tmp', sourceBranch: 'd', workingBranch: 'second' })
+    const { startAgent, stopAllAgents, getRunningCount } = await import('../../server/services/agent/orchestrator.js')
+    startAgent(first.id, '/tmp', 'hi')
+    startAgent(second.id, '/tmp', 'hi')
+    await flushControllerStart()
+
+    await stopAllAgents()
+
+    expect(getRunningCount()).toBe(0)
+  })
+
   it('sendMessage rejects when no agent is running', async () => {
     const { sendMessage } = await import('../../server/services/agent/orchestrator.js')
     await expect(sendMessage('nope', 'hi')).rejects.toThrow(/No agent running/)

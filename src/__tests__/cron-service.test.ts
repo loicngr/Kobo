@@ -249,6 +249,27 @@ describe('cron-service — fireOrSkip', () => {
 
     consoleErr.mockRestore()
   })
+
+  it('does not consume a one-shot cron when orchestrator.startAgent throws', async () => {
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const ws = await import('../server/services/websocket-service.js')
+    ;(orch.startAgent as ReturnType<typeof vi.fn>).mockImplementation(() => {
+      throw new Error('boom')
+    })
+    const svc = await import('../server/services/cron-service.js')
+    const consoleErr = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const cron = svc.arm(wsId, { expression: '@hourly', prompt: 'tick', oneShot: true })
+    await vi.advanceTimersByTimeAsync(60 * 60 * 1000 + 100)
+
+    expect(svc.getCron(cron.id)).not.toBeNull()
+    const firedEvents = (ws.emitEphemeral as ReturnType<typeof vi.fn>).mock.calls.filter(
+      ([, type]) => type === 'cron:fired',
+    )
+    expect(firedEvents.at(-1)?.[2]).toMatchObject({ id: cron.id, status: 'start-failed' })
+
+    consoleErr.mockRestore()
+  })
 })
 
 describe('cron-service — restoreOnBoot', () => {

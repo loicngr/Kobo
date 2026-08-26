@@ -1216,13 +1216,7 @@ export function interruptAgent(workspaceId: string, options: InterruptAgentOptio
   }
 }
 
-/** Gracefully stop an agent (the engine handles SIGTERM + SIGKILL). */
-export function stopAgent(workspaceId: string): void {
-  const ctrl = controllers.get(workspaceId)
-  if (!ctrl) {
-    throw new Error(`No agent running for workspace '${workspaceId}'`)
-  }
-
+async function stopController(workspaceId: string, ctrl: SessionController): Promise<void> {
   wakeupService.cancel(workspaceId, 'stopped')
 
   // If the session was waiting on a question/permission, normalize the state
@@ -1253,10 +1247,41 @@ export function stopAgent(workspaceId: string): void {
   // Manual stop should also drop any pending quota auto-resume.
   quotaBackoffService.cancel(workspaceId, 'user')
 
-  // Fire-and-forget: controller.stop is async but we don't block callers.
-  void ctrl.stop().catch((err) => {
+  await ctrl.stop()
+}
+
+/** Gracefully stop an agent (the engine handles SIGTERM + SIGKILL). */
+export function stopAgent(workspaceId: string): void {
+  const ctrl = controllers.get(workspaceId)
+  if (!ctrl) {
+    throw new Error(`No agent running for workspace '${workspaceId}'`)
+  }
+
+  // Fire-and-forget: callers such as archive/delete must remain synchronous.
+  void stopController(workspaceId, ctrl).catch((err) => {
     console.error('[orchestrator] controller.stop failed:', err)
   })
+}
+
+/** Stop every live engine before process shutdown, with a bounded wait per engine. */
+export async function stopAllAgents(timeoutMs = 3_000): Promise<void> {
+  const stops = [...controllers.entries()].map(async ([workspaceId, ctrl]) => {
+    let timeout: ReturnType<typeof setTimeout> | undefined
+    try {
+      await Promise.race([
+        stopController(workspaceId, ctrl),
+        new Promise<void>((resolve) => {
+          timeout = setTimeout(resolve, timeoutMs)
+          timeout.unref?.()
+        }),
+      ])
+    } catch (err) {
+      console.error(`[orchestrator] Failed to stop '${workspaceId}' during shutdown:`, err)
+    } finally {
+      if (timeout) clearTimeout(timeout)
+    }
+  })
+  await Promise.all(stops)
 }
 
 /** Write a user message to the running agent. */

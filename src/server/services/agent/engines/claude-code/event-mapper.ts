@@ -234,7 +234,8 @@ export function mapSdkMessage(msg: SDKMessage, state: MapperState): AgentEvent[]
       return events
     }
     if (subtype === 'task_started' || subtype === 'task_progress' || subtype === 'task_notification') {
-      const toolCallId = typeof parsed.tool_use_id === 'string' ? (parsed.tool_use_id as string) : undefined
+      const taskId = typeof parsed.task_id === 'string' ? (parsed.task_id as string) : undefined
+      const toolCallId = typeof parsed.tool_use_id === 'string' ? (parsed.tool_use_id as string) : taskId
       if (toolCallId) {
         const usage = parsed.usage as Record<string, unknown> | undefined
         // Unlike task_started/task_progress (in-flight signals), task_notification
@@ -246,6 +247,7 @@ export function mapSdkMessage(msg: SDKMessage, state: MapperState): AgentEvent[]
         events.push({
           kind: 'subagent:progress',
           toolCallId,
+          ...(taskId ? { taskId } : {}),
           status: isDone ? 'done' : 'running',
           description: typeof parsed.description === 'string' ? (parsed.description as string) : undefined,
           taskType: typeof parsed.task_type === 'string' ? (parsed.task_type as string) : undefined,
