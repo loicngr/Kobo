@@ -30,6 +30,13 @@ import { createTurnLiveness } from './turn-liveness.js'
 /** Long enough for normal tool work, short enough to recover a lost turn event. */
 export const CODEX_TURN_IDLE_TIMEOUT_MS = 120_000
 export const CODEX_GRACEFUL_INTERRUPT_TIMEOUT_MS = 3_000
+// Safety net while `turnLiveness` is paused for background subagents: that
+// pause is deliberately unbounded (a legitimate subagent can run long), but
+// if a thread never reports a terminal status (dropped notification, or the
+// sub-thread's own process hanging), nothing else would ever resume it or
+// resolve `turnDonePromise` — the session would hang forever. Generous
+// window, refreshed on every observed subagent-thread status change.
+export const CODEX_SUBAGENT_STALL_TIMEOUT_MS = 10 * 60_000
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
@@ -138,6 +145,30 @@ export function createCodexEngine(): AgentEngine {
         resolveTurnDone = resolve
         rejectTurnDone = reject
       })
+      let subagentStallTimer: ReturnType<typeof setTimeout> | undefined
+      const clearSubagentStallWatchdog = (): void => {
+        if (!subagentStallTimer) return
+        clearTimeout(subagentStallTimer)
+        subagentStallTimer = undefined
+      }
+      // Re-armed on every observed subagent-thread status change so the
+      // deadline tracks the last activity, not the start of the wait.
+      const armSubagentStallWatchdog = (): void => {
+        clearSubagentStallWatchdog()
+        subagentStallTimer = setTimeout(() => {
+          subagentStallTimer = undefined
+          console.warn(
+            `[codex-engine] Background subagent thread(s) still tracked active ${CODEX_SUBAGENT_STALL_TIMEOUT_MS}ms after the turn completed — forcing session drain.`,
+          )
+          activeSubagentThreads.clear()
+          // Forced, unclean termination (a thread may still be alive
+          // server-side) — never report it as a normal completion, so
+          // auto-loop doesn't treat an orphaned run as forward progress.
+          mapperState.sawErrorResult = true
+          if (waitingForBackgroundSubagents) resolveTurnDone()
+        }, CODEX_SUBAGENT_STALL_TIMEOUT_MS)
+        subagentStallTimer.unref?.()
+      }
       const finishBackgroundSubagent = (threadId: string, alreadyEmittedToolCallId?: string): void => {
         const tracked = activeSubagentThreads.get(threadId)
         if (!tracked) return
@@ -151,7 +182,14 @@ export function createCodexEngine(): AgentEngine {
             taskType: tracked.taskType,
           })
         }
-        if (waitingForBackgroundSubagents && activeSubagentThreads.size === 0) resolveTurnDone()
+        if (waitingForBackgroundSubagents) {
+          if (activeSubagentThreads.size === 0) {
+            clearSubagentStallWatchdog()
+            resolveTurnDone()
+          } else {
+            armSubagentStallWatchdog()
+          }
+        }
       }
       const turnLiveness = createTurnLiveness({
         timeoutMs: CODEX_TURN_IDLE_TIMEOUT_MS,
@@ -263,6 +301,7 @@ export function createCodexEngine(): AgentEngine {
               if (n.turn?.status === 'completed' && activeSubagentThreads.size > 0) {
                 waitingForBackgroundSubagents = true
                 turnLiveness.pause()
+                armSubagentStallWatchdog()
               } else {
                 resolveTurnDone()
               }
@@ -415,8 +454,20 @@ export function createCodexEngine(): AgentEngine {
           }
         } finally {
           turnLiveness.stop()
+          clearSubagentStallWatchdog()
           streamingBatcher.close()
           iteratorRunning = false
+          // Drain any outstanding approval/elicitation request (SDK terminated
+          // while awaiting a human decision) — without a response, Codex's own
+          // process would otherwise wait forever for a reply that never comes.
+          for (const pending of pendingByCallId.values()) {
+            try {
+              client.peer.respondError(pending.requestId, -32000, 'session ended')
+            } catch {
+              // best-effort
+            }
+          }
+          pendingByCallId.clear()
           client.close()
           try {
             child.kill('SIGTERM')

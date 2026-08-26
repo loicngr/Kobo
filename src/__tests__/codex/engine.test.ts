@@ -52,7 +52,12 @@ vi.mock('../../server/utils/paths.js', async (importOriginal) => {
 })
 
 // Import AFTER mocks are installed
-import { CODEX_TURN_IDLE_TIMEOUT_MS, createCodexEngine } from '../../server/services/agent/engines/codex/engine.js'
+import {
+  CODEX_GRACEFUL_INTERRUPT_TIMEOUT_MS,
+  CODEX_SUBAGENT_STALL_TIMEOUT_MS,
+  CODEX_TURN_IDLE_TIMEOUT_MS,
+  createCodexEngine,
+} from '../../server/services/agent/engines/codex/engine.js'
 import type { AgentEvent, StartOptions } from '../../server/services/agent/engines/types.js'
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -255,6 +260,60 @@ describe('createCodexEngine — background subagents', () => {
     expect(events).toContainEqual({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
     expect(events.filter((event) => event.kind === 'subagent:progress' && event.status === 'done')).toHaveLength(1)
     expect(_child.kill).toHaveBeenCalledWith('SIGTERM')
+  })
+
+  it('force-ends the session if a spawned subagent thread never reports a terminal status', async () => {
+    resetChild()
+    vi.useFakeTimers()
+    try {
+      const events: AgentEvent[] = []
+
+      await createCodexEngine().start(BASE_OPTIONS, (event) => events.push(event))
+
+      await vi.advanceTimersByTimeAsync(10)
+      pushInitializeResponse(1)
+      await vi.advanceTimersByTimeAsync(5)
+      pushThreadStartResponse('thr_parent', 2)
+      await vi.advanceTimersByTimeAsync(5)
+      pushTurnStartResponse('turn_1', 3)
+      await vi.advanceTimersByTimeAsync(5)
+
+      const collabItem = {
+        id: 'spawn_1',
+        type: 'collabAgentToolCall',
+        tool: 'spawnAgent',
+        status: 'completed',
+        senderThreadId: 'thr_parent',
+        receiverThreadIds: ['thr_child'],
+        prompt: 'Review the pull request',
+        model: null,
+        agentsStates: { thr_child: { status: 'running', message: null } },
+      }
+      pushNotification('item/started', {
+        item: { ...collabItem, status: 'inProgress', agentsStates: {} },
+        threadId: 'thr_parent',
+        turnId: 'turn_1',
+      })
+      pushNotification('item/completed', { item: collabItem, threadId: 'thr_parent', turnId: 'turn_1' })
+      pushNotification('turn/completed', {
+        threadId: 'thr_parent',
+        turn: { id: 'turn_1', status: 'completed' },
+      })
+      await vi.advanceTimersByTimeAsync(20)
+
+      expect(events.some((event) => event.kind === 'session:ended')).toBe(false)
+
+      // thr_child never sends thread/status/changed or a terminal
+      // item/completed — a dropped notification, or the sub-thread's own
+      // process hanging. Without the stall watchdog this hangs forever
+      // (turnLiveness stays paused, and nothing else resumes it).
+      await vi.advanceTimersByTimeAsync(CODEX_SUBAGENT_STALL_TIMEOUT_MS + 1_000)
+
+      expect(events).toContainEqual({ kind: 'session:ended', reason: 'error', exitCode: null })
+      expect(_child.kill).toHaveBeenCalledWith('SIGTERM')
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
@@ -730,6 +789,53 @@ describe('createCodexEngine — server request (approval flow)', () => {
     const approvalResponse = responses.find((r) => r.id === 100)
     expect(approvalResponse).toBeDefined()
     expect(approvalResponse?.result).toEqual({ decision: 'accept' })
+  })
+
+  it('drains an outstanding approval request with an error response when the engine tears down mid-approval', async () => {
+    resetChild()
+    vi.useFakeTimers()
+    try {
+      const events: AgentEvent[] = []
+      const engine = createCodexEngine()
+      const proc = await engine.start(BASE_OPTIONS, (ev) => events.push(ev))
+
+      await vi.advanceTimersByTimeAsync(5)
+      pushInitializeResponse(1)
+      await vi.advanceTimersByTimeAsync(5)
+      pushThreadStartResponse('thr_1', 2)
+      await vi.advanceTimersByTimeAsync(5)
+      pushTurnStartResponse('turn_1', 3)
+      await vi.advanceTimersByTimeAsync(5)
+
+      pushLine({
+        jsonrpc: '2.0',
+        id: 100,
+        method: 'item/commandExecution/requestApproval',
+        params: {
+          callId: 'call_teardown',
+          threadId: 'thr_1',
+          turnId: 'turn_1',
+          itemId: 'item_0',
+          command: 'ls',
+          cwd: '/workspace',
+          reason: null,
+        },
+      })
+      await vi.advanceTimersByTimeAsync(20)
+      expect(events.some((e) => e.kind === 'session:user-input-requested')).toBe(true)
+
+      // Nobody ever answers the approval — the engine is torn down mid-flight
+      // (e.g. the workspace is stopped/deleted while a permission card is up).
+      const stopPromise = proc.stop()
+      await vi.advanceTimersByTimeAsync(CODEX_GRACEFUL_INTERRUPT_TIMEOUT_MS * 2 + 100)
+      await stopPromise
+
+      const responses = _child._written.map((line) => JSON.parse(line) as { id?: number; error?: unknown })
+      const response = responses.find((r) => r.id === 100)
+      expect(response?.error).toBeDefined()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 

@@ -237,11 +237,12 @@ export function mapSdkMessage(msg: SDKMessage, state: MapperState): AgentEvent[]
       const toolCallId = typeof parsed.tool_use_id === 'string' ? (parsed.tool_use_id as string) : undefined
       if (toolCallId) {
         const usage = parsed.usage as Record<string, unknown> | undefined
-        const taskStatus = typeof parsed.status === 'string' ? (parsed.status as string) : undefined
-        const isDone =
-          subtype === 'task_notification' &&
-          taskStatus !== undefined &&
-          ['completed', 'stopped', 'failed', 'cancelled'].includes(taskStatus)
+        // Unlike task_started/task_progress (in-flight signals), task_notification
+        // is only ever emitted once a task settles — its `status` value is a
+        // reason, not a liveness signal. Treat every task_notification as
+        // terminal instead of matching against a status whitelist, so an SDK
+        // status value added later doesn't leave the subagent stuck 'running'.
+        const isDone = subtype === 'task_notification'
         events.push({
           kind: 'subagent:progress',
           toolCallId,

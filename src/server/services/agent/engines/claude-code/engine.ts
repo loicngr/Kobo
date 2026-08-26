@@ -32,6 +32,12 @@ const RESULT_DRAIN_TIMEOUT_MS = 15_000
 // without producing a result message. Keep a separate, conservative guard for
 // that shape; active tool/message traffic always cancels and re-arms it.
 const TEXT_IDLE_TIMEOUT_MS = 120_000
+// Safety net for a subagent whose terminal `task_notification` carries a
+// status outside the mapper's known-terminal set (SDK schema drift) — it
+// never clears `activeSubagentToolCallIds`, which otherwise blocks
+// `inputStream.close()`/the result-drain watchdog forever. Generous window:
+// legitimate subagents can run for several minutes.
+const SUBAGENT_STALL_TIMEOUT_MS = 10 * 60_000
 const MAX_PENDING_USER_MESSAGES = 20
 
 function toMcpServersMap(specs: StartOptions['mcpServers']): Options['mcpServers'] | undefined {
@@ -322,6 +328,42 @@ export function createClaudeCodeEngine(): AgentEngine {
         resultDrainTimer.unref?.()
       }
 
+      // Safety net for the "waiting on a background subagent" branch below:
+      // if `activeSubagentToolCallIds` never empties (a missed/unrecognised
+      // terminal notification), the workspace would otherwise stay `executing`
+      // forever. Force the drain through once this fires.
+      let subagentStallTimer: ReturnType<typeof setTimeout> | undefined
+      const clearSubagentStallWatchdog = (): void => {
+        if (!subagentStallTimer) return
+        clearTimeout(subagentStallTimer)
+        subagentStallTimer = undefined
+      }
+      // Re-armed (not merely armed-once) on every qualifying `result` so the
+      // deadline tracks the last observed activity, matching the warning
+      // message below — a long chain of legitimate subagent-backed turns
+      // must not be cut off just because 10 minutes have passed in total.
+      const armSubagentStallWatchdog = (): void => {
+        clearSubagentStallWatchdog()
+        subagentStallTimer = setTimeout(() => {
+          subagentStallTimer = undefined
+          // A message queued between arming and firing means a new turn is
+          // about to start on this same stream — don't discard the subagent
+          // tracking or force-close under it; the next 'result' re-evaluates.
+          if (inputStream.hasUnansweredInput(completedResponses)) return
+          console.warn(
+            `[claude-engine] Subagent(s) still tracked active ${SUBAGENT_STALL_TIMEOUT_MS}ms after the last turn ended — forcing session drain.`,
+          )
+          activeSubagentToolCallIds.clear()
+          // This is a forced, unclean termination (the subagent may still be
+          // alive server-side) — never report it as a normal completion, so
+          // auto-loop doesn't treat an orphaned run as forward progress.
+          mapperState.sawErrorResult = true
+          inputStream.close()
+          armResultDrainWatchdog()
+        }, SUBAGENT_STALL_TIMEOUT_MS)
+        subagentStallTimer.unref?.()
+      }
+
       const iteratorPromise = (async () => {
         iteratorRunning = true
         try {
@@ -331,6 +373,19 @@ export function createClaudeCodeEngine(): AgentEngine {
               if (ev.kind !== 'subagent:progress') continue
               if (ev.status === 'running') activeSubagentToolCallIds.add(ev.toolCallId)
               else activeSubagentToolCallIds.delete(ev.toolCallId)
+            }
+            // The stall watchdog is only armed while we're waiting purely on
+            // background subagents (no further SDK turn expected unless one
+            // reports done). React the moment the last one clears instead of
+            // waiting for a 'result' message that may never come.
+            if (
+              subagentStallTimer &&
+              activeSubagentToolCallIds.size === 0 &&
+              !inputStream.hasUnansweredInput(completedResponses)
+            ) {
+              clearSubagentStallWatchdog()
+              inputStream.close()
+              armResultDrainWatchdog()
             }
             for (const ev of events) {
               if (ev.kind === 'session:started') discoveredSessionId = ev.engineSessionId
@@ -347,9 +402,14 @@ export function createClaudeCodeEngine(): AgentEngine {
               clearTextIdleWatchdog()
               completedResponses++
               // A queued forced message starts the next response on this same SDK stream.
-              if (!inputStream.hasUnansweredInput(completedResponses) && activeSubagentToolCallIds.size === 0) {
-                inputStream.close()
-                armResultDrainWatchdog()
+              if (!inputStream.hasUnansweredInput(completedResponses)) {
+                if (activeSubagentToolCallIds.size === 0) {
+                  clearSubagentStallWatchdog()
+                  inputStream.close()
+                  armResultDrainWatchdog()
+                } else {
+                  armSubagentStallWatchdog()
+                }
               }
             }
           }
@@ -392,6 +452,7 @@ export function createClaudeCodeEngine(): AgentEngine {
             resultDrainTimer = undefined
           }
           clearTextIdleWatchdog()
+          clearSubagentStallWatchdog()
           // Drain any callback still pending (SDK terminated while awaiting an
           // answer). canUseTool's abort path covers signalled stops; this
           // covers natural iterator completion.
@@ -428,6 +489,19 @@ export function createClaudeCodeEngine(): AgentEngine {
           // subtype `error_during_execution` through the normal iterator —
           // the mapper needs this flag to treat it as a clean stop.
           mapperState.userInterrupted = true
+          // The soft interrupt below only ends the foreground turn — a
+          // background subagent task keeps running unless told to stop via
+          // its own API, which would otherwise leave the Stop button
+          // appearing to do nothing for up to SUBAGENT_STALL_TIMEOUT_MS.
+          for (const taskId of activeSubagentToolCallIds) {
+            try {
+              void q.stopTask(taskId).catch(() => {
+                /* best-effort */
+              })
+            } catch {
+              /* best-effort */
+            }
+          }
           const qq = q as unknown as { interrupt?: () => unknown }
           if (typeof qq.interrupt === 'function') {
             try {

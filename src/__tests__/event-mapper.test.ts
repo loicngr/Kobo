@@ -196,6 +196,23 @@ describe('event-mapper', () => {
       expect(events[0]).toMatchObject({ kind: 'subagent:progress', status: 'done' })
     })
 
+    it('emits subagent:progress with done for any task_notification status, including ones outside the known set', () => {
+      // task_notification is only ever emitted when a task finishes (unlike
+      // task_started/task_progress) — a future SDK status value must not be
+      // mistaken for "still running" and leave the subagent tracked forever.
+      const events = mapSdkMessage(
+        asMsg({
+          type: 'system',
+          subtype: 'task_notification',
+          session_id: 's',
+          tool_use_id: 'tool-1',
+          status: 'succeeded',
+        }),
+        createMapperState(),
+      )
+      expect(events[0]).toMatchObject({ kind: 'subagent:progress', status: 'done' })
+    })
+
     it('drops task events without a tool_use_id', () => {
       const events = mapSdkMessage(
         asMsg({ type: 'system', subtype: 'task_started', session_id: 's', description: 'no tool id' }),
