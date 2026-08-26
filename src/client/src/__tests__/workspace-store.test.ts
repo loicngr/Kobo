@@ -55,6 +55,29 @@ describe('workspace store', () => {
     setActivePinia(createPinia())
   })
 
+  describe('createWorkspace', () => {
+    it('preserves the server error message when Sentry extraction fails', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: false,
+          status: 422,
+          json: async () => ({ error: 'Failed to extract Sentry issue: MCP authentication failed' }),
+        } as Response),
+      )
+      const store = useWorkspaceStore()
+
+      await expect(
+        store.createWorkspace({
+          name: 'workspace',
+          projectPath: '/tmp/proj',
+          sourceBranch: 'main',
+          workingBranch: 'feature/task',
+        }),
+      ).rejects.toThrow('Failed to extract Sentry issue: MCP authentication failed')
+    })
+  })
+
   describe('selectWorkspace', () => {
     it('clears sessions synchronously before the replacement fetch resolves', () => {
       const store = useWorkspaceStore()

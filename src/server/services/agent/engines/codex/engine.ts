@@ -132,10 +132,27 @@ export function createCodexEngine(): AgentEngine {
 
       let resolveTurnDone!: () => void
       let rejectTurnDone!: (err: Error) => void
+      const activeSubagentThreads = new Map<string, { toolCallId: string; description?: string; taskType?: string }>()
+      let waitingForBackgroundSubagents = false
       const turnDonePromise = new Promise<void>((resolve, reject) => {
         resolveTurnDone = resolve
         rejectTurnDone = reject
       })
+      const finishBackgroundSubagent = (threadId: string, alreadyEmittedToolCallId?: string): void => {
+        const tracked = activeSubagentThreads.get(threadId)
+        if (!tracked) return
+        activeSubagentThreads.delete(threadId)
+        if (tracked.toolCallId !== alreadyEmittedToolCallId) {
+          safeEmit({
+            kind: 'subagent:progress',
+            toolCallId: tracked.toolCallId,
+            status: 'done',
+            description: tracked.description,
+            taskType: tracked.taskType,
+          })
+        }
+        if (waitingForBackgroundSubagents && activeSubagentThreads.size === 0) resolveTurnDone()
+      }
       const turnLiveness = createTurnLiveness({
         timeoutMs: CODEX_TURN_IDLE_TIMEOUT_MS,
         onTimeout() {
@@ -174,24 +191,62 @@ export function createCodexEngine(): AgentEngine {
             safeEmit({ kind: 'mcp:status', serverName, status: normalized, message })
             return
           }
-          if (
-            method === 'thread/started' ||
-            method === 'thread/status/changed' ||
-            method === 'remoteControl/status/changed' ||
-            method === 'turn/started'
-          ) {
+          if (method === 'thread/status/changed') {
+            const notification = params as { threadId?: string; status?: { type?: string } }
+            if (notification.threadId && notification.status?.type !== 'active') {
+              finishBackgroundSubagent(notification.threadId)
+            }
+            return
+          }
+          if (method === 'thread/started' || method === 'remoteControl/status/changed' || method === 'turn/started') {
             return
           }
 
           if (method === 'item/started') {
             const n = params as ItemStartedNotification
-            for (const ev of handleItemStarted(n.item, mapperState)) safeEmit(ev)
+            const events = handleItemStarted(n.item, mapperState)
+            for (const ev of events) safeEmit(ev)
+            if (n.item.type === 'collabAgentToolCall' && n.item.tool === 'spawnAgent') {
+              const progress = events.find(
+                (event): event is Extract<AgentEvent, { kind: 'subagent:progress' }> =>
+                  event.kind === 'subagent:progress',
+              )
+              if (progress) {
+                for (const threadId of n.item.receiverThreadIds) {
+                  activeSubagentThreads.set(threadId, {
+                    toolCallId: progress.toolCallId,
+                    description: progress.description,
+                    taskType: progress.taskType,
+                  })
+                }
+              }
+            }
             return
           }
 
           if (method === 'item/completed') {
             const n = params as ItemCompletedNotification
-            for (const ev of handleItemCompleted(n.item, mapperState)) safeEmit(ev)
+            const events = handleItemCompleted(n.item, mapperState)
+            for (const ev of events) safeEmit(ev)
+            if (n.item.type === 'collabAgentToolCall') {
+              const progress = events.find(
+                (event): event is Extract<AgentEvent, { kind: 'subagent:progress' }> =>
+                  event.kind === 'subagent:progress',
+              )
+              for (const [threadId, agentState] of Object.entries(n.item.agentsStates)) {
+                if (agentState.status === 'pendingInit' || agentState.status === 'running') {
+                  if (progress) {
+                    activeSubagentThreads.set(threadId, {
+                      toolCallId: progress.toolCallId,
+                      description: progress.description,
+                      taskType: progress.taskType,
+                    })
+                  }
+                } else {
+                  finishBackgroundSubagent(threadId, progress?.status === 'done' ? progress.toolCallId : undefined)
+                }
+              }
+            }
             return
           }
 
@@ -204,7 +259,14 @@ export function createCodexEngine(): AgentEngine {
           if (method === 'turn/completed') {
             const n = params as TurnCompletedNotification
             for (const ev of handleTurnCompleted(n, mapperState)) safeEmit(ev)
-            if (!activeTurnId || !n.turn?.id || n.turn.id === activeTurnId) resolveTurnDone()
+            if (!activeTurnId || !n.turn?.id || n.turn.id === activeTurnId) {
+              if (n.turn?.status === 'completed' && activeSubagentThreads.size > 0) {
+                waitingForBackgroundSubagents = true
+                turnLiveness.pause()
+              } else {
+                resolveTurnDone()
+              }
+            }
             return
           }
 

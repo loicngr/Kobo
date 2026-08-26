@@ -665,7 +665,10 @@ export const useWorkspaceStore = defineStore('workspace', {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(input),
         })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        if (!res.ok) {
+          const body = (await res.json().catch(() => ({}))) as { error?: unknown }
+          throw new Error(typeof body.error === 'string' ? body.error : `HTTP ${res.status}`)
+        }
         // The server appends a `-<HASH>` suffix to the working branch (and
         // matching worktree path) when the requested name was already taken.
         // The header is the cheapest way to signal that without changing the

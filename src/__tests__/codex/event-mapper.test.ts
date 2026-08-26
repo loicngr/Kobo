@@ -411,6 +411,25 @@ describe('handleItemStarted — collabAgentToolCall', () => {
 })
 
 describe('handleItemCompleted — collabAgentToolCall', () => {
+  it('keeps subagent:progress running when spawnAgent returned but the child is still active', () => {
+    const state = mkState()
+    const item = {
+      id: 'item_sa',
+      type: 'collabAgentToolCall' as const,
+      tool: 'spawnAgent' as const,
+      status: 'completed' as const,
+      senderThreadId: 'thr_parent',
+      receiverThreadIds: ['thr_child'],
+      prompt: 'Do thing',
+      model: 'gpt-5.4',
+      agentsStates: { thr_child: { status: 'running' as const, message: null } },
+    }
+
+    const events = handleItemCompleted(item, state)
+
+    expect(events[1]).toMatchObject({ kind: 'subagent:progress', status: 'running' })
+  })
+
   it('emits tool:result + subagent:progress=done when the call completes', () => {
     const state = mkState()
     const item = {

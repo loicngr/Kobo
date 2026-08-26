@@ -329,6 +329,11 @@ export function handleItemCompleted(item: ThreadItem, state: MapperState): Agent
 
   if (item.type === 'collabAgentToolCall') {
     const toolCallId = scopedId(state, item.id)
+    const hasActiveAgent =
+      item.status === 'completed' &&
+      Object.values(item.agentsStates).some(
+        (agentState) => agentState.status === 'pendingInit' || agentState.status === 'running',
+      )
     events.push({
       kind: 'tool:result',
       toolCallId,
@@ -342,7 +347,7 @@ export function handleItemCompleted(item: ThreadItem, state: MapperState): Agent
     events.push({
       kind: 'subagent:progress',
       toolCallId,
-      status: 'done',
+      status: hasActiveAgent ? 'running' : 'done',
       description: item.prompt ?? item.tool,
       taskType: item.tool,
     })

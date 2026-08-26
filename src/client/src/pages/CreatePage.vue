@@ -1654,10 +1654,10 @@ async function handleCreate() {
     wsStore.subscribe(workspace.id)
     store.selectWorkspace(workspace.id)
     void router.push({ name: 'workspace', params: { id: workspace.id } })
-  } catch {
+  } catch (err) {
     $q.notify({
       type: 'negative',
-      message: t('createPage.errorCreating'),
+      message: err instanceof Error && err.message ? err.message : t('createPage.errorCreating'),
       position: 'top',
     })
   } finally {

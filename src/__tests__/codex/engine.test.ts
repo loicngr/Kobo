@@ -197,6 +197,67 @@ describe('createCodexEngine — happy path', () => {
   })
 })
 
+describe('createCodexEngine — background subagents', () => {
+  it('keeps app-server alive after the parent turn until the child thread becomes idle', async () => {
+    resetChild()
+    const events: AgentEvent[] = []
+    let resolveEnded: () => void = () => {}
+    const ended = new Promise<void>((resolve) => {
+      resolveEnded = resolve
+    })
+
+    await createCodexEngine().start(BASE_OPTIONS, (event) => {
+      events.push(event)
+      if (event.kind === 'session:ended') resolveEnded()
+    })
+
+    await flush(10)
+    pushInitializeResponse(1)
+    await flush(5)
+    pushThreadStartResponse('thr_parent', 2)
+    await flush(5)
+    pushTurnStartResponse('turn_1', 3)
+    await flush(5)
+
+    const collabItem = {
+      id: 'spawn_1',
+      type: 'collabAgentToolCall',
+      tool: 'spawnAgent',
+      status: 'completed',
+      senderThreadId: 'thr_parent',
+      receiverThreadIds: ['thr_child'],
+      prompt: 'Review the pull request',
+      model: null,
+      agentsStates: { thr_child: { status: 'running', message: null } },
+    }
+    pushNotification('item/started', {
+      item: { ...collabItem, status: 'inProgress', agentsStates: {} },
+      threadId: 'thr_parent',
+      turnId: 'turn_1',
+    })
+    pushNotification('item/completed', { item: collabItem, threadId: 'thr_parent', turnId: 'turn_1' })
+    pushNotification('turn/completed', {
+      threadId: 'thr_parent',
+      turn: { id: 'turn_1', status: 'completed' },
+    })
+    await flush(20)
+
+    expect(events.some((event) => event.kind === 'session:ended')).toBe(false)
+    expect(_child.kill).not.toHaveBeenCalled()
+
+    pushNotification('thread/status/changed', {
+      threadId: 'thr_child',
+      status: { type: 'idle' },
+    })
+    await ended
+    await flush(10)
+
+    expect(events).toContainEqual({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+    expect(events.filter((event) => event.kind === 'subagent:progress' && event.status === 'done')).toHaveLength(1)
+    expect(_child.kill).toHaveBeenCalledWith('SIGTERM')
+  })
+})
+
 describe('createCodexEngine — active turn steering', () => {
   it('queues steering until the initial Codex turn is ready', async () => {
     resetChild()

@@ -4639,7 +4639,7 @@ describe('POST /api/workspaces — pre-flight URL validation', () => {
     const wsService = await import('../server/services/workspace-service.js')
 
     vi.mocked(sentryService.extractSentryIssue).mockResolvedValueOnce({
-      title: "TypeError: undefined is not an object (evaluating 't.key')",
+      title: 'TypeError: undefined is not an object',
       issueId: 'SEKUR-IOS-9',
       issueNumericId: '99',
       culprit: 'fn',
@@ -4675,7 +4675,14 @@ describe('POST /api/workspaces — pre-flight URL validation', () => {
 
     expect(wsService.updateWorkspaceName).toHaveBeenCalledWith(
       'ws-1',
-      "SEKUR-IOS-9 | TypeError: undefined is not an object (evaluating 't.key')",
+      'SEKUR-IOS-9 | TypeError: undefined is not an object',
+    )
+    expect(worktreeService.createWorktree).toHaveBeenCalledWith(
+      '/tmp/proj',
+      'feat/SEKUR-IOS-9--typeerror-undefined-is-not-an-object',
+      'origin/main',
+      '.worktrees',
+      undefined,
     )
   })
 })

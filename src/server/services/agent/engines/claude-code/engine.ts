@@ -116,6 +116,7 @@ export function createClaudeCodeEngine(): AgentEngine {
     async start(options: StartOptions, onEvent): Promise<EngineProcess> {
       const abortController = new AbortController()
       const mapperState = createMapperState()
+      const activeSubagentToolCallIds = new Set<string>()
 
       // Pending canUseTool callbacks, keyed by SDK ctx.toolUseID.
       const pendingResolvers = new Map<string, PendingResolver>()
@@ -280,8 +281,11 @@ export function createClaudeCodeEngine(): AgentEngine {
       // near-instantly. If it stays parked (a hung subagent task or stuck
       // teardown), the `for await` below would wait forever — `session:ended`
       // would never fire, freezing the orchestrator and the auto-loop. Once a
-      // `result` is observed we arm a timer that force-emits `session:ended`
-      // with the result's own outcome, then aborts the generator best-effort.
+      // `result` is observed with no background subagent still running, we arm
+      // a timer that force-emits `session:ended` with the result's own outcome,
+      // then aborts the generator best-effort. A result emitted while a
+      // background subagent is active is not terminal: the SDK can still emit
+      // its task notification and an automatic continuation turn.
       let resultDrainTimer: ReturnType<typeof setTimeout> | undefined
       let textIdleTimer: ReturnType<typeof setTimeout> | undefined
       const clearTextIdleWatchdog = (): void => {
@@ -313,11 +317,6 @@ export function createClaudeCodeEngine(): AgentEngine {
           )
           const reason = userInterrupted ? 'killed' : mapperState.sawErrorResult ? 'error' : 'completed'
           emitSessionEnded(reason, reason === 'completed' ? 0 : null)
-          // A wakeup starts a new turn later; it cannot safely keep this SDK
-          // stream alive after Kōbō has emitted session:ended and detached its
-          // controller. Leaving it alive lets late hooks issue AskUserQuestion
-          // calls against a closed input stream, producing an unanswerable UI
-          // card followed by "Stream closed". Abort deterministically instead.
           abortController.abort()
         }, RESULT_DRAIN_TIMEOUT_MS)
         resultDrainTimer.unref?.()
@@ -328,6 +327,11 @@ export function createClaudeCodeEngine(): AgentEngine {
         try {
           for await (const msg of q as AsyncIterable<SDKMessage>) {
             const events = mapSdkMessage(msg, mapperState)
+            for (const ev of events) {
+              if (ev.kind !== 'subagent:progress') continue
+              if (ev.status === 'running') activeSubagentToolCallIds.add(ev.toolCallId)
+              else activeSubagentToolCallIds.delete(ev.toolCallId)
+            }
             for (const ev of events) {
               if (ev.kind === 'session:started') discoveredSessionId = ev.engineSessionId
               safeEmit(ev)
@@ -343,7 +347,7 @@ export function createClaudeCodeEngine(): AgentEngine {
               clearTextIdleWatchdog()
               completedResponses++
               // A queued forced message starts the next response on this same SDK stream.
-              if (!inputStream.hasUnansweredInput(completedResponses)) {
+              if (!inputStream.hasUnansweredInput(completedResponses) && activeSubagentToolCallIds.size === 0) {
                 inputStream.close()
                 armResultDrainWatchdog()
               }
