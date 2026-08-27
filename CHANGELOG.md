@@ -4,6 +4,10 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.11.15
+
+- feat(agent): harden autonomous session lifecycle
+
 ## 1.11.14
 
 - ⬆️ develop - refactor(deps): Bump SDKs + refactor shutdown + hardening sécurité
