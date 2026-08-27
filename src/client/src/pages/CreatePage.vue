@@ -1,5 +1,6 @@
 <template>
   <q-page class="create-page">
+    <DrawerToggleButton class="create-page__drawer-toggle" />
     <div class="create-inner q-mx-auto">
       <header class="q-mb-lg">
         <div class="create-title text-weight-bold text-grey-2">{{ $t('createPage.title') }}</div>
@@ -704,6 +705,7 @@
 <script setup lang="ts">
 import type { QInput } from 'quasar'
 import { useQuasar } from 'quasar'
+import DrawerToggleButton from 'src/components/DrawerToggleButton.vue'
 import SlashSuggestionsPopup from 'src/components/SlashSuggestionsPopup.vue'
 import { type SlashDropdownItem, useSlashAutocomplete } from 'src/composables/use-slash-autocomplete'
 import { EFFORT_OPTION_DEFS_BY_ENGINE } from 'src/constants/efforts'
@@ -1668,9 +1670,17 @@ async function handleCreate() {
 
 <style lang="scss" scoped>
 .create-page {
+  position: relative;
   min-height: 100%;
   padding: 48px 24px 80px;
   background: #1a1a2e;
+}
+
+.create-page__drawer-toggle {
+  position: absolute;
+  top: var(--kobo-space-md);
+  left: var(--kobo-space-md);
+  z-index: 1;
 }
 
 .create-inner {

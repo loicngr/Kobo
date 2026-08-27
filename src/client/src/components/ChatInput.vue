@@ -210,8 +210,8 @@
     </div>
     <div class="chat-hint row items-center no-wrap text-caption text-grey-8">
       <div class="chat-hint__shortcuts row items-center no-wrap">
-        <span class="chat-hint__primary"><kbd>Enter</kbd> {{ $t('common.send') }} <span class="q-mx-xs">&middot;</span> <kbd>Shift+Enter</kbd> {{ $t('common.newLine') }}</span>
-        <q-btn flat dense round size="xs" icon="keyboard" class="q-ml-xs">
+        <span class="chat-hint__primary"><kbd>Enter</kbd> {{ $t('common.send') }}<template v-if="!isMobile"> <span class="q-mx-xs">&middot;</span> <kbd>Shift+Enter</kbd> {{ $t('common.newLine') }}</template></span>
+        <q-btn v-if="!isMobile" flat dense round size="xs" icon="keyboard" class="q-ml-xs">
           <q-tooltip>{{ $t('chatInput.shortcuts') }}</q-tooltip>
           <q-menu anchor="top left" self="bottom left">
             <q-list dense class="chat-shortcuts-menu">
@@ -259,6 +259,7 @@ import { useQuasar } from 'quasar'
 import QuotaFooter from 'src/components/QuotaFooter.vue'
 import SlashSuggestionsPopup from 'src/components/SlashSuggestionsPopup.vue'
 import { useFileMention } from 'src/composables/use-file-mention'
+import { useIsMobile } from 'src/composables/use-is-mobile'
 import { type SlashDropdownItem, useSlashAutocomplete } from 'src/composables/use-slash-autocomplete'
 import { supportsLiveSteering, supportsQuotaStatus } from 'src/constants/engineFeatures'
 import { useSettingsStore } from 'src/stores/settings'
@@ -277,6 +278,7 @@ const props = defineProps<{
 
 const { t } = useI18n()
 const $q = useQuasar()
+const { isMobile } = useIsMobile()
 const store = useWorkspaceStore()
 const settingsStore = useSettingsStore()
 const wsStore = useWebSocketStore()
@@ -620,10 +622,15 @@ watch(message, async () => {
   }
 })
 
-window.addEventListener('keydown', onWindowKeyDown)
-window.addEventListener('keyup', onWindowKeyUp)
-window.addEventListener('blur', onWindowBlur)
-document.addEventListener('visibilitychange', onVisibilityChange)
+// Keyboard push-to-talk has no tactile effect on phones (no physical
+// keyboard) — skip registration on mobile. The touch mic button
+// (@touchstart/@touchend) keeps working via startVoiceCapture/stopVoiceCapture.
+if (!isMobile.value) {
+  window.addEventListener('keydown', onWindowKeyDown)
+  window.addEventListener('keyup', onWindowKeyUp)
+  window.addEventListener('blur', onWindowBlur)
+  document.addEventListener('visibilitychange', onVisibilityChange)
+}
 onUnmounted(() => {
   window.removeEventListener('keydown', onWindowKeyDown)
   window.removeEventListener('keyup', onWindowKeyUp)

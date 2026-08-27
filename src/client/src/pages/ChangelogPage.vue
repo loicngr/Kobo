@@ -1,6 +1,7 @@
 <template>
   <q-page class="q-pa-md" style="max-width: 900px; margin: 0 auto;">
     <div class="row items-center q-mb-md">
+      <DrawerToggleButton class="q-mr-xs" />
       <q-btn flat dense round icon="arrow_back" @click="router.back()" />
       <div class="text-h6 q-ml-sm">{{ $t('changelog.title') }}</div>
       <q-space />
@@ -49,6 +50,7 @@
 </template>
 
 <script setup lang="ts">
+import DrawerToggleButton from 'src/components/DrawerToggleButton.vue'
 import { renderChatMarkdown } from 'src/utils/render-chat-markdown'
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'

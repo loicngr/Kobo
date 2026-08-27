@@ -174,6 +174,7 @@ export default {
   'workspacePage.activeSessionModelTooltip': 'Model currently used by the selected session',
   'workspacePage.switchEngine': 'Switch engine',
   'workspacePage.switchEngineHint': 'Continue this workspace with another agent engine',
+  'workspacePage.moreActions': 'More actions',
   'workspacePage.switchEngineTitle': 'Switch agent engine',
   'workspacePage.switchEngineWarning':
     'The current agent will be stopped and a fresh session will start in the same worktree.',
@@ -763,6 +764,7 @@ export default {
   'settings.nav.notifications': 'Notifications',
   'settings.nav.worktrees': 'Worktrees',
   'settings.nav.export': 'Export',
+  'settings.openNav': 'Open navigation',
   'settings.saveError': 'Error saving settings.',
   'settings.projectSaved': 'Project saved.',
   'settings.projectSaveError': 'Error saving project.',

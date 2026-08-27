@@ -1,30 +1,52 @@
 <template>
   <q-page class="settings-page">
     <div class="settings-layout">
-      <!-- Sidebar nav -->
-      <aside class="settings-nav">
+      <!-- Sidebar nav (desktop: fixed aside) -->
+      <aside v-if="!isMobile" class="settings-nav">
         <div class="settings-nav__title">{{ $t('settings.title') }}</div>
-        <q-list dense class="settings-nav__list">
-          <q-item
-            v-for="item in navItems"
-            :key="item.value"
-            clickable
-            v-ripple="false"
-            :data-tour="`settings-nav-${item.value}`"
-            :class="['settings-nav__item', { 'settings-nav__item--active': activeTab === item.value }]"
-            @click="activeTab = item.value"
-          >
-            <q-item-section avatar class="settings-nav__icon">
-              <q-icon :name="item.icon" size="16px" />
-            </q-item-section>
-            <q-item-section class="settings-nav__label">{{ item.label }}</q-item-section>
-          </q-item>
-        </q-list>
+        <SettingsNavList :nav-items="navItems" :active-tab="activeTab" @select="selectTab" />
       </aside>
+
+      <!-- Sidebar nav (mobile: overlay drawer) -->
+      <q-drawer
+        v-else
+        v-model="navDrawerOpen"
+        side="left"
+        overlay
+        behavior="mobile"
+        :width="240"
+      >
+        <q-list>
+          <q-item clickable @click="openWorkspacesDrawer">
+            <q-item-section avatar>
+              <q-icon name="arrow_back" />
+            </q-item-section>
+            <q-item-section>{{ $t('workspaceList.title') }}</q-item-section>
+          </q-item>
+          <q-separator />
+        </q-list>
+        <div class="settings-nav">
+          <div class="settings-nav__title">{{ $t('settings.title') }}</div>
+          <SettingsNavList :nav-items="navItems" :active-tab="activeTab" @select="selectTab" />
+        </div>
+      </q-drawer>
 
       <!-- Content panel -->
       <main class="settings-content">
         <header class="settings-content__header">
+          <DrawerToggleButton exclude-mobile class="q-mr-sm" />
+          <q-btn
+            v-if="isMobile"
+            flat
+            dense
+            round
+            icon="menu"
+            :aria-label="$t('settings.openNav')"
+            class="settings-content__nav-toggle"
+            @click="navDrawerOpen = true"
+          >
+            <q-tooltip>{{ $t('settings.openNav') }}</q-tooltip>
+          </q-btn>
           <h2 class="settings-content__title">{{ activeNavLabel }}</h2>
         </header>
 
@@ -2463,12 +2485,16 @@ where ffmpeg</pre>
 <script setup lang="ts">
 import QRCode from 'qrcode'
 import { type QInput, useQuasar } from 'quasar'
+import DrawerToggleButton from 'src/components/DrawerToggleButton.vue'
 import FolderPickerDialog from 'src/components/FolderPickerDialog.vue'
 import PrNotificationSoundSettings from 'src/components/PrNotificationSoundSettings.vue'
+import SettingsNavList from 'src/components/SettingsNavList.vue'
 import WhipShortcutRecorder from 'src/components/WhipShortcutRecorder.vue'
+import { useIsMobile } from 'src/composables/use-is-mobile'
 import { useOnboarding } from 'src/composables/use-onboarding'
 import { CODEX_MODEL_OPTION_DEFS, MODEL_OPTION_DEFS } from 'src/constants/models'
 import { type AgentPermissionMode, PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
+import { useLayoutStore } from 'src/stores/layout'
 import type { ProjectSettings } from 'src/stores/settings'
 import { useSettingsStore } from 'src/stores/settings'
 import { type Template, useTemplatesStore } from 'src/stores/templates'
@@ -2504,9 +2530,22 @@ const store = useSettingsStore()
 const templatesStore = useTemplatesStore()
 const { t, locale } = useI18n()
 const { startTour } = useOnboarding()
+const { isMobile } = useIsMobile()
+const layout = useLayoutStore()
 
 // Tab state
 const activeTab = ref('general')
+const navDrawerOpen = ref(false)
+
+function selectTab(tab: string) {
+  activeTab.value = tab
+  if (isMobile.value) navDrawerOpen.value = false
+}
+
+function openWorkspacesDrawer() {
+  navDrawerOpen.value = false
+  layout.toggleLeft()
+}
 
 const navItems = computed(() => [
   { value: 'general', icon: 'tune', label: t('settings.nav.general') },
@@ -4194,52 +4233,6 @@ onUnmounted(() => {
   margin-bottom: 16px;
 }
 
-.settings-nav__list {
-  padding: 0;
-}
-
-.settings-nav__item {
-  border-radius: var(--kobo-radius-sm);
-  padding: 6px 12px;
-  color: var(--kobo-text-2);
-  font-size: 13px;
-  font-weight: 500;
-  min-height: 30px;
-  transition: background-color var(--kobo-duration-micro) var(--kobo-ease-out),
-              color var(--kobo-duration-micro) var(--kobo-ease-out);
-
-  &:hover {
-    background-color: var(--kobo-hover);
-    color: var(--kobo-text);
-  }
-}
-
-.settings-nav__item--active {
-  background-color: var(--kobo-hover);
-  color: var(--kobo-text);
-  position: relative;
-
-  &::before {
-    content: '';
-    position: absolute;
-    left: -8px;
-    top: 6px;
-    bottom: 6px;
-    width: 2px;
-    background-color: var(--kobo-accent);
-    border-radius: 1px;
-  }
-}
-
-.settings-nav__icon {
-  min-width: 24px;
-  color: inherit;
-}
-
-.settings-nav__label {
-  padding-left: 4px;
-}
-
 .settings-content {
   flex: 1;
   min-width: 0;
@@ -4257,6 +4250,13 @@ onUnmounted(() => {
   margin-top: -24px;
   padding-top: 24px;
   z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: var(--kobo-space-sm);
+}
+
+.settings-content__nav-toggle {
+  color: var(--kobo-text-2);
 }
 
 .settings-content__title {

@@ -1,6 +1,7 @@
 <template>
   <q-page class="q-pa-md" style="max-width: 900px; margin: 0 auto;">
     <div class="row items-center q-mb-md">
+      <DrawerToggleButton class="q-mr-xs" />
       <q-btn flat dense round icon="arrow_back" @click="router.back()" />
       <div class="text-h6 q-ml-sm">{{ $t('health.title') }}</div>
       <q-space />
@@ -15,21 +16,21 @@
         <q-card-section>
           <div class="text-subtitle2 q-mb-sm">{{ $t('health.envTitle') }}</div>
           <div class="row q-col-gutter-md">
-            <div class="col-auto">
+            <div class="col-12 col-sm-auto">
               <div class="text-caption text-grey-6">{{ $t('health.version') }}</div>
               <div class="text-body2" style="font-family: var(--kobo-font-mono, monospace);">
                 {{ report.version }}
               </div>
             </div>
-            <div class="col-auto">
+            <div class="col-12 col-sm-auto">
               <div class="text-caption text-grey-6">{{ $t('health.settingsSchemaVersion') }}</div>
               <div class="text-body2" style="font-family: var(--kobo-font-mono, monospace);">
                 {{ report.settings.schemaVersion }}
               </div>
             </div>
-            <div class="col">
+            <div class="col-12 col-sm">
               <div class="text-caption text-grey-6">{{ $t('health.koboHome') }}</div>
-              <div class="text-body2">{{ report.koboHome }}</div>
+              <div class="text-body2 health-path">{{ report.koboHome }}</div>
             </div>
           </div>
         </q-card-section>
@@ -44,15 +45,15 @@
             <q-icon :name="statusIcon(dbSchemaOk)" :color="statusColor(dbSchemaOk)" />
           </div>
           <div class="row q-col-gutter-md q-mt-xs">
-            <div class="col">
+            <div class="col-12 col-sm">
               <div class="text-caption text-grey-6">{{ $t('health.dbPath') }}</div>
-              <div class="text-body2">{{ report.db.path }}</div>
+              <div class="text-body2 health-path">{{ report.db.path }}</div>
             </div>
-            <div class="col-auto">
+            <div class="col-12 col-sm-auto">
               <div class="text-caption text-grey-6">{{ $t('health.dbSize') }}</div>
               <div class="text-body2">{{ dbSizeHuman }}</div>
             </div>
-            <div class="col-auto">
+            <div class="col-12 col-sm-auto">
               <div class="text-caption text-grey-6">{{ $t('health.schemaVersion') }}</div>
               <div class="text-body2">{{ report.db.schemaVersion }} / {{ report.db.currentSchemaVersion }}</div>
             </div>
@@ -121,7 +122,7 @@
               <q-item v-for="w in report.workspaces.worktreesMissing" :key="w.workspaceId">
                 <q-item-section>
                   <div class="text-body2">{{ w.name }}</div>
-                  <div class="text-caption text-grey-6">{{ w.path }}</div>
+                  <div class="text-caption text-grey-6 health-path">{{ w.path }}</div>
                 </q-item-section>
               </q-item>
             </q-list>
@@ -328,6 +329,7 @@
 
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
+import DrawerToggleButton from 'src/components/DrawerToggleButton.vue'
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
@@ -458,3 +460,9 @@ function goToWorkspace(id: string): void {
   router.push({ name: 'workspace', params: { id } }).catch(() => {})
 }
 </script>
+
+<style scoped>
+.health-path {
+  word-break: break-all;
+}
+</style>

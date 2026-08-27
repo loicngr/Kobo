@@ -179,6 +179,7 @@ export default {
   'workspacePage.activeSessionModelTooltip': 'Modello effettivamente usato dalla sessione selezionata',
   'workspacePage.switchEngine': 'Cambia motore',
   'workspacePage.switchEngineHint': 'Continua questo workspace con un altro motore agente',
+  'workspacePage.moreActions': 'Altre azioni',
   'workspacePage.switchEngineTitle': 'Cambia motore agente',
   'workspacePage.switchEngineWarning':
     "L'agente attuale verrà fermato e una nuova sessione inizierà nello stesso worktree.",
@@ -772,6 +773,7 @@ export default {
   'settings.nav.notifications': 'Notifiche',
   'settings.nav.worktrees': 'Worktrees',
   'settings.nav.export': 'Esporta',
+  'settings.openNav': 'Apri la navigazione',
   'settings.saveError': 'Errore durante il salvataggio delle impostazioni.',
   'settings.projectSaved': 'Progetto salvato.',
   'settings.projectSaveError': 'Errore durante il salvataggio del progetto.',

@@ -1,7 +1,10 @@
 <template>
   <q-page class="q-pa-md search-page">
     <div class="search-header">
-      <h2 class="text-h5 q-mb-md">{{ $t('search.title') }}</h2>
+      <div class="row items-center">
+        <DrawerToggleButton class="q-mr-sm" />
+        <h2 class="text-h5 q-mb-md">{{ $t('search.title') }}</h2>
+      </div>
 
       <q-input
         ref="inputEl"
@@ -76,6 +79,7 @@
 </template>
 
 <script setup lang="ts">
+import DrawerToggleButton from 'src/components/DrawerToggleButton.vue'
 import { type SearchResult, useSearchStore } from 'src/stores/search'
 import { useTimeAgo } from 'src/utils/formatters'
 import { ref, watch } from 'vue'
