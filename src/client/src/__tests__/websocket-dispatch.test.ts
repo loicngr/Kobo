@@ -47,6 +47,44 @@ function workspaceFixture(status = 'executing'): Workspace {
 describe('websocket dispatch — AgentEvent side-effects to workspace store', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
+  it('marks a completed turn as visually settled without changing the workspace status', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const ws = useWorkspaceStore()
+    ws.workspaces = [workspaceFixture('executing')]
+    ws.selectedWorkspaceId = 'w1'
+    ws.setActiveAgentSession('w1', 'session-1')
+
+    const { dispatchAgentEvent } = await import('../stores/websocket.js')
+    dispatchAgentEvent('w1', { kind: 'turn:completed' }, undefined, undefined, 'session-1')
+
+    expect(ws.workspaces[0]?.status).toBe('executing')
+    expect((ws as unknown as { settledAgentSessionIds: Record<string, string> }).settledAgentSessionIds.w1).toBe(
+      'session-1',
+    )
+  })
+
+  it('clears a visually settled turn when a new session starts', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const ws = useWorkspaceStore()
+    ws.workspaces = [workspaceFixture('executing')]
+    ;(ws as unknown as { settledAgentSessionIds: Record<string, string> }).settledAgentSessionIds = {
+      w1: 'session-1',
+    }
+
+    const { dispatchAgentEvent } = await import('../stores/websocket.js')
+    dispatchAgentEvent(
+      'w1',
+      { kind: 'session:started', engineSessionId: 'engine-2' },
+      undefined,
+      undefined,
+      'session-2',
+    )
+
+    expect(
+      (ws as unknown as { settledAgentSessionIds: Record<string, string> }).settledAgentSessionIds.w1,
+    ).toBeUndefined()
+  })
+
   it('does not regress local status from quota to error when session:ended follows a quota hit', async () => {
     const { useWorkspaceStore } = await import('../stores/workspace.js')
     const ws = useWorkspaceStore()

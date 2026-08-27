@@ -274,11 +274,33 @@ export function createClaudeCodeEngine(): AgentEngine {
       let iteratorRunning = false
       let userInterrupted = false
       let completedResponses = 0
+      let turnCompletedEmittedForResponse = 0
+
+      // `result` is the Claude Agent SDK's per-turn completion signal. Keep
+      // it distinct from iterator completion: the SDK may still drain
+      // informational events afterwards, while Kōbō must retain the session
+      // for orchestration and auto-loop until `session:ended`.
+      const emitTurnCompletedIfSettled = (): void => {
+        if (
+          completedResponses === 0 ||
+          completedResponses === turnCompletedEmittedForResponse ||
+          activeSubagentTaskIds.size > 0 ||
+          pendingResolvers.size > 0 ||
+          inputStream.hasUnansweredInput(completedResponses)
+        ) {
+          return
+        }
+        turnCompletedEmittedForResponse = completedResponses
+        safeEmit({ kind: 'turn:completed' })
+      }
 
       // Guard so the post-result drain watchdog and the natural loop exit (or
       // catch block) never both emit `session:ended` for the same run.
       let sessionEndedEmitted = false
-      const emitSessionEnded = (reason: 'completed' | 'error' | 'killed', exitCode: number | null): void => {
+      const emitSessionEnded = (
+        reason: 'completed' | 'error' | 'killed' | 'watchdog',
+        exitCode: number | null,
+      ): void => {
         if (sessionEndedEmitted) return
         sessionEndedEmitted = true
         safeEmit({ kind: 'session:ended', reason, exitCode })
@@ -311,8 +333,9 @@ export function createClaudeCodeEngine(): AgentEngine {
           console.warn(
             `[claude-engine] SDK stream inactive ${TEXT_IDLE_TIMEOUT_MS}ms after a text-only response — forcing session:ended`,
           )
-          const reason = userInterrupted ? 'killed' : mapperState.sawErrorResult ? 'error' : 'completed'
-          emitSessionEnded(reason, reason === 'completed' ? 0 : null)
+          if (userInterrupted) emitSessionEnded('killed', null)
+          else if (mapperState.sawErrorResult) emitSessionEnded('error', null)
+          else emitSessionEnded('watchdog', null)
           abortController.abort()
         }, TEXT_IDLE_TIMEOUT_MS)
         textIdleTimer.unref?.()
@@ -323,8 +346,9 @@ export function createClaudeCodeEngine(): AgentEngine {
           console.warn(
             `[claude-engine] SDK generator still open ${RESULT_DRAIN_TIMEOUT_MS}ms after 'result' — forcing session:ended`,
           )
-          const reason = userInterrupted ? 'killed' : mapperState.sawErrorResult ? 'error' : 'completed'
-          emitSessionEnded(reason, reason === 'completed' ? 0 : null)
+          if (userInterrupted) emitSessionEnded('killed', null)
+          else if (mapperState.sawErrorResult) emitSessionEnded('error', null)
+          else emitSessionEnded('watchdog', null)
           abortController.abort()
         }, RESULT_DRAIN_TIMEOUT_MS)
         resultDrainTimer.unref?.()
@@ -403,6 +427,7 @@ export function createClaudeCodeEngine(): AgentEngine {
             if ((msg as { type?: string }).type === 'result') {
               clearTextIdleWatchdog()
               completedResponses++
+              emitTurnCompletedIfSettled()
               // A queued forced message starts the next response on this same SDK stream.
               if (!inputStream.hasUnansweredInput(completedResponses)) {
                 if (activeSubagentTaskIds.size === 0) {

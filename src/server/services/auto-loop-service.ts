@@ -148,7 +148,7 @@ export function disable(workspaceId: string, reason: DisableReason): void {
  */
 export function onSessionEnded(
   workspaceId: string,
-  reason: 'completed' | 'error' | 'killed',
+  reason: 'completed' | 'error' | 'killed' | 'watchdog',
   taskProgressDelta: number,
 ): void {
   const row = getRow(workspaceId)
@@ -162,6 +162,12 @@ export function onSessionEnded(
   // Don't spawn a competing session while paused on canUseTool — the user
   // will resume the deferred turn explicitly.
   if (row.status === 'awaiting-user') return
+
+  // A watchdog denotes Kōbō's own forced recovery from a stuck engine stream.
+  // The orchestrator owns its bounded backoff/retry path; counting it as a
+  // normal no-progress iteration would falsely disable an otherwise healthy
+  // loop after three SDK teardown timeouts.
+  if (reason === 'watchdog') return
 
   if (reason === 'error') {
     disable(workspaceId, 'error')

@@ -145,6 +145,62 @@ describe('orchestrator auto-loop integration', () => {
     expect(autoLoop.onSessionEnded).toHaveBeenCalledWith(wsId, 'completed', 0)
   })
 
+  it('uses the persisted baseline when session:started was lost during a restart', async () => {
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const autoLoop = await import('../server/services/auto-loop-service.js')
+    const { getDb } = await import('../server/db/index.js')
+    const { listTasks, updateTaskStatus } = await import('../server/services/workspace-service.js')
+    await setWorkspaceExecuting(wsId)
+
+    const db = getDb()
+    const baseline = JSON.stringify({
+      doneCount: 1,
+      stateSignature: JSON.stringify(
+        db.prepare('SELECT id, status, updated_at FROM tasks WHERE workspace_id = ? ORDER BY id').all(wsId),
+      ),
+    })
+    db.prepare(
+      `INSERT INTO agent_sessions (id, workspace_id, status, started_at, task_progress_baseline)
+       VALUES (?, ?, 'running', ?, ?)`,
+    ).run('persisted-session', wsId, new Date().toISOString(), baseline)
+
+    const pending = listTasks(wsId).find((task) => task.title === 't2')
+    if (!pending) throw new Error('test setup')
+    updateTaskStatus(pending.id, 'done')
+
+    orch.__test__.handleEvent(wsId, 'persisted-session', {
+      kind: 'session:ended',
+      reason: 'completed',
+      exitCode: 0,
+    })
+
+    expect(autoLoop.onSessionEnded).toHaveBeenCalledWith(wsId, 'completed', 1)
+    expect(
+      db.prepare('SELECT task_progress_baseline FROM agent_sessions WHERE id = ?').get('persisted-session'),
+    ).toEqual({ task_progress_baseline: null })
+  })
+
+  it('routes a watchdog end through the bounded backoff instead of auto-loop stall tracking', async () => {
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const autoLoop = await import('../server/services/auto-loop-service.js')
+    const { getDb } = await import('../server/db/index.js')
+    const quotaBackoff = await import('../server/services/quota-backoff-service.js')
+    await setWorkspaceExecuting(wsId)
+    const db = getDb()
+    db.prepare('UPDATE workspaces SET auto_loop = 1, auto_loop_ready = 1 WHERE id = ?').run(wsId)
+
+    orch.__test__.handleEvent(wsId, 'watchdog-session', {
+      kind: 'session:ended',
+      reason: 'watchdog',
+      exitCode: null,
+    })
+    await Promise.resolve()
+
+    expect(autoLoop.onSessionEnded).not.toHaveBeenCalled()
+    expect(db.prepare('SELECT status FROM workspaces WHERE id = ?').get(wsId)).toEqual({ status: 'quota' })
+    expect(quotaBackoff.getPending(wsId)).toMatchObject({ workspaceId: wsId, source: 'fallback_ladder', retryCount: 1 })
+  })
+
   it('forgetTasksDoneSnapshot clears every session snapshot for the workspace', async () => {
     const orch = await import('../server/services/agent/orchestrator.js')
     await setWorkspaceExecuting(wsId)

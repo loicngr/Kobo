@@ -38,7 +38,7 @@ const runningSubagentCount = computed(() => store.currentSubagents.filter((s) =>
 const isVisible = computed(() => {
   const ws = store.selectedWorkspace
   if (!ws) return false
-  return isBusyStatus(ws.status)
+  return isBusyStatus(ws.status) && !store.isAgentTurnSettled(ws.id)
 })
 
 function viewSubagents() {

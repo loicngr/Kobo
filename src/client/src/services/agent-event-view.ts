@@ -145,6 +145,7 @@ export function foldEvents(
       // is an ephemeral live indicator handled by the agent-stream store, never
       // a persisted feed item).
       case 'session:compacting':
+      case 'turn:completed':
       case 'session:brainstorm-complete':
       case 'session:user-input-requested':
       case 'mcp:status':

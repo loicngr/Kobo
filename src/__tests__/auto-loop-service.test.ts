@@ -242,6 +242,23 @@ describe('auto-loop-service', () => {
       expect(orch.startAgent).toHaveBeenCalledOnce()
     })
 
+    it('does not count a watchdog end as a stalled iteration', async () => {
+      const svc = await import('../server/services/auto-loop-service.js')
+      const orch = await import('../server/services/agent/orchestrator.js')
+      const { createTask } = await import('../server/services/workspace-service.js')
+      const db = (await import('../server/db/index.js')).getDb()
+      createTask(wsId, { title: 't1', isAcceptanceCriterion: false, sortOrder: 0 })
+      svc._test_setAutoLoopReady(wsId, true)
+      svc.enable(wsId)
+      db.prepare('UPDATE workspaces SET no_progress_streak = 2 WHERE id = ?').run(wsId)
+      ;(orch.startAgent as ReturnType<typeof vi.fn>).mockClear()
+
+      svc.onSessionEnded(wsId, 'watchdog', 0)
+
+      expect(svc.getStatus(wsId)).toEqual({ auto_loop: true, auto_loop_ready: true, no_progress_streak: 2 })
+      expect(orch.startAgent).not.toHaveBeenCalled()
+    })
+
     it('resets streak when delta > 0', async () => {
       const svc = await import('../server/services/auto-loop-service.js')
       const { createTask } = await import('../server/services/workspace-service.js')

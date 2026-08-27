@@ -634,21 +634,81 @@ interface TaskProgressSnapshot {
 
 const taskProgressSnapshots = new Map<string, Map<string, TaskProgressSnapshot>>()
 
-function rememberTaskProgressSnapshot(workspaceId: string, agentSessionId: string): void {
-  const workspaceSnapshots = taskProgressSnapshots.get(workspaceId) ?? new Map<string, TaskProgressSnapshot>()
-  workspaceSnapshots.set(agentSessionId, {
+function createTaskProgressSnapshot(workspaceId: string): TaskProgressSnapshot {
+  return {
     doneCount: getDoneTaskCount(workspaceId),
     stateSignature: getTaskStateSignature(workspaceId),
-  })
+  }
+}
+
+function rememberTaskProgressSnapshot(
+  workspaceId: string,
+  agentSessionId: string,
+  snapshot: TaskProgressSnapshot = createTaskProgressSnapshot(workspaceId),
+): void {
+  const workspaceSnapshots = taskProgressSnapshots.get(workspaceId) ?? new Map<string, TaskProgressSnapshot>()
+  workspaceSnapshots.set(agentSessionId, snapshot)
   taskProgressSnapshots.set(workspaceId, workspaceSnapshots)
+}
+
+function parseTaskProgressSnapshot(value: string | null): TaskProgressSnapshot | undefined {
+  if (!value) return undefined
+  try {
+    const parsed = JSON.parse(value) as Partial<TaskProgressSnapshot>
+    if (typeof parsed.doneCount !== 'number' || typeof parsed.stateSignature !== 'string') return undefined
+    return { doneCount: parsed.doneCount, stateSignature: parsed.stateSignature }
+  } catch {
+    return undefined
+  }
+}
+
+function captureTaskProgressBaseline(workspaceId: string, agentSessionId: string): void {
+  const snapshot = createTaskProgressSnapshot(workspaceId)
+  rememberTaskProgressSnapshot(workspaceId, agentSessionId, snapshot)
+  try {
+    getDb()
+      .prepare('UPDATE agent_sessions SET task_progress_baseline = ? WHERE id = ?')
+      .run(JSON.stringify(snapshot), agentSessionId)
+  } catch (err) {
+    console.warn('[orchestrator] Failed to persist task progress baseline:', err)
+  }
+}
+
+function ensureTaskProgressBaseline(workspaceId: string, agentSessionId: string): void {
+  if (taskProgressSnapshots.get(workspaceId)?.has(agentSessionId)) return
+  try {
+    const row = getDb().prepare('SELECT task_progress_baseline FROM agent_sessions WHERE id = ?').get(agentSessionId) as
+      | { task_progress_baseline: string | null }
+      | undefined
+    if (row?.task_progress_baseline) return
+  } catch {
+    // The in-memory fallback below is still useful in narrow unit-test and
+    // bootstrap windows where the persisted session row is unavailable.
+  }
+  captureTaskProgressBaseline(workspaceId, agentSessionId)
 }
 
 function consumeTaskProgressSnapshot(workspaceId: string, agentSessionId: string): TaskProgressSnapshot | undefined {
   const workspaceSnapshots = taskProgressSnapshots.get(workspaceId)
-  const snapshot = workspaceSnapshots?.get(agentSessionId)
+  const memorySnapshot = workspaceSnapshots?.get(agentSessionId)
   workspaceSnapshots?.delete(agentSessionId)
   if (workspaceSnapshots?.size === 0) taskProgressSnapshots.delete(workspaceId)
-  return snapshot
+
+  try {
+    const db = getDb()
+    const readAndClear = db.transaction((id: string) => {
+      const row = db.prepare('SELECT task_progress_baseline FROM agent_sessions WHERE id = ?').get(id) as
+        | { task_progress_baseline: string | null }
+        | undefined
+      db.prepare('UPDATE agent_sessions SET task_progress_baseline = NULL WHERE id = ?').run(id)
+      return row?.task_progress_baseline ?? null
+    })
+    const persistedSnapshot = parseTaskProgressSnapshot(readAndClear(agentSessionId))
+    if (persistedSnapshot) return persistedSnapshot
+  } catch (err) {
+    console.warn('[orchestrator] Failed to consume task progress baseline:', err)
+  }
+  return memorySnapshot
 }
 
 function rememberResumeFailed(workspaceId: string, agentSessionId: string): void {
@@ -751,10 +811,11 @@ function handleEvent(
     latestRateLimitInfo.set(workspaceId, ev.info)
   }
 
-  // Snapshot the done-count at session start so the session:ended hook below
-  // can compute a delta for auto-loop stall detection.
+  // The normal start path captures this synchronously before engine.start.
+  // Keep an idempotent fallback for engines/tests that emit session:started
+  // without first going through startAgent.
   if (ev.kind === 'session:started') {
-    rememberTaskProgressSnapshot(workspaceId, agentSessionId)
+    ensureTaskProgressBaseline(workspaceId, agentSessionId)
   }
 
   // Legacy fallback: the built-in `ScheduleWakeup` tool (CLI tradition) isn't
@@ -879,6 +940,16 @@ function handleEvent(
     // whose backend callback has already been discarded.
     purgeAllPersistedUserInputRequests(workspaceId, agentSessionId)
 
+    // A watchdog end means Kōbō forced the stream closed after the engine
+    // failed to drain. It is neither a clean completion nor evidence of an
+    // agent stall. Move auto-loop work onto the existing persisted, bounded
+    // transient-retry path before lifecycle cleanup observes the status.
+    const watchdogRecovery = ev.reason === 'watchdog' && getWs(workspaceId)?.autoLoop === true
+    if (watchdogRecovery) {
+      console.warn(`[auto-loop] watchdog recovery scheduled for workspace '${workspaceId}'`)
+      void handleTransientAutoLoopFailure(workspaceId)
+    }
+
     // Must run BEFORE autoLoopService.onSessionEnded → spawnNextIteration →
     // startAgent, otherwise startAgent throws "Agent already running" because
     // the just-ended controller is still in the map.
@@ -892,6 +963,8 @@ function handleEvent(
     )
 
     if (!ownsWorkspaceLifecycle) return
+
+    if (watchdogRecovery) return
 
     // resume_failed exits with an error but the workspace is fine (stale id
     // cleared, next iteration will start fresh) — report 'completed' to
@@ -962,7 +1035,7 @@ function onSessionEnded(
   agentSessionId: string,
   sourceController: SessionController | undefined,
   exitCode: number | null,
-  reason: 'completed' | 'error' | 'killed',
+  reason: 'completed' | 'error' | 'killed' | 'watchdog',
   resumeFailed = false,
 ): boolean {
   // Update the agent_sessions row
@@ -1122,6 +1195,10 @@ export function startAgent(
   } else {
     agentSessionId = reuseOrCreateFreshSession(workspaceId, existingSessionId, model, engineId)
   }
+
+  // Persist before the asynchronous engine can emit its first event. This
+  // survives a Kōbō restart and does not depend on SDK system:init delivery.
+  captureTaskProgressBaseline(workspaceId, agentSessionId)
 
   const settings = ws ? readEffectiveSettingsSafe(ws.projectPath) : readEffectiveSettingsSafe(workingDir)
 

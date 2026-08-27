@@ -226,6 +226,22 @@ const WORKSPACE_SCOPED_TOOLS: Tool[] = [
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   {
+    name: 'set_auto_loop',
+    description:
+      'Enable or disable auto-loop for THIS workspace. Read get_workspace_info first. Enable it only when the user explicitly asks for autonomous continuation and pending tasks remain; disable it only when the user explicitly asks. Kōbō resumes the next iteration automatically after a session ends while it is enabled.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        enabled: {
+          type: 'boolean',
+          description: 'True to enable auto-loop; false to disable it.',
+        },
+      },
+      required: ['enabled'],
+    },
+    annotations: { destructiveHint: false, openWorldHint: false },
+  },
+  {
     name: 'set_workspace_agent_description',
     description:
       "Set or clear the workspace's agent-side description (≤ 200 chars). Pass an empty string to clear. The user sees this string under the workspace title in the sidebar (it takes precedence over the user-controlled `description` field). Plain text only. The current value is available via get_workspace_info as agentDescription. NOTE: there is a separate user-controlled `description` field — do NOT try to write it; it has no MCP tool.",
@@ -716,6 +732,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 
     if (name === 'get_workspace_info') {
       return ok(getWorkspaceInfoHandler(db, workspaceId!))
+    }
+
+    if (name === 'set_auto_loop') {
+      if (typeof a.enabled !== 'boolean') return fail('enabled parameter is required and must be boolean')
+      try {
+        const method = a.enabled ? 'POST' : 'DELETE'
+        const result = await backendRequest(method, `/api/workspaces/${workspaceId}/auto-loop`)
+        return ok(result)
+      } catch (err) {
+        return fail(err instanceof Error ? err.message : String(err))
+      }
     }
 
     if (name === 'set_workspace_agent_description') {

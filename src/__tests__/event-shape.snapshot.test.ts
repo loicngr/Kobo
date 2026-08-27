@@ -6,6 +6,7 @@ import { ALL_AGENT_EVENT_KINDS } from '../server/services/agent/engines/types.js
 const EXAMPLES: Record<string, AgentEvent> = {
   'session:started': { kind: 'session:started', engineSessionId: 's1', model: 'claude-sonnet-4-6' },
   'session:ended': { kind: 'session:ended', reason: 'completed', exitCode: 0 },
+  'turn:completed': { kind: 'turn:completed' },
   'session:user-input-requested': {
     kind: 'session:user-input-requested',
     requestKind: 'question',

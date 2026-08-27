@@ -127,10 +127,17 @@ export type AgentEvent =
   | { kind: 'session:started'; engineSessionId: string; model?: string }
   | {
       kind: 'session:ended'
-      reason: 'completed' | 'error' | 'killed'
+      reason: 'completed' | 'error' | 'killed' | 'watchdog'
       exitCode: number | null
       superseded?: boolean
     }
+  /**
+   * The current model turn has produced its terminal result and no tracked
+   * background work remains. The session may still be draining internally.
+   * This is deliberately separate from `session:ended`, which remains the
+   * authoritative lifecycle signal for orchestration and auto-loop.
+   */
+  | { kind: 'turn:completed' }
   | {
       kind: 'session:user-input-requested'
       requestKind: 'question' | 'permission'
@@ -187,6 +194,7 @@ export type AgentEvent =
 export const ALL_AGENT_EVENT_KINDS = [
   'session:started',
   'session:ended',
+  'turn:completed',
   'session:user-input-requested',
   'session:compacted',
   'session:compacting',

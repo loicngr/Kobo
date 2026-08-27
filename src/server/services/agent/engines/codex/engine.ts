@@ -303,6 +303,7 @@ export function createCodexEngine(): AgentEngine {
                 turnLiveness.pause()
                 armSubagentStallWatchdog()
               } else {
+                if (n.turn?.status === 'completed') safeEmit({ kind: 'turn:completed' })
                 resolveTurnDone()
               }
             }

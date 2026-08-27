@@ -378,6 +378,15 @@ export function dispatchAgentEvent(
   // to do here for this kind.
   if (event.kind === 'session:started') return
 
+  // Engines emit this when a model turn has returned its terminal result but
+  // their underlying stream is still draining. It only changes the visual
+  // busy indicator; persisted workspace status remains `executing` until the
+  // authoritative session:ended event arrives.
+  if (event.kind === 'turn:completed') {
+    if (sessionId) workspaceStore.markAgentTurnSettled(workspaceId, sessionId)
+    return
+  }
+
   // Session lifecycle: session:ended signals completion/error/kill. Refresh
   // the workspace list so the new DB status shows up, and surface a
   // notification if not replaying.

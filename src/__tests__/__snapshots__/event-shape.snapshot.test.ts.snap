@@ -12,6 +12,9 @@ exports[`AgentEvent shape snapshot > matches the snapshot > agent-event-shape 1`
     "reason": "completed",
     "exitCode": 0
   },
+  "turn:completed": {
+    "kind": "turn:completed"
+  },
   "session:user-input-requested": {
     "kind": "session:user-input-requested",
     "requestKind": "question",

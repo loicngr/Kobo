@@ -609,6 +609,18 @@ export const migrations: Migration[] = [
       `)
     },
   },
+  {
+    version: 35,
+    name: 'add-agent-session-task-progress-baseline',
+    migrate: (db) => {
+      const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_sessions'").get()
+      if (!table) return
+      const columns = db.prepare('PRAGMA table_info(agent_sessions)').all() as Array<{ name: string }>
+      if (!columns.some((column) => column.name === 'task_progress_baseline')) {
+        db.exec('ALTER TABLE agent_sessions ADD COLUMN task_progress_baseline TEXT')
+      }
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

@@ -42,8 +42,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 34', () => {
-    expect(SCHEMA_VERSION).toBe(34)
+  it('exporte SCHEMA_VERSION = 35', () => {
+    expect(SCHEMA_VERSION).toBe(35)
   })
 
   it('migration v33 records and backfills the engine on agent sessions', () => {
@@ -125,6 +125,51 @@ describe('runMigrations(db)', () => {
     db.prepare("DELETE FROM ws_events WHERE id = 'e3'").run()
     expect((db.prepare('SELECT errors FROM session_event_metrics').get() as { errors: number }).errors).toBe(0)
     db.close()
+  })
+
+  it('migration v35 adds a nullable task progress baseline without losing sessions', () => {
+    const upgraded = new Database(':memory:')
+    upgraded.exec(`
+      CREATE TABLE agent_sessions (
+        id TEXT PRIMARY KEY,
+        workspace_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'running'
+      );
+      INSERT INTO agent_sessions (id, workspace_id, status) VALUES ('session-1', 'ws-1', 'completed');
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+    `)
+    for (let version = 1; version <= 34; version++) {
+      upgraded.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(version, `v${version}`, 'now')
+    }
+
+    runMigrations(upgraded)
+
+    expect(
+      (upgraded.prepare('PRAGMA table_info(agent_sessions)').all() as Array<{ name: string }>).map(
+        (column) => column.name,
+      ),
+    ).toContain('task_progress_baseline')
+    expect(
+      upgraded.prepare("SELECT id, status, task_progress_baseline FROM agent_sessions WHERE id = 'session-1'").get(),
+    ).toEqual({
+      id: 'session-1',
+      status: 'completed',
+      task_progress_baseline: null,
+    })
+    expect(getMigrationHistory(upgraded).at(-1)).toMatchObject({
+      version: 35,
+      name: 'add-agent-session-task-progress-baseline',
+    })
+    upgraded.close()
+
+    const fresh = new Database(':memory:')
+    initSchema(fresh)
+    expect(
+      (fresh.prepare('PRAGMA table_info(agent_sessions)').all() as Array<{ name: string }>).map(
+        (column) => column.name,
+      ),
+    ).toContain('task_progress_baseline')
+    fresh.close()
   })
 
   it('migration v17 unifies legacy permission_mode + permission_profile into agent_permission_mode', () => {

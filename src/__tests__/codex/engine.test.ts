@@ -133,7 +133,7 @@ function resetChild() {
 // ── Tests ─────────────────────────────────────────────────────────────────────
 
 describe('createCodexEngine — happy path', () => {
-  it('emits session:started, message:text, message:end, session:ended on a successful turn', async () => {
+  it('emits turn:completed before session:ended on a successful turn', async () => {
     resetChild()
     const engine = createCodexEngine()
     const events: AgentEvent[] = []
@@ -185,7 +185,9 @@ describe('createCodexEngine — happy path', () => {
     expect(kinds).toContain('session:started')
     expect(kinds).toContain('message:text')
     expect(kinds).toContain('message:end')
+    expect(kinds).toContain('turn:completed')
     expect(kinds).toContain('session:ended')
+    expect(kinds.indexOf('turn:completed')).toBeLessThan(kinds.indexOf('session:ended'))
 
     const sessionStarted = events.find((e) => e.kind === 'session:started') as Extract<
       AgentEvent,

@@ -845,6 +845,19 @@ describe('MCP server tool registration — cron family', () => {
   })
 })
 
+describe('MCP server tool registration — auto-loop control', () => {
+  it('exposes set_auto_loop and delegates both transitions to the backend', () => {
+    const serverSource = fs.readFileSync(path.join(__dirname, '..', 'mcp-server', 'kobo-tasks-server.ts'), 'utf-8')
+
+    expect(serverSource).toMatch(/name:\s*['"]set_auto_loop['"]/)
+    expect(serverSource).toMatch(/required:\s*\[['"]enabled['"]\]/)
+    expect(serverSource).toMatch(
+      /name === 'set_auto_loop'[\s\S]*?a\.enabled \? 'POST' : 'DELETE'[\s\S]*?backendRequest\(method, `\/api\/workspaces\/\$\{workspaceId\}\/auto-loop`\)/,
+    )
+    expect(serverSource).not.toMatch(/name === 'set_auto_loop'[\s\S]*?UPDATE workspaces SET auto_loop/)
+  })
+})
+
 describe('MCP server tool registration — global workspace tools', () => {
   const readServerSource = () =>
     fs.readFileSync(path.join(__dirname, '..', 'mcp-server', 'kobo-tasks-server.ts'), 'utf-8')

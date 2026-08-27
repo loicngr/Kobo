@@ -82,6 +82,23 @@ function resetControls(): void {
 }
 
 describe('claude-code engine — result drain watchdog', () => {
+  it('emits a turn-completed signal as soon as a result has no background work', async () => {
+    vi.useFakeTimers()
+    try {
+      const events: AgentEvent[] = []
+      const engine = createClaudeCodeEngine()
+      await engine.start(BASE_OPTIONS, (event) => events.push(event))
+
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(events).toContainEqual({ kind: 'turn:completed' })
+    } finally {
+      releaseStream?.()
+      resetControls()
+      vi.useRealTimers()
+    }
+  })
+
   it('aborts a stuck SDK stream with no background subagent', async () => {
     vi.useFakeTimers()
     try {
@@ -92,7 +109,7 @@ describe('claude-code engine — result drain watchdog', () => {
 
       await vi.advanceTimersByTimeAsync(15_000)
 
-      expect(events).toContainEqual({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+      expect(events).toContainEqual({ kind: 'session:ended', reason: 'watchdog', exitCode: null })
       expect(abortSignal?.aborted).toBe(true)
     } finally {
       releaseStream?.()
@@ -111,18 +128,20 @@ describe('claude-code engine — result drain watchdog', () => {
 
       await vi.advanceTimersByTimeAsync(15_000)
 
+      expect(events).not.toContainEqual({ kind: 'turn:completed' })
       expect(events).not.toContainEqual({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
       expect(abortSignal?.aborted).toBe(false)
 
       completeSubagent?.()
       await vi.advanceTimersByTimeAsync(0)
 
+      expect(events).toContainEqual({ kind: 'turn:completed' })
       expect(events).not.toContainEqual({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
       expect(abortSignal?.aborted).toBe(false)
 
       await vi.advanceTimersByTimeAsync(15_000)
 
-      expect(events).toContainEqual({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+      expect(events).toContainEqual({ kind: 'session:ended', reason: 'watchdog', exitCode: null })
       expect(abortSignal?.aborted).toBe(true)
     } finally {
       completeSubagent?.()
@@ -149,7 +168,7 @@ describe('claude-code engine — result drain watchdog', () => {
       // subagent set empties instead of waiting out the 10-minute stall.
       await vi.advanceTimersByTimeAsync(20_000)
 
-      expect(events).toContainEqual({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+      expect(events).toContainEqual({ kind: 'session:ended', reason: 'watchdog', exitCode: null })
       expect(abortSignal?.aborted).toBe(true)
     } finally {
       completeSubagent?.()
@@ -186,7 +205,7 @@ describe('claude-code engine — result drain watchdog', () => {
       completeSubagent?.()
       await vi.advanceTimersByTimeAsync(20_000)
 
-      expect(events).toContainEqual({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+      expect(events).toContainEqual({ kind: 'session:ended', reason: 'watchdog', exitCode: null })
     } finally {
       completeSubagent?.()
       extraTurnGate?.()

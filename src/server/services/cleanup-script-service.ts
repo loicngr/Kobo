@@ -43,7 +43,7 @@ function countPendingTasks(workspaceId: string): number {
 /** Inputs for the pure cleanup-trigger decision. */
 export interface CleanupDecisionInput {
   /** Session end reason from the agent engine. */
-  reason: 'completed' | 'error' | 'killed'
+  reason: 'completed' | 'error' | 'killed' | 'watchdog'
   /** Whether the workspace was an active auto-loop target when the session ended. */
   wasAutoLoop: boolean
   /** True only on the auto-loop completion path (all tasks done) — bypasses the mode check. */
@@ -96,7 +96,7 @@ export function runCleanupScript(
 
 function trigger(
   workspaceId: string,
-  decision: { reason: 'completed' | 'error' | 'killed'; wasAutoLoop: boolean; autoLoopCompleted: boolean },
+  decision: { reason: 'completed' | 'error' | 'killed' | 'watchdog'; wasAutoLoop: boolean; autoLoopCompleted: boolean },
 ): void {
   try {
     const row = getRow(workspaceId)
@@ -156,7 +156,7 @@ function trigger(
  */
 export function onSessionEnded(
   workspaceId: string,
-  reason: 'completed' | 'error' | 'killed',
+  reason: 'completed' | 'error' | 'killed' | 'watchdog',
   opts: { wasAutoLoop: boolean },
 ): void {
   trigger(workspaceId, { reason, wasAutoLoop: opts.wasAutoLoop, autoLoopCompleted: false })

@@ -269,7 +269,7 @@ describe('claude-code engine — canUseTool abort tagging', () => {
 })
 
 describe('claude-code engine — hung SDK generator after result', () => {
-  it('forces session:ended/completed when the generator never closes after a result message', async () => {
+  it('forces session:ended/watchdog when the generator never closes after a result message', async () => {
     // Repro of the stuck-auto-loop bug: the SDK emits its terminal `result`
     // message (turn done, `usage` event observed) but the async generator
     // never reaches `done` — a hung subagent task / stuck teardown keeps it
@@ -326,7 +326,7 @@ describe('claude-code engine — hung SDK generator after result', () => {
       const ended = events.find((e) => e.kind === 'session:ended')
       expect(ended, 'session:ended must be forced after a hung post-result generator').toBeDefined()
       if (ended && ended.kind === 'session:ended') {
-        expect(ended.reason).toBe('completed')
+        expect(ended.reason).toBe('watchdog')
       }
       // A clean (non-error) result must not surface a spurious error event.
       expect(events.find((e) => e.kind === 'error')).toBeUndefined()

@@ -64,7 +64,8 @@ export function initSchema(db: Database.Database): void {
       model TEXT,
       started_at TEXT NOT NULL,
       ended_at TEXT,
-      name TEXT
+      name TEXT,
+      task_progress_baseline TEXT
     );
 
     CREATE TABLE IF NOT EXISTS ws_events (

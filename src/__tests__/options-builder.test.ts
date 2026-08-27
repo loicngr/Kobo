@@ -23,6 +23,16 @@ describe('buildClaudeOptions', () => {
     expect(effectivePrompt.endsWith('hello')).toBe(true)
   })
 
+  it('documents the MCP auto-loop control for fresh sessions', () => {
+    const { effectivePrompt } = buildClaudeOptions({
+      prompt: 'hello',
+      agentPermissionMode: 'bypass',
+      workingDir: '/tmp/work',
+    })
+    expect(effectivePrompt).toContain('kobo__set_auto_loop')
+    expect(effectivePrompt).toContain('never disable it unless explicitly asked')
+  })
+
   it('plan mode maps to SDK plan and never sets allowDangerouslySkipPermissions', () => {
     const { options } = buildClaudeOptions({
       prompt: 'p',

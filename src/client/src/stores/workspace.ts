@@ -381,6 +381,9 @@ export const useWorkspaceStore = defineStore('workspace', {
     chatDraft: '',
     queuedMessages: {} as Record<string, { content: string; sessionId: string }>,
     activeAgentSessionIds: {} as Record<string, string>,
+    // A model turn may be complete while its engine stream is still draining.
+    // Keep this UI-only state separate from persisted workspace status.
+    settledAgentSessionIds: {} as Record<string, string>,
     gitRefreshTrigger: 0,
     gitStatsCache: {} as Record<string, GitStats>,
     pendingWakeups: {} as Record<string, PendingWakeup>,
@@ -2092,16 +2095,30 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     setActiveAgentSession(workspaceId: string, sessionId: string) {
       this.activeAgentSessionIds[workspaceId] = sessionId
+      delete this.settledAgentSessionIds[workspaceId]
+    },
+
+    markAgentTurnSettled(workspaceId: string, sessionId: string) {
+      if (this.activeAgentSessionIds[workspaceId] === sessionId) {
+        this.settledAgentSessionIds[workspaceId] = sessionId
+      }
+    },
+
+    isAgentTurnSettled(workspaceId: string): boolean {
+      const sessionId = this.activeAgentSessionIds[workspaceId]
+      return sessionId !== undefined && this.settledAgentSessionIds[workspaceId] === sessionId
     },
 
     clearActiveAgentSession(workspaceId: string, sessionId: string) {
       if (this.activeAgentSessionIds[workspaceId] === sessionId) {
         delete this.activeAgentSessionIds[workspaceId]
+        delete this.settledAgentSessionIds[workspaceId]
       }
     },
 
     clearActiveAgentSessionOwner(workspaceId: string) {
       delete this.activeAgentSessionIds[workspaceId]
+      delete this.settledAgentSessionIds[workspaceId]
     },
 
     updateWorkspaceFromEvent(workspaceId: string, data: Partial<Workspace>) {
