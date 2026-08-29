@@ -3,6 +3,19 @@ import type { EffectiveSettings } from '../../settings-service.js'
 // ── Engine contract ───────────────────────────────────────────────────────────
 
 /**
+ * Substring an engine's error message must contain once its session has
+ * fully ended and it can no longer receive a message. The Claude engine
+ * throws `Claude agent is no longer running`; the Codex engine's
+ * post-session-end guard in `codex/engine.ts` reuses this same substring so a
+ * single already-recognized `isAgentUnavailableError` pattern in the
+ * orchestrator covers both engines, instead of growing that list with a
+ * fourth, engine-specific string. Kept here — a module neither engine's
+ * business logic depends on — purely to give the two call sites a shared
+ * anchor; it is not itself part of the `AgentEngine` interface.
+ */
+export const AGENT_NO_LONGER_RUNNING_TEXT = 'agent is no longer running'
+
+/**
  * Known engine identifiers. Expand this union when new engines are added.
  * The registry still accepts plain strings at its resolve boundary because DB
  * values are untyped — validation happens at workspace creation via

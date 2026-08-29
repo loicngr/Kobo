@@ -10,7 +10,6 @@ import {
   getSettingsPath,
   getSkillsPath,
 } from '../../utils/paths.js'
-import { unregisterProcess } from '../../utils/process-tracker.js'
 import * as autoLoopService from '../auto-loop-service.js'
 import * as cleanupScriptService from '../cleanup-script-service.js'
 import * as cronService from '../cron-service.js'
@@ -28,7 +27,13 @@ import {
   type WorkspaceStatus,
 } from '../workspace-service.js'
 import { resolveEngine } from './engines/registry.js'
-import type { AgentEvent, McpServerSpec, RateLimitInfo, StartOptions } from './engines/types.js'
+import {
+  AGENT_NO_LONGER_RUNNING_TEXT,
+  type AgentEvent,
+  type McpServerSpec,
+  type RateLimitInfo,
+  type StartOptions,
+} from './engines/types.js'
 import { routeEvent } from './event-router.js'
 import { SessionController } from './session-controller.js'
 
@@ -290,26 +295,46 @@ const WATCHDOG_INTERVAL_MS = 30_000
 
 let watchdogTimer: ReturnType<typeof setInterval> | null = null
 
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch {
-    return false
-  }
-}
+/**
+ * Grace window for a controller whose `engine.start` has not resolved yet.
+ * `engineProcess` is undefined during that window, so there is no probe to
+ * call — and concluding "dead" from a missing pid is exactly the dormant bug
+ * that would kill every new session the day the start path becomes blocking.
+ */
+const CONTROLLER_STARTUP_GRACE_MS = 60_000
 
 function runWatchdog(): void {
   for (const [workspaceId, ctrl] of controllers) {
-    const pid = ctrl.pid
-    // SDK-backed engines have no pid — query the engine's optional `isAlive`
-    // probe instead so the watchdog isn't blind on those engines. Legacy
-    // engines without `isAlive` fall back to the pid-based check.
-    const ep = ctrl.engineProcess
-    const alive = ep && typeof ep.isAlive === 'function' ? ep.isAlive() : pid !== undefined && isProcessAlive(pid)
-    if (alive) continue
+    // D1 — a controller already in `stopping` state is being torn down by
+    // `stopController`/`stopAgentAndWait`, which has its own bounded deadline
+    // (STOP_AGENT_TIMEOUT_MS) and its own eviction path once that deadline
+    // passes. Before D1 this branch could never see a stopping controller —
+    // the entry was removed from `controllers` synchronously, before
+    // `ctrl.stop()` was even awaited. Now that the entry survives the whole
+    // stop, a slow-but-honest voluntary stop (the engine's iterator already
+    // closed, `isAlive()` already reporting `false`, well within the 15s
+    // window) must not be raced here: doing so would report a false "Agent
+    // process died unexpectedly", force the workspace to `error`, and set an
+    // unread badge — all on a stop the user explicitly asked for.
+    if (ctrl.status === 'stopping') continue
 
-    console.error(`[watchdog] Agent process for workspace '${workspaceId}' (PID ${pid}) is dead — cleaning up`)
+    const ep = ctrl.engineProcess
+
+    if (!ep) {
+      // engine.start is still in flight — stay silent until the grace window
+      // closes, then treat a controller that never produced a process as dead.
+      if (Date.now() - ctrl.startedAt < CONTROLLER_STARTUP_GRACE_MS) continue
+      console.error(
+        `[watchdog] Controller for workspace '${workspaceId}' produced no engine process within ${CONTROLLER_STARTUP_GRACE_MS}ms — cleaning up`,
+      )
+    } else {
+      // D1 — the pid is never a liveness criterion. The Claude engine exposes
+      // none, and a pid recycled after a machine restart reads as alive. An
+      // engine that cannot answer is presumed alive: only an explicit `false`
+      // triggers the cleanup below.
+      if (ep.isAlive?.() !== false) continue
+      console.error(`[watchdog] Agent engine for workspace '${workspaceId}' reports dead — cleaning up`)
+    }
 
     // Emit an error + session:ended AgentEvent pair so clients can react uniformly
     try {
@@ -327,7 +352,6 @@ function runWatchdog(): void {
       console.warn('[watchdog] Failed to route death notification events:', err)
     }
 
-    unregisterProcess(workspaceId)
     if (controllers.get(workspaceId) === ctrl) controllers.delete(workspaceId)
     retryCounts.delete(workspaceId)
 
@@ -358,57 +382,72 @@ function runWatchdog(): void {
 }
 
 /**
- * On server start, any `agent_sessions` row still in `running` status is
- * necessarily orphaned — the process that owned it died with the previous
- * server run. Mark those rows as `error` (or `completed` if the PID is
- * somehow still alive and reachable) so the health check stops complaining
- * and the UI doesn't show ghost agents.
+ * Boot-time reconciliation. D1 — the `controllers` map is THE liveness source
+ * of truth, and it is empty by definition at this point: every row implying a
+ * live agent is therefore orphaned, unconditionally, with no probe to run.
+ *
+ * The former `isProcessAlive(row.pid)` guard was wrong in both directions. The
+ * Claude engine never exposes a pid, so the column stayed NULL and the probe
+ * never ran for the default engine. And after a machine restart, a pid
+ * recycled by an unrelated program read as "still alive" — pinning the session
+ * as running forever, with no controller and no watchdog to ever clean it up.
  *
  * Called once at boot, BEFORE `startWatchdog`.
  */
 export function reconcileOrphanSessions(): void {
+  const now = new Date().toISOString()
+
   try {
     const db = getDb()
-    const rows = db.prepare("SELECT id, pid FROM agent_sessions WHERE status = 'running'").all() as Array<{
-      id: string
-      pid: number | null
-    }>
-    if (rows.length > 0) {
-      const now = new Date().toISOString()
-      const update = db.prepare("UPDATE agent_sessions SET status = 'error', ended_at = ? WHERE id = ?")
-      let fixed = 0
-      for (const row of rows) {
-        if (row.pid && isProcessAlive(row.pid)) continue // genuine leftover from a graceful restart — skip
-        update.run(now, row.id)
-        fixed++
-      }
-      if (fixed > 0) {
-        console.log(`[orchestrator] Reconciled ${fixed} orphan agent_sessions row(s) at boot.`)
-      }
+    const result = db
+      .prepare("UPDATE agent_sessions SET status = 'error', ended_at = ? WHERE status = 'running'")
+      .run(now)
+    if (result.changes > 0) {
+      console.log(`[orchestrator] Reconciled ${result.changes} orphan agent_sessions row(s) at boot.`)
     }
   } catch (err) {
     console.error('[orchestrator] Failed to reconcile orphan agent_sessions at boot:', err)
   }
 
-  // Workspaces stuck in `awaiting-user` after a server kill have no live
-  // controller to resolve canUseTool, so the chat input is disabled forever.
-  // Drop them back to `idle` so the user can interact (start fresh, etc).
-  // We bypass `updateWorkspaceStatus` here because the orchestrator/workspace
-  // module pair is circular and the reference may not be initialised at boot
-  // time when this runs; a raw SQL update is safe — the awaiting-user → idle
-  // transition is allowed by VALID_TRANSITIONS.
+  // Same reasoning for the workspaces themselves: a status that implies a live
+  // agent has no controller left to drive it, so the UI would show "the agent
+  // is busy" forever with the chat input disabled.
+  //
+  // Raw SQL on purpose: `updateWorkspaceStatus` lives in a module that forms a
+  // cycle with this one and may not be initialised this early. Every
+  // transition performed here (executing / brainstorming / extracting /
+  // awaiting-user → idle) is allowed by VALID_TRANSITIONS anyway.
   try {
     const db = getDb()
     const result = db
       .prepare(
-        "UPDATE workspaces SET status = 'idle', updated_at = ? WHERE status = 'awaiting-user' AND archived_at IS NULL",
+        `UPDATE workspaces SET status = 'idle', updated_at = ?
+          WHERE status IN ('executing', 'brainstorming', 'extracting', 'awaiting-user')`,
       )
-      .run(new Date().toISOString())
+      .run(now)
     if (result.changes > 0) {
-      console.log(`[orchestrator] Reconciled ${result.changes} awaiting-user workspace(s) at boot.`)
+      console.log(`[orchestrator] Reconciled ${result.changes} orphan workspace status(es) at boot.`)
     }
   } catch (err) {
-    console.error('[orchestrator] Failed to reconcile awaiting-user workspaces at boot:', err)
+    console.error('[orchestrator] Failed to reconcile orphan workspace statuses at boot:', err)
+  }
+
+  // The dev-server children died with the previous server run too, so a
+  // `running` / `starting` column is exactly as false as an orphan agent
+  // status — and the health page counts it.
+  try {
+    const db = getDb()
+    const result = db
+      .prepare(
+        `UPDATE workspaces SET dev_server_status = 'stopped', updated_at = ?
+          WHERE dev_server_status IN ('running', 'starting')`,
+      )
+      .run(now)
+    if (result.changes > 0) {
+      console.log(`[orchestrator] Reconciled ${result.changes} orphan dev_server_status value(s) at boot.`)
+    }
+  } catch (err) {
+    console.error('[orchestrator] Failed to reconcile dev_server_status at boot:', err)
   }
 }
 
@@ -795,14 +834,29 @@ function handleEvent(
     lifecycleOwnership.owner !== sourceController &&
     lifecycleOwnership.supersededControllers.has(sourceController)
 
-  // A stopped controller can continue draining buffered engine events after it
-  // has lost ownership. Drop every stale non-terminal event before it reaches
-  // persistence/live delivery, including the gap where no replacement is
-  // registered yet. A terminal event still records session-local history; it
-  // carries a durable marker only when a different controller now owns the
-  // workspace, or when the latest owner already ended, so replay does not
-  // depend on transient browser state.
+  // An EVICTED controller (replaced, or timed out past STOP_AGENT_TIMEOUT_MS)
+  // can continue draining buffered engine events after it has lost ownership.
+  // Drop every stale non-terminal event before it reaches persistence/live
+  // delivery, including the gap where no replacement is registered yet. A
+  // terminal event still records session-local history; it carries a durable
+  // marker only when a different controller now owns the workspace, or when
+  // the latest owner already ended, so replay does not depend on transient
+  // browser state.
+  //
+  // This does NOT cover the `stopping` window (D1): a controller mid-stop
+  // stays registered as its own workspace's owner, so its events are real and
+  // reach persistence/delivery below unconditionally. What must NOT happen is
+  // any side effect that could resurrect the session the user just told to
+  // stop — see `sourceControllerIsStopping` further down.
   if (sourceNoLongerOwnsWorkspace && ev.kind !== 'session:ended') return
+  // A controller already told to stop (D1) keeps emitting real events until it
+  // actually dies — they are persisted and broadcast like any other (see
+  // `routeEvent` below, unconditional). But a handful of side effects here
+  // would re-arm or re-open a session the user just stopped: a new wakeup, a
+  // new cron, a quota/auto-loop backoff, or a status bounce back into
+  // `awaiting-user`/`executing`. Every branch that does one of those must
+  // check this guard.
+  const sourceControllerIsStopping = sourceController?.status === 'stopping'
   const routedEvent =
     ev.kind === 'session:ended' && (hasReplacement || sourceIsSuperseded) ? { ...ev, superseded: true } : ev
   routeEvent(workspaceId, agentSessionId, routedEvent)
@@ -827,7 +881,7 @@ function handleEvent(
     const delay = typeof input?.delaySeconds === 'number' ? input.delaySeconds : 0
     const prompt = typeof input?.prompt === 'string' ? input.prompt : ''
     const reason = typeof input?.reason === 'string' ? input.reason : undefined
-    if (delay > 0 && prompt) {
+    if (delay > 0 && prompt && !sourceControllerIsStopping) {
       console.warn(
         `[orchestrator] Legacy ScheduleWakeup intercepted for workspace '${workspaceId}' — agent should use kobo__schedule_wakeup instead.`,
       )
@@ -852,18 +906,20 @@ function handleEvent(
       (typeof input?.expression === 'string' && input.expression) ||
       ''
     if (prompt && expression) {
-      console.warn(
-        `[orchestrator] Native CronCreate intercepted for workspace '${workspaceId}' — armed equivalent kobo cron. Prefer kobo__cron_create.`,
-      )
-      try {
-        cronService.arm(workspaceId, {
-          expression,
-          prompt,
-          label: 'from-native-CronCreate',
-          agentSessionId,
-        })
-      } catch (err) {
-        console.error('[orchestrator] Failed to mirror native CronCreate as kobo cron:', err)
+      if (!sourceControllerIsStopping) {
+        console.warn(
+          `[orchestrator] Native CronCreate intercepted for workspace '${workspaceId}' — armed equivalent kobo cron. Prefer kobo__cron_create.`,
+        )
+        try {
+          cronService.arm(workspaceId, {
+            expression,
+            prompt,
+            label: 'from-native-CronCreate',
+            agentSessionId,
+          })
+        } catch (err) {
+          console.error('[orchestrator] Failed to mirror native CronCreate as kobo cron:', err)
+        }
       }
     } else if (prompt || input) {
       console.warn(
@@ -892,7 +948,13 @@ function handleEvent(
       console.error('[orchestrator] Failed to persist skills:', err)
     }
   }
-  if (ev.kind === 'session:brainstorm-complete') {
+  // The `[BRAINSTORM_COMPLETE]` marker is produced by both engine mappers from
+  // assistant text, so it can arrive during `stop()`'s own drain — same class
+  // of bug as `session:started`'s executing-bounce (D1). The whole block is
+  // nothing but this status transition (no separate bookkeeping to preserve),
+  // so it is entirely behind the guard; the event itself is still
+  // persisted/broadcast unconditionally via `routeEvent` above.
+  if (ev.kind === 'session:brainstorm-complete' && !sourceControllerIsStopping) {
     try {
       const ws = getWs(workspaceId)
       if (ws && ws.status !== 'executing') {
@@ -902,14 +964,15 @@ function handleEvent(
       console.error('[orchestrator] Failed to transition to executing:', err)
     }
   }
-  if (ev.kind === 'error' && ev.category === 'quota') {
+  if (ev.kind === 'error' && ev.category === 'quota' && !sourceControllerIsStopping) {
     void handleQuota(workspaceId, agentSessionId)
   }
   if (
     ev.kind === 'error' &&
     ev.category === 'other' &&
     TRANSIENT_SERVER_ERROR_PATTERN.test(ev.message) &&
-    getWs(workspaceId)?.autoLoop
+    getWs(workspaceId)?.autoLoop &&
+    !sourceControllerIsStopping
   ) {
     void handleTransientAutoLoopFailure(workspaceId)
   }
@@ -944,8 +1007,25 @@ function handleEvent(
     // failed to drain. It is neither a clean completion nor evidence of an
     // agent stall. Move auto-loop work onto the existing persisted, bounded
     // transient-retry path before lifecycle cleanup observes the status.
-    const watchdogRecovery = ev.reason === 'watchdog' && getWs(workspaceId)?.autoLoop === true
-    if (watchdogRecovery) {
+    //
+    // `!hasReplacement` is load-bearing: this recovery is workspace-scoped,
+    // not session-scoped, and it runs BEFORE onSessionEnded's own superseded
+    // guard. Without it, an old session timing out would flip the workspace
+    // that a NEW session is already running into `quota` and arm a backoff.
+    // This is not covered by `sourceControllerIsStopping`: `runWatchdog`'s
+    // dead-engine branch evicts a controller from the map WITHOUT ever
+    // calling `.stop()` on it, so an old controller can still be 'running'
+    // by the time its own drain watchdog reports a late `session:ended`.
+    const watchdogRecovery = !hasReplacement && ev.reason === 'watchdog' && getWs(workspaceId)?.autoLoop === true
+    // A drain watchdog can fire mid-`stop()`: `stopController` already cancelled
+    // any pending quota backoff (`quotaBackoffService.cancel(id, 'user')`), and
+    // re-arming one here would resurrect a session the user just stopped — the
+    // same `sourceControllerIsStopping` guard as every other revive side effect
+    // in this function. `watchdogRecovery` itself stays computed unguarded: the
+    // `onSessionEnded` call below independently bails out via its own
+    // `wasStopping` check before its later `if (watchdogRecovery) return` use
+    // could matter.
+    if (watchdogRecovery && !sourceControllerIsStopping) {
       console.warn(`[auto-loop] watchdog recovery scheduled for workspace '${workspaceId}'`)
       void handleTransientAutoLoopFailure(workspaceId)
     }
@@ -978,7 +1058,7 @@ function handleEvent(
     cleanupScriptService.onSessionEnded(workspaceId, effectiveReason, { wasAutoLoop })
   }
 
-  if (ev.kind === 'session:user-input-requested') {
+  if (ev.kind === 'session:user-input-requested' && !sourceControllerIsStopping) {
     if (ev.requestKind === 'question') {
       enqueuePending(workspaceId, {
         kind: 'question',
@@ -1017,15 +1097,21 @@ function handleEvent(
     }
     // Transition terminal states (completed/idle/error/quota) → executing so
     // the frontend's `sessionActive` flips and streaming messages get the
-    // typing spinner.
-    try {
-      const ws = getWs(workspaceId)
-      if (ws && (ws.status === 'completed' || ws.status === 'idle' || ws.status === 'error' || ws.status === 'quota')) {
-        updateWorkspaceStatus(workspaceId, 'executing')
+    // typing spinner. Skip while the source controller is stopping — this
+    // would bounce a workspace the user just stopped back into `executing`.
+    if (!sourceControllerIsStopping) {
+      try {
+        const ws = getWs(workspaceId)
+        if (
+          ws &&
+          (ws.status === 'completed' || ws.status === 'idle' || ws.status === 'error' || ws.status === 'quota')
+        ) {
+          updateWorkspaceStatus(workspaceId, 'executing')
+        }
+      } catch (err) {
+        // Transition may be invalid for some edge states — best-effort.
+        console.warn('[orchestrator] Could not transition workspace to executing on session:started:', err)
       }
-    } catch (err) {
-      // Transition may be invalid for some edge states — best-effort.
-      console.warn('[orchestrator] Could not transition workspace to executing on session:started:', err)
     }
   }
 }
@@ -1063,7 +1149,6 @@ function onSessionEnded(
     controllers.delete(workspaceId)
   }
 
-  unregisterProcess(workspaceId)
   if (!preserveQuotaBackoff) {
     retryCounts.delete(workspaceId)
   }
@@ -1145,16 +1230,31 @@ export function startAgent(
   // Zombie detection: an SDK iterator hung on a never-resolved canUseTool
   // callback can leave its controller in the map after the workspace is
   // logically idle. Evict it instead of refusing the new session.
+  //
+  // A controller already in `stopping` state is evictable too: it stays
+  // registered for the whole teardown now (D1), and refusing here would break
+  // every legitimate stop-then-start sequence.
+  let zombieEviction: Promise<void> = Promise.resolve()
   const existingCtrl = controllers.get(workspaceId)
   if (existingCtrl) {
     const wsForCheck = getWs(workspaceId)
     const status = wsForCheck?.status
     const isLogicallyDone = status === 'idle' || status === 'completed' || status === 'error' || status === 'quota'
-    if (isLogicallyDone) {
+    if (isLogicallyDone || existingCtrl.status === 'stopping') {
       console.warn(
-        `[orchestrator] Evicting zombie controller for workspace '${workspaceId}' (status=${status}) before starting fresh session`,
+        `[orchestrator] Evicting zombie controller for workspace '${workspaceId}' (status=${status}, controller=${existingCtrl.status}) before starting fresh session`,
       )
-      void existingCtrl.stop().catch(() => {})
+      // The new engine must not touch the worktree while the zombie may still
+      // be writing to it — a zombie that ignores its own stop is exactly the
+      // case this path exists for. Bounded: it cannot hold the new session
+      // hostage for more than STOP_AGENT_TIMEOUT_MS.
+      zombieEviction = stopWithTimeout(existingCtrl, STOP_AGENT_TIMEOUT_MS).then((stopped) => {
+        if (!stopped) {
+          console.error(
+            `[orchestrator] Zombie controller for workspace '${workspaceId}' did not stop within ${STOP_AGENT_TIMEOUT_MS}ms — starting the new session anyway`,
+          )
+        }
+      })
       // Drop any queued pending items + persisted user-input-requested events
       // tied to the zombie's agentSessionId so the new session doesn't inherit
       // a stale queue and so a future sync replay doesn't resurrect them.
@@ -1231,9 +1331,11 @@ export function startAgent(
   registerSessionLifecycleOwner(workspaceId, agentSessionId, controller)
   controllers.set(workspaceId, controller)
 
-  // Kick off engine.start asynchronously. Errors surface as error events.
-  void controller
-    .start(options)
+  // Kick off engine.start asynchronously, BEHIND the zombie eviction so the
+  // new engine never runs concurrently with the one it replaces. Errors
+  // surface as error events.
+  void zombieEviction
+    .then(() => controller.start(options))
     .then(() => {
       const pid = controller.pid
       if (pid !== undefined) {
@@ -1293,72 +1395,164 @@ export function interruptAgent(workspaceId: string, options: InterruptAgentOptio
   }
 }
 
+/**
+ * Upper bound on a stop. Beyond this the engine is considered deaf to its own
+ * stop path: we evict the controller so the workspace becomes usable again.
+ *
+ * This is an honest abandonment, not an escalation to something else that
+ * watches over the process: Kōbō has no graduated SIGTERM/SIGKILL path of its
+ * own, the `process-tracker` module that used to exist was removed, and the
+ * session watchdog only walks the `controllers` map — the very map this
+ * eviction just removed the entry from. Whatever survives past this timeout
+ * is untracked by anyone in this process; only the OS or the user can end it.
+ */
+export const STOP_AGENT_TIMEOUT_MS = 15_000
+
+export type StopAgentOutcome = 'stopped' | 'not-running' | 'timeout'
+
 async function stopController(workspaceId: string, ctrl: SessionController): Promise<void> {
   wakeupService.cancel(workspaceId, 'stopped')
 
-  // If the session was waiting on a question/permission, normalize the state
-  // synchronously so callers (archive, delete, manual stop) see a clean
-  // workspace immediately — without waiting for the async controller.stop()
-  // → session:ended round-trip. We:
+  // Normalize the state synchronously so callers (archive, delete, manual
+  // stop) see a clean workspace immediately — without waiting for the async
+  // controller.stop() → session:ended round-trip, which onSessionEnded skips
+  // entirely for a controller already in `stopping` state (see `wasStopping`
+  // there). Every status that implies a live agent must be covered here —
+  // the same four covered by boot-time reconciliation — or a manual stop
+  // from `executing`/`brainstorming`/`extracting` leaves the workspace
+  // stuck showing "agent busy" with nothing left to ever clear it.
   //   1. drop queued pending items for this session,
   //   2. purge persisted `session:user-input-requested` events so a F5 can't
   //      resurrect zombie panels,
-  //   3. transition the workspace out of `awaiting-user` (→ idle) so badges
-  //      and unarchive don't leave a stuck status.
+  //   3. transition the workspace out of the active status (→ idle) so
+  //      badges and unarchive don't leave a stuck status.
+  // Steps 1-2 are `awaiting-user`-specific: they only make sense when the
+  // session actually left a pending question/permission behind.
   const wsBefore = getWs(workspaceId)
-  if (wsBefore?.status === 'awaiting-user') {
-    clearPendingForSession(workspaceId, ctrl.agentSessionId)
-    purgeAllPersistedUserInputRequests(workspaceId, ctrl.agentSessionId)
+  const activeStatuses: WorkspaceStatus[] = ['executing', 'brainstorming', 'extracting', 'awaiting-user']
+  if (wsBefore && activeStatuses.includes(wsBefore.status)) {
+    if (wsBefore.status === 'awaiting-user') {
+      clearPendingForSession(workspaceId, ctrl.agentSessionId)
+      purgeAllPersistedUserInputRequests(workspaceId, ctrl.agentSessionId)
+    }
     try {
       updateWorkspaceStatus(workspaceId, 'idle')
     } catch (err) {
-      console.warn('[orchestrator] Failed to normalize awaiting-user → idle on stop:', err)
+      console.warn(`[orchestrator] Failed to normalize ${wsBefore.status} → idle on stop:`, err)
     }
   }
-
-  // Remove from the map immediately so a fresh startAgent can proceed. The
-  // session:ended handler checks identity before removing, so a new controller
-  // started in the meantime is preserved.
-  controllers.delete(workspaceId)
 
   // Manual stop should also drop any pending quota auto-resume.
   quotaBackoffService.cancel(workspaceId, 'user')
 
-  await ctrl.stop()
+  // D1 — the controller stays REGISTERED for the whole stop, in `stopping`
+  // state. Removing it up-front (as we used to) made the only "is an agent
+  // running?" signal of the system lie for the entire teardown window: cron
+  // and auto-loop could start a second agent on the same worktree, and delete
+  // could pull the worktree from under a process still writing to it.
+  try {
+    await ctrl.stop()
+  } finally {
+    if (controllers.get(workspaceId) === ctrl) controllers.delete(workspaceId)
+  }
 }
 
-/** Gracefully stop an agent (the engine handles SIGTERM + SIGKILL). */
+/**
+ * Race an arbitrary promise against a bounded deadline. Resolves to the
+ * winner's value; if the deadline wins, `onTimeout()` supplies the value
+ * instead. Never throws — the timer is always cleared. Single source of
+ * truth for the "stop, but not forever" pattern: both `stopWithTimeout` and
+ * `stopAgentAndWait` used to hand-roll their own `Promise.race` + timer, two
+ * copies of the same logic that could silently drift apart.
+ */
+async function raceWithTimeout<T>(promise: Promise<T>, timeoutMs: number, onTimeout: () => T): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((resolve) => {
+        timer = setTimeout(() => resolve(onTimeout()), timeoutMs)
+        timer.unref?.()
+      }),
+    ])
+  } finally {
+    if (timer) clearTimeout(timer)
+  }
+}
+
+/** Race a controller stop against a bounded deadline. Never throws. */
+async function stopWithTimeout(ctrl: SessionController, timeoutMs: number): Promise<boolean> {
+  return raceWithTimeout(
+    ctrl
+      .stop()
+      .then(() => true)
+      .catch((err) => {
+        console.error('[orchestrator] controller.stop rejected:', err)
+        return true
+      }),
+    timeoutMs,
+    () => false,
+  )
+}
+
+/**
+ * Stop the agent and wait for it to actually die. Every caller that mutates
+ * the worktree afterwards — delete, archive, purge, setup script, engine
+ * switch — MUST use this: the fire-and-forget `stopAgent` returns while the
+ * engine may still be writing files.
+ */
+export async function stopAgentAndWait(
+  workspaceId: string,
+  timeoutMs: number = STOP_AGENT_TIMEOUT_MS,
+): Promise<StopAgentOutcome> {
+  const ctrl = controllers.get(workspaceId)
+  if (!ctrl) return 'not-running'
+
+  const finished = await raceWithTimeout(
+    stopController(workspaceId, ctrl).then(
+      () => true,
+      (err) => {
+        console.error(`[orchestrator] controller.stop failed for '${workspaceId}':`, err)
+        return true
+      },
+    ),
+    timeoutMs,
+    () => false,
+  )
+  if (finished) return 'stopped'
+
+  console.error(
+    `[orchestrator] Agent for workspace '${workspaceId}' did not stop within ${timeoutMs}ms — evicting its controller`,
+  )
+  if (controllers.get(workspaceId) === ctrl) controllers.delete(workspaceId)
+  return 'timeout'
+}
+
+/**
+ * Fire-and-forget stop, for the few callers that cannot await (WebSocket
+ * handlers). Anything that touches the worktree afterwards must call
+ * `stopAgentAndWait` instead. Escalation is the engine's business — Kōbō has
+ * no graduated SIGTERM/SIGKILL path of its own.
+ */
 export function stopAgent(workspaceId: string): void {
   const ctrl = controllers.get(workspaceId)
   if (!ctrl) {
     throw new Error(`No agent running for workspace '${workspaceId}'`)
   }
-
-  // Fire-and-forget: callers such as archive/delete must remain synchronous.
-  void stopController(workspaceId, ctrl).catch((err) => {
-    console.error('[orchestrator] controller.stop failed:', err)
+  void stopAgentAndWait(workspaceId).catch((err) => {
+    console.error('[orchestrator] stopAgent failed:', err)
   })
 }
 
 /** Stop every live engine before process shutdown, with a bounded wait per engine. */
 export async function stopAllAgents(timeoutMs = 3_000): Promise<void> {
-  const stops = [...controllers.entries()].map(async ([workspaceId, ctrl]) => {
-    let timeout: ReturnType<typeof setTimeout> | undefined
-    try {
-      await Promise.race([
-        stopController(workspaceId, ctrl),
-        new Promise<void>((resolve) => {
-          timeout = setTimeout(resolve, timeoutMs)
-          timeout.unref?.()
-        }),
-      ])
-    } catch (err) {
-      console.error(`[orchestrator] Failed to stop '${workspaceId}' during shutdown:`, err)
-    } finally {
-      if (timeout) clearTimeout(timeout)
-    }
-  })
-  await Promise.all(stops)
+  // No per-workspace try/catch here: unlike the pre-D1 shutdown path,
+  // `stopAgentAndWait` never rejects — every internal failure (a rejecting
+  // `controller.stop()`, or the bounded deadline firing) is already converted
+  // into a logged, returned `StopAgentOutcome` ('stopped' | 'timeout')
+  // instead of a thrown error. A wrapping catch here would be unreachable
+  // dead code pretending to guard against a failure mode that can't occur.
+  await Promise.all([...controllers.keys()].map((workspaceId) => stopAgentAndWait(workspaceId, timeoutMs)))
 }
 
 /** Write a user message to the running agent. */
@@ -1406,6 +1600,41 @@ export async function sendMessageForFallback(workspaceId: string, content: strin
     await replacementController.sendMessage(content)
     return { status: 'sent', sessionId: replacementController.agentSessionId }
   }
+}
+
+/**
+ * Error shapes that all mean the same thing to a chat sender: this workspace
+ * has no agent able to receive a message right now, so the correct reaction is
+ * to resume a session — never to reject and drop what the user typed.
+ *
+ * `Claude input stream is closed` / `Claude agent is no longer running` are
+ * exactly what the Claude engine throws after a one-prompt-one-turn session
+ * closed its stdin. The former literal `includes('No agent running')` test
+ * missed both, and the message vanished with no feedback at all.
+ *
+ * The third pattern is built from `AGENT_NO_LONGER_RUNNING_TEXT`
+ * (`engines/types.ts`) rather than hardcoded again here: the Codex engine's
+ * `sendMessage` throws `Codex ${AGENT_NO_LONGER_RUNNING_TEXT}` once its
+ * session has fully ended (JSON-RPC peer closed, child killed) and a message
+ * arrives afterward — the same "resume, don't reject" situation Claude hits,
+ * reusing this one already-recognized shape instead of adding a fourth,
+ * engine-specific string to maintain here.
+ *
+ * Deliberately EXCLUDED: `SessionController is stopping` and
+ * `SessionController not started` (Claude), and Codex's own
+ * `Codex session is not ready to receive a message` (thrown before its first
+ * turn is established). Resuming any of those would spawn a second agent on
+ * a worktree that is mid-teardown or mid-startup, or mask a genuine startup
+ * failure behind a resume loop. Those stay visible rejections.
+ */
+const AGENT_UNAVAILABLE_PATTERNS = [
+  /no agent running/i,
+  /input stream is closed/i,
+  new RegExp(AGENT_NO_LONGER_RUNNING_TEXT, 'i'),
+] as const
+
+export function isAgentUnavailableError(message: string): boolean {
+  return AGENT_UNAVAILABLE_PATTERNS.some((pattern) => pattern.test(message))
 }
 
 /**
@@ -1735,6 +1964,41 @@ export function getRunningCount(): number {
   return controllers.size
 }
 
+/**
+ * D1 — liveness is memory, not a column. Serializing it is what lets the
+ * client stop inferring "an agent is running" from `workspaces.status`: a
+ * workspace stuck in `executing` with no controller is an orphan, and only
+ * this shape can say so.
+ */
+export interface AgentLiveness {
+  status: 'running' | 'stopping'
+  agentSessionId: string
+  startedAt: string
+  lastEventAt: string
+}
+
+/** Liveness for one workspace, or `null` when no controller owns it. */
+export function getAgentLiveness(workspaceId: string): AgentLiveness | null {
+  const ctrl = controllers.get(workspaceId)
+  if (!ctrl) return null
+  return {
+    status: ctrl.status,
+    agentSessionId: ctrl.agentSessionId,
+    startedAt: new Date(ctrl.startedAt).toISOString(),
+    lastEventAt: new Date(ctrl.lastEventAt).toISOString(),
+  }
+}
+
+/** Liveness for every live controller, keyed by workspace id. */
+export function getAllAgentLiveness(): Record<string, AgentLiveness> {
+  const out: Record<string, AgentLiveness> = {}
+  for (const workspaceId of controllers.keys()) {
+    const liveness = getAgentLiveness(workspaceId)
+    if (liveness) out[workspaceId] = liveness
+  }
+  return out
+}
+
 /** Kobo built-in slash commands injected into the skill list (without leading /). */
 const KOBO_COMMANDS = ['kobo-check-progress', 'kobo-prep-autoloop']
 
@@ -1871,8 +2135,9 @@ export function _test_setRateLimitInfo(workspaceId: string, info: RateLimitInfo)
 async function handleQuota(workspaceId: string, _agentSessionId?: string): Promise<void> {
   try {
     updateWorkspaceStatus(workspaceId, 'quota')
-  } catch {
-    // May fail if transition is not valid
+  } catch (err) {
+    // Never silent: a refused transition here loses the backoff two lines down.
+    console.warn(`[orchestrator] Could not transition workspace '${workspaceId}' to quota:`, err)
   }
 
   const retryCount = retryCounts.get(workspaceId) ?? 0
@@ -1903,8 +2168,11 @@ async function handleQuota(workspaceId: string, _agentSessionId?: string): Promi
 async function handleTransientAutoLoopFailure(workspaceId: string): Promise<void> {
   try {
     updateWorkspaceStatus(workspaceId, 'quota')
-  } catch {
-    // May fail if transition is not valid.
+  } catch (err) {
+    console.warn(
+      `[orchestrator] Could not transition workspace '${workspaceId}' to quota for a transient failure:`,
+      err,
+    )
   }
 
   const retryCount = retryCounts.get(workspaceId) ?? 0

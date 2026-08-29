@@ -186,7 +186,9 @@ app.post('/:id/switch-engine', migrationGuard, async (c) => {
         ? body.handoff.trim().slice(0, 30_000)
         : buildEngineHandoff(workspace, workspace.engine, body.engine)
 
-    if (agentManager.hasController(id)) agentManager.stopAgent(id)
+    // A new engine is started three lines below: the previous one must be dead
+    // first, or two agents share the worktree.
+    if (agentManager.hasController(id)) await agentManager.stopAgentAndWait(id)
     const updated = workspaceService.updateWorkspaceEngineConfiguration(
       id,
       body.engine,
@@ -1153,6 +1155,9 @@ app.get('/info', (c) => {
       workspaces: workspaceService.listWorkspaces(false),
       prSnapshots: getAllPrSnapshots(),
       gitStats: getAllGitStats(),
+      // In-memory truth, not the `status` column: a workspace missing from
+      // this map has no agent, whatever its status claims.
+      agentLiveness: agentManager.getAllAgentLiveness(),
     })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -2202,7 +2207,7 @@ app.get('/:id', (c) => {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
     }
 
-    return c.json(workspace)
+    return c.json({ ...workspace, agentLiveness: agentManager.getAgentLiveness(id) })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
@@ -2531,13 +2536,14 @@ app.post('/:id/run-setup-script', async (c) => {
       return c.json({ error: 'Setup script is already running for this workspace' }, 409)
     }
 
-    // Stop the running agent before re-running the setup script
+    // Stop the running agent before re-running the setup script — the script
+    // rewrites the worktree the agent may still be writing to.
     try {
       if (agentManager.getAgentStatus(id)) {
-        agentManager.stopAgent(id)
+        await agentManager.stopAgentAndWait(id)
       }
-    } catch {
-      /* best-effort — agent may already be stopped */
+    } catch (err) {
+      console.error(`[workspaces] stopAgentAndWait before setup script failed for '${id}':`, err)
     }
 
     const effectiveSettings = settingsService.getEffectiveSettings(workspace.projectPath)
@@ -2586,9 +2592,9 @@ app.post('/:id/archive', migrationGuard, async (c) => {
     }
 
     try {
-      agentManager.stopAgent(id)
-    } catch {
-      // Agent may not be running — ignore
+      await agentManager.stopAgentAndWait(id)
+    } catch (err) {
+      console.error(`[workspaces] stopAgentAndWait during archive failed for '${id}':`, err)
     }
 
     try {
@@ -2681,11 +2687,13 @@ async function deleteWorkspaceWithSideEffects(
   workspace: WorkspaceRow,
   opts: { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean },
 ): Promise<string[]> {
-  // Stop agent if running (best-effort)
+  // Stop the agent and WAIT for it to die. `git worktree remove --force` runs
+  // a few lines below: firing and forgetting here pulled the directory from
+  // under an agent still writing to it, destroying uncommitted work.
   try {
-    agentManager.stopAgent(workspace.id)
-  } catch {
-    // Agent may not be running — ignore
+    await agentManager.stopAgentAndWait(workspace.id)
+  } catch (err) {
+    console.error(`[workspaces] stopAgentAndWait during delete failed for '${workspace.name}':`, err)
   }
 
   // Stop dev server if it was running. The processSpawn would otherwise
@@ -2879,11 +2887,11 @@ app.post('/:id/start', migrationGuard, async (c) => {
     const agentSessionId = body.agentSessionId
     const resume = body.resume === true
 
-    // Stop existing agent if running
+    // Stop the existing agent and wait: a fresh one starts right below.
     try {
-      agentManager.stopAgent(id)
-    } catch {
-      // Agent may not be running — ignore
+      await agentManager.stopAgentAndWait(id)
+    } catch (err) {
+      console.error(`[workspaces] stopAgentAndWait before start failed for '${id}':`, err)
     }
 
     const worktreePath = workspace.worktreePath
@@ -4065,12 +4073,12 @@ app.post('/:id/start-review', async (c) => {
     let emitSessionId: string | undefined
 
     if (newSession) {
-      // Stop current agent (best-effort) then start fresh.
+      // Stop current agent, wait for it, then start fresh.
       try {
-        agentManager.stopAgent(workspace.id)
+        await agentManager.stopAgentAndWait(workspace.id)
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
-        console.error(`[start-review] stopAgent failed (continuing): ${msg}`)
+        console.error(`[start-review] stopAgentAndWait failed (continuing): ${msg}`)
       }
       try {
         const agent = agentManager.startAgent(
@@ -4263,7 +4271,7 @@ app.post('/:id/mark-read', (c) => {
 })
 
 // POST /api/workspaces/:id/stop — stop agent
-app.post('/:id/stop', migrationGuard, (c) => {
+app.post('/:id/stop', migrationGuard, async (c) => {
   try {
     const id = c.req.param('id')
 
@@ -4273,9 +4281,11 @@ app.post('/:id/stop', migrationGuard, (c) => {
     }
 
     try {
-      agentManager.stopAgent(id)
-    } catch {
+      // The response says "stopped": make that true before returning.
+      await agentManager.stopAgentAndWait(id)
+    } catch (err) {
       // Agent may not be tracked (e.g. server restarted) — just update status
+      console.error(`[workspaces] stopAgentAndWait on manual stop failed for '${id}':`, err)
     }
 
     // Always transition to idle so the UI reflects the stopped state

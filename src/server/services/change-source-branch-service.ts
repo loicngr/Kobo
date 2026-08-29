@@ -42,13 +42,35 @@ export async function changeSourceBranch(workspaceId: string, newBase: string): 
   if (!trimmedNew) throw new Error('New source branch is required')
   if (trimmedNew === oldBase) throw new Error(`The source branch is already '${oldBase}'`)
 
-  const effective = getEffectiveSettings(workspace.projectPath)
-  if (effective.changeSourceBranchScript && effective.changeSourceBranchScript.trim().length > 0) {
-    return runCustomScript(workspace, oldBase, trimmedNew, effective.changeSourceBranchScript)
-  }
-
   const worktreePath = workspace.worktreePath
   const workingBranch = workspace.workingBranch
+
+  const effective = getEffectiveSettings(workspace.projectPath)
+  const customScript = effective.changeSourceBranchScript?.trim() ?? ''
+  if (customScript.length > 0) {
+    // Un script personnalisé remplace la STRATEGIE, jamais les GARANTIES.
+    // Le script par défaut fait `git reset --hard`, qui détruit sans recours
+    // le travail non commité et les fichiers non suivis. Le chemin intégré
+    // sait mettre de côté puis restaurer quand la branche est alignée ; un
+    // script arbitraire étant une boîte noire, on ne peut pas le supposer —
+    // donc tout worktree sale est refusé ici, sans exception.
+    // Fail-closed: `worktreeHasChanges` swallows any git failure and reports
+    // "clean" (see its doc comment), which is exactly wrong on a destructive
+    // path — an unknown state must never be read as "safe to reset --hard".
+    // `worktreeHasChangesStrict` lets the error through instead, and here we
+    // treat that failure the same as "dirty": refuse rather than guess.
+    let dirty: boolean
+    try {
+      dirty = gitOps.worktreeHasChangesStrict(worktreePath)
+    } catch (err) {
+      console.error('[change-source-branch] could not determine worktree state, refusing as a precaution:', err)
+      dirty = true
+    }
+    if (dirty) {
+      return { status: 'dirty', forcePushNeeded: false, commitCount: 0 }
+    }
+    return runCustomScript(workspace, oldBase, trimmedNew, effective.changeSourceBranchScript)
+  }
 
   // Fetch every branch so all `origin/*` refs are current: the proper-commit
   // computation and the `reset --hard` target both depend on fresh refs.
@@ -72,7 +94,18 @@ export async function changeSourceBranch(workspaceId: string, newBase: string): 
   }
 
   const isAligned = commits.length === 0
-  const dirty = gitOps.worktreeHasChanges(worktreePath)
+  // Fail-closed, same rule as the custom-script path above: an indeterminate
+  // worktree state must never be read as "nothing to lose". Refuse right
+  // here, before either branch below — in particular before the
+  // `isAligned && dirty` stash path, since stashing a state we could not
+  // inspect would be worse than refusing outright.
+  let dirty: boolean
+  try {
+    dirty = gitOps.worktreeHasChangesStrict(worktreePath)
+  } catch (err) {
+    console.error('[change-source-branch] could not determine worktree state, refusing as a precaution:', err)
+    return { status: 'dirty', forcePushNeeded, commitCount: commits.length }
+  }
 
   if (!isAligned && dirty) {
     return { status: 'dirty', forcePushNeeded, commitCount: commits.length }

@@ -1,7 +1,14 @@
 import { getPackageVersion } from '../../../../utils/paths.js'
 import { isWorkspacePermissionAllowed } from '../../../workspace-permission-policy-service.js'
 import { createStreamingBatcher } from '../../streaming-batcher.js'
-import type { AgentEngine, AgentEvent, EngineProcess, StartOptions } from '../types.js'
+import { createTurnLiveness } from '../../turn-liveness.js'
+import {
+  AGENT_NO_LONGER_RUNNING_TEXT,
+  type AgentEngine,
+  type AgentEvent,
+  type EngineProcess,
+  type StartOptions,
+} from '../types.js'
 import { CODEX_CAPABILITIES } from './capabilities.js'
 import { createAppServerClient } from './client.js'
 import {
@@ -25,7 +32,6 @@ import type {
 } from './protocol/types.js'
 import { buildResponseForResolve, handleServerRequest, type PendingApproval } from './server-requests.js'
 import { spawnAppServer } from './spawn.js'
-import { createTurnLiveness } from './turn-liveness.js'
 
 /** Long enough for normal tool work, short enough to recover a lost turn event. */
 export const CODEX_TURN_IDLE_TIMEOUT_MS = 120_000
@@ -377,6 +383,11 @@ export function createCodexEngine(): AgentEngine {
       const iteratorPromise = (async () => {
         iteratorRunning = true
         try {
+          // Armed BEFORE the handshake (D2). Previously the probe only started
+          // once `turn/start` had answered, leaving initialize / thread.start /
+          // turn.start entirely uncovered — the exact window where a broken
+          // install hangs.
+          turnLiveness.start()
           await waitForChild(client.connect())
 
           if (isResume && options.resumeFromEngineSessionId) {
@@ -411,7 +422,7 @@ export function createCodexEngine(): AgentEngine {
             }),
           )
           activeTurnId = initialTurn.turnId
-          turnLiveness.start()
+          turnLiveness.activity()
           readySettled = true
           resolveReady()
 
@@ -491,6 +502,21 @@ export function createCodexEngine(): AgentEngine {
         sendMessage(text: string): Promise<void> {
           const steer = async (): Promise<void> => {
             await readyPromise
+            // `readyPromise` only ever resolves once, on the FIRST turn
+            // reaching `turn/start` — it says nothing about whether the
+            // session has since ended. A one-prompt-one-turn session that
+            // completed naturally (or was stopped) already ran the `finally`
+            // block below: `client.close()` tore down the JSON-RPC peer and
+            // `child.kill('SIGTERM')` killed the process. Without this check
+            // a message typed after that point would either write to an
+            // already-closed peer or sit for the full 120s JSON-RPC timeout
+            // before failing — and neither shape was recognised as "resume
+            // instead of rejecting". Fail fast instead, reusing the same
+            // substring Claude's engine throws once its stdin is closed, so
+            // the orchestrator's existing pattern covers this case too.
+            if (!iteratorRunning) {
+              throw new Error(`Codex ${AGENT_NO_LONGER_RUNNING_TEXT}`)
+            }
             if (!discoveredSessionId || !activeTurnId) {
               throw new Error('Codex session is not ready to receive a message')
             }

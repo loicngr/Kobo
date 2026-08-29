@@ -7,8 +7,12 @@ export interface TurnLiveness {
 }
 
 /**
- * Tracks a single active Codex turn. A pending user decision deliberately
- * pauses the deadline: the agent is waiting on a human, not stalled.
+ * Tracks a single active agent turn. Shared by every engine (D2): one module,
+ * armed BEFORE the handshake, re-armed on ANY event, paused while a human
+ * decision is pending, stopped in the cleanup block.
+ *
+ * A pending user decision deliberately pauses the deadline: the agent is
+ * waiting on a human, not stalled.
  */
 export function createTurnLiveness(input: { timeoutMs: number; onTimeout: () => void }): TurnLiveness {
   let timer: ReturnType<typeof setTimeout> | undefined

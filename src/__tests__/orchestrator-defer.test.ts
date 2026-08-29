@@ -397,10 +397,10 @@ describe('Orchestrator — pending question (canUseTool)', () => {
     })
     expect(getWorkspace(ws.id)?.status).toBe('awaiting-user')
 
-    // stopAgent transitions awaiting-user → idle synchronously and removes the
-    // controller from the map. The engine's stop() then resolves async and
-    // emits session:ended — at which point onSessionEnded must NOT try to
-    // transition idle → completed (which is invalid).
+    // stopAgent transitions awaiting-user → idle synchronously; the controller
+    // stays registered in `stopping` state until the engine actually dies. The
+    // engine's stop() then resolves async and emits session:ended — at which
+    // point onSessionEnded must NOT try to transition idle → completed.
     stopAgent(ws.id)
     expect(getWorkspace(ws.id)?.status).toBe('idle')
 
@@ -417,5 +417,90 @@ describe('Orchestrator — pending question (canUseTool)', () => {
     } finally {
       errSpy.mockRestore()
     }
+  })
+
+  it.each(['executing', 'brainstorming', 'extracting'] as const)(
+    'stopAgent normalizes %s → idle, not just awaiting-user',
+    async (activeStatus) => {
+      const { createWorkspace, updateWorkspaceStatus, getWorkspace } = await import(
+        '../server/services/workspace-service.js'
+      )
+      const ws = createWorkspace({
+        name: `W-${activeStatus}`,
+        projectPath: '/tmp',
+        sourceBranch: 'develop',
+        workingBranch: `feature/${activeStatus}`,
+      })
+      // `created` can only reach `executing` via `brainstorming` per
+      // VALID_TRANSITIONS; the other two targets are reachable directly.
+      if (activeStatus === 'executing') {
+        updateWorkspaceStatus(ws.id, 'brainstorming')
+      }
+      updateWorkspaceStatus(ws.id, activeStatus)
+
+      const orch = await import('../server/services/agent/orchestrator.js')
+      const { startAgent, stopAgent } = orch
+      startAgent(ws.id, '/tmp', 'hi')
+      await Promise.resolve()
+      await Promise.resolve()
+      const cap = captured[captured.length - 1]
+      if (!cap) throw new Error('no capture')
+      cap.onEvent({ kind: 'session:started', engineSessionId: 'engine-sess-1' })
+
+      expect(getWorkspace(ws.id)?.status).toBe(activeStatus)
+
+      stopAgent(ws.id)
+
+      expect(getWorkspace(ws.id)?.status).toBe('idle')
+    },
+  )
+
+  it('does not run the awaiting-user-only cleanup (persisted user-input-requested purge) when stopping from executing', async () => {
+    const { createWorkspace, updateWorkspaceStatus, getWorkspace } = await import(
+      '../server/services/workspace-service.js'
+    )
+    const { getDb } = await import('../server/db/index.js')
+    const ws = createWorkspace({
+      name: 'W-executing-no-purge',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/w-executing-no-purge',
+    })
+    updateWorkspaceStatus(ws.id, 'brainstorming')
+    updateWorkspaceStatus(ws.id, 'executing')
+
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const { startAgent, stopAgent } = orch
+    const { agentSessionId } = startAgent(ws.id, '/tmp', 'hi')
+    await Promise.resolve()
+    await Promise.resolve()
+    const cap = captured[captured.length - 1]
+    if (!cap) throw new Error('no capture')
+    cap.onEvent({ kind: 'session:started', engineSessionId: 'engine-sess-1' })
+
+    // Simulate a persisted user-input-requested event lingering from an
+    // earlier, unrelated interaction on this same session (matched by the
+    // real DB agent_sessions id, exactly what purgeAllPersistedUserInputRequests
+    // filters on). The awaiting-user-specific purge must NOT run here — the
+    // workspace never entered `awaiting-user` for this stop.
+    const db = getDb()
+    db.prepare(
+      `INSERT INTO ws_events (id, workspace_id, type, payload, session_id, created_at)
+       VALUES (?, ?, 'agent:event', ?, ?, ?)`,
+    ).run(
+      'evt-fixture-1',
+      ws.id,
+      JSON.stringify({ kind: 'session:user-input-requested', toolCallId: 'toolu_leftover' }),
+      agentSessionId,
+      new Date().toISOString(),
+    )
+
+    stopAgent(ws.id)
+
+    expect(getWorkspace(ws.id)?.status).toBe('idle')
+    const remaining = db.prepare('SELECT COUNT(*) as c FROM ws_events WHERE id = ?').get('evt-fixture-1') as {
+      c: number
+    }
+    expect(remaining.c).toBe(1)
   })
 })

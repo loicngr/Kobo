@@ -233,6 +233,56 @@ describe('changeSourceBranch', () => {
     expect(updateSourceMock).not.toHaveBeenCalled()
   })
 
+  it('refuses the built-in path when dirty-state detection fails (fail-closed), and touches nothing on disk', async () => {
+    g(repo, ['checkout', '-q', '-b', 'feature'])
+    writeFileSync(join(repo, 'feat.txt'), 'feat\n')
+    g(repo, ['add', '.'])
+    g(repo, ['commit', '-q', '-m', 'F1'])
+    const headBefore = g(repo, ['rev-parse', 'HEAD'])
+    // Mirrors `branchExists(repo, 'feature', 'origin')`: true as soon as the
+    // local branch exists, which it does — it's the branch we just checked
+    // out. Computed before corrupting the index below.
+    const forcePushNeededBefore = (() => {
+      try {
+        g(repo, ['rev-parse', '--verify', '--quiet', 'refs/heads/feature'])
+        return true
+      } catch {
+        return false
+      }
+    })()
+
+    // Corrupt the index so `git status --porcelain` fails ("index file
+    // smaller than expected") while the read-only commands the built-in path
+    // already ran (rev-parse, log, branch) keep working — this reproduces,
+    // on the reconstruct path, the same `git()` failure mode task 2
+    // introduced (timeout, buffer cap, index.lock) that motivated the
+    // custom-script fix above.
+    writeFileSync(join(repo, '.git', 'index'), 'corrupt')
+
+    getEffectiveSettingsMock.mockReturnValue({ changeSourceBranchScript: '' })
+    getWorkspaceMock.mockReturnValue({
+      id: 'w1',
+      sourceBranch: 'main',
+      workingBranch: 'feature',
+      worktreePath: repo,
+      projectPath: repo,
+    })
+
+    const res = await changeSourceBranch('w1', 'develop')
+
+    expect(res.status).toBe('dirty')
+    expect(res.commitCount).toBe(1)
+    // `forcePushNeeded` (from `branchExists`) is computed before the dirty
+    // check and unaffected by this fix; asserting it here just proves this
+    // return path carries the real computed values, unlike the custom-script
+    // path's hardcoded `{ forcePushNeeded: false, commitCount: 0 }`.
+    expect(res.forcePushNeeded).toBe(forcePushNeededBefore)
+    expect(updateSourceMock).not.toHaveBeenCalled()
+    // No `reset --hard`, no stash attempt: HEAD is exactly where it was.
+    const headAfter = g(repo, ['rev-parse', 'HEAD'])
+    expect(headAfter).toBe(headBefore)
+  })
+
   it('autostashes uncommitted work on the aligned path and restores it', async () => {
     g(repo, ['checkout', '-q', '-b', 'feature']) // sits on main, 0 own commits
     writeFileSync(join(repo, 'wip.txt'), 'work in progress\n') // dirty (untracked)
@@ -507,6 +557,59 @@ describe('changeSourceBranch', () => {
     })
     await expect(changeSourceBranch('w1', 'develop')).rejects.toThrow(/agent/i)
     expect(spawnMock).not.toHaveBeenCalled()
+  })
+
+  it('refuses to run the custom script when the worktree is dirty, and destroys nothing', async () => {
+    g(repo, ['checkout', '-q', '-b', 'feature'])
+    writeFileSync(join(repo, 'feat.txt'), 'feat\n')
+    g(repo, ['add', '.'])
+    g(repo, ['commit', '-q', '-m', 'F1'])
+
+    // Travail non commité que le `reset --hard` du script par défaut détruirait.
+    writeFileSync(join(repo, 'feat.txt'), 'MODIFIE NON COMMITE\n')
+    writeFileSync(join(repo, 'untracked.txt'), 'FICHIER NON SUIVI\n')
+
+    // Un script non vide : c'est la configuration PAR DEFAUT du produit.
+    getEffectiveSettingsMock.mockReturnValue({ changeSourceBranchScript: 'echo noop' })
+    getWorkspaceMock.mockReturnValue({
+      id: 'w1',
+      sourceBranch: 'main',
+      workingBranch: 'feature',
+      worktreePath: repo,
+      projectPath: repo,
+    })
+
+    const res = await changeSourceBranch('w1', 'develop')
+
+    expect(res.status).toBe('dirty')
+    // Le script ne doit jamais avoir été lancé.
+    expect(spawnMock).not.toHaveBeenCalled()
+    // Et rien ne doit avoir bougé sur le disque.
+    expect(readFileSync(join(repo, 'feat.txt'), 'utf-8')).toBe('MODIFIE NON COMMITE\n')
+    expect(existsSync(join(repo, 'untracked.txt'))).toBe(true)
+  })
+
+  it('refuses to run the custom script when dirty-state detection fails (fail-closed), and never spawns it', async () => {
+    // `git status` fails outright here (not a git repository at all), which is
+    // the most realistic way to trigger `worktreeHasChangesStrict` throwing —
+    // the same failure mode task 2 introduced for `git()` (timeout, buffer
+    // cap, index.lock).
+    const notARepo = mkdtempSync(join(tmpdir(), 'kobo-csb-not-a-repo-'))
+    getEffectiveSettingsMock.mockReturnValue({ changeSourceBranchScript: 'echo noop' })
+    getWorkspaceMock.mockReturnValue({
+      id: 'w1',
+      sourceBranch: 'main',
+      workingBranch: 'feature',
+      worktreePath: notARepo,
+      projectPath: repo,
+    })
+
+    const res = await changeSourceBranch('w1', 'develop')
+
+    expect(res.status).toBe('dirty')
+    expect(spawnMock).not.toHaveBeenCalled()
+
+    rmSync(notARepo, { recursive: true, force: true })
   })
 
   it('leaves the built-in cherry-pick path untouched when the script is empty', async () => {

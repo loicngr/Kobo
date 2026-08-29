@@ -73,7 +73,7 @@
 
 <script setup lang="ts">
 import type { QScrollArea } from 'quasar'
-import { foldEvents, mergeWithUserMessages, type UserMessage } from 'src/services/agent-event-view'
+import { foldEvents, isNormalSessionEnd, mergeWithUserMessages, type UserMessage } from 'src/services/agent-event-view'
 import { groupIntoTurns } from 'src/services/conversation-turns'
 import { useAgentStreamStore } from 'src/stores/agent-stream'
 import { useSettingsStore } from 'src/stores/settings'
@@ -160,9 +160,19 @@ const turns = computed(() => {
   }
   const agentItems = foldEvents(filteredEvents, filteredTs, sessionActive.value, filteredIds)
   const merged = mergeWithUserMessages(agentItems, userMessages.value)
-  const filtered = merged.filter(
-    (item) => item.type !== 'thinking' && (settings.showVerboseSystemMessages || item.type !== 'session'),
-  )
+  const filtered = merged.filter((item) => {
+    if (item.type === 'thinking') return false
+    if (item.type !== 'session') return true
+    // `started` / `compacted` stay verbose-only. A session ending abnormally
+    // (killed / error / watchdog) — or for an absent/unknown reason — is never
+    // noise: hiding it behind the verbose toggle is exactly why a crash could
+    // look indistinguishable from a normal turn. A *normal* completion, though,
+    // happens after every turn and no longer needs to interrupt the feed: the
+    // failure case now has its own dedicated `error` item, and the
+    // `AgentLivenessChip` shows whether the agent is still running.
+    if (item.kind !== 'ended') return settings.showVerboseSystemMessages
+    return settings.showVerboseSystemMessages || !isNormalSessionEnd(item.detail)
+  })
   return groupIntoTurns(filtered)
 })
 

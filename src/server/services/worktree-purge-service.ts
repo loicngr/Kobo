@@ -28,11 +28,13 @@ export async function purgeWorktree(workspaceId: string): Promise<PurgeResult> {
 
   const warnings: string[] = []
 
+  // `removeWorktree` runs later in this same function — the agent must be dead
+  // by then, not merely asked to stop.
   try {
-    agentManager.stopAgent(workspaceId)
+    await agentManager.stopAgentAndWait(workspaceId)
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    console.error(`[purge] stopAgent failed for '${workspace.name}':`, msg)
+    console.error(`[purge] stopAgentAndWait failed for '${workspace.name}':`, msg)
   }
   try {
     await devServerService.stopDevServer(workspaceId)

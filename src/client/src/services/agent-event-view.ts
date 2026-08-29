@@ -14,6 +14,81 @@ export type ConversationItem =
     }
   | { type: 'session'; kind: 'started' | 'ended' | 'compacted'; detail?: unknown; ts?: string; eventIds?: string[] }
   | { type: 'user'; content: string; sender: 'user' | 'system-prompt' | string; ts?: string; eventIds?: string[] }
+  | { type: 'error'; category: string; message: string; ts?: string; eventIds?: string[] }
+
+/**
+ * Informational "Warning:" lines the Claude CLI writes to stderr; the legacy
+ * pipeline persisted them as error events. Real engine failures never start
+ * that way. Shared with AgentErrorBanner so the banner and the feed can never
+ * disagree on what counts as an error.
+ */
+export function isBenignAgentWarning(message: string): boolean {
+  // Strip ANSI escape sequences like "\u001b[33m" before matching "Warning:".
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: ANSI escapes by design
+  const cleaned = message.replace(/\u001b\[\d+m/g, '').trim()
+  return /^warning:/i.test(cleaned)
+}
+
+/**
+ * Pick the error the banner should show: the most recent one that isn't
+ * `quota` (own surface), isn't a benign CLI warning, and hasn't been
+ * acknowledged (dismissed) yet. `dismissedEventIds` is client-local and
+ * intentionally never persisted — see AgentErrorBanner.vue's `dismiss()` for
+ * why acknowledging must not delete the underlying event anymore: the feed
+ * now anchors the same event in the conversation timeline (task 9), so a
+ * destructive dismiss would erase that anchor too.
+ */
+export function selectLastAgentError(
+  events: AgentEvent[],
+  eventIds: Array<string | null | undefined>,
+  dismissedEventIds: ReadonlySet<string>,
+): { event: Extract<AgentEvent, { kind: 'error' }>; eventId: string | null } | null {
+  for (let i = events.length - 1; i >= 0; i--) {
+    const ev = events[i]
+    if (ev.kind !== 'error' || ev.category === 'quota') continue
+    if (ev.category === 'other' && isBenignAgentWarning(ev.message)) continue
+    const eventId = eventIds[i] ?? null
+    if (eventId && dismissedEventIds.has(eventId)) continue
+    return { event: ev, eventId }
+  }
+  return null
+}
+
+/**
+ * i18n key for a `session:ended` item. The reason has always been captured in
+ * `detail` but was never read at render time, so a turn that finished normally
+ * and a force-closed stream looked identical — the whole "it stops on its own"
+ * symptom.
+ */
+export function sessionEndedI18nKey(detail: unknown): string {
+  const reason = (detail as { reason?: unknown } | null | undefined)?.reason
+  switch (reason) {
+    case 'completed':
+      return 'session.endedCompleted'
+    case 'killed':
+      return 'session.endedKilled'
+    case 'error':
+      return 'session.endedError'
+    case 'watchdog':
+      return 'session.endedWatchdog'
+    default:
+      return 'session.ended'
+  }
+}
+
+/**
+ * Whether a `session:ended` item's reason is a normal completion. Used to
+ * gate the item behind the verbose-system-messages toggle: a normal
+ * completion happens after every turn and is expected noise now that the
+ * `AgentLivenessChip` shows whether the agent is still running and a failure
+ * gets its own dedicated `error` feed item — but an abnormal reason (killed,
+ * error, watchdog) or an absent/unknown one must stay visible unconditionally,
+ * since not knowing why a session ended is not the same as knowing it ended
+ * normally.
+ */
+export function isNormalSessionEnd(detail: unknown): boolean {
+  return (detail as { reason?: unknown } | null | undefined)?.reason === 'completed'
+}
 
 /** Return the newest usable thinking item from a normalised conversation. */
 export function getLatestThinkingItem(
@@ -141,6 +216,24 @@ export function foldEvents(
       case 'session:compacted':
         items.push({ type: 'session', kind: 'compacted', ts, eventIds: eventId ? [eventId] : undefined })
         break
+      // An agent error belongs in the timeline: the banner shows only the LAST
+      // one, outside the feed, and it can be dismissed for good — so a failed
+      // engine start left no trace of WHEN it happened. Quota keeps its own
+      // surface (banner + workspace status) and informational CLI warnings
+      // are not failures.
+      case 'error': {
+        if (ev.category === 'quota') break
+        if (ev.category === 'other' && isBenignAgentWarning(ev.message)) break
+        items.push({
+          type: 'error',
+          category: ev.category,
+          message: ev.message,
+          ts,
+          eventIds: eventId ? [eventId] : undefined,
+        })
+        break
+      }
+
       // Ignored categories — consumed by dedicated panels (session:compacting
       // is an ephemeral live indicator handled by the agent-stream store, never
       // a persisted feed item).
@@ -154,7 +247,6 @@ export function foldEvents(
       case 'usage':
       case 'rate_limit':
       case 'subagent:progress':
-      case 'error':
         break
       default: {
         // Exhaustiveness check — a new AgentEvent kind added upstream must be

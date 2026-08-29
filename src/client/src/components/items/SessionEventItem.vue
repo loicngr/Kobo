@@ -3,7 +3,7 @@
 </template>
 
 <script setup lang="ts">
-import type { ConversationItem } from 'src/services/agent-event-view'
+import { type ConversationItem, sessionEndedI18nKey } from 'src/services/agent-event-view'
 import { computed } from 'vue'
 
 const props = defineProps<{ item: Extract<ConversationItem, { type: 'session' }> }>()
@@ -13,7 +13,9 @@ const i18nKey = computed(() => {
     case 'started':
       return 'session.started'
     case 'ended':
-      return 'session.ended'
+      // The reason has always been carried in `detail`; reading it is what
+      // separates "the turn is over, keep typing" from "it crashed".
+      return sessionEndedI18nKey(props.item.detail)
     case 'compacted':
       return 'session.compacted'
     default:

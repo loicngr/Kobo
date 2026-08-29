@@ -18,6 +18,7 @@ vi.mock('../server/services/websocket-service.js', () => ({
 vi.mock('../server/services/agent/orchestrator.js', () => ({
   startAgent: vi.fn(() => ({ agentSessionId: 'mock-agent-session-id' })),
   stopAgent: vi.fn(),
+  stopAgentAndWait: vi.fn().mockResolvedValue('not-running'),
   sendMessage: vi.fn(),
   hasController: vi.fn(() => false),
   getAgentStatus: vi.fn(() => null),

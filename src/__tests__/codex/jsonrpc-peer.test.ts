@@ -62,4 +62,73 @@ describe('createJsonRpcPeer', () => {
     await expect(p1).resolves.toBe('peer closed')
     await expect(p2).resolves.toBe('peer closed')
   })
+
+  it('rejects a request that never receives a response once its deadline passes', async () => {
+    vi.useFakeTimers()
+    try {
+      const { stdin, stdout } = makeStreams()
+      const peer = createJsonRpcPeer({
+        stdin,
+        stdout,
+        onNotification: () => {},
+        onServerRequest: () => {},
+        defaultRequestTimeoutMs: 1_000,
+      })
+      const rejected = peer.request('turn/start', {}).catch((err: Error) => err)
+
+      await vi.advanceTimersByTimeAsync(1_001)
+
+      const err = await rejected
+      expect(err).toBeInstanceOf(Error)
+      expect((err as Error).name).toBe('JsonRpcTimeoutError')
+      expect((err as Error).message).toMatch(/turn\/start/)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('clears the deadline when the response arrives in time', async () => {
+    vi.useFakeTimers()
+    try {
+      const { stdin, stdout } = makeStreams()
+      const peer = createJsonRpcPeer({
+        stdin,
+        stdout,
+        onNotification: () => {},
+        onServerRequest: () => {},
+        defaultRequestTimeoutMs: 1_000,
+      })
+      const settled = peer.request('thread/start', {}).then(
+        (value) => ({ ok: true, value }),
+        (err: Error) => ({ ok: false, value: err.message }),
+      )
+      stdout.push('{"jsonrpc":"2.0","id":1,"result":{"thread":{"id":"thr_ok"}}}\n')
+      await vi.advanceTimersByTimeAsync(5_000)
+
+      expect(await settled).toEqual({ ok: true, value: { thread: { id: 'thr_ok' } } })
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('honours a per-call timeout that overrides the default', async () => {
+    vi.useFakeTimers()
+    try {
+      const { stdin, stdout } = makeStreams()
+      const peer = createJsonRpcPeer({
+        stdin,
+        stdout,
+        onNotification: () => {},
+        onServerRequest: () => {},
+        defaultRequestTimeoutMs: 60_000,
+      })
+      const rejected = peer.request('initialize', {}, 500).catch((err: Error) => err.name)
+
+      await vi.advanceTimersByTimeAsync(501)
+
+      expect(await rejected).toBe('JsonRpcTimeoutError')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
 })

@@ -3,7 +3,10 @@ import {
   type ConversationItem,
   foldEvents,
   getLatestThinkingItem,
+  isNormalSessionEnd,
   mergeWithUserMessages,
+  selectLastAgentError,
+  sessionEndedI18nKey,
 } from '../services/agent-event-view.js'
 import type { AgentEvent } from '../types/agent-event'
 
@@ -55,15 +58,124 @@ describe('foldEvents', () => {
     expect(sessions).toHaveLength(3)
   })
 
-  it('ignores skills:discovered, usage, rate_limit, subagent:progress, error', () => {
+  it('ignores skills:discovered, usage, rate_limit and subagent:progress', () => {
     const items = foldEvents([
       { kind: 'skills:discovered', skills: ['x'] },
       { kind: 'usage', inputTokens: 1, outputTokens: 2 },
       { kind: 'rate_limit', info: { buckets: [] } },
       { kind: 'subagent:progress', toolCallId: 't', status: 'running' },
-      { kind: 'error', category: 'other', message: 'x' },
     ])
     expect(items).toEqual([])
+  })
+
+  it('anchors an agent error in the feed so a failed start is visible in place', () => {
+    const items = foldEvents([{ kind: 'error', category: 'spawn_failed', message: 'codex binary not found' }])
+    expect(items).toEqual([
+      {
+        type: 'error',
+        category: 'spawn_failed',
+        message: 'codex binary not found',
+        ts: undefined,
+        eventIds: undefined,
+      },
+    ])
+  })
+
+  it('keeps quota errors and informational CLI warnings out of the feed', () => {
+    const items = foldEvents([
+      { kind: 'error', category: 'quota', message: 'usage limit reached' },
+      { kind: 'error', category: 'other', message: 'Warning: something cosmetic' },
+    ])
+    expect(items).toEqual([])
+  })
+})
+
+describe('selectLastAgentError', () => {
+  const events: AgentEvent[] = [
+    { kind: 'error', category: 'spawn_failed', message: 'first failure' },
+    { kind: 'error', category: 'other', message: 'Warning: something cosmetic' },
+    { kind: 'error', category: 'quota', message: 'usage limit reached' },
+    { kind: 'error', category: 'spawn_failed', message: 'second failure' },
+  ]
+  const eventIds = ['e1', 'e2', 'e3', 'e4']
+
+  it('returns the most recent error, skipping quota and benign warnings', () => {
+    const result = selectLastAgentError(events, eventIds, new Set())
+    expect(result?.eventId).toBe('e4')
+    expect(result?.event.message).toBe('second failure')
+  })
+
+  it('skips a dismissed (acknowledged) error and falls back to an earlier real one', () => {
+    const result = selectLastAgentError(events, eventIds, new Set(['e4']))
+    expect(result?.eventId).toBe('e1')
+    expect(result?.event.message).toBe('first failure')
+  })
+
+  it('returns null once every real error has been dismissed', () => {
+    const result = selectLastAgentError(events, eventIds, new Set(['e1', 'e4']))
+    expect(result).toBeNull()
+  })
+
+  it('returns null when there is no error event at all', () => {
+    expect(selectLastAgentError([], [], new Set())).toBeNull()
+  })
+})
+
+describe('sessionEndedI18nKey', () => {
+  it('names the reason instead of collapsing every ending into one label', () => {
+    expect(sessionEndedI18nKey({ reason: 'completed', exitCode: 0 })).toBe('session.endedCompleted')
+    expect(sessionEndedI18nKey({ reason: 'killed', exitCode: null })).toBe('session.endedKilled')
+    expect(sessionEndedI18nKey({ reason: 'error', exitCode: null })).toBe('session.endedError')
+    expect(sessionEndedI18nKey({ reason: 'watchdog', exitCode: null })).toBe('session.endedWatchdog')
+  })
+
+  it('falls back to the generic label for an unknown or missing reason', () => {
+    expect(sessionEndedI18nKey(undefined)).toBe('session.ended')
+    expect(sessionEndedI18nKey({ reason: 'something-new' })).toBe('session.ended')
+  })
+})
+
+describe('isNormalSessionEnd', () => {
+  it('is true only for a completed reason', () => {
+    expect(isNormalSessionEnd({ reason: 'completed', exitCode: 0 })).toBe(true)
+    expect(isNormalSessionEnd({ reason: 'killed', exitCode: null })).toBe(false)
+    expect(isNormalSessionEnd({ reason: 'error', exitCode: null })).toBe(false)
+    expect(isNormalSessionEnd({ reason: 'watchdog', exitCode: null })).toBe(false)
+  })
+
+  it('is false for an absent or unknown reason', () => {
+    expect(isNormalSessionEnd(undefined)).toBe(false)
+    expect(isNormalSessionEnd(null)).toBe(false)
+    expect(isNormalSessionEnd({ reason: 'something-new' })).toBe(false)
+  })
+})
+
+describe('ActivityFeed verbose gate for session:ended items', () => {
+  // Mirrors the exact condition ActivityFeed.vue applies to a 'session' item
+  // whose kind is 'ended': `verbose || !isNormalSessionEnd(detail)`. Extracted
+  // here because that condition is not itself exported, but its behavior for
+  // every reason in the table is what the gate must get right.
+  function isRetained(detail: unknown, verbose: boolean): boolean {
+    return verbose || !isNormalSessionEnd(detail)
+  }
+
+  it('hides only a normal completion behind the verbose toggle', () => {
+    expect(isRetained({ reason: 'completed', exitCode: 0 }, false)).toBe(false)
+    expect(isRetained({ reason: 'completed', exitCode: 0 }, true)).toBe(true)
+  })
+
+  it('always keeps an abnormal ending regardless of the verbose toggle', () => {
+    for (const reason of ['killed', 'error', 'watchdog'] as const) {
+      expect(isRetained({ reason, exitCode: null }, false)).toBe(true)
+      expect(isRetained({ reason, exitCode: null }, true)).toBe(true)
+    }
+  })
+
+  it('always keeps an ending with an absent or unknown reason', () => {
+    expect(isRetained(undefined, false)).toBe(true)
+    expect(isRetained(undefined, true)).toBe(true)
+    expect(isRetained({ reason: 'something-new' }, false)).toBe(true)
+    expect(isRetained({ reason: 'something-new' }, true)).toBe(true)
   })
 })
 

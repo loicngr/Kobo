@@ -51,6 +51,7 @@ vi.mock('../server/services/worktree-service.js', () => ({
 vi.mock('../server/services/agent/orchestrator.js', () => ({
   startAgent: vi.fn(),
   stopAgent: vi.fn(),
+  stopAgentAndWait: vi.fn().mockResolvedValue('not-running'),
   sendMessage: vi.fn(),
   getAgentStatus: vi.fn().mockReturnValue(null),
   answerPendingQuestion: vi.fn(),

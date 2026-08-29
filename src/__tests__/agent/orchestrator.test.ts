@@ -144,6 +144,11 @@ describe('Orchestrator — stop / interrupt / sendMessage', () => {
     const { startAgent, stopAgent, getAgentStatus } = await import('../../server/services/agent/orchestrator.js')
     startAgent(ws.id, '/tmp', 'hi')
     stopAgent(ws.id)
+    // stopAgent is fire-and-forget: the controller stays registered, in
+    // `stopping` state, until the engine's stop() promise actually resolves (D1).
+    expect(getAgentStatus(ws.id)).toBe('stopping')
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
     expect(getAgentStatus(ws.id)).toBeNull()
   })
 
@@ -185,6 +190,11 @@ describe('Orchestrator — stop / interrupt / sendMessage', () => {
     startAgent(ws.id, '/tmp', 'hi')
     expect(getRunningCount()).toBe(1)
     stopAgent(ws.id)
+    // stopAgent is fire-and-forget: the controller stays registered, in
+    // `stopping` state, until the engine's stop() promise actually resolves (D1).
+    expect(getRunningCount()).toBe(1)
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
+    await new Promise<void>((resolve) => setTimeout(resolve, 0))
     expect(getRunningCount()).toBe(0)
   })
 })
@@ -799,8 +809,16 @@ describe('Orchestrator — watchdog', () => {
         supportsSkills: true,
       },
       async start(_opts, _onEvent) {
-        // Use an absurdly high PID that is certain not to exist on the host.
-        return { pid: 999_999, engineSessionId: 'sid-dead', sendMessage() {}, interrupt() {}, async stop() {} }
+        // D1 — the pid is never a liveness criterion; an explicit `isAlive`
+        // returning false is what the watchdog now acts on.
+        return {
+          pid: 999_999,
+          engineSessionId: 'sid-dead',
+          sendMessage() {},
+          interrupt() {},
+          async stop() {},
+          isAlive: () => false,
+        }
       },
     })
   })
@@ -853,7 +871,11 @@ describe('Orchestrator — reconcileOrphanSessions', () => {
     expect(row.ended_at).not.toBeNull()
   })
 
-  it('leaves a running session alone when its PID is still alive', async () => {
+  it('marks a running session as error even when its recorded pid is still alive', async () => {
+    // D1 — the `controllers` map is the only liveness source of truth, and it
+    // is empty by definition at boot. The pid column is never consulted, so a
+    // pid that happens to be alive (recycled by another program after a
+    // machine restart, or `process.pid` itself here) changes nothing.
     const { createWorkspace } = await import('../../server/services/workspace-service.js')
     const { getDb } = await import('../../server/db/index.js')
     const ws = createWorkspace({ name: 'W', projectPath: '/tmp', sourceBranch: 'd', workingBranch: 'b' })
@@ -869,8 +891,8 @@ describe('Orchestrator — reconcileOrphanSessions', () => {
       status: string
       ended_at: string | null
     }
-    expect(row.status).toBe('running')
-    expect(row.ended_at).toBeNull()
+    expect(row.status).toBe('error')
+    expect(row.ended_at).not.toBeNull()
   })
 
   it('marks a running session with null PID as error', async () => {
@@ -1023,5 +1045,53 @@ describe('Orchestrator — interruptAgent', () => {
       message: expect.stringMatching(/Failed to interrupt agent.*interrupt failed/),
     })
     expect(autoLoopService.getStatus(ws.id).auto_loop).toBe(true)
+  })
+})
+
+describe('isAgentUnavailableError', () => {
+  it('recognises every shape that means "resume instead of rejecting"', async () => {
+    const { isAgentUnavailableError } = await import('../../server/services/agent/orchestrator.js')
+
+    expect(isAgentUnavailableError("No agent running for workspace 'w1'")).toBe(true)
+    // Thrown by the Claude engine once a one-prompt-one-turn session closed
+    // its stdin — the shape that used to silently drop the user's message.
+    expect(isAgentUnavailableError('Claude input stream is closed')).toBe(true)
+    expect(isAgentUnavailableError('Claude agent is no longer running')).toBe(true)
+  })
+
+  it('never swallows a stop in progress or an unstarted controller', async () => {
+    const { isAgentUnavailableError } = await import('../../server/services/agent/orchestrator.js')
+
+    // Resuming during a teardown would start a second agent on the worktree —
+    // exactly the race the stopping state exists to close. Reject visibly.
+    expect(isAgentUnavailableError('SessionController is stopping')).toBe(false)
+    expect(isAgentUnavailableError('SessionController not started')).toBe(false)
+    expect(isAgentUnavailableError('Claude input queue is full (max 20 messages)')).toBe(false)
+    expect(isAgentUnavailableError('ENOSPC: no space left on device')).toBe(false)
+  })
+
+  it('recognises the Codex engine reusing the "agent is no longer running" shape', async () => {
+    const { isAgentUnavailableError } = await import('../../server/services/agent/orchestrator.js')
+
+    // Thrown by the Codex engine's sendMessage guard (codex/engine.ts) once a
+    // session has fully ended (JSON-RPC peer closed, child killed) and a
+    // message arrives afterward — Codex's own equivalent of the Claude
+    // "stdin closed" case above. It deliberately reuses this already-
+    // recognized substring instead of a fourth, engine-specific pattern.
+    expect(isAgentUnavailableError('Codex agent is no longer running')).toBe(true)
+  })
+
+  it('distinguishes a Codex session that never reached its first turn from one that already ended', async () => {
+    const { isAgentUnavailableError } = await import('../../server/services/agent/orchestrator.js')
+
+    // Thrown before discoveredSessionId/activeTurnId are ever established.
+    // Unlike the ended-session case above, resuming here could mask a
+    // genuine startup failure (bad model config, broken install) behind a
+    // silent resume loop — so it deliberately stays an unrecognized, visible
+    // rejection, the Codex analogue of Claude's "SessionController not
+    // started" exclusion.
+    expect(isAgentUnavailableError('Codex session is not ready to receive a message')).toBe(false)
+    // The ended-after-a-turn case above, for direct contrast in this same test.
+    expect(isAgentUnavailableError('Codex agent is no longer running')).toBe(true)
   })
 })

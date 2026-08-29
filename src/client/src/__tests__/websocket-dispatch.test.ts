@@ -940,3 +940,97 @@ describe('_routeMessage — workspace:worktree-purged', () => {
     expect(fetchArchivedSpy).toHaveBeenCalled()
   })
 })
+
+describe('_routeMessage — user:message reconciliation', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
+
+  it('adopts the server timestamp on the matching optimistic entry instead of duplicating it', async () => {
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const wsStore = useWebSocketStore()
+    const workspaceStore = useWorkspaceStore()
+
+    // Optimistic entry stamped by a browser clock that runs ahead of the
+    // server (the WSL2 scenario: browser on Windows, server in the Linux VM).
+    const optimisticTimestamp = '2026-08-29T15:20:05.000Z'
+    workspaceStore.addActivityItem('w1', {
+      id: 'user-1756480805000',
+      type: 'text',
+      content: 'hello agent',
+      timestamp: optimisticTimestamp,
+      meta: { sender: 'user', pending: true },
+    })
+
+    const serverTimestamp = '2026-08-29T15:19:17.000Z'
+    ;(wsStore as unknown as { _routeMessage: (msg: unknown) => void })._routeMessage({
+      id: 'evt-server-1',
+      workspaceId: 'w1',
+      type: 'user:message',
+      payload: { content: 'hello agent', sender: 'user' },
+      createdAt: serverTimestamp,
+      sessionId: 'session-1',
+    })
+
+    const items = workspaceStore.activityFeeds.w1 ?? []
+    expect(items).toHaveLength(1)
+    expect(items[0]?.timestamp).toBe(serverTimestamp)
+    expect(items[0]?.id).toBe('evt-server-1')
+    expect(items[0]?.sessionId).toBe('session-1')
+  })
+
+  it('keeps the optimistic timestamp when the server event carries no createdAt', async () => {
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const wsStore = useWebSocketStore()
+    const workspaceStore = useWorkspaceStore()
+
+    const optimisticTimestamp = '2026-08-29T15:20:05.000Z'
+    workspaceStore.addActivityItem('w1', {
+      id: 'user-1756480805000',
+      type: 'text',
+      content: 'hello agent',
+      timestamp: optimisticTimestamp,
+      meta: { sender: 'user', pending: true },
+    })
+
+    ;(wsStore as unknown as { _routeMessage: (msg: unknown) => void })._routeMessage({
+      workspaceId: 'w1',
+      type: 'user:message',
+      payload: { content: 'hello agent', sender: 'user' },
+      sessionId: 'session-1',
+    })
+
+    const items = workspaceStore.activityFeeds.w1 ?? []
+    expect(items).toHaveLength(1)
+    expect(items[0]?.timestamp).toBe(optimisticTimestamp)
+  })
+
+  it('does not reconcile a non-matching pending entry, appending a separate item instead', async () => {
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const wsStore = useWebSocketStore()
+    const workspaceStore = useWorkspaceStore()
+
+    workspaceStore.addActivityItem('w1', {
+      id: 'user-1',
+      type: 'text',
+      content: 'first message',
+      timestamp: '2026-08-29T15:20:05.000Z',
+      meta: { sender: 'user', pending: true },
+    })
+
+    ;(wsStore as unknown as { _routeMessage: (msg: unknown) => void })._routeMessage({
+      id: 'evt-server-2',
+      workspaceId: 'w1',
+      type: 'user:message',
+      payload: { content: 'second message', sender: 'user' },
+      createdAt: '2026-08-29T15:19:17.000Z',
+      sessionId: 'session-1',
+    })
+
+    const items = workspaceStore.activityFeeds.w1 ?? []
+    expect(items).toHaveLength(2)
+  })
+})

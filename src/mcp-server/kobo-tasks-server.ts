@@ -4,7 +4,6 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema, type Tool } from '@modelcontextprotocol/sdk/types.js'
 import type Database from 'better-sqlite3'
 import { getDb } from '../server/db/index.js'
-import { runMigrations } from '../server/db/migrations.js'
 import {
   createTaskHandler,
   cronListHandler,
@@ -47,13 +46,15 @@ try {
   // KOBO_DB_PATH is passed). That would silently open a second connection
   // against the user's prod DB at ~/.config/kobo/kobo.db, which may not
   // even have the same schema as the dev DB the backend is using.
+  // On ouvre SANS migrer. Ce process est lancé une fois par workspace, sur le
+  // même fichier de base : `runMigrations` calcule l'ensemble des blocs
+  // appliqués AVANT de prendre le verrou, donc deux serveurs MCP démarrés
+  // ensemble peuvent rejouer le même bloc — et les blocs v2 à v19 ajoutent
+  // des colonnes sans garde d'existence. Un `duplicate column name` ici
+  // termine le process et prive l'agent de tous ses outils en pleine session.
+  // Le backend migre au démarrage, et il démarre nécessairement avant de
+  // pouvoir lancer ce serveur.
   db = getDb(dbPath)
-  // Defensive: run migrations to ensure the schema is at the latest version.
-  // The backend already ran them at boot, but this MCP server might be the
-  // first to touch the DB (e.g. tests, race at first boot, or KOBO_DB_PATH
-  // pointing somewhere the backend hasn't migrated). Idempotent — no-op if
-  // the DB is already at SCHEMA_VERSION.
-  runMigrations(db)
 } catch (err) {
   console.error('[kobo-tasks-server] Failed to open database:', err)
   process.exit(1)

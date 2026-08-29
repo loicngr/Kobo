@@ -323,6 +323,34 @@ describe('updateWorkspaceStatus(id, status)', () => {
     const ws = createWorkspace({ name: 'Defer 4', projectPath: '/p', sourceBranch: 'main', workingBranch: 'b' })
     expect(() => updateWorkspaceStatus(ws.id, 'awaiting-user')).toThrow(/Invalid status transition/)
   })
+
+  it('allows brainstorming and extracting to fall into quota', async () => {
+    const { createWorkspace, updateWorkspaceStatus, getWorkspace } = await import(
+      '../server/services/workspace-service.js'
+    )
+    // An auto-loop workspace with a distinct brainstormModel spends its first
+    // session in `brainstorming`. Refusing the transition there silently lost
+    // the quota backoff that had just been armed.
+    const brainstorming = createWorkspace({
+      name: 'Q1',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'feature/q1',
+    })
+    updateWorkspaceStatus(brainstorming.id, 'brainstorming')
+    updateWorkspaceStatus(brainstorming.id, 'quota')
+    expect(getWorkspace(brainstorming.id)?.status).toBe('quota')
+
+    const extracting = createWorkspace({
+      name: 'Q2',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'feature/q2',
+    })
+    updateWorkspaceStatus(extracting.id, 'extracting')
+    updateWorkspaceStatus(extracting.id, 'quota')
+    expect(getWorkspace(extracting.id)?.status).toBe('quota')
+  })
 })
 
 describe('deleteWorkspace(id)', () => {

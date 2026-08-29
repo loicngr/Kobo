@@ -218,9 +218,11 @@ describe('SessionController', () => {
     const ctrl = new SessionController('w1', 'sess-1', engine, () => {})
 
     const starting = ctrl.start(BASE_OPTS)
-    await ctrl.stop()
+    // stop() now waits for the in-flight start, so it must not be awaited
+    // before releasing the start gate — that would deadlock.
+    const stopping = ctrl.stop()
     releaseStart(process)
-    await starting
+    await Promise.all([starting, stopping])
 
     expect(stopCount).toBe(1)
     expect(ctrl.status).toBe('stopping')
@@ -264,7 +266,9 @@ describe('SessionController', () => {
     const ctrl = new SessionController('w1', 'sess-1', engine, () => {})
 
     const starting = ctrl.start(BASE_OPTS)
-    await ctrl.stop()
+    // stop() now waits for the in-flight start, so it must not be awaited
+    // before releasing the start gate — that would deadlock.
+    const firstStop = ctrl.stop()
     releaseStart(process)
     await vi.waitFor(() => expect(stopCount).toBe(1))
 
@@ -274,7 +278,65 @@ describe('SessionController', () => {
     } finally {
       releaseStop()
     }
-    await Promise.all([starting, repeatedStop])
+    await Promise.all([starting, firstStop, repeatedStop])
+    expect(stopCount).toBe(1)
+    expect(ctrl.engineProcess).toBeUndefined()
+  })
+
+  it('waits for an in-flight start before resolving stop(), then stops the process that eventually starts', async () => {
+    const { SessionController } = await import('../../server/services/agent/session-controller.js')
+    let releaseStart!: (process: EngineProcess) => void
+    const startGate = new Promise<EngineProcess>((resolve) => {
+      releaseStart = resolve
+    })
+    let stopCount = 0
+    const process: EngineProcess = {
+      pid: 999,
+      engineSessionId: undefined,
+      sendMessage() {},
+      interrupt() {},
+      async stop() {
+        stopCount++
+      },
+      resolvePendingUserInput: () => false,
+    }
+    const engine: AgentEngine = {
+      id: 'codex',
+      displayName: 'Codex',
+      capabilities: {
+        models: [],
+        permissionModes: ['bypass'],
+        supportsResume: true,
+        supportsMcp: true,
+        supportsSkills: true,
+      },
+      async start() {
+        return startGate
+      },
+    }
+    const ctrl = new SessionController('w1', 'sess-1', engine, () => {})
+
+    const starting = ctrl.start(BASE_OPTS)
+    let stopResolved = false
+    const stopping = ctrl.stop().then(() => {
+      stopResolved = true
+    })
+
+    // The engine's `start` is still in flight (gated on startGate): stop()
+    // must not resolve early, and the not-yet-existent process cannot have
+    // been stopped yet.
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(stopResolved).toBe(false)
+    expect(stopCount).toBe(0)
+
+    releaseStart(process)
+    await Promise.all([starting, stopping])
+
+    // Only once the engine actually started AND that instance was stopped
+    // should stop() hand control back — otherwise a caller (e.g. worktree
+    // removal) can race ahead while the engine is still spinning up.
+    expect(stopResolved).toBe(true)
     expect(stopCount).toBe(1)
     expect(ctrl.engineProcess).toBeUndefined()
   })

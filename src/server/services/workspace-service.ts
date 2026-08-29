@@ -144,8 +144,13 @@ export interface CreateTaskInput {
 /** Allowed status transitions per current status. Enforced by updateWorkspaceStatus. */
 const VALID_TRANSITIONS: Record<WorkspaceStatus, WorkspaceStatus[]> = {
   created: ['extracting', 'brainstorming', 'idle', 'error'],
-  extracting: ['extracting', 'brainstorming', 'idle', 'error', 'awaiting-user'],
-  brainstorming: ['executing', 'completed', 'idle', 'error', 'awaiting-user'],
+  // `quota` is reachable from every state that can be running a live session.
+  // It used to be missing here and on `brainstorming`, so an auto-loop
+  // workspace with a distinct brainstormModel silently lost its backoff: the
+  // transition threw, the error was swallowed, and the very next lines
+  // cancelled the timer that had just been armed.
+  extracting: ['extracting', 'brainstorming', 'idle', 'error', 'awaiting-user', 'quota'],
+  brainstorming: ['executing', 'completed', 'idle', 'error', 'awaiting-user', 'quota'],
   executing: ['completed', 'idle', 'error', 'quota', 'awaiting-user'],
   'awaiting-user': ['executing', 'brainstorming', 'extracting', 'idle', 'error', 'completed', 'quota'],
   completed: ['idle', 'executing'],
