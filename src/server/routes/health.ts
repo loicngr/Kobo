@@ -75,6 +75,12 @@ interface HealthReport {
     available: boolean
     version: string | null
   }
+  /** Kōbō ships no forge credentials: `gh` / `glab` are the user's own. Toute
+   *  la moitié « intégrer » du produit en dépend, et rien ne les sondait. */
+  forgeCli: {
+    gh: { available: boolean; version: string | null }
+    glab: { available: boolean; version: string | null }
+  }
   workspaces: {
     total: number
     archived: number
@@ -156,7 +162,7 @@ app.get('/report', async (c) => {
   const db = getDb()
   const dbPath = getDbPath()
   const home = getKoboHome()
-  const cliChecks = Promise.all([checkClaudeCli(), checkCodexCli()])
+  const cliChecks = Promise.all([checkClaudeCli(), checkCodexCli(), checkCli('gh'), checkCli('glab')])
 
   // DB schema version
   const row = db.prepare('SELECT MAX(version) as v FROM schema_migrations').get() as { v: number | null }
@@ -270,7 +276,7 @@ app.get('/report', async (c) => {
     n: number
   }
 
-  const [claudeCli, codexCli] = await cliChecks
+  const [claudeCli, codexCli, ghCli, glabCli] = await cliChecks
   const report: HealthReport = {
     version: getPackageVersion(),
     koboHome: home,
@@ -283,6 +289,7 @@ app.get('/report', async (c) => {
     settings: { schemaVersion: SETTINGS_SCHEMA_VERSION },
     claudeCli,
     codexCli,
+    forgeCli: { gh: ghCli, glab: glabCli },
     workspaces: {
       total: settingsRow.n,
       archived: archivedRow.n,

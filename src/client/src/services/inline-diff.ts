@@ -63,9 +63,19 @@ export interface FileChangeInfo {
 export function parseUnifiedDiff(diff: string): DiffLine[] {
   const lines = diff.split('\n')
   const result: DiffLine[] = []
+  // Les en-têtes `---` / `+++` n'existent QUE dans le préambule, avant le
+  // premier `@@`. Les tester inconditionnellement effaçait toute ligne
+  // supprimée commençant par deux tirets — commentaire SQL, séparateur
+  // Markdown ou YAML, décrémentation en C — qui disparaissait purement et
+  // simplement du rendu. On ne les reconnaît donc que tant qu'aucun bloc n'a
+  // commencé.
+  let inHunk = false
   for (const line of lines) {
-    if (line.startsWith('@@')) continue
-    if (line.startsWith('+++') || line.startsWith('---')) continue
+    if (line.startsWith('@@')) {
+      inHunk = true
+      continue
+    }
+    if (!inHunk && (line.startsWith('+++') || line.startsWith('---'))) continue
     if (line.startsWith('+')) {
       result.push({ type: 'add', content: line.slice(1) })
     } else if (line.startsWith('-')) {

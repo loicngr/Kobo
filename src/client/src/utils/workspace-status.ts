@@ -59,3 +59,42 @@ export function shouldWarnAgentNotRunning(
 ): boolean {
   return isAgentStatusStale(status, !hasLoadedLiveness || hasController)
 }
+
+/**
+ * The nine lifecycle statuses the server can put on a workspace. Mirrors
+ * `WorkspaceStatus` in `src/server/services/workspace-service.ts` — keep both
+ * lists in sync when a status is added.
+ */
+export const WORKSPACE_STATUSES = [
+  'created',
+  'extracting',
+  'brainstorming',
+  'executing',
+  'awaiting-user',
+  'completed',
+  'idle',
+  'error',
+  'quota',
+] as const
+
+const STATUS_KEYS: Record<string, string> = {
+  created: 'workspaceStatus.created',
+  extracting: 'workspaceStatus.extracting',
+  brainstorming: 'workspaceStatus.brainstorming',
+  executing: 'workspaceStatus.executing',
+  'awaiting-user': 'workspaceStatus.awaitingUser',
+  completed: 'workspaceStatus.completed',
+  idle: 'workspaceStatus.idle',
+  error: 'workspaceStatus.error',
+  quota: 'workspaceStatus.quota',
+}
+
+/**
+ * i18n key for a workspace status, or `null` when the status is unknown to
+ * this client build. Callers fall back to the raw value on `null` — that way a
+ * server that ships a new status renders it verbatim instead of blank.
+ */
+export function workspaceStatusKey(status: string | null | undefined): string | null {
+  if (!status) return null
+  return STATUS_KEYS[status] ?? null
+}

@@ -88,3 +88,38 @@ describe('computeInlineDiff() (regression coverage)', () => {
     ])
   })
 })
+
+describe('parseUnifiedDiff — deleted lines that look like a file header', () => {
+  it('keeps a deleted SQL comment starting with two dashes', () => {
+    const diff = [
+      '--- a/schema.sql',
+      '+++ b/schema.sql',
+      '@@ -1,2 +1,1 @@',
+      '--- drop the legacy index',
+      ' CREATE TABLE t (id INT);',
+    ].join('\n')
+
+    expect(parseUnifiedDiff(diff)).toEqual([
+      { type: 'del', content: '-- drop the legacy index' },
+      { type: 'context', content: 'CREATE TABLE t (id INT);' },
+    ])
+  })
+
+  it('keeps an added YAML front-matter separator', () => {
+    const diff = ['--- a/post.md', '+++ b/post.md', '@@ -0,0 +1,2 @@', '++++', '+title: hello'].join('\n')
+
+    expect(parseUnifiedDiff(diff)).toEqual([
+      { type: 'add', content: '+++' },
+      { type: 'add', content: 'title: hello' },
+    ])
+  })
+
+  it('still drops the real file headers that precede the first hunk', () => {
+    const diff = ['--- a/x.ts', '+++ b/x.ts', '@@ -1 +1 @@', '-const a = 1', '+const a = 2'].join('\n')
+
+    expect(parseUnifiedDiff(diff)).toEqual([
+      { type: 'del', content: 'const a = 1' },
+      { type: 'add', content: 'const a = 2' },
+    ])
+  })
+})

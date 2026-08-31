@@ -28,7 +28,16 @@ const props = defineProps<{ excludeMobile?: boolean }>()
 const layout = useLayoutStore()
 const { isMobile, isDrawerCollapsed } = useIsMobile()
 
-const shouldShow = computed(() =>
-  props.excludeMobile ? isDrawerCollapsed.value && !isMobile.value : isDrawerCollapsed.value,
-)
+// TOUTE la navigation (créer, réglages, recherche, santé, changelog) vit dans
+// le tiroir gauche. Le gate d'origine ne montrait ce bouton que sous 1024 px :
+// sur un écran large, fermer le tiroir puis changer de page enfermait
+// l'utilisateur hors de toute navigation, sans autre issue que le bouton
+// retour du navigateur. On l'affiche donc dès que le tiroir n'est pas ouvert,
+// quelle que soit la largeur.
+const shouldShow = computed(() => {
+  // `excludeMobile` sert à SettingsPage, qui a son propre menu hamburger sous
+  // 600 px : deux hamburgers côte à côte seraient illisibles.
+  if (props.excludeMobile && isMobile.value) return false
+  return isDrawerCollapsed.value || !layout.leftDrawerOpen
+})
 </script>

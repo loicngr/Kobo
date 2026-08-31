@@ -284,11 +284,11 @@
             <q-btn-dropdown
               split dense no-caps size="sm" outline color="grey-5"
               icon="sync"
-              :label="$t('git.sync')"
+              :label="syncLabel"
               class="full-width git-btn"
               :loading="pulling || rebasing || merging || fetching"
               :disable="!workspace || pushing || isArchived"
-              @click="gitStats.unpushedCount === -1 ? handleRebase() : handlePull()"
+              @click="handleSyncPrimary"
             >
               <q-list dark dense style="min-width: 140px;">
                 <q-item
@@ -392,6 +392,17 @@
                     </q-item-section>
                     <q-item-section>{{ $t('git.changeSourceBranch') }}</q-item-section>
                   </q-item>
+                  <q-item
+                    clickable
+                    v-close-popup
+                    :disable="!workspace || pushing || isArchived"
+                    @click="handleForcePush"
+                  >
+                    <q-item-section avatar style="min-width: 28px;">
+                      <q-icon name="upload" size="16px" color="orange-6" />
+                    </q-item-section>
+                    <q-item-section>{{ $t('git.forcePush') }}</q-item-section>
+                  </q-item>
                 </q-list>
               </q-menu>
               <q-tooltip>{{ $t('git.actions.more') }}</q-tooltip>
@@ -411,40 +422,6 @@
     <div v-else class="text-caption text-grey-8">
       {{ $t('common.selectWorkspace') }}
     </div>
-
-    <!-- Push confirmation dialog with Force Push toggle (uses --force-with-lease) -->
-    <q-dialog v-model="showPushDialog">
-      <q-card dark style="min-width: 360px; max-width: 480px;">
-        <q-card-section>
-          <div class="text-subtitle1">{{ $t('git.pushConfirmTitle') }}</div>
-          <div class="text-body2 text-grey-5 q-mt-sm">
-            {{ $t('git.pushConfirmMessagePrefix') }}
-            <code class="git-branch-code">{{ workspace?.workingBranch ?? '' }}</code>
-            {{ $t('git.pushConfirmMessageSuffix') }}
-          </div>
-        </q-card-section>
-        <q-card-section class="q-pt-none">
-          <q-toggle
-            v-model="pushForce"
-            :label="$t('git.forcePushToggle')"
-            color="orange-6"
-            dense
-          />
-          <div class="text-caption text-grey-6 q-mt-xs" style="padding-left: 46px;">
-            {{ $t('git.forcePushHint') }}
-          </div>
-        </q-card-section>
-        <q-card-actions align="right">
-          <q-btn flat :label="$t('common.cancel')" color="grey-5" v-close-popup />
-          <q-btn
-            flat
-            :label="pushForce ? $t('git.forcePush') : $t('git.push')"
-            :color="pushForce ? 'orange-4' : 'grey-5'"
-            @click="confirmPush"
-          />
-        </q-card-actions>
-      </q-card>
-    </q-dialog>
 
     <q-dialog v-model="showCommitDialog" persistent>
       <q-card dark style="min-width: 420px; max-width: 600px;">
@@ -715,9 +692,13 @@
 
     <!-- Diff viewer dialog (fullscreen). `diffInitialReview` selects which
          mode the viewer opens in — set to true by the "Diff v2" button. -->
-    <q-dialog v-model="showDiff" maximized>
+    <!-- `persistent` : Échap et le clic sur le fond ne doivent plus détruire
+         un tampon d'édition non enregistré. DiffViewer réimplémente Échap
+         lui-même, en le faisant passer par sa garde. -->
+    <q-dialog v-model="showDiff" maximized persistent>
       <DiffViewer
         v-if="workspace"
+        ref="diffViewerRef"
         :key="workspace.id"
         :workspace-id="workspace.id"
         :initial-review-mode="diffInitialReview"
@@ -791,6 +772,7 @@ const changeSourceBranchEnabled = computed<boolean>(() => {
 })
 
 const pushing = ref(false)
+const deletingRemoteBranch = ref(false)
 const pulling = ref(false)
 const rebasing = ref(false)
 const merging = ref(false)
@@ -799,6 +781,11 @@ const openingPr = ref(false)
 const changingBase = ref(false)
 const mergingRequest = ref(false)
 const showDiff = ref(false)
+// Exposed API surface of DiffViewer (see its `defineExpose`). Typed loosely
+// rather than via `InstanceType<typeof DiffViewer>` because DiffViewer is
+// wrapped in `defineAsyncComponent`, whose instance type doesn't resolve to
+// the underlying component's exposed members.
+const diffViewerRef = ref<{ requestClose: () => void } | null>(null)
 const showCommitDialog = ref(false)
 const commitMessage = ref('')
 const committingDirect = ref(false)
@@ -974,9 +961,21 @@ async function abortSourceChange() {
   }
 }
 
+/**
+ * "Add to chat" from a Monaco selection. The selected snippet is captured
+ * into the chat draft unconditionally — it must never be lost — but closing
+ * the dialog itself goes through DiffViewer's own `requestClose()` guard, so
+ * a dirty (unsaved) file still prompts before the diff viewer disappears.
+ * Falls back to a direct close only if the ref isn't populated yet (should
+ * not happen: DiffViewer must be mounted for this handler to fire at all).
+ */
 function onSendToChat(text: string) {
   store.chatDraft = text
-  showDiff.value = false
+  if (diffViewerRef.value) {
+    diffViewerRef.value.requestClose()
+  } else {
+    showDiff.value = false
+  }
 }
 const gitStats = ref<GitStats | null>(null)
 const loadingStats = ref(false)
@@ -1077,6 +1076,18 @@ const hasUncommittedChanges = computed(() => {
   return workingTree.staged + workingTree.modified + workingTree.untracked > 0
 })
 
+// Le bouton fractionné déclenchait un REBASE — qui réécrit l'historique — ou un
+// simple pull, selon `unpushedCount === -1` (« pas d'amont »), invisible à
+// l'écran, et sous le même libellé. On nomme désormais l'action réelle, et le
+// rebase n'est plus jamais implicite : il reste une entrée explicite du menu.
+const hasUpstream = computed(() => gitStats.value !== null && gitStats.value.unpushedCount !== -1)
+const syncLabel = computed(() => (hasUpstream.value ? t('git.pull') : t('git.fetch')))
+
+function handleSyncPrimary() {
+  if (hasUpstream.value) void handlePull()
+  else void handleFetchAll()
+}
+
 const createPrDisabledReason = computed(() => {
   if (!gitStats.value) return ''
   // Branch-not-pushed takes priority (most actionable for the user)
@@ -1101,8 +1112,10 @@ const createPrDisabledReason = computed(() => {
 const canRenameBranch = computed<boolean>(() => props.workspace?.worktreeOwned !== false)
 const hasOverflowActions = computed(() => {
   if (!props.workspace) return false
-  const hasChangePrBase = !!(gitStats.value?.prUrl && gitStats.value.prState === 'OPEN')
-  return canRenameBranch.value || hasChangePrBase || changeSourceBranchEnabled.value
+  // Force push always has an entry here now (moved out of the old push
+  // dialog), so the overflow menu itself is never empty once a workspace is
+  // selected.
+  return true
 })
 
 // Branch divergence dialog state
@@ -1487,7 +1500,24 @@ function dirtyDiscard() {
   })
 }
 
-async function abortGitOperation() {
+/**
+ * Abandonner jette TOUT le travail de résolution en cours et remet le worktree
+ * dans son état d'avant l'opération. C'est irréversible : la règle du projet
+ * impose donc une confirmation, que ce bouton n'avait pas.
+ */
+function abortGitOperation() {
+  if (!props.workspace) return
+  $q.dialog({
+    title: t('git.conflictAbortConfirmTitle'),
+    message: t('git.conflictAbortConfirmMessage', { op: conflictOperation.value || 'rebase' }),
+    dark: true,
+    persistent: true,
+    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    ok: { unelevated: true, label: t('git.conflictAbort'), color: 'red-6' },
+  }).onOk(() => void runAbortGitOperation())
+}
+
+async function runAbortGitOperation() {
   if (!props.workspace) return
   conflictAborting.value = true
   try {
@@ -1501,7 +1531,7 @@ async function abortGitOperation() {
     loadGitStats()
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Abort failed'
-    reportGitFailure(msg, () => void abortGitOperation())
+    reportGitFailure(msg, () => void runAbortGitOperation())
   } finally {
     conflictAborting.value = false
   }
@@ -1550,21 +1580,15 @@ async function resolveWithAgent() {
   }
 }
 
-// Push confirmation dialog state — custom inline dialog (instead of $q.dialog)
-// so we can embed a Force Push toggle inside the body.
-const showPushDialog = ref(false)
-const pushForce = ref(false)
-
-function handlePush() {
+/**
+ * Envoi. La règle du projet est « pas de dialogue pour le réversible,
+ * dialogue pour le destructif » : un push normal ne réécrit rien, il n'a donc
+ * rien à confirmer. Le dialogue n'existait que pour héberger le basculeur
+ * d'envoi forcé — lequel a désormais sa propre entrée, avec sa propre
+ * confirmation.
+ */
+async function runPush(force: boolean) {
   if (!props.workspace) return
-  pushForce.value = false // reset each time, never default to force
-  showPushDialog.value = true
-}
-
-async function confirmPush() {
-  if (!props.workspace) return
-  const force = pushForce.value
-  showPushDialog.value = false
   pushing.value = true
   try {
     await store.pushBranch(props.workspace.id, { force })
@@ -1580,6 +1604,23 @@ async function confirmPush() {
   } finally {
     pushing.value = false
   }
+}
+
+function handlePush() {
+  void runPush(false)
+}
+
+/** Envoi forcé : destructif côté distant, donc confirmation obligatoire. */
+function handleForcePush() {
+  if (!props.workspace) return
+  $q.dialog({
+    title: t('git.forcePush'),
+    message: t('git.forcePushHint'),
+    dark: true,
+    persistent: true,
+    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    ok: { unelevated: true, label: t('git.forcePush'), color: 'orange-7' },
+  }).onOk(() => void runPush(true))
 }
 
 // Fetch directly (not via the store) so we can inspect the 409 `dirty_worktree`
@@ -1739,6 +1780,10 @@ function handleMergeRequest() {
 
 async function deleteRemoteBranch(branch: string) {
   if (!props.workspace) return
+  // Suppression d'une branche distante : destructive et lente (aller-retour
+  // réseau). Elle n'avait aucun indicateur — l'utilisateur ne savait pas si
+  // son clic était parti.
+  deletingRemoteBranch.value = true
   try {
     const res = await fetch(`/api/workspaces/${props.workspace.id}/delete-remote-branch`, { method: 'POST' })
     if (!res.ok) {
@@ -1752,6 +1797,8 @@ async function deleteRemoteBranch(branch: string) {
       message: e instanceof Error ? e.message : t('git.deleteRemoteBranchFailed'),
       position: 'top',
     })
+  } finally {
+    deletingRemoteBranch.value = false
   }
 }
 
@@ -1767,6 +1814,7 @@ function promptForcePush() {
     ok: { flat: true, label: t('git.forcePush'), color: 'primary' },
   }).onOk(async () => {
     if (!props.workspace) return
+    pushing.value = true
     try {
       const res = await fetch(`/api/workspaces/${props.workspace.id}/force-push`, { method: 'POST' })
       if (!res.ok) {
@@ -1778,6 +1826,8 @@ function promptForcePush() {
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'Failed'
       $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    } finally {
+      pushing.value = false
     }
   })
 }

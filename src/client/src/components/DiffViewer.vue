@@ -2,6 +2,10 @@
   <div class="diff-viewer column full-height">
     <!-- Header — same style as .wp-header in WorkspacePage -->
     <div class="diff-header row items-center q-px-md q-py-sm no-wrap">
+      <!-- Tout le contenu variable défile horizontalement ; les deux boutons
+           de droite restent épinglés. Sans cela, sous ~900 px le bouton de
+           fermeture sortait du cadre et il ne restait qu'Échap. -->
+      <div class="diff-header__scroll row items-center no-wrap">
       <q-icon name="difference" size="18px" color="indigo-4" class="q-mr-xs" />
       <span class="text-body1 text-weight-medium text-grey-3">{{ $t('diff.title') }}</span>
       <q-badge
@@ -30,8 +34,11 @@
       >
         {{ selectedFile }}
       </span>
+      <!-- Rendu dès qu'il y a des modifications, même quand `canEdit` est
+           faux : le faire disparaître du DOM piégeait le tampon sans un mot.
+           Désactivé plutôt qu'absent, avec la raison en infobulle. -->
       <q-btn
-        v-if="canEdit && dirty"
+        v-if="dirty"
         dense
         flat
         size="sm"
@@ -40,8 +47,19 @@
         :label="$t('diffViewer.save')"
         color="indigo-4"
         :loading="savingFile"
+        :disable="!canEdit"
         class="q-ml-sm"
         @click="onSaveClicked"
+      >
+        <q-tooltip v-if="!canEdit">{{ $t('diffViewer.saveBlocked') }}</q-tooltip>
+      </q-btn>
+      <q-badge
+        v-if="dirty && !canEdit"
+        color="orange-9"
+        text-color="white"
+        class="q-ml-sm"
+        style="font-size: 10px;"
+        :label="$t('diffViewer.unsavedBanner')"
       />
       <q-space />
       <q-chip
@@ -125,6 +143,34 @@
           {{ includeUntracked ? $t('diff.hideUntracked') : $t('diff.showUntracked') }}
         </q-tooltip>
       </q-btn>
+      </div>
+
+      <q-btn
+        icon="account_tree"
+        dense
+        flat
+        size="sm"
+        :color="fileTreeOpen ? 'indigo-4' : 'grey-5'"
+        class="q-ml-sm q-mr-sm diff-header__pinned"
+        @click="fileTreeOpen = !fileTreeOpen"
+      >
+        <q-tooltip anchor="bottom middle" self="top middle" :delay="400">
+          {{ fileTreeOpen ? $t('diffViewer.fileTreeHide') : $t('diffViewer.fileTreeShow') }}
+        </q-tooltip>
+      </q-btn>
+      <q-btn
+        icon="checklist"
+        dense
+        flat
+        size="sm"
+        :color="criteriaRailOpen ? 'indigo-4' : 'grey-5'"
+        class="q-mr-sm diff-header__pinned"
+        @click="criteriaRailOpen = !criteriaRailOpen"
+      >
+        <q-tooltip anchor="bottom middle" self="top middle" :delay="400">
+          {{ criteriaRailOpen ? $t('diffViewer.criteriaRailHide') : $t('diffViewer.criteriaRailShow') }}
+        </q-tooltip>
+      </q-btn>
       <q-btn
         flat
         round
@@ -133,7 +179,8 @@
         color="grey-5"
         size="sm"
         :disable="submittingReview"
-        @click="emit('close')"
+        class="diff-header__pinned"
+        @click="requestClose"
       >
         <q-tooltip>{{ $t('tooltip.closeDiffViewer') }}</q-tooltip>
       </q-btn>
@@ -146,10 +193,16 @@
            Note: `reviewDraft.draft` is a Ref nested inside the returned object,
            so Vue does NOT auto-unwrap it in the template — we go through the
            `draftComments` / `draftGlobalMessage` computed wrappers below. -->
+      <!-- Sous 1024 px, le panneau de brouillon céderait toute sa largeur à
+           l'éditeur : on le rend proportionnel plutôt que fixe. -->
       <div
-        v-if="reviewMode === 'review'"
+        v-if="reviewDraftPanelOpen"
         class="review-draft-panel-wrapper"
-        :style="{ width: '300px', minWidth: '240px', flexShrink: 0, borderRight: '1px solid #2a2a4a' }"
+        :style="
+          isDrawerCollapsed
+            ? { width: '45%', minWidth: '0', flexShrink: 1, borderRight: '1px solid var(--kobo-border-subtle)' }
+            : { width: '300px', minWidth: '240px', flexShrink: 0, borderRight: '1px solid var(--kobo-border-subtle)' }
+        "
       >
         <ReviewDraftPanel
           :comments="draftComments"
@@ -164,8 +217,13 @@
 
       <!-- File tree sidebar (resizable via the drag handle on its right edge) -->
       <div
+        v-if="fileTreeOpen"
         class="diff-file-list-wrapper"
-        :style="{ width: `${fileListWidth}px`, minWidth: `${FILE_LIST_MIN}px` }"
+        :style="
+          isDrawerCollapsed
+            ? { width: '55%', minWidth: '0' }
+            : { width: `${fileListWidth}px`, minWidth: `${FILE_LIST_MIN}px` }
+        "
       >
       <q-input
         v-if="!loading && files.length > 0"
@@ -371,8 +429,91 @@
           @click="sendSelectionToChat"
         />
       </div>
+
+      <!-- Rail « Revue » — le contexte de relecture, DANS le diff. -->
+      <div v-if="criteriaRailOpen" class="diff-criteria-rail column no-wrap">
+        <div class="diff-criteria-rail__title">{{ $t('diffViewer.criteriaRail') }}</div>
+        <q-separator dark />
+        <div class="col" style="overflow-y: auto; min-height: 0;">
+          <AcceptancePanel :tasks="railCriteria" />
+          <q-separator dark />
+          <TasksPanel :workspace="railWorkspace" :tasks="railTasks" />
+        </div>
+      </div>
     </div>
 
+    <!-- Conflit de sauvegarde : trois issues, dont une qui débloque
+         réellement le fichier. Persistant : Échap ne doit pas refermer un
+         dialogue dont chaque option a une conséquence. -->
+    <q-dialog v-model="conflictDialogOpen" persistent>
+      <q-card dark style="min-width: 420px; max-width: 560px;">
+        <q-card-section>
+          <div class="text-subtitle1">{{ $t('diffViewer.conflict.title') }}</div>
+          <div class="text-body2 text-grey-5 q-mt-sm">{{ $t('diffViewer.conflict.message') }}</div>
+        </q-card-section>
+        <q-card-section class="q-pt-none">
+          <div class="text-caption text-grey-6">{{ $t('diffViewer.conflict.keepHint') }}</div>
+          <div class="text-caption text-grey-6 q-mt-xs">{{ $t('diffViewer.conflict.overwriteHint') }}</div>
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn
+            flat
+            no-caps
+            :label="$t('diffViewer.conflict.reload')"
+            color="grey-5"
+            :disable="overwriting"
+            @click="conflictReload"
+          />
+          <q-btn
+            flat
+            no-caps
+            :label="$t('diffViewer.conflict.keep')"
+            color="indigo-4"
+            :disable="overwriting"
+            @click="conflictKeepMine"
+          />
+          <q-btn
+            unelevated
+            no-caps
+            :label="$t('diffViewer.conflict.overwrite')"
+            color="orange-7"
+            :loading="overwriting"
+            @click="conflictOverwrite"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+
+    <!-- Fermeture gardée : la garde « modifications non enregistrées »
+         n'existait que sur le CHANGEMENT DE FICHIER. Échap ou un clic sur le
+         fond détruisaient le tampon sans un mot. -->
+    <q-dialog v-model="closeConfirmOpen" persistent>
+      <q-card dark style="min-width: 420px; max-width: 560px;">
+        <q-card-section>
+          <div class="text-subtitle1">{{ $t('diffViewer.closeConfirm.title') }}</div>
+          <div class="text-body2 text-grey-5 q-mt-sm">{{ $t('diffViewer.closeConfirm.message') }}</div>
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat no-caps :label="$t('common.cancel')" color="grey-5" :disable="savingFile" v-close-popup />
+          <q-btn
+            flat
+            no-caps
+            :label="$t('diffViewer.closeConfirm.discard')"
+            color="red-4"
+            :disable="savingFile"
+            @click="closeDiscarding"
+          />
+          <q-btn
+            unelevated
+            no-caps
+            :label="$t('diffViewer.closeConfirm.saveAndClose')"
+            color="indigo-6"
+            :loading="savingFile"
+            @click="closeSaving"
+          />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
   </div>
 </template>
 
@@ -383,6 +524,7 @@ import HtmlWorker from 'monaco-editor/language/html/html.worker.js?worker'
 import JsonWorker from 'monaco-editor/language/json/json.worker.js?worker'
 import TypeScriptWorker from 'monaco-editor/language/typescript/ts.worker.js?worker'
 import { useQuasar } from 'quasar'
+import { useIsMobile } from 'src/composables/use-is-mobile'
 import { type ReviewComment, useReviewDraft } from 'src/composables/use-review-draft'
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
@@ -394,8 +536,10 @@ import { registerUnsavedScope, unregisterUnsavedScope } from 'src/utils/unsaved-
 import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import AcceptancePanel from './AcceptancePanel.vue'
 import ReviewCommentBlock from './ReviewCommentBlock.vue'
 import ReviewDraftPanel from './ReviewDraftPanel.vue'
+import TasksPanel from './TasksPanel.vue'
 
 const props = defineProps<{
   workspaceId: string
@@ -471,6 +615,22 @@ watch(reviewMode, (m) => {
   // Service has been disposed"). We just turn the gutter handler + zones
   // on or off as needed.
   if (m === 'review') {
+    // Réaffirmation manuelle : rebasculer en mode review réaffiche le panneau
+    // de brouillon même s'il avait été replié pour laisser la place à l'arbre
+    // de fichiers / au rail de critères sur petit écran (bug 1 du correctif
+    // task-7). On ne le referme jamais automatiquement en dehors de ce geste
+    // explicite de l'utilisateur.
+    reviewDraftHidden.value = false
+    // Troisième sens de l'exclusion mutuelle (bug 2 du correctif task-7) :
+    // sous le seuil responsive, le panneau de brouillon qui réapparaît ne doit
+    // pas coexister avec l'arbre de fichiers ni le rail de critères, sous
+    // peine d'écraser l'éditeur à 0px. On les referme au même titre que
+    // l'ouverture de l'un ou l'autre le fait déjà pour les deux autres
+    // colonnes. Ne touche à rien en desktop.
+    if (isDrawerCollapsed.value) {
+      fileTreeOpen.value = false
+      criteriaRailOpen.value = false
+    }
     setupReviewMode()
   } else {
     teardownReviewMode()
@@ -832,6 +992,81 @@ function disposeEditor() {
   model?.modified?.dispose()
 }
 
+// ── Rail « Revue » ───────────────────────────────────────────────────────────
+// Le diff est une modale PLEIN ÉCRAN : il fallait donc le fermer pour relire
+// les critères d'acceptation, qui vivent dans le tiroir droit de MainLayout —
+// exactement au moment où on en a le plus besoin. Plutôt que de sortir le diff
+// de sa modale (remaniement de mise en page, hors périmètre), on lui fait
+// emporter le contexte : `AcceptancePanel` et `TasksPanel` sont déjà autonomes
+// et lisent le store, ils se réutilisent tels quels.
+const CRITERIA_RAIL_KEY = 'kobo:diff:criteriaRail'
+const criteriaRailOpen = ref<boolean>(
+  localStorage.getItem(CRITERIA_RAIL_KEY) === null
+    ? window.innerWidth >= 1280
+    : localStorage.getItem(CRITERIA_RAIL_KEY) === '1',
+)
+watch(criteriaRailOpen, (open) => localStorage.setItem(CRITERIA_RAIL_KEY, open ? '1' : '0'))
+
+/** Le visualiseur est toujours monté pour le workspace sélectionné. */
+const railWorkspace = computed(() => workspaceStore.workspaces.find((w) => w.id === props.workspaceId) ?? null)
+const railTasks = computed(() => workspaceStore.tasks.filter((task) => !task.isAcceptanceCriterion))
+const railCriteria = computed(() => workspaceStore.acceptanceCriteria)
+
+// ── Repli des colonnes en petite largeur ─────────────────────────────────────
+const { isDrawerCollapsed } = useIsMobile()
+
+// L'arbre de fichiers occupe au minimum 180 px et n'était pas rétractable :
+// avec le panneau de brouillon (240 px) et le rail (240 px), l'éditeur
+// recevait une largeur NULLE sous 900 px.
+const FILE_TREE_KEY = 'kobo:diff:fileTree'
+const fileTreeOpen = ref<boolean>(
+  localStorage.getItem(FILE_TREE_KEY) === null ? window.innerWidth >= 900 : localStorage.getItem(FILE_TREE_KEY) === '1',
+)
+watch(fileTreeOpen, (open) => localStorage.setItem(FILE_TREE_KEY, open ? '1' : '0'))
+
+// En mode Review, un TROISIÈME panneau concurrence l'arbre de fichiers et le
+// rail de critères pour la largeur disponible : le panneau de brouillon de
+// revue (`review-draft-panel-wrapper`). Il n'a pas de bouton dédié — sa
+// visibilité découle normalement de `reviewMode === 'review'` — donc on le
+// masque via ce flag plutôt qu'en le fermant réellement, pour pouvoir le
+// réafficher sans perdre l'état de la revue. Non persisté : chaque montage du
+// visualiseur repart visible.
+const reviewDraftHidden = ref<boolean>(false)
+const reviewDraftPanelOpen = computed(
+  () => reviewMode.value === 'review' && !(isDrawerCollapsed.value && reviewDraftHidden.value),
+)
+
+// Sous 1024 px, l'écran ne peut porter qu'UNE colonne latérale à la fois.
+// Ouvrir l'une referme les deux autres (l'autre colonne ET le panneau de
+// brouillon de revue s'il est affiché) plutôt que d'écraser l'éditeur.
+watch(criteriaRailOpen, (open) => {
+  if (open && isDrawerCollapsed.value) {
+    fileTreeOpen.value = false
+    reviewDraftHidden.value = true
+  }
+})
+watch(fileTreeOpen, (open) => {
+  if (open && isDrawerCollapsed.value) {
+    criteriaRailOpen.value = false
+    reviewDraftHidden.value = true
+  }
+})
+
+// Un état ouvert (arbre et/ou rail) peut avoir été persisté en localStorage
+// depuis un usage en grand écran. Si la fenêtre est ensuite redimensionnée
+// vers une largeur étroite SANS rechargement de page, les watchers ci-dessus
+// ne se déclenchent pas (ils portent sur les refs elles-mêmes, pas sur le
+// passage sous le seuil responsive) : on referme donc explicitement toutes
+// les colonnes concurrentes dès que `isDrawerCollapsed` bascule à `true`. On
+// ne referme rien quand il repasse à `false` — on laisse l'utilisateur
+// rouvrir manuellement ce qu'il veut en grand écran.
+watch(isDrawerCollapsed, (collapsed) => {
+  if (!collapsed) return
+  fileTreeOpen.value = false
+  criteriaRailOpen.value = false
+  reviewDraftHidden.value = true
+})
+
 // ── File tree ────────────────────────────────────────────────────────────────
 
 const tree = computed(() => buildPathTree(files.value))
@@ -1065,11 +1300,20 @@ async function saveCurrentFile(): Promise<
   }
 }
 
+// Trois issues, pas deux. `$q.dialog` n'en offre que deux (ok / cancel), et
+// c'est précisément pour cela que « écraser quand même » n'existait pas et que
+// « garder les miennes » ne faisait rien : on passe donc à un dialogue rendu
+// dans le gabarit.
+const conflictDialogOpen = ref(false)
+const conflictCurrentSha = ref('')
+const overwriting = ref(false)
+
 async function onSaveClicked(): Promise<void> {
   const result = await saveCurrentFile()
   if (result.ok) return
   if (result.status === 412) {
-    showConflictDialog()
+    conflictCurrentSha.value = result.currentSha ?? ''
+    conflictDialogOpen.value = true
     return
   }
   $q.notify({
@@ -1084,18 +1328,129 @@ async function onSaveClicked(): Promise<void> {
   })
 }
 
-function showConflictDialog(): void {
-  $q.dialog({
-    title: t('diffViewer.conflict.title'),
-    message: t('diffViewer.conflict.message'),
-    dark: true,
-    persistent: true,
-    ok: { flat: true, label: t('diffViewer.conflict.reload'), color: 'indigo-4' },
-    cancel: { flat: true, label: t('diffViewer.conflict.keep'), color: 'grey-5' },
-  }).onOk(async () => {
-    if (selectedFile.value) await loadFileDiff(selectedFile.value)
+/** Jeter mes modifications et repartir du contenu réel du disque. */
+async function conflictReload(): Promise<void> {
+  conflictDialogOpen.value = false
+  if (selectedFile.value) await loadFileDiff(selectedFile.value)
+}
+
+/**
+ * Garder mes modifications dans l'éditeur ET adopter la signature renvoyée par
+ * le serveur. Sans cette adoption, `baseSha` restait périmé et TOUTE
+ * sauvegarde ultérieure échouait à l'infini sur le même 412.
+ */
+function conflictKeepMine(): void {
+  if (conflictCurrentSha.value) baseSha.value = conflictCurrentSha.value
+  conflictDialogOpen.value = false
+}
+
+/** Adopter la signature du serveur puis ré-enregistrer immédiatement. */
+async function conflictOverwrite(): Promise<void> {
+  if (!conflictCurrentSha.value) {
+    conflictDialogOpen.value = false
+    return
+  }
+  baseSha.value = conflictCurrentSha.value
+  overwriting.value = true
+  try {
+    const result = await saveCurrentFile()
+    if (result.ok) {
+      conflictDialogOpen.value = false
+      return
+    }
+    if (result.status === 412) {
+      // Le fichier a encore changé entre-temps : on garde le dialogue ouvert
+      // avec la signature fraîche plutôt que de renvoyer l'utilisateur au
+      // point de départ.
+      conflictCurrentSha.value = result.currentSha ?? ''
+      return
+    }
+    conflictDialogOpen.value = false
+    $q.notify({
+      type: 'negative',
+      message:
+        result.status === 409
+          ? t('diffViewer.agentRunning')
+          : result.message
+            ? t('diffViewer.saveFailedDetail', { error: result.message })
+            : t('diffViewer.saveFailed'),
+      position: 'top',
+    })
+  } finally {
+    overwriting.value = false
+  }
+}
+
+// ── Fermeture gardée ─────────────────────────────────────────────────────────
+const closeConfirmOpen = ref(false)
+
+/**
+ * Point de sortie UNIQUE du visualiseur. Le bouton de fermeture et la touche
+ * Échap passent tous les deux par ici : c'est la seule façon de garantir
+ * qu'aucun tampon non enregistré ne parte en silence.
+ */
+function requestClose(): void {
+  if (!dirty.value) {
+    emit('close')
+    return
+  }
+  closeConfirmOpen.value = true
+}
+
+/**
+ * Exposed so hosts (GitPanel) that need to close the viewer from outside —
+ * e.g. after "Add to chat" — go through the same guard as the close button
+ * and Escape, instead of tearing down the dialog directly and silently
+ * dropping unsaved edits.
+ */
+defineExpose({ requestClose })
+
+function closeDiscarding(): void {
+  closeConfirmOpen.value = false
+  dirty.value = false
+  emit('close')
+}
+
+async function closeSaving(): Promise<void> {
+  const result = await saveCurrentFile()
+  if (result.ok) {
+    closeConfirmOpen.value = false
+    emit('close')
+    return
+  }
+  closeConfirmOpen.value = false
+  if (result.status === 412) {
+    conflictCurrentSha.value = result.currentSha ?? ''
+    conflictDialogOpen.value = true
+    return
+  }
+  $q.notify({
+    type: 'negative',
+    message:
+      result.status === 409
+        ? t('diffViewer.agentRunning')
+        : result.message
+          ? t('diffViewer.saveFailedDetail', { error: result.message })
+          : t('diffViewer.saveFailed'),
+    position: 'top',
   })
 }
+
+/**
+ * Échap. Le dialogue hôte est passé `persistent` (GitPanel), donc Quasar ne
+ * ferme plus rien tout seul : c'est ce gestionnaire qui rend la commodité
+ * d'Échap, en la faisant passer par la garde.
+ */
+function onDiffKeydown(event: KeyboardEvent): void {
+  if (event.key !== 'Escape') return
+  // Un dialogue enfant est ouvert : c'est à lui de traiter la touche.
+  if (conflictDialogOpen.value || closeConfirmOpen.value) return
+  event.preventDefault()
+  requestClose()
+}
+
+onMounted(() => window.addEventListener('keydown', onDiffKeydown))
+onUnmounted(() => window.removeEventListener('keydown', onDiffKeydown))
 
 // Right-click → rollback. Destructive: warns the user. The exact action
 // depends on the file status (cascade in the backend resolves the right
@@ -1238,7 +1593,8 @@ watch(selectedFile, async (filePath, previousPath) => {
         revertingSelection = true
         selectedFile.value = previousPath
         if (result.status === 412) {
-          showConflictDialog()
+          conflictCurrentSha.value = result.currentSha ?? ''
+          conflictDialogOpen.value = true
         } else {
           $q.notify({ type: 'negative', message: t('diffViewer.saveFailed'), position: 'top' })
         }
@@ -1368,11 +1724,64 @@ onUnmounted(() => {
   background-color: #1a1a2e;
 }
 
+/* L'en-tête ne passe pas à la ligne (les contrôles perdraient leur
+   alignement) : il défile. Les deux boutons de droite restent atteignables
+   quelle que soit la largeur — sans quoi la seule sortie était Échap. */
+.diff-header__scroll {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
+}
+
+.diff-header__scroll::-webkit-scrollbar {
+  height: 4px;
+}
+
+.diff-header__scroll::-webkit-scrollbar-thumb {
+  background-color: var(--kobo-border);
+  border-radius: var(--kobo-radius-sm);
+}
+
+.diff-header__pinned {
+  flex: 0 0 auto;
+}
+
+/* Rail de revue : même largeur que le panneau de brouillon de revue, pour que
+   l'oeil retrouve la même colonne des deux côtés. Jetons de design
+   exclusivement — aucune valeur en dur (cf. DESIGN.md). */
+.diff-criteria-rail {
+  width: 300px;
+  min-width: 240px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--kobo-border-subtle);
+  background-color: var(--kobo-bg-deep);
+  overflow: hidden;
+}
+
+.diff-criteria-rail__title {
+  font-family: var(--kobo-font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--kobo-text-3);
+  padding: var(--kobo-space-md) var(--kobo-space-lg);
+}
+
 // Same as .wp-header in WorkspacePage
 .diff-header {
   min-height: 48px;
   background-color: #16162a;
   border-bottom: 1px solid #2a2a4a;
+  // `.diff-header` est un item flex de la colonne `.diff-viewer` : sans
+  // width: 100% + min-width: 0, son contenu (largement plus large que
+  // l'écran sous ~550 px) le fait déborder de la page entière au lieu de
+  // laisser `.diff-header__scroll` défiler EN INTERNE. C'est ce qui causait
+  // le bouton de fermeture hors cadre.
+  width: 100%;
+  min-width: 0;
 }
 
 .diff-file-list-wrapper {

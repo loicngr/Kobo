@@ -19,14 +19,23 @@ export function markOnboardingDone(): void {
  * Settings sections walked through by the tour, in nav order. Each value is a
  * `SettingsPage` tab id; the tour switches to it via the `settings-nav-<id>`
  * entry and highlights the section's `settings-card-<id>` anchor.
+ *
+ * Doit rester alignée sur `navItems` dans `SettingsPage.vue`. La visite en
+ * annonçait douze là où la navigation en compte quatorze : `sentry` et
+ * `forge` manquaient, et la visite était donc périmée dès son ouverture.
+ * Chaque entrée exige une ancre `data-tour="settings-card-<id>"` dans
+ * `SettingsPage.vue` et les deux clés `onboarding.settings-<id>.{title,description}`
+ * dans les cinq locales.
  */
-const SETTINGS_SECTIONS = [
+export const SETTINGS_SECTIONS = [
   'general',
   'agents',
   'skills',
   'prompts',
   'scripts',
   'notion',
+  'sentry',
+  'forge',
   'voice',
   'notifications',
   'worktrees',
@@ -155,7 +164,39 @@ export function useOnboarding() {
       settingsSteps.splice(worktreesIdx + 1, 0, purgeStep)
     }
 
-    return [...homeSteps, ...settingsSteps]
+    // La visite faisait découvrir l'INTERFACE, jamais la TÂCHE : elle
+    // s'achevait sur l'onglet d'export, sans jamais proposer le seul geste qui
+    // rend le produit utile. Dernière étape : revenir à l'accueil et ouvrir la
+    // page de création.
+    const lastSettingsStep = settingsSteps[settingsSteps.length - 1]
+    if (lastSettingsStep?.popover) {
+      lastSettingsStep.popover = {
+        ...lastSettingsStep.popover,
+        onNextClick: async () => {
+          await router.push('/')
+          await waitForVisible('[data-tour="create-workspace"]')
+          driverObj?.moveNext()
+        },
+      }
+    }
+
+    const firstWorkspaceStep: DriveStep = {
+      element: '[data-tour="create-workspace"]',
+      popover: {
+        ...popover('firstWorkspace'),
+        onPrevClick: async () => {
+          await router.push('/settings')
+          await gotoSection(SETTINGS_SECTIONS[SETTINGS_SECTIONS.length - 1]!)
+          driverObj?.movePrevious()
+        },
+        onNextClick: () => {
+          driverObj?.destroy()
+          void router.push({ name: 'create' })
+        },
+      },
+    }
+
+    return [...homeSteps, ...settingsSteps, firstWorkspaceStep]
   }
 
   /** Build and run the tour now. */

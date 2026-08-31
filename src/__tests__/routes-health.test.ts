@@ -164,6 +164,39 @@ describe('GET /api/health/report — active state', () => {
   })
 })
 
+describe('GET /api/health/report — forge CLI probes', () => {
+  beforeEach(async () => {
+    await resetDb()
+    const { getDb } = await import('../server/db/index.js')
+    getDb(dbPath)
+    const healthRouter = (await import('../server/routes/health.js')).default
+    app = new Hono()
+    app.route('/api/health', healthRouter)
+  })
+
+  afterEach(async () => {
+    const { closeDb } = await import('../server/db/index.js')
+    closeDb()
+    if (tmpDir && fs.existsSync(tmpDir)) {
+      fs.rmSync(tmpDir, { recursive: true, force: true })
+    }
+  })
+
+  it('reports the forge CLIs alongside the agent CLIs', async () => {
+    const res = await app.request('/api/health/report')
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      claudeCli: { available: boolean }
+      forgeCli?: { gh?: { available: boolean }; glab?: { available: boolean } }
+    }
+    // La moitié « intégrer » du produit (PR, MR, surveillance de CI) dépend
+    // entièrement de `gh` ou `glab`, et rien ne les sondait.
+    expect(body.forgeCli).toBeDefined()
+    expect(typeof body.forgeCli?.gh?.available).toBe('boolean')
+    expect(typeof body.forgeCli?.glab?.available).toBe('boolean')
+  })
+})
+
 describe('GET /api/health/logs', () => {
   beforeEach(async () => {
     await resetDb()

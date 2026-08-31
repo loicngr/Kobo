@@ -927,20 +927,6 @@ where ffmpeg</pre>
                   @click="resetFieldToDefault('reviewPromptTemplate')"
                 />
               </div>
-              <q-btn
-                flat
-                dense
-                no-caps
-                color="indigo-4"
-                icon="health_and_safety"
-                :label="$t('settings.testIntegration')"
-                :loading="integrationTestLoading === 'notion'"
-                :disable="!globalNotionEnabled || integrationTestLoading !== null"
-                @click="testIntegration('notion')"
-              />
-              <div v-if="integrationTestResult.notion" :class="['text-caption q-mt-sm', integrationTestResult.notion.ok ? 'text-positive' : 'text-negative']">
-                {{ integrationTestResult.notion.detail }} ({{ integrationTestResult.notion.durationMs }} ms)
-              </div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.prPromptHint') }}</div>
               <q-input
                 v-model="globalReviewPrompt"
@@ -1103,6 +1089,11 @@ where ffmpeg</pre>
                   class="settings-input"
                 />
               </div>
+              <!-- Le test de l'intégration Notion appartient à l'onglet Notion.
+                   Il vivait au milieu de l'onglet « prompts », où personne ne
+                   pouvait le trouver, pendant que cet onglet-ci hébergeait le
+                   test SENTRY — grisé en permanence pour qui n'utilise pas
+                   Sentry. Les deux boutons sont maintenant chez eux. -->
               <q-btn
                 flat
                 dense
@@ -1110,16 +1101,20 @@ where ffmpeg</pre>
                 color="indigo-4"
                 icon="health_and_safety"
                 :label="$t('settings.testIntegration')"
-                :loading="integrationTestLoading === 'sentry'"
-                :disable="!globalSentryEnabled || integrationTestLoading !== null"
-                @click="testIntegration('sentry')"
+                :loading="integrationTestLoading === 'notion'"
+                :disable="!globalNotionEnabled || integrationTestLoading !== null"
+                @click="testIntegration('notion')"
               />
-              <div v-if="integrationTestResult.sentry" :class="['text-caption q-mt-sm', integrationTestResult.sentry.ok ? 'text-positive' : 'text-negative']">
-                {{ integrationTestResult.sentry.detail }} ({{ integrationTestResult.sentry.durationMs }} ms)
+              <div v-if="integrationTestResult.notion" :class="['text-caption q-mt-sm', integrationTestResult.notion.ok ? 'text-positive' : 'text-negative']">
+                {{ integrationTestResult.notion.detail }} ({{ integrationTestResult.notion.durationMs }} ms)
               </div>
             </div>
 
-            <div v-show="activeTab === 'sentry'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div
+              v-show="activeTab === 'sentry'"
+              data-tour="settings-card-sentry"
+              class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
+            >
               <q-toggle v-model="globalSentryEnabled" :label="$t('settings.integrationEnabled')" dark dense color="indigo-4" />
             </div>
 
@@ -1139,9 +1134,28 @@ where ffmpeg</pre>
                   class="settings-input"
                 />
               </div>
+              <q-btn
+                flat
+                dense
+                no-caps
+                color="indigo-4"
+                icon="health_and_safety"
+                :label="$t('settings.testIntegration')"
+                :loading="integrationTestLoading === 'sentry'"
+                :disable="!globalSentryEnabled || integrationTestLoading !== null"
+                class="q-mt-sm"
+                @click="testIntegration('sentry')"
+              />
+              <div v-if="integrationTestResult.sentry" :class="['text-caption q-mt-sm', integrationTestResult.sentry.ok ? 'text-positive' : 'text-negative']">
+                {{ integrationTestResult.sentry.detail }} ({{ integrationTestResult.sentry.durationMs }} ms)
+              </div>
             </div>
 
-            <div v-show="activeTab === 'forge'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div
+              v-show="activeTab === 'forge'"
+              data-tour="settings-card-forge"
+              class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
+            >
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.bitbucketCommunity') }}</div>
               <div class="text-caption text-grey-6 q-mb-md">{{ $t('settings.bitbucketCommunityHint') }}</div>
               <q-input v-model="globalBitbucketUsername" :label="$t('settings.bitbucketUsername')" autocomplete="username" dark dense outlined class="q-mb-sm" />
@@ -1762,20 +1776,6 @@ where ffmpeg</pre>
               </div>
             </div>
 
-            <!-- Save button -->
-            <div class="row justify-end settings-sticky-actions">
-              <q-btn
-                :label="$t('common.save')"
-                no-caps
-                unelevated
-                size="sm"
-                color="primary"
-                :loading="savingGlobal"
-                :disable="!!store.loadError"
-                :class="{ 'save-btn--dirty': isGlobalDirty }"
-                @click="saveGlobal"
-              />
-            </div>
           </div>
 
         <!-- Projects panel -->
@@ -2316,22 +2316,6 @@ where ffmpeg</pre>
                     />
                   </div>
 
-                  <!-- Actions — kept hidden (display:none); save is driven by the
-                       floating settings-savebar, delete moved to the panel header. -->
-                  <div class="row items-center q-gutter-sm settings-sticky-actions">
-                    <q-space />
-                    <q-btn
-                      :label="$t('common.save')"
-                      no-caps
-                      unelevated
-                      size="sm"
-                      color="primary"
-                      :loading="savingProject"
-                      :disable="!!store.loadError"
-                      :class="{ 'save-btn--dirty': isProjectDirty }"
-                      @click="saveProject"
-                    />
-                  </div>
                 </template>
 
                 <!-- No selection state -->
@@ -2433,7 +2417,7 @@ where ffmpeg</pre>
       </main>
 
       <transition name="save-bar">
-        <div v-if="savebarVisible" class="settings-savebar">
+        <div v-if="savebarVisible" class="settings-savebar" :class="{ 'settings-savebar--full': isMobile }">
           <span class="settings-savebar__label">{{ $t('settings.unsavedChanges') }}</span>
           <q-btn
             dense
@@ -3517,7 +3501,14 @@ const selectedProject = computed<ProjectSettings | null>(() => {
 // hydration and after each successful save. The Save buttons compare the
 // current ref values against these snapshots to surface unsaved changes
 // with an orange outline.
-const globalSavedSnapshot = ref<string>('')
+// Initialisé à la valeur RÉELLE du formulaire, pas à la chaîne vide.
+// `captureGlobalSnapshot` est une déclaration de fonction, donc hissée, et
+// toutes les refs qu'elle lit sont déclarées plus haut dans ce fichier :
+// l'appel est sûr ici. Avec `''`, `isGlobalDirty` était vrai dès le premier
+// rendu et la barre « modifications non enregistrées » clignotait à chaque
+// ouverture, le temps que `onMounted` finisse ses `await` et appelle
+// `syncGlobalForm()`.
+const globalSavedSnapshot = ref<string>(captureGlobalSnapshot())
 const projectSavedSnapshot = ref<string>('')
 
 function captureGlobalSnapshot(): string {
@@ -3618,8 +3609,11 @@ const savebarVisible = computed(() => {
 const savebarLoading = computed(() => {
   // Mirrors savebarSave's own condition rather than the active tab, for the
   // same reason: the dirty scope, not the visible tab, decides what happens.
+  // `saving` is the prompt-template DIALOG's own loading flag — unrelated to
+  // the global save. The savebar button never showed a spinner because of it,
+  // which made a double-click on a slow save possible.
   if (isProjectDirty.value && (selectedProject.value !== null || isNewProject.value)) return savingProject.value
-  return saving.value
+  return savingGlobal.value
 })
 function savebarSave() {
   if (isProjectDirty.value && (selectedProject.value !== null || isNewProject.value)) saveProject()
@@ -4227,7 +4221,10 @@ function addNewProject() {
 
 // Select a project from the list
 function selectProject(index: number) {
-  if (isProjectDirty.value) {
+  // Same gate as savebarVisible / the settings:project unsaved-scope: dirty
+  // alone is trivially true before any project was ever selected, since
+  // projectSavedSnapshot starts at '' while captureProjectSnapshot() never is.
+  if (isProjectDirty.value && (selectedProject.value !== null || isNewProject.value)) {
     $q.dialog({
       title: t('settings.unsavedChanges.title'),
       message: t('settings.unsavedChanges.message'),
@@ -4287,7 +4284,14 @@ onMounted(async () => {
   if (store.global.notionEnabled) loadNotionUsers().catch(() => {})
   void fetchNetwork()
   registerUnsavedScope('settings:global', () => isGlobalDirty.value)
-  registerUnsavedScope('settings:project', () => isProjectDirty.value)
+  // Mirrors savebarVisible's own gate: `isProjectDirty` alone is trivially true
+  // from mount (captureProjectSnapshot() on the default form is never the
+  // initial empty-string snapshot), so without this gate the guard fired on
+  // every exit from Settings, project selected or not. See savebarVisible.
+  registerUnsavedScope(
+    'settings:project',
+    () => isProjectDirty.value && (selectedProject.value !== null || isNewProject.value),
+  )
 })
 
 // Cleanup debounce timer on unmount
@@ -4536,10 +4540,6 @@ onUnmounted(() => {
   }
 }
 
-.settings-sticky-actions {
-  display: none;
-}
-
 .project-item--active {
   background-color: var(--kobo-hover) !important;
   border-left: 2px solid var(--kobo-accent);
@@ -4564,6 +4564,14 @@ onUnmounted(() => {
   padding: 12px 32px;
   background-color: var(--kobo-surface);
   border-top: 1px solid var(--kobo-border-subtle);
+}
+
+/* Sous 600 px l'aside de navigation n'est pas rendu (`v-if="!isMobile"`), donc
+   le décalage de 240 px laissait la barre collée à droite : 135 px utiles sur
+   un écran de 375. Pleine largeur en mobile. */
+.settings-savebar--full {
+  left: 0;
+  padding: var(--kobo-space-md) var(--kobo-space-lg);
 }
 
 .settings-savebar__label {

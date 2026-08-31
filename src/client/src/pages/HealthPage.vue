@@ -96,6 +96,24 @@
                 {{ $t('health.codexCliMissing') }}
               </span>
             </div>
+            <div class="row items-center q-py-xs">
+              <q-icon
+                :name="statusIcon(report.forgeCli.gh.available || report.forgeCli.glab.available)"
+                :color="statusColor(report.forgeCli.gh.available || report.forgeCli.glab.available)"
+                size="18px"
+              />
+              <span class="q-ml-sm text-body2">{{ $t('health.forgeCliTitle') }}</span>
+              <q-space />
+              <span
+                v-if="report.forgeCli.gh.available || report.forgeCli.glab.available"
+                class="text-caption text-grey-5"
+              >
+                {{ [report.forgeCli.gh.version, report.forgeCli.glab.version].filter(Boolean).join(' · ') }}
+              </span>
+              <span v-else class="text-caption text-grey-5">
+                {{ $t('health.forgeCliMissing') }}
+              </span>
+            </div>
           </div>
         </q-card-section>
       </q-card>
@@ -384,6 +402,10 @@ interface HealthReport {
   settings: { schemaVersion: number }
   claudeCli: { available: boolean; version: string | null }
   codexCli: { available: boolean; version: string | null }
+  forgeCli: {
+    gh: { available: boolean; version: string | null }
+    glab: { available: boolean; version: string | null }
+  }
   workspaces: { total: number; archived: number; worktreesMissing: WorktreeCheck[] }
   agentSessions: { orphaned: number }
   integrations: {
