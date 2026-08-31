@@ -66,6 +66,23 @@
           <q-tooltip>{{ $t('workspacePage.switchEngineHint') }}</q-tooltip>
         </q-btn>
         <q-btn
+          v-if="!isMobile"
+          flat
+          dense
+          no-caps
+          size="sm"
+          class="q-mr-xs palette-shortcut-hint"
+          label="⌘K"
+          @click="
+            () => {
+              commandPaletteQuery = ''
+              commandPaletteOpen = true
+            }
+          "
+        >
+          <q-tooltip>{{ $t('workspacePage.commandPaletteHint') }}</q-tooltip>
+        </q-btn>
+        <q-btn
           v-if="isBusyStatus(selectedWs.status) && !selectedWs.archivedAt"
           dense
           no-caps
@@ -284,7 +301,10 @@
             @click="runCommand(command)"
           >
             <q-item-section avatar><q-icon :name="command.icon" color="indigo-4" /></q-item-section>
-            <q-item-section>{{ command.label }}</q-item-section>
+            <q-item-section>
+              <q-item-label>{{ command.label }}</q-item-label>
+              <q-item-label v-if="command.hint" caption class="palette-hint">{{ command.hint }}</q-item-label>
+            </q-item-section>
           </q-item>
           <q-item v-if="filteredCommands.length === 0" dense>
             <q-item-section class="text-grey-6">{{ t('workspacePage.commandPaletteEmpty') }}</q-item-section>
@@ -381,10 +401,11 @@ import { useLayoutStore } from 'src/stores/layout'
 import type { AgentSession } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { copyToClipboard } from 'src/utils/clipboard'
+import { isTypingTarget, type PaletteEntry, rankCommands } from 'src/utils/command-palette'
 import { useTimeAgo } from 'src/utils/formatters'
 import { getWhipRunningSessionId } from 'src/utils/whip-session'
 import { workspacePageStyle } from 'src/utils/workspace-page-layout'
-import { isBusyStatus } from 'src/utils/workspace-status'
+import { isBusyStatus, workspaceStatusKey } from 'src/utils/workspace-status'
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
@@ -417,8 +438,10 @@ const { t } = useI18n()
 const { timeAgo } = useTimeAgo()
 
 function statusLabel(status: string): string {
-  if (status === 'awaiting-user') return t('workspaceStatus.awaitingUser')
-  return status
+  const key = workspaceStatusKey(status)
+  // Statut inconnu de ce build : on rend la valeur brute plutôt que rien —
+  // un serveur plus récent reste lisible.
+  return key ? t(key) : status
 }
 
 const starting = ref(false)
@@ -434,25 +457,23 @@ function onWorkspaceShortcut(event: KeyboardEvent) {
   if (!(event.ctrlKey || event.metaKey)) return
   const key = event.key.toLowerCase()
   if (key === 'k') {
+    // ⌘K reste global : c'est la convention, et l'ouvrir depuis un champ est
+    // exactement ce qu'on attend d'une palette.
     event.preventDefault()
     commandPaletteQuery.value = ''
     commandPaletteOpen.value = true
     void nextTick(() => commandPaletteInput.value?.focus())
   } else if (key === 'f') {
+    // ⌘F était intercepté MÊME pendant la rédaction d'un message : la
+    // recherche du navigateur disparaissait sans explication.
+    if (isTypingTarget(event.target)) return
     event.preventDefault()
     historySearchOpen.value = true
   }
 }
 
-interface WorkspaceCommand {
-  id: string
-  label: string
-  icon: string
-  run: () => void
-}
-
-const workspaceCommands = computed<WorkspaceCommand[]>(() => {
-  const commands: WorkspaceCommand[] = [
+const workspaceCommands = computed<PaletteEntry[]>(() => {
+  const commands: PaletteEntry[] = [
     {
       id: 'focus-chat',
       label: t('workspacePage.commandFocusChat'),
@@ -475,27 +496,86 @@ const workspaceCommands = computed<WorkspaceCommand[]>(() => {
     },
   ]
   if (selectedWs.value && !selectedWs.value.archivedAt) {
-    commands.push(
-      isBusyStatus(selectedWs.value.status)
-        ? { id: 'stop-agent', label: t('workspacePage.commandStopAgent'), icon: 'stop', run: () => void handleStop() }
-        : {
-            id: 'start-agent',
-            label: t('workspacePage.commandStartAgent'),
-            icon: 'play_arrow',
-            run: () => void handleStart(),
-          },
-    )
+    if (isBusyStatus(selectedWs.value.status)) {
+      commands.push(
+        {
+          id: 'interrupt-agent',
+          label: t('workspacePage.interrupt'),
+          icon: 'pause',
+          hint: t('workspacePage.interruptHint'),
+          run: () => void handleInterrupt(),
+        },
+        { id: 'stop-agent', label: t('workspacePage.commandStopAgent'), icon: 'stop', run: () => void handleStop() },
+      )
+    } else {
+      commands.push({
+        id: 'start-agent',
+        label: t('workspacePage.commandStartAgent'),
+        icon: 'play_arrow',
+        run: () => void handleStart(),
+      })
+    }
   }
+
+  // Navigation. La palette ne sortait pas du workspace courant : ni réglages,
+  // ni création, ni recherche globale n'y étaient atteignables.
+  commands.push(
+    {
+      id: 'open-create',
+      label: t('workspacePage.commandOpenCreate'),
+      icon: 'add',
+      run: () => void router.push({ name: 'create' }),
+    },
+    {
+      id: 'open-settings',
+      label: t('workspacePage.commandOpenSettings'),
+      icon: 'settings',
+      run: () => void router.push({ name: 'settings' }),
+    },
+    {
+      id: 'open-search',
+      label: t('workspacePage.commandOpenSearch'),
+      icon: 'manage_search',
+      run: () => void router.push({ name: 'search' }),
+    },
+    {
+      id: 'open-health',
+      label: t('workspacePage.commandOpenHealth'),
+      icon: 'monitor_heart',
+      run: () => void router.push({ name: 'health' }),
+    },
+    {
+      id: 'open-changelog',
+      label: t('workspacePage.commandOpenChangelog'),
+      icon: 'history',
+      run: () => void router.push({ name: 'changelog' }),
+    },
+  )
+
+  // Saut direct vers n'importe quel workspace non archivé — l'usage premier
+  // d'une palette, et le seul qui manquait vraiment.
+  for (const ws of store.workspaces) {
+    if (ws.archivedAt) continue
+    if (ws.id === store.selectedWorkspaceId) continue
+    commands.push({
+      id: `goto-${ws.id}`,
+      label: ws.name,
+      icon: 'folder_open',
+      hint: `${t('workspacePage.commandGroupWorkspaces')} · ${ws.workingBranch}`,
+      run: () => {
+        store.selectWorkspace(ws.id)
+        void router.push({ name: 'workspace', params: { id: ws.id } })
+      },
+    })
+  }
+
   return commands
 })
 
-const filteredCommands = computed(() => {
-  const query = commandPaletteQuery.value.trim().toLocaleLowerCase()
-  if (!query) return workspaceCommands.value
-  return workspaceCommands.value.filter((command) => command.label.toLocaleLowerCase().includes(query))
-})
+// Classement approximatif partagé, testé dans `command-palette.test.ts`.
+const filteredCommands = computed(() => rankCommands(commandPaletteQuery.value, workspaceCommands.value))
 
-function runCommand(command: WorkspaceCommand): void {
+function runCommand(command: PaletteEntry): void {
   commandPaletteOpen.value = false
   command.run()
 }
@@ -979,6 +1059,21 @@ watch(
 
 .command-palette-card {
   width: min(520px, calc(100vw - 32px));
+}
+
+.palette-hint {
+  font-family: var(--kobo-font-mono);
+  font-size: 11px;
+  color: var(--kobo-text-3);
+}
+
+.palette-shortcut-hint {
+  font-family: var(--kobo-font-mono);
+  font-size: 11px;
+  color: var(--kobo-text-3);
+  background-color: var(--kobo-surface-2);
+  border: 1px solid var(--kobo-border-subtle);
+  border-radius: var(--kobo-radius-sm);
 }
 
 .wp-archived-banner {

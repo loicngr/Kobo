@@ -345,7 +345,7 @@
                   <AutoLoopChip :workspace="ws" class="q-mt-xs" />
                   <WorkspaceAttentionLabels :workspace="ws" :ci-recap-only="true" />
                   <div class="text-caption q-mt-xs">
-                    <span class="text-green-4">{{ ws.status }}</span>
+                    <span class="text-green-4">{{ statusLabel(ws.status) }}</span>
                     <span class="q-ml-xs text-grey-8">&middot; {{ timeAgo(ws.updatedAt) }}</span>
                   </div>
                   <div v-if="ws.tags.length > 0" class="row q-gutter-xs q-mt-xs">
@@ -401,7 +401,7 @@
                 <AutoLoopChip :workspace="ws" class="q-mt-xs" />
                 <WorkspaceAttentionLabels :workspace="ws" :ci-recap-only="true" />
                 <div class="text-caption q-mt-xs">
-                  <span class="text-green-4">{{ ws.status }}</span>
+                  <span class="text-green-4">{{ statusLabel(ws.status) }}</span>
                   <span class="q-ml-xs text-grey-8">&middot; {{ timeAgo(ws.updatedAt) }}</span>
                 </div>
                 <div v-if="flatten || ws.tags.length > 0" class="row q-gutter-xs q-mt-xs">
@@ -824,7 +824,9 @@ import ManageTagsDialog from 'src/components/ManageTagsDialog.vue'
 import WorkspaceAttentionLabels from 'src/components/WorkspaceAttentionLabels.vue'
 import WorkspaceContextMenu from 'src/components/WorkspaceContextMenu.vue'
 import WorkspaceDrawerIndicators from 'src/components/WorkspaceDrawerIndicators.vue'
+import { useIsMobile } from 'src/composables/use-is-mobile'
 import { useDevServerStore } from 'src/stores/dev-server'
+import { useLayoutStore } from 'src/stores/layout'
 import { useSettingsStore } from 'src/stores/settings'
 import { useWebSocketStore } from 'src/stores/websocket'
 import type { Workspace } from 'src/stores/workspace'
@@ -834,7 +836,8 @@ import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
 import type { ProjectColor } from 'src/utils/project-color'
 import { projectColorFor, projectNameFor, projectNameForPath, projectTextColorFor } from 'src/utils/project-color'
 import { getAttentionReasons } from 'src/utils/workspace-attention'
-import { isBusyStatus } from 'src/utils/workspace-status'
+import { filterWorkspaces } from 'src/utils/workspace-search'
+import { isBusyStatus, workspaceStatusKey } from 'src/utils/workspace-status'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -842,11 +845,18 @@ import { useRouter } from 'vue-router'
 const { t } = useI18n()
 const $q = useQuasar()
 const { timeAgo } = useTimeAgo()
+
+function statusLabel(status: string): string {
+  const key = workspaceStatusKey(status)
+  return key ? t(key) : status
+}
 const store = useWorkspaceStore()
 const wsStore = useWebSocketStore()
 const devServerStore = useDevServerStore()
 const settingsStore = useSettingsStore()
 const router = useRouter()
+const layout = useLayoutStore()
+const { isDrawerCollapsed } = useIsMobile()
 
 function attentionBorderColor(ws: Workspace): string {
   const reasons = getAttentionReasons(ws, store.prSnapshots[ws.id])
@@ -859,7 +869,12 @@ function attentionBorderColor(ws: Workspace): string {
 
 let workspaceInfoInterval: ReturnType<typeof setInterval> | null = null
 
-const searchQuery = ref('')
+// Mémorisée comme les deux autres filtres de la même barre (`favoritesOnly`,
+// `searchArchived`) : rien ne justifiait qu'elle seule soit perdue au
+// rechargement.
+const SEARCH_QUERY_KEY = 'kobo:workspace-search'
+const searchQuery = ref<string>(localStorage.getItem(SEARCH_QUERY_KEY) ?? '')
+watch(searchQuery, (v) => localStorage.setItem(SEARCH_QUERY_KEY, v))
 const favoritesOnly = ref<boolean>(localStorage.getItem('kobo:favorites-filter') === '1')
 watch(favoritesOnly, (v) => localStorage.setItem('kobo:favorites-filter', v ? '1' : '0'))
 
@@ -899,22 +914,22 @@ function groupByProject(workspaces: Workspace[]): ProjectGroup[] {
   }))
 }
 
+// Recherche approximative sur TOUS les champs que la carte affiche — nom,
+// branche, description, étiquettes, projet — et plus seulement sur le nom en
+// sous-chaîne exacte. `filterWorkspaces` classe aussi par pertinence quand la
+// requête est non vide, et rend la liste intacte quand elle est vide.
 const filteredNeedsAttention = computed(() =>
-  store.needsAttention
-    .filter((w) => w.name.toLowerCase().includes(searchQuery.value.toLowerCase()))
-    .filter((w) => !favoritesOnly.value || w.favoritedAt !== null),
+  filterWorkspaces(searchQuery.value, store.needsAttention).filter(
+    (w) => !favoritesOnly.value || w.favoritedAt !== null,
+  ),
 )
 
 const filteredRunning = computed(() =>
-  store.running
-    .filter((w) => w.name.toLowerCase().includes(searchQuery.value.toLowerCase()))
-    .filter((w) => !favoritesOnly.value || w.favoritedAt !== null),
+  filterWorkspaces(searchQuery.value, store.running).filter((w) => !favoritesOnly.value || w.favoritedAt !== null),
 )
 
 const filteredIdle = computed(() =>
-  store.idle
-    .filter((w) => w.name.toLowerCase().includes(searchQuery.value.toLowerCase()))
-    .filter((w) => !favoritesOnly.value || w.favoritedAt !== null),
+  filterWorkspaces(searchQuery.value, store.idle).filter((w) => !favoritesOnly.value || w.favoritedAt !== null),
 )
 
 const groupedNeedsAttention = computed(() => groupByProject(filteredNeedsAttention.value))
@@ -934,10 +949,10 @@ const flatIdle = computed(() => filteredIdle.value)
 // and by `favoritesOnly` whenever it's ON. With both toggles OFF and an
 // empty query, returns the full archived list (current default behaviour).
 const filteredArchived = computed(() => {
-  const q = searchQuery.value.toLowerCase()
-  return store.archived
-    .filter((w) => !searchArchived.value || q.length === 0 || w.name.toLowerCase().includes(q))
-    .filter((w) => !favoritesOnly.value || w.favoritedAt !== null)
+  // `searchArchived` OFF ⇒ la requête n'affecte pas cette section (comportement
+  // d'origine). ON ⇒ même moteur approximatif que les sections actives.
+  const base = searchArchived.value ? filterWorkspaces(searchQuery.value, store.archived) : store.archived
+  return base.filter((w) => !favoritesOnly.value || w.favoritedAt !== null)
 })
 
 // Auto-expand the archived section when the user toggles `searchArchived`
@@ -1094,6 +1109,30 @@ async function onArchiveClick(ws: Workspace, event: Event) {
     // Note: we do NOT call wsStore.unsubscribe(ws.id). The server-side
     // subscription is kept so that if the user unarchives from another tab,
     // this tab receives the event and refetches.
+
+    // L'archivage est RÉVERSIBLE : la règle du projet interdit donc de le
+    // barrer d'un dialogue. Mais il faisait disparaître le workspace de la
+    // liste sans le moindre signal. Une notification avec une action
+    // « Annuler » respecte les deux exigences.
+    $q.notify({
+      type: 'info',
+      message: t('workspaceList.archivedToast', { name: ws.name }),
+      position: 'top',
+      timeout: DEFAULT_TOAST_TIMEOUT_MS,
+      actions: [
+        {
+          label: t('workspaceList.archivedUndo'),
+          color: 'white',
+          handler: () => {
+            void store
+              .unarchiveWorkspace(ws.id)
+              .catch(() =>
+                $q.notify({ type: 'negative', message: t('workspaceList.unarchiveFailed'), position: 'top' }),
+              )
+          },
+        },
+      ],
+    })
   } catch (err) {
     console.error('Archive failed:', err)
   }
@@ -1173,6 +1212,11 @@ async function onUnarchiveClick(ws: Workspace, event: Event) {
 function selectWorkspace(id: string) {
   store.selectWorkspace(id)
   router.push({ name: 'workspace', params: { id } })
+  // Sous DRAWER_BREAKPOINT (1024 px) le tiroir gauche est une SURIMPRESSION :
+  // il recouvre le workspace que ce clic vient précisément d'ouvrir. Le
+  // refermer est le geste attendu, pas une commodité. Au-dessus du seuil le
+  // tiroir est en flux, il n'y a rien à fermer.
+  if (isDrawerCollapsed.value) layout.setLeft(false)
 }
 
 function copyWorktreePath(ws: Workspace) {

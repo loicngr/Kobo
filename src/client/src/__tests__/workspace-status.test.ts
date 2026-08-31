@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { BUSY_STATUSES, isAgentStatusStale, isBusyStatus, shouldWarnAgentNotRunning } from '../utils/workspace-status'
+import {
+  BUSY_STATUSES,
+  isAgentStatusStale,
+  isBusyStatus,
+  shouldWarnAgentNotRunning,
+  WORKSPACE_STATUSES,
+  workspaceStatusKey,
+} from '../utils/workspace-status'
 
 describe('isBusyStatus', () => {
   it('returns true for every status in BUSY_STATUSES', () => {
@@ -65,5 +72,35 @@ describe('shouldWarnAgentNotRunning', () => {
     expect(shouldWarnAgentNotRunning('idle', false, false)).toBe(false)
     expect(shouldWarnAgentNotRunning('idle', true, false)).toBe(false)
     expect(shouldWarnAgentNotRunning('completed', true, false)).toBe(false)
+  })
+})
+
+describe('workspaceStatusKey', () => {
+  it('maps every server-side status to an i18n key', () => {
+    expect(WORKSPACE_STATUSES).toEqual([
+      'created',
+      'extracting',
+      'brainstorming',
+      'executing',
+      'awaiting-user',
+      'completed',
+      'idle',
+      'error',
+      'quota',
+    ])
+    for (const status of WORKSPACE_STATUSES) {
+      expect(workspaceStatusKey(status)).toMatch(/^workspaceStatus\./)
+    }
+  })
+
+  it('camel-cases the hyphenated status', () => {
+    expect(workspaceStatusKey('awaiting-user')).toBe('workspaceStatus.awaitingUser')
+  })
+
+  it('returns null for an unknown, null or empty status so the caller can fall back to the raw value', () => {
+    expect(workspaceStatusKey('stopping')).toBeNull()
+    expect(workspaceStatusKey(null)).toBeNull()
+    expect(workspaceStatusKey(undefined)).toBeNull()
+    expect(workspaceStatusKey('')).toBeNull()
   })
 })

@@ -32,6 +32,13 @@
           :highlighted="turn.items.some((item) => item.eventIds?.includes(highlightedEventId ?? '') ?? false)"
           @scroll-to="onTurnScrollTo"
         />
+        <!-- Un workspace neuf n'a rien à montrer : le dire, plutôt que de
+             laisser une zone vide qui ressemble à une panne. -->
+        <div v-if="turns.length === 0 && rawLines.length === 0 && !loadingOlder" class="activity-feed-empty">
+          <q-icon name="forum" size="28px" />
+          <div class="activity-feed-empty__title">{{ $t('activity.empty') }}</div>
+          <div class="activity-feed-empty__hint">{{ $t('activity.emptyHint') }}</div>
+        </div>
       </div>
       <div v-if="rawLines.length" class="q-px-md q-pb-md">
         <q-expansion-item :label="$t('activity.raw_lines', { n: rawLines.length })" dense>
@@ -613,9 +620,14 @@ const eventCount = computed(() => {
 // Unfiltered count — used by the switching spinner to know whether the
 // workspace stream has been populated at all. We must NOT use `eventCount`
 // (session-filtered) here: an old session with zero events in the current
-// sync:response window would loop the spinner to its 5s timeout before the
-// session-scoped fetch even gets a chance to run.
+// sync:response window would loop the spinner to its grace-period timeout
+// before the session-scoped fetch even gets a chance to run.
 const rawEventCount = computed(() => stream.eventsFor(props.workspaceId).length)
+
+/** Un workspace neuf n'émettra JAMAIS d'événement : attendre cinq secondes
+ *  pour finir par n'afficher rien du tout est une punition, pas un chargement.
+ *  Une grâce courte suffit à masquer le battement de `sync:response`. */
+const EMPTY_FEED_GRACE_MS = 1200
 
 /**
  * Shows the switching spinner for at least `WORKSPACE_SWITCH_SPINNER_MS`
@@ -626,8 +638,7 @@ async function showSwitchingSpinner() {
   switching.value = true
   const startedAt = Date.now()
   await new Promise((r) => setTimeout(r, WORKSPACE_SWITCH_SPINNER_MS))
-  // Poll briefly if the sync:response hasn't landed yet (capped).
-  const deadline = startedAt + 5000
+  const deadline = startedAt + EMPTY_FEED_GRACE_MS
   while (rawEventCount.value === 0 && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 50))
   }
@@ -869,5 +880,26 @@ async function handleScrollToBottomClick() {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+.activity-feed-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--kobo-space-sm);
+  padding: var(--kobo-space-4xl) var(--kobo-space-xl);
+  color: var(--kobo-text-3);
+  text-align: center;
+}
+.activity-feed-empty__title {
+  font-family: var(--kobo-font-sans);
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--kobo-text-2);
+}
+.activity-feed-empty__hint {
+  font-family: var(--kobo-font-sans);
+  font-size: 13px;
+  color: var(--kobo-text-3);
+  max-width: 380px;
 }
 </style>

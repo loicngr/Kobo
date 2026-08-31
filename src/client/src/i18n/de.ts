@@ -122,6 +122,9 @@ export default {
   'workspaceList.running': 'Aktiv',
   'workspaceList.idle': 'Inaktiv',
   'workspaceList.archived': 'Archiviert',
+  'workspaceList.archivedToast': '„{name}“ archiviert',
+  'workspaceList.archivedUndo': 'Rückgängig',
+  'workspaceList.unarchiveFailed': 'Workspace konnte nicht dearchiviert werden',
   'workspaceList.noWorkspaces': 'Noch keine Arbeitsbereiche',
   'workspaceList.loadFailed': 'Deine Workspaces konnten nicht geladen werden',
   'workspaceList.loadFailedHint': 'Das ist ein Verbindungsfehler, kein leeres Konto.',
@@ -145,6 +148,13 @@ export default {
   'workspacePage.commandTogglePanel': 'Seitenleiste ein- oder ausblenden',
   'workspacePage.commandStartAgent': 'Agent starten',
   'workspacePage.commandStopAgent': 'Agent stoppen',
+  'workspacePage.commandOpenSettings': 'Einstellungen öffnen',
+  'workspacePage.commandOpenCreate': 'Workspace erstellen',
+  'workspacePage.commandOpenSearch': 'Globale Suche',
+  'workspacePage.commandOpenHealth': 'Health-Seite',
+  'workspacePage.commandOpenChangelog': 'Changelog',
+  'workspacePage.commandGroupWorkspaces': 'Zu einem Workspace wechseln',
+  'workspacePage.commandPaletteHint': 'Befehlspalette',
   'workspacePage.session': 'Sitzung #{n}',
   'workspacePage.newSession': '+ Neue Sitzung',
   'workspacePage.renameSession': 'Umbenennen',
@@ -176,6 +186,7 @@ export default {
   'workspacePage.unarchived': 'Workspace dearchiviert',
   'workspacePage.unarchiveFailed': 'Dearchivierung fehlgeschlagen',
   'workspacePage.interruptFailed': 'Unterbrechung fehlgeschlagen',
+  'workspacePage.interruptHint': 'Den laufenden Zug unterbrechen, ohne die Sitzung zu beenden.',
   'workspacePage.interruptTooltip':
     'Sanfte Unterbrechung (wie Escape) — stoppt das aktuelle Tool, hält die Sitzung aktiv',
   'workspacePage.pendingNextRun': 'Beim nächsten Start angewendet',
@@ -386,6 +397,7 @@ export default {
   'createPage.validationName': 'Bitte geben Sie einen Arbeitsbereichnamen an.',
   'createPage.validationPath': 'Bitte geben Sie den Projektpfad ein.',
   'createPage.validationBranch': 'Bitte wählen Sie einen Branch aus.',
+  'createPage.validationFocusHint': 'Das zu korrigierende Feld ist unten hervorgehoben.',
   'createPage.progress.validate': 'Anfrage wird geprüft…',
   'createPage.progress.fetch-source-branch': 'Source-Branch wird von origin geholt…',
   'createPage.progress.inspect-worktree': 'Bestehender Worktree wird geprüft…',
@@ -718,6 +730,11 @@ export default {
   'onboarding.settings-notion.title': 'Notion',
   'onboarding.settings-notion.description':
     'Verbinde deinen Notion-Integrationstoken, um Tickets als Workspace-Missionen zu importieren.',
+  'onboarding.settings-sentry.title': 'Sentry',
+  'onboarding.settings-sentry.description': 'Ein Sentry-Issue als Quelle der Wahrheit für einen Workspace importieren.',
+  'onboarding.settings-forge.title': 'Forge',
+  'onboarding.settings-forge.description':
+    'Wähle pro Projekt GitHub, GitLab oder keine. Kōbō steuert deine eigene gh-/glab-CLI — es liefert keine Zugangsdaten mit.',
   'onboarding.settings-voice.title': 'Sprache',
   'onboarding.settings-voice.description':
     'Sprachdiktat: aktiviere es, wähle das Whisper-Modell und verwalte die lokale Spracherkennungs-Runtime.',
@@ -739,6 +756,9 @@ export default {
   'onboarding.settings-export.title': 'Import / Export',
   'onboarding.settings-export.description':
     'Sichere oder teile deine Kōbō-Konfiguration und exportiere Workspace-Daten in eine Datei.',
+  'onboarding.firstWorkspace.title': 'Erstelle deinen ersten Workspace',
+  'onboarding.firstWorkspace.description':
+    'Darum geht es: eine Mission, ein Worktree, ein Agent. Öffne die Erstellungsseite, um loszulegen.',
   'onboarding.next': 'Weiter',
   'onboarding.prev': 'Zurück',
   'onboarding.done': 'Fertig',
@@ -959,6 +979,9 @@ export default {
   'git.operationPausedSubtitle':
     'Keine Dateien stehen im Konflikt. Git wartet nur darauf, dass du den Vorgang fortsetzt.',
   'git.conflictSubtitle': '{count} Datei(en) mit Konflikten. Wie soll fortgefahren werden?',
+  'git.conflictAbortConfirmTitle': 'Konfliktlösung verwerfen?',
+  'git.conflictAbortConfirmMessage':
+    'Alles, was du in diesem {op} gelöst hast, wird verworfen und der Worktree kehrt in den Zustand davor zurück. Das lässt sich nicht rückgängig machen.',
   'git.conflictAbort': 'Abbrechen',
   'git.conflictContinue': 'Fortsetzen',
   'git.conflictContinued': 'Git-Vorgang fortgesetzt',
@@ -1240,6 +1263,23 @@ export default {
   'diffViewer.conflict.message': 'Die Datei wurde außerhalb von Kōbō geändert, seit du sie geöffnet hast.',
   'diffViewer.conflict.reload': 'Neu laden (lokale Änderungen verwerfen)',
   'diffViewer.conflict.keep': 'Eigene behalten',
+  'diffViewer.conflict.overwrite': 'Trotzdem überschreiben',
+  'diffViewer.conflict.overwriteHint':
+    'Ersetzt die Datei auf der Festplatte durch deine Version. Die andere Änderung geht verloren.',
+  'diffViewer.conflict.keepHint':
+    'Behält deine Änderungen im Editor und übernimmt die neue Signatur der Datei, damit das nächste Speichern funktioniert.',
+  'diffViewer.saveBlocked': 'Der Agent läuft — stoppe ihn, um deine Änderungen zu speichern.',
+  'diffViewer.unsavedBanner': 'Ungespeicherte Änderungen. Stoppe den Agenten, um sie zu sichern.',
+  'diffViewer.closeConfirm.title': 'Ungespeicherte Änderungen',
+  'diffViewer.closeConfirm.message':
+    'Diese Datei enthält nie gespeicherte Änderungen. Beim Schließen des Diff-Viewers gehen sie verloren.',
+  'diffViewer.closeConfirm.discard': 'Ohne Speichern schließen',
+  'diffViewer.criteriaRail': 'Review-Checkliste',
+  'diffViewer.criteriaRailShow': 'Review-Checkliste einblenden',
+  'diffViewer.criteriaRailHide': 'Review-Checkliste ausblenden',
+  'diffViewer.fileTreeShow': 'Dateibaum einblenden',
+  'diffViewer.fileTreeHide': 'Dateibaum ausblenden',
+  'diffViewer.closeConfirm.saveAndClose': 'Speichern und schließen',
   'diffViewer.agentRunning': 'Agent läuft — stoppe ihn zum Bearbeiten',
   'diffViewer.fileDeleted': 'Datei gelöscht',
 
@@ -1431,6 +1471,8 @@ export default {
   'health.claudeCliMissing': 'claude nicht im PATH',
   'health.codexCliTitle': 'OpenAI Codex',
   'health.codexCliMissing': 'codex-Binärdatei nicht auflösbar',
+  'health.forgeCliTitle': 'Forge-CLI (gh / glab)',
+  'health.forgeCliMissing': 'Weder gh noch glab gefunden — Pull Requests und CI-Überwachung nicht verfügbar',
   'health.workspacesTitle': 'Workspaces',
   'health.workspacesCount': '{total} gesamt, {archived} archiviert',
   'health.worktreesMissing': '{count} Worktree(s) auf der Festplatte fehlen',
@@ -1468,6 +1510,8 @@ export default {
   'activity.compacting': 'Kontext wird komprimiert…',
   'activity.prev_user_message': 'Vorherige Nachricht des Benutzers',
   'activity.scroll_to_bottom': 'Nach unten scrollen',
+  'activity.empty': 'Noch nichts',
+  'activity.emptyHint': 'Die Agentenausgabe erscheint hier, sobald eine Sitzung startet.',
   'chat.systemPrompt': 'System-Prompt',
   'chat.agent': 'Agent',
   'chat.cleanupScript': 'Cleanup-Skript',
@@ -1583,7 +1627,15 @@ export default {
   'permissionRequest.expand': 'Berechtigungsfenster ausklappen',
   'permissionRequest.denied': 'vom Nutzer abgelehnt',
 
+  'workspaceStatus.created': 'erstellt',
+  'workspaceStatus.extracting': 'Extraktion',
+  'workspaceStatus.brainstorming': 'Brainstorming',
+  'workspaceStatus.executing': 'läuft',
   'workspaceStatus.awaitingUser': 'wartet auf deine Antwort',
+  'workspaceStatus.completed': 'abgeschlossen',
+  'workspaceStatus.idle': 'inaktiv',
+  'workspaceStatus.error': 'Fehler',
+  'workspaceStatus.quota': 'Kontingent erreicht',
 
   // Workspace list drawer indicators
   'workspaceList.prOpen': '#{n} — Pull Request offen',

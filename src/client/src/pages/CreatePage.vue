@@ -41,11 +41,14 @@
 
           <q-card-section class="column q-gutter-y-md">
             <q-input
+              ref="nameFieldRef"
               v-model="workspaceName"
               dark
               dense
               outlined
               stack-label
+              :error="fieldError === 'name'"
+              :error-message="fieldErrorMessage"
               :label="$t('createPage.workspaceNameLabel')"
               :placeholder="useNotion && isValidNotionUrl ? $t('createPage.workspaceName') : $t('createPage.workspaceNamePlaceholder')"
             />
@@ -61,6 +64,8 @@
                 type="textarea"
                 autogrow
                 :rows="6"
+                :error="fieldError === 'description'"
+                :error-message="fieldErrorMessage"
                 :label="$t('createPage.descriptionLabel')"
                 :placeholder="useNotion ? $t('createPage.instructions') : $t('createPage.instructionsPlaceholder')"
                 class="create-textarea"
@@ -143,6 +148,7 @@
             <transition name="slide">
               <div v-if="useNotion" class="source-panel column q-gutter-y-sm q-pa-md rounded-borders">
                 <q-input
+                  ref="notionFieldRef"
                   v-model="notionUrl"
                   dark
                   outlined
@@ -208,6 +214,7 @@
             <transition name="slide">
               <div v-if="useSentry" class="source-panel q-pa-md rounded-borders">
                 <q-input
+                  ref="sentryFieldRef"
                   v-model="sentryUrl"
                   dark
                   outlined
@@ -363,12 +370,15 @@
             <div class="responsive-fields row q-col-gutter-x-md">
               <div class="col-12 col-md-6">
                 <q-select
+                  ref="projectFieldRef"
                   v-model="projectPath"
                   :options="pathFilterOptions"
                   dark
                   dense
                   outlined
                   stack-label
+                  :error="fieldError === 'projectPath'"
+                  :error-message="fieldErrorMessage"
                   use-input
                   fill-input
                   hide-selected
@@ -397,12 +407,15 @@
               </div>
               <div class="col-12 col-md-6">
                 <q-select
+                  ref="branchFieldRef"
                   v-model="branch"
                   :options="branchFilterOptions"
                   dark
                   dense
                   outlined
                   stack-label
+                  :error="fieldError === 'branch'"
+                  :error-message="fieldErrorMessage"
                   use-input
                   input-debounce="0"
                   :label="$t('createPage.sourceBranch')"
@@ -1592,19 +1605,83 @@ const workingBranchPreview = computed(() => {
   return `${branchType.value}/${slug}`
 })
 
-// Form validation
-function validate(): string | null {
-  if (useNotion.value && !isValidNotionUrl.value) return t('createPage.validationNotionUrl')
-  if (useSentry.value && !isValidSentryUrl.value) return t('createPage.sentryValidation')
+// ── Validation par champ ─────────────────────────────────────────────────────
+// La validation ne produisait qu'une notification : sur une page de ~2 000 px
+// de haut, l'utilisateur lisait le message sans savoir OÙ corriger. On marque
+// donc le champ fautif et on défile jusqu'à lui.
+type CreateField = 'name' | 'description' | 'notionUrl' | 'sentryUrl' | 'projectPath' | 'branch'
+
+const fieldError = ref<CreateField | null>(null)
+const fieldErrorMessage = ref('')
+
+const nameFieldRef = ref<{ $el?: HTMLElement; focus?: () => void } | null>(null)
+const notionFieldRef = ref<{ $el?: HTMLElement; focus?: () => void } | null>(null)
+const sentryFieldRef = ref<{ $el?: HTMLElement; focus?: () => void } | null>(null)
+const projectFieldRef = ref<{ $el?: HTMLElement; focus?: () => void } | null>(null)
+const branchFieldRef = ref<{ $el?: HTMLElement; focus?: () => void } | null>(null)
+
+function fieldRefFor(field: CreateField) {
+  switch (field) {
+    case 'name':
+      return nameFieldRef.value
+    case 'description':
+      return descriptionRef.value
+    case 'notionUrl':
+      return notionFieldRef.value
+    case 'sentryUrl':
+      return sentryFieldRef.value
+    case 'projectPath':
+      return projectFieldRef.value
+    case 'branch':
+      return branchFieldRef.value
+  }
+}
+
+/** Marquer, faire défiler jusqu'au champ, puis lui donner le focus. */
+async function revealField(field: CreateField, message: string): Promise<void> {
+  fieldError.value = field
+  fieldErrorMessage.value = message
+  await nextTick()
+  const target = fieldRefFor(field)
+  const el = (target as { $el?: HTMLElement } | null)?.$el ?? (target as unknown as HTMLElement | null)
+  // `block: 'center'` plutôt que `'start'` : le champ ne se retrouve pas collé
+  // sous l'en-tête collant.
+  el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  ;(target as { focus?: () => void } | null)?.focus?.()
+}
+
+/** Effacer le marquage dès que l'utilisateur touche à quoi que ce soit. */
+watch([workspaceName, description, notionUrl, sentryUrl, projectPath, branch], () => {
+  if (fieldError.value !== null) {
+    fieldError.value = null
+    fieldErrorMessage.value = ''
+  }
+})
+
+// Form validation — retourne le CHAMP fautif en plus du message, pour que
+// l'appelant puisse le marquer et défiler jusqu'à lui.
+function validate(): { field: CreateField; message: string } | null {
+  if (useNotion.value && !isValidNotionUrl.value) {
+    return { field: 'notionUrl', message: t('createPage.validationNotionUrl') }
+  }
+  if (useSentry.value && !isValidSentryUrl.value) {
+    return { field: 'sentryUrl', message: t('createPage.sentryValidation') }
+  }
   // Description is optional when Notion or Sentry provides the workspace context
   if (!useNotion.value && !useSentry.value && !description.value.trim()) {
-    return t('createPage.validationDescription')
+    return { field: 'description', message: t('createPage.validationDescription') }
   }
   if (!useNotion.value && !useSentry.value && (!getFinalName() || getFinalName() === 'workspace')) {
-    if (!workspaceName.value.trim() && !description.value.trim()) return t('createPage.validationName')
+    if (!workspaceName.value.trim() && !description.value.trim()) {
+      return { field: 'name', message: t('createPage.validationName') }
+    }
   }
-  if (!projectPath.value.trim()) return t('createPage.validationPath')
-  if (!branch.value) return t('createPage.validationBranch')
+  if (!projectPath.value.trim()) {
+    return { field: 'projectPath', message: t('createPage.validationPath') }
+  }
+  if (!branch.value) {
+    return { field: 'branch', message: t('createPage.validationBranch') }
+  }
   return null
 }
 
@@ -1618,7 +1695,12 @@ async function handleCreate() {
 
   const error = validate()
   if (error) {
-    $q.notify({ type: 'negative', message: error, position: 'top' })
+    $q.notify({
+      type: 'negative',
+      message: `${error.message} — ${t('createPage.validationFocusHint')}`,
+      position: 'top',
+    })
+    void revealField(error.field, error.message)
     return
   }
 
