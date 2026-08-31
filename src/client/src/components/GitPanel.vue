@@ -70,6 +70,23 @@
         </div>
       </div>
 
+      <!-- Failed load — NOT the same thing as "nothing to show". Replaces the
+           Changes, Actions and Pull-request sub-cards, which used to vanish
+           silently when the stats request failed. -->
+      <div v-if="statsError" class="git-subcard git-subcard--error">
+        <div class="git-subcard-title text-negative">{{ $t('git.statsFailed') }}</div>
+        <div class="text-caption text-grey-6">{{ statsError }}</div>
+        <q-btn
+          dense
+          flat
+          no-caps
+          class="q-mt-xs"
+          icon="refresh"
+          :label="$t('common.retry')"
+          @click="loadGitStats({ freshFetch: true })"
+        />
+      </div>
+
       <!-- Changes sub-card -->
       <div v-if="gitStats" class="git-subcard">
         <div class="git-subcard-title">{{ $t('git.section.changes') }}</div>
@@ -676,6 +693,26 @@
       </q-card>
     </q-dialog>
 
+    <!-- Raw git output — readable, selectable, and it stays until dismissed.
+         Same shape as sourceChangeErrorDialog, generalised to every git call. -->
+    <q-dialog v-model="gitOutputDialog">
+      <q-card dark style="min-width: 480px; max-width: 760px;">
+        <q-card-section>
+          <div class="text-subtitle1 text-negative">
+            <q-icon name="error" class="q-mr-xs" />
+            {{ $t('git.outputDialogTitle') }}
+          </div>
+        </q-card-section>
+        <q-card-section class="q-pt-none" style="max-height: 50vh; overflow: auto;">
+          <div class="text-body2 text-grey-3 git-output-pre">{{ gitOutputText }}</div>
+        </q-card-section>
+        <q-card-actions align="right">
+          <q-btn flat no-caps :label="$t('common.copy')" color="grey-5" @click="copyGitOutput" />
+          <q-btn flat no-caps :label="$t('common.close')" color="grey-5" @click="gitOutputDialog = false" />
+        </q-card-actions>
+      </q-card>
+    </q-dialog>
+
     <!-- Diff viewer dialog (fullscreen). `diffInitialReview` selects which
          mode the viewer opens in — set to true by the "Diff v2" button. -->
     <q-dialog v-model="showDiff" maximized>
@@ -725,7 +762,10 @@ import PrPanel from 'src/components/PrPanel.vue'
 import { useSettingsStore } from 'src/stores/settings'
 import type { BranchCommit, ForgeInfo, GitStats, Workspace } from 'src/stores/workspace'
 import { useWorkspaceStore, WorkspaceActionError } from 'src/stores/workspace'
+import { copyToClipboard } from 'src/utils/clipboard'
+import { needsScrollableOutput } from 'src/utils/git-output'
 import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
+import { notifyRetryableError } from 'src/utils/notifications'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import CompareCommitsDialog from './CompareCommitsDialog.vue'
 
@@ -940,6 +980,39 @@ function onSendToChat(text: string) {
 }
 const gitStats = ref<GitStats | null>(null)
 const loadingStats = ref(false)
+const statsError = ref<string | null>(null)
+
+// Raw git output — readable, selectable, and it stays until dismissed. A
+// merge conflict or a rejected pre-push hook is twenty lines the user needs
+// to read and copy, not a six-second toast.
+const gitOutputDialog = ref(false)
+const gitOutputText = ref('')
+
+/**
+ * Route a git failure to the right surface: a toast for a one-liner, a
+ * scrollable dialog for real git output. Both always offer a retry.
+ */
+function reportGitFailure(message: string, retry: () => void) {
+  if (needsScrollableOutput(message)) {
+    gitOutputText.value = message
+    gitOutputDialog.value = true
+    return
+  }
+  notifyRetryableError(message, {
+    retryLabel: t('common.retry'),
+    onRetry: retry,
+    detailsLabel: t('common.details'),
+    onDetails: () => {
+      gitOutputText.value = message
+      gitOutputDialog.value = true
+    },
+    dismissLabel: t('common.dismiss'),
+  })
+}
+
+function copyGitOutput() {
+  void copyToClipboard($q, t, gitOutputText.value)
+}
 
 const repoName = computed(() => {
   if (!props.workspace?.projectPath) return '-'
@@ -1058,8 +1131,13 @@ async function loadGitStats(opts: { freshFetch?: boolean } = {}) {
     if (controller.signal.aborted) return
     if (props.workspace?.id !== wsIdAtStart) return
     gitStats.value = stats
+    statsError.value = null
   } catch (err) {
     if ((err as Error)?.name === 'AbortError') return
+    // Blanking gitStats hides the Changes, Actions and Pull-request sub-cards
+    // at once, which reads as "nothing to show" instead of "the read failed".
+    // Keep the failure visible and offer a way out.
+    statsError.value = err instanceof Error ? err.message : String(err)
     gitStats.value = null
   } finally {
     // Only the still-current request may clear the loading flag — a
@@ -1093,6 +1171,7 @@ watch(
     // loader instead of stale info while the new fetch is in flight.
     if (newId !== oldId) {
       gitStats.value = null
+      statsError.value = null
       commits.value = []
       showCommits.value = false
       showWorkingTreeFiles.value = false
@@ -1211,7 +1290,7 @@ async function runRebase(opts?: { autostash?: boolean }) {
     loadGitStats()
   } catch (e) {
     const msg = e instanceof Error ? e.message : t('git.rebaseFailed')
-    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    reportGitFailure(msg, () => void runRebase(opts))
   } finally {
     rebasing.value = false
   }
@@ -1256,7 +1335,7 @@ async function runMerge(opts?: { autostash?: boolean }) {
     loadGitStats()
   } catch (e) {
     const msg = e instanceof Error ? e.message : t('git.mergeFailed')
-    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    reportGitFailure(msg, () => void runMerge(opts))
   } finally {
     merging.value = false
   }
@@ -1422,7 +1501,7 @@ async function abortGitOperation() {
     loadGitStats()
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Abort failed'
-    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    reportGitFailure(msg, () => void abortGitOperation())
   } finally {
     conflictAborting.value = false
   }
@@ -1878,6 +1957,16 @@ async function handleOpenPr() {
   letter-spacing: 0.08em;
   text-transform: uppercase;
   margin-bottom: 6px;
+}
+
+.git-subcard--error {
+  border: 1px solid var(--kobo-danger);
+}
+
+.git-output-pre {
+  font-family: var(--kobo-font-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 </style>
 

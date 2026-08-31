@@ -163,3 +163,40 @@ describe('GET /api/health/report — active state', () => {
     expect(body.active.devServersRunning[0]?.name).toBe('Live')
   })
 })
+
+describe('GET /api/health/logs', () => {
+  beforeEach(async () => {
+    await resetDb()
+    const { getDb } = await import('../server/db/index.js')
+    getDb(dbPath)
+    process.env.KOBO_HOME = tmpDir
+    const { _resetLoggerForTest } = await import('../server/utils/logger.js')
+    _resetLoggerForTest()
+    const healthRouter = (await import('../server/routes/health.js')).default
+    app = new Hono()
+    app.route('/api/health', healthRouter)
+  })
+
+  it('returns the most recent entries, newest first', async () => {
+    const { logError, logInfo } = await import('../server/utils/logger.js')
+    logInfo('boot', 'started')
+    logError('purge', 'worktree removal failed')
+
+    const res = await app.request('/api/health/logs?limit=10')
+
+    expect(res.status).toBe(200)
+    const data = (await res.json()) as { entries: Array<{ scope: string; message: string }> }
+    expect(data.entries[0]).toMatchObject({ scope: 'purge', message: 'worktree removal failed' })
+  })
+
+  it('filters by level', async () => {
+    const { logError, logInfo } = await import('../server/utils/logger.js')
+    logInfo('boot', 'started')
+    logError('purge', 'worktree removal failed')
+
+    const res = await app.request('/api/health/logs?level=error')
+
+    const data = (await res.json()) as { entries: Array<{ message: string }> }
+    expect(data.entries.map((e) => e.message)).toEqual(['worktree removal failed'])
+  })
+})

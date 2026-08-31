@@ -78,6 +78,54 @@ describe('workspace store', () => {
     })
   })
 
+  describe('creation progress', () => {
+    it('stores the step reported by the server so the create page can name it', () => {
+      const store = useWorkspaceStore()
+      expect(store.creationProgress).toBeNull()
+
+      store.setCreationProgress({ creationId: 'c1', step: 'setup-script', index: 11, total: 14 })
+      expect(store.creationProgress).toEqual({ creationId: 'c1', step: 'setup-script', index: 11, total: 14 })
+
+      store.clearCreationProgress()
+      expect(store.creationProgress).toBeNull()
+    })
+
+    it('rejects with the server message and the failing step name', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: false,
+          status: 500,
+          headers: { get: () => null },
+          json: async () => ({
+            error:
+              'Failed to start the agent: claude: command not found. The workspace, its worktree and its branch were removed.',
+            step: 'start-agent',
+            rollback: { done: true, warnings: [] },
+          }),
+        } as unknown as Response),
+      )
+      const store = useWorkspaceStore()
+
+      // The server destroys everything it created on this failure, so there is
+      // no workspace to push into the list — only an error to show, naming the
+      // step that broke.
+      const err = await store
+        .createWorkspace({
+          name: 'w9',
+          projectPath: '/tmp/proj',
+          sourceBranch: 'main',
+          workingBranch: 'feature/x',
+          creationId: 'c2',
+        })
+        .catch((e: unknown) => e)
+
+      expect((err as Error).message).toContain('claude: command not found')
+      expect((err as { code?: string }).code).toBe('start-agent')
+      expect(store.workspaces).toEqual([])
+    })
+  })
+
   describe('selectWorkspace', () => {
     it('clears sessions synchronously before the replacement fetch resolves', () => {
       const store = useWorkspaceStore()
@@ -1081,13 +1129,15 @@ describe('workspace store', () => {
       const second = store.fetchWorkspaceDetails('w1')
       resolveSecond({
         ok: true,
-        json: async () => ({ workspace: makeWorkspace({ id: 'w1', name: 'new' }), tasks: [] }),
-      } as Response)
+        status: 200,
+        text: async () => JSON.stringify({ workspace: makeWorkspace({ id: 'w1', name: 'new' }), tasks: [] }),
+      } as unknown as Response)
       await second
       resolveFirst({
         ok: true,
-        json: async () => ({ workspace: makeWorkspace({ id: 'w1', name: 'old' }), tasks: [] }),
-      } as Response)
+        status: 200,
+        text: async () => JSON.stringify({ workspace: makeWorkspace({ id: 'w1', name: 'old' }), tasks: [] }),
+      } as unknown as Response)
       await first
 
       expect(store.workspaces[0]?.name).toBe('new')
@@ -1102,12 +1152,14 @@ describe('workspace store', () => {
         'fetch',
         vi.fn().mockResolvedValue({
           ok: true,
-          json: async () => ({
-            ...makeWorkspace({ id: 'w1' }),
-            tasks: [],
-            agentLiveness: { status: 'running', agentSessionId: 's1', startedAt: 't0', lastEventAt: 't1' },
-          }),
-        } as Response),
+          status: 200,
+          text: async () =>
+            JSON.stringify({
+              ...makeWorkspace({ id: 'w1' }),
+              tasks: [],
+              agentLiveness: { status: 'running', agentSessionId: 's1', startedAt: 't0', lastEventAt: 't1' },
+            }),
+        } as unknown as Response),
       )
 
       await store.fetchWorkspaceDetails('w1')
@@ -1130,8 +1182,9 @@ describe('workspace store', () => {
         'fetch',
         vi.fn().mockResolvedValue({
           ok: true,
-          json: async () => ({ ...makeWorkspace({ id: 'w1' }), tasks: [], agentLiveness: null }),
-        } as Response),
+          status: 200,
+          text: async () => JSON.stringify({ ...makeWorkspace({ id: 'w1' }), tasks: [], agentLiveness: null }),
+        } as unknown as Response),
       )
 
       await store.fetchWorkspaceDetails('w1')
@@ -1165,12 +1218,14 @@ describe('workspace store', () => {
 
       resolveFetch({
         ok: true,
-        json: async () => ({
-          ...makeWorkspace({ id: 'w1', status: 'executing' }),
-          tasks: [],
-          agentLiveness: { status: 'running', agentSessionId: 's1', startedAt: 't0', lastEventAt: 't1' },
-        }),
-      } as Response)
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            ...makeWorkspace({ id: 'w1', status: 'executing' }),
+            tasks: [],
+            agentLiveness: { status: 'running', agentSessionId: 's1', startedAt: 't0', lastEventAt: 't1' },
+          }),
+      } as unknown as Response)
       await fetching
 
       // The stale `executing` from the in-flight request must not clobber
@@ -1259,8 +1314,10 @@ describe('workspace store', () => {
       store.workspaces = [makeWorkspace({ id: 'w1', status: 'idle' })]
       const fetchMock = vi.fn().mockResolvedValue({
         ok: true,
-        json: async () => ({ ...makeWorkspace({ id: 'w1', status: 'executing' }), tasks: [], agentLiveness: null }),
-      } as Response)
+        status: 200,
+        text: async () =>
+          JSON.stringify({ ...makeWorkspace({ id: 'w1', status: 'executing' }), tasks: [], agentLiveness: null }),
+      } as unknown as Response)
       vi.stubGlobal('fetch', fetchMock)
 
       store.updateWorkspaceFromEvent('w1', { status: 'executing' })
@@ -1277,8 +1334,9 @@ describe('workspace store', () => {
       const store = useWorkspaceStore()
       const fetchMock = vi.fn().mockResolvedValue({
         ok: true,
-        json: () =>
-          Promise.resolve({
+        status: 200,
+        text: async () =>
+          JSON.stringify({
             workspaces: [
               makeWorkspace({ id: 'ws-1', status: 'idle' }),
               makeWorkspace({ id: 'ws-2', status: 'executing' }),
@@ -1306,18 +1364,20 @@ describe('workspace store', () => {
       store.workspaces = [makeWorkspace({ id: 'w1', status: 'idle' })]
       const fetchMock = vi.fn().mockResolvedValue({
         ok: true,
-        json: async () => ({
-          ...makeWorkspace({ id: 'w1', status: 'executing' }),
-          tasks: [],
-          agentLiveness: { status: 'running', agentSessionId: 's1', startedAt: 't0', lastEventAt: 't1' },
-        }),
-      } as Response)
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            ...makeWorkspace({ id: 'w1', status: 'executing' }),
+            tasks: [],
+            agentLiveness: { status: 'running', agentSessionId: 's1', startedAt: 't0', lastEventAt: 't1' },
+          }),
+      } as unknown as Response)
       vi.stubGlobal('fetch', fetchMock)
 
       store.updateWorkspaceFromEvent('w1', { status: 'executing' })
       await vi.waitFor(() => expect(store.agentLiveness.w1).toBeDefined())
 
-      expect(fetchMock).toHaveBeenCalledWith('/api/workspaces/w1')
+      expect(fetchMock).toHaveBeenCalledWith('/api/workspaces/w1', expect.anything())
       expect(store.agentLiveness.w1).toEqual({
         status: 'running',
         agentSessionId: 's1',
@@ -1723,8 +1783,9 @@ describe('workspace store', () => {
     it('fetchWorkspacesInfo populates workspaces, prSnapshots and gitStatsCache', async () => {
       const fetchMock = vi.fn().mockResolvedValue({
         ok: true,
-        json: () =>
-          Promise.resolve({
+        status: 200,
+        text: async () =>
+          JSON.stringify({
             workspaces: [makeWorkspace({ id: 'ws-1', status: 'idle' })],
             prSnapshots: { 'ws-1': { number: 7, state: 'OPEN' } },
             gitStats: { 'ws-1': { commitCount: 9 } },
@@ -1744,8 +1805,9 @@ describe('workspace store', () => {
     it('fetchWorkspacesInfo never replaces fresher local git-stats with an older poll snapshot', async () => {
       const fetchMock = vi.fn().mockResolvedValue({
         ok: true,
-        json: () =>
-          Promise.resolve({
+        status: 200,
+        text: async () =>
+          JSON.stringify({
             workspaces: [makeWorkspace({ id: 'ws-1', status: 'idle' })],
             prSnapshots: {},
             // Stale server snapshot (older computedAt) — e.g. pre-rebase.
@@ -1767,8 +1829,9 @@ describe('workspace store', () => {
     it('fetchWorkspacesInfo applies a newer poll snapshot over older local git-stats', async () => {
       const fetchMock = vi.fn().mockResolvedValue({
         ok: true,
-        json: () =>
-          Promise.resolve({
+        status: 200,
+        text: async () =>
+          JSON.stringify({
             workspaces: [makeWorkspace({ id: 'ws-1', status: 'idle' })],
             prSnapshots: {},
             gitStats: { 'ws-1': { commitCount: 8, computedAt: 300 } },
@@ -1810,22 +1873,26 @@ describe('workspace store', () => {
       // Second (newer) call's network response lands first.
       resolveSecond({
         ok: true,
-        json: async () => ({
-          workspaces: [{ id: 'ws_1', name: 'Test', status: 'executing' }],
-          prSnapshots: { ws_1: { number: 2, updatedAt: '2026-08-07T00:01:00.000Z' } },
-          gitStats: {},
-        }),
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            workspaces: [{ id: 'ws_1', name: 'Test', status: 'executing' }],
+            prSnapshots: { ws_1: { number: 2, updatedAt: '2026-08-07T00:01:00.000Z' } },
+            gitStats: {},
+          }),
       })
       await secondCall
 
       // First (older, now-stale) call's response lands after.
       resolveFirst({
         ok: true,
-        json: async () => ({
-          workspaces: [{ id: 'ws_1', name: 'Test', status: 'idle' }],
-          prSnapshots: { ws_1: { number: 1, updatedAt: '2026-08-07T00:00:00.000Z' } },
-          gitStats: {},
-        }),
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            workspaces: [{ id: 'ws_1', name: 'Test', status: 'idle' }],
+            prSnapshots: { ws_1: { number: 1, updatedAt: '2026-08-07T00:00:00.000Z' } },
+            gitStats: {},
+          }),
       })
       await firstCall
 
@@ -1848,11 +1915,13 @@ describe('workspace store', () => {
       store.updateWorkspaceFromEvent('ws-live', { status: 'executing' })
       resolve({
         ok: true,
-        json: async () => ({
-          workspaces: [makeWorkspace({ id: 'ws-live', status: 'idle' })],
-          prSnapshots: {},
-          gitStats: {},
-        }),
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            workspaces: [makeWorkspace({ id: 'ws-live', status: 'idle' })],
+            prSnapshots: {},
+            gitStats: {},
+          }),
       } as Response)
       await poll
 
@@ -1882,11 +1951,13 @@ describe('workspace store', () => {
       await store.refreshPrSnapshot('ws-live')
       resolvePoll({
         ok: true,
-        json: async () => ({
-          workspaces: [makeWorkspace({ id: 'ws-live', status: 'idle' })],
-          prSnapshots: { 'ws-live': { number: 1, state: 'OPEN', updatedAt: '2026-08-07T00:00:00.000Z' } },
-          gitStats: {},
-        }),
+        status: 200,
+        text: async () =>
+          JSON.stringify({
+            workspaces: [makeWorkspace({ id: 'ws-live', status: 'idle' })],
+            prSnapshots: { 'ws-live': { number: 1, state: 'OPEN', updatedAt: '2026-08-07T00:00:00.000Z' } },
+            gitStats: {},
+          }),
       } as Response)
       await poll
 
@@ -1906,6 +1977,210 @@ describe('workspace store', () => {
       await store.refreshPrSnapshot('ws-1')
 
       expect(store.prSnapshots['ws-1']).toBeUndefined()
+    })
+  })
+
+  describe('list load failure', () => {
+    it('records the server message instead of showing an empty account', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: false,
+          status: 503,
+          text: async () => JSON.stringify({ error: 'database is locked' }),
+        } as unknown as Response),
+      )
+      const store = useWorkspaceStore()
+
+      await store.fetchWorkspaces()
+
+      expect(store.listLoadError).toBe('database is locked')
+      expect(store.workspaces).toEqual([])
+      expect(store.loading).toBe(false)
+    })
+
+    it('reports a transport failure with something other than an HTTP code', async () => {
+      vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')))
+      const store = useWorkspaceStore()
+
+      await store.fetchWorkspaces()
+
+      expect(store.listLoadError).toBe('Failed to fetch')
+    })
+
+    it('clears the failure once a load succeeds', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ workspaces: [makeWorkspace({ id: 'w1' })] }),
+        } as unknown as Response),
+      )
+      const store = useWorkspaceStore()
+      store.listLoadError = 'previous failure'
+
+      await store.fetchWorkspaces()
+
+      expect(store.listLoadError).toBeNull()
+      expect(store.workspaces).toHaveLength(1)
+    })
+
+    it('retryLoadWorkspaces reloads both the active and archived lists', async () => {
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        status: 200,
+        text: async () => JSON.stringify({ workspaces: [] }),
+      } as unknown as Response)
+      vi.stubGlobal('fetch', fetchMock)
+      const store = useWorkspaceStore()
+      store.archivedLoaded = true
+
+      await store.retryLoadWorkspaces()
+
+      const urls = fetchMock.mock.calls.map(([url]) => url as string)
+      expect(urls).toContain('/api/workspaces')
+      expect(urls).toContain('/api/workspaces/archived')
+    })
+
+    it('keeps the server message when starting a workspace fails', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: false,
+          status: 409,
+          text: async () => JSON.stringify({ error: 'An agent is already running for this workspace' }),
+        } as unknown as Response),
+      )
+      const store = useWorkspaceStore()
+
+      await expect(store.startWorkspace('w1')).rejects.toThrow('An agent is already running for this workspace')
+    })
+  })
+
+  describe('poll load failure', () => {
+    /** `/api/workspaces/info` mock: `null` fails the request, an object answers it. */
+    function stubInfoFetch(responses: Array<null | Record<string, unknown>>) {
+      let call = 0
+      const fetchMock = vi.fn(() => {
+        const body = responses[Math.min(call++, responses.length - 1)]
+        if (body === null || body === undefined) {
+          return Promise.resolve({
+            ok: false,
+            status: 502,
+            text: async () => JSON.stringify({ error: 'backend is gone' }),
+          } as unknown as Response)
+        }
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify(body),
+        } as unknown as Response)
+      })
+      vi.stubGlobal('fetch', fetchMock)
+      return fetchMock
+    }
+
+    const emptyInfo = { workspaces: [], prSnapshots: {}, gitStats: {} }
+
+    it('stays quiet on a single dropped poll', async () => {
+      stubInfoFetch([null])
+      const store = useWorkspaceStore()
+
+      await store.fetchWorkspacesInfo()
+
+      // One missed poll (a laptop waking up, a proxy blip) must not flash a
+      // "backend is down" banner at a user whose backend is fine.
+      expect(store.listLoadError).toBeNull()
+    })
+
+    it('raises the banner after two consecutive failed polls', async () => {
+      stubInfoFetch([null, null])
+      const store = useWorkspaceStore()
+
+      await store.fetchWorkspacesInfo()
+      await store.fetchWorkspacesInfo()
+
+      expect(store.listLoadError).toBe('backend is gone')
+    })
+
+    it('never empties the workspace list when a poll fails', async () => {
+      stubInfoFetch([null, null])
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'ws-1' })]
+
+      await store.fetchWorkspacesInfo()
+      await store.fetchWorkspacesInfo()
+
+      // A failure records the failure. It never wipes data that is valid on
+      // screen — the user keeps their list, plus an honest banner.
+      expect(store.workspaces.map((w) => w.id)).toEqual(['ws-1'])
+    })
+
+    it('clears the banner as soon as a poll succeeds again', async () => {
+      stubInfoFetch([null, null, emptyInfo])
+      const store = useWorkspaceStore()
+
+      await store.fetchWorkspacesInfo()
+      await store.fetchWorkspacesInfo()
+      expect(store.listLoadError).toBe('backend is gone')
+
+      await store.fetchWorkspacesInfo()
+
+      // A banner posted at load time used to survive the backend coming back.
+      expect(store.listLoadError).toBeNull()
+    })
+
+    it('resets the failure streak on success, so one later failure stays quiet', async () => {
+      stubInfoFetch([null, emptyInfo, null])
+      const store = useWorkspaceStore()
+
+      await store.fetchWorkspacesInfo()
+      await store.fetchWorkspacesInfo()
+      await store.fetchWorkspacesInfo()
+
+      expect(store.listLoadError).toBeNull()
+    })
+
+    it('lets a successful archived load clear the banner', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify([]),
+        } as unknown as Response),
+      )
+      const store = useWorkspaceStore()
+      store.listLoadError = 'previous failure'
+
+      await store.fetchArchivedWorkspaces()
+
+      expect(store.listLoadError).toBeNull()
+    })
+
+    it('does not let a successful archived load clear a banner raised by the active list', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((input: string | URL | Request) => {
+          const url = String(input)
+          if (url === '/api/workspaces/archived') {
+            return Promise.resolve({ ok: true, status: 200, text: async () => '[]' } as unknown as Response)
+          }
+          return Promise.resolve({
+            ok: false,
+            status: 500,
+            text: async () => JSON.stringify({ error: 'database is locked' }),
+          } as unknown as Response)
+        }),
+      )
+      const store = useWorkspaceStore()
+      store.archivedLoaded = true
+
+      await store.retryLoadWorkspaces()
+
+      // The archived list has no authority over a failure of the main list.
+      expect(store.listLoadError).toBe('database is locked')
     })
   })
 })

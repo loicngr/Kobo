@@ -6,8 +6,10 @@ export default {
   // Common
   'common.save': 'Speichern',
   'common.cancel': 'Abbrechen',
+  'common.retry': 'Erneut versuchen',
   'common.delete': 'Löschen',
   'common.close': 'Schließen',
+  'common.dismiss': 'Verwerfen',
   'common.details': 'Details',
   'common.ok': 'OK',
   'whatsNew.title': 'Neuigkeiten',
@@ -121,6 +123,8 @@ export default {
   'workspaceList.idle': 'Inaktiv',
   'workspaceList.archived': 'Archiviert',
   'workspaceList.noWorkspaces': 'Noch keine Arbeitsbereiche',
+  'workspaceList.loadFailed': 'Deine Workspaces konnten nicht geladen werden',
+  'workspaceList.loadFailedHint': 'Das ist ein Verbindungsfehler, kein leeres Konto.',
   'workspaceList.footer': '{count} Arbeitsbereich | {count} Arbeitsbereiche',
   'workspaceList.footerRunning': '{count} aktiv',
   'workspaceList.deleteDialog.title': 'Arbeitsbereich löschen?',
@@ -234,6 +238,9 @@ export default {
   'terminal.noWorktree': 'Worktree noch nicht erstellt',
   'terminal.error': 'Terminalfehler',
   'terminal.exited': 'Terminal beendet',
+  'terminal.disconnected': 'Verbindung verloren',
+  'terminal.reconnecting': 'Verbindungsaufbau… (Versuch {attempt} von {max})',
+  'terminal.reconnect': 'Neu verbinden',
 
   // Chat Input
   'chatInput.placeholder': 'Nachricht... (/ für Skills)',
@@ -379,6 +386,28 @@ export default {
   'createPage.validationName': 'Bitte geben Sie einen Arbeitsbereichnamen an.',
   'createPage.validationPath': 'Bitte geben Sie den Projektpfad ein.',
   'createPage.validationBranch': 'Bitte wählen Sie einen Branch aus.',
+  'createPage.progress.validate': 'Anfrage wird geprüft…',
+  'createPage.progress.fetch-source-branch': 'Source-Branch wird von origin geholt…',
+  'createPage.progress.inspect-worktree': 'Bestehender Worktree wird geprüft…',
+  'createPage.progress.extract-notion': 'Notion-Seite wird extrahiert…',
+  'createPage.progress.extract-sentry': 'Sentry-Issue wird extrahiert…',
+  'createPage.progress.create-record': 'Workspace wird erstellt…',
+  'createPage.progress.create-tasks': 'Tasks und Akzeptanzkriterien werden erstellt…',
+  'createPage.progress.create-worktree': 'Git-Worktree wird erstellt…',
+  'createPage.progress.write-conventions': 'Git-Konventionen werden geschrieben…',
+  'createPage.progress.write-context-files': 'Kontextdateien werden geschrieben…',
+  'createPage.progress.build-prompt': 'Initialer Prompt wird erstellt…',
+  'createPage.progress.setup-script': 'Dein Setup-Skript läuft…',
+  'createPage.progress.start-agent': 'Agent wird gestartet…',
+  'createPage.progress.rollback': 'Fehlgeschlagene Erstellung wird rückgängig gemacht…',
+  'createPage.progress.done': 'Fertig',
+  'createPage.progress.step': 'Schritt {index} von {total}',
+  'createPage.errorAtStep': 'Erstellung im Schritt „{step}“ fehlgeschlagen: {message}',
+  'createPage.override.title': 'Zwei deiner Einstellungen wurden überschrieben',
+  'createPage.override.setup-script-forced':
+    'Setup-Skript übersprungen: ein erneuter Lauf auf einem bereits vorbereiteten Worktree könnte dessen Inhalt zerstören.',
+  'createPage.override.permission-mode-downgraded':
+    'Berechtigungsmodus von Plan auf Bypass geändert: eine autonome Schleife kann nicht in Plan laufen, der Tools und Änderungen blockiert.',
 
   // Settings Page
   'settings.title': 'Einstellungen',
@@ -838,6 +867,8 @@ export default {
 
   // Git Panel
   'git.title': 'Git',
+  'git.outputDialogTitle': 'Git hat einen Fehler gemeldet',
+  'git.statsFailed': 'Der Git-Status konnte nicht gelesen werden',
   'git.section.repository': 'Repository',
   'git.section.changes': 'Änderungen',
   'git.section.pullRequest': 'Pull Request',
@@ -1164,6 +1195,7 @@ export default {
     '{path} dauerhaft löschen? Diese Datei wird nicht von Git verfolgt — ihr Inhalt geht verloren.',
   'diff.deleteUntrackedConfirmOk': 'Löschen',
   'diff.rollbackFailed': 'Rollback fehlgeschlagen',
+  'diff.rollbackFailedDetail': 'Rollback fehlgeschlagen: {error}',
   'diff.modeInspect': 'Bearbeiten',
   'diff.modeReview': 'Review',
   'diff.addComment': 'Kommentar hinzufügen',
@@ -1185,6 +1217,10 @@ export default {
   'diff.searchFiles': 'Dateien suchen…',
   'diff.noFileMatch': 'Keine passende Datei',
   'diff.selectFile': 'Datei auswählen, um den Diff anzuzeigen',
+  'diff.fileLoadFailed': 'Dieser Diff konnte nicht geladen werden',
+  'diff.fileLoadFailedHint': 'Die Datei auf der Festplatte ist unverändert — nur der Diff konnte nicht geladen werden.',
+  'diff.fileListLoadFailed': 'Die Dateiliste konnte nicht geladen werden',
+  'diff.fileListLoadFailedHint': 'Das ist eine fehlgeschlagene Anfrage, kein Branch ohne Änderungen.',
   'diff.addToChat': 'Zum Chat hinzufügen',
   'diff.compareTitle': 'Commits vergleichen',
   'diff.compareFrom': 'Von',
@@ -1195,6 +1231,7 @@ export default {
   'diffViewer.save': 'Speichern',
   'diffViewer.savedAt': 'Gespeichert',
   'diffViewer.saveFailed': 'Speichern fehlgeschlagen',
+  'diffViewer.saveFailedDetail': 'Speichern fehlgeschlagen: {error}',
   'diffViewer.unsavedChanges.title': 'Nicht gespeicherte Änderungen',
   'diffViewer.unsavedChanges.message': 'Du hast nicht gespeicherte Änderungen. Was möchtest du tun?',
   'diffViewer.unsavedChanges.save': 'Speichern',
@@ -1354,6 +1391,9 @@ export default {
     'Dieses Projekt hat nicht gespeicherte Änderungen. Ein Projektwechsel verwirft sie.',
   'settings.unsavedChanges.discard': 'Verwerfen und wechseln',
   'settings.unsavedChanges.cancel': 'Abbrechen',
+  'settings.loadFailed': 'Einstellungen konnten nicht geladen werden',
+  'settings.loadFailedHint':
+    'Speichern ist deaktiviert: das Formular zeigt Standardwerte, und sie zu schreiben würde deine echte Konfiguration überschreiben.',
   'health.title': 'Status',
   'health.tooltip': 'Systemstatus',
   'changelog.title': 'Änderungsprotokoll',
@@ -1590,4 +1630,10 @@ export default {
   'network.login.unreachable': 'Kōbō ist nicht erreichbar — prüfe deine Verbindung.',
   'layout.toggleWorkspaces': 'Workspaces-Leiste ein-/ausblenden',
   'layout.togglePanel': 'Seitenleiste ein-/ausblenden',
+
+  // Unsaved-work navigation guard
+  'unsaved.title': 'Ohne Speichern verlassen?',
+  'unsaved.message': 'Du hast ungespeicherte Änderungen. Diese Seite zu verlassen verwirft sie.',
+  'unsaved.leave': 'Verlassen',
+  'unsaved.stay': 'Bleiben',
 }

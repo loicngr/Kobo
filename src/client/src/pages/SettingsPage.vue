@@ -1,5 +1,15 @@
 <template>
   <q-page class="settings-page">
+    <div v-if="store.loadError" class="settings-load-error">
+      <q-icon name="error" size="18px" />
+      <div class="column">
+        <span class="settings-load-error__title">{{ $t('settings.loadFailed') }}</span>
+        <span class="settings-load-error__detail">{{ store.loadError }}</span>
+        <span class="settings-load-error__hint">{{ $t('settings.loadFailedHint') }}</span>
+      </div>
+      <q-space />
+      <q-btn dense flat no-caps icon="refresh" :label="$t('common.retry')" @click="reloadSettings" />
+    </div>
     <div class="settings-layout">
       <!-- Sidebar nav (desktop: fixed aside) -->
       <aside v-if="!isMobile" class="settings-nav">
@@ -1726,6 +1736,7 @@ where ffmpeg</pre>
                 size="sm"
                 color="primary"
                 :loading="savingGlobal"
+                :disable="!!store.loadError"
                 :class="{ 'save-btn--dirty': isGlobalDirty }"
                 @click="saveGlobal"
               />
@@ -2281,6 +2292,7 @@ where ffmpeg</pre>
                       size="sm"
                       color="primary"
                       :loading="savingProject"
+                      :disable="!!store.loadError"
                       :class="{ 'save-btn--dirty': isProjectDirty }"
                       @click="saveProject"
                     />
@@ -2511,6 +2523,7 @@ import {
 } from 'src/utils/notification-sounds'
 import { playNotificationSound } from 'src/utils/notifications'
 import { PROJECT_COLOR_PALETTE, type ProjectColor } from 'src/utils/project-color'
+import { registerUnsavedScope, unregisterUnsavedScope } from 'src/utils/unsaved-guard'
 import { getWhipVolumeAvailability } from 'src/utils/whip-settings'
 import { DEFAULT_WHIP_SHORTCUT } from 'src/utils/whip-shortcut'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -3555,14 +3568,22 @@ const isGlobalDirty = computed(() => captureGlobalSnapshot() !== globalSavedSnap
 const isProjectDirty = computed(() => captureProjectSnapshot() !== projectSavedSnapshot.value)
 
 const savebarVisible = computed(() => {
-  if (activeTab.value === 'projects')
-    return isProjectDirty.value && (selectedProject.value !== null || isNewProject.value)
-  if (activeTab.value === 'templates') return false
-  return isGlobalDirty.value
+  // A failed load must never offer a Save: the form is on defaults.
+  if (store.loadError) return false
+  // Any dirty scope keeps the bar up, whichever tab is showing. Computing it
+  // per tab made the warning vanish on tab switch, and the user believed they
+  // had saved (see unsaved-guard.ts).
+  if (isGlobalDirty.value) return true
+  return isProjectDirty.value && (selectedProject.value !== null || isNewProject.value)
 })
-const savebarLoading = computed(() => (activeTab.value === 'projects' ? savingProject.value : saving.value))
+const savebarLoading = computed(() => {
+  // Mirrors savebarSave's own condition rather than the active tab, for the
+  // same reason: the dirty scope, not the visible tab, decides what happens.
+  if (isProjectDirty.value && (selectedProject.value !== null || isNewProject.value)) return savingProject.value
+  return saving.value
+})
 function savebarSave() {
-  if (activeTab.value === 'projects') saveProject()
+  if (isProjectDirty.value && (selectedProject.value !== null || isNewProject.value)) saveProject()
   else saveGlobal()
 }
 
@@ -4157,6 +4178,11 @@ function filterBranches(val: string, update: (fn: () => void) => void) {
   })
 }
 
+async function reloadSettings() {
+  await store.fetchSettings()
+  if (!store.loadError) syncGlobalForm()
+}
+
 // Init
 onMounted(async () => {
   await Promise.all([store.fetchSettings(), store.fetchActiveMcpServers(), fetchAvailableSkills()])
@@ -4171,12 +4197,16 @@ onMounted(async () => {
   syncGlobalForm()
   if (store.global.notionEnabled) loadNotionUsers().catch(() => {})
   void fetchNetwork()
+  registerUnsavedScope('settings:global', () => isGlobalDirty.value)
+  registerUnsavedScope('settings:project', () => isProjectDirty.value)
 })
 
 // Cleanup debounce timer on unmount
 onUnmounted(() => {
   if (pathDebounce) clearTimeout(pathDebounce)
   stopVoiceModelsPolling()
+  unregisterUnsavedScope('settings:global')
+  unregisterUnsavedScope('settings:project')
 })
 </script>
 
@@ -4186,6 +4216,8 @@ onUnmounted(() => {
   position: relative;
   padding: 0;
   min-height: 100vh;
+  display: flex;
+  flex-direction: column;
 }
 
 .purge-docs {
@@ -4205,9 +4237,28 @@ onUnmounted(() => {
   word-break: break-all;
 }
 
+.settings-load-error {
+  display: flex;
+  align-items: flex-start;
+  flex-shrink: 0;
+  gap: var(--kobo-space-sm);
+  padding: var(--kobo-space-md);
+  border: 1px solid var(--kobo-danger);
+  border-radius: var(--kobo-radius-sm);
+  background: var(--kobo-surface);
+  color: var(--kobo-text);
+}
+
+.settings-load-error__detail,
+.settings-load-error__hint {
+  font-size: 12px;
+  color: var(--kobo-text-3);
+}
+
 .settings-layout {
-  position: absolute;
-  inset: 0;
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
   display: flex;
   align-items: stretch;
   overflow: hidden;
