@@ -217,6 +217,23 @@ describe('updateGlobalSettings()', () => {
     expect(() => updateGlobalSettings({ worktreesPath: '../outside' })).toThrow(/parent directory traversal/)
     expect(getGlobalSettings().worktreesPath).toBe('$HOME/kobo/worktrees')
   })
+
+  it('accepts an explicit retention window and refuses an out-of-range one', () => {
+    expect(getGlobalSettings().wsEventsRetentionDays).toBe(0)
+
+    updateGlobalSettings({ wsEventsRetentionDays: 30, wsEventsKeepPerWorkspace: 5000 } as Partial<GlobalSettings>)
+    expect(getGlobalSettings().wsEventsRetentionDays).toBe(30)
+
+    updateGlobalSettings({ wsEventsRetentionDays: -5 } as Partial<GlobalSettings>)
+    expect(getGlobalSettings().wsEventsRetentionDays).toBe(30)
+
+    updateGlobalSettings({ wsEventsRetentionDays: 4_000 } as Partial<GlobalSettings>)
+    expect(getGlobalSettings().wsEventsRetentionDays).toBe(30)
+
+    // 0 is a first-class value — "never delete anything" — not an error.
+    updateGlobalSettings({ wsEventsRetentionDays: 0 } as Partial<GlobalSettings>)
+    expect(getGlobalSettings().wsEventsRetentionDays).toBe(0)
+  })
 })
 
 describe('upsertProject()', () => {
@@ -856,6 +873,53 @@ describe('runSettingsMigrations()', () => {
 
     const migrated = runSettingsMigrations(legacy as unknown as Record<string, unknown>)
     expect(migrated.global.cleanupScriptOnlyOnChanges).toBe(true)
+  })
+
+  it('migration v54 seeds retention DISABLED — the feature is opt-in', () => {
+    const legacy = {
+      schemaVersion: 53,
+      global: {},
+      projects: [],
+    }
+
+    const migrated = runSettingsMigrations(legacy as unknown as Record<string, unknown>)
+    expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+    expect(migrated.global.wsEventsRetentionDays).toBe(0)
+    expect(migrated.global.wsEventsKeepPerWorkspace).toBe(0)
+  })
+
+  it('migration v54 preserves a window the user had already chosen', () => {
+    const legacy = {
+      schemaVersion: 53,
+      global: { wsEventsRetentionDays: 45, wsEventsKeepPerWorkspace: 2000 },
+      projects: [],
+    }
+
+    const migrated = runSettingsMigrations(legacy as unknown as Record<string, unknown>)
+    expect(migrated.global.wsEventsRetentionDays).toBe(45)
+    expect(migrated.global.wsEventsKeepPerWorkspace).toBe(2000)
+  })
+
+  it('migration v54 falls back to disabled on a garbage value', () => {
+    const legacy = {
+      schemaVersion: 53,
+      global: { wsEventsRetentionDays: -1, wsEventsKeepPerWorkspace: 'lots' },
+      projects: [],
+    }
+
+    const migrated = runSettingsMigrations(legacy as unknown as Record<string, unknown>)
+    expect(migrated.global.wsEventsRetentionDays).toBe(0)
+    expect(migrated.global.wsEventsKeepPerWorkspace).toBe(0)
+  })
+
+  it('a fresh settings file is born with retention disabled, like a migrated one', () => {
+    const fresh = getSettings()
+    expect(fresh.global.wsEventsRetentionDays).toBe(0)
+    expect(fresh.global.wsEventsKeepPerWorkspace).toBe(0)
+
+    const migrated = runSettingsMigrations({ schemaVersion: 53, global: {}, projects: [] })
+    expect(migrated.global.wsEventsRetentionDays).toBe(fresh.global.wsEventsRetentionDays)
+    expect(migrated.global.wsEventsKeepPerWorkspace).toBe(fresh.global.wsEventsKeepPerWorkspace)
   })
 })
 
@@ -2131,7 +2195,7 @@ describe('PR notification sounds (v45)', () => {
       audioQuestionSound: 'hey.mp3',
       networkAccessToken: 'keep-me',
     })
-    expect(SETTINGS_SCHEMA_VERSION).toBe(53)
+    expect(SETTINGS_SCHEMA_VERSION).toBe(54)
   })
 
   it('adds the auto-loop retry limit while preserving existing settings', () => {
@@ -2249,7 +2313,7 @@ describe('whip feature toggle (v51)', () => {
       projects: [],
     })
 
-    expect(migrated.schemaVersion).toBe(53)
+    expect(migrated.schemaVersion).toBe(54)
     expect(migrated.global.whipEnabled).toBe(false)
     expect(migrated.global.audioNotifications).toBe(true)
   })
@@ -2297,7 +2361,7 @@ describe('whip feature toggle (v51)', () => {
       projects: [],
     })
 
-    expect(migrated.schemaVersion).toBe(53)
+    expect(migrated.schemaVersion).toBe(54)
     expect(migrated.global.whipShortcut).toBe('mod+shift+x')
     expect(migrated.global.editorCommand).toBe('zed')
   })
@@ -2359,7 +2423,7 @@ describe('whip feature toggle (v51)', () => {
       projects: [],
     })
 
-    expect(migrated.schemaVersion).toBe(53)
+    expect(migrated.schemaVersion).toBe(54)
     expect(migrated.global.whipVolume).toBe(1)
     expect(migrated.global.whipShortcut).toBe('alt+k')
     expect(migrated.global.editorCommand).toBe('zed')

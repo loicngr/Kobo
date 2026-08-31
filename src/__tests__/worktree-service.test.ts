@@ -83,7 +83,7 @@ describe('createWorktree(projectPath, branchName, baseRef)', () => {
     expect(content).toContain(`/${relativePath}`)
   })
 
-  it("n'ajoute pas les worktrees absolus hors projet à .git/info/exclude", () => {
+  it("n'ajoute pas les worktrees absolus hors projet à .git/info/exclude", async () => {
     const branchName = 'feature/external-root'
     const externalRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'at-wt-external-'))
     let worktreePath = ''
@@ -99,7 +99,7 @@ describe('createWorktree(projectPath, branchName, baseRef)', () => {
       expect(content).not.toContain(`/${relativePath}`)
     } finally {
       if (worktreePath && fs.existsSync(worktreePath)) {
-        removeWorktree(repoDir, worktreePath)
+        await removeWorktree(repoDir, worktreePath)
       }
       fs.rmSync(externalRoot, { recursive: true, force: true })
     }
@@ -179,19 +179,19 @@ describe('worktreeExists(projectPath, branchName)', () => {
 })
 
 describe('removeWorktree(projectPath, worktreePath)', () => {
-  it('supprime le worktree et son dossier', () => {
+  it('supprime le worktree et son dossier', async () => {
     const branchName = 'feature/remove-test'
     const { worktreePath } = createWorktree(repoDir, branchName, 'origin/main')
     expect(fs.existsSync(worktreePath)).toBe(true)
 
-    removeWorktree(repoDir, worktreePath)
+    await removeWorktree(repoDir, worktreePath)
     expect(fs.existsSync(worktreePath)).toBe(false)
   })
 
-  it("retire l'entrée de .git/info/exclude après suppression", () => {
+  it("retire l'entrée de .git/info/exclude après suppression", async () => {
     const branchName = 'feature/remove-exclude'
     const { worktreePath } = createWorktree(repoDir, branchName, 'origin/main')
-    removeWorktree(repoDir, worktreePath)
+    await removeWorktree(repoDir, worktreePath)
 
     const excludeFile = path.join(repoDir, '.git', 'info', 'exclude')
     if (fs.existsSync(excludeFile)) {
@@ -201,14 +201,52 @@ describe('removeWorktree(projectPath, worktreePath)', () => {
     }
   })
 
-  it("le worktree n'apparaît plus dans listWorktrees après suppression", () => {
+  it("le worktree n'apparaît plus dans listWorktrees après suppression", async () => {
     const branchName = 'feature/remove-list-check'
     const { worktreePath } = createWorktree(repoDir, branchName, 'origin/main')
-    removeWorktree(repoDir, worktreePath)
+    await removeWorktree(repoDir, worktreePath)
 
     const worktrees = listWorktrees(repoDir)
     const found = worktrees.some((wt) => wt.branch === branchName)
     expect(found).toBe(false)
+  })
+
+  it('waits for the shared repository lock before touching the common git dir', async () => {
+    const { withGitRepoLock, _resetGitRepoLocksForTest } = await import('../server/utils/git-repo-lock.js')
+    _resetGitRepoLocksForTest()
+    const { worktreePath } = createWorktree(repoDir, 'feature/remove-under-lock', 'origin/main')
+
+    let release: () => void = () => {}
+    const holder = withGitRepoLock(repoDir, () => new Promise<void>((resolve) => (release = resolve)))
+    await Promise.resolve()
+
+    const pending = removeWorktree(repoDir, worktreePath)
+    for (let i = 0; i < 5; i++) await Promise.resolve()
+    // `git worktree remove` mutates the common git dir, so it must not run
+    // while another repository operation holds the lock.
+    expect(fs.existsSync(worktreePath)).toBe(true)
+
+    release()
+    await holder
+    await pending
+    expect(fs.existsSync(worktreePath)).toBe(false)
+  })
+
+  it('refuses to report success while the directory is still on disk', async () => {
+    const wtPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'at-wt-verify-')), 'wt')
+    createWorktree(repoDir, 'feature/verify-removal', 'origin/main')
+    // Simulate the failure mode: git drops the administrative entry but the
+    // directory survives (root-owned files, a busy mount, an open handle).
+    const realPath = listWorktrees(repoDir).find((w) => w.branch === 'feature/verify-removal')?.path as string
+    gitSetup(repoDir, ['worktree', 'remove', realPath, '--force'])
+    fs.mkdirSync(realPath, { recursive: true })
+    fs.writeFileSync(path.join(realPath, 'leftover.txt'), 'still here\n')
+
+    await expect(removeWorktree(repoDir, realPath)).rejects.toThrow(/still on disk|Failed to remove worktree/)
+    expect(fs.existsSync(realPath)).toBe(true)
+
+    fs.rmSync(realPath, { recursive: true, force: true })
+    fs.rmSync(wtPath, { recursive: true, force: true })
   })
 })
 

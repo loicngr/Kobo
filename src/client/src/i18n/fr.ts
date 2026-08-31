@@ -1277,6 +1277,23 @@ export default {
   'settings.autoLoopMaxRetries': 'Nombre maximal de nouvelles tentatives',
   'settings.autoLoopMaxRetriesHint':
     "Arrête l'auto-loop après ce nombre d'erreurs de quota ou d'erreurs serveur temporaires.",
+  'settings.retentionTitle': "Rétention de l'historique de conversation (désactivée par défaut)",
+  'settings.retentionWarning':
+    "Activer cette option supprime définitivement de la base l'historique de conversation des agents, à commencer par tout ce qui est déjà plus vieux que la fenêtre. Les événements supprimés sont irrécupérables.",
+  'settings.retentionHint':
+    "Exécutée une fois au démarrage du serveur. Les workspaces, tâches, sessions, branches et worktrees ne sont jamais touchés — seule la sortie enregistrée des agents l'est.",
+  'settings.retentionDaysLabel': 'Supprimer les événements plus vieux que (jours)',
+  'settings.retentionDaysHint':
+    '0 — la valeur par défaut — conserve tous les événements indéfiniment. Renseignez une valeur pour activer la rétention.',
+  'settings.retentionKeepLabel': 'Événements toujours conservés par workspace',
+  'settings.retentionKeepHint':
+    "Les événements les plus récents de chaque workspace survivent quel que soit leur âge, pour qu'un workspace ancien mais toujours ouvert garde un historique lisible. Suggéré : 5000.",
+  'settings.retentionDisabledHint': 'Rétention désactivée : rien ne sera jamais supprimé.',
+  'settings.retentionConfirmTitle': "Supprimer définitivement de l'historique de conversation ?",
+  'settings.retentionConfirmMessage':
+    "Ne conserver que {days} jour(s) d'historique supprimera définitivement, au prochain démarrage du serveur, {count} des {total} événements d'agent enregistrés — y compris tout ce qui est déjà plus ancien. C'est irréversible. Continuer ?",
+  'settings.retentionConfirmMessageUnknown':
+    "Ne conserver que {days} jour(s) d'historique supprimera définitivement, au prochain démarrage du serveur, tous les événements d'agent plus anciens — y compris tout ce qui est déjà accumulé. Le volume exact n'a pas pu être calculé. C'est irréversible. Continuer ?",
   'settings.purgeDocsTitle': 'Comment ça marche — restauration & permissions',
   'settings.purgeDocsRestoreTitle': 'Restaurer un worktree purgé (détection automatique)',
   'settings.purgeDocsRestoreIntro':

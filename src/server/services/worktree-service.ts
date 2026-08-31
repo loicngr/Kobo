@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { isGitBranchExistsError } from '../utils/git-ops.js'
+import { withGitRepoLock } from '../utils/git-repo-lock.js'
 import { resolveWorkspaceWorktreePath, resolveWorktreesRoot } from '../utils/worktree-paths.js'
 
 /** Parsed information about a single git worktree. */
@@ -155,13 +156,43 @@ export function createWorktree(
   return { worktreePath, base, branchCreated }
 }
 
+/** `git worktree remove` drops the administrative entry even when it fails to
+ *  delete the directory, and the prune only ever ran in the Docker fallback.
+ *  Prune the stale metadata, then refuse to report success while the folder is
+ *  still there — the purge feature marked workspaces as purged on that false
+ *  success, telling the user the disk space was reclaimed when it wasn't.
+ *
+ *  Callers hold the repository lock: acquiring it again here would deadlock on
+ *  the same key, since the chain is strictly sequential per common git dir. */
+function assertWorktreeGone(projectPath: string, worktreePath: string): void {
+  try {
+    git(projectPath, ['worktree', 'prune'])
+  } catch (err) {
+    console.warn(`[worktree] prune after removing '${worktreePath}' failed:`, err instanceof Error ? err.message : err)
+  }
+  if (fs.existsSync(worktreePath)) {
+    throw new Error(`Failed to remove worktree '${worktreePath}': the directory is still on disk after removal`)
+  }
+}
+
 /** Remove a git worktree and clean up the .git/info/exclude entry.
  *
  * If `git worktree remove` fails on a permission error (Docker dev servers leave
  * root-owned files in node_modules / vendor), and Docker is available, reclaim
  * ownership with a throwaway container (`chown -R <uid>:<gid>`) and retry once.
  * Otherwise rethrow so the caller's recovery toast (sudo rm -rf …) fires. */
-export function removeWorktree(projectPath: string, worktreePath: string): void {
+export function removeWorktree(projectPath: string, worktreePath: string): Promise<void> {
+  // `git worktree remove` and `git worktree prune` both rewrite the worktree
+  // administrative files of the COMMON git dir — the very state a concurrent
+  // source-branch change (fetch / reset / cherry-pick) is manipulating under
+  // the same lock. The whole removal sequence is held, Docker chown included:
+  // it sits between the `remove` and the `prune` that repairs its metadata, so
+  // releasing in the middle would expose a half-removed repository.
+  return withGitRepoLock(projectPath, () => removeWorktreeLocked(projectPath, worktreePath))
+}
+
+/** The actual removal. Always called with the repository lock held. */
+function removeWorktreeLocked(projectPath: string, worktreePath: string): void {
   try {
     git(projectPath, ['worktree', 'remove', worktreePath, '--force'])
   } catch (err) {
@@ -184,6 +215,7 @@ export function removeWorktree(projectPath: string, worktreePath: string): void 
         git(projectPath, ['worktree', 'prune'])
         console.log(`[worktree] Docker cleanup succeeded; removed '${worktreePath}'`)
         removeFromExclude(projectPath, worktreePath)
+        assertWorktreeGone(projectPath, worktreePath)
         return
       } catch (retryErr) {
         const retryMessage = retryErr instanceof Error ? retryErr.message : String(retryErr)
@@ -196,6 +228,7 @@ export function removeWorktree(projectPath: string, worktreePath: string): void 
   }
 
   removeFromExclude(projectPath, worktreePath)
+  assertWorktreeGone(projectPath, worktreePath)
 }
 
 /** List all git worktrees for a repository by parsing `git worktree list --porcelain`. */

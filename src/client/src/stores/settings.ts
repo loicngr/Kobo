@@ -98,6 +98,8 @@ interface GlobalSettings {
   /** Opt-in: pr-watcher auto-purges the worktree on PR-merged transition. */
   autoPurgeOnPrMerged: boolean
   autoLoopMaxRetries: number
+  wsEventsRetentionDays: number
+  wsEventsKeepPerWorkspace: number
   browserNotifications: boolean
   audioNotifications: boolean
   audioQuestionNotifications: boolean
@@ -233,6 +235,8 @@ export const useSettingsStore = defineStore('settings', {
       terminalCommand: '',
       autoPurgeOnPrMerged: false,
       autoLoopMaxRetries: 5,
+      wsEventsRetentionDays: 0,
+      wsEventsKeepPerWorkspace: 0,
       browserNotifications: true,
       audioNotifications: true,
       audioQuestionNotifications: false,
@@ -360,6 +364,10 @@ export const useSettingsStore = defineStore('settings', {
       changeSourceBranchScript: string
     }> {
       return apiFetch('/api/settings/defaults')
+    },
+
+    async previewRetention(days: number, keep: number): Promise<{ deletable: number; total: number }> {
+      return apiFetch(`/api/settings/ws-events-retention-preview?days=${days}&keep=${keep}`)
     },
 
     async updateGlobal(data: Partial<GlobalSettings>) {

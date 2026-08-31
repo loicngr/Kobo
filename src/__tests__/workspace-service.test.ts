@@ -1677,3 +1677,43 @@ describe('dismissPrAttention() / restorePrAttention()', () => {
     expect(() => restorePrAttention('nope', 'ci-failed')).toThrow("Workspace 'nope' not found")
   })
 })
+
+describe('recomputeSessionMetrics()', () => {
+  it('rebuilds a session metric row after events were deleted without the session', async () => {
+    const { getDb } = await import('../server/db/index.js')
+    const { recomputeSessionMetrics } = await import('../server/services/workspace-service.js')
+    const db = getDb()
+    const now = new Date().toISOString()
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, model, created_at, updated_at)
+       VALUES ('ws-1', 'w', '/tmp/w', 'main', 'feature/w', 'claude-opus-4-8', ?, ?)`,
+    ).run(now, now)
+    db.prepare(
+      "INSERT INTO agent_sessions (id, workspace_id, status, started_at) VALUES ('s-1', 'ws-1', 'completed', ?)",
+    ).run(now)
+    const insert = db.prepare(
+      'INSERT INTO ws_events (id, workspace_id, type, payload, session_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+    )
+    insert.run('e1', 'ws-1', 'agent:event', '{"kind":"tool:call"}', 's-1', now)
+    insert.run('e2', 'ws-1', 'agent:event', '{"kind":"tool:call"}', 's-1', now)
+    insert.run('e3', 'ws-1', 'agent:event', '{"kind":"error"}', 's-1', now)
+
+    expect(db.prepare('SELECT tool_calls, errors FROM session_event_metrics').get()).toEqual({
+      tool_calls: 2,
+      errors: 1,
+    })
+
+    // No AFTER DELETE trigger any more: the stored row goes stale on purpose.
+    db.prepare("DELETE FROM ws_events WHERE id = 'e3'").run()
+    expect(db.prepare('SELECT tool_calls, errors FROM session_event_metrics').get()).toEqual({
+      tool_calls: 2,
+      errors: 1,
+    })
+
+    recomputeSessionMetrics('ws-1', 's-1')
+    expect(db.prepare('SELECT tool_calls, errors FROM session_event_metrics').get()).toEqual({
+      tool_calls: 2,
+      errors: 0,
+    })
+  })
+})

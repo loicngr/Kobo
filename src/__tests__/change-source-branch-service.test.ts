@@ -85,6 +85,7 @@ const SCRIPT_TIMEOUT_MS = 5 * 60 * 1000
 
 import { execFileSync } from 'node:child_process'
 import { changeSourceBranch } from '../server/services/change-source-branch-service.js'
+import { withGitRepoLock } from '../server/utils/git-repo-lock.js'
 
 function g(repo: string, args: string[]): string {
   return execFileSync('git', args, { cwd: repo, encoding: 'utf-8' }).trimEnd()
@@ -356,6 +357,41 @@ describe('changeSourceBranch', () => {
     const res = await changeSourceBranch('w1', 'develop')
     expect(res.status).toBe('conflict')
     expect(updateSourceMock).toHaveBeenCalledWith('w1', 'develop')
+  })
+
+  it('rotates the backup branches even when the attempt ends in a conflict', async () => {
+    // Same divergence as above — the cherry-pick is guaranteed to conflict.
+    g(repo, ['checkout', '-q', 'develop'])
+    writeFileSync(join(repo, 'base.txt'), 'develop-change\n')
+    g(repo, ['commit', '-q', '-am', 'D2'])
+    g(repo, ['push', '-q', 'origin', 'develop'])
+    g(repo, ['checkout', '-q', 'main'])
+    g(repo, ['checkout', '-q', '-b', 'feature'])
+    writeFileSync(join(repo, 'base.txt'), 'feature-change\n')
+    g(repo, ['commit', '-q', '-am', 'F1'])
+    // Four backups from previous failed attempts, above the retention of 3.
+    for (const stamp of ['1000', '2000', '3000', '4000']) {
+      g(repo, ['branch', `kobo-backup/feature-${stamp}`, 'feature'])
+    }
+
+    getWorkspaceMock.mockReturnValue({
+      id: 'w1',
+      sourceBranch: 'main',
+      workingBranch: 'feature',
+      worktreePath: repo,
+      projectPath: repo,
+    })
+
+    const res = await changeSourceBranch('w1', 'develop')
+    expect(res.status).toBe('conflict')
+
+    // 4 old + 1 created by this attempt, rotated down to the 3 newest.
+    const remaining = g(repo, ['branch', '--list', 'kobo-backup/feature-*', '--format=%(refname:short)'])
+      .split('\n')
+      .filter(Boolean)
+    expect(remaining).toHaveLength(3)
+    expect(remaining).not.toContain('kobo-backup/feature-1000')
+    expect(remaining).not.toContain('kobo-backup/feature-2000')
   })
 
   it('runs the custom script when changeSourceBranchScript is set and updates metadata on exit 0', async () => {
@@ -630,5 +666,58 @@ describe('changeSourceBranch', () => {
     expect(res.status).toBe('done')
     expect(spawnMock).not.toHaveBeenCalled()
     expect(g(repo, ['log', '--format=%s', 'feature'])).toContain('D1')
+  })
+
+  it('refuses to change the source branch while a stale git index lock is held', async () => {
+    g(repo, ['checkout', '-q', '-b', 'feature'])
+    writeFileSync(join(repo, 'feat.txt'), 'feat\n')
+    g(repo, ['add', '.'])
+    g(repo, ['commit', '-q', '-m', 'F1'])
+    writeFileSync(join(repo, '.git', 'index.lock'), '')
+
+    getWorkspaceMock.mockReturnValue({
+      id: 'w1',
+      name: 'w1',
+      sourceBranch: 'main',
+      workingBranch: 'feature',
+      worktreePath: repo,
+      projectPath: repo,
+    })
+
+    await expect(changeSourceBranch('w1', 'develop')).rejects.toThrow(/index of this worktree is locked/)
+    expect(spawnMock).not.toHaveBeenCalled()
+  })
+
+  it('checks the index lock after acquiring the repository lock, not when queueing', async () => {
+    g(repo, ['checkout', '-q', '-b', 'feature'])
+    writeFileSync(join(repo, 'feat.txt'), 'feat\n')
+    g(repo, ['add', '.'])
+    g(repo, ['commit', '-q', '-m', 'F1'])
+
+    getWorkspaceMock.mockReturnValue({
+      id: 'w1',
+      name: 'w1',
+      sourceBranch: 'main',
+      workingBranch: 'feature',
+      worktreePath: repo,
+      projectPath: repo,
+    })
+
+    // Occupy the repository lock so the change is queued behind it, exactly
+    // like a concurrent PR-watcher fetch would.
+    let release: () => void = () => {}
+    const holder = withGitRepoLock(repo, () => new Promise<void>((resolve) => (release = resolve)))
+    await flushMicrotasks()
+
+    const pending = changeSourceBranch('w1', 'develop')
+    await flushMicrotasks()
+
+    // The lock only appears WHILE we are queued: a guard evaluated at request
+    // time cannot see it, one evaluated after acquisition must.
+    writeFileSync(join(repo, '.git', 'index.lock'), '')
+    release()
+    await holder
+
+    await expect(pending).rejects.toThrow(/index of this worktree is locked/)
   })
 })

@@ -24,6 +24,16 @@ vi.mock('../server/services/agent/orchestrator.js', () => ({
   getBackendPort: vi.fn(() => 3300),
 }))
 
+vi.mock('../server/db/index.js', () => ({
+  getDb: vi.fn(() => ({
+    prepare: vi.fn(() => ({ get: vi.fn(() => ({ c: 0 })) })),
+  })),
+}))
+
+vi.mock('../server/services/ws-events-retention-service.js', () => ({
+  countPrunableWsEvents: vi.fn(() => 0),
+}))
+
 // ── Imports (after mocks) ────────────────────────────────────────────────────
 
 import router from '../server/routes/settings.js'
@@ -377,5 +387,18 @@ describe('network routes', () => {
     const res = await app.request('/api/settings/network/ping')
     expect(res.status).toBe(200)
     expect(await res.json()).toEqual({ ok: true })
+  })
+})
+
+describe('GET /ws-events-retention-preview', () => {
+  it('refuses a negative window instead of counting something absurd', async () => {
+    const res = await app.request('/api/settings/ws-events-retention-preview?days=-1&keep=0')
+    expect(res.status).toBe(400)
+  })
+
+  it('counts zero when the window is 0 — retention disabled deletes nothing', async () => {
+    const res = await app.request('/api/settings/ws-events-retention-preview?days=0&keep=0')
+    expect(res.status).toBe(200)
+    expect((await res.json()) as { deletable: number }).toMatchObject({ deletable: 0 })
   })
 })

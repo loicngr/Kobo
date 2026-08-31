@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { getDb } from '../db/index.js'
 import { getBackendPort } from '../services/agent/orchestrator.js'
 import {
   DEFAULT_NOTION_INITIAL_PROMPT,
@@ -18,6 +19,7 @@ import {
   type ProjectSettings,
 } from '../services/settings-service.js'
 import { listTemplates, replaceAllTemplates } from '../services/templates-service.js'
+import { countPrunableWsEvents } from '../services/ws-events-retention-service.js'
 
 /** Hono sub-router for global and per-project settings CRUD. */
 const app = new Hono()
@@ -59,6 +61,28 @@ app.get('/defaults', (c) => {
     sentryInitialPromptTemplate: DEFAULT_SENTRY_INITIAL_PROMPT,
     changeSourceBranchScript: DEFAULT_CHANGE_SOURCE_BRANCH_SCRIPT,
   })
+})
+
+// GET /api/settings/ws-events-retention-preview?days=<n>&keep=<n>
+// Count what a retention window WOULD delete, without deleting anything. Backs
+// the confirmation dialog: enabling retention on a year-old database destroys
+// months of conversation in one go, and the user is entitled to the number
+// before agreeing to it.
+app.get('/ws-events-retention-preview', (c) => {
+  try {
+    const days = Number.parseInt(c.req.query('days') ?? '', 10)
+    const keep = Number.parseInt(c.req.query('keep') ?? '', 10)
+    if (!Number.isInteger(days) || days < 0 || !Number.isInteger(keep) || keep < 0) {
+      return c.json({ error: 'days and keep must be non-negative integers' }, 400)
+    }
+    const db = getDb()
+    const total = (db.prepare('SELECT COUNT(*) AS c FROM ws_events').get() as { c: number }).c
+    const deletable = countPrunableWsEvents(db, { retentionDays: days, keepPerWorkspace: keep })
+    return c.json({ deletable, total })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
 })
 
 // GET /api/settings/network — network access state + LAN URLs

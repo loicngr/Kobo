@@ -1903,7 +1903,15 @@ app.delete('/:id/events/:eventId', (c) => {
       return c.json({ error: `Workspace '${workspaceId}' not found` }, 404)
     }
     const db = getDb()
+    // Capture the session BEFORE deleting: since v36 there is no AFTER DELETE
+    // trigger, so the metrics of that session must be recomputed once, here.
+    const row = db
+      .prepare('SELECT session_id FROM ws_events WHERE id = ? AND workspace_id = ?')
+      .get(eventId, workspaceId) as { session_id: string | null } | undefined
     db.prepare('DELETE FROM ws_events WHERE id = ? AND workspace_id = ?').run(eventId, workspaceId)
+    if (row?.session_id) {
+      workspaceService.recomputeSessionMetrics(workspaceId, row.session_id)
+    }
     return c.json({ ok: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'unknown'
@@ -3008,7 +3016,7 @@ async function deleteWorkspaceWithSideEffects(
     console.log(`[workspaces] skipping worktree removal on delete (already purged): ${worktreePath}`)
   } else if (workspace.worktreeOwned) {
     try {
-      worktreeService.removeWorktree(workspace.projectPath, worktreePath)
+      await worktreeService.removeWorktree(workspace.projectPath, worktreePath)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       console.error(`[workspaces] Failed to remove worktree: ${message}`)
@@ -3515,8 +3523,14 @@ app.post('/:id/rename-branch', async (c) => {
     if (!newName) {
       return c.json({ error: 'newName is required' }, 400)
     }
-    if (!/^[A-Za-z0-9/_\-.]+$/.test(newName)) {
-      return c.json({ error: 'Invalid branch name (only letters, digits, /, _, -, . allowed)' }, 400)
+    if (!gitOps.isValidBranchName(newName)) {
+      return c.json(
+        {
+          error:
+            'Invalid branch name. It must start with a letter or a digit and may then contain letters, digits, /, _, - and . — no leading dash, no "..", no trailing "/", "." or ".lock".',
+        },
+        400,
+      )
     }
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) {
@@ -4133,7 +4147,16 @@ app.post('/:id/cancel-source-change', async (c) => {
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
 
-    const backups = gitOps.listBackupBranches(workspace.worktreePath, workspace.workingBranch)
+    // "No backup exists" and "I could not find out" are different answers.
+    // Conflating them told the user restoration was impossible while the
+    // backup branch was on disk, closing the only rollback path there is.
+    let backups: string[]
+    try {
+      backups = gitOps.listBackupBranches(workspace.worktreePath, workspace.workingBranch)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      return c.json({ error: `Cannot list backup branches: ${message}`, code: 'backup_list_failed' }, 500)
+    }
     if (backups.length === 0) {
       return c.json({ error: 'No backup branch found — cannot auto-restore', code: 'no_backup' }, 409)
     }

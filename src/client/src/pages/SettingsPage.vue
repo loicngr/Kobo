@@ -1589,6 +1589,41 @@ where ffmpeg</pre>
                 class="settings-input q-mt-md"
               />
 
+              <q-separator dark class="q-my-md" />
+
+              <div data-tour="settings-card-worktrees-retention">
+                <div class="text-subtitle2 q-mb-sm">{{ $t('settings.retentionTitle') }}</div>
+                <div class="text-caption text-negative q-mb-sm">{{ $t('settings.retentionWarning') }}</div>
+                <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.retentionHint') }}</div>
+                <q-input
+                  v-model.number="globalWsEventsRetentionDays"
+                  :label="$t('settings.retentionDaysLabel')"
+                  :hint="$t('settings.retentionDaysHint')"
+                  type="number"
+                  min="0"
+                  max="3650"
+                  dense
+                  dark
+                  outlined
+                  class="settings-input"
+                />
+                <q-input
+                  v-model.number="globalWsEventsKeepPerWorkspace"
+                  :label="$t('settings.retentionKeepLabel')"
+                  :hint="$t('settings.retentionKeepHint')"
+                  type="number"
+                  min="0"
+                  max="1000000"
+                  dense
+                  dark
+                  outlined
+                  class="settings-input q-mt-md"
+                />
+                <div v-if="globalWsEventsRetentionDays === 0" class="text-caption text-grey-6 q-mt-sm">
+                  {{ $t('settings.retentionDisabledHint') }}
+                </div>
+              </div>
+
               <q-expansion-item
                 dense
                 dark
@@ -2608,6 +2643,8 @@ const globalFileManagerCommand = ref('')
 const globalTerminalCommand = ref('')
 const globalAutoPurgeOnPrMerged = ref(false)
 const globalAutoLoopMaxRetries = ref(5)
+const globalWsEventsRetentionDays = ref(0)
+const globalWsEventsKeepPerWorkspace = ref(0)
 
 // Network access
 interface NetworkState {
@@ -3497,6 +3534,8 @@ function captureGlobalSnapshot(): string {
     terminalCommand: globalTerminalCommand.value,
     autoPurgeOnPrMerged: globalAutoPurgeOnPrMerged.value,
     autoLoopMaxRetries: globalAutoLoopMaxRetries.value,
+    wsEventsRetentionDays: globalWsEventsRetentionDays.value,
+    wsEventsKeepPerWorkspace: globalWsEventsKeepPerWorkspace.value,
     browserNotifications: globalBrowserNotifications.value,
     audioNotifications: globalAudioNotifications.value,
     audioQuestionNotifications: globalAudioQuestionNotifications.value,
@@ -3603,6 +3642,8 @@ function syncGlobalForm() {
   globalTerminalCommand.value = store.global.terminalCommand ?? ''
   globalAutoPurgeOnPrMerged.value = store.global.autoPurgeOnPrMerged ?? false
   globalAutoLoopMaxRetries.value = store.global.autoLoopMaxRetries ?? 5
+  globalWsEventsRetentionDays.value = store.global.wsEventsRetentionDays ?? 0
+  globalWsEventsKeepPerWorkspace.value = store.global.wsEventsKeepPerWorkspace ?? 0
   globalBrowserNotifications.value = store.global.browserNotifications ?? true
   globalAudioNotifications.value = store.global.audioNotifications ?? true
   globalAudioQuestionNotifications.value = store.global.audioQuestionNotifications ?? false
@@ -3895,9 +3936,55 @@ async function resetFieldToDefault(field: ResettableField) {
   }
 }
 
+/**
+ * Ask before NARROWING the retention window — which includes enabling it.
+ *
+ * `0` means "keep everything", so in this comparison it is +∞: going from 0 to
+ * 30 shrinks the window from infinity to a month and is the single most
+ * destructive move of the feature (a year-old database loses eleven months at
+ * the next start-up). Going the other way — 30 → 0, or 7 → 30 — destroys
+ * nothing and needs no confirmation.
+ *
+ * The dialog states the real volume, from a preview that counts without
+ * deleting. If that count fails we still ask, with a wording that carries no
+ * number: a failed preview must never remove the safeguard.
+ */
+async function confirmRetentionReduction(): Promise<boolean> {
+  const asWindow = (days: number): number => (days === 0 ? Number.POSITIVE_INFINITY : days)
+  const previous = store.global.wsEventsRetentionDays ?? 0
+  const next = globalWsEventsRetentionDays.value
+  if (asWindow(next) >= asWindow(previous)) return true
+
+  let message = t('settings.retentionConfirmMessageUnknown', { days: next })
+  try {
+    const preview = await store.previewRetention(next, globalWsEventsKeepPerWorkspace.value)
+    message = t('settings.retentionConfirmMessage', {
+      days: next,
+      count: preview.deletable,
+      total: preview.total,
+    })
+  } catch (err) {
+    console.error('[SettingsPage] retention preview failed:', err)
+  }
+
+  return await new Promise<boolean>((resolve) => {
+    $q.dialog({
+      title: t('settings.retentionConfirmTitle'),
+      message,
+      cancel: true,
+      persistent: true,
+      dark: true,
+    })
+      .onOk(() => resolve(true))
+      .onCancel(() => resolve(false))
+      .onDismiss(() => resolve(false))
+  })
+}
+
 async function saveGlobal() {
   const worktreesPathValid = await globalWorktreesPathInput.value?.validate()
   if (worktreesPathValid === false) return
+  if (!(await confirmRetentionReduction())) return
 
   savingGlobal.value = true
   try {
@@ -3916,6 +4003,8 @@ async function saveGlobal() {
       terminalCommand: globalTerminalCommand.value,
       autoPurgeOnPrMerged: globalAutoPurgeOnPrMerged.value,
       autoLoopMaxRetries: globalAutoLoopMaxRetries.value,
+      wsEventsRetentionDays: globalWsEventsRetentionDays.value,
+      wsEventsKeepPerWorkspace: globalWsEventsKeepPerWorkspace.value,
       browserNotifications: globalBrowserNotifications.value,
       audioNotifications: globalAudioNotifications.value,
       audioQuestionNotifications: globalAudioQuestionNotifications.value,

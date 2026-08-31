@@ -27,6 +27,11 @@ export interface WsMessage {
 /** Maps each WS client to the set of workspaceIds they are subscribed to */
 const clients = new Map<WebSocket, Set<string>>()
 
+/** Above this many bytes queued for a single client, we stop sending it events
+ *  rather than growing the process heap on its behalf. It will catch up through
+ *  `sync:request` on its next reconnect. */
+const MAX_BUFFERED_BYTES = 1024 * 1024
+
 // ── Message handler (decoupled routing) ────────────────────────────────────────
 
 /** Callback for routed WS messages (chat, workspace, devserver commands). */
@@ -121,13 +126,28 @@ export function handleConnection(ws: WebSocket): void {
     }
   })
 
-  // Ping every 30s to keep the connection alive and detect stale clients
+  // Heartbeat with a verdict. Pinging without ever waiting for a pong detected
+  // nothing: half-open sockets stayed in `clients` for ever, and every emit
+  // kept serialising a message for a peer that will never read it.
+  let isAlive = true
+  ws.on('pong', () => {
+    isAlive = true
+  })
   const pingInterval = setInterval(() => {
-    if (ws.readyState === ws.OPEN) {
-      ws.ping()
-    } else {
+    if (ws.readyState !== 1 /* WebSocket.OPEN */) {
       clearInterval(pingInterval)
+      clients.delete(ws)
+      return
     }
+    if (!isAlive) {
+      console.warn('[ws] client missed the heartbeat — terminating the connection')
+      clearInterval(pingInterval)
+      clients.delete(ws)
+      ws.terminate()
+      return
+    }
+    isAlive = false
+    ws.ping()
   }, 30_000)
 
   ws.on('close', () => {
@@ -173,6 +193,13 @@ export function emit(workspaceId: string, type: string, payload: unknown, sessio
   let emitSendErrorLogged = false
   for (const [ws, subs] of clients) {
     if (subs.has(workspaceId) && ws.readyState === 1 /* WebSocket.OPEN */) {
+      if (((ws as { bufferedAmount?: number }).bufferedAmount ?? 0) > MAX_BUFFERED_BYTES) {
+        if (!emitSendErrorLogged) {
+          console.warn(`[ws] client backlogged, dropping live events (workspace=${workspaceId}, type=${type})`)
+          emitSendErrorLogged = true
+        }
+        continue
+      }
       try {
         ws.send(message)
       } catch (err) {
@@ -200,6 +227,13 @@ export function emitEphemeral(workspaceId: string, type: string, payload: unknow
   let sendErrorLogged = false
   for (const [ws, subs] of clients) {
     if (subs.has(workspaceId) && ws.readyState === 1 /* WebSocket.OPEN */) {
+      if (((ws as { bufferedAmount?: number }).bufferedAmount ?? 0) > MAX_BUFFERED_BYTES) {
+        if (!sendErrorLogged) {
+          console.warn(`[ws] client backlogged, dropping ephemeral event (workspace=${workspaceId}, type=${type})`)
+          sendErrorLogged = true
+        }
+        continue
+      }
       try {
         ws.send(message)
       } catch (err) {
@@ -232,79 +266,116 @@ export function handleSyncRequest(ws: WebSocket, lastEventId: string, workspaceI
     return
   }
 
-  const db = getDb()
-
-  // Build a query with placeholders for all subscribed workspaces
-  const placeholders = resolvedIds.map(() => '?').join(', ')
-
-  let rows: Array<{
-    id: string
-    workspace_id: string
-    type: string
-    payload: string
-    session_id: string | null
-    created_at: string
-  }>
-
   // Initial window size: on a fresh connection (no lastEventId), we only
   // replay the most recent slice of history. The client fetches older
   // events on-demand via GET /api/workspaces/:id/events as the user scrolls
   // up. This keeps first-paint fast on long-lived workspaces with tens of
   // thousands of events without ever deleting anything from the DB.
   const INITIAL_WINDOW = 300
+  /** Hard ceiling on one replay message. A tab left open overnight used to ask
+   *  for every row since its cursor at once; the client simply asks again with
+   *  the new cursor when `truncated` is set. */
+  const MAX_REPLAY_EVENTS = 2_000
 
-  let mode: 'snapshot' | 'delta' = 'snapshot'
-  if (lastEventId) {
-    // Resume path: replay every event strictly after the cursor (delta
-    // since last seen). If the cursor is stale/unknown, fall back to the
-    // recent window rather than streaming the entire history.
-    const lastRow = db.prepare('SELECT rowid FROM ws_events WHERE id = ?').get(lastEventId) as
-      | { rowid: number }
-      | undefined
-
-    if (lastRow) {
-      mode = 'delta'
-      rows = db
-        .prepare(`SELECT * FROM ws_events WHERE workspace_id IN (${placeholders}) AND rowid > ? ORDER BY rowid ASC`)
-        .all(...resolvedIds, lastRow.rowid) as typeof rows
-    } else {
-      rows = db
-        .prepare(`SELECT * FROM ws_events WHERE workspace_id IN (${placeholders}) ORDER BY rowid DESC LIMIT ?`)
-        .all(...resolvedIds, INITIAL_WINDOW) as typeof rows
-      rows.reverse()
-    }
-  } else {
-    // Fresh connect: most recent INITIAL_WINDOW events, in chronological order.
-    rows = db
-      .prepare(`SELECT * FROM ws_events WHERE workspace_id IN (${placeholders}) ORDER BY rowid DESC LIMIT ?`)
-      .all(...resolvedIds, INITIAL_WINDOW) as typeof rows
-    rows.reverse()
+  interface EventRow {
+    rid: number
+    id: string
+    workspace_id: string
+    type: string
+    payload: string
+    session_id: string | null
+    created_at: string
   }
 
-  const events: WsEvent[] = rows.map((row) => {
-    let parsedPayload: unknown
-    try {
-      parsedPayload = JSON.parse(row.payload)
-    } catch {
-      console.error('[ws] corrupt ws_events row, falling back to raw:', {
-        id: row.id,
-        workspace_id: row.workspace_id,
-        type: row.type,
-      })
-      parsedPayload = { raw: row.payload }
-    }
-    return {
-      id: row.id,
-      workspaceId: row.workspace_id,
-      type: row.type,
-      payload: parsedPayload,
-      sessionId: row.session_id ?? undefined,
-      createdAt: row.created_at,
-      replayable: true,
-    }
-  })
+  try {
+    const db = getDb()
+    let mode: 'snapshot' | 'delta' = 'snapshot'
+    let truncated = false
+    const rows: EventRow[] = []
 
-  ws.send(JSON.stringify({ type: 'sync:response', payload: { events, mode } }))
+    const lastRow = lastEventId
+      ? (db.prepare('SELECT rowid FROM ws_events WHERE id = ?').get(lastEventId) as { rowid: number } | undefined)
+      : undefined
+
+    // One bounded query PER workspace. With `workspace_id IN (...)` SQLite
+    // materialised and sorted the whole history of every requested workspace
+    // before applying the limit — so the limit protected the message, not the
+    // server.
+    if (lastRow) {
+      mode = 'delta'
+      const statement = db.prepare(
+        'SELECT rowid AS rid, * FROM ws_events WHERE workspace_id = ? AND rowid > ? ORDER BY rowid ASC LIMIT ?',
+      )
+      for (const workspaceId of resolvedIds) {
+        const batch = statement.all(workspaceId, lastRow.rowid, MAX_REPLAY_EVENTS) as EventRow[]
+        if (batch.length === MAX_REPLAY_EVENTS) truncated = true
+        rows.push(...batch)
+      }
+    } else {
+      const statement = db.prepare(
+        'SELECT rowid AS rid, * FROM ws_events WHERE workspace_id = ? ORDER BY rowid DESC LIMIT ?',
+      )
+      for (const workspaceId of resolvedIds) {
+        const batch = statement.all(workspaceId, INITIAL_WINDOW) as EventRow[]
+        rows.push(...batch)
+      }
+    }
+
+    rows.sort((a, b) => a.rid - b.rid)
+    if (rows.length > MAX_REPLAY_EVENTS) {
+      if (mode === 'delta') {
+        // Keep the OLDEST slice: the client's cursor then advances and its next
+        // sync:request picks up exactly where this message stopped.
+        rows.length = MAX_REPLAY_EVENTS
+      } else {
+        // Snapshot mode has no cursor to advance — the client is looking at a
+        // fresh window and wants what just happened. Dropping the head here
+        // (rather than the tail) is the difference between "the last few
+        // minutes" and "ancient history with no way to reach the present".
+        rows.splice(0, rows.length - MAX_REPLAY_EVENTS)
+      }
+      truncated = true
+    }
+
+    const events: WsEvent[] = rows.map((row) => {
+      let parsedPayload: unknown
+      try {
+        parsedPayload = JSON.parse(row.payload)
+      } catch {
+        console.error('[ws] corrupt ws_events row, falling back to raw:', {
+          id: row.id,
+          workspace_id: row.workspace_id,
+          type: row.type,
+        })
+        parsedPayload = { raw: row.payload }
+      }
+      return {
+        id: row.id,
+        workspaceId: row.workspace_id,
+        type: row.type,
+        payload: parsedPayload,
+        sessionId: row.session_id ?? undefined,
+        createdAt: row.created_at,
+        replayable: true,
+      }
+    })
+
+    ws.send(JSON.stringify({ type: 'sync:response', payload: { events, mode, truncated } }))
+  } catch (err) {
+    // This handler runs inside ws's 'message' callback: an uncaught SQLite
+    // error here used to reach the process, not the client.
+    console.error('[ws] sync request failed:', err)
+    try {
+      ws.send(
+        JSON.stringify({
+          type: 'sync:error',
+          payload: { message: err instanceof Error ? err.message : String(err) },
+        }),
+      )
+    } catch {
+      /* the client is gone too — nothing left to tell it */
+    }
+  }
 }
 
 // ── Utilities ──────────────────────────────────────────────────────────────────

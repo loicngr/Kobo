@@ -75,6 +75,46 @@ async function gitAsync(repoPath: string, args: string[], timeout = READ_ONLY_GI
   return stdout.trimEnd()
 }
 
+/** Raised when a stale `index.lock` blocks every write on a worktree. */
+export class GitIndexLockError extends Error {
+  readonly lockPath: string
+
+  constructor(lockPath: string) {
+    super(
+      `The git index of this worktree is locked by '${lockPath}'. A previous git command was killed before it ` +
+        `could release it — typically a setup or cleanup script that hit its timeout and was SIGKILLed mid-commit. ` +
+        `If no git process is running on this worktree, remove the file: rm -f '${lockPath}'`,
+    )
+    this.name = 'GitIndexLockError'
+    this.lockPath = lockPath
+  }
+}
+
+/**
+ * Absolute path of this worktree's `index.lock` when it exists, else `null`.
+ *
+ * The lock lives in the worktree's OWN git dir (`--absolute-git-dir`), not in
+ * the common dir shared with the other worktrees: each worktree has its own
+ * index. Returns `null` rather than throwing outside a repository — callers use
+ * this to produce a better error, never to decide whether git is usable.
+ */
+export function getIndexLockPath(repoPath: string): string | null {
+  let gitDir: string
+  try {
+    gitDir = git(repoPath, ['rev-parse', '--absolute-git-dir'])
+  } catch {
+    return null
+  }
+  const lockPath = join(gitDir, 'index.lock')
+  return existsSync(lockPath) ? lockPath : null
+}
+
+/** Throw `GitIndexLockError` when a stale index lock would make every write fail. */
+export function assertNoIndexLock(repoPath: string): void {
+  const lockPath = getIndexLockPath(repoPath)
+  if (lockPath) throw new GitIndexLockError(lockPath)
+}
+
 /** Return the name of the currently checked-out branch. */
 export function getCurrentBranch(repoPath: string): string {
   return git(repoPath, ['rev-parse', '--abbrev-ref', 'HEAD'])
@@ -516,19 +556,65 @@ export function reconstructBranchOnto(
   return backupBranch
 }
 
-/** List `kobo-backup/<workingBranch>-<ts>` branches, newest timestamp first. */
+/** List `kobo-backup/<workingBranch>-<ts>` branches, newest timestamp first.
+ *
+ *  THROWS on a git failure instead of returning an empty list: an empty list is
+ *  the caller's signal that no rollback exists, and swallowing an inherited
+ *  lock or a buffer overflow here made the cancel route answer "automatic
+ *  restore impossible" while the backup branch was sitting right there. */
 export function listBackupBranches(repoPath: string, workingBranch: string): string[] {
+  const prefix = `kobo-backup/${workingBranch}-`
+  let out: string
   try {
-    const prefix = `kobo-backup/${workingBranch}-`
-    const out = git(repoPath, ['branch', '--list', `${prefix}*`, '--format=%(refname:short)'])
-    return out
-      .split('\n')
-      .map((s) => s.trim())
-      .filter((b) => b.startsWith(prefix) && /^\d+$/.test(b.slice(prefix.length)))
-      .sort((a, b) => Number(b.slice(prefix.length)) - Number(a.slice(prefix.length)))
-  } catch {
-    return []
+    out = git(repoPath, ['branch', '--list', `${prefix}*`, '--format=%(refname:short)'])
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`Failed to list backup branches for '${workingBranch}': ${message}`)
   }
+  return out
+    .split('\n')
+    .map((s) => s.trim())
+    .filter((b) => b.startsWith(prefix) && /^\d+$/.test(b.slice(prefix.length)))
+    .sort((a, b) => Number(b.slice(prefix.length)) - Number(a.slice(prefix.length)))
+}
+
+/** Keep the `keep` newest backup branches of `workingBranch`, delete the rest.
+ *
+ *  Each backup branch pins every commit of a previous version of the branch, so
+ *  git's garbage collector can never reclaim them: without rotation the
+ *  repository grows by one full branch history per source-branch change, for
+ *  ever. Best-effort — a failure to delete one branch must not fail the
+ *  operation that just succeeded.
+ *
+ *  Never throws, but never stays silent either: "nothing to rotate" and "the
+ *  rotation could not run" are two different answers, and reporting the second
+ *  as the first turns a persistent git failure into unbounded growth that only
+ *  a server log would ever have revealed. */
+export function pruneBackupBranches(
+  repoPath: string,
+  workingBranch: string,
+  keep = 3,
+): { removed: string[]; warnings: string[] } {
+  const warnings: string[] = []
+  let branches: string[]
+  try {
+    branches = listBackupBranches(repoPath, workingBranch)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    warnings.push(`Backup branch rotation skipped for '${workingBranch}': ${message}`)
+    return { removed: [], warnings }
+  }
+  const removed: string[] = []
+  for (const branch of branches.slice(keep)) {
+    try {
+      git(repoPath, ['branch', '-D', branch])
+      removed.push(branch)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      warnings.push(`Failed to delete backup branch '${branch}': ${message}`)
+    }
+  }
+  return { removed, warnings }
 }
 
 /** Abort any in-progress operation, then hard-reset `workingBranch` to a backup branch. */
@@ -1111,6 +1197,23 @@ export function isGitWorktree(repoPath: string): boolean {
 }
 
 /**
+ * True when `name` is a branch name Kōbō may hand to git.
+ *
+ * The first character MUST be alphanumeric. Without that anchor a leading `-`
+ * passes any `[A-Za-z0-9/_.-]+` check and git reads the whole argument as an
+ * OPTION — `--force`, `--exec=…` — rather than as a branch. (There is no shell
+ * injection to worry about here: every git call in this project goes through an
+ * argument array. The exposure is option injection.)
+ * The remaining rules mirror `git check-ref-format`.
+ */
+export function isValidBranchName(name: string): boolean {
+  if (!/^[A-Za-z0-9][A-Za-z0-9/_.-]*$/.test(name)) return false
+  if (name.includes('..') || name.includes('//')) return false
+  if (name.endsWith('/') || name.endsWith('.') || name.endsWith('.lock')) return false
+  return true
+}
+
+/**
  * Turn an arbitrary string into a git-ref-safe segment, capped to `maxLen`.
  * Strips accents (é→e), collapses every run of non-alphanumeric characters
  * (backslashes, colons, spaces, dots… — all unsafe or awkward in a ref/path)
@@ -1293,9 +1396,49 @@ export function stashPush(repoPath: string, label: string): void {
   git(repoPath, ['stash', 'push', '--include-untracked', '-m', label])
 }
 
-/** Pop the most recent stash entry. */
-export function stashPop(repoPath: string): void {
-  git(repoPath, ['stash', 'pop'])
+/**
+ * Index of the newest stash entry whose message contains `label`, or `null`.
+ * `%gd` is the ref (`stash@{N}`), `%gs` the reflog subject (`On <branch>: <label>`).
+ */
+export function findStashIndexByLabel(repoPath: string, label: string): number | null {
+  let out: string
+  try {
+    out = git(repoPath, ['stash', 'list', '--format=%gd%x09%gs'])
+  } catch {
+    return null
+  }
+  if (!out) return null
+  for (const line of out.split('\n')) {
+    const separator = line.indexOf('\t')
+    if (separator < 0) continue
+    const ref = line.slice(0, separator).trim()
+    const subject = line.slice(separator + 1)
+    if (!subject.includes(label)) continue
+    const match = /^stash@\{(\d+)\}$/.exec(ref)
+    if (match) return Number(match[1])
+  }
+  return null
+}
+
+/**
+ * Pop a stash entry. With `label`, pops the newest entry whose message contains
+ * it instead of blindly popping `stash@{0}`.
+ *
+ * `stashPush` has always written a label, but nothing ever read it back. The
+ * agent and the integrated terminal both stash routinely before a rebase — do
+ * that between our push and our pop and the bare `git stash pop` restores THEIR
+ * entry, burying the user's work one slot deeper where nothing surfaces it.
+ */
+export function stashPop(repoPath: string, label?: string): void {
+  if (!label) {
+    git(repoPath, ['stash', 'pop'])
+    return
+  }
+  const index = findStashIndexByLabel(repoPath, label)
+  if (index === null) {
+    throw new Error(`No stash entry labelled '${label}' to restore`)
+  }
+  git(repoPath, ['stash', 'pop', `stash@{${index}}`])
 }
 
 /** Stage every change (tracked + untracked) and commit it. Hooks run normally

@@ -59,6 +59,7 @@ import { startUsagePoller, stopUsagePoller } from './services/usage/index.js'
 import * as wakeupService from './services/wakeup-service.js'
 import { emit, emitEphemeral, handleConnection, setMessageHandler } from './services/websocket-service.js'
 import { getActiveSession, getWorkspace, updateWorkspaceStatus } from './services/workspace-service.js'
+import { pruneWsEvents, resolveRetentionConfig } from './services/ws-events-retention-service.js'
 import { getClientSpaPath, getDbPath, getKoboHome, getPackageVersion } from './utils/paths.js'
 
 console.log(`[kobo] Kōbō home: ${getKoboHome()}`)
@@ -74,12 +75,39 @@ try {
   if (pending.length > 0) {
     const result = await createPreMigrationBackup(db, getDbPath(), `v${pending[pending.length - 1]}`)
     console.log(`[kobo] Pre-migration backup before applying ${pending.length} migration(s): ${result.created}`)
+    if (result.deleted.length > 0) {
+      console.log(`[kobo] Rotated ${result.deleted.length} old pre-migration backup(s)`)
+    }
   }
 } catch (err) {
   console.error('[kobo] Pre-migration backup failed (continuing — daily backup remains as fallback):', err)
 }
 
 runMigrations(db)
+
+// Event retention. OPT-IN: disabled by default, so this is a no-op until the
+// user sets a window in Settings → Worktrees. When enabled it runs at boot
+// only: no session is alive yet, so the batched write lock disturbs nobody, and
+// the daily backup that follows snapshots an already-compacted file.
+// Best-effort — a failure must never block boot.
+try {
+  const retentionConfig = resolveRetentionConfig(getGlobalSettings())
+  if (retentionConfig.retentionDays > 0) {
+    const retentionStartedAt = Date.now()
+    const retention = pruneWsEvents(db, retentionConfig)
+    if (retention.deleted > 0 || retention.vacuumed) {
+      console.log(
+        `[kobo] Event retention (${retentionConfig.retentionDays} d, keeping ${retentionConfig.keepPerWorkspace}/workspace): ` +
+          `${retention.deleted} agent event(s) permanently deleted, ` +
+          `${retention.sessionsRecomputed} session metric(s) recomputed, ` +
+          `${retention.vacuumed ? `VACUUM reclaimed ${retention.freePagesBefore - retention.freePagesAfter} page(s), ` : ''}` +
+          `${Date.now() - retentionStartedAt} ms`,
+      )
+    }
+  }
+} catch (err) {
+  console.error('[kobo] Event retention failed (continuing):', err)
+}
 
 // Daily DB backup (best-effort, fire-and-forget — never blocks boot).
 // Creates a WAL-safe snapshot alongside kobo.db if no backup exists in the

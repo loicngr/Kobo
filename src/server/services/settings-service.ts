@@ -262,6 +262,19 @@ export interface GlobalSettings {
   autoPurgeOnPrMerged: boolean
   autoLoopMaxRetries: number
   /**
+   * Delete agent events (`ws_events`) older than this many days, once at server
+   * start-up. `0` — the default — disables retention entirely: nothing is ever
+   * deleted, which is what every install did before this setting existed. The
+   * feature is opt-in because it destroys conversation history for good.
+   */
+  wsEventsRetentionDays: number
+  /**
+   * Newest events kept per workspace whatever their age, so an old but still
+   * open workspace keeps a readable history. Irrelevant while
+   * `wsEventsRetentionDays` is 0.
+   */
+  wsEventsKeepPerWorkspace: number
+  /**
    * Opt-in LAN network access. When false (default) the server binds
    * 127.0.0.1 only; when true it binds all interfaces and requires the
    * token for every non-loopback request. Seeded by settings migration v39.
@@ -1087,6 +1100,31 @@ const settingsMigrations: SettingsMigration[] = [
       global.whipVolume = normalizeWhipVolume(global.whipVolume)
     },
   },
+  {
+    version: 54,
+    name: 'add-ws-events-retention',
+    migrate: ({ global }) => {
+      // Seeded DISABLED (0), on fresh installs as well as migrated ones. This
+      // feature permanently deletes conversation history, so it is opt-in: a
+      // silent loss of history is worse than a growing file. A window the user
+      // already chose survives untouched; only a negative or non-integer value
+      // falls back to 0.
+      if (
+        typeof global.wsEventsRetentionDays !== 'number' ||
+        !Number.isInteger(global.wsEventsRetentionDays) ||
+        global.wsEventsRetentionDays < 0
+      ) {
+        global.wsEventsRetentionDays = 0
+      }
+      if (
+        typeof global.wsEventsKeepPerWorkspace !== 'number' ||
+        !Number.isInteger(global.wsEventsKeepPerWorkspace) ||
+        global.wsEventsKeepPerWorkspace < 0
+      ) {
+        global.wsEventsKeepPerWorkspace = 0
+      }
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -1164,6 +1202,8 @@ function defaultSettings(): Settings {
       terminalCommand: '',
       autoPurgeOnPrMerged: false,
       autoLoopMaxRetries: 5,
+      wsEventsRetentionDays: 0,
+      wsEventsKeepPerWorkspace: 0,
       networkAccessEnabled: false,
       networkAccessToken: '',
       networkAccessBehindProxy: false,
@@ -1596,6 +1636,20 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
       delete (data as Record<string, unknown>).autoLoopMaxRetries
     }
   }
+  // Same shape as the autoLoopMaxRetries guard above: an invalid value is
+  // dropped so the stored one survives. Retention deletes history — a bad write
+  // here would delete more than the user ever asked for. `0` is NOT invalid:
+  // it is the default, and it means "never delete anything".
+  for (const key of ['wsEventsRetentionDays', 'wsEventsKeepPerWorkspace'] as const) {
+    if (key in data) {
+      const value = data[key]
+      const max = key === 'wsEventsRetentionDays' ? 3650 : 1_000_000
+      if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > max) {
+        console.warn(`[settings] Invalid ${key} value rejected: ${value}`)
+        delete (data as Record<string, unknown>)[key]
+      }
+    }
+  }
   const allowedGlobalKeys = [
     'defaultModelByEngine',
     'dangerouslySkipPermissions',
@@ -1617,6 +1671,8 @@ export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSetti
     'terminalCommand',
     'autoPurgeOnPrMerged',
     'autoLoopMaxRetries',
+    'wsEventsRetentionDays',
+    'wsEventsKeepPerWorkspace',
     'browserNotifications',
     'audioNotifications',
     'audioQuestionNotifications',

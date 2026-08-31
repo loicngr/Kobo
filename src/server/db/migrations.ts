@@ -621,6 +621,69 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 36,
+    name: 'drop-metrics-delete-trigger-add-hot-indexes',
+    migrate: (db) => {
+      // The AFTER DELETE trigger installed by v34 re-aggregated the entire
+      // session for EVERY deleted row. Measured on an identical schema: 79.7 s
+      // for 20 000 events, 106.6 s through a cascade, with the SQLite write
+      // lock held for the whole duration — during which every WebSocket emit
+      // gives up after busy_timeout and loses the event for good.
+      // Metrics are now recomputed once, application-side, at the end of the
+      // transactions that delete events while keeping the session
+      // (recomputeSessionMetrics in workspace-service.ts).
+      db.exec('DROP TRIGGER IF EXISTS trg_ws_events_metrics_delete')
+
+      const tables = new Set(
+        (db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all() as Array<{ name: string }>).map(
+          (row) => row.name,
+        ),
+      )
+      const hasColumns = (table: string, needed: readonly string[]): boolean => {
+        if (!tables.has(table)) return false
+        const columns = new Set(
+          (db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((column) => column.name),
+        )
+        return needed.every((column) => columns.has(column))
+      }
+
+      // Five hot paths measured as full table scans before this migration.
+      const indexes: ReadonlyArray<{ table: string; columns: readonly string[]; sql: string }> = [
+        {
+          table: 'tasks',
+          columns: ['workspace_id', 'sort_order'],
+          sql: 'CREATE INDEX IF NOT EXISTS idx_tasks_workspace_sort ON tasks(workspace_id, sort_order)',
+        },
+        {
+          table: 'agent_sessions',
+          columns: ['workspace_id', 'started_at'],
+          sql: 'CREATE INDEX IF NOT EXISTS idx_agent_sessions_workspace_started ON agent_sessions(workspace_id, started_at DESC)',
+        },
+        {
+          table: 'agent_sessions',
+          columns: ['engine_session_id'],
+          sql: 'CREATE INDEX IF NOT EXISTS idx_agent_sessions_engine_session ON agent_sessions(engine_session_id)',
+        },
+        {
+          table: 'workspaces',
+          columns: ['archived_at', 'updated_at'],
+          sql: 'CREATE INDEX IF NOT EXISTS idx_workspaces_archived_updated ON workspaces(archived_at, updated_at DESC)',
+        },
+        {
+          table: 'session_event_metrics',
+          columns: ['session_id'],
+          sql: 'CREATE INDEX IF NOT EXISTS idx_session_event_metrics_session ON session_event_metrics(session_id)',
+        },
+      ]
+      // Column guards, not just table guards: several shipped migration tests
+      // build a stripped-down table (e.g. `workspaces(id, engine)`) and replay
+      // every later migration on top of it.
+      for (const index of indexes) {
+        if (hasColumns(index.table, index.columns)) db.exec(index.sql)
+      }
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */
