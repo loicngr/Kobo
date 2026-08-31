@@ -240,6 +240,12 @@
       </template>
     </Suspense>
 
+    <AgentLivenessChip
+      v-if="selectedWs && !selectedWs.archivedAt"
+      class="q-pa-xs q-px-sm"
+      :workspace-id="selectedWs.id"
+      :status="selectedWs.status"
+    />
     <AgentBusyBanner />
     <WakeupBanner />
     <AskUserQuestionPanel v-if="selectedId" :workspace-id="selectedId" />
@@ -391,6 +397,7 @@ const ActivityFeed = defineAsyncComponent(() =>
 
 import AgentBusyBanner from 'src/components/AgentBusyBanner.vue'
 import AgentErrorBanner from 'src/components/AgentErrorBanner.vue'
+import AgentLivenessChip from 'src/components/AgentLivenessChip.vue'
 import AskUserQuestionPanel from 'src/components/AskUserQuestionPanel.vue'
 import ChatInput from 'src/components/ChatInput.vue'
 import LatestThinkingPanel from 'src/components/LatestThinkingPanel.vue'

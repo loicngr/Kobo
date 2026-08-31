@@ -66,12 +66,15 @@ vi.mock('../server/services/agent/orchestrator.js', () => ({
   InterruptAgentError: MockInterruptAgentError,
   startAgent: vi.fn().mockReturnValue({ agentSessionId: 'mock-agent-session-id' }),
   stopAgent: vi.fn(),
+  stopAgentAndWait: vi.fn().mockResolvedValue('not-running'),
   interruptAgent: vi.fn(),
   sendMessage: vi.fn(),
   sendMessageForFallback: vi.fn().mockResolvedValue({ status: 'sent', sessionId: 'delivered-session-id' }),
   hasController: vi.fn(() => false),
   getAgentStatus: vi.fn().mockReturnValue(null),
   getActiveSessionId: vi.fn().mockReturnValue('active-session-id'),
+  getAgentLiveness: vi.fn().mockReturnValue(null),
+  getAllAgentLiveness: vi.fn().mockReturnValue({}),
 }))
 
 vi.mock('../server/services/agent/engines/registry.js', () => ({
@@ -2197,13 +2200,13 @@ describe('POST /api/workspaces/:id/stop', () => {
     expect(res.status).toBe(200)
     const data = await res.json()
     expect(data.status).toBe('stopped')
-    expect(agentManager.stopAgent).toHaveBeenCalledWith('ws-1')
+    expect(agentManager.stopAgentAndWait).toHaveBeenCalledWith('ws-1')
     expect(workspaceService.updateWorkspaceStatus).toHaveBeenCalledWith('ws-1', 'idle')
   })
 
   it('returns stopped even when agent is not running', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(agentManager.stopAgent).mockImplementation(() => {
+    vi.mocked(agentManager.stopAgentAndWait).mockImplementation(async () => {
       throw new Error('Agent not tracked')
     })
 
@@ -2336,11 +2339,36 @@ describe('DELETE /api/workspaces/:id', () => {
     })
 
     expect(res.status).toBe(204)
-    expect(agentManager.stopAgent).toHaveBeenCalledWith('ws-1')
+    expect(agentManager.stopAgentAndWait).toHaveBeenCalledWith('ws-1')
     expect(worktreeService.removeWorktree).toHaveBeenCalledWith('/tmp/project', '/tmp/project/.worktrees/feature/test')
     expect(gitOps.deleteLocalBranch).toHaveBeenCalledWith('/tmp/project', 'feature/test')
     expect(gitOps.deleteRemoteBranch).toHaveBeenCalledWith('/tmp/project', 'feature/test')
     expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-1')
+  })
+
+  it('waits for the agent to actually stop before removing the worktree', async () => {
+    const callOrder: string[] = []
+    let releaseStop: (() => void) | undefined
+
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(agentManager.stopAgentAndWait).mockImplementation(async () => {
+      callOrder.push('stopAgentAndWait:start')
+      await new Promise<void>((resolve) => {
+        releaseStop = resolve
+        setTimeout(resolve, 0)
+      })
+      callOrder.push('stopAgentAndWait:done')
+      return 'stopped'
+    })
+    vi.mocked(worktreeService.removeWorktree).mockImplementation(() => {
+      callOrder.push('removeWorktree')
+    })
+
+    const res = await app.request('/api/workspaces/ws-1', { method: 'DELETE' })
+
+    expect(res.status).toBe(204)
+    expect(callOrder).toEqual(['stopAgentAndWait:start', 'stopAgentAndWait:done', 'removeWorktree'])
+    releaseStop?.()
   })
 
   it('deletes workspace without branch cleanup', async () => {
@@ -3124,7 +3152,7 @@ describe('POST /api/workspaces/:id/archive', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.archivedAt).toBe('2026-04-05T10:00:00.000Z')
-    expect(agentManager.stopAgent).toHaveBeenCalledWith('ws-1')
+    expect(agentManager.stopAgentAndWait).toHaveBeenCalledWith('ws-1')
     expect(devServerService.stopDevServer).toHaveBeenCalledWith('ws-1')
     expect(workspaceService.archiveWorkspace).toHaveBeenCalledWith('ws-1')
     expect(wsService.emitEphemeral).toHaveBeenCalledWith('ws-1', 'workspace:archived', { workspace: archivedWs })
@@ -5343,6 +5371,37 @@ describe('POST /api/workspaces/pr-snapshot/refresh/:id', () => {
     const res = await app.request('/pr-snapshot/refresh/ws-1', { method: 'POST' })
     expect(res.status).toBe(500)
     expect(((await res.json()) as { error: string }).error).toMatch(/gh exploded/)
+  })
+})
+
+describe('GET /api/workspaces/:id and /info — agent liveness', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('serializes agent liveness alongside the workspace and in the bulk info payload', async () => {
+    const { default: app } = await import('../server/routes/workspaces.js')
+    const agentManager = await import('../server/services/agent/orchestrator.js')
+    vi.mocked(agentManager.getAgentLiveness).mockReturnValue({
+      status: 'running',
+      agentSessionId: 'sess-1',
+      startedAt: '2026-08-29T10:00:00.000Z',
+      lastEventAt: '2026-08-29T10:04:00.000Z',
+    })
+    vi.mocked(agentManager.getAllAgentLiveness).mockReturnValue({
+      'ws-1': {
+        status: 'stopping',
+        agentSessionId: 'sess-2',
+        startedAt: '2026-08-29T10:00:00.000Z',
+        lastEventAt: '2026-08-29T10:04:00.000Z',
+      },
+    })
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue({ id: 'ws-1', tasks: [] } as never)
+    vi.mocked(workspaceService.listWorkspaces).mockReturnValue([])
+
+    const detail = await (await app.request('/ws-1')).json()
+    expect(detail.agentLiveness).toMatchObject({ status: 'running', agentSessionId: 'sess-1' })
+
+    const info = await (await app.request('/info')).json()
+    expect(info.agentLiveness['ws-1']).toMatchObject({ status: 'stopping' })
   })
 })
 

@@ -27,6 +27,7 @@
         <ToolCallItem v-else-if="item.type === 'tool'" :item="item" />
         <UserMessageItem v-else-if="item.type === 'user'" :item="item" />
         <SessionEventItem v-else-if="item.type === 'session'" :item="item" />
+        <AgentErrorItem v-else-if="item.type === 'error'" :item="item" />
       </template>
     </div>
     <!-- Scroll-to-top button: useful on long agent cards (many tool calls)
@@ -54,6 +55,7 @@
 import type { Turn } from 'src/services/conversation-turns'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import AgentErrorItem from './items/AgentErrorItem.vue'
 import SessionEventItem from './items/SessionEventItem.vue'
 import TextMessageItem from './items/TextMessageItem.vue'
 import ThinkingItem from './items/ThinkingItem.vue'

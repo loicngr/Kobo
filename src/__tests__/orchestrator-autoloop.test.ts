@@ -29,10 +29,6 @@ vi.mock('../server/services/cleanup-script-service.js', () => ({
   onAutoLoopCompleted: vi.fn(),
 }))
 
-vi.mock('../server/utils/process-tracker.js', () => ({
-  unregisterProcess: vi.fn(),
-}))
-
 vi.mock('../server/services/usage/poller.js', () => ({
   refreshNow: vi.fn().mockResolvedValue(null),
 }))
@@ -73,9 +69,12 @@ async function setWorkspaceExecuting(workspaceId: string): Promise<void> {
   updateWorkspaceStatus(workspaceId, 'executing')
 }
 
+// Two macrotask ticks: every microtask queued in between is drained. Needed
+// because startAgent now chains engine.start behind the previous controller's
+// stop (F14), which spans several microtask turns.
 async function flushControllerStart(): Promise<void> {
-  await Promise.resolve()
-  await Promise.resolve()
+  await new Promise<void>((resolve) => setTimeout(resolve, 0))
+  await new Promise<void>((resolve) => setTimeout(resolve, 0))
 }
 
 describe('orchestrator auto-loop integration', () => {
@@ -283,7 +282,6 @@ describe('orchestrator auto-loop integration', () => {
     const eventRouter = await import('../server/services/agent/event-router.js')
     const autoLoop = await import('../server/services/auto-loop-service.js')
     const cleanupScript = await import('../server/services/cleanup-script-service.js')
-    const processTracker = await import('../server/utils/process-tracker.js')
     const quotaBackoff = await import('../server/services/quota-backoff-service.js')
     const { _registerEngineForTest } = await import('../server/services/agent/engines/registry.js')
     const { getWorkspace, listTasks, updateTaskStatus } = await import('../server/services/workspace-service.js')
@@ -347,7 +345,6 @@ describe('orchestrator auto-loop integration', () => {
     expect(getWorkspace(wsId)).toMatchObject({ status: 'executing', hasUnread: false })
     expect(orch._getRetryCounts().get(wsId)).toBe(2)
     expect(quotaBackoff.getPending(wsId)).not.toBeNull()
-    expect(processTracker.unregisterProcess).not.toHaveBeenCalled()
     expect(autoLoop.onSessionEnded).not.toHaveBeenCalled()
     expect(autoLoop.disable).not.toHaveBeenCalled()
     expect(cleanupScript.onSessionEnded).not.toHaveBeenCalled()
@@ -357,7 +354,6 @@ describe('orchestrator auto-loop integration', () => {
     expect(autoLoop.onSessionEnded).toHaveBeenCalledOnce()
     expect(autoLoop.onSessionEnded).toHaveBeenCalledWith(wsId, 'completed', 1)
     expect(cleanupScript.onSessionEnded).toHaveBeenCalledOnce()
-    expect(processTracker.unregisterProcess).toHaveBeenCalledOnce()
     const rows = (await import('../server/db/index.js'))
       .getDb()
       .prepare('SELECT id, status FROM agent_sessions WHERE id IN (?, ?) ORDER BY id')
@@ -563,7 +559,6 @@ describe('orchestrator auto-loop integration', () => {
     const eventRouter = await import('../server/services/agent/event-router.js')
     const autoLoop = await import('../server/services/auto-loop-service.js')
     const cleanupScript = await import('../server/services/cleanup-script-service.js')
-    const processTracker = await import('../server/utils/process-tracker.js')
     const { _registerEngineForTest } = await import('../server/services/agent/engines/registry.js')
     await setWorkspaceExecuting(wsId)
 
@@ -600,15 +595,23 @@ describe('orchestrator auto-loop integration', () => {
     emitEvent({ kind: 'session:started', engineSessionId: 'late-manual-stop-engine' })
     emitEvent({ kind: 'session:ended', reason: 'killed', exitCode: null })
 
-    expect(eventRouter.routeEvent).toHaveBeenCalledOnce()
-    expect(eventRouter.routeEvent).toHaveBeenCalledWith(wsId, session.agentSessionId, {
+    // stopAgent no longer disowns the controller synchronously (D1): it stays
+    // the registered, `stopping` controller for the workspace until its
+    // engine.stop() promise actually resolves. Events it emits during that
+    // window therefore aren't stale by ownership — both the late
+    // session:started and the terminal session:ended are routed.
+    expect(eventRouter.routeEvent).toHaveBeenCalledTimes(2)
+    expect(eventRouter.routeEvent).toHaveBeenNthCalledWith(1, wsId, session.agentSessionId, {
+      kind: 'session:started',
+      engineSessionId: 'late-manual-stop-engine',
+    })
+    expect(eventRouter.routeEvent).toHaveBeenNthCalledWith(2, wsId, session.agentSessionId, {
       kind: 'session:ended',
       reason: 'killed',
       exitCode: null,
     })
     expect(orch._getControllers().has(wsId)).toBe(false)
     expect(orch._getRetryCounts().has(wsId)).toBe(false)
-    expect(processTracker.unregisterProcess).toHaveBeenCalledOnce()
     expect(autoLoop.onSessionEnded).not.toHaveBeenCalled()
     expect(cleanupScript.onSessionEnded).not.toHaveBeenCalled()
     const row = (await import('../server/db/index.js'))
@@ -617,6 +620,83 @@ describe('orchestrator auto-loop integration', () => {
       .get(session.agentSessionId) as { status: string; ended_at: string | null }
     expect(row.status).toBe('error')
     expect(row.ended_at).not.toBeNull()
+  })
+
+  it('ignores a late watchdog end from a controller evicted without stop() instead of quota-ing the live one', async () => {
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const { _registerEngineForTest } = await import('../server/services/agent/engines/registry.js')
+    const { getDb } = await import('../server/db/index.js')
+    const db = getDb()
+    await setWorkspaceExecuting(wsId)
+    db.prepare('UPDATE workspaces SET auto_loop = 1, auto_loop_ready = 1 WHERE id = ?').run(wsId)
+
+    // isAlive() is controlled per-engine-instance via this array so the
+    // watchdog sweep below can flip the FIRST engine to "dead" without
+    // affecting the second.
+    const aliveFlags: boolean[] = []
+    const emitters: Array<(ev: AgentEvent) => void> = []
+    _registerEngineForTest({
+      id: 'claude-code',
+      displayName: 'Claude Code',
+      capabilities: {
+        models: [{ id: 'auto', label: 'Auto' }],
+        permissionModes: ['bypass'],
+        supportsResume: true,
+        supportsMcp: true,
+        supportsSkills: true,
+        supportsSubagents: false,
+        supportsQuotaStatus: false,
+      },
+      async start(_opts, onEvent) {
+        const index = emitters.length
+        aliveFlags[index] = true
+        emitters.push(onEvent)
+        return {
+          pid: undefined,
+          engineSessionId: undefined,
+          isAlive: () => aliveFlags[index],
+          sendMessage() {},
+          interrupt() {},
+          async stop() {},
+          resolvePendingUserInput: () => false,
+        }
+      },
+    })
+
+    orch.startAgent(wsId, '/tmp/p', 'first')
+    await flushControllerStart()
+
+    // Unlike startAgent's own zombie-eviction path (which always calls
+    // ctrl.stop() first), `runWatchdog`'s dead-engine branch
+    // (orchestrator.ts ~317-349) deletes the controller from the map
+    // directly and forces the workspace to `error` WITHOUT ever calling
+    // stop() on it. The evicted controller's own `.status` therefore stays
+    // 'running' forever — sourceControllerIsStopping will be false for any
+    // event it emits later.
+    aliveFlags[0] = false
+    orch._runWatchdogForTest()
+    expect(orch._getControllers().get(wsId)).toBeUndefined()
+    expect(db.prepare('SELECT status FROM workspaces WHERE id = ?').get(wsId)).toEqual({ status: 'error' })
+
+    // A genuinely new session starts with a FRESH agentSessionId (no
+    // resume), so the lifecycle-ownership bookkeeping — keyed by
+    // agentSessionId, only populated on id reuse — never marks the first
+    // controller as superseded either.
+    orch.startAgent(wsId, '/tmp/p', 'second')
+    await flushControllerStart()
+    // The replacement reports session:started, bouncing the workspace back
+    // from the terminal `error` state into `executing` — same as a real
+    // resume would.
+    emitters[1]?.({ kind: 'session:started', engineSessionId: 'engine-2' })
+    expect(db.prepare('SELECT status FROM workspaces WHERE id = ?').get(wsId)).toEqual({ status: 'executing' })
+
+    // The FIRST engine's own drain watchdog finally fires, reporting its end
+    // through the callback captured when IT started — still bound to the
+    // evicted-but-never-stopped controller.
+    emitters[0]?.({ kind: 'session:ended', reason: 'watchdog', exitCode: null })
+    await Promise.resolve()
+
+    expect(db.prepare('SELECT status FROM workspaces WHERE id = ?').get(wsId)).not.toEqual({ status: 'quota' })
   })
 })
 

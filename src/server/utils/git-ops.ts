@@ -7,6 +7,47 @@ import { resolvePathInside } from './safe-path.js'
 const execFileAsync = promisify(execFileCb)
 const READ_ONLY_GIT_TIMEOUT_MS = 15_000
 
+/** Plafond partagé par les appels git synchrones. Le défaut de Node (1 Mo)
+ *  transforme les gros diffs et les gros fichiers en `ENOBUFS`, erreur
+ *  ensuite avalée par les `catch` de ce fichier — un fichier de 2 Mo
+ *  s'affichait donc vide dans le visualiseur de diff. */
+const GIT_MAX_BUFFER_BYTES = 64 * 1024 * 1024
+
+/** Un git synchrone qui pend bloque TOUTE la boucle d'événements Node : plus
+ *  de HTTP, plus de WebSocket, plus d'événements agent. Les opérations
+ *  réseau (`fetch`, `push`, `pull`) sont les seules réellement exposées ;
+ *  60 s leur laissent de la marge sur un gros dépôt tout en garantissant que
+ *  le serveur repart. */
+const SYNC_GIT_TIMEOUT_MS = 60_000
+
+/** Empêche git d'ouvrir une invite de mot de passe : sans cela, un dépôt
+ *  privé sans identifiants en cache fait pendre le process indéfiniment.
+ *  Exported as a function (not a plain module-level object) so tests can
+ *  mutate `process.env.GIT_SSH_COMMAND` and observe the effect — the
+ *  constant below is evaluated once at import time and would not reflect
+ *  a later mutation. */
+export function buildNonInteractiveGitEnv(): NodeJS.ProcessEnv {
+  return {
+    ...process.env,
+    GIT_TERMINAL_PROMPT: '0',
+    GIT_ASKPASS: 'echo',
+    // `GIT_ASKPASS` only covers HTTP(S) credential prompts. A passphrase-
+    // protected SSH key with no running agent still blocks `ssh` on
+    // `/dev/tty`; `BatchMode=yes` makes that interactive auth fail in ~1s
+    // instead of hanging until the 60s sync-git timeout above catches it.
+    // Preserve a user-provided `GIT_SSH_COMMAND` (custom identity, host alias,
+    // non-standard port) and only append the non-interactive flag. ssh resolves
+    // each option to its FIRST occurrence, so an explicit `BatchMode` set by the
+    // user still wins — their intent is respected, and the 60 s timeout remains
+    // the backstop.
+    GIT_SSH_COMMAND: process.env.GIT_SSH_COMMAND
+      ? `${process.env.GIT_SSH_COMMAND} -o BatchMode=yes`
+      : 'ssh -o BatchMode=yes',
+  }
+}
+
+const NON_INTERACTIVE_GIT_ENV = buildNonInteractiveGitEnv()
+
 function git(repoPath: string, args: string[]): string {
   // `trimEnd` (not `trim`): some git outputs are column-aligned and the LEADING
   // space carries information. The classic case is `git status --porcelain`,
@@ -15,7 +56,13 @@ function git(repoPath: string, args: string[]): string {
   // and makes `line.substring(3)` chop the first character of the filename
   // (e.g. `front/foo` → `ront/foo`). Trailing whitespace (the final `\n` git
   // always appends) still goes — that's what every caller expects.
-  return execFileSync('git', args, { cwd: repoPath, encoding: 'utf-8' }).trimEnd()
+  return execFileSync('git', args, {
+    cwd: repoPath,
+    encoding: 'utf-8',
+    timeout: SYNC_GIT_TIMEOUT_MS,
+    maxBuffer: GIT_MAX_BUFFER_BYTES,
+    env: NON_INTERACTIVE_GIT_ENV,
+  }).trimEnd()
 }
 
 async function gitAsync(repoPath: string, args: string[], timeout = READ_ONLY_GIT_TIMEOUT_MS): Promise<string> {
@@ -721,6 +768,14 @@ export function worktreeHasChanges(worktreePath: string): boolean {
   }
 }
 
+/** Like `worktreeHasChanges`, but propagates the error instead of reporting
+ *  "clean". Use this on destructive paths: when we cannot determine whether
+ *  the worktree holds uncommitted work, "unknown" must never be read as
+ *  "nothing to lose". */
+export function worktreeHasChangesStrict(worktreePath: string): boolean {
+  return git(worktreePath, ['status', '--porcelain']).length > 0
+}
+
 export function getChangedFiles(repoPath: string, base: string, includeUntracked = false): DiffFile[] {
   const ref = resolveBase(repoPath, base)
   const files: DiffFile[] = []
@@ -830,6 +885,9 @@ export function getFileAtRef(repoPath: string, ref: string, filePath: string): s
     return execFileSync('git', ['show', `${resolvedRef}:${filePath}`], {
       cwd: repoPath,
       encoding: 'utf-8',
+      timeout: SYNC_GIT_TIMEOUT_MS,
+      maxBuffer: GIT_MAX_BUFFER_BYTES,
+      env: NON_INTERACTIVE_GIT_ENV,
     })
   } catch {
     return null

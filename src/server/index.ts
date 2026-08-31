@@ -27,6 +27,7 @@ import voiceRouter from './routes/voice.js'
 import workspacesRouter from './routes/workspaces.js'
 import {
   getAvailableSkills,
+  isAgentUnavailableError,
   reconcileOrphanSessions,
   restoreRetryCountsFromDb,
   sendMessage,
@@ -383,10 +384,11 @@ setMessageHandler(async (type, payload) => {
       if (p.force) emitEphemeral(p.workspaceId, 'chat:accepted', { sessionId: p.sessionId })
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
-      // Only resume on the specific "No agent running" path. Other errors
-      // (stdin closed, process dead mid-write, etc.) should surface to the
-      // logs instead of silently respawning a fresh agent.
-      if (!msg.includes('No agent running')) {
+      // Resume on every shape that means "no agent can receive this message"
+      // — the closed-stdin case included. Anything else (queue full, disk
+      // error, a stop in progress) surfaces to the user instead of silently
+      // respawning a fresh agent.
+      if (!isAgentUnavailableError(msg)) {
         emitEphemeral(p.workspaceId, 'chat:rejected', { sessionId: p.sessionId, content: p.content, message: msg })
         console.error(`[ws] chat:message failed for workspace ${p.workspaceId}:`, err)
         return
@@ -523,7 +525,7 @@ server.on('upgrade', (request, socket, head) => {
 // Graceful shutdown handler
 let isShuttingDown = false
 
-async function gracefulShutdown(signal: string): Promise<void> {
+async function gracefulShutdown(signal: string, exitCode = 0): Promise<void> {
   if (isShuttingDown) return
   isShuttingDown = true
 
@@ -594,8 +596,32 @@ async function gracefulShutdown(signal: string): Promise<void> {
 
   clearTimeout(forceExitTimer)
   console.log('[kobo] Shutdown complete')
-  process.exit(0)
+  process.exit(exitCode)
 }
 
 process.on('SIGTERM', () => void gracefulShutdown('SIGTERM'))
 process.on('SIGINT', () => void gracefulShutdown('SIGINT'))
+// Fermeture du terminal parent : sans ce gestionnaire, Node termine le
+// process sans passer par l'arrêt propre, donc sans fermer la base.
+process.on('SIGHUP', () => void gracefulShutdown('SIGHUP'))
+
+// Un `EPIPE` sur stdout/stderr — typiquement quand la sortie est redirigée
+// vers un lecteur qui s'est fermé — est émis de façon asynchrone et tue le
+// process. On l'ignore : perdre une ligne de journal ne doit jamais arrêter
+// le serveur.
+process.stdout.on('error', () => {})
+process.stderr.on('error', () => {})
+
+// Filets de dernier recours. On ne poursuit PAS l'exécution après une
+// exception non capturée : l'état du process est indéterminé. On garantit
+// seulement une trace exploitable et une fermeture propre de la base et des
+// WebSockets — ce que la terminaison implicite de Node ne fait pas.
+process.on('uncaughtException', (err) => {
+  console.error('[kobo] Uncaught exception — shutting down:', err)
+  void gracefulShutdown('uncaughtException', 1)
+})
+
+process.on('unhandledRejection', (reason) => {
+  console.error('[kobo] Unhandled promise rejection — shutting down:', reason)
+  void gracefulShutdown('unhandledRejection', 1)
+})

@@ -52,6 +52,7 @@ vi.mock('../../server/utils/paths.js', async (importOriginal) => {
 })
 
 // Import AFTER mocks are installed
+import { CODEX_HANDSHAKE_TIMEOUT_MS } from '../../server/services/agent/engines/codex/client.js'
 import {
   CODEX_GRACEFUL_INTERRUPT_TIMEOUT_MS,
   CODEX_SUBAGENT_STALL_TIMEOUT_MS,
@@ -721,6 +722,57 @@ describe('createCodexEngine — stop()', () => {
   })
 })
 
+describe('createCodexEngine — sendMessage after session ended', () => {
+  it('rejects immediately with an agent-unavailable error instead of writing to the closed peer', async () => {
+    // Drive a full happy-path session to completion (client.close() and
+    // child.kill('SIGTERM') both run in the engine's `finally` block), then
+    // simulate a chat message typed after that point — Kōbō's one-prompt-
+    // one-turn contract means this is exactly the case that used to either
+    // write to an already-closed JSON-RPC peer or hang for the full 120s
+    // request timeout, with neither shape recognised by the orchestrator.
+    resetChild()
+    const engine = createCodexEngine()
+    const events: AgentEvent[] = []
+
+    let proc!: Awaited<ReturnType<typeof engine.start>>
+    const startPromise = engine
+      .start(BASE_OPTIONS, (ev) => events.push(ev))
+      .then((p) => {
+        proc = p
+      })
+
+    await flush(5)
+    pushInitializeResponse(1)
+    await flush(5)
+    pushThreadStartResponse('thr_ended', 2)
+    await flush(5)
+    pushTurnStartResponse('turn_1', 3)
+    await flush(5)
+    pushNotification('turn/completed', { turnId: 'turn_1', turn: { status: 'completed' } })
+    await flush(20)
+
+    await startPromise
+    await flush(10)
+
+    expect(events.filter((e) => e.kind === 'session:ended')).toHaveLength(1)
+    expect(proc.isAlive()).toBe(false)
+    expect(_child.kill).toHaveBeenCalled()
+
+    const writesBefore = _child._written.length
+
+    // Must settle well before vitest's own test timeout — a stuck 120s
+    // JSON-RPC wait would fail this test on its own.
+    await expect(proc.sendMessage('typed after the session already ended')).rejects.toThrow(
+      /agent is no longer running/i,
+    )
+
+    const wroteSteerRequest = _child._written
+      .slice(writesBefore)
+      .some((line) => JSON.parse(line).method === 'turn/steer')
+    expect(wroteSteerRequest).toBe(false)
+  })
+})
+
 describe('createCodexEngine — server request (approval flow)', () => {
   it('emits session:user-input-requested and resolves via resolvePendingUserInput', async () => {
     resetChild()
@@ -1020,5 +1072,26 @@ describe('createCodexEngine — turn liveness with multiple pending approvals', 
     expect(timeoutError).toBeUndefined()
 
     vi.useRealTimers()
+  })
+})
+
+describe('createCodexEngine — handshake liveness', () => {
+  it('fails the session when the app-server never answers initialize', async () => {
+    resetChild()
+    vi.useFakeTimers()
+    try {
+      const engine = createCodexEngine()
+      const events: AgentEvent[] = []
+      void engine.start(BASE_OPTIONS, (ev) => events.push(ev))
+
+      // The child stays alive and simply never replies. Before the fix this
+      // parked the whole start path forever, with no event of any kind.
+      await vi.advanceTimersByTimeAsync(CODEX_HANDSHAKE_TIMEOUT_MS + 1_000)
+
+      expect(events).toContainEqual(expect.objectContaining({ kind: 'error', category: 'spawn_failed' }))
+      expect(events).toContainEqual({ kind: 'session:ended', reason: 'error', exitCode: null })
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

@@ -1093,6 +1093,265 @@ describe('workspace store', () => {
       expect(store.workspaces[0]?.name).toBe('new')
       vi.unstubAllGlobals()
     })
+
+    it('applies agentLiveness from the GET /:id response for the selected workspace', async () => {
+      const store = useWorkspaceStore()
+      store.selectedWorkspaceId = 'w1'
+      store.workspaces = [makeWorkspace({ id: 'w1' })]
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: true,
+          json: async () => ({
+            ...makeWorkspace({ id: 'w1' }),
+            tasks: [],
+            agentLiveness: { status: 'running', agentSessionId: 's1', startedAt: 't0', lastEventAt: 't1' },
+          }),
+        } as Response),
+      )
+
+      await store.fetchWorkspaceDetails('w1')
+
+      expect(store.agentLiveness.w1).toEqual({
+        status: 'running',
+        agentSessionId: 's1',
+        startedAt: 't0',
+        lastEventAt: 't1',
+      })
+      vi.unstubAllGlobals()
+    })
+
+    it('clears a stale agentLiveness entry when GET /:id reports no controller', async () => {
+      const store = useWorkspaceStore()
+      store.selectedWorkspaceId = 'w1'
+      store.workspaces = [makeWorkspace({ id: 'w1' })]
+      store.agentLiveness = { w1: { status: 'running', agentSessionId: 's1', startedAt: 't0', lastEventAt: 't1' } }
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: true,
+          json: async () => ({ ...makeWorkspace({ id: 'w1' }), tasks: [], agentLiveness: null }),
+        } as Response),
+      )
+
+      await store.fetchWorkspaceDetails('w1')
+
+      expect(store.agentLiveness.w1).toBeUndefined()
+      vi.unstubAllGlobals()
+    })
+
+    it('does not let a stale response overwrite a status that changed via WebSocket while the request was in flight, but still applies agentLiveness', async () => {
+      const store = useWorkspaceStore()
+      store.selectedWorkspaceId = 'w1'
+      store.workspaces = [makeWorkspace({ id: 'w1', status: 'executing' })]
+
+      let resolveFetch!: (response: Response) => void
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(() => new Promise<Response>((resolve) => (resolveFetch = resolve))),
+      )
+
+      const fetching = store.fetchWorkspaceDetails('w1')
+
+      // Simulate the WebSocket announcing a status change while the read is
+      // in flight. Deselect around the call so correctif 3's own
+      // liveness-refresh hook on `updateWorkspaceFromEvent` doesn't fire a
+      // second, self-healing `fetchWorkspaceDetails` — this test isolates
+      // the dedicated `_workspaceEventVersions` guard, not the pre-existing
+      // per-request version counter.
+      store.selectedWorkspaceId = null
+      store.updateWorkspaceFromEvent('w1', { status: 'awaiting-user' })
+      store.selectedWorkspaceId = 'w1'
+
+      resolveFetch({
+        ok: true,
+        json: async () => ({
+          ...makeWorkspace({ id: 'w1', status: 'executing' }),
+          tasks: [],
+          agentLiveness: { status: 'running', agentSessionId: 's1', startedAt: 't0', lastEventAt: 't1' },
+        }),
+      } as Response)
+      await fetching
+
+      // The stale `executing` from the in-flight request must not clobber
+      // the fresher `awaiting-user` the WebSocket already applied.
+      expect(store.workspaces[0]?.status).toBe('awaiting-user')
+      // Liveness is server-authoritative and independent of the status
+      // guard — it must still be applied even though the status write was
+      // suppressed.
+      expect(store.agentLiveness.w1).toEqual({
+        status: 'running',
+        agentSessionId: 's1',
+        startedAt: 't0',
+        lastEventAt: 't1',
+      })
+      vi.unstubAllGlobals()
+    })
+  })
+
+  describe('applyAgentLiveness (pure state merge)', () => {
+    it('stores the liveness object for the workspace', () => {
+      const store = useWorkspaceStore()
+      const liveness = { status: 'running' as const, agentSessionId: 's1', startedAt: 't0', lastEventAt: 't1' }
+      store.applyAgentLiveness('w1', liveness)
+      expect(store.agentLiveness.w1).toEqual(liveness)
+    })
+
+    it('removes the entry when liveness is null', () => {
+      const store = useWorkspaceStore()
+      store.agentLiveness = { w1: { status: 'running', agentSessionId: 's1', startedAt: 't0', lastEventAt: 't1' } }
+      store.applyAgentLiveness('w1', null)
+      expect(store.agentLiveness.w1).toBeUndefined()
+    })
+
+    it('leaves an unrelated workspace entry untouched', () => {
+      const store = useWorkspaceStore()
+      store.agentLiveness = { w2: { status: 'running', agentSessionId: 's2', startedAt: 't0', lastEventAt: 't1' } }
+      store.applyAgentLiveness('w1', null)
+      expect(store.agentLiveness.w2).toBeDefined()
+    })
+
+    it('marks the workspace as loaded whether or not a controller is reported', () => {
+      const store = useWorkspaceStore()
+      store.applyAgentLiveness('w1', null)
+      expect(store.agentLivenessLoaded.w1).toBe(true)
+
+      store.applyAgentLiveness('w2', { status: 'running', agentSessionId: 's2', startedAt: 't0', lastEventAt: 't1' })
+      expect(store.agentLivenessLoaded.w2).toBe(true)
+    })
+  })
+
+  describe('agentLivenessLoaded — confirmed-absence tracking (liveness false-positive fix)', () => {
+    it('does not treat an unloaded workspace as a confirmed absent controller', () => {
+      const store = useWorkspaceStore()
+      // Never fetched: no entry in either map.
+      expect(store.agentLivenessLoaded.w1).toBeUndefined()
+      expect(store.agentLiveness.w1).toBeUndefined()
+    })
+
+    it('clears the loaded marker when a status change arrives via WebSocket, even for a non-selected workspace', () => {
+      const store = useWorkspaceStore()
+      store.selectedWorkspaceId = null
+      store.workspaces = [makeWorkspace({ id: 'w1', status: 'idle' })]
+      store.agentLivenessLoaded = { w1: true }
+      const fetchMock = vi.fn()
+      vi.stubGlobal('fetch', fetchMock)
+
+      store.updateWorkspaceFromEvent('w1', { status: 'executing' })
+
+      expect(store.agentLivenessLoaded.w1).toBeUndefined()
+      vi.unstubAllGlobals()
+    })
+
+    it('does not touch the loaded marker when the patch carries no status field', () => {
+      const store = useWorkspaceStore()
+      store.workspaces = [makeWorkspace({ id: 'w1' })]
+      store.agentLivenessLoaded = { w1: true }
+
+      store.updateWorkspaceFromEvent('w1', { description: 'x' })
+
+      expect(store.agentLivenessLoaded.w1).toBe(true)
+    })
+
+    it('re-confirms loaded once the selected workspace status-change fetch resolves', async () => {
+      const store = useWorkspaceStore()
+      store.selectedWorkspaceId = 'w1'
+      store.workspaces = [makeWorkspace({ id: 'w1', status: 'idle' })]
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ ...makeWorkspace({ id: 'w1', status: 'executing' }), tasks: [], agentLiveness: null }),
+      } as Response)
+      vi.stubGlobal('fetch', fetchMock)
+
+      store.updateWorkspaceFromEvent('w1', { status: 'executing' })
+      // Immediately after the WS event, and before the fetch resolves, the
+      // marker must be cleared — this is the window that used to produce a
+      // false "agent not running" warning.
+      expect(store.agentLivenessLoaded.w1).toBeUndefined()
+
+      await vi.waitFor(() => expect(store.agentLivenessLoaded.w1).toBe(true))
+      vi.unstubAllGlobals()
+    })
+
+    it('fetchWorkspacesInfo marks every returned workspace as loaded, including ones absent from agentLiveness', async () => {
+      const store = useWorkspaceStore()
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            workspaces: [
+              makeWorkspace({ id: 'ws-1', status: 'idle' }),
+              makeWorkspace({ id: 'ws-2', status: 'executing' }),
+            ],
+            prSnapshots: {},
+            gitStats: {},
+            agentLiveness: { 'ws-2': { status: 'running', agentSessionId: 's2', startedAt: 't0', lastEventAt: 't1' } },
+          }),
+      })
+      vi.stubGlobal('fetch', fetchMock)
+
+      await store.fetchWorkspacesInfo()
+
+      expect(store.agentLivenessLoaded['ws-1']).toBe(true)
+      expect(store.agentLivenessLoaded['ws-2']).toBe(true)
+      expect(store.agentLiveness['ws-1']).toBeUndefined()
+      vi.unstubAllGlobals()
+    })
+  })
+
+  describe('updateWorkspaceFromEvent — agentLiveness refresh on status change', () => {
+    it('refreshes agentLiveness via GET /:id when the selected workspace flips status', async () => {
+      const store = useWorkspaceStore()
+      store.selectedWorkspaceId = 'w1'
+      store.workspaces = [makeWorkspace({ id: 'w1', status: 'idle' })]
+      const fetchMock = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          ...makeWorkspace({ id: 'w1', status: 'executing' }),
+          tasks: [],
+          agentLiveness: { status: 'running', agentSessionId: 's1', startedAt: 't0', lastEventAt: 't1' },
+        }),
+      } as Response)
+      vi.stubGlobal('fetch', fetchMock)
+
+      store.updateWorkspaceFromEvent('w1', { status: 'executing' })
+      await vi.waitFor(() => expect(store.agentLiveness.w1).toBeDefined())
+
+      expect(fetchMock).toHaveBeenCalledWith('/api/workspaces/w1')
+      expect(store.agentLiveness.w1).toEqual({
+        status: 'running',
+        agentSessionId: 's1',
+        startedAt: 't0',
+        lastEventAt: 't1',
+      })
+      vi.unstubAllGlobals()
+    })
+
+    it('does not fetch when the status change is for a non-selected workspace', () => {
+      const store = useWorkspaceStore()
+      store.selectedWorkspaceId = 'w1'
+      store.workspaces = [makeWorkspace({ id: 'w2', status: 'idle' })]
+      const fetchMock = vi.fn()
+      vi.stubGlobal('fetch', fetchMock)
+
+      store.updateWorkspaceFromEvent('w2', { status: 'executing' })
+
+      expect(fetchMock).not.toHaveBeenCalled()
+      vi.unstubAllGlobals()
+    })
+
+    it('does not fetch when the patch carries no status field', () => {
+      const store = useWorkspaceStore()
+      store.selectedWorkspaceId = 'w1'
+      store.workspaces = [makeWorkspace({ id: 'w1' })]
+      const fetchMock = vi.fn()
+      vi.stubGlobal('fetch', fetchMock)
+
+      store.updateWorkspaceFromEvent('w1', { description: 'x' })
+
+      expect(fetchMock).not.toHaveBeenCalled()
+      vi.unstubAllGlobals()
+    })
   })
 
   describe('workspace:description-updated WS handler', () => {

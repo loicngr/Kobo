@@ -1,10 +1,11 @@
 import { execFileSync, execSync } from 'node:child_process'
 import fs, { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import os, { tmpdir } from 'node:os'
-import path from 'node:path'
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import path, { join } from 'node:path'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import {
   BranchAlreadyExistsError,
+  buildNonInteractiveGitEnv,
   commitAllChanges,
   commitExists,
   createBranch,
@@ -23,6 +24,7 @@ import {
   getCurrentBranch,
   getDiffStats,
   getDiffStatsBetween,
+  getFileAtRef,
   getStructuredDiffStatsBetween,
   getWorkingTreeDiffStats,
   getWorkingTreeFiles,
@@ -39,6 +41,7 @@ import {
   rebaseBranch,
   rollbackFile,
   slugifyBranchSegment,
+  worktreeHasChangesStrict,
 } from '../server/utils/git-ops.js'
 
 let repoDir: string
@@ -385,6 +388,43 @@ describe('getWorkingTreeDiffStats', () => {
     const notARepo = mkdtempSync(path.join(tmpdir(), 'at-git-wt-norepo-'))
     const result = getWorkingTreeDiffStats(notARepo)
     expect(result).toBe('')
+    rmSync(notARepo, { recursive: true, force: true })
+  })
+})
+
+describe('worktreeHasChangesStrict', () => {
+  it('returns false on a clean worktree', () => {
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-git-strict-clean-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+    writeFileSync(path.join(repo, 'README.md'), 'initial\n')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: repo })
+
+    expect(worktreeHasChangesStrict(repo)).toBe(false)
+
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('returns true when the worktree has uncommitted changes', () => {
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-git-strict-dirty-'))
+    execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+    writeFileSync(path.join(repo, 'README.md'), 'initial\n')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: repo })
+    writeFileSync(path.join(repo, 'README.md'), 'changed\n')
+
+    expect(worktreeHasChangesStrict(repo)).toBe(true)
+
+    rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('throws instead of reporting clean when the path is not a git repository', () => {
+    const notARepo = mkdtempSync(path.join(tmpdir(), 'at-git-strict-norepo-'))
+    expect(() => worktreeHasChangesStrict(notARepo)).toThrow()
     rmSync(notARepo, { recursive: true, force: true })
   })
 })
@@ -1399,5 +1439,55 @@ describe('slugifyBranchSegment', () => {
 
   it('returns empty string when nothing safe remains', () => {
     expect(slugifyBranchSegment('::\\::', 40)).toBe('')
+  })
+})
+
+describe('getFileAtRef', () => {
+  it('reads a file larger than the default 1 MB buffer instead of returning null', () => {
+    const repo = mkdtempSync(join(tmpdir(), 'kobo-bigfile-'))
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 't@t.t'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'T'], { cwd: repo })
+
+    // 2 Mo : au-dessus du maxBuffer par défaut de Node (1 Mo).
+    const big = 'x'.repeat(2 * 1024 * 1024)
+    writeFileSync(join(repo, 'big.txt'), big)
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-q', '-m', 'big'], { cwd: repo })
+
+    const content = getFileAtRef(repo, 'HEAD', 'big.txt')
+
+    expect(content).not.toBeNull()
+    expect(content?.length).toBe(big.length)
+
+    rmSync(repo, { recursive: true, force: true })
+  })
+})
+
+describe('buildNonInteractiveGitEnv — SSH prompt suppression', () => {
+  // `GIT_ASKPASS: 'echo'` only silences HTTP credential prompts. An SSH
+  // remote with a passphrase-protected key and no agent still blocks on
+  // `/dev/tty` unless `ssh` itself is told to fail instead of prompting —
+  // otherwise only the 60 s sync-git timeout eventually catches it.
+  const originalSshCommand = process.env.GIT_SSH_COMMAND
+
+  afterEach(() => {
+    if (originalSshCommand === undefined) {
+      delete process.env.GIT_SSH_COMMAND
+    } else {
+      process.env.GIT_SSH_COMMAND = originalSshCommand
+    }
+  })
+
+  it('defaults GIT_SSH_COMMAND to a batch-mode ssh when the user set none', () => {
+    delete process.env.GIT_SSH_COMMAND
+    expect(buildNonInteractiveGitEnv().GIT_SSH_COMMAND).toBe('ssh -o BatchMode=yes')
+  })
+
+  it('preserves a user-provided GIT_SSH_COMMAND and only appends BatchMode', () => {
+    process.env.GIT_SSH_COMMAND = 'ssh -i /tmp/k'
+    const built = buildNonInteractiveGitEnv().GIT_SSH_COMMAND
+    expect(built).toContain('-i /tmp/k')
+    expect(built).toContain('-o BatchMode=yes')
   })
 })

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createTurnLiveness } from '../../server/services/agent/engines/codex/turn-liveness.js'
+import { createTurnLiveness } from '../../server/services/agent/turn-liveness.js'
 
 describe('createTurnLiveness', () => {
   it('times out an active turn after inactivity', () => {

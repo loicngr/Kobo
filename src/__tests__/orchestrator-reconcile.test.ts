@@ -63,4 +63,108 @@ describe('reconcileOrphanSessions', () => {
 
     expect(getWorkspace(ws.id)?.status).toBe('idle')
   })
+
+  it('drops executing, brainstorming and extracting workspaces back to idle on boot', async () => {
+    const { createWorkspace, getWorkspace } = await import('../server/services/workspace-service.js')
+    const orchestrator = await import('../server/services/agent/orchestrator.js')
+    const { getDb } = await import('../server/db/index.js')
+    const db = getDb()
+
+    const ids: string[] = []
+    for (const status of ['executing', 'brainstorming', 'extracting']) {
+      const ws = createWorkspace({
+        name: `Ghost ${status}`,
+        projectPath: '/tmp/p',
+        sourceBranch: 'main',
+        workingBranch: `b-${status}`,
+      })
+      db.prepare('UPDATE workspaces SET status = ? WHERE id = ?').run(status, ws.id)
+      ids.push(ws.id)
+    }
+
+    // The controller map is empty at boot by definition, so every one of these
+    // is orphaned — no probe, no exception.
+    orchestrator.reconcileOrphanSessions()
+
+    for (const id of ids) {
+      expect(getWorkspace(id)?.status).toBe('idle')
+    }
+  })
+
+  it('drops an executing workspace back to idle on boot even when it is archived', async () => {
+    // `archiveWorkspace` does not normalise the status, and unarchiving
+    // restores the row as-is — an archived workspace stuck in `executing`
+    // has no controller left to drive it, exactly like a non-archived one.
+    const { createWorkspace, getWorkspace } = await import('../server/services/workspace-service.js')
+    const orchestrator = await import('../server/services/agent/orchestrator.js')
+    const { getDb } = await import('../server/db/index.js')
+    const db = getDb()
+
+    const ws = createWorkspace({
+      name: 'Archived ghost',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'b-archived-ghost',
+    })
+    db.prepare("UPDATE workspaces SET status = 'executing', archived_at = ? WHERE id = ?").run(
+      new Date().toISOString(),
+      ws.id,
+    )
+
+    orchestrator.reconcileOrphanSessions()
+
+    expect(getWorkspace(ws.id)?.status).toBe('idle')
+  })
+
+  it('ends a running agent session even when its recorded pid is still alive', async () => {
+    const { createWorkspace } = await import('../server/services/workspace-service.js')
+    const orchestrator = await import('../server/services/agent/orchestrator.js')
+    const { getDb } = await import('../server/db/index.js')
+    const db = getDb()
+
+    const ws = createWorkspace({
+      name: 'Recycled pid',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'b-pid',
+    })
+    // `process.pid` is guaranteed alive — this is exactly the false positive a
+    // machine restart produces when another program inherits the old pid.
+    db.prepare(
+      "INSERT INTO agent_sessions (id, workspace_id, pid, status, started_at) VALUES (?, ?, ?, 'running', ?)",
+    ).run('sess-recycled', ws.id, process.pid, new Date().toISOString())
+
+    orchestrator.reconcileOrphanSessions()
+
+    expect(db.prepare('SELECT status FROM agent_sessions WHERE id = ?').get('sess-recycled')).toEqual({
+      status: 'error',
+    })
+  })
+
+  it('resets a running or starting dev_server_status to stopped on boot', async () => {
+    const { createWorkspace, getWorkspace } = await import('../server/services/workspace-service.js')
+    const orchestrator = await import('../server/services/agent/orchestrator.js')
+    const { getDb } = await import('../server/db/index.js')
+    const db = getDb()
+
+    const running = createWorkspace({
+      name: 'Dev running',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'b-dev-running',
+    })
+    const starting = createWorkspace({
+      name: 'Dev starting',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'b-dev-starting',
+    })
+    db.prepare("UPDATE workspaces SET dev_server_status = 'running' WHERE id = ?").run(running.id)
+    db.prepare("UPDATE workspaces SET dev_server_status = 'starting' WHERE id = ?").run(starting.id)
+
+    orchestrator.reconcileOrphanSessions()
+
+    expect(getWorkspace(running.id)?.devServerStatus).toBe('stopped')
+    expect(getWorkspace(starting.id)?.devServerStatus).toBe('stopped')
+  })
 })

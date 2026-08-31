@@ -20,7 +20,7 @@
 
 <script setup lang="ts">
 import { useWorkspaceStore } from 'src/stores/workspace'
-import { isBusyStatus } from 'src/utils/workspace-status'
+import { isBusyStatus, shouldWarnAgentNotRunning } from 'src/utils/workspace-status'
 import { computed, inject } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -35,10 +35,24 @@ const runningSubagentCount = computed(() => store.currentSubagents.filter((s) =>
 // the banner up — they're a sign we missed a termination event, not that
 // anything is actually running. The running count is still rendered inside
 // the banner text when the banner IS visible (i.e. workspace busy + subs running).
+//
+// The `status` column can also lie outright (F05-class bug): it claims busy
+// while the server's live controller registry has no matching controller.
+// AgentLivenessChip.vue is the authority on liveness — reuse the same
+// `shouldWarnAgentNotRunning` derivation so this banner never contradicts it.
+// A liveness entry absent from `store.agentLiveness` means "confirmed no
+// controller" only once `store.agentLivenessLoaded` says a read has
+// completed for this workspace's current status (see
+// `shouldWarnAgentNotRunning`'s doc comment) — never merely because the data
+// hasn't loaded yet, e.g. right after a message flips `status` to busy over
+// WebSocket while the liveness confirmation is still an HTTP round trip away.
 const isVisible = computed(() => {
   const ws = store.selectedWorkspace
   if (!ws) return false
-  return isBusyStatus(ws.status) && !store.isAgentTurnSettled(ws.id)
+  if (!isBusyStatus(ws.status)) return false
+  if (shouldWarnAgentNotRunning(ws.status, store.agentLivenessLoaded[ws.id] === true, ws.id in store.agentLiveness))
+    return false
+  return !store.isAgentTurnSettled(ws.id)
 })
 
 function viewSubagents() {

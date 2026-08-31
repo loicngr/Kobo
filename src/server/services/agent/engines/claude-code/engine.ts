@@ -10,7 +10,14 @@ import {
 import { nanoid } from 'nanoid'
 import { isWorkspacePermissionAllowed } from '../../../workspace-permission-policy-service.js'
 import { createStreamingBatcher } from '../../streaming-batcher.js'
-import type { AgentEngine, AgentEvent, EngineProcess, StartOptions } from '../types.js'
+import { createTurnLiveness } from '../../turn-liveness.js'
+import {
+  AGENT_NO_LONGER_RUNNING_TEXT,
+  type AgentEngine,
+  type AgentEvent,
+  type EngineProcess,
+  type StartOptions,
+} from '../types.js'
 import { CLAUDE_CODE_CAPABILITIES } from './capabilities.js'
 import { createMapperState, mapSdkMessage, QUOTA_PATTERN, tryEmitQuota } from './event-mapper.js'
 import { buildClaudeOptions } from './options-builder.js'
@@ -28,10 +35,14 @@ type McpStdioServerConfigWithAlwaysLoad = McpStdioServerConfig & { alwaysLoad: b
  * and auto-loop are not frozen forever.
  */
 const RESULT_DRAIN_TIMEOUT_MS = 15_000
-// Claude may occasionally leave its async iterator open after its final text
-// without producing a result message. Keep a separate, conservative guard for
-// that shape; active tool/message traffic always cancels and re-arms it.
-const TEXT_IDLE_TIMEOUT_MS = 120_000
+/**
+ * Deadline for a stream that stops reporting ANY activity. The former
+ * text-only guard was re-armed solely on a message with text and no tool call
+ * — the minority shape — so a run frozen mid-tool-call had no timer at all,
+ * `isAlive()` kept answering true, and the workspace stayed `executing`
+ * forever with zero trace. Exported so tests never hard-code the value.
+ */
+export const CLAUDE_STREAM_IDLE_TIMEOUT_MS = 120_000
 // Safety net for a subagent whose terminal `task_notification` carries a
 // status outside the mapper's known-terminal set (SDK schema drift) — it
 // never clears `activeSubagentToolCallIds`, which otherwise blocks
@@ -153,9 +164,9 @@ export function createClaudeCodeEngine(): AgentEngine {
         return new Promise<PermissionResult>((resolve, reject) => {
           const resolver: PendingResolver = { resolve, input, requestKind }
           pendingResolvers.set(toolCallId, resolver)
-          // A user decision is intentional inactivity. The text-only watchdog
-          // must never end this session while the permission card is visible.
-          clearTextIdleWatchdog()
+          // A user decision is intentional inactivity — suspend the deadline
+          // rather than cancel it, so it resumes the moment the card is answered.
+          turnLiveness.pause()
 
           const onAbort = (): void => {
             if (pendingResolvers.get(toolCallId) === resolver) {
@@ -317,29 +328,21 @@ export function createClaudeCodeEngine(): AgentEngine {
       // background subagent is active is not terminal: the SDK can still emit
       // its task notification and an automatic continuation turn.
       let resultDrainTimer: ReturnType<typeof setTimeout> | undefined
-      let textIdleTimer: ReturnType<typeof setTimeout> | undefined
-      const clearTextIdleWatchdog = (): void => {
-        if (!textIdleTimer) return
-        clearTimeout(textIdleTimer)
-        textIdleTimer = undefined
-      }
-      const armTextIdleWatchdog = (): void => {
-        clearTextIdleWatchdog()
-        textIdleTimer = setTimeout(() => {
-          if (pendingResolvers.size > 0) {
-            textIdleTimer = undefined
-            return
-          }
+      // D2 — one shared liveness module for both engines. Armed before the
+      // first SDK message, re-armed on EVERY message, suspended while a human
+      // decision or a background subagent is outstanding, stopped in `finally`.
+      const turnLiveness = createTurnLiveness({
+        timeoutMs: CLAUDE_STREAM_IDLE_TIMEOUT_MS,
+        onTimeout() {
           console.warn(
-            `[claude-engine] SDK stream inactive ${TEXT_IDLE_TIMEOUT_MS}ms after a text-only response — forcing session:ended`,
+            `[claude-engine] SDK stream reported no activity for ${CLAUDE_STREAM_IDLE_TIMEOUT_MS}ms — forcing session:ended`,
           )
           if (userInterrupted) emitSessionEnded('killed', null)
           else if (mapperState.sawErrorResult) emitSessionEnded('error', null)
           else emitSessionEnded('watchdog', null)
           abortController.abort()
-        }, TEXT_IDLE_TIMEOUT_MS)
-        textIdleTimer.unref?.()
-      }
+        },
+      })
       const armResultDrainWatchdog = (): void => {
         if (resultDrainTimer) return
         resultDrainTimer = setTimeout(() => {
@@ -392,6 +395,7 @@ export function createClaudeCodeEngine(): AgentEngine {
 
       const iteratorPromise = (async () => {
         iteratorRunning = true
+        turnLiveness.start()
         try {
           for await (const msg of q as AsyncIterable<SDKMessage>) {
             const events = mapSdkMessage(msg, mapperState)
@@ -417,15 +421,15 @@ export function createClaudeCodeEngine(): AgentEngine {
               if (ev.kind === 'session:started') discoveredSessionId = ev.engineSessionId
               safeEmit(ev)
             }
-            // A plain final response is normally followed by `result`. If the
-            // SDK instead leaves the iterator parked, release the workspace
-            // after a conservative quiet period. Tool activity never arms it.
-            clearTextIdleWatchdog()
-            if (events.some((ev) => ev.kind === 'message:text') && !events.some((ev) => ev.kind === 'tool:call')) {
-              armTextIdleWatchdog()
-            }
+            // Any SDK message is proof of life — re-arm on EVERY message, not
+            // only on a text-without-tool-call one.
+            turnLiveness.activity()
+            // A background subagent or a pending permission card can stay
+            // legitimately quiet for minutes; their own dedicated watchdogs
+            // own those windows, so suspend the turn deadline meanwhile.
+            if (activeSubagentTaskIds.size > 0 || pendingResolvers.size > 0) turnLiveness.pause()
+            else turnLiveness.resume()
             if ((msg as { type?: string }).type === 'result') {
-              clearTextIdleWatchdog()
               completedResponses++
               emitTurnCompletedIfSettled()
               // A queued forced message starts the next response on this same SDK stream.
@@ -478,7 +482,7 @@ export function createClaudeCodeEngine(): AgentEngine {
             clearTimeout(resultDrainTimer)
             resultDrainTimer = undefined
           }
-          clearTextIdleWatchdog()
+          turnLiveness.stop()
           clearSubagentStallWatchdog()
           // Drain any callback still pending (SDK terminated while awaiting an
           // answer). canUseTool's abort path covers signalled stops; this
@@ -507,7 +511,7 @@ export function createClaudeCodeEngine(): AgentEngine {
           return iteratorRunning
         },
         sendMessage(text: string) {
-          if (!iteratorRunning) throw new Error('Claude agent is no longer running')
+          if (!iteratorRunning) throw new Error(`Claude ${AGENT_NO_LONGER_RUNNING_TEXT}`)
           inputStream.send(text)
         },
         interrupt() {
@@ -557,6 +561,9 @@ export function createClaudeCodeEngine(): AgentEngine {
           const resolver = pendingResolvers.get(toolCallId)
           if (!resolver) return false
           pendingResolvers.delete(toolCallId)
+          // Only resume the deadline once every outstanding card is answered —
+          // a sibling request may still be waiting on a human.
+          if (pendingResolvers.size === 0) turnLiveness.resume()
 
           if (response.kind === 'question') {
             // Echo the original questions array + answers so the SDK

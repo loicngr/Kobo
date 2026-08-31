@@ -741,7 +741,11 @@ export const useWebSocketStore = defineStore('websocket', {
             const sender = (payload.sender as string) ?? 'user'
             const sessionId = (msg as Record<string, unknown>).sessionId as string | undefined
             const eventId = msg.id ?? msg.eventId ?? `user-${Date.now()}`
-            const timestamp = msg.createdAt ?? new Date().toISOString()
+            // `msg.createdAt` is the server's persisted timestamp (server clock —
+            // authoritative). Only fall back to the local clock when it's absent,
+            // e.g. a synthetic/legacy payload.
+            const serverTimestamp = typeof msg.createdAt === 'string' ? msg.createdAt : undefined
+            const timestamp = serverTimestamp ?? new Date().toISOString()
             const items = workspaceStore.activityFeeds[wid] ?? []
             const alreadyExists =
               sender === 'user' &&
@@ -749,7 +753,18 @@ export const useWebSocketStore = defineStore('websocket', {
             if (alreadyExists) {
               const idx = items.findIndex((i) => i.meta?.sender === 'user' && i.content === content && i.meta?.pending)
               if (idx >= 0) {
-                items[idx] = { ...items[idx], id: eventId, sessionId }
+                // Reconcile the optimistic entry (timestamped by the browser
+                // clock at send time) with the server's persisted timestamp so
+                // the feed sorts correctly even when the two clocks disagree
+                // (e.g. a WSL2 browser on Windows vs. the server in the Linux
+                // VM). Never fall back to `new Date()` here — that would just
+                // swap one arbitrary local clock reading for another.
+                items[idx] = {
+                  ...items[idx],
+                  id: eventId,
+                  sessionId,
+                  ...(serverTimestamp ? { timestamp: serverTimestamp } : {}),
+                }
               }
             } else {
               workspaceStore.addActivityItem(wid, {

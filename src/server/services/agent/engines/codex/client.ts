@@ -13,6 +13,18 @@ import type {
   TurnSteerResponse,
 } from './protocol/types.js'
 
+/**
+ * A handshake that never answers is a broken install (missing binary, expired
+ * token, protocol drift), not a model thinking — fail fast and loudly.
+ */
+export const CODEX_HANDSHAKE_TIMEOUT_MS = 20_000
+
+/** Thread creation/resume can touch disk and the network; give it more room. */
+export const CODEX_THREAD_TIMEOUT_MS = 30_000
+
+/** An interrupt that is not acknowledged must never block the escalation path. */
+export const CODEX_INTERRUPT_TIMEOUT_MS = 10_000
+
 export interface AppServerClientOptions {
   stdin: Writable
   stdout: Readable
@@ -50,22 +62,25 @@ export function createAppServerClient(opts: AppServerClientOptions): AppServerCl
         clientInfo: opts.clientInfo,
         capabilities: { experimentalApi: true },
       }
-      return peer.request<InitializeResponse>('initialize', params)
+      return peer.request<InitializeResponse>('initialize', params, CODEX_HANDSHAKE_TIMEOUT_MS)
     },
     startThread(params) {
-      return peer.request<ThreadStartResponse>('thread/start', params)
+      return peer.request<ThreadStartResponse>('thread/start', params, CODEX_THREAD_TIMEOUT_MS)
     },
     resumeThread(params) {
-      return peer.request<ThreadStartResponse>('thread/resume', params)
+      return peer.request<ThreadStartResponse>('thread/resume', params, CODEX_THREAD_TIMEOUT_MS)
     },
     startTurn(params) {
+      // Default deadline: starting a turn is the model's own latency budget.
       return peer.request<TurnStartResponse>('turn/start', params)
     },
     steerTurn(params) {
+      // Same budget. Steering requests are chained, so a request left pending
+      // here used to block every later message of the workspace for good.
       return peer.request<TurnSteerResponse>('turn/steer', params)
     },
     async interruptTurn(params) {
-      await peer.request<unknown>('turn/interrupt', params)
+      await peer.request<unknown>('turn/interrupt', params, CODEX_INTERRUPT_TIMEOUT_MS)
     },
     close() {
       peer.close()

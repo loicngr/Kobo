@@ -46,6 +46,7 @@ vi.mock('../server/services/worktree-service.js', () => ({
 vi.mock('../server/services/agent/orchestrator.js', () => ({
   startAgent: vi.fn().mockReturnValue({ agentSessionId: 'mock-agent-session-id' }),
   stopAgent: vi.fn(),
+  stopAgentAndWait: vi.fn().mockResolvedValue('not-running'),
   sendMessage: vi.fn(),
   sendMessageForFallback: vi.fn().mockResolvedValue({ status: 'sent', sessionId: 'delivered-session-id' }),
   getAgentStatus: vi.fn().mockReturnValue(null),
@@ -395,8 +396,9 @@ describe('POST /api/workspaces/:id/start-review', () => {
 
   it('newSession=true with running agent stops then starts a fresh session', async () => {
     const callOrder: string[] = []
-    vi.mocked(agentManager.stopAgent).mockImplementation(() => {
+    vi.mocked(agentManager.stopAgentAndWait).mockImplementation(async () => {
       callOrder.push('stopAgent')
+      return 'stopped'
     })
     vi.mocked(agentManager.startAgent).mockImplementation(() => {
       callOrder.push('startAgent')
@@ -422,8 +424,8 @@ describe('POST /api/workspaces/:id/start-review', () => {
   })
 
   it('newSession=true without running agent still starts fresh (stopAgent best-effort)', async () => {
-    // stopAgent throws because no agent is running — must still proceed.
-    vi.mocked(agentManager.stopAgent).mockImplementation(() => {
+    // stopAgentAndWait throws because no agent is running — must still proceed.
+    vi.mocked(agentManager.stopAgentAndWait).mockImplementation(async () => {
       throw new Error('No agent running')
     })
     vi.mocked(agentManager.startAgent).mockReturnValue({ agentSessionId: 'fresh' } as never)
@@ -442,7 +444,7 @@ describe('POST /api/workspaces/:id/start-review', () => {
   })
 
   it('newSession=true: stopAgent throws but startAgent still runs', async () => {
-    vi.mocked(agentManager.stopAgent).mockImplementation(() => {
+    vi.mocked(agentManager.stopAgentAndWait).mockImplementation(async () => {
       throw new Error('stop failed')
     })
     vi.mocked(agentManager.startAgent).mockReturnValue({ agentSessionId: 'fresh' } as never)
@@ -455,7 +457,7 @@ describe('POST /api/workspaces/:id/start-review', () => {
 
     expect(res.status).toBe(200)
     // Both called: stop first (and threw), then start.
-    expect(agentManager.stopAgent).toHaveBeenCalledTimes(1)
+    expect(agentManager.stopAgentAndWait).toHaveBeenCalledTimes(1)
     expect(agentManager.startAgent).toHaveBeenCalledTimes(1)
   })
 

@@ -53,6 +53,18 @@ export interface Workspace {
   updatedAt: string
 }
 
+/**
+ * Server-side memory truth about an agent controller, never derived from the
+ * `status` column. See `getAgentLiveness` / `getAllAgentLiveness` in
+ * `orchestrator.ts` — this is the exact shape those serialize.
+ */
+export interface AgentLiveness {
+  status: 'running' | 'stopping'
+  agentSessionId: string
+  startedAt: string
+  lastEventAt: string
+}
+
 export interface Task {
   id: string
   workspaceId: string
@@ -393,6 +405,18 @@ export const useWorkspaceStore = defineStore('workspace', {
     prSnapshots: {} as Record<string, PrSnapshot>,
     autoLoopStates: {} as Record<string, AutoLoopStatus>,
     crons: {} as Record<string, PendingCron[]>,
+    // Server-side memory truth. A workspace absent from this map has no agent,
+    // whatever its `status` column says.
+    agentLiveness: {} as Record<string, AgentLiveness>,
+    // Whether `agentLiveness` reflects a liveness read that completed *after*
+    // the workspace's current status took effect. Absence from `agentLiveness`
+    // only means "confirmed no controller" once this is true — otherwise the
+    // workspace simply hasn't been checked yet for its current status (e.g.
+    // the HTTP round trip is still in flight right after a WebSocket status
+    // flip). Set by `applyAgentLiveness` and `fetchWorkspacesInfo`, cleared by
+    // `updateWorkspaceFromEvent` on every status change. See
+    // `shouldWarnAgentNotRunning` in `utils/workspace-status.ts`.
+    agentLivenessLoaded: {} as Record<string, boolean>,
   }),
 
   getters: {
@@ -633,6 +657,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     async fetchWorkspaceDetails(id: string) {
       const requestVersion = (_workspaceDetailsRequestVersions.get(id) ?? 0) + 1
       _workspaceDetailsRequestVersions.set(id, requestVersion)
+      const eventVersionAtStart = _workspaceEventVersions.get(id) ?? 0
       try {
         const res = await fetch(`/api/workspaces/${id}`)
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -642,8 +667,20 @@ export const useWorkspaceStore = defineStore('workspace', {
         // this request was in flight.
         if (this.selectedWorkspaceId !== id || _workspaceDetailsRequestVersions.get(id) !== requestVersion) return
 
+        // A WebSocket event can flip `status` (e.g. executing -> awaiting-user)
+        // while this read is in flight — same class of race `fetchWorkspacesInfo`
+        // already guards against via `_workspaceEventVersions`. Don't let a
+        // late response resurrect a stale status over a fresher one. This is
+        // scoped to `status` only: `agentLiveness` below is server-authoritative
+        // and is exactly what this read exists to deliver, so it always applies.
+        const statusChangedDuringRequest = (_workspaceEventVersions.get(id) ?? 0) !== eventVersionAtStart
+        const incomingRaw = data.workspace ?? data
+        const incoming = statusChangedDuringRequest ? { ...incomingRaw } : incomingRaw
+        if (statusChangedDuringRequest) {
+          delete incoming.status
+        }
+
         // Update workspace in whichever list it lives in (active or archived).
-        const incoming = data.workspace ?? data
         const idx = this.workspaces.findIndex((w) => w.id === id)
         if (idx >= 0) {
           this.workspaces[idx] = { ...this.workspaces[idx], ...incoming }
@@ -660,8 +697,35 @@ export const useWorkspaceStore = defineStore('workspace', {
         if (data.tasks) {
           this.tasks = data.tasks
         }
+
+        // `GET /:id` already serializes the in-memory controller liveness —
+        // consume it here so the AgentLivenessChip doesn't have to wait for
+        // the next 30s `fetchWorkspacesInfo` poll to stop showing a false
+        // "no process" warning right after a legitimate start/status flip.
+        if ('agentLiveness' in data) {
+          this.applyAgentLiveness(id, data.agentLiveness as AgentLiveness | null)
+        }
       } catch (err) {
         console.error('[workspace store] fetchWorkspaceDetails failed:', err)
+      }
+    },
+
+    /** Pure merge of a single workspace's liveness into the map — sets the
+     *  entry when a controller is reported, removes it otherwise so a
+     *  stopped/never-started agent doesn't linger as a stale "running".
+     *  Always marks the workspace as loaded: a `GET /:id` response that
+     *  reaches here — with or without a controller — is a completed,
+     *  server-authoritative confirmation for this one workspace. */
+    applyAgentLiveness(workspaceId: string, liveness: AgentLiveness | null | undefined) {
+      this.agentLivenessLoaded = { ...this.agentLivenessLoaded, [workspaceId]: true }
+      if (liveness) {
+        this.agentLiveness = { ...this.agentLiveness, [workspaceId]: liveness }
+        return
+      }
+      if (workspaceId in this.agentLiveness) {
+        const next = { ...this.agentLiveness }
+        delete next[workspaceId]
+        this.agentLiveness = next
       }
     },
 
@@ -1452,8 +1516,18 @@ export const useWorkspaceStore = defineStore('workspace', {
           workspaces: Workspace[]
           prSnapshots: Record<string, PrSnapshot>
           gitStats: Record<string, GitStats>
+          agentLiveness?: Record<string, AgentLiveness>
         }
         if (requestToken !== _workspacesInfoRequestToken) return
+        // Full replacement, never a merge: an entry that disappeared means the
+        // controller is gone, which is the single most important thing to show.
+        this.agentLiveness = data.agentLiveness ?? {}
+        // Every workspace covered by this snapshot now has a confirmed
+        // liveness read, whether or not it appears in `agentLiveness` above —
+        // absence from the map above IS the confirmation for those ids.
+        const loadedFromInfo = { ...this.agentLivenessLoaded }
+        for (const ws of data.workspaces) loadedFromInfo[ws.id] = true
+        this.agentLivenessLoaded = loadedFromInfo
         const currentById = new Map(this.workspaces.map((workspace) => [workspace.id, workspace]))
         this.workspaces = data.workspaces.map((incoming) => {
           const current = currentById.get(incoming.id)
@@ -2126,6 +2200,29 @@ export const useWorkspaceStore = defineStore('workspace', {
       const idx = this.workspaces.findIndex((w) => w.id === workspaceId)
       if (idx >= 0) {
         this.workspaces[idx] = { ...this.workspaces[idx], ...data }
+      }
+      // The status column flips instantly over WebSocket, but `agentLiveness`
+      // only otherwise refreshes on the 30s `fetchWorkspacesInfo` poll — a
+      // false "no process" warning would flash on the liveness chip for up to
+      // 15s after every legitimate start. A single targeted read of the
+      // already-selected workspace's `GET /:id` (which already serializes
+      // liveness) closes that window without adding a new poll or a
+      // dedicated WebSocket channel.
+      if (data.status !== undefined) {
+        // Any prior liveness confirmation predates this status change and
+        // can no longer be trusted to describe it — e.g. a workspace that
+        // was confirmed idle a moment ago flips to "executing" here, and
+        // that stale "no controller" would otherwise be misread as
+        // confirming the brand-new session is already dead. Forget it until
+        // a fresh read lands.
+        if (workspaceId in this.agentLivenessLoaded) {
+          const nextLoaded = { ...this.agentLivenessLoaded }
+          delete nextLoaded[workspaceId]
+          this.agentLivenessLoaded = nextLoaded
+        }
+        if (workspaceId === this.selectedWorkspaceId) {
+          void this.fetchWorkspaceDetails(workspaceId)
+        }
       }
       // When agent stops, resolve pending messages and mark subagents as done
       if (data.status && ['completed', 'idle', 'error', 'quota'].includes(data.status)) {
