@@ -4,6 +4,15 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.11.17
+
+- feat(client): render in the design system's own type, palette and tokens (#34)
+- perf(client): stop re-rendering frozen content and racing stale requests (#33)
+- fix(client): make the review path usable and stop lying about navigation state (#32)
+- fix(git,db): serialize git writes, bound event history, verify irreversible ops (#31)
+- feat(client,server): tell the truth while working and when it fails (#30)
+- fix(agent): stop reporting a running agent when none exists (#29)
+
 ## 1.11.16
 
 - feat(client): responsive mobile layout for drawer, settings nav and workspace toolbar (#28)
