@@ -6,8 +6,10 @@ export default {
   // Common
   'common.save': 'Enregistrer',
   'common.cancel': 'Annuler',
+  'common.retry': 'Réessayer',
   'common.delete': 'Supprimer',
   'common.close': 'Fermer',
+  'common.dismiss': 'Ignorer',
   'common.details': 'Détails',
   'common.ok': 'OK',
   'whatsNew.title': 'Quoi de neuf',
@@ -123,6 +125,8 @@ export default {
   'workspaceList.idle': 'Inactif',
   'workspaceList.archived': 'Archivés',
   'workspaceList.noWorkspaces': 'Aucun espace de travail',
+  'workspaceList.loadFailed': 'Impossible de charger vos workspaces',
+  'workspaceList.loadFailedHint': 'Il s’agit d’un échec de connexion, pas d’un compte vide.',
   'workspaceList.footer': '{count} espace de travail | {count} espaces de travail',
   'workspaceList.footerRunning': '{count} en cours',
   'workspaceList.deleteDialog.title': "Supprimer l'espace de travail ?",
@@ -237,6 +241,9 @@ export default {
   'terminal.noWorktree': 'Worktree pas encore créé',
   'terminal.error': 'Erreur du terminal',
   'terminal.exited': 'Terminal fermé',
+  'terminal.disconnected': 'Connexion perdue',
+  'terminal.reconnecting': 'Reconnexion… (essai {attempt} sur {max})',
+  'terminal.reconnect': 'Reconnecter',
 
   // Chat Input
   'chatInput.placeholder': 'Message... (/ pour les skills)',
@@ -382,6 +389,28 @@ export default {
   'createPage.validationName': "Veuillez fournir un nom d'espace de travail.",
   'createPage.validationPath': 'Veuillez entrer le chemin du projet.',
   'createPage.validationBranch': 'Veuillez sélectionner une branche.',
+  'createPage.progress.validate': 'Validation de la demande…',
+  'createPage.progress.fetch-source-branch': 'Récupération de la branche source depuis origin…',
+  'createPage.progress.inspect-worktree': 'Inspection du worktree existant…',
+  'createPage.progress.extract-notion': 'Extraction de la page Notion…',
+  'createPage.progress.extract-sentry': 'Extraction de l’issue Sentry…',
+  'createPage.progress.create-record': 'Création du workspace…',
+  'createPage.progress.create-tasks': 'Création des tâches et critères d’acceptation…',
+  'createPage.progress.create-worktree': 'Création du worktree git…',
+  'createPage.progress.write-conventions': 'Écriture des conventions git…',
+  'createPage.progress.write-context-files': 'Écriture des fichiers de contexte…',
+  'createPage.progress.build-prompt': 'Construction du prompt initial…',
+  'createPage.progress.setup-script': 'Exécution de votre script d’installation…',
+  'createPage.progress.start-agent': 'Démarrage de l’agent…',
+  'createPage.progress.rollback': 'Annulation de la création échouée…',
+  'createPage.progress.done': 'Terminé',
+  'createPage.progress.step': 'Étape {index} sur {total}',
+  'createPage.errorAtStep': 'La création a échoué à l’étape « {step} » : {message}',
+  'createPage.override.title': 'Deux de vos choix ont été remplacés',
+  'createPage.override.setup-script-forced':
+    'Script d’installation ignoré : le relancer sur un worktree que vous avez déjà préparé pourrait en détruire le contenu.',
+  'createPage.override.permission-mode-downgraded':
+    'Mode de permission passé de Plan à Bypass : une boucle autonome ne peut pas tourner en Plan, qui bloque les outils et les modifications.',
 
   // Settings Page
   'settings.title': 'Paramètres',
@@ -839,6 +868,8 @@ export default {
 
   // Git Panel
   'git.title': 'Git',
+  'git.outputDialogTitle': 'Git a signalé une erreur',
+  'git.statsFailed': 'L’état git n’a pas pu être lu',
   'git.section.repository': 'Dépôt',
   'git.section.changes': 'Modifications',
   'git.section.pullRequest': 'Pull request',
@@ -1164,6 +1195,7 @@ export default {
     "Supprimer définitivement {path} ? Ce fichier n'est pas suivi par git — son contenu sera perdu.",
   'diff.deleteUntrackedConfirmOk': 'Supprimer',
   'diff.rollbackFailed': 'Échec du rollback',
+  'diff.rollbackFailedDetail': 'Échec du rollback : {error}',
   'diff.modeInspect': 'Édition',
   'diff.modeReview': 'Review',
   'diff.addComment': 'Ajouter un commentaire',
@@ -1184,6 +1216,10 @@ export default {
   'diff.searchFiles': 'Rechercher des fichiers…',
   'diff.noFileMatch': 'Aucun fichier correspondant',
   'diff.selectFile': 'Sélectionnez un fichier pour voir le diff',
+  'diff.fileLoadFailed': 'Ce diff n’a pas pu être chargé',
+  'diff.fileLoadFailedHint': 'Le fichier sur le disque est intact — seul le chargement du diff a échoué.',
+  'diff.fileListLoadFailed': 'La liste des fichiers n’a pas pu être chargée',
+  'diff.fileListLoadFailedHint': 'Il s’agit d’un échec de requête, pas d’une branche sans modification.',
   'diff.addToChat': 'Ajouter au chat',
   'diff.compareTitle': 'Comparer des commits',
   'diff.compareFrom': 'De',
@@ -1194,6 +1230,7 @@ export default {
   'diffViewer.save': 'Enregistrer',
   'diffViewer.savedAt': 'Enregistré',
   'diffViewer.saveFailed': 'Échec de l’enregistrement',
+  'diffViewer.saveFailedDetail': 'Échec de l’enregistrement : {error}',
   'diffViewer.unsavedChanges.title': 'Modifications non enregistrées',
   'diffViewer.unsavedChanges.message': 'Tu as des modifications non enregistrées. Que veux-tu faire ?',
   'diffViewer.unsavedChanges.save': 'Enregistrer',
@@ -1351,6 +1388,9 @@ export default {
   'settings.unsavedChanges.message': 'Ce projet a des modifications non enregistrées. Changer de projet les annulera.',
   'settings.unsavedChanges.discard': 'Ignorer et changer',
   'settings.unsavedChanges.cancel': 'Annuler',
+  'settings.loadFailed': 'Les réglages n’ont pas pu être chargés',
+  'settings.loadFailedHint':
+    'L’enregistrement est désactivé : le formulaire affiche les valeurs par défaut, et les écrire remplacerait votre configuration réelle.',
   'health.title': 'Santé',
   'health.tooltip': 'Santé du système',
   'changelog.title': 'Journal des changements',
@@ -1588,4 +1628,10 @@ export default {
   'network.login.unreachable': 'Kōbō est injoignable — vérifie ta connexion.',
   'layout.toggleWorkspaces': 'Afficher/masquer les espaces de travail',
   'layout.togglePanel': 'Afficher/masquer le panneau latéral',
+
+  // Unsaved-work navigation guard
+  'unsaved.title': 'Quitter sans enregistrer ?',
+  'unsaved.message': 'Vous avez des modifications non enregistrées. Quitter cette page les abandonne.',
+  'unsaved.leave': 'Quitter',
+  'unsaved.stay': 'Rester',
 }

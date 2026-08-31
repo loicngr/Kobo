@@ -37,6 +37,15 @@
       </q-btn>
     </div>
 
+    <div v-else-if="isDisconnected" class="col column items-center justify-center terminal-panel__state">
+      <q-icon name="link_off" size="20px" class="text-warning" />
+      <div>{{ t('terminal.disconnected') }}</div>
+      <div v-if="reconnectAttempt > 0 && reconnectAttempt <= reconnectMax" class="text-caption">
+        {{ t('terminal.reconnecting', { attempt: reconnectAttempt, max: reconnectMax }) }}
+      </div>
+      <q-btn dense flat no-caps icon="refresh" :label="t('terminal.reconnect')" @click="reconnectNow" />
+    </div>
+
     <div
       v-else-if="hasExited"
       class="col column items-center justify-center text-amber-6 text-caption"
@@ -81,6 +90,11 @@ import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { appendTokenToWsUrl, getToken } from 'src/utils/auth-token'
+import {
+  shouldConnectOnFocus,
+  TERMINAL_RECONNECT_MAX_ATTEMPTS,
+  terminalReconnectDelayMs,
+} from 'src/utils/terminal-reconnect'
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -97,6 +111,11 @@ interface TerminalEntry {
   container: HTMLDivElement // persistent DOM container for this terminal
   opened: boolean // whether terminal.open() has been called
   onDataDisposable?: { dispose: () => void }
+  /** Connection lost while the shell is still alive — distinct from `exited`. */
+  disconnected: boolean
+  /** 1-based count of consecutive reconnection attempts. 0 when connected. */
+  reconnectAttempt: number
+  reconnectTimer?: ReturnType<typeof setTimeout>
 }
 
 // Singleton map — survives component remount
@@ -127,8 +146,11 @@ const currentEntry = computed(() => {
   return terminalMap.get(workspaceId.value) ?? null
 })
 
-const isOpen = computed(() => !!currentEntry.value && !currentEntry.value.exited)
+const isOpen = computed(() => !!currentEntry.value && !currentEntry.value.exited && !currentEntry.value.disconnected)
 const hasExited = computed(() => !!currentEntry.value?.exited)
+const isDisconnected = computed(() => !!currentEntry.value?.disconnected)
+const reconnectAttempt = computed(() => currentEntry.value?.reconnectAttempt ?? 0)
+const reconnectMax = TERMINAL_RECONNECT_MAX_ATTEMPTS
 const terminalError = computed(() => currentEntry.value?.error ?? null)
 
 function bumpState() {
@@ -158,6 +180,8 @@ function connectWs(wid: string, entry: TerminalEntry) {
 
       if (msg.type === 'ready') {
         entry.error = null
+        entry.disconnected = false
+        entry.reconnectAttempt = 0
         bumpState()
         try {
           entry.fitAddon.fit()
@@ -181,6 +205,7 @@ function connectWs(wid: string, entry: TerminalEntry) {
 
   ws.onclose = () => {
     entry.ws = null
+    scheduleReconnect(wid, entry)
   }
 
   ws.onerror = () => {
@@ -198,6 +223,44 @@ function connectWs(wid: string, entry: TerminalEntry) {
       entry.ws.send(new TextEncoder().encode(data))
     }
   })
+}
+
+// Shared cleanup gesture — reused at every site that must not leave a stale
+// reconnect timer armed: closing the terminal, reopening it, the manual
+// "Reconnect" button, and refocusing a workspace tab. Repeating the inline
+// `if (entry.reconnectTimer) clearTimeout(...)` at four call sites is exactly
+// how one of them gets missed; centralizing it here means there's only one
+// place to get right.
+function clearReconnectTimer(entry: TerminalEntry) {
+  if (entry.reconnectTimer) {
+    clearTimeout(entry.reconnectTimer)
+    entry.reconnectTimer = undefined
+  }
+}
+
+// Declared with `function` (hoisted) — connectWs's onclose calls this, and
+// this calls back into connectWs on the retry timer, so neither can be a
+// `const` without breaking the mutual reference.
+function scheduleReconnect(wid: string, target: TerminalEntry) {
+  // A shell that exited on its own must NOT be respawned — only a lost
+  // connection is retried.
+  if (target.exited) return
+  const attempt = target.reconnectAttempt + 1
+  const delay = terminalReconnectDelayMs(attempt)
+  if (delay === null) return // give up; the user gets a manual Reconnect button
+  target.reconnectAttempt = attempt
+  target.disconnected = true
+  bumpState()
+  // Light jitter (same 0.8-1.2x spread as the main WS store's
+  // `_scheduleReconnect`), applied here rather than inside
+  // `terminalReconnectDelayMs` so that function stays a deterministic,
+  // exactly-testable schedule. Without it, several workspaces with a
+  // terminal open would all resume in lockstep after one backend restart.
+  const jitteredDelay = Math.round(delay * (0.8 + Math.random() * 0.4))
+  target.reconnectTimer = setTimeout(() => {
+    if (target.exited) return
+    connectWs(wid, target)
+  }, jitteredDelay)
 }
 
 function openTerminal() {
@@ -233,6 +296,8 @@ function openTerminal() {
     error: null,
     container,
     opened: false,
+    disconnected: false,
+    reconnectAttempt: 0,
   }
 
   terminalMap.set(wid, entry)
@@ -253,8 +318,15 @@ function closeTerminal() {
     detachTerminal()
   }
 
-  if (entry.ws && entry.ws.readyState === WebSocket.OPEN) {
-    entry.ws.close()
+  // Clear any pending reconnect timer AND stop this close from scheduling a
+  // new one — the classic leak this kind of fix introduces if skipped:
+  // ws.close() fires `onclose` asynchronously, and by then the entry is gone
+  // from terminalMap but scheduleReconnect doesn't consult the map, so it
+  // would happily reconnect a terminal the user just closed.
+  clearReconnectTimer(entry)
+  if (entry.ws) {
+    entry.ws.onclose = null
+    if (entry.ws.readyState === WebSocket.OPEN) entry.ws.close()
   }
   entry.onDataDisposable?.dispose()
   entry.terminal.dispose()
@@ -268,8 +340,10 @@ function reopenTerminal() {
 
   const old = terminalMap.get(wid)
   if (old) {
-    if (old.ws && old.ws.readyState === WebSocket.OPEN) {
-      old.ws.close()
+    clearReconnectTimer(old)
+    if (old.ws) {
+      old.ws.onclose = null
+      if (old.ws.readyState === WebSocket.OPEN) old.ws.close()
     }
     old.terminal.dispose()
     terminalMap.delete(wid)
@@ -277,6 +351,15 @@ function reopenTerminal() {
   currentAttachedId = null
   bumpState()
   nextTick(() => openTerminal())
+}
+
+function reconnectNow() {
+  const wid = workspaceId.value
+  const entry = currentEntry.value
+  if (!wid || !entry) return
+  clearReconnectTimer(entry)
+  entry.reconnectAttempt = 0
+  connectWs(wid, entry)
 }
 
 function attachTerminal(wid: string, entry: TerminalEntry) {
@@ -316,10 +399,13 @@ watch(workspaceId, (newId, oldId) => {
     if (entry) {
       nextTick(() => {
         attachTerminal(newId, entry)
-        if (!entry.ws || entry.ws.readyState !== WebSocket.OPEN) {
-          if (!entry.exited) {
-            connectWs(newId, entry)
-          }
+        // A reconnect backoff may still be armed from before this workspace
+        // tab lost focus. Cancel it before deciding whether to connect now —
+        // otherwise the timer fires later and races this immediate call,
+        // opening two sockets for the same entry.
+        clearReconnectTimer(entry)
+        if (shouldConnectOnFocus({ wsOpen: entry.ws?.readyState === WebSocket.OPEN, exited: entry.exited })) {
+          connectWs(newId, entry)
         }
       })
     }
@@ -357,3 +443,11 @@ onBeforeUnmount(() => {
   detachTerminal()
 })
 </script>
+
+<style lang="scss" scoped>
+.terminal-panel__state {
+  gap: var(--kobo-space-sm);
+  padding: var(--kobo-space-2xl);
+  color: var(--kobo-text-3);
+}
+</style>

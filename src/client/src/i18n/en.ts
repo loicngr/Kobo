@@ -6,8 +6,10 @@ export default {
   // Common
   'common.save': 'Save',
   'common.cancel': 'Cancel',
+  'common.retry': 'Retry',
   'common.delete': 'Delete',
   'common.close': 'Close',
+  'common.dismiss': 'Dismiss',
   'common.details': 'Details',
   'common.ok': 'OK',
   'whatsNew.title': "What's new",
@@ -121,6 +123,8 @@ export default {
   'workspaceList.idle': 'Idle',
   'workspaceList.archived': 'Archived',
   'workspaceList.noWorkspaces': 'No workspaces yet',
+  'workspaceList.loadFailed': 'Could not load your workspaces',
+  'workspaceList.loadFailedHint': 'This is a connection failure, not an empty account.',
   'workspaceList.footer': '{count} workspace | {count} workspaces',
   'workspaceList.footerRunning': '{count} running',
   'workspaceList.deleteDialog.title': 'Delete workspace?',
@@ -232,6 +236,9 @@ export default {
   'terminal.noWorktree': 'Worktree not created yet',
   'terminal.error': 'Terminal error',
   'terminal.exited': 'Terminal exited',
+  'terminal.disconnected': 'Connection lost',
+  'terminal.reconnecting': 'Reconnecting… (attempt {attempt} of {max})',
+  'terminal.reconnect': 'Reconnect',
 
   // Chat Input
   'chatInput.placeholder': 'Message... (/ for skills)',
@@ -376,6 +383,28 @@ export default {
   'createPage.validationName': 'Please provide a workspace name.',
   'createPage.validationPath': 'Please enter the project path.',
   'createPage.validationBranch': 'Please select a branch.',
+  'createPage.progress.validate': 'Validating the request…',
+  'createPage.progress.fetch-source-branch': 'Fetching the source branch from origin…',
+  'createPage.progress.inspect-worktree': 'Inspecting the existing worktree…',
+  'createPage.progress.extract-notion': 'Extracting the Notion page…',
+  'createPage.progress.extract-sentry': 'Extracting the Sentry issue…',
+  'createPage.progress.create-record': 'Creating the workspace…',
+  'createPage.progress.create-tasks': 'Creating tasks and acceptance criteria…',
+  'createPage.progress.create-worktree': 'Creating the git worktree…',
+  'createPage.progress.write-conventions': 'Writing git conventions…',
+  'createPage.progress.write-context-files': 'Writing context files…',
+  'createPage.progress.build-prompt': 'Building the initial prompt…',
+  'createPage.progress.setup-script': 'Running your setup script…',
+  'createPage.progress.start-agent': 'Starting the agent…',
+  'createPage.progress.rollback': 'Undoing the failed creation…',
+  'createPage.progress.done': 'Done',
+  'createPage.progress.step': 'Step {index} of {total}',
+  'createPage.errorAtStep': 'Creation failed at step "{step}": {message}',
+  'createPage.override.title': 'Two of your choices were overridden',
+  'createPage.override.setup-script-forced':
+    'Setup script skipped: re-running it on a worktree you already prepared could destroy its contents.',
+  'createPage.override.permission-mode-downgraded':
+    'Permission mode moved from Plan to Bypass: an auto-loop cannot run in Plan, which blocks tools and edits.',
 
   // Settings Page
   'settings.title': 'Settings',
@@ -829,6 +858,8 @@ export default {
 
   // Git Panel
   'git.title': 'Git',
+  'git.outputDialogTitle': 'Git reported an error',
+  'git.statsFailed': 'Git status could not be read',
   'git.section.repository': 'Repository',
   'git.section.changes': 'Changes',
   'git.section.pullRequest': 'Pull request',
@@ -1149,6 +1180,7 @@ export default {
   'diff.deleteUntrackedConfirm': 'Permanently delete {path}? This file is not tracked — its content will be lost.',
   'diff.deleteUntrackedConfirmOk': 'Delete',
   'diff.rollbackFailed': 'Rollback failed',
+  'diff.rollbackFailedDetail': 'Rollback failed: {error}',
   'diff.modeInspect': 'Edit',
   'diff.modeReview': 'Review',
   'diff.addComment': 'Add comment',
@@ -1169,6 +1201,10 @@ export default {
   'diff.searchFiles': 'Search files…',
   'diff.noFileMatch': 'No file matches',
   'diff.selectFile': 'Select a file to view diff',
+  'diff.fileLoadFailed': 'This diff could not be loaded',
+  'diff.fileLoadFailedHint': 'The file is unchanged on disk — only its diff failed to load.',
+  'diff.fileListLoadFailed': 'The file list could not be loaded',
+  'diff.fileListLoadFailedHint': 'This is a failed request, not a branch without changes.',
   'diff.addToChat': 'Add to chat',
   'diff.compareTitle': 'Compare commits',
   'diff.compareFrom': 'From',
@@ -1179,6 +1215,7 @@ export default {
   'diffViewer.save': 'Save',
   'diffViewer.savedAt': 'Saved',
   'diffViewer.saveFailed': 'Save failed',
+  'diffViewer.saveFailedDetail': 'Save failed: {error}',
   'diffViewer.unsavedChanges.title': 'Unsaved changes',
   'diffViewer.unsavedChanges.message': 'You have unsaved edits. What do you want to do?',
   'diffViewer.unsavedChanges.save': 'Save',
@@ -1334,6 +1371,9 @@ export default {
   'settings.unsavedChanges.message': 'This project has unsaved changes. Switching projects will discard them.',
   'settings.unsavedChanges.discard': 'Discard and switch',
   'settings.unsavedChanges.cancel': 'Cancel',
+  'settings.loadFailed': 'Settings could not be loaded',
+  'settings.loadFailedHint':
+    'Saving is disabled: the form is showing default values, and writing them would overwrite your real configuration.',
   'health.title': 'Health',
   'health.tooltip': 'System health',
   'changelog.title': 'Changelog',
@@ -1566,4 +1606,10 @@ export default {
   'network.login.unreachable': 'Kōbō is unreachable — check your connection.',
   'layout.toggleWorkspaces': 'Toggle workspaces panel',
   'layout.togglePanel': 'Toggle side panel',
+
+  // Unsaved-work navigation guard
+  'unsaved.title': 'Leave without saving?',
+  'unsaved.message': 'You have unsaved changes. Leaving this page discards them.',
+  'unsaved.leave': 'Leave',
+  'unsaved.stay': 'Stay',
 }

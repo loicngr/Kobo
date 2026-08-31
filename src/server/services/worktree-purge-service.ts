@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import { logError, logWarn } from '../utils/logger.js'
 import * as agentManager from './agent/orchestrator.js'
 import * as devServerService from './dev-server-service.js'
 import { getForgeProvider } from './forge/registry.js'
@@ -34,13 +35,13 @@ export async function purgeWorktree(workspaceId: string): Promise<PurgeResult> {
     await agentManager.stopAgentAndWait(workspaceId)
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    console.error(`[purge] stopAgentAndWait failed for '${workspace.name}':`, msg)
+    logError('purge', `stopAgent failed for '${workspace.name}'`, { workspaceId: workspace.id, error: msg })
   }
   try {
     await devServerService.stopDevServer(workspaceId)
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
-    console.error(`[purge] stopDevServer failed for '${workspace.name}':`, msg)
+    logError('purge', `stopDevServer failed for '${workspace.name}'`, { workspaceId: workspace.id, error: msg })
   }
   try {
     destroyTerminal(workspaceId)
@@ -122,7 +123,10 @@ async function captureRestoreData(
         prUrl = fresh.url ?? null
       }
     } catch (err) {
-      console.warn(`[purge] PR lookup for restore data failed:`, err instanceof Error ? err.message : err)
+      logWarn('purge', 'PR lookup for restore data failed', {
+        workspaceId: workspace.id,
+        error: err instanceof Error ? err.message : String(err),
+      })
     }
   }
 

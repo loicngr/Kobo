@@ -54,6 +54,7 @@ import * as purgeWorktreeService from '../services/worktree-purge-service.js'
 import * as worktreeService from '../services/worktree-service.js'
 import { resolveUniqueBranchAndPath } from '../utils/branch-resolver.js'
 import * as gitOps from '../utils/git-ops.js'
+import { logError } from '../utils/logger.js'
 import { slugifyProjectName } from '../utils/project-slug.js'
 import * as safePath from '../utils/safe-path.js'
 import { resolveSiblingWorkspaceWorktreePath } from '../utils/worktree-paths.js'
@@ -63,6 +64,130 @@ const app = new Hono()
 
 /** Tracks workspaces currently running a setup script to prevent concurrent executions. */
 const setupScriptRunning = new Set<string>()
+
+/**
+ * Ordered, named steps of `POST /api/workspaces`. The handler already runs
+ * these sequentially; naming them is what lets the create page say WHAT it is
+ * waiting on instead of showing an undifferentiated spinner for what can be
+ * several minutes (a user-supplied setup script runs inside this request).
+ */
+export const CREATE_WORKSPACE_STEPS = [
+  'validate',
+  'fetch-source-branch',
+  'inspect-worktree',
+  'extract-notion',
+  'extract-sentry',
+  'create-record',
+  'create-tasks',
+  'create-worktree',
+  'write-conventions',
+  'write-context-files',
+  'build-prompt',
+  'setup-script',
+  'start-agent',
+  // Never reached on a happy path. Emitted while the handler UNDOES a failed
+  // creation, so the page stops showing the last step it managed to reach.
+  'rollback',
+  'done',
+] as const
+
+export type CreateWorkspaceStep = (typeof CREATE_WORKSPACE_STEPS)[number]
+
+/**
+ * Emit one creation-progress beat.
+ *
+ * The channel is the client-supplied `creationId`, NOT a workspace id: while
+ * this handler runs, the workspace row may not exist yet and the client has
+ * no id to subscribe to (the POST response is still in flight). A WebSocket
+ * subscription is just a string in a Set, and `emitEphemeral` never persists,
+ * so there is no foreign key to satisfy — the existing machinery works as-is.
+ *
+ * No `creationId` (API consumers, tests) → no-op.
+ */
+function emitCreateProgress(creationId: string | undefined, step: CreateWorkspaceStep): void {
+  if (!creationId) return
+  try {
+    wsService.emitEphemeral(creationId, 'workspace:create-progress', {
+      creationId,
+      step,
+      index: CREATE_WORKSPACE_STEPS.indexOf(step),
+      total: CREATE_WORKSPACE_STEPS.length,
+    })
+  } catch (err) {
+    // Best-effort: a broken progress beat must never fail workspace creation.
+    console.error(`[workspaces] emitCreateProgress failed for step '${step}':`, err)
+  }
+}
+
+/**
+ * What a rollback provably cannot reach. The setup script may have installed
+ * dependencies in a global cache, started containers or written files outside
+ * the worktree — say so rather than implying a total undo.
+ */
+const SETUP_SCRIPT_ROLLBACK_CAVEAT =
+  ' The setup script had already run: anything it created outside the worktree (containers, global caches, files elsewhere) was NOT undone.'
+
+/** Terminal failure beat — names the step that broke, so the user never has to guess. */
+function emitCreateFailed(creationId: string | undefined, step: CreateWorkspaceStep, message: string): void {
+  if (!creationId) return
+  try {
+    wsService.emitEphemeral(creationId, 'workspace:create-failed', { creationId, step, message })
+  } catch (err) {
+    // Best-effort: a broken failure beat must never mask or replace the real error.
+    console.error(`[workspaces] emitCreateFailed failed for step '${step}':`, err)
+  }
+}
+
+/**
+ * Undo a creation that failed after the workspace row existed.
+ *
+ * Delegates to `deleteWorkspaceWithSideEffects` — the module's ONE demolition
+ * path — rather than growing a second cleanup that would drift from it. That
+ * function already stops the agent, stops the dev server, destroys the
+ * terminal, skips a worktree the user brought (`worktreeOwned === false`), and
+ * collects side-effect failures as warnings without ever throwing.
+ *
+ * It is declared with `async function` further down the file, so it is hoisted
+ * and callable from here.
+ *
+ * IMPORTANT: this is best-effort cleanup. It must NEVER throw, and it must
+ * NEVER become the error the caller reports — the original cause always wins.
+ */
+async function rollbackFailedCreation(
+  workspace: WorkspaceRow,
+  opts: { deleteLocalBranch: boolean },
+): Promise<string[]> {
+  try {
+    return await deleteWorkspaceWithSideEffects(workspace, {
+      deleteLocalBranch: opts.deleteLocalBranch,
+      // Nothing was ever pushed at this point in the creation flow.
+      deleteRemoteBranch: false,
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`[workspaces] rollback of '${workspace.id}' failed:`, message)
+    return [`Rollback of workspace '${workspace.name}' failed: ${message}`]
+  }
+}
+
+/**
+ * Move a freshly created workspace to `brainstorming`, never throwing.
+ *
+ * This transition is cosmetic — the agent starts either way — but it sits
+ * inside the creation try block, so letting it throw would hand a live
+ * workspace to the rollback path and demolish it. The realistic trigger is a
+ * race: a long setup script leaves the row visible in the sidebar, the user
+ * clicks Start, the agent moves the workspace to `executing`, and
+ * `executing -> brainstorming` is then a rejected transition. Losing the
+ * status beat is a cosmetic bug; losing the worktree is data loss.
+ */
+function markBrainstormingBestEffort(workspaceId: string): void {
+  try {
+    workspaceService.updateWorkspaceStatus(workspaceId, 'brainstorming')
+  } catch (err) {
+    console.error(`[workspaces] could not mark '${workspaceId}' as brainstorming:`, err)
+  }
+}
 
 const VALID_AGENT_PERMISSION_MODES: AgentPermissionMode[] = ['plan', 'bypass', 'strict', 'interactive']
 const VALID_WORKSPACE_STATUSES: WorkspaceStatus[] = [
@@ -221,6 +346,25 @@ app.post('/:id/switch-engine', migrationGuard, async (c) => {
 
 // POST /api/workspaces — create workspace
 app.post('/', migrationGuard, async (c) => {
+  // Declared outside the try so the outermost catch (any unforeseen throw,
+  // including a malformed request body) can still name a step instead of
+  // leaving the create-progress channel silent. Updated in lockstep with
+  // every `emitCreateProgress` call below via the assignment-expression
+  // argument, so it always reflects the last beat actually emitted.
+  let creationId: string | undefined
+  let currentStep: CreateWorkspaceStep = 'validate'
+  // The workspace row, as soon as it exists, so the outermost catch can undo a
+  // creation that broke on a step with no handler of its own. Only `name` ever
+  // changes afterwards (Notion / Sentry title), and the rollback uses it for
+  // log text alone — every field it acts on is fixed at creation time.
+  let createdWorkspace: WorkspaceRow | null = null
+  // Set only once WE created the worktree, which is also what created the
+  // branch. A failure before that point must not delete a branch we never made.
+  let createdBranch = false
+  // Hoisted out of the `build-prompt` block (declared with `const` there) so
+  // both rollback paths — the `start-agent` branch and the outermost catch —
+  // can read it to decide whether the setup-script caveat applies.
+  let setupScriptConfigured = false
   try {
     const body = await c.req.json<{
       name: string
@@ -243,6 +387,7 @@ app.post('/', migrationGuard, async (c) => {
       autoLoop?: boolean
       autoLoopSessionMode?: 'per_task' | 'continuous'
       worktreePath?: string
+      creationId?: string
     }>()
 
     // workingBranch is derived from git when worktreePath is provided, so
@@ -254,6 +399,10 @@ app.post('/', migrationGuard, async (c) => {
       return c.json({ error: 'Missing required field: workingBranch' }, 400)
     }
 
+    creationId = typeof body.creationId === 'string' && body.creationId.length > 0 ? body.creationId : undefined
+    currentStep = 'validate'
+    emitCreateProgress(creationId, currentStep)
+
     // Validate the engine id (if provided) against the registry. An unknown
     // engine is rejected up-front so we don't create orphan workspaces that
     // can't spawn an agent.
@@ -261,7 +410,9 @@ app.post('/', migrationGuard, async (c) => {
       const engines = listEngines()
       const validEngineIds = engines.map((e) => e.id as string)
       if (!validEngineIds.includes(body.engine)) {
-        return c.json({ error: `Unknown engine '${body.engine}'. Valid engines: ${validEngineIds.join(', ')}` }, 400)
+        const message = `Unknown engine '${body.engine}'. Valid engines: ${validEngineIds.join(', ')}`
+        emitCreateFailed(creationId, 'validate', message)
+        return c.json({ error: message, step: 'validate' }, 400)
       }
       // Cross-validate engine × permission mode: each engine declares which
       // modes it supports via `capabilities.permissionModes`. The UI already
@@ -272,12 +423,9 @@ app.post('/', migrationGuard, async (c) => {
         const engine = engines.find((e) => (e.id as string) === body.engine)
         const supported = engine?.capabilities.permissionModes ?? []
         if (!supported.includes(body.agentPermissionMode)) {
-          return c.json(
-            {
-              error: `Engine '${body.engine}' does not support agentPermissionMode '${body.agentPermissionMode}'. Supported: ${supported.join(', ')}`,
-            },
-            400,
-          )
+          const message = `Engine '${body.engine}' does not support agentPermissionMode '${body.agentPermissionMode}'. Supported: ${supported.join(', ')}`
+          emitCreateFailed(creationId, 'validate', message)
+          return c.json({ error: message, step: 'validate' }, 400)
         }
       }
     }
@@ -287,6 +435,8 @@ app.post('/', migrationGuard, async (c) => {
     // and only hard-block (422) when neither origin nor a local branch is usable.
     // The reuse path (body.worktreePath) needs no base ref, so a failed fetch is
     // simply logged there.
+    currentStep = 'fetch-source-branch'
+    emitCreateProgress(creationId, currentStep)
     const isReuseRequest = !!body.worktreePath
     let baseRef = `origin/${body.sourceBranch}`
     let usedLocalFallback = false
@@ -305,7 +455,9 @@ app.post('/', migrationGuard, async (c) => {
           `[workspaces] fetch of '${body.sourceBranch}' from origin failed; falling back to local branch: ${message}`,
         )
       } else {
-        return c.json({ error: `${message} — and no local branch '${body.sourceBranch}' exists to fall back on` }, 422)
+        const failure = `${message} — and no local branch '${body.sourceBranch}' exists to fall back on`
+        emitCreateFailed(creationId, 'fetch-source-branch', failure)
+        return c.json({ error: failure, step: 'fetch-source-branch' }, 422)
       }
     }
 
@@ -317,8 +469,14 @@ app.post('/', migrationGuard, async (c) => {
     let useReusedWorktree = false
     let reusedDerivedBranch: string | null = null
     if (body.worktreePath) {
+      currentStep = 'inspect-worktree'
+      emitCreateProgress(creationId, currentStep)
+    }
+    if (body.worktreePath) {
       if (!fs.existsSync(body.worktreePath)) {
-        return c.json({ error: `Worktree path does not exist: ${body.worktreePath}` }, 422)
+        const failure = `Worktree path does not exist: ${body.worktreePath}`
+        emitCreateFailed(creationId, 'inspect-worktree', failure)
+        return c.json({ error: failure, step: 'inspect-worktree' }, 422)
       }
       try {
         const commonDir = execFileSync('git', ['-C', body.worktreePath, 'rev-parse', '--git-common-dir'], {
@@ -326,24 +484,32 @@ app.post('/', migrationGuard, async (c) => {
         }).trim()
         const expectedCommonDir = path.join(body.projectPath, '.git')
         if (path.resolve(commonDir) !== path.resolve(expectedCommonDir)) {
-          return c.json({ error: `Worktree '${body.worktreePath}' belongs to a different repository` }, 422)
+          const failure = `Worktree '${body.worktreePath}' belongs to a different repository`
+          emitCreateFailed(creationId, 'inspect-worktree', failure)
+          return c.json({ error: failure, step: 'inspect-worktree' }, 422)
         }
         const branch = execFileSync('git', ['-C', body.worktreePath, 'rev-parse', '--abbrev-ref', 'HEAD'], {
           encoding: 'utf-8',
         }).trim()
         if (!branch || branch === 'HEAD') {
-          return c.json({ error: 'Worktree is in detached HEAD state and cannot be attached' }, 422)
+          const failure = 'Worktree is in detached HEAD state and cannot be attached'
+          emitCreateFailed(creationId, 'inspect-worktree', failure)
+          return c.json({ error: failure, step: 'inspect-worktree' }, 422)
         }
         reusedDerivedBranch = branch
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
-        return c.json({ error: `Failed to inspect worktree: ${message}` }, 422)
+        const failure = `Failed to inspect worktree: ${message}`
+        emitCreateFailed(creationId, 'inspect-worktree', failure)
+        return c.json({ error: failure, step: 'inspect-worktree' }, 422)
       }
       // Validate the worktree isn't already attached to another workspace.
       const dbForCheck = getDb()
       const existing = dbForCheck.prepare('SELECT id FROM workspaces WHERE worktree_path = ?').get(body.worktreePath)
       if (existing) {
-        return c.json({ error: 'This worktree is already attached to another Kōbō workspace' }, 422)
+        const failure = 'This worktree is already attached to another Kōbō workspace'
+        emitCreateFailed(creationId, 'inspect-worktree', failure)
+        return c.json({ error: failure, step: 'inspect-worktree' }, 422)
       }
       useReusedWorktree = true
     }
@@ -353,14 +519,20 @@ app.post('/', migrationGuard, async (c) => {
     // before createWorkspace and surface failures as 422.
     let notionContent: notionService.NotionPageContent | null = null
     if (body.notionUrl) {
+      currentStep = 'extract-notion'
+      emitCreateProgress(creationId, currentStep)
       if (!settingsService.getGlobalSettings().notionEnabled) {
-        return c.json({ error: 'Notion integration is disabled in Settings' }, 403)
+        const failure = 'Notion integration is disabled in Settings'
+        emitCreateFailed(creationId, 'extract-notion', failure)
+        return c.json({ error: failure, step: 'extract-notion' }, 403)
       }
       try {
         notionContent = await notionService.extractNotionPage(body.notionUrl)
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
-        return c.json({ error: `Failed to extract Notion page: ${message}` }, 422)
+        const failure = `Failed to extract Notion page: ${message}`
+        emitCreateFailed(creationId, 'extract-notion', failure)
+        return c.json({ error: failure, step: 'extract-notion' }, 422)
       }
       const assigneeProperty = settingsService.getGlobalSettings().notionAssigneeProperty
       if (assigneeProperty && body.notionUrl) {
@@ -378,14 +550,20 @@ app.post('/', migrationGuard, async (c) => {
 
     let sentryContent: sentryService.SentryIssueContent | null = null
     if (body.sentryUrl) {
+      currentStep = 'extract-sentry'
+      emitCreateProgress(creationId, currentStep)
       if (!settingsService.getGlobalSettings().sentryEnabled) {
-        return c.json({ error: 'Sentry integration is disabled in Settings' }, 403)
+        const failure = 'Sentry integration is disabled in Settings'
+        emitCreateFailed(creationId, 'extract-sentry', failure)
+        return c.json({ error: failure, step: 'extract-sentry' }, 403)
       }
       try {
         sentryContent = await sentryService.extractSentryIssue(body.sentryUrl)
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
-        return c.json({ error: `Failed to extract Sentry issue: ${message}` }, 422)
+        const failure = `Failed to extract Sentry issue: ${message}`
+        emitCreateFailed(creationId, 'extract-sentry', failure)
+        return c.json({ error: failure, step: 'extract-sentry' }, 422)
       }
       if (sentryContent && sentryContent.assignee.length === 0) {
         const sentryUrl = body.sentryUrl
@@ -453,6 +631,8 @@ app.post('/', migrationGuard, async (c) => {
     //      request — keeps the user's flow smooth at the cost of a longer
     //      branch name. The same hash is applied to BOTH the branch and the
     //      worktree path so they stay aligned.
+    currentStep = 'create-record'
+    emitCreateProgress(creationId, currentStep)
     let prospectiveWorktreePath: string
     let workingBranchAdjusted = false
     if (useReusedWorktree) {
@@ -470,7 +650,8 @@ app.post('/', migrationGuard, async (c) => {
         workingBranchAdjusted = resolved.adjusted
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
-        return c.json({ error: message }, 409)
+        emitCreateFailed(creationId, 'create-record', message)
+        return c.json({ error: message, step: 'create-record' }, 409)
       }
     }
 
@@ -496,6 +677,7 @@ app.post('/', migrationGuard, async (c) => {
       engine: body.engine,
       ...(useReusedWorktree ? {} : { worktreesPath: globalSettings.worktreesPath }),
     })
+    createdWorkspace = workspace
 
     // Enable auto-loop before starting the initial brainstorming session so
     // its model override is available when selecting that session's model.
@@ -545,6 +727,8 @@ app.post('/', migrationGuard, async (c) => {
       workspace = workspaceService.updateWorkspaceName(workspace.id, `${prefix}${sentryContent.title}`)
     }
 
+    currentStep = 'create-tasks'
+    emitCreateProgress(creationId, currentStep)
     // Create tasks from extracted Notion data
     if (notionContent) {
       let sortOrder = 0
@@ -600,6 +784,8 @@ app.post('/', migrationGuard, async (c) => {
       }
     }
 
+    currentStep = 'create-worktree'
+    emitCreateProgress(creationId, currentStep)
     // Create git worktree for the working branch — unless we're reusing an
     // existing one, in which case the path is taken straight from the body.
     let worktreePath: string
@@ -615,25 +801,27 @@ app.post('/', migrationGuard, async (c) => {
           projectSlug,
         )
         worktreePath = created.worktreePath
+        // Not an assumption: `createWorktree` reports which git command it ran.
+        // It falls back to attaching an existing branch, and deleting that one
+        // on rollback would destroy commits the user made before Kobo existed.
+        createdBranch = created.branchCreated
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err)
-        // Roll back the half-created workspace: a failed worktree creation must NOT
-        // leave an orphan record behind. Best-effort cleanup of any partial worktree
-        // dir git may have produced, then delete the just-inserted workspace row.
-        try {
-          worktreeService.removeWorktree(body.projectPath, prospectiveWorktreePath)
-        } catch {
-          // worktree may never have been registered — ignore
-        }
-        try {
-          workspaceService.deleteWorkspace(workspace.id)
-        } catch (delErr) {
-          console.error('[workspaces] rollback deleteWorkspace failed:', delErr)
-        }
-        return c.json({ error: `Failed to create worktree: ${message}` }, 500)
+        // Roll back the half-created workspace through the SHARED demolition
+        // path — a second inline cleanup here would drift from it. The branch
+        // is not deleted: `createWorktree` failed, so we never created one.
+        const rollbackWarnings = await rollbackFailedCreation(workspace, { deleteLocalBranch: false })
+        const failure = `Failed to create worktree: ${message}`
+        emitCreateFailed(creationId, 'create-worktree', failure)
+        return c.json(
+          { error: failure, step: 'create-worktree', rollback: { done: true, warnings: rollbackWarnings } },
+          500,
+        )
       }
     }
 
+    currentStep = 'write-conventions'
+    emitCreateProgress(creationId, currentStep)
     // Ensure Kobo-generated files are gitignored. Check both the root
     // .gitignore and .ai/.gitignore to avoid duplicate entries.
     try {
@@ -666,7 +854,10 @@ app.post('/', migrationGuard, async (c) => {
         fs.appendFileSync(rootGitignorePath, `${separator}${toAdd.join('\n')}\n`, 'utf-8')
       }
     } catch (err) {
-      console.error('[workspaces] Failed to update .gitignore:', err)
+      logError('workspaces', 'Failed to update .gitignore', {
+        workspaceId: workspace.id,
+        error: err instanceof Error ? err.message : String(err),
+      })
     }
 
     // Write git conventions to the worktree if configured
@@ -678,7 +869,10 @@ app.post('/', migrationGuard, async (c) => {
         const conventionsPath = path.join(aiDir, '.git-conventions.md')
         fs.writeFileSync(conventionsPath, effectiveSettings.gitConventions, 'utf-8')
       } catch (err) {
-        console.error('[workspaces] Failed to write .git-conventions.md:', err)
+        logError('workspaces', 'Failed to write .git-conventions.md', {
+          workspaceId: workspace.id,
+          error: err instanceof Error ? err.message : String(err),
+        })
       }
     }
 
@@ -686,7 +880,14 @@ app.post('/', migrationGuard, async (c) => {
     // persisted via setInitialPrompt). This guarantees the prompt survives a
     // setup-script crash and can be replayed by /:id/start.
     let setupScriptFailed = false
+    // Captured, not swallowed: a failed engine start used to reach only the
+    // server console while the route still answered 201 "created". A
+    // half-created workspace lies to the user, so this now drives a full
+    // rollback below instead of merely flipping the status to 'error'.
+    let agentStartError: string | null = null
 
+    currentStep = 'write-context-files'
+    emitCreateProgress(creationId, currentStep)
     // Save Notion content as markdown in worktree
     let notionFilePath: string | null = null
     if (notionContent && body.notionUrl) {
@@ -738,7 +939,10 @@ app.post('/', migrationGuard, async (c) => {
 
         fs.writeFileSync(notionFilePath, md, 'utf-8')
       } catch (err) {
-        console.error('[workspaces] Failed to save Notion content:', err)
+        logError('workspaces', 'Failed to save Notion content', {
+          workspaceId: workspace.id,
+          error: err instanceof Error ? err.message : String(err),
+        })
       }
     }
 
@@ -795,7 +999,10 @@ app.post('/', migrationGuard, async (c) => {
           sortOrder: 9999,
         })
       } catch (err) {
-        console.error('[workspaces] Failed to save Sentry content:', err)
+        logError('workspaces', 'Failed to save Sentry content', {
+          workspaceId: workspace.id,
+          error: err instanceof Error ? err.message : String(err),
+        })
         sentryFilePath = null
       }
     }
@@ -825,6 +1032,8 @@ app.post('/', migrationGuard, async (c) => {
     // VALID_TRANSITIONS contract intact (`created → extracting → brainstorming`
     // vs `created → brainstorming` when setup is skipped).
     {
+      currentStep = 'build-prompt'
+      emitCreateProgress(creationId, currentStep)
       // Resolve the per-feature initial-prompt templates with single-fallback
       // semantics: project || global is already handled inside getEffectiveSettings,
       // and a whitespace-only string acts as a user escape hatch (skip injection).
@@ -992,8 +1201,10 @@ Once the brainstorming + planning steps above are complete and you have a saved 
       // leaves the workspace in `error` state with `initial_prompt` ready for
       // a retry via POST /:id/start. Skipped when reusing an existing worktree
       // (rerunning could be destructive — drop a curated node_modules, etc.).
-      const setupScriptConfigured = effectiveSettings.setupScript && !body.skipSetupScript && !useReusedWorktree
+      setupScriptConfigured = Boolean(effectiveSettings.setupScript) && !body.skipSetupScript && !useReusedWorktree
       if (setupScriptConfigured) {
+        currentStep = 'setup-script'
+        emitCreateProgress(creationId, currentStep)
         workspaceService.updateWorkspaceStatus(workspace.id, 'extracting')
         wsService.emit(workspace.id, 'setup:output', { text: '[kobo] Running setup script...' })
         try {
@@ -1006,18 +1217,20 @@ Once the brainstorming + planning steps above are complete and you have a saved 
           if (result.exitCode !== 0) {
             workspaceService.updateWorkspaceStatus(workspace.id, 'error')
             setupScriptFailed = true
+            emitCreateFailed(creationId, 'setup-script', `Setup script exited with code ${result.exitCode}`)
           } else {
-            workspaceService.updateWorkspaceStatus(workspace.id, 'brainstorming')
+            markBrainstormingBestEffort(workspace.id)
           }
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err)
           console.error(`[workspaces] Setup script error: ${message}`)
           workspaceService.updateWorkspaceStatus(workspace.id, 'error')
           setupScriptFailed = true
+          emitCreateFailed(creationId, 'setup-script', message)
         }
       } else {
         // No setup step → go straight from `created` to `brainstorming`.
-        workspaceService.updateWorkspaceStatus(workspace.id, 'brainstorming')
+        markBrainstormingBestEffort(workspace.id)
       }
 
       if (setupScriptFailed) {
@@ -1026,7 +1239,15 @@ Once the brainstorming + planning steps above are complete and you have a saved 
             '[kobo] Setup script failed — the agent was NOT started. Your initial prompt has been saved. ' +
             'Fix the setup script (Settings → Scripts) and click Start to retry with the original prompt.',
         })
+        // This path keeps its deliberate recovery flow (workspace stays in
+        // `error`, prompt persisted, 201 response) — nothing is undone here.
+        // The step is already named on the create-progress channel by the
+        // `emitCreateFailed(creationId, 'setup-script', …)` calls above, at
+        // the point of detection (exit code / thrown error), so the create
+        // page never shows a mute spinner on this path.
       } else {
+        currentStep = 'start-agent'
+        emitCreateProgress(creationId, currentStep)
         try {
           // The brainstorming session (this very first startAgent call) uses
           // brainstormModel when the workspace was created with auto-loop
@@ -1068,14 +1289,39 @@ Once the brainstorming + planning steps above are complete and you have a saved 
         } catch (err) {
           const message = err instanceof Error ? err.message : String(err)
           console.error(`[workspaces] Failed to start agent: ${message}`)
-          try {
-            workspaceService.updateWorkspaceStatus(workspace.id, 'error')
-          } catch {
-            /* already logged */
-          }
+          agentStartError = message
         }
       }
     }
+
+    // A workspace whose agent never started is a half-created object, and a
+    // half-created object is exactly what lies to the user. Undo everything
+    // and report the step that broke.
+    if (agentStartError) {
+      emitCreateProgress(creationId, 'rollback')
+      // A worktree the user brought is not ours to remove, and neither is the
+      // branch it was already sitting on. `deleteWorkspaceWithSideEffects`
+      // already guards the worktree via `worktreeOwned`; the branch flag is
+      // ours to set.
+      const rollbackWarnings = await rollbackFailedCreation(workspace, {
+        deleteLocalBranch: !useReusedWorktree,
+      })
+
+      // The setup script has already run by this point — see the caveat's own
+      // comment for what that rollback cannot reach.
+      const setupCaveat = setupScriptConfigured ? SETUP_SCRIPT_ROLLBACK_CAVEAT : ''
+      const failure = `Failed to start the agent: ${agentStartError}. The workspace, its worktree and its branch were removed.${setupCaveat}`
+
+      emitCreateFailed(creationId, 'start-agent', failure)
+      return c.json({ error: failure, step: 'start-agent', rollback: { done: true, warnings: rollbackWarnings } }, 500)
+    }
+
+    // The agent is running. From here the workspace is a live object, not a
+    // half-created one, so it stops being the rollback's business: dropping the
+    // handle means a later throw (the read below, a header, a status beat)
+    // returns 500 without demolishing a worktree that already has an agent
+    // working in it. Failures before this line still roll back in full.
+    createdWorkspace = null
 
     // Return created workspace with tasks
     const workspaceWithTasks = workspaceService.getWorkspaceWithTasks(workspace.id)
@@ -1088,10 +1334,48 @@ Once the brainstorming + planning steps above are complete and you have a saved 
     if (usedLocalFallback) {
       c.header('X-Kobo-Source-Fallback', 'local')
     }
+    // The `done` beat means "the sequence completed the way the user expects" —
+    // NOT merely "the HTTP response is about to return 201". A workspace whose
+    // setup script failed still gets a 201 (its record exists, in `error`
+    // status, ready for retry via POST /:id/start) because that path has a
+    // deliberate recovery flow — but the create-progress channel must not
+    // claim success on it: the corresponding emitCreateFailed above already
+    // named the real failure. A failed agent start never reaches this line at
+    // all (see the rollback branch above).
+    if (!setupScriptFailed) {
+      currentStep = 'done'
+      emitCreateProgress(creationId, currentStep)
+    }
     return c.json(workspaceWithTasks, 201)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    // Anything past `create-record` left a row behind. Leaving it there is a
+    // half-created workspace whose existence lies to the user — and the client
+    // already tells them "the server undoes everything it created". Make that
+    // sentence true for every step, not only the two that had their own
+    // handler. Best-effort: the rollback never throws and never becomes the
+    // reported error.
+    if (createdWorkspace) {
+      emitCreateProgress(creationId, 'rollback')
+      const rollbackWarnings = await rollbackFailedCreation(createdWorkspace, { deleteLocalBranch: createdBranch })
+      logError('workspaces', 'Rolled back a creation that failed outside any per-step handler', {
+        workspaceId: createdWorkspace.id,
+        step: currentStep,
+        error: message,
+        ...(rollbackWarnings.length > 0 ? { rollbackWarnings } : {}),
+      })
+      // Say exactly what was undone — a claim of "everything" would be the
+      // very kind of comfortable lie this route is being fixed for.
+      const removed = createdBranch
+        ? ' The workspace, its worktree and its branch were removed.'
+        : ' The half-created workspace was removed.'
+      const cause = message.endsWith('.') ? message : `${message}.`
+      const failure = `${cause}${removed}${setupScriptConfigured ? SETUP_SCRIPT_ROLLBACK_CAVEAT : ''}`
+      emitCreateFailed(creationId, currentStep, failure)
+      return c.json({ error: failure, step: currentStep, rollback: { done: true, warnings: rollbackWarnings } }, 500)
+    }
+    emitCreateFailed(creationId, currentStep, message)
+    return c.json({ error: message, step: currentStep }, 500)
   }
 })
 

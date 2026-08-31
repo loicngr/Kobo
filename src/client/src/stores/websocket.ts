@@ -581,6 +581,20 @@ export const useWebSocketStore = defineStore('websocket', {
       })
     },
 
+    /**
+     * Subscribe to a non-workspace broadcast channel — currently the
+     * `creationId` a POST /api/workspaces progress stream is published on.
+     * Unlike `subscribe`, this sends NO `sync:request`: the channel has no
+     * persisted history to replay (the server uses `emitEphemeral`), and
+     * asking for one would query ws_events for an id that does not exist.
+     */
+    subscribeChannel(channelId: string) {
+      this._send({
+        type: 'subscribe',
+        payload: { workspaceId: channelId },
+      })
+    },
+
     sendChatMessage(
       workspaceId: string,
       content: string,
@@ -1350,6 +1364,36 @@ export const useWebSocketStore = defineStore('websocket', {
                       ? 'notification.autoLoopAwaitingClarification'
                       : null // 'manual'/'user-action' → user disabled it themselves, don't notify
             if (titleKey) notify(t(titleKey, { name: wsName }), undefined, wid)
+          }
+          break
+        }
+
+        case 'workspace:create-progress': {
+          const step = typeof payload.step === 'string' ? payload.step : ''
+          const creationId = typeof payload.creationId === 'string' ? payload.creationId : ''
+          if (creationId && step) {
+            workspaceStore.setCreationProgress({
+              creationId,
+              step,
+              index: typeof payload.index === 'number' ? payload.index : 0,
+              total: typeof payload.total === 'number' ? payload.total : 0,
+            })
+          }
+          break
+        }
+
+        case 'workspace:create-failed': {
+          // The step name is what makes the failure actionable — the page
+          // renders it; clearing the progress here would erase it.
+          const creationId = typeof payload.creationId === 'string' ? payload.creationId : ''
+          const step = typeof payload.step === 'string' ? payload.step : ''
+          if (creationId && step) {
+            workspaceStore.setCreationProgress({
+              creationId,
+              step,
+              index: -1,
+              total: 0,
+            })
           }
           break
         }

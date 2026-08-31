@@ -6,6 +6,7 @@ import { getDb } from '../db/index.js'
 import { SCHEMA_VERSION } from '../db/migrations.js'
 import { resolveCodexBinary } from '../services/agent/engines/codex/spawn.js'
 import { getGlobalSettings, getProjectSettings, SETTINGS_SCHEMA_VERSION } from '../services/settings-service.js'
+import { type LogLevel, readRecentLogs } from '../utils/logger.js'
 import { getDbPath, getKoboHome, getPackageVersion } from '../utils/paths.js'
 import { slugifyProjectName } from '../utils/project-slug.js'
 import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
@@ -133,6 +134,22 @@ function safeFileSize(p: string): number | null {
     return null
   }
 }
+
+const VALID_LOG_LEVELS: LogLevel[] = ['debug', 'info', 'warn', 'error']
+
+// GET /api/health/logs?limit=200&level=error — most recent entries, newest first.
+// Declared BEFORE any dynamic segment, per the route-ordering invariant.
+app.get('/logs', (c) => {
+  try {
+    const rawLimit = Number.parseInt(c.req.query('limit') ?? '', 10)
+    const limit = Number.isFinite(rawLimit) ? rawLimit : 200
+    const rawLevel = c.req.query('level')
+    const level = VALID_LOG_LEVELS.includes(rawLevel as LogLevel) ? (rawLevel as LogLevel) : undefined
+    return c.json({ entries: readRecentLogs(level ? { limit, level } : { limit }) })
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : 'Failed to read logs' }, 500)
+  }
+})
 
 // GET /api/health/report — detailed health diagnostics for the Health panel.
 app.get('/report', async (c) => {

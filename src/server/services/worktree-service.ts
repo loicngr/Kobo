@@ -122,7 +122,7 @@ export function createWorktree(
   baseRef: string,
   worktreesPath?: string | null,
   projectSlug?: string,
-): { worktreePath: string; base: 'origin' | 'local' } {
+): { worktreePath: string; base: 'origin' | 'local'; branchCreated: boolean } {
   const worktreesDir = resolveWorktreesRoot(projectPath, worktreesPath)
   if (!fs.existsSync(worktreesDir)) {
     fs.mkdirSync(worktreesDir, { recursive: true })
@@ -130,6 +130,11 @@ export function createWorktree(
 
   const worktreePath = resolveWorkspaceWorktreePath(projectPath, branchName, worktreesPath, projectSlug)
   const base: 'origin' | 'local' = baseRef.startsWith('origin/') ? 'origin' : 'local'
+
+  // Tracks which of the two git commands below actually ran. Callers use it to
+  // decide whether a rollback may delete the branch: deleting one we merely
+  // attached to would destroy commits Kobo never created.
+  let branchCreated = true
 
   try {
     git(projectPath, ['worktree', 'add', '-b', branchName, worktreePath, baseRef])
@@ -139,6 +144,7 @@ export function createWorktree(
     // If branch already exists, add worktree without creating the branch
     if (isGitBranchExistsError(message)) {
       git(projectPath, ['worktree', 'add', worktreePath, branchName])
+      branchCreated = false
     } else {
       throw new Error(`Failed to create worktree for branch '${branchName}': ${message}`)
     }
@@ -146,7 +152,7 @@ export function createWorktree(
 
   addToExclude(projectPath, worktreePath)
 
-  return { worktreePath, base }
+  return { worktreePath, base, branchCreated }
 }
 
 /** Remove a git worktree and clean up the .git/info/exclude entry.

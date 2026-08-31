@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { ApiError, apiFetch } from 'src/utils/api'
 import { DEFAULT_PR_NOTIFICATION_AUDIO_SETTINGS } from 'src/utils/notification-sounds'
 import type { ProjectColor } from 'src/utils/project-color'
 import { DEFAULT_WHIP_SHORTCUT } from 'src/utils/whip-shortcut'
@@ -296,6 +297,12 @@ export const useSettingsStore = defineStore('settings', {
     activeMcpServers: [] as ActiveMcpServer[],
     projects: [] as ProjectSettings[],
     loading: false,
+    /** True only after a settings load that actually succeeded. Every write
+     *  path checks it: a failed load leaves the form on the DEFAULT values
+     *  declared above, and saving those would overwrite the real config. */
+    loaded: false,
+    /** Server message of the last failed load, null when the last load worked. */
+    loadError: null as string | null,
     showVerboseSystemMessages: localStorage.getItem('kobo:showVerboseSystemMessages') === 'true',
   }),
 
@@ -306,15 +313,27 @@ export const useSettingsStore = defineStore('settings', {
   },
 
   actions: {
+    /** Throws unless a settings load has actually succeeded. Guards every write. */
+    _assertLoaded() {
+      if (!this.loaded) {
+        throw new Error('Settings were never loaded successfully — refusing to overwrite the stored configuration')
+      }
+    },
+
     async fetchSettings() {
       this.loading = true
       try {
-        const res = await fetch('/api/settings')
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const data = await res.json()
+        const data = await apiFetch<{ global: GlobalSettings; projects: ProjectSettings[] }>('/api/settings')
         this.global = data.global
         this.projects = data.projects
+        this.loadError = null
+        this.loaded = true
       } catch (err) {
+        // NEVER pretend a failed load is an empty configuration: the form would
+        // render the store defaults, and one click on Save would write them
+        // over the user's real scripts, conventions and tokens.
+        this.loadError = err instanceof Error ? err.message : String(err)
+        this.loaded = false
         console.error('[settings store] fetchSettings failed:', err)
       } finally {
         this.loading = false
@@ -323,9 +342,7 @@ export const useSettingsStore = defineStore('settings', {
 
     async fetchActiveMcpServers() {
       try {
-        const res = await fetch('/api/settings/mcp-servers')
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        this.activeMcpServers = await res.json()
+        this.activeMcpServers = await apiFetch<ActiveMcpServer[]>('/api/settings/mcp-servers')
       } catch (err) {
         console.error('[settings store] fetchActiveMcpServers failed:', err)
         this.activeMcpServers = []
@@ -342,46 +359,26 @@ export const useSettingsStore = defineStore('settings', {
       sentryInitialPromptTemplate: string
       changeSourceBranchScript: string
     }> {
-      const res = await fetch('/api/settings/defaults')
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      return res.json()
+      return apiFetch('/api/settings/defaults')
     },
 
     async updateGlobal(data: Partial<GlobalSettings>) {
-      try {
-        const res = await fetch('/api/settings/global', {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(data),
-        })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const updated = await res.json()
-        this.global = updated
-      } catch (err) {
-        console.error('[settings store] updateGlobal failed:', err)
-        throw err
-      }
+      this._assertLoaded()
+      this.global = await apiFetch<GlobalSettings>('/api/settings/global', { method: 'PUT', body: data })
     },
 
     async upsertProject(projectPath: string, data: Partial<Omit<ProjectSettings, 'path'>>) {
-      try {
-        const encoded = toBase64Url(projectPath)
-        const res = await fetch(`/api/settings/projects/${encoded}`, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(data),
-        })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const project = await res.json()
-        const idx = this.projects.findIndex((p) => p.path === projectPath)
-        if (idx >= 0) {
-          this.projects[idx] = project
-        } else {
-          this.projects.push(project)
-        }
-      } catch (err) {
-        console.error('[settings store] upsertProject failed:', err)
-        throw err
+      this._assertLoaded()
+      const encoded = toBase64Url(projectPath)
+      const project = await apiFetch<ProjectSettings>(`/api/settings/projects/${encoded}`, {
+        method: 'PUT',
+        body: data,
+      })
+      const idx = this.projects.findIndex((p) => p.path === projectPath)
+      if (idx >= 0) {
+        this.projects[idx] = project
+      } else {
+        this.projects.push(project)
       }
     },
 
@@ -395,27 +392,20 @@ export const useSettingsStore = defineStore('settings', {
     },
 
     async deleteProject(projectPath: string) {
-      try {
-        const encoded = toBase64Url(projectPath)
-        const res = await fetch(`/api/settings/projects/${encoded}`, { method: 'DELETE' })
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        this.projects = this.projects.filter((p) => p.path !== projectPath)
-      } catch (err) {
-        console.error('[settings store] deleteProject failed:', err)
-        throw err
-      }
+      this._assertLoaded()
+      const encoded = toBase64Url(projectPath)
+      await apiFetch(`/api/settings/projects/${encoded}`, { method: 'DELETE' })
+      this.projects = this.projects.filter((p) => p.path !== projectPath)
     },
 
     async fetchVoiceModels() {
       this.voiceModelsLoading = true
       try {
-        const res = await fetch('/api/voice/models')
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const data = (await res.json()) as {
+        const data = await apiFetch<{
           modelsDir: string
           available: VoiceModelStatus[]
           activeModel: string | null
-        }
+        }>('/api/voice/models')
         this.voiceModels = data.available
         this.voiceModelsDir = data.modelsDir
         this.global.voiceModel = data.activeModel
@@ -427,30 +417,31 @@ export const useSettingsStore = defineStore('settings', {
     },
 
     async cancelVoiceModelDownload(name: string) {
-      const res = await fetch(`/api/voice/models/${encodeURIComponent(name)}/download`, { method: 'DELETE' })
-      if (!res.ok && res.status !== 404) throw new Error(`HTTP ${res.status}`)
+      try {
+        await apiFetch(`/api/voice/models/${encodeURIComponent(name)}/download`, { method: 'DELETE' })
+      } catch (err) {
+        // A 404 means the download already finished or was never armed — not
+        // a failure from the user's point of view.
+        if (!(err instanceof ApiError) || err.status !== 404) throw err
+      }
       await this.fetchVoiceModels()
     },
 
     async fetchVoiceRuntime() {
       try {
-        const res = await fetch('/api/voice/runtime')
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        this.voiceRuntime = (await res.json()) as VoiceRuntimeStatus
+        this.voiceRuntime = await apiFetch<VoiceRuntimeStatus>('/api/voice/runtime')
       } catch (err) {
         console.error('[settings store] fetchVoiceRuntime failed:', err)
       }
     },
 
     async downloadVoiceModel(name: string) {
-      const res = await fetch(`/api/voice/models/${encodeURIComponent(name)}/download`, { method: 'POST' })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      await apiFetch(`/api/voice/models/${encodeURIComponent(name)}/download`, { method: 'POST' })
       await this.fetchVoiceModels()
     },
 
     async deleteVoiceModel(name: string) {
-      const res = await fetch(`/api/voice/models/${encodeURIComponent(name)}`, { method: 'DELETE' })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      await apiFetch(`/api/voice/models/${encodeURIComponent(name)}`, { method: 'DELETE' })
       await this.fetchVoiceModels()
     },
   },

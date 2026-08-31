@@ -7,6 +7,26 @@
         <div class="text-body1 text-grey-5 q-mt-xs">{{ $t('createPage.subtitle') }}</div>
       </header>
 
+      <!--
+        Both silent overrides (forced skip-setup-script, plan->bypass under
+        auto-loop) are surfaced here, at the top of the form, rather than only
+        as a note buried inside a collapsed "Advanced options" / "Configure
+        agent" panel. A change of security posture (permission mode) in
+        particular deserves to be seen without the user having to go looking
+        for it. `resolvedOverrides` is the single source of truth also used to
+        build the request payload, so this can never drift from what actually
+        gets sent.
+      -->
+      <div v-if="resolvedOverrides.applied.length > 0" class="create-page__overrides q-mb-lg">
+        <div class="create-page__overrides-title text-caption">
+          <q-icon name="info" size="16px" />
+          {{ $t('createPage.override.title') }}
+        </div>
+        <div v-for="id in resolvedOverrides.applied" :key="id" class="create-page__overrides-item text-caption">
+          {{ $t(`createPage.override.${id}`) }}
+        </div>
+      </div>
+
       <div class="create-sections column">
         <q-card flat bordered class="create-section-card">
           <q-card-section class="row items-start no-wrap q-gutter-md">
@@ -510,7 +530,10 @@
                     {{ reasoningOptions.find((item) => item.value === reasoningEffort)?.label ?? reasoningEffort }}
                   </q-chip>
                   <q-chip dense color="grey-9" text-color="grey-3" :icon="agentPermissionModeIcon">
-                    {{ agentPermissionModeOptions.find((item) => item.value === agentPermissionMode)?.label ?? agentPermissionMode }}
+                    {{
+                      agentPermissionModeOptions.find((item) => item.value === resolvedOverrides.agentPermissionMode)
+                        ?.label ?? resolvedOverrides.agentPermissionMode
+                    }}
                   </q-chip>
                 </q-item-label>
               </q-item-section>
@@ -582,7 +605,7 @@
               </div>
               <div class="col-12 col-sm-6">
                 <q-select
-                  v-model="agentPermissionMode"
+                  :model-value="resolvedOverrides.agentPermissionMode"
                   :options="agentPermissionModeOptions"
                   dark
                   dense
@@ -596,6 +619,7 @@
                   :disable="autoLoop"
                   :label="$t('agentPermissionMode.label')"
                   :hint="autoLoop ? $t('agentPermissionMode.autoLoopLocked') : undefined"
+                  @update:model-value="(val) => (agentPermissionMode = val as AgentPermissionMode)"
                 />
               </div>
             </q-card-section>
@@ -696,6 +720,12 @@
               />
             </div>
           </q-card-section>
+
+          <q-card-section v-if="submitting && creationStepLabel" class="create-page__progress text-caption q-pt-none">
+            <q-spinner-dots size="18px" />
+            <span class="create-page__progress-step">{{ creationStepLabel }}</span>
+            <span v-if="creationStepCounter" class="create-page__progress-counter">{{ creationStepCounter }}</span>
+          </q-card-section>
         </q-card>
       </div>
     </div>
@@ -715,10 +745,12 @@ import { useSettingsStore } from 'src/stores/settings'
 import { useTemplatesStore } from 'src/stores/templates'
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { resolveCreateOverrides } from 'src/utils/create-overrides'
 import { loadCreatePagePrefs, saveCreatePagePrefs } from 'src/utils/create-page-prefs'
 import { buildTemplateVars, expandTemplate } from 'src/utils/expand-template'
 import { playNotificationSound } from 'src/utils/notifications'
 import { projectNameForPath } from 'src/utils/project-color'
+import { registerUnsavedScope, unregisterUnsavedScope } from 'src/utils/unsaved-guard'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -750,7 +782,7 @@ const router = useRouter()
 const $q = useQuasar()
 const store = useWorkspaceStore()
 const settingsStore = useSettingsStore()
-const { t } = useI18n()
+const { t, te } = useI18n()
 
 const pathFilterOptions = ref<string[]>([])
 
@@ -837,7 +869,7 @@ function deriveDefaultAgentPermissionMode(projectPath: string, engineId: string)
 const agentPermissionMode = ref<AgentPermissionMode>(deriveDefaultAgentPermissionMode('', selectedEngineId.value))
 
 const agentPermissionModeIcon = computed<string>(() => {
-  switch (agentPermissionMode.value) {
+  switch (resolvedOverrides.value.agentPermissionMode) {
     case 'plan':
       return 'visibility'
     case 'bypass':
@@ -866,6 +898,24 @@ const branches = ref<string[]>([])
 const branchFilterOptions = ref<string[]>([])
 const loadingBranches = ref(false)
 const submitting = ref(false)
+const creationId = ref<string | null>(null)
+
+/** Human label for the step the server is currently on. Empty when idle. */
+const creationStepLabel = computed(() => {
+  const progress = store.creationProgress
+  if (!progress || progress.creationId !== creationId.value) return ''
+  const key = `createPage.progress.${progress.step}`
+  // Steps are server-defined and may grow over time (or briefly be a step
+  // name this build doesn't know yet, right after an upgrade). Fall back to
+  // the raw step id rather than showing nothing or throwing.
+  return te(key) ? t(key) : progress.step
+})
+
+const creationStepCounter = computed(() => {
+  const progress = store.creationProgress
+  if (!progress || progress.creationId !== creationId.value || progress.index < 0) return ''
+  return t('createPage.progress.step', { index: progress.index + 1, total: progress.total })
+})
 
 function filterBranches(val: string, update: (fn: () => void) => void) {
   update(() => {
@@ -1189,15 +1239,13 @@ function toggleNotion() {
 const useSentry = ref(false)
 const autoLoop = ref(false)
 const autoLoopSessionMode = ref<'per_task' | 'continuous'>('per_task')
-// Auto-loop ON forces 'bypass' (plan would deadlock the loop).
-watch(
-  () => autoLoop.value,
-  (enabled) => {
-    if (enabled && agentPermissionMode.value !== 'bypass') {
-      agentPermissionMode.value = 'bypass'
-    }
-  },
-)
+// NOTE: auto-loop no longer mutates `agentPermissionMode` directly. Doing so
+// used to permanently clobber the user's stored preference (e.g. 'plan')
+// with 'bypass' the moment auto-loop was enabled, so turning auto-loop back
+// off could never restore what the user actually picked. `resolvedOverrides`
+// (see below) now derives the effective, send-to-server mode from the raw
+// preference + autoLoop on every read — for both the request payload and
+// everywhere the mode is displayed — without ever touching the ref itself.
 
 function toggleAutoLoop() {
   autoLoop.value = !autoLoop.value
@@ -1226,6 +1274,19 @@ const useExistingWorktree = ref(false)
 const selectedWorktreePath = ref<string | null>(null)
 const orphanWorktrees = ref<Array<{ path: string; branch: string; head: string; suggestedSourceBranch: string }>>([])
 const loadingOrphanWorktrees = ref(false)
+
+// Single source of truth for both silent overrides this form applies
+// (forced skip-setup-script on worktree reuse, plan->bypass under auto-loop).
+// The template and the request payload both read from here, so what the UI
+// displays can never drift from what actually goes out over the wire.
+const resolvedOverrides = computed(() =>
+  resolveCreateOverrides({
+    useExistingWorktree: useExistingWorktree.value,
+    skipSetupScript: skipSetupScript.value,
+    autoLoop: autoLoop.value,
+    agentPermissionMode: agentPermissionMode.value,
+  }),
+)
 
 async function fetchOrphans() {
   if (!projectPath.value.trim()) {
@@ -1440,6 +1501,14 @@ onMounted(async () => {
   window.addEventListener('keyup', onCreateWindowKeyUp)
   window.addEventListener('blur', onCreateWindowBlur)
   document.addEventListener('visibilitychange', onCreateVisibilityChange)
+  // Only a form the user actually filled in is worth defending — a pristine
+  // page must never prompt.
+  registerUnsavedScope(
+    'create:form',
+    () =>
+      !submitting.value &&
+      (description.value.trim().length > 0 || manualTasks.value.length > 0 || manualCriteria.value.length > 0),
+  )
 })
 
 // Cleanup debounce timer on unmount
@@ -1449,6 +1518,7 @@ onUnmounted(() => {
   window.removeEventListener('keyup', onCreateWindowKeyUp)
   window.removeEventListener('blur', onCreateWindowBlur)
   document.removeEventListener('visibilitychange', onCreateVisibilityChange)
+  unregisterUnsavedScope('create:form')
   if (createVoiceTimeoutRef.value) {
     clearTimeout(createVoiceTimeoutRef.value)
     createVoiceTimeoutRef.value = null
@@ -1558,6 +1628,16 @@ async function handleCreate() {
   }
 
   submitting.value = true
+  // Subscribe BEFORE posting: the first progress beats are emitted while the
+  // POST is still in flight, and an unsubscribed channel drops them silently.
+  const wsStoreForProgress = useWebSocketStore()
+  const newCreationId =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? `create-${crypto.randomUUID()}`
+      : `create-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  creationId.value = newCreationId
+  store.clearCreationProgress()
+  wsStoreForProgress.subscribeChannel(newCreationId)
   try {
     const name = getFinalName()
 
@@ -1580,11 +1660,13 @@ async function handleCreate() {
       name,
       projectPath: projectPath.value.trim(),
       sourceBranch: branch.value as string,
+      creationId: newCreationId,
       // Reuse-an-existing-worktree branch: skip generating a workingBranch
-      // (backend ignores it when worktreePath is set) and force skipSetupScript.
+      // (backend ignores it when worktreePath is set). skipSetupScript is
+      // resolved once, below, via `resolvedOverrides`.
       // Standard branch: keep the generated workingBranch as before.
       ...(useExistingWorktree.value && selectedWorktreePath.value
-        ? { worktreePath: selectedWorktreePath.value, skipSetupScript: true, workingBranch }
+        ? { worktreePath: selectedWorktreePath.value, workingBranch }
         : { workingBranch }),
       engine: selectedEngineId.value,
       model: model.value,
@@ -1595,7 +1677,7 @@ async function handleCreate() {
       ...(showManualSections.value && manualCriteria.value.length > 0
         ? { acceptanceCriteria: manualCriteria.value }
         : {}),
-      ...(skipSetupScript.value && !useExistingWorktree.value ? { skipSetupScript: true } : {}),
+      ...(resolvedOverrides.value.skipSetupScript ? { skipSetupScript: true } : {}),
       ...(description.value.trim() ? { description: description.value.trim() } : {}),
       ...(autoLoop.value
         ? {
@@ -1605,9 +1687,9 @@ async function handleCreate() {
             brainstormReasoningEffort: brainstormReasoningEffort.value,
           }
         : {}),
-      // Auto-loop cannot run in 'plan' (blocks MCP + edits) — promote to bypass.
-      agentPermissionMode:
-        autoLoop.value && agentPermissionMode.value === 'plan' ? 'bypass' : agentPermissionMode.value,
+      // Resolved in exactly one place (utils/create-overrides) so what the page
+      // displays and what the request carries can never drift apart.
+      agentPermissionMode: resolvedOverrides.value.agentPermissionMode,
     }
 
     const workspace = await store.createWorkspace(payload)
@@ -1652,18 +1734,38 @@ async function handleCreate() {
     })
 
     // Subscribe to receive WebSocket events for this workspace
-    const wsStore = useWebSocketStore()
-    wsStore.subscribe(workspace.id)
+    wsStoreForProgress.subscribe(workspace.id)
     store.selectWorkspace(workspace.id)
+    // The form has nothing left to save: the workspace exists. Drop the scope
+    // BEFORE navigating — the `finally` below resets `submitting` synchronously,
+    // so by the time the router guard runs (a microtask later) the predicate
+    // would be true again and every successful creation would pop the
+    // "unsaved work" dialog, with "Stay" trapping the user on the form of a
+    // workspace that was already created. `onUnmounted` unregisters again; the
+    // registry tolerates that (see unsaved-guard.test.ts).
+    unregisterUnsavedScope('create:form')
     void router.push({ name: 'workspace', params: { id: workspace.id } })
   } catch (err) {
+    // The server undoes what it created when a step fails — every step past
+    // `create-record` — so there is nothing half-built to navigate to, only an
+    // error worth reading. The message itself flags whatever the rollback
+    // could not reach. The step name is the whole point: "it failed" is what
+    // the page said before.
+    const step = (err as { code?: string })?.code
+    const message = err instanceof Error && err.message ? err.message : t('createPage.errorCreating')
     $q.notify({
       type: 'negative',
-      message: err instanceof Error && err.message ? err.message : t('createPage.errorCreating'),
       position: 'top',
+      timeout: 0,
+      multiLine: true,
+      message: step ? t('createPage.errorAtStep', { step, message }) : message,
+      actions: [{ label: t('common.close'), color: 'white' }],
     })
   } finally {
     submitting.value = false
+    wsStoreForProgress.unsubscribe(newCreationId)
+    creationId.value = null
+    store.clearCreationProgress()
   }
 }
 </script>
@@ -1681,6 +1783,39 @@ async function handleCreate() {
   top: var(--kobo-space-md);
   left: var(--kobo-space-md);
   z-index: 1;
+}
+
+.create-page__progress {
+  display: flex;
+  align-items: center;
+  gap: var(--kobo-space-sm);
+  color: var(--kobo-text-2);
+}
+
+.create-page__progress-counter {
+  font-family: var(--kobo-font-mono);
+  color: var(--kobo-text-3);
+}
+
+.create-page__overrides {
+  display: flex;
+  flex-direction: column;
+  gap: var(--kobo-space-xs);
+  padding: var(--kobo-space-md);
+  border: 1px solid var(--kobo-border-subtle);
+  border-radius: var(--kobo-radius-sm);
+  background: var(--kobo-surface-2);
+}
+
+.create-page__overrides-title {
+  display: flex;
+  align-items: center;
+  gap: var(--kobo-space-xs);
+  color: var(--kobo-text-2);
+}
+
+.create-page__overrides-item {
+  color: var(--kobo-text-3);
 }
 
 .create-inner {

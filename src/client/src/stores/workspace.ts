@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { apiFetch } from 'src/utils/api'
 import type { ProviderId, UsageSnapshot } from '../types/usage'
 import { hasPrAttention } from '../utils/pr-status'
 import { isBusyStatus } from '../utils/workspace-status'
@@ -113,6 +114,11 @@ export interface CreateWorkspaceInput {
   acceptanceCriteria?: string[]
   autoLoop?: boolean
   autoLoopSessionMode?: 'per_task' | 'continuous'
+  // Client-generated channel id the caller subscribed to (via
+  // websocketStore.subscribeChannel) *before* this call, so it can receive
+  // `workspace:create-progress` / `workspace:create-failed` beats for a
+  // workspace that doesn't have an id yet.
+  creationId?: string
 }
 
 export class WorkspaceActionError extends Error {
@@ -387,6 +393,22 @@ export const useWorkspaceStore = defineStore('workspace', {
     archivedWorkspaces: [] as Workspace[],
     archivedLoaded: false,
     loading: false,
+    // Server message (or transport error) from the most recent failed
+    // fetchWorkspaces/fetchArchivedWorkspaces/fetchWorkspacesInfo call. Null
+    // means the last load succeeded — this is what lets the sidebar tell a
+    // dead backend apart from a genuinely empty account, which used to render
+    // identically.
+    listLoadError: null as string | null,
+    // Consecutive failures of the 30s `/api/workspaces/info` poll. The banner
+    // only goes up on the second one: a single dropped poll (a laptop waking
+    // up, a proxy blip) must not flash "backend is down" at a user whose
+    // backend is fine. The initial load has no such delay — someone who just
+    // opened the app is waiting for an answer.
+    listPollFailureStreak: 0,
+    // True when the last load of the ACTIVE list failed. Keeps a successful
+    // archived load from clearing a banner it has no authority over:
+    // `retryLoadWorkspaces` runs both loaders back to back.
+    activeListLoadFailed: false,
     loadingOlderEvents: false,
     hasMoreEvents: {} as Record<string, boolean>,
     providerUsage: {} as Record<ProviderId, UsageSnapshot | undefined>,
@@ -405,6 +427,10 @@ export const useWorkspaceStore = defineStore('workspace', {
     prSnapshots: {} as Record<string, PrSnapshot>,
     autoLoopStates: {} as Record<string, AutoLoopStatus>,
     crons: {} as Record<string, PendingCron[]>,
+    // Live step of an in-flight POST /api/workspaces, fed by the ephemeral
+    // `workspace:create-progress` events the server emits on the creationId
+    // channel. Null whenever no creation is running.
+    creationProgress: null as { creationId: string; step: string; index: number; total: number } | null,
     // Server-side memory truth. A workspace absent from this map has no agent,
     // whatever its `status` column says.
     agentLiveness: {} as Record<string, AgentLiveness>,
@@ -532,6 +558,14 @@ export const useWorkspaceStore = defineStore('workspace', {
       localStorage.removeItem(`kobo:session:${id}`)
     },
 
+    setCreationProgress(progress: { creationId: string; step: string; index: number; total: number }) {
+      this.creationProgress = progress
+    },
+
+    clearCreationProgress() {
+      this.creationProgress = null
+    },
+
     async toggleFavorite(id: string) {
       // Resolve by id both before and after the network call — the workspace
       // array can be reordered (or the workspace removed) by a concurrent
@@ -614,19 +648,19 @@ export const useWorkspaceStore = defineStore('workspace', {
     async fetchOrphanWorktrees(
       projectPath: string,
     ): Promise<Array<{ path: string; branch: string; head: string; suggestedSourceBranch: string }>> {
-      const url = `/api/git/orphan-worktrees?projectPath=${encodeURIComponent(projectPath)}`
-      const res = await fetch(url, { cache: 'no-store' })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      return res.json()
+      return apiFetch(`/api/git/orphan-worktrees?projectPath=${encodeURIComponent(projectPath)}`, {
+        cache: 'no-store',
+      })
     },
 
     async fetchWorkspaces() {
       this.loading = true
       try {
-        const res = await fetch('/api/workspaces')
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const data = await res.json()
-        this.workspaces = data.workspaces ?? data
+        const data = await apiFetch<{ workspaces?: Workspace[] } | Workspace[]>('/api/workspaces')
+        this.workspaces = Array.isArray(data) ? data : (data.workspaces ?? [])
+        this.listLoadError = null
+        this.activeListLoadFailed = false
+        this.listPollFailureStreak = 0
         // Finalize orphan sub-agents for workspaces that came back in a
         // terminal state. Covers the rare case where `session:ended` was
         // missed (WS reconnect, browser tab returning from sleep, etc.)
@@ -637,19 +671,34 @@ export const useWorkspaceStore = defineStore('workspace', {
           }
         }
       } catch (err) {
+        // A dead backend and an empty account used to render identically.
+        // Recording the failure — without touching `this.workspaces` — is
+        // what lets the sidebar say which one it is, without wiping out a
+        // list that was already showing on screen.
+        this.listLoadError = err instanceof Error ? err.message : String(err)
+        this.activeListLoadFailed = true
         console.error('[workspace store] fetchWorkspaces failed:', err)
       } finally {
         this.loading = false
       }
     },
 
+    /** Re-runs the loaders behind the sidebar's Retry button after a failed load. */
+    async retryLoadWorkspaces() {
+      await this.fetchWorkspaces()
+      if (this.archivedLoaded) await this.fetchArchivedWorkspaces()
+    },
+
     async fetchArchivedWorkspaces() {
       try {
-        const res = await fetch('/api/workspaces/archived')
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        this.archivedWorkspaces = await res.json()
+        this.archivedWorkspaces = await apiFetch<Workspace[]>('/api/workspaces/archived')
         this.archivedLoaded = true
+        // This loader used to post the banner and never lift it, so a failure
+        // survived the backend coming back. It clears its own failure — but
+        // never one the active list raised, which it knows nothing about.
+        if (!this.activeListLoadFailed) this.listLoadError = null
       } catch (err) {
+        this.listLoadError = err instanceof Error ? err.message : String(err)
         console.error('[workspace store] fetchArchivedWorkspaces failed:', err)
       }
     },
@@ -659,9 +708,9 @@ export const useWorkspaceStore = defineStore('workspace', {
       _workspaceDetailsRequestVersions.set(id, requestVersion)
       const eventVersionAtStart = _workspaceEventVersions.get(id) ?? 0
       try {
-        const res = await fetch(`/api/workspaces/${id}`)
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const data = await res.json()
+        const data = await apiFetch<{ workspace?: Workspace; tasks?: Task[] } & Partial<Workspace>>(
+          `/api/workspaces/${id}`,
+        )
 
         // Guard against stale response: user may have switched workspace while
         // this request was in flight.
@@ -689,7 +738,7 @@ export const useWorkspaceStore = defineStore('workspace', {
           if (aIdx >= 0) {
             this.archivedWorkspaces[aIdx] = { ...this.archivedWorkspaces[aIdx], ...incoming }
           } else if (incoming?.archivedAt) {
-            this.archivedWorkspaces.unshift(incoming)
+            this.archivedWorkspaces.unshift(incoming as Workspace)
           }
         }
 
@@ -731,14 +780,24 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     async createWorkspace(input: CreateWorkspaceInput) {
       try {
+        // Kept on raw fetch on purpose: this is the only call that reads the
+        // X-Kobo-Branch-Adjusted / X-Kobo-Source-Fallback response headers,
+        // which apiFetch deliberately does not expose. The error path below
+        // already reads the server message, so F43 does not apply here.
         const res = await fetch('/api/workspaces', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(input),
         })
         if (!res.ok) {
-          const body = (await res.json().catch(() => ({}))) as { error?: unknown }
-          throw new Error(typeof body.error === 'string' ? body.error : `HTTP ${res.status}`)
+          // The server destroys what it created when a creation step fails —
+          // every step past `create-record`, not just a couple of them — so
+          // there is nothing to push into the list, only an error to show. It
+          // names the step that broke, and says what the rollback could not
+          // reach (setup-script side effects outside the worktree).
+          const body = (await res.json().catch(() => ({}))) as { error?: unknown; step?: unknown }
+          const message = typeof body.error === 'string' ? body.error : `HTTP ${res.status}`
+          throw new WorkspaceActionError(message, typeof body.step === 'string' ? body.step : undefined)
         }
         // The server appends a `-<HASH>` suffix to the working branch (and
         // matching worktree path) when the requested name was already taken.
@@ -776,15 +835,10 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     async startWorkspace(id: string, prompt?: string, agentSessionId?: string, resume?: boolean) {
       try {
-        const res = await fetch(`/api/workspaces/${id}/start`, {
+        await apiFetch(`/api/workspaces/${id}/start`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ prompt, agentSessionId, resume }),
+          body: { prompt, agentSessionId, resume },
         })
-        if (!res.ok) {
-          const body = await res.json().catch(() => ({}))
-          throw new Error(body.error ?? `HTTP ${res.status}`)
-        }
         await this.fetchWorkspaces()
       } catch (err) {
         console.error('[workspace store] startWorkspace failed:', err)
@@ -1080,9 +1134,7 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     async fetchGitStats(id: string, opts: { freshFetch?: boolean; signal?: AbortSignal } = {}): Promise<GitStats> {
       const url = `/api/workspaces/${id}/git-stats${opts.freshFetch ? '?freshFetch=1' : ''}`
-      const res = await fetch(url, { signal: opts.signal })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const stats = (await res.json()) as GitStats
+      const stats = await apiFetch<GitStats>(url, { signal: opts.signal, timeoutMs: 60_000 })
       this.gitStatsCache[id] = stats
       return stats
     },
@@ -1510,14 +1562,18 @@ export const useWorkspaceStore = defineStore('workspace', {
       const eventVersionsAtStart = new Map(_workspaceEventVersions)
       const prVersionsAtStart = new Map(_prSnapshotVersions)
       try {
-        const res = await fetch('/api/workspaces/info', { cache: 'no-store' })
-        if (!res.ok) return
-        const data = (await res.json()) as {
+        const data = await apiFetch<{
           workspaces: Workspace[]
           prSnapshots: Record<string, PrSnapshot>
           gitStats: Record<string, GitStats>
           agentLiveness?: Record<string, AgentLiveness>
-        }
+        }>('/api/workspaces/info', { cache: 'no-store' })
+        // The backend answered: that is true whether or not this particular
+        // response is still the freshest one, so lift the banner before the
+        // staleness check below.
+        this.listPollFailureStreak = 0
+        this.activeListLoadFailed = false
+        this.listLoadError = null
         if (requestToken !== _workspacesInfoRequestToken) return
         // Full replacement, never a merge: an entry that disappeared means the
         // controller is gone, which is the single most important thing to show.
@@ -1557,6 +1613,16 @@ export const useWorkspaceStore = defineStore('workspace', {
         this.gitStatsCache = mergedStats
       } catch (err) {
         console.error('[workspace-store] fetchWorkspacesInfo failed:', err)
+        // A backend that dies AFTER the initial load is the dominant real
+        // case — the user leaves the tab open. The poll used to swallow that
+        // entirely, leaving a list that looked live but was frozen. Record
+        // the failure, and never touch `this.workspaces`: an error must not
+        // wipe data that is still valid on screen.
+        this.listPollFailureStreak += 1
+        if (this.listPollFailureStreak >= 2) {
+          this.activeListLoadFailed = true
+          this.listLoadError = err instanceof Error ? err.message : String(err)
+        }
       }
     },
 

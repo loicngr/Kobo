@@ -113,6 +113,21 @@ describe('createWorktree(projectPath, branchName, baseRef)', () => {
     expect(fs.existsSync(worktreePath)).toBe(true)
   })
 
+  // `branchCreated` decides whether a failed creation may `git branch -D` on
+  // rollback. Reporting `true` for a branch that was already there deletes work
+  // Kobo never owned, so the flag has to come from the code that knows which
+  // git command actually ran — not from the caller's optimistic assumption.
+  it('reports branchCreated=false when the branch already existed', () => {
+    gitSetup(repoDir, ['branch', 'feature/pre-existing'])
+    const { branchCreated } = createWorktree(repoDir, 'feature/pre-existing', 'origin/main')
+    expect(branchCreated).toBe(false)
+  })
+
+  it('reports branchCreated=true when it created the branch itself', () => {
+    const { branchCreated } = createWorktree(repoDir, 'feature/brand-new', 'origin/main')
+    expect(branchCreated).toBe(true)
+  })
+
   it('creates a worktree from a local branch when base ref has no origin/ prefix', () => {
     // `main` exists locally in repoDir (the clone). Base directly off it.
     const { worktreePath, base } = createWorktree(repoDir, 'feature/local-base', 'main')

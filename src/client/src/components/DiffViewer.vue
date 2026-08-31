@@ -184,7 +184,30 @@
       </q-input>
       <q-scroll-area class="diff-file-list q-pa-xs" style="width: 100%; border-right: 1px solid #2a2a4a;">
         <q-spinner-dots v-if="loading" size="24px" color="grey-6" class="q-ma-md" />
-        <div v-else-if="files.length === 0" class="text-caption text-grey-8 q-pa-sm">{{ $t('diff.noChanges') }}</div>
+        <template v-else>
+        <!-- A file list that is empty because the request failed is NOT a
+             branch without changes. The banner sits above whatever was
+             already listed, so a failed refresh never wipes valid data. -->
+        <div v-if="fileListError" class="text-caption q-pa-sm">
+          <div class="row items-center q-gutter-xs">
+            <q-icon name="error" size="16px" color="negative" />
+            <span class="text-negative">{{ $t('diff.fileListLoadFailed') }}</span>
+          </div>
+          <div class="text-grey-6 q-mt-xs">{{ fileListError }}</div>
+          <div class="text-grey-7 q-mt-xs">{{ $t('diff.fileListLoadFailedHint') }}</div>
+          <q-btn
+            dense
+            flat
+            no-caps
+            class="q-mt-xs"
+            icon="refresh"
+            :label="$t('common.retry')"
+            @click="retryFileList"
+          />
+        </div>
+        <div v-if="files.length === 0 && !fileListError" class="text-caption text-grey-8 q-pa-sm">
+          {{ $t('diff.noChanges') }}
+        </div>
         <div v-else-if="noFilterMatch" class="text-caption text-grey-8 q-pa-sm">{{ $t('diff.noFileMatch') }}</div>
         <q-tree
           v-else
@@ -279,6 +302,7 @@
             </template>
           </template>
         </q-tree>
+        </template>
       </q-scroll-area>
         <div class="diff-file-list-resize-handle" @mousedown="startFileListResize" />
       </div>
@@ -287,6 +311,22 @@
       <div class="col column" style="min-width: 0; position: relative;">
         <div v-if="loadingFile" class="col column items-center justify-center">
           <q-spinner-dots size="32px" color="indigo-4" />
+        </div>
+        <!-- Explicit failure state — the editor was already disposed above, so
+             there is nothing stale left behind under the new file's name.
+             Same shape as the sidebar, the settings page and the git stats
+             card: icon, title, server message, hint, inline retry. This is
+             the ONLY report for this failure; the toast that used to double
+             it (in a second, unrelated convention) is gone. -->
+        <div
+          v-else-if="fileLoadError"
+          class="col column items-center justify-center text-caption q-gutter-xs q-pa-lg text-center"
+        >
+          <q-icon name="error" size="24px" color="negative" />
+          <div class="text-negative">{{ $t('diff.fileLoadFailed') }}</div>
+          <div class="text-grey-6">{{ fileLoadError }}</div>
+          <div class="text-grey-7">{{ $t('diff.fileLoadFailedHint') }}</div>
+          <q-btn dense flat no-caps icon="refresh" :label="$t('common.retry')" @click="retryFileDiff" />
         </div>
         <div
           v-else-if="!selectedFile"
@@ -346,9 +386,11 @@ import { useQuasar } from 'quasar'
 import { type ReviewComment, useReviewDraft } from 'src/composables/use-review-draft'
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { ApiError, apiFetch } from 'src/utils/api'
 import { buildPathTree, countLeaves, type PathTreeNode } from 'src/utils/build-path-tree'
 import { monacoLanguageForPath } from 'src/utils/monaco-language'
 import { takePendingDiffOpen } from 'src/utils/pending-diff-open'
+import { registerUnsavedScope, unregisterUnsavedScope } from 'src/utils/unsaved-guard'
 import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -388,6 +430,9 @@ const workingBranch = ref('')
 const selectedFile = ref<string | null>(null)
 const loading = ref(false)
 const loadingFile = ref(false)
+const fileLoadError = ref<string | null>(null)
+/** Failure of the file-list request itself, told apart from "no changes". */
+const fileListError = ref<string | null>(null)
 const editorContainer = ref<HTMLElement | null>(null)
 const viewMode = ref<'side' | 'inline'>('side')
 // Compact mode: collapse unchanged regions in the Monaco diff editor so the
@@ -821,19 +866,28 @@ async function loadFiles() {
     if (!isCommitsMode.value && diffMode.value === 'branch' && includeUntracked.value) {
       params.set('includeUntracked', '1')
     }
-    const res = await fetch(`/api/workspaces/${props.workspaceId}/diff?${params}`, {
-      cache: 'no-store',
-    })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const data = await res.json()
+    const data = await apiFetch<{ files: DiffFile[]; sourceBranch?: string; workingBranch?: string }>(
+      `/api/workspaces/${props.workspaceId}/diff?${params}`,
+      { cache: 'no-store' },
+    )
     files.value = data.files
     sourceBranch.value = data.sourceBranch ?? ''
     workingBranch.value = data.workingBranch ?? ''
+    fileListError.value = null
   } catch (err) {
+    // This used to be a bare `console.error`, in the very component whose job
+    // is to show failures: the tree simply stayed empty and the user read it
+    // as "no changes". Record the failure; never clear `files`.
+    fileListError.value = err instanceof Error ? err.message : String(err)
     console.error('Failed to load diff files:', err)
   } finally {
     loading.value = false
   }
+}
+
+/** Retry button of the file-list failure state. */
+function retryFileList(): void {
+  void loadFiles()
 }
 
 async function loadFileDiff(filePath: string) {
@@ -841,6 +895,12 @@ async function loadFileDiff(filePath: string) {
   loadingFile.value = true
 
   try {
+    // Dispose FIRST. Disposing after the request left the PREVIOUS file's
+    // content on screen under the NEW file's name whenever the request failed
+    // — the user then reviewed a diff that was not the one they believed.
+    disposeEditor()
+    fileLoadError.value = null
+
     if (!monaco) {
       // Configure Monaco workers per language for proper syntax support
       self.MonacoEnvironment = {
@@ -876,13 +936,12 @@ async function loadFileDiff(filePath: string) {
     const fileQuery = isCommitsMode.value
       ? `path=${encodeURIComponent(filePath)}&mode=commits&from=${encodeURIComponent(props.compareFrom!)}&to=${encodeURIComponent(props.compareTo!)}`
       : `path=${encodeURIComponent(filePath)}&mode=${diffMode.value}`
-    const res = await fetch(`/api/workspaces/${props.workspaceId}/diff-file?${fileQuery}`, { cache: 'no-store' })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    const data = await res.json()
+    const data = await apiFetch<{ original?: string; modified?: string; modifiedSha?: string }>(
+      `/api/workspaces/${props.workspaceId}/diff-file?${fileQuery}`,
+      { cache: 'no-store' },
+    )
 
     const language = monacoLanguageForPath(filePath)
-
-    disposeEditor()
 
     const originalModel = monaco.editor.createModel(data.original ?? '', language)
     const modifiedModel = monaco.editor.createModel(data.modified ?? '', language)
@@ -934,13 +993,23 @@ async function loadFileDiff(filePath: string) {
       renderCommentZonesForFile(filePath)
     }
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    fileLoadError.value = message
     console.error('Failed to load file diff:', err)
   } finally {
     loadingFile.value = false
   }
 }
 
-async function saveCurrentFile(): Promise<{ ok: true } | { ok: false; status: number; currentSha?: string }> {
+/** Retry button of the inline failure state — re-runs the load for the file
+ *  the user is looking at. */
+function retryFileDiff(): void {
+  if (selectedFile.value) void loadFileDiff(selectedFile.value)
+}
+
+async function saveCurrentFile(): Promise<
+  { ok: true } | { ok: false; status: number; currentSha?: string; message?: string }
+> {
   // Belt-and-braces: commits mode is a read-only historical diff (canEdit is
   // false, so this is already unreachable from the UI). Guard the save path
   // itself so a future regression can never write a historical commit's
@@ -955,34 +1024,42 @@ async function saveCurrentFile(): Promise<{ ok: true } | { ok: false; status: nu
   const sha = baseSha.value
   savingFile.value = true
   try {
-    const res = await fetch(`/api/workspaces/${wsId}/save-file`, {
+    await apiFetch(`/api/workspaces/${wsId}/save-file`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: filePath, content, baseSha: sha }),
+      body: { path: filePath, content, baseSha: sha },
     })
-    if (res.status === 204) {
-      // Refetch the diff so baseSha + baseContent reflect the new on-disk truth.
-      const refresh = await fetch(
+    // Refetch the diff so baseSha + baseContent reflect the new on-disk truth.
+    // A failed refresh does not undo the save: report the save as done and let
+    // the stale sha surface as a 412 on the next attempt.
+    try {
+      const data = await apiFetch<{ modified?: string; modifiedSha?: string }>(
         `/api/workspaces/${wsId}/diff-file?path=${encodeURIComponent(filePath)}&mode=${diffMode.value}`,
         { cache: 'no-store' },
       )
-      if (refresh.ok) {
-        const data = await refresh.json()
-        baseSha.value = data.modifiedSha ?? ''
-        baseContent.value = data.modified ?? ''
-        dirty.value = modifiedModel.getValue() !== baseContent.value
-      }
-      $q.notify({ type: 'positive', message: t('diffViewer.savedAt'), position: 'top', timeout: 1200 })
-      return { ok: true }
+      baseSha.value = data.modifiedSha ?? ''
+      baseContent.value = data.modified ?? ''
+      dirty.value = modifiedModel.getValue() !== baseContent.value
+    } catch (err) {
+      console.error('[DiffViewer] post-save refresh failed:', err)
     }
-    if (res.status === 412) {
-      const body = (await res.json().catch(() => ({}))) as { currentSha?: string }
-      return { ok: false, status: 412, currentSha: body.currentSha }
-    }
-    return { ok: false, status: res.status }
+    $q.notify({ type: 'positive', message: t('diffViewer.savedAt'), position: 'top', timeout: 1200 })
+    return { ok: true }
   } catch (err) {
     console.error('[DiffViewer] save failed:', err)
-    return { ok: false, status: 0 }
+    if (err instanceof ApiError) {
+      if (err.status === 412) {
+        let currentSha: string | undefined
+        try {
+          currentSha = (JSON.parse(err.body) as { currentSha?: string }).currentSha
+        } catch {
+          // The 412 body is expected to carry the on-disk sha; without it the
+          // conflict dialog still works, it just cannot pre-fill anything.
+        }
+        return { ok: false, status: 412, currentSha }
+      }
+      return { ok: false, status: err.status, message: err.message }
+    }
+    return { ok: false, status: 0, message: err instanceof Error ? err.message : undefined }
   } finally {
     savingFile.value = false
   }
@@ -997,7 +1074,12 @@ async function onSaveClicked(): Promise<void> {
   }
   $q.notify({
     type: 'negative',
-    message: result.status === 409 ? t('diffViewer.agentRunning') : t('diffViewer.saveFailed'),
+    message:
+      result.status === 409
+        ? t('diffViewer.agentRunning')
+        : result.message
+          ? t('diffViewer.saveFailedDetail', { error: result.message })
+          : t('diffViewer.saveFailed'),
     position: 'top',
   })
 }
@@ -1042,24 +1124,13 @@ function confirmRollback(filePath: string, fileStatus: DiffFile['status']) {
 
 async function rollbackFile(filePath: string) {
   try {
-    const res = await fetch(`/api/workspaces/${props.workspaceId}/rollback-file`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ path: filePath }),
-    })
-    if (!res.ok) {
-      const body = (await res.json().catch(() => ({}))) as { error?: string }
-      $q.notify({
-        type: 'negative',
-        message: body.error || t('diff.rollbackFailed'),
-        position: 'top',
-      })
-      return
-    }
-    const body = (await res.json().catch(() => ({}))) as { target?: 'remote' | 'head' | 'deleted' }
+    const body = await apiFetch<{ target?: 'remote' | 'head' | 'deleted' } | undefined>(
+      `/api/workspaces/${props.workspaceId}/rollback-file`,
+      { method: 'POST', body: { path: filePath } },
+    )
     let message = t('diff.rollbackDoneRemote')
-    if (body.target === 'head') message = t('diff.rollbackDoneHead')
-    else if (body.target === 'deleted') message = t('diff.rollbackDoneDeleted')
+    if (body?.target === 'head') message = t('diff.rollbackDoneHead')
+    else if (body?.target === 'deleted') message = t('diff.rollbackDoneDeleted')
     $q.notify({ type: 'positive', message, position: 'top' })
     await loadFiles()
     if (selectedFile.value === filePath) {
@@ -1074,7 +1145,14 @@ async function rollbackFile(filePath: string) {
     }
   } catch (err) {
     console.error('rollbackFile failed:', err)
-    $q.notify({ type: 'negative', message: t('diff.rollbackFailed'), position: 'top' })
+    // The server names the reason (dirty index, missing baseline, agent
+    // running). Showing it beats a flat "Rollback failed".
+    const detail = err instanceof ApiError ? err.message : null
+    $q.notify({
+      type: 'negative',
+      message: detail ? t('diff.rollbackFailedDetail', { error: detail }) : t('diff.rollbackFailed'),
+      position: 'top',
+    })
   }
 }
 
@@ -1271,6 +1349,7 @@ onMounted(() => {
     const path = takePendingDiffOpen(props.workspaceId)
     if (path) void selectRequestedFile(path)
   })
+  registerUnsavedScope('diff:file', () => dirty.value)
 })
 
 onUnmounted(() => {
@@ -1279,6 +1358,7 @@ onUnmounted(() => {
   // editor and (in Review mode) view zones / mounted Vue apps.
   reviewDraft.flush() // before disposeEditor in case the user closed mid-edit
   disposeEditor()
+  unregisterUnsavedScope('diff:file')
 })
 </script>
 

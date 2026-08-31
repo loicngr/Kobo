@@ -1,5 +1,5 @@
 import { createPinia, setActivePinia } from 'pinia'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useSettingsStore } from '../stores/settings'
 
 describe('settings store', () => {
@@ -7,6 +7,8 @@ describe('settings store', () => {
     setActivePinia(createPinia())
     localStorage.clear()
   })
+
+  afterEach(() => vi.unstubAllGlobals())
 
   describe('showVerboseSystemMessages', () => {
     it('defaults to false when localStorage is empty', () => {
@@ -149,6 +151,83 @@ describe('settings store', () => {
       audioPrMergedSound: 'inherit',
       audioPrMergedEnabled: false,
       audioPrMergedVolume: 1,
+    })
+  })
+
+  describe('load failure is not an empty configuration', () => {
+    it('records the server message and refuses to consider itself loaded', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: false,
+          status: 500,
+          text: async () => JSON.stringify({ error: 'settings.json is unreadable' }),
+        } as unknown as Response),
+      )
+      const store = useSettingsStore()
+
+      await store.fetchSettings()
+
+      expect(store.loadError).toBe('settings.json is unreadable')
+      expect(store.loaded).toBe(false)
+      expect(store.loading).toBe(false)
+    })
+
+    it('refuses to save global settings that were never loaded', async () => {
+      const fetchMock = vi.fn()
+      vi.stubGlobal('fetch', fetchMock)
+      const store = useSettingsStore()
+      store.loaded = false
+
+      // The whole point: a failed load leaves the form on DEFAULTS, and saving
+      // those defaults would silently destroy the real configuration on disk.
+      await expect(store.updateGlobal({ editorCommand: 'code' })).rejects.toThrow(/never loaded/i)
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('refuses to write a project whose settings were never loaded', async () => {
+      const fetchMock = vi.fn()
+      vi.stubGlobal('fetch', fetchMock)
+      const store = useSettingsStore()
+      store.loaded = false
+
+      await expect(store.upsertProject('/tmp/proj', { displayName: 'X' })).rejects.toThrow(/never loaded/i)
+      await expect(store.deleteProject('/tmp/proj')).rejects.toThrow(/never loaded/i)
+      expect(fetchMock).not.toHaveBeenCalled()
+    })
+
+    it('clears the failure and unlocks writes once a load succeeds', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ global: { editorCommand: 'vim' }, projects: [] }),
+        } as unknown as Response),
+      )
+      const store = useSettingsStore()
+      store.loadError = 'previous failure'
+
+      await store.fetchSettings()
+
+      expect(store.loadError).toBeNull()
+      expect(store.loaded).toBe(true)
+      expect(store.global.editorCommand).toBe('vim')
+    })
+
+    it('surfaces the server message when saving fails', async () => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: false,
+          status: 400,
+          text: async () => JSON.stringify({ error: 'worktreesPath must be relative' }),
+        } as unknown as Response),
+      )
+      const store = useSettingsStore()
+      store.loaded = true
+
+      await expect(store.updateGlobal({ worktreesPath: '/abs' })).rejects.toThrow('worktreesPath must be relative')
     })
   })
 })

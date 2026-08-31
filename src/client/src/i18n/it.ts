@@ -6,8 +6,10 @@ export default {
   // Common
   'common.save': 'Salva',
   'common.cancel': 'Annulla',
+  'common.retry': 'Riprova',
   'common.delete': 'Elimina',
   'common.close': 'Chiudi',
+  'common.dismiss': 'Ignora',
   'common.details': 'Dettagli',
   'common.ok': 'OK',
   'whatsNew.title': 'Novità',
@@ -123,6 +125,8 @@ export default {
   'workspaceList.idle': 'Inattivo',
   'workspaceList.archived': 'Archiviati',
   'workspaceList.noWorkspaces': 'Nessun workspace ancora',
+  'workspaceList.loadFailed': 'Impossibile caricare i tuoi workspace',
+  'workspaceList.loadFailedHint': 'È un errore di connessione, non un account vuoto.',
   'workspaceList.footer': '{count} workspace | {count} workspace',
   'workspaceList.footerRunning': '{count} in esecuzione',
   'workspaceList.deleteDialog.title': 'Eliminare il workspace?',
@@ -237,6 +241,9 @@ export default {
   'terminal.noWorktree': 'Worktree non ancora creato',
   'terminal.error': 'Errore del terminale',
   'terminal.exited': 'Terminale chiuso',
+  'terminal.disconnected': 'Connessione persa',
+  'terminal.reconnecting': 'Riconnessione… (tentativo {attempt} di {max})',
+  'terminal.reconnect': 'Riconnetti',
 
   // Chat Input
   'chatInput.placeholder': 'Messaggio... (/ per le skill)',
@@ -382,6 +389,28 @@ export default {
   'createPage.validationName': 'Indica un nome per il workspace.',
   'createPage.validationPath': 'Inserisci il percorso del progetto.',
   'createPage.validationBranch': 'Seleziona un branch.',
+  'createPage.progress.validate': 'Validazione della richiesta…',
+  'createPage.progress.fetch-source-branch': 'Recupero del branch sorgente da origin…',
+  'createPage.progress.inspect-worktree': 'Ispezione del worktree esistente…',
+  'createPage.progress.extract-notion': 'Estrazione della pagina Notion…',
+  'createPage.progress.extract-sentry': 'Estrazione dell’issue Sentry…',
+  'createPage.progress.create-record': 'Creazione del workspace…',
+  'createPage.progress.create-tasks': 'Creazione di task e criteri di accettazione…',
+  'createPage.progress.create-worktree': 'Creazione del worktree git…',
+  'createPage.progress.write-conventions': 'Scrittura delle convenzioni git…',
+  'createPage.progress.write-context-files': 'Scrittura dei file di contesto…',
+  'createPage.progress.build-prompt': 'Costruzione del prompt iniziale…',
+  'createPage.progress.setup-script': 'Esecuzione del tuo script di installazione…',
+  'createPage.progress.start-agent': 'Avvio dell’agente…',
+  'createPage.progress.rollback': 'Annullamento della creazione fallita…',
+  'createPage.progress.done': 'Fatto',
+  'createPage.progress.step': 'Passo {index} di {total}',
+  'createPage.errorAtStep': 'Creazione fallita al passo «{step}»: {message}',
+  'createPage.override.title': 'Due delle tue scelte sono state sostituite',
+  'createPage.override.setup-script-forced':
+    'Script di installazione saltato: rieseguirlo su un worktree già preparato potrebbe distruggerne il contenuto.',
+  'createPage.override.permission-mode-downgraded':
+    'Modalità permessi passata da Plan a Bypass: un ciclo autonomo non può girare in Plan, che blocca strumenti e modifiche.',
 
   // Settings Page
   'settings.title': 'Impostazioni',
@@ -836,6 +865,8 @@ export default {
 
   // Git Panel
   'git.title': 'Git',
+  'git.outputDialogTitle': 'Git ha segnalato un errore',
+  'git.statsFailed': 'Impossibile leggere lo stato git',
   'git.section.repository': 'Repository',
   'git.section.changes': 'Modifiche',
   'git.section.pullRequest': 'Pull request',
@@ -1161,6 +1192,7 @@ export default {
     'Eliminare definitivamente {path}? Questo file non è tracciato da git — il suo contenuto andrà perso.',
   'diff.deleteUntrackedConfirmOk': 'Elimina',
   'diff.rollbackFailed': 'Rollback fallito',
+  'diff.rollbackFailedDetail': 'Rollback non riuscito: {error}',
   'diff.modeInspect': 'Modifica',
   'diff.modeReview': 'Review',
   'diff.addComment': 'Aggiungi commento',
@@ -1181,6 +1213,10 @@ export default {
   'diff.searchFiles': 'Cerca file…',
   'diff.noFileMatch': 'Nessun file corrispondente',
   'diff.selectFile': 'Seleziona un file per visualizzare il diff',
+  'diff.fileLoadFailed': 'Impossibile caricare questo diff',
+  'diff.fileLoadFailedHint': 'Il file su disco è intatto — è fallito solo il caricamento del diff.',
+  'diff.fileListLoadFailed': 'Impossibile caricare l’elenco dei file',
+  'diff.fileListLoadFailedHint': 'È una richiesta fallita, non un branch senza modifiche.',
   'diff.addToChat': 'Aggiungi alla chat',
   'diff.compareTitle': 'Confronta commit',
   'diff.compareFrom': 'Da',
@@ -1191,6 +1227,7 @@ export default {
   'diffViewer.save': 'Salva',
   'diffViewer.savedAt': 'Salvato',
   'diffViewer.saveFailed': 'Salvataggio non riuscito',
+  'diffViewer.saveFailedDetail': 'Salvataggio non riuscito: {error}',
   'diffViewer.unsavedChanges.title': 'Modifiche non salvate',
   'diffViewer.unsavedChanges.message': 'Hai modifiche non salvate. Cosa vuoi fare?',
   'diffViewer.unsavedChanges.save': 'Salva',
@@ -1348,6 +1385,9 @@ export default {
   'settings.unsavedChanges.message': 'Questo progetto ha modifiche non salvate. Cambiando progetto andranno perse.',
   'settings.unsavedChanges.discard': 'Scarta e cambia',
   'settings.unsavedChanges.cancel': 'Annulla',
+  'settings.loadFailed': 'Impossibile caricare le impostazioni',
+  'settings.loadFailedHint':
+    'Il salvataggio è disattivato: il modulo mostra i valori predefiniti e scriverli sovrascriverebbe la tua configurazione reale.',
   'health.title': 'Stato',
   'health.tooltip': 'Stato del sistema',
   'changelog.title': 'Changelog',
@@ -1587,4 +1627,10 @@ export default {
   'network.login.unreachable': 'Kōbō non è raggiungibile — controlla la connessione.',
   'layout.toggleWorkspaces': 'Mostra/nascondi il pannello degli spazi',
   'layout.togglePanel': 'Mostra/nascondi il pannello laterale',
+
+  // Unsaved-work navigation guard
+  'unsaved.title': 'Uscire senza salvare?',
+  'unsaved.message': 'Hai modifiche non salvate. Uscire da questa pagina le scarta.',
+  'unsaved.leave': 'Esci',
+  'unsaved.stay': 'Resta',
 }

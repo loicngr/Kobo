@@ -672,9 +672,26 @@
         </div>
       </div>
 
+      <!-- Failed load — NOT the same thing as an empty account. -->
+      <div v-if="store.listLoadError" class="q-pa-lg text-center">
+        <q-icon name="cloud_off" size="28px" class="text-negative" />
+        <div class="text-caption text-negative q-mt-sm">{{ $t('workspaceList.loadFailed') }}</div>
+        <div class="text-caption text-grey-6 q-mt-xs">{{ store.listLoadError }}</div>
+        <div class="text-caption text-grey-7 q-mt-xs">{{ $t('workspaceList.loadFailedHint') }}</div>
+        <q-btn
+          dense
+          flat
+          no-caps
+          class="q-mt-sm"
+          icon="refresh"
+          :label="$t('common.retry')"
+          @click="store.retryLoadWorkspaces()"
+        />
+      </div>
+
       <!-- Empty state -->
       <div
-        v-if="filteredNeedsAttention.length === 0 && filteredRunning.length === 0 && filteredIdle.length === 0 && filteredArchived.length === 0"
+        v-else-if="filteredNeedsAttention.length === 0 && filteredRunning.length === 0 && filteredIdle.length === 0 && filteredArchived.length === 0"
         class="q-pa-lg text-center text-grey-6 text-caption"
       >
         <template v-if="store.loading">{{ $t('common.loading') }}</template>

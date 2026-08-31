@@ -1,3 +1,4 @@
+import { Notify } from 'quasar'
 import { useSettingsStore } from 'src/stores/settings'
 import { DEFAULT_NOTIFICATION_SOUND, resolveSoundId, soundUrl } from 'src/utils/notification-sounds'
 
@@ -137,4 +138,46 @@ export function notify(
         : (settings.global.audioNotificationSound ?? DEFAULT_NOTIFICATION_SOUND)
     queueNotificationSound(sound, volumeOverride ?? settings.global.audioNotificationVolume)
   }
+}
+
+export interface RetryableErrorOptions {
+  /** Already translated by the caller — this module has no i18n context. */
+  retryLabel: string
+  onRetry: () => void
+  detailsLabel?: string
+  onDetails?: () => void
+  /** Required for the same reason `retryLabel` is: an internal English default
+   *  would be a user-visible string no locale file can reach. */
+  dismissLabel: string
+  /** Milliseconds. Defaults to 0 (stays until dismissed). */
+  timeout?: number
+}
+
+/**
+ * A failure notification the user can actually act on.
+ *
+ * Every error toast in the client used to be a dead end: read it, watch it
+ * vanish after six seconds, redo the gesture by hand. The default timeout is
+ * 0 on purpose — a toast carrying a button the user must click cannot also
+ * dismiss itself while they read it. Retry is never invented by this helper:
+ * the caller decides whether an action is safe to offer, exactly like the
+ * network helper leaves retry to the caller.
+ */
+export function notifyRetryableError(message: string, options: RetryableErrorOptions): void {
+  const actions: Array<{ label: string; color: string; handler?: () => void }> = [
+    { label: options.retryLabel, color: 'white', handler: options.onRetry },
+  ]
+  if (options.detailsLabel && options.onDetails) {
+    actions.push({ label: options.detailsLabel, color: 'white', handler: options.onDetails })
+  }
+  actions.push({ label: options.dismissLabel, color: 'grey-5' })
+
+  Notify.create({
+    type: 'negative',
+    position: 'top',
+    multiLine: true,
+    message,
+    timeout: options.timeout ?? 0,
+    actions,
+  })
 }
