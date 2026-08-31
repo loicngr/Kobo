@@ -398,6 +398,14 @@ app.post('/', migrationGuard, async (c) => {
     if (!body.worktreePath && !body.workingBranch) {
       return c.json({ error: 'Missing required field: workingBranch' }, 400)
     }
+    // Only when the caller actually supplies it: when worktreePath is given
+    // instead, workingBranch is derived from git itself further down, not
+    // user input. A name starting with `-` would otherwise read as a git
+    // option (`--upload-pack=…`) rather than a branch name — see
+    // isValidBranchName's own doc comment for why this specific shape matters.
+    if (body.workingBranch && !gitOps.isValidBranchName(body.workingBranch)) {
+      return c.json({ error: `Invalid working branch name: ${body.workingBranch}` }, 400)
+    }
 
     creationId = typeof body.creationId === 'string' && body.creationId.length > 0 ? body.creationId : undefined
     currentStep = 'validate'

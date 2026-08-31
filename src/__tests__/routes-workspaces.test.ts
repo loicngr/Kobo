@@ -526,6 +526,50 @@ describe('POST /api/workspaces', () => {
     expect(agentManager.startAgent).toHaveBeenCalledOnce()
   })
 
+  it('refuses a working branch name git would read as an option', async () => {
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: '--upload-pack=/tmp/evil.sh',
+      }),
+    })
+
+    expect(res.status).toBe(400)
+    const data = await res.json()
+    expect(data.error).toContain('Invalid working branch name')
+    expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('does not validate workingBranch when it is derived from an existing worktreePath', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        worktreePath: '/tmp/existing-worktree',
+      }),
+    })
+
+    // No 400 from the branch-name guard: workingBranch is absent here on
+    // purpose, resolved from git further down this handler, not user input.
+    expect(res.status).not.toBe(400)
+  })
+
   it('emits one named progress beat per creation step on the creationId channel', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
     vi.mocked(worktreeService.createWorktree).mockReturnValue({
