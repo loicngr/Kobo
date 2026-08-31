@@ -5,8 +5,8 @@
       <q-chip
         dense
         square
-        :color="snapshot.state === 'OPEN' ? 'green-9' : 'grey-9'"
-        :text-color="snapshot.state === 'OPEN' ? 'green-3' : 'grey-3'"
+        :color="snapshot.state === 'OPEN' ? 'green-9' : 'kobo-surface-2'"
+        :text-color="snapshot.state === 'OPEN' ? 'green-3' : 'kobo-1'"
         :label="snapshot.state"
         class="pr-panel__state"
       />
@@ -195,13 +195,13 @@ const showPassed = ref(false)
 function reviewerColor(state: PrSnapshot['reviewers'][number]['state']): string {
   switch (state) {
     case 'APPROVED':
-      return '#4ade80'
+      return 'var(--kobo-success)'
     case 'CHANGES_REQUESTED':
-      return '#ef4444'
+      return 'var(--kobo-danger)'
     case 'COMMENTED':
-      return '#f59e0b'
+      return 'var(--kobo-warning)'
     default:
-      return '#6b7280'
+      return 'var(--kobo-text-3)'
   }
 }
 
@@ -229,7 +229,7 @@ const ciColor = computed(() => {
     case 'PENDING':
       return 'amber-4'
     default:
-      return 'grey-5'
+      return 'kobo-2'
   }
 })
 
@@ -250,16 +250,16 @@ const ciLabel = computed(() => {
 <style scoped lang="scss">
 .pr-panel__header {
   padding-bottom: 8px;
-  border-bottom: 1px solid #2a2a4a;
+  border-bottom: 1px solid var(--kobo-border-subtle);
 }
 .pr-panel__number {
-  color: #a5b4fc;
+  color: var(--kobo-text-2);
   font-weight: 600;
   text-decoration: none;
   font-size: 12px;
 }
 .pr-panel__title {
-  color: #ddd;
+  color: var(--kobo-text-2);
   font-size: 12px;
 }
 .pr-panel__state, .pr-panel__badge, .pr-panel__label-chip {
@@ -274,14 +274,14 @@ const ciLabel = computed(() => {
   font-size: 11px;
 }
 .pr-panel__label {
-  color: #9ca3af;
+  color: var(--kobo-text-3);
   text-transform: uppercase;
   font-size: 10px;
   letter-spacing: 0.05em;
   align-self: center;
 }
 .pr-panel__value {
-  color: #ddd;
+  color: var(--kobo-text-2);
 }
 .pr-panel__reviewers {
   display: flex;
@@ -301,9 +301,9 @@ const ciLabel = computed(() => {
 }
 .pr-panel__ci {
   padding-top: 8px;
-  border-top: 1px solid #2a2a4a;
+  border-top: 1px solid var(--kobo-border-subtle);
   font-size: 11px;
-  color: #ddd;
+  color: var(--kobo-text-2);
 }
 .pr-panel__ci-summary {
   flex-wrap: wrap;
@@ -321,10 +321,10 @@ const ciLabel = computed(() => {
   border-radius: 3px;
   background-color: rgba(255, 255, 255, 0.04);
 }
-.pr-panel__ci-count--failed { color: #fca5a5; }
-.pr-panel__ci-count--pending { color: #fcd34d; }
-.pr-panel__ci-count--passed { color: #86efac; }
-.pr-panel__ci-count--skipped { color: #9ca3af; }
+.pr-panel__ci-count--failed { color: var(--kobo-danger); }
+.pr-panel__ci-count--pending { color: var(--kobo-warning); }
+.pr-panel__ci-count--passed { color: var(--kobo-success); }
+.pr-panel__ci-count--skipped { color: var(--kobo-text-3); }
 .pr-panel__ci-list {
   display: flex;
   flex-direction: column;
@@ -344,12 +344,12 @@ a.pr-panel__ci-item:hover {
   background-color: rgba(255, 255, 255, 0.05);
   text-decoration: underline;
 }
-.pr-panel__ci-item--failed { color: #fca5a5; }
-.pr-panel__ci-item--pending { color: #fcd34d; }
-.pr-panel__ci-item--passed { color: #86efac; }
-.pr-panel__ci-item--skipped { color: #9ca3af; }
+.pr-panel__ci-item--failed { color: var(--kobo-danger); }
+.pr-panel__ci-item--pending { color: var(--kobo-warning); }
+.pr-panel__ci-item--passed { color: var(--kobo-success); }
+.pr-panel__ci-item--skipped { color: var(--kobo-text-3); }
 .pr-panel__ci-toggle {
-  color: #9ca3af;
+  color: var(--kobo-text-3);
   font-size: 10px;
 }
 </style>

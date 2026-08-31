@@ -23,7 +23,7 @@
         >
           <q-tooltip>{{ t('tools.fixCiTooltip') }}</q-tooltip>
         </q-btn>
-        <span v-if="i === reasons.length - 1" class="q-ml-xs text-grey-8">
+        <span v-if="i === reasons.length - 1" class="q-ml-xs text-kobo-3">
           &middot; {{ timeAgo(workspace.updatedAt) }}
         </span>
       </div>
@@ -35,16 +35,16 @@
     <div v-if="ciRunning" class="row items-center no-wrap ci-recap">
       <q-icon name="hourglass_empty" size="12px" color="amber-5" class="q-mr-xs" />
       <span class="text-amber-5">{{ t('git.pr.ci.pendingCount', { n: ciSummary.pending.length }) }}</span>
-      <span class="q-mx-xs text-grey-7">&middot;</span>
+      <span class="q-mx-xs text-kobo-3">&middot;</span>
       <q-icon name="check_circle" size="12px" color="green-5" class="q-mr-xs" />
-      <span class="text-grey-5">{{ ciSummary.passed.length }}</span>
+      <span class="text-kobo-2">{{ ciSummary.passed.length }}</span>
       <template v-if="ciSummary.skipped.length > 0">
-        <span class="q-mx-xs text-grey-7">&middot;</span>
-        <q-icon name="remove_circle_outline" size="12px" color="grey-6" class="q-mr-xs" />
-        <span class="text-grey-6">{{ ciSummary.skipped.length }}</span>
+        <span class="q-mx-xs text-kobo-3">&middot;</span>
+        <q-icon name="remove_circle_outline" size="12px" color="kobo-3" class="q-mr-xs" />
+        <span class="text-kobo-3">{{ ciSummary.skipped.length }}</span>
       </template>
       <template v-if="ciSummary.failed.length > 0">
-        <span class="q-mx-xs text-grey-7">&middot;</span>
+        <span class="q-mx-xs text-kobo-3">&middot;</span>
         <q-icon name="cancel" size="12px" color="red-5" class="q-mr-xs" />
         <span class="text-red-5">{{ ciSummary.failed.length }}</span>
       </template>
@@ -59,7 +59,7 @@
         <div v-if="ciSummary.failed.length > 0" class="text-red-4 q-mt-xs">
           {{ t('git.pr.ci.failedCount', { n: ciSummary.failed.length }) }}
         </div>
-        <div class="text-grey-5 q-mt-xs">
+        <div class="text-kobo-2 q-mt-xs">
           {{ t('git.pr.ci.passedCount', { n: ciSummary.passed.length }) }} &middot;
           {{ t('git.pr.ci.skippedCount', { n: ciSummary.skipped.length }) }}
         </div>

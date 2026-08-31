@@ -1,12 +1,20 @@
-// Quasar SCSS variables
-$primary: #6c63ff;
-$secondary: #26a69a;
-$accent: #9c27b0;
+// Quasar SCSS variables — mirror of DESIGN.md § CSS Variables. These are read
+// at build time by Quasar's own stylesheets; quasar.config.ts:framework.config
+// .brand carries the same values for the runtime API (Notify, colour props).
+// The two MUST stay in sync.
+$primary: #665fdd; // --kobo-accent (Task 2)
+$secondary: #34d399; // --kobo-success
+$accent: #665fdd; // --kobo-accent — a single accent, never a second hue
+$dark: #1a1a2e; // --kobo-bg
+$dark-page: #1a1a2e; // --kobo-bg
 
-$dark: #1a1a2e;
-$dark-page: #1a1a2e;
+$positive: #34d399; // --kobo-success
+$negative: #f87171; // --kobo-danger
+$info: #665fdd; // DESIGN.md: --kobo-info aliases the accent
+$warning: #fbbf24; // --kobo-warning
 
-$positive: #21ba45;
-$negative: #c10015;
-$info: #31ccec;
-$warning: #f2c037;
+// Quasar paints `body { font-family: $typography-font-family }` in
+// core/typography.sass. Pointing that variable at the design-system token is
+// what actually makes the whole UI render in Geist — declaring the token alone
+// changed nothing, which is exactly what F91 described.
+$typography-font-family: var(--kobo-font-sans);

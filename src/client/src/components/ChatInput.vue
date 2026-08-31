@@ -18,7 +18,7 @@
           'image-tag--error': img.status === 'error',
         }"
       >
-        <q-spinner-dots v-if="img.status === 'uploading'" size="14px" color="grey-6" class="q-mr-xs" />
+        <q-spinner-dots v-if="img.status === 'uploading'" size="14px" color="kobo-3" class="q-mr-xs" />
         <q-icon v-else-if="img.status === 'ready'" name="image" size="14px" color="green-6" class="q-mr-xs" />
         <q-icon v-else name="error" size="14px" color="red-6" class="q-mr-xs" />
 
@@ -63,7 +63,7 @@
           @click="selectFile(file)"
         >
           <q-item-section avatar>
-            <q-icon name="insert_drive_file" size="xs" color="grey-6" />
+            <q-icon name="insert_drive_file" size="xs" color="kobo-3" />
           </q-item-section>
           <q-item-section class="chat-file-path">{{ file }}</q-item-section>
         </q-item>
@@ -83,9 +83,9 @@
          Prevents racy queued messages between iterations. -->
     <div
       v-if="isAutoLoopRunning"
-      class="autoloop-banner row items-center no-wrap q-pa-xs q-px-sm text-caption text-indigo-3"
+      class="autoloop-banner row items-center no-wrap q-pa-xs q-px-sm text-caption text-kobo-2"
     >
-      <q-icon name="all_inclusive" size="14px" color="indigo-4" class="q-mr-sm" />
+      <q-icon name="all_inclusive" size="14px" color="primary" class="q-mr-sm" />
       <span class="col">{{ $t('chatInput.autoLoopBanner') }}</span>
       <q-btn
         flat
@@ -141,7 +141,7 @@
         flat
         dense
         icon="attach_file"
-        color="grey-6"
+        color="kobo-3"
         :disable="isDisabled"
         @click="fileInputRef?.click()"
       >
@@ -152,7 +152,7 @@
         flat
         dense
         :icon="isTranscribing ? 'hourglass_top' : isRecording ? 'mic' : 'mic_none'"
-        :color="isRecording ? 'red-5' : isTranscribing ? 'amber-6' : 'grey-6'"
+        :color="isRecording ? 'red-5' : isTranscribing ? 'amber-6' : 'kobo-3'"
         :disable="!voiceEnabled || isTranscribing"
         :class="{ 'voice-btn--recording': isRecording }"
         @mousedown.prevent="startVoiceCapture"
@@ -208,7 +208,7 @@
         <q-tooltip>{{ $t('tooltip.sendMessage') }}</q-tooltip>
       </q-btn>
     </div>
-    <div class="chat-hint row items-center no-wrap text-caption text-grey-8">
+    <div class="chat-hint row items-center no-wrap text-caption text-kobo-3">
       <div class="chat-hint__shortcuts row items-center no-wrap">
         <span class="chat-hint__primary"><kbd>Enter</kbd> {{ $t('common.send') }}<template v-if="!isMobile"> <span class="q-mx-xs">&middot;</span> <kbd>Shift+Enter</kbd> {{ $t('common.newLine') }}</template></span>
         <q-btn v-if="!isMobile" flat dense round size="xs" icon="keyboard" class="q-ml-xs">
@@ -1146,19 +1146,19 @@ function onKeydown(event: KeyboardEvent) {
 
 <style lang="scss" scoped>
 .chat-input-container {
-  background-color: #16162a;
-  border-top: 1px solid #2a2a4a;
+  background-color: var(--kobo-bg-deep);
+  border-top: 1px solid var(--kobo-border-subtle);
   min-height: 48px;
   position: relative;
 
   &.chat-input-dragging {
-    outline: 2px dashed #6c63ff;
+    outline: 2px dashed var(--kobo-accent);
     outline-offset: -2px;
   }
 }
 
 .chat-input {
-  background-color: #222244;
+  background-color: var(--kobo-surface);
   padding: 4px 12px;
 
   :deep(.q-field__control) {
@@ -1166,7 +1166,7 @@ function onKeydown(event: KeyboardEvent) {
   }
   :deep(textarea),
   :deep(input) {
-    color: #ccc;
+    color: var(--kobo-text-2);
     font-size: 13px;
   }
 }
@@ -1186,40 +1186,40 @@ function onKeydown(event: KeyboardEvent) {
 .chat-file-popup {
   max-height: 300px;
   overflow-y: auto;
-  background-color: #1e1e3a;
+  background-color: var(--kobo-surface);
   border: 1px solid rgba(255, 255, 255, 0.1);
   border-radius: 6px;
 }
 .chat-file-popup .chat-file-path {
-  font-family: 'Roboto Mono', monospace;
+  font-family: var(--kobo-font-mono);
   font-size: 12px;
   word-break: break-all;
 }
 .chat-file-popup .chat-file-item--active {
-  background-color: rgba(108, 99, 255, 0.15);
+  background-color: rgba(102, 95, 221, 0.15);
 }
 
 .image-tag {
-  font-family: 'Roboto Mono', monospace;
+  font-family: var(--kobo-font-mono);
   font-size: 12px;
   line-height: 1;
 
   &--uploading {
-    background-color: #2a2a4a;
-    border: 1px solid #3a3a5a;
-    color: #8888aa;
+    background-color: var(--kobo-hover);
+    border: 1px solid var(--kobo-border);
+    color: var(--kobo-text-3);
   }
 
   &--ready {
-    background-color: #1a2a1a;
-    border: 1px solid #2a4a2a;
-    color: #6aaa6a;
+    background-color: rgba(52, 211, 153, 0.12);
+    border: 1px solid rgba(52, 211, 153, 0.35);
+    color: var(--kobo-success);
   }
 
   &--error {
-    background-color: #2a1a1a;
-    border: 1px solid #4a2a2a;
-    color: #aa6a6a;
+    background-color: rgba(248, 113, 113, 0.12);
+    border: 1px solid rgba(248, 113, 113, 0.35);
+    color: var(--kobo-danger);
   }
 }
 
@@ -1241,10 +1241,10 @@ function onKeydown(event: KeyboardEvent) {
   &__status, &__interrupt { flex: 0 0 auto; }
 
   kbd {
-    background-color: #2a2a4a;
+    background-color: var(--kobo-hover);
     border-radius: 3px;
     padding: 1px 4px;
-    font-family: 'Roboto Mono', monospace;
+    font-family: var(--kobo-font-mono);
     font-size: 9px;
   }
 }
@@ -1252,14 +1252,14 @@ function onKeydown(event: KeyboardEvent) {
 .chat-shortcuts-menu { min-width: 190px; font-size: 12px; }
 
 .queue-banner {
-  background-color: #2a2a1a;
-  border-bottom: 1px solid #4a4a2a;
+  background-color: rgba(251, 191, 36, 0.12);
+  border-bottom: 1px solid rgba(251, 191, 36, 0.35);
 }
 
 .autoloop-banner {
-  background-color: #1e1e36;
-  border-bottom: 1px solid rgba(108, 99, 255, 0.4);
-  border-top: 1px solid rgba(108, 99, 255, 0.4);
+  background-color: var(--kobo-surface-2);
+  border-bottom: 1px solid rgba(102, 95, 221, 0.4);
+  border-top: 1px solid rgba(102, 95, 221, 0.4);
 }
 
 .voice-btn--recording {
@@ -1282,7 +1282,7 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 .image-tag-close {
-  color: #aa4444;
+  color: var(--kobo-danger);
   opacity: 0.7;
 
   &:hover {

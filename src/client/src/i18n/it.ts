@@ -120,6 +120,9 @@ export default {
 
   // Workspace List
   'workspaceList.title': 'Workspace',
+  'workspaceList.a11y.groupToggle': 'Gruppo {group}, {count} workspace',
+  'workspaceList.a11y.list': 'Workspace',
+  'workspaceList.a11y.card': '{name}, {status}',
   'workspaceList.needsAttention': 'Richiede attenzione',
   'workspaceList.running': 'In esecuzione',
   'workspaceList.idle': 'Inattivo',
@@ -1505,6 +1508,11 @@ export default {
   'activity.scroll_to_bottom': 'Scorri in fondo',
   'activity.empty': 'Ancora nulla',
   'activity.emptyHint': 'L’output dell’agente comparirà qui appena una sessione parte.',
+  'activity.a11y.region': 'Annunci di attività dell’agente',
+  'activity.a11y.agentSaid': 'Agente: {text}',
+  'activity.a11y.toolStarted': 'Strumento {name} avviato',
+  'activity.a11y.toolFinished': 'Strumento {name} completato',
+  'activity.a11y.toolFailed': 'Strumento {name} fallito',
   'chat.systemPrompt': 'Prompt di sistema',
   'chat.agent': 'Agente',
   'chat.cleanupScript': 'Script di pulizia',

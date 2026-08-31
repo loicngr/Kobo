@@ -1,13 +1,13 @@
 <template>
   <div class="whip-shortcut-recorder">
-    <div class="text-caption text-grey-5 q-mb-xs">{{ t('settings.whipShortcut') }}</div>
+    <div class="text-caption text-kobo-2 q-mb-xs">{{ t('settings.whipShortcut') }}</div>
     <div class="row items-center no-wrap q-gutter-xs">
       <q-btn
         data-testid="whip-shortcut-recorder"
         dense
         no-caps
         outline
-        color="indigo-4"
+        color="primary"
         :aria-label="accessibleLabel"
         :aria-pressed="recording"
         @click="startRecording"
@@ -21,7 +21,7 @@
         flat
         round
         size="sm"
-        color="grey-5"
+        color="kobo-2"
         icon="restart_alt"
         :aria-label="t('settings.whipShortcutReset')"
         @click="resetShortcut"

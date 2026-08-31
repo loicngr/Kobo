@@ -1,10 +1,10 @@
 <template>
   <div class="subagents-panel q-pa-md">
-    <div class="text-caption text-uppercase text-weight-bold text-grey-6 q-mb-sm" style="letter-spacing: 0.05em;">
+    <div class="text-caption text-uppercase text-weight-bold text-kobo-3 q-mb-sm" style="letter-spacing: 0.05em;">
       {{ $t('subagents.title') }}
     </div>
 
-    <div v-if="subagents.length === 0" class="text-caption text-grey-8">
+    <div v-if="subagents.length === 0" class="text-caption text-kobo-3">
       {{ $t('subagents.empty') }}
     </div>
 
@@ -13,17 +13,17 @@
         <q-icon
           :name="sa.status === 'running' ? 'play_circle' : 'check_circle'"
           size="14px"
-          :color="sa.status === 'running' ? 'green-4' : 'grey-6'"
+          :color="sa.status === 'running' ? 'green-4' : 'kobo-3'"
           class="q-mr-xs"
         />
-        <span class="text-caption text-weight-medium text-grey-3 ellipsis" style="max-width: 220px;">
+        <span class="text-caption text-weight-medium text-kobo-1 ellipsis" style="max-width: 220px;">
           {{ sa.description || sa.toolUseId }}
         </span>
       </div>
-      <div v-if="sa.lastToolName" class="text-caption text-grey-6" style="font-size: 10px;">
-        {{ $t('subagents.running') }}<span class="text-grey-4">{{ sa.lastToolName }}</span>
+      <div v-if="sa.lastToolName" class="text-caption text-kobo-3" style="font-size: 10px;">
+        {{ $t('subagents.running') }}<span class="text-kobo-2">{{ sa.lastToolName }}</span>
       </div>
-      <div class="row items-center q-gutter-xs q-mt-xs text-caption text-grey-7" style="font-size: 10px;">
+      <div class="row items-center q-gutter-xs q-mt-xs text-caption text-kobo-3" style="font-size: 10px;">
         <span v-if="sa.toolUses !== undefined">{{ $t('subagents.tools', { count: sa.toolUses }) }}</span>
         <span v-if="sa.totalTokens">· {{ formatTokens(sa.totalTokens) }} tok</span>
         <span v-if="sa.durationMs">· {{ formatDuration(sa.durationMs) }}</span>
@@ -65,7 +65,7 @@ function formatTokens(count?: number): string {
 }
 
 .subagent-item {
-  background: #1e1e3a;
-  border: 1px solid #2a2a4a;
+  background: var(--kobo-surface);
+  border: 1px solid var(--kobo-border-subtle);
 }
 </style>

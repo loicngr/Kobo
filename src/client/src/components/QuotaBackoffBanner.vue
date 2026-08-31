@@ -2,7 +2,7 @@
   <div
     v-if="visible"
     class="quota-backoff-banner row items-center q-px-md q-py-sm"
-    style="background-color: #b87333; color: #f0f0f0;"
+    style="background-color: var(--kobo-warning); color: var(--kobo-bg-deep);"
   >
     <q-icon name="hourglass_top" size="18px" class="q-mr-sm" />
     <span class="text-body2">{{ t('quotaBackoff.banner.title', { time: formattedTime }) }}</span>
@@ -11,7 +11,7 @@
     </q-tooltip>
     <q-space />
     <q-btn
-      flat dense no-caps size="sm" color="grey-3"
+      flat dense no-caps size="sm" color="kobo-1"
       :label="t('quotaBackoff.banner.cancel')"
       :loading="cancelling"
       @click="onCancel"

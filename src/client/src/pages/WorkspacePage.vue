@@ -14,7 +14,7 @@
         <q-tooltip>{{ $t('layout.toggleWorkspaces') }}</q-tooltip>
       </q-btn>
       <template v-if="selectedWs">
-        <span class="text-body1 text-weight-medium text-grey-3 ellipsis" style="max-width: 480px;">
+        <span class="text-body1 text-weight-medium text-kobo-1 ellipsis" style="max-width: 480px;">
           {{ selectedWs.name }}
           <q-tooltip>{{ selectedWs.name }}</q-tooltip>
         </span>
@@ -24,7 +24,7 @@
             ['error', 'quota'].includes(selectedWs.status) ? 'red-9' :
             selectedWs.status === 'awaiting-user' ? 'amber-9' :
             isBusyStatus(selectedWs.status) ? 'green-9' :
-            'grey-8'
+            'kobo-3'
           "
           class="q-ml-sm"
           style="font-size: 10px;"
@@ -130,7 +130,7 @@
         </q-btn>
       </template>
       <template v-else>
-        <span class="text-body2 text-grey-8">
+        <span class="text-body2 text-kobo-3">
           {{ $t('workspacePage.selectWorkspace') }}
         </span>
         <q-space />
@@ -156,7 +156,7 @@
         borderless
         :placeholder="t('workspace.descriptionPlaceholder')"
         :maxlength="200"
-        input-class="text-caption text-grey-5"
+        input-class="text-caption text-kobo-2"
         class="workspace-description-input"
         style="width: 100%; max-width: 960px;"
         @blur="saveDescription"
@@ -164,7 +164,7 @@
       />
       <div
         v-if="selectedWs?.agentDescription"
-        class="text-caption text-grey-7 q-mt-xs ellipsis"
+        class="text-caption text-kobo-3 q-mt-xs ellipsis"
         style="font-style: italic; max-width: 960px;"
         :title="t('workspace.agentDescriptionTooltip')"
       >
@@ -179,11 +179,11 @@
       class="wp-purged-banner row items-center q-px-md q-py-sm"
     >
       <q-icon name="cleaning_services" size="16px" color="orange-5" class="q-mr-sm" />
-      <span class="text-caption text-grey-3">
+      <span class="text-caption text-kobo-1">
         {{ $t('workspacePage.worktreePurgedBanner') }}
       </span>
       <q-space />
-      <q-btn flat dense size="sm" no-caps color="grey-5" icon="info_outline" :label="$t('common.details')">
+      <q-btn flat dense size="sm" no-caps color="kobo-2" icon="info_outline" :label="$t('common.details')">
         <q-tooltip max-width="320px" anchor="bottom right" self="top right">
           {{ $t('workspacePage.worktreePurgedTooltip') }}
         </q-tooltip>
@@ -194,8 +194,8 @@
       v-else-if="selectedWs?.archivedAt"
       class="wp-archived-banner row items-center q-px-md q-py-sm"
     >
-      <q-icon name="inventory_2" size="16px" color="grey-5" class="q-mr-sm" />
-      <span class="text-caption text-grey-4">
+      <q-icon name="inventory_2" size="16px" color="kobo-2" class="q-mr-sm" />
+      <span class="text-caption text-kobo-2">
         {{ $t('workspacePage.archivedBanner') }}
       </span>
       <q-space />
@@ -204,7 +204,7 @@
         dense
         size="sm"
         no-caps
-        color="indigo-4"
+        color="primary"
         icon="unarchive"
         :label="$t('common.unarchive')"
         :loading="unarchiving"
@@ -218,7 +218,7 @@
       class="wp-pending-prompt-banner row items-center q-px-md q-py-sm"
     >
       <q-icon name="warning" size="16px" color="amber-5" class="q-mr-sm" />
-      <span class="text-caption text-grey-3">
+      <span class="text-caption text-kobo-1">
         {{ $t('workspacePage.pendingInitialPromptBanner') }}
       </span>
       <q-space />
@@ -227,7 +227,7 @@
         dense
         size="sm"
         no-caps
-        color="indigo-5"
+        color="primary"
         icon="play_arrow"
         :label="$t('common.start')"
         :loading="starting"
@@ -251,8 +251,8 @@
       <ActivityFeed class="col" style="min-height: 0;" :workspace-id="selectedId" />
       <template #fallback>
         <div class="col column items-center justify-center">
-          <q-spinner-dots size="40px" color="indigo-4" />
-          <div class="text-grey-6 text-caption q-mt-sm">{{ $t('common.loading') }}</div>
+          <q-spinner-dots size="40px" color="primary" />
+          <div class="text-kobo-3 text-caption q-mt-sm">{{ $t('common.loading') }}</div>
         </div>
       </template>
     </Suspense>
@@ -300,14 +300,14 @@
             v-ripple
             @click="runCommand(command)"
           >
-            <q-item-section avatar><q-icon :name="command.icon" color="indigo-4" /></q-item-section>
+            <q-item-section avatar><q-icon :name="command.icon" color="primary" /></q-item-section>
             <q-item-section>
               <q-item-label>{{ command.label }}</q-item-label>
               <q-item-label v-if="command.hint" caption class="palette-hint">{{ command.hint }}</q-item-label>
             </q-item-section>
           </q-item>
           <q-item v-if="filteredCommands.length === 0" dense>
-            <q-item-section class="text-grey-6">{{ t('workspacePage.commandPaletteEmpty') }}</q-item-section>
+            <q-item-section class="text-kobo-3">{{ t('workspacePage.commandPaletteEmpty') }}</q-item-section>
           </q-item>
         </q-list>
       </q-card>
@@ -345,7 +345,7 @@
           <q-icon name="swap_horiz" color="primary" size="24px" class="q-mr-sm q-mt-xs" />
           <div>
             <div class="text-subtitle1">{{ t('workspacePage.switchEngineTitle') }}</div>
-            <div class="text-caption text-grey-5 q-mt-xs">{{ t('workspacePage.switchEngineWarning') }}</div>
+            <div class="text-caption text-kobo-2 q-mt-xs">{{ t('workspacePage.switchEngineWarning') }}</div>
           </div>
         </q-card-section>
         <q-separator dark />
@@ -356,7 +356,7 @@
             <div class="col-12 col-sm-4 flex"><q-select v-model="switchEffort" :options="switchEffortOptions" emit-value map-options dark dense outlined class="engine-switch-field full-width" :label="$t('engine.effort')" /></div>
             <div class="col-12 col-sm-4 flex"><q-select v-model="switchPermissionMode" :options="switchPermissionOptions" emit-value map-options dark dense outlined class="engine-switch-field full-width" :label="$t('agentPermissionMode.label')" /></div>
           </div>
-          <q-expansion-item default-opened dense dense-toggle icon="description" :label="t('workspacePage.engineHandoff')" header-class="text-grey-3">
+          <q-expansion-item default-opened dense dense-toggle icon="description" :label="t('workspacePage.engineHandoff')" header-class="text-kobo-1">
             <div class="q-pt-sm">
               <q-input
                 v-model="switchHandoff"
@@ -1052,8 +1052,8 @@ watch(
 <style lang="scss" scoped>
 .wp-header {
   min-height: 48px;
-  background-color: #16162a;
-  border-bottom: 1px solid #2a2a4a;
+  background-color: var(--kobo-bg-deep);
+  border-bottom: 1px solid var(--kobo-border-subtle);
 }
 
 .command-palette-card {

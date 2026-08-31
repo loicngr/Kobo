@@ -1,6 +1,6 @@
 <template>
-  <div v-if="isVisible" class="row items-center q-pa-xs q-px-sm bg-dark text-grey-5 text-caption">
-    <q-spinner-dots size="14px" color="indigo-4" class="q-mr-sm" />
+  <div v-if="isVisible" class="row items-center q-pa-xs q-px-sm bg-dark text-kobo-2 text-caption">
+    <q-spinner-dots size="14px" color="primary" class="q-mr-sm" />
     <span>{{ t('agentBusy.banner') }}</span>
     <span v-if="runningSubagentCount > 0" class="q-ml-xs">
       — {{ t('agentBusy.subagentsRunning', { n: runningSubagentCount }, runningSubagentCount) }}
@@ -8,7 +8,7 @@
     <template v-if="runningSubagentCount > 0">
       <q-space />
       <span
-        class="text-indigo-4 cursor-pointer"
+        class="text-kobo-2 cursor-pointer"
         style="text-decoration: underline;"
         @click="viewSubagents"
       >

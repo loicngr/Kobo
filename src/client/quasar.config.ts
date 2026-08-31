@@ -6,11 +6,13 @@ export default defineConfig((ctx) => {
   const wsTarget = `ws://localhost:${backendPort}`
 
   return {
-    boot: ['i18n', 'network-auth'],
+    boot: ['i18n', 'network-auth', 'notify-theme'],
 
     css: ['app.scss'],
 
-    extras: ['roboto-font', 'material-icons'],
+    // The Roboto extra was removed: DESIGN.md forbids that typeface by name.
+    // 'material-icons' stays — the whole UI uses Quasar's Material icon names.
+    extras: ['material-icons'],
 
     build: {
       alias: {
@@ -52,15 +54,16 @@ export default defineConfig((ctx) => {
       config: {
         dark: true,
         brand: {
-          primary: '#6c63ff',
-          secondary: '#26a69a',
-          accent: '#9c27b0',
+          // Mirror of src/css/quasar.variables.scss — keep both in sync.
+          primary: '#665fdd',
+          secondary: '#34d399',
+          accent: '#665fdd',
           dark: '#1a1a2e',
           'dark-page': '#1a1a2e',
-          positive: '#21ba45',
-          negative: '#c10015',
-          info: '#31ccec',
-          warning: '#f2c037',
+          positive: '#34d399',
+          negative: '#f87171',
+          info: '#665fdd',
+          warning: '#fbbf24',
         },
       },
       plugins: ['Notify', 'Dialog'],

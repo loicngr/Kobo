@@ -3,7 +3,7 @@
     <q-card dark style="min-width: 360px;">
       <q-card-section>
         <div class="text-subtitle1">{{ $t('tags.manageTitle') }}</div>
-        <div class="text-caption text-grey-6 q-mt-xs">{{ workspace.name }}</div>
+        <div class="text-caption text-kobo-3 q-mt-xs">{{ workspace.name }}</div>
       </q-card-section>
       <q-card-section>
         <q-option-group
@@ -20,7 +20,7 @@
         <div v-if="orphanedTags.length > 0" class="text-caption text-orange-5 q-mt-sm">
           {{ $t('tags.orphanedHint', { count: orphanedTags.length }) }}
         </div>
-        <div v-if="availableTags.length === 0" class="text-grey-6 text-caption">
+        <div v-if="availableTags.length === 0" class="text-kobo-3 text-caption">
           {{ $t('tags.noTagsDefined') }}
         </div>
       </q-card-section>

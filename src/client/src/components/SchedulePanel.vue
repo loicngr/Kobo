@@ -6,21 +6,21 @@
       </div>
       <div>
         <div class="text-subtitle1 text-weight-medium">{{ $t('schedule.panelTitle') }}</div>
-        <div class="text-caption text-grey-6">{{ $t('schedule.panelDescription') }}</div>
+        <div class="text-caption text-kobo-3">{{ $t('schedule.panelDescription') }}</div>
       </div>
     </header>
 
     <section>
       <div class="row items-center justify-between q-mb-sm">
         <div class="text-subtitle2">{{ $t('schedule.activeTitle') }}</div>
-        <q-badge v-if="activeCount > 0" rounded color="indigo-5" :label="activeCount" />
+        <q-badge v-if="activeCount > 0" rounded color="primary" :label="activeCount" />
       </div>
 
       <q-card v-if="activeCount === 0" dark flat bordered class="empty-state row items-center q-gutter-sm q-pa-md">
-        <q-icon name="event_available" size="24px" color="grey-6" />
+        <q-icon name="event_available" size="24px" color="kobo-3" />
         <div>
           <div class="text-body2 text-weight-medium">{{ $t('schedule.emptyTitle') }}</div>
-          <div class="text-caption text-grey-6">{{ $t('schedule.emptyDescription') }}</div>
+          <div class="text-caption text-kobo-3">{{ $t('schedule.emptyDescription') }}</div>
         </div>
       </q-card>
 
@@ -32,7 +32,7 @@
                 <q-icon name="alarm" size="18px" />
               </div>
               <div class="col min-width-zero">
-                <div class="text-caption text-grey-6">{{ $t('schedule.wakeupTitle') }}</div>
+                <div class="text-caption text-kobo-3">{{ $t('schedule.wakeupTitle') }}</div>
                 <div class="text-body2 text-weight-medium">{{ formatDateTime(pendingWakeup.targetAt) }}</div>
               </div>
               <q-btn
@@ -41,7 +41,7 @@
                 round
                 icon="delete_outline"
                 size="sm"
-                color="grey-5"
+                color="kobo-2"
                 :title="$t('schedule.cancelWakeup')"
                 @click="cancelWakeup"
               />
@@ -60,7 +60,7 @@
               </div>
               <div class="col min-width-zero">
                 <div class="text-body2 text-weight-medium ellipsis">{{ cron.label || cron.expression }}</div>
-                <div class="text-caption text-grey-6">
+                <div class="text-caption text-kobo-3">
                   {{ $t('schedule.nextFireAt', { time: formatDateTime(cron.nextFireAt) }) }}
                 </div>
               </div>
@@ -70,16 +70,16 @@
                 round
                 icon="delete_outline"
                 size="sm"
-                color="grey-5"
+                color="kobo-2"
                 :title="$t('schedule.cancelCron')"
                 @click="onCancelCron(cron.id)"
               />
             </div>
             <div class="row items-center q-gutter-xs q-mt-sm">
-              <q-chip dense square color="blue-grey-9" text-color="grey-4" size="sm">
+              <q-chip dense square color="blue-grey-9" text-color="kobo-2" size="sm">
                 {{ cron.expression }}
               </q-chip>
-              <span v-if="cron.lastFiredAt" class="text-caption text-grey-7">
+              <span v-if="cron.lastFiredAt" class="text-caption text-kobo-3">
                 {{ $t('schedule.lastFiredAt', { time: formatRelative(cron.lastFiredAt) }) }}
               </span>
             </div>
@@ -93,7 +93,7 @@
       <div class="row items-center justify-between q-mb-sm">
         <div>
           <div class="text-subtitle2">{{ $t('schedule.createTitle') }}</div>
-          <div class="text-caption text-grey-7">{{ $t('schedule.createDescription') }}</div>
+          <div class="text-caption text-kobo-3">{{ $t('schedule.createDescription') }}</div>
         </div>
       </div>
 
@@ -103,9 +103,9 @@
           spread
           no-caps
           unelevated
-          toggle-color="indigo-5"
+          toggle-color="primary"
           color="blue-grey-10"
-          text-color="grey-5"
+          text-color="kobo-2"
           :options="createKindOptions"
           class="type-toggle"
         />
@@ -113,7 +113,7 @@
         <q-card-section v-if="createKind === 'wakeup'" class="column q-gutter-y-md">
           <div>
             <div class="text-body2 text-weight-medium">{{ $t('schedule.addWakeupTitle') }}</div>
-            <div class="text-caption text-grey-6">{{ $t('schedule.wakeupDescription') }}</div>
+            <div class="text-caption text-kobo-3">{{ $t('schedule.wakeupDescription') }}</div>
           </div>
 
           <q-input
@@ -147,7 +147,7 @@
               unelevated
               toggle-color="blue-grey-7"
               color="transparent"
-              text-color="grey-5"
+              text-color="kobo-2"
               :options="sessionModeOptions"
               class="session-toggle"
             />
@@ -156,7 +156,7 @@
           <q-btn
             no-caps
             unelevated
-            color="indigo-5"
+            color="primary"
             icon="alarm_add"
             :loading="creatingWakeup"
             :disable="!wakeupPrompt.trim() || !(wakeupMinutes > 0)"
@@ -169,7 +169,7 @@
         <q-card-section v-else class="column q-gutter-y-md">
           <div>
             <div class="text-body2 text-weight-medium">{{ $t('schedule.addCronTitle') }}</div>
-            <div class="text-caption text-grey-6">{{ $t('schedule.cronDescription') }}</div>
+            <div class="text-caption text-kobo-3">{{ $t('schedule.cronDescription') }}</div>
           </div>
 
           <q-input v-model="cronLabel" dense dark outlined :label="$t('schedule.labelOptional')" />
@@ -177,7 +177,7 @@
           <div class="column q-gutter-y-xs">
             <div class="field-label">{{ $t('schedule.frequencyTitle') }}</div>
             <div class="row items-center no-wrap q-gutter-sm">
-              <span class="text-body2 text-grey-5">{{ $t('schedule.every') }}</span>
+              <span class="text-body2 text-kobo-2">{{ $t('schedule.every') }}</span>
               <q-input v-model.number="cronN" type="number" dense dark outlined min="1" class="frequency-value" />
               <q-select
                 v-model="cronUnit"
@@ -239,7 +239,7 @@
               unelevated
               toggle-color="blue-grey-7"
               color="transparent"
-              text-color="grey-5"
+              text-color="kobo-2"
               :options="sessionModeOptions"
               class="session-toggle"
             />
@@ -248,7 +248,7 @@
           <div class="one-shot-option row items-center justify-between no-wrap q-pa-sm">
             <div>
               <div class="text-body2">{{ $t('schedule.oneShot') }}</div>
-              <div class="text-caption text-grey-7">{{ $t('schedule.oneShotHint') }}</div>
+              <div class="text-caption text-kobo-3">{{ $t('schedule.oneShotHint') }}</div>
             </div>
             <q-toggle v-model="cronOneShot" dense />
           </div>
@@ -256,7 +256,7 @@
           <q-btn
             no-caps
             unelevated
-            color="indigo-5"
+            color="primary"
             icon="add_task"
             :loading="creatingCron"
             :disable="!cronPrompt.trim()"
@@ -423,10 +423,10 @@ async function onScheduleWakeup(): Promise<void> {
   height: 38px;
   flex: 0 0 38px;
   place-items: center;
-  border: 1px solid rgb(129 140 248 / 35%);
+  border: 1px solid rgb(102 95 221 / 35%);
   border-radius: 10px;
-  color: #a5b4fc;
-  background: rgb(99 102 241 / 12%);
+  color: var(--kobo-text-2);
+  background: rgb(102 95 221 / 12%);
 }
 
 .empty-state {
@@ -452,12 +452,12 @@ async function onScheduleWakeup(): Promise<void> {
 }
 
 .schedule-item__icon--wakeup {
-  color: #fbbf24;
+  color: var(--kobo-warning);
   background: rgb(251 191 36 / 12%);
 }
 
 .schedule-item__icon--cron {
-  color: #67e8f9;
+  color: var(--kobo-accent);
   background: rgb(34 211 238 / 10%);
 }
 
@@ -465,7 +465,7 @@ async function onScheduleWakeup(): Promise<void> {
   margin-top: 8px;
   padding: 8px 10px;
   border-radius: 6px;
-  color: #a8a8b8;
+  color: var(--kobo-text-3);
   background: rgb(0 0 0 / 16%);
   font-size: 12px;
   line-height: 1.45;
@@ -492,7 +492,7 @@ async function onScheduleWakeup(): Promise<void> {
 }
 
 .field-label {
-  color: #b8b8c8;
+  color: var(--kobo-text-2);
   font-size: 12px;
   font-weight: 500;
 }

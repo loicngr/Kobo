@@ -18,7 +18,7 @@
         class="q-ml-xs"
       />
       <q-icon v-else-if="item.result" name="check" color="positive" size="xs" class="q-ml-xs" />
-      <q-icon :name="expanded ? 'expand_less' : 'expand_more'" size="xs" class="q-ml-auto text-grey-6" />
+      <q-icon :name="expanded ? 'expand_less' : 'expand_more'" size="xs" class="q-ml-auto text-kobo-3" />
     </div>
     <div v-if="expanded && diffLines" class="tool-diff" @click.stop>
       <div
@@ -56,7 +56,7 @@
         v-if="canToggleOutput"
         :name="expanded ? 'expand_less' : 'expand_more'"
         size="xs"
-        class="q-ml-xs text-grey-6"
+        class="q-ml-xs text-kobo-3"
       />
     </div>
     <div
@@ -223,7 +223,7 @@ watch(
   align-items: center;
   gap: 10px;
   padding: 5px 10px;
-  color: #bbb;
+  color: var(--kobo-text-2);
   cursor: default;
   min-width: 0;
 }
@@ -237,23 +237,23 @@ watch(
   background: rgba(255, 255, 255, 0.03);
 }
 .tool-icon {
-  color: #9fbce0;
+  color: var(--kobo-text-2);
   flex-shrink: 0;
 }
 .tool-name {
   font-weight: 600;
-  color: #d0d0d0;
+  color: var(--kobo-text-2);
   flex-shrink: 0;
 }
 .tool-arg,
 .tool-path {
-  color: #999;
+  color: var(--kobo-text-3);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
   max-width: 100%;
-  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-family: var(--kobo-font-mono);
   font-size: 11.5px;
 }
 .tool-open-diff { flex-shrink: 0; }
@@ -264,13 +264,13 @@ watch(
   flex: 1;
 }
 .tool-stat-add {
-  color: #66bb6a;
+  color: var(--kobo-success);
   font-weight: 600;
   font-size: 11px;
   flex-shrink: 0;
 }
 .tool-stat-del {
-  color: #ef5350;
+  color: var(--kobo-danger);
   font-weight: 600;
   font-size: 11px;
   flex-shrink: 0;
@@ -282,42 +282,42 @@ watch(
   border-radius: 4px;
   max-height: 400px;
   overflow: auto;
-  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-family: var(--kobo-font-mono);
   font-size: 11px;
   line-height: 1.5;
 }
 .diff-line {
   padding: 0 12px;
   white-space: pre;
-  color: #bbb;
+  color: var(--kobo-text-2);
 }
 .diff-sign {
   display: inline-block;
   width: 14px;
-  color: #555;
+  color: var(--kobo-text-disabled);
   user-select: none;
 }
 .diff-add {
   background: rgba(102, 187, 106, 0.1);
-  color: #c8e6c9;
+  color: var(--kobo-success);
 }
 .diff-add .diff-sign {
-  color: #66bb6a;
+  color: var(--kobo-success);
 }
 .diff-del {
   background: rgba(239, 83, 80, 0.1);
-  color: #ffcdd2;
+  color: var(--kobo-danger);
 }
 .diff-del .diff-sign {
-  color: #ef5350;
+  color: var(--kobo-danger);
 }
 .tool-output {
   margin-top: 4px;
   padding: 6px 10px;
   background: rgba(0, 0, 0, 0.15);
   border-radius: 4px;
-  color: #aaa;
-  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  color: var(--kobo-text-2);
+  font-family: var(--kobo-font-mono);
   font-size: 11px;
   white-space: pre-wrap;
   max-height: 8em;

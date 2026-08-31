@@ -33,7 +33,7 @@
     v-if="workspace.prWatchDisabledAt"
     name="visibility_off"
     size="14px"
-    color="grey-6"
+    color="kobo-3"
   >
     <q-tooltip>{{ t('workspaceList.prWatchDisabledIndicator') }}</q-tooltip>
   </q-icon>
@@ -41,7 +41,7 @@
     v-if="workspaceStore.autoLoopStates[workspace.id]?.auto_loop"
     name="autorenew"
     size="14px"
-    :color="workspaceStore.autoLoopStates[workspace.id]?.auto_loop_ready ? 'amber-4' : 'indigo-4'"
+    :color="workspaceStore.autoLoopStates[workspace.id]?.auto_loop_ready ? 'amber-4' : 'primary'"
     class="auto-loop-spin"
   >
     <q-tooltip>
@@ -108,7 +108,7 @@ function openPr(): void {
   flex-shrink: 0;
 }
 .dd-dot--running {
-  background-color: #22c55e;
+  background-color: var(--kobo-success);
   box-shadow: 0 0 4px rgba(34, 197, 94, 0.5);
 }
 </style>

@@ -40,6 +40,10 @@ let context: CanvasRenderingContext2D | null = null
 let state: WhipState | null = null
 let animationFrame: number | null = null
 let previousFocusedElement: HTMLElement | null = null
+// Canvas 2D `strokeStyle` is parsed by the browser's own colour grammar, which
+// does not resolve `var(--...)` — the token is read to its literal value once
+// at mount instead of hardcoding hex in source.
+let whipShadowColor = 'rgb(0, 0, 0)'
 
 function resizeCanvas(): void {
   const canvas = canvasRef.value
@@ -84,7 +88,7 @@ function drawWhip(): void {
     context.beginPath()
     context.moveTo(start.x, start.y)
     context.lineTo(end.x, end.y)
-    context.strokeStyle = '#15151d'
+    context.strokeStyle = whipShadowColor
     context.lineWidth = 8 - progress * 4
     context.stroke()
   }
@@ -158,6 +162,7 @@ onMounted(() => {
     emit('closed')
     return
   }
+  whipShadowColor = getComputedStyle(document.documentElement).getPropertyValue('--kobo-bg-deep').trim()
   resizeCanvas()
   state = createWhip(pointer, performance.now())
   canvas.addEventListener('pointermove', handlePointerMove)

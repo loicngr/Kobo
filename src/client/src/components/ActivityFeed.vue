@@ -3,20 +3,32 @@
        every time the user clicks a workspace, hiding the mid-swap flicker
        and the empty transition while sync:response arrives. -->
   <div v-if="switching" class="activity-feed-switching">
-    <q-spinner-dots size="40px" color="indigo-4" />
+    <q-spinner-dots size="40px" color="primary" />
   </div>
   <div v-else class="activity-feed-wrap">
+    <!-- Off-screen live region. Deliberately NOT wrapped around the feed:
+         announcing the container would read out every streaming fragment. -->
+    <div
+      data-testid="activity-live-region"
+      class="sr-only"
+      role="log"
+      aria-live="polite"
+      aria-atomic="true"
+      :aria-label="$t('activity.a11y.region')"
+    >
+      {{ liveAnnouncement }}
+    </div>
     <!-- Live, transient indicator while the engine compacts context — the feed
          looks frozen for a minute or two otherwise. Cleared automatically when
          compaction ends (boundary / session end). -->
     <transition name="fade">
       <div v-if="isCompacting" class="activity-feed-compacting">
-        <q-spinner-dots size="18px" color="indigo-4" />
-        <span class="text-caption text-grey-4">{{ $t('activity.compacting') }}</span>
+        <q-spinner-dots size="18px" color="primary" />
+        <span class="text-caption text-kobo-2">{{ $t('activity.compacting') }}</span>
       </div>
     </transition>
     <q-scroll-area ref="scrollRef" class="activity-feed-scroll" @scroll="onScroll">
-      <div v-if="loadingOlder" class="text-center q-py-sm text-caption text-grey-6">
+      <div v-if="loadingOlder" class="text-center q-py-sm text-caption text-kobo-3">
         <q-spinner size="sm" /> {{ $t('activity.loading_older') }}
       </div>
       <q-virtual-scroll
@@ -47,7 +59,7 @@
       </div>
       <div v-if="rawLines.length" class="q-px-md q-pb-md">
         <q-expansion-item :label="$t('activity.raw_lines', { n: rawLines.length })" dense>
-          <div v-for="(line, i) in rawLines" :key="i" class="text-caption text-grey q-pa-xs">
+          <div v-for="(line, i) in rawLines" :key="i" class="text-caption text-kobo-3 q-pa-xs">
             {{ line }}
           </div>
         </q-expansion-item>
@@ -59,24 +71,26 @@
         round
         dense
         unelevated
-        color="grey-9"
-        text-color="grey-3"
+        color="kobo-surface-2"
+        text-color="kobo-1"
         icon="arrow_downward"
         size="sm"
         class="activity-feed-nav-btn"
         :title="$t('activity.scroll_to_bottom')"
+        :aria-label="$t('activity.scroll_to_bottom')"
         @click="handleScrollToBottomClick"
       />
       <q-btn
         round
         dense
         unelevated
-        color="grey-9"
-        text-color="grey-3"
+        color="kobo-surface-2"
+        text-color="kobo-1"
         icon="arrow_upward"
         size="sm"
         class="activity-feed-nav-btn"
         :title="$t('activity.prev_user_message')"
+        :aria-label="$t('activity.prev_user_message')"
         :loading="navigatingUp"
         :disable="navigatingUp"
         @click="goToPreviousUserMessage"
@@ -102,7 +116,10 @@ import type { AgentEvent } from 'src/types/agent-event'
 import { waitForCondition } from 'src/utils/wait-for'
 import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import TurnCard from './TurnCard.vue'
+
+const { t } = useI18n()
 
 const props = defineProps<{ workspaceId: string }>()
 const stream = useAgentStreamStore()
@@ -214,6 +231,49 @@ const rawLines = computed(() => {
     .eventsFor(props.workspaceId)
     .filter((e: AgentEvent): e is Extract<AgentEvent, { kind: 'message:raw' }> => e.kind === 'message:raw')
     .map((e) => e.content)
+})
+
+// ── Screen-reader announcements ────────────────────────────────────────────
+// The feed itself is NOT a live region: Codex emits one message:text event per
+// token delta (50-200 per message), so announcing the container would read out
+// every fragment. We therefore announce only two things — a message that has
+// stopped streaming, and a tool call entering or leaving its running state.
+const MAX_ANNOUNCED_CHARS = 300
+
+const lastAnnounceable = computed(() => {
+  for (let i = turns.value.length - 1; i >= 0; i--) {
+    const items = turns.value[i]?.items ?? []
+    for (let j = items.length - 1; j >= 0; j--) {
+      const item = items[j]
+      if (!item) continue
+      if (item.type === 'text' && !item.streaming) {
+        return { key: `text:${item.messageId}`, text: item.text }
+      }
+      if (item.type === 'tool') {
+        if (!item.result) {
+          return { key: `tool:${item.toolCallId}:start`, text: t('activity.a11y.toolStarted', { name: item.name }) }
+        }
+        const key = `tool:${item.toolCallId}:end`
+        return {
+          key,
+          text: item.result.isError
+            ? t('activity.a11y.toolFailed', { name: item.name })
+            : t('activity.a11y.toolFinished', { name: item.name }),
+        }
+      }
+    }
+  }
+  return null
+})
+
+const liveAnnouncement = ref('')
+
+watch(lastAnnounceable, (next, previous) => {
+  if (!next || next.key === previous?.key) return
+  const body = next.key.startsWith('text:')
+    ? t('activity.a11y.agentSaid', { text: next.text.slice(0, MAX_ANNOUNCED_CHARS) })
+    : next.text
+  liveAnnouncement.value = body
 })
 
 // ── Auto-scroll + infinite-scroll-up ─────────────────────────────────────

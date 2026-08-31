@@ -1,12 +1,12 @@
 <template>
-  <div v-if="pending" class="ask-user-question-panel q-pa-sm bg-dark text-grey-3" :class="{ collapsed }">
+  <div v-if="pending" class="ask-user-question-panel q-pa-sm bg-dark text-kobo-1" :class="{ collapsed }">
     <div class="row items-center q-mb-xs">
       <q-icon name="question_answer" size="16px" color="amber-4" class="q-mr-sm" />
       <div class="text-caption text-uppercase text-weight-bold text-amber-4" style="letter-spacing: 0.05em;">
         {{ t('askUserQuestion.title') }}
       </div>
       <q-space />
-      <span v-if="questions.length > 1" class="text-caption text-grey-6 q-mr-sm">
+      <span v-if="questions.length > 1" class="text-caption text-kobo-3 q-mr-sm">
         {{ stepIndex + 1 }} / {{ questions.length }}
       </span>
       <q-btn
@@ -14,7 +14,7 @@
         flat
         dense
         size="sm"
-        color="grey-4"
+        color="kobo-2"
         :aria-label="t(collapsed ? 'askUserQuestion.expand' : 'askUserQuestion.collapse')"
         @click="collapsed = !collapsed"
       >
@@ -46,8 +46,8 @@
         :done="stepDone(qIdx)"
         :header-nav="stepDone(qIdx) || qIdx === stepIndex"
       >
-        <div class="text-body2 text-grey-2 q-mb-sm">{{ q.question }}</div>
-        <div v-if="q.multiSelect" class="text-caption text-grey-6 q-mb-xs">
+        <div class="text-body2 text-kobo-1 q-mb-sm">{{ q.question }}</div>
+        <div v-if="q.multiSelect" class="text-caption text-kobo-3 q-mb-xs">
           {{ t('askUserQuestion.multiSelectHint') }}
         </div>
         <div class="aukq-options column q-gutter-xs">
@@ -59,7 +59,7 @@
               :val="opt.label"
               dark
               dense
-              color="indigo-4"
+              color="primary"
               :disable="submitting"
             >
               <template #default>
@@ -75,7 +75,7 @@
               :val="opt.label"
               dark
               dense
-              color="indigo-4"
+              color="primary"
               :disable="submitting"
             >
               <template #default>
@@ -106,7 +106,7 @@
               v-if="stepIndex > 0"
               flat
               dense
-              color="grey-4"
+              color="kobo-2"
               :label="t('askUserQuestion.previous')"
               :disable="submitting"
               @click="goPrev"
@@ -114,7 +114,7 @@
             <q-btn
               v-if="!isLast"
               :label="t('askUserQuestion.next')"
-              color="indigo-5"
+              color="primary"
               dense
               unelevated
               :disable="!stepFilled(stepIndex) || submitting"
@@ -123,7 +123,7 @@
             <q-btn
               v-else
               :label="t('askUserQuestion.submit')"
-              color="indigo-5"
+              color="primary"
               dense
               unelevated
               :loading="submitting"
@@ -134,7 +134,7 @@
               :label="t('askUserQuestion.cancel')"
               flat
               dense
-              color="grey-4"
+              color="kobo-2"
               :disable="submitting"
               @click="cancel"
             >

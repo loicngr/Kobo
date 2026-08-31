@@ -1,5 +1,5 @@
 <template>
-  <div v-if="isVisible" class="row items-center q-pa-xs q-px-sm bg-dark text-grey-5 text-caption">
+  <div v-if="isVisible" class="row items-center q-pa-xs q-px-sm bg-dark text-kobo-2 text-caption">
     <q-icon name="schedule" size="14px" color="amber-4" class="q-mr-sm" />
     <span>
       {{ display }}
@@ -14,7 +14,7 @@
       round
       size="xs"
       icon="close"
-      color="grey-5"
+      color="kobo-2"
       :aria-label="t('wakeup.cancel')"
       @click="onCancel"
     >

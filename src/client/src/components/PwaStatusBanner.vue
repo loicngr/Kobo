@@ -1,6 +1,6 @@
 <template>
   <div ref="bannerRef" v-if="offline || reconnecting || (installPrompt && !installBannerDismissed) || updateReady" class="pwa-status-banner row items-center q-gutter-sm q-px-md q-py-sm">
-    <q-icon :name="offline ? 'cloud_off' : reconnecting ? 'sync' : updateReady ? 'system_update' : 'install_mobile'" size="18px" color="indigo-3" />
+    <q-icon :name="offline ? 'cloud_off' : reconnecting ? 'sync' : updateReady ? 'system_update' : 'install_mobile'" size="18px" color="primary" />
     <span class="text-caption col">
       {{ offline ? $t('pwa.offline') : reconnecting ? $t('pwa.reconnecting') : updateReady ? $t('pwa.updateReady') : $t('pwa.installReady') }}
     </span>
@@ -9,17 +9,17 @@
       dense
       flat
       no-caps
-      color="indigo-3"
+      color="primary"
       :label="$t('pwa.install')"
       @click="install"
     />
-    <q-btn v-if="installPrompt && !installBannerDismissed" dense flat no-caps color="indigo-3" :label="$t('pwa.ignore')" @click="ignoreInstallBanner" />
+    <q-btn v-if="installPrompt && !installBannerDismissed" dense flat no-caps color="primary" :label="$t('pwa.ignore')" @click="ignoreInstallBanner" />
     <q-btn
       v-if="updateReady"
       dense
       flat
       no-caps
-      color="indigo-3"
+      color="primary"
       :label="$t('pwa.reload')"
       @click="reloadForUpdate"
     />

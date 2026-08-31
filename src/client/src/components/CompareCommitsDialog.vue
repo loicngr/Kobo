@@ -2,7 +2,7 @@
   <q-dialog v-model="open" @hide="$emit('close')">
     <q-card dark style="min-width: 460px; max-width: 640px;">
       <q-card-section>
-        <div class="text-subtitle1 text-grey-3">{{ $t('diff.compareTitle') }}</div>
+        <div class="text-subtitle1 text-kobo-1">{{ $t('diff.compareTitle') }}</div>
       </q-card-section>
       <q-card-section class="q-gutter-md">
         <q-select
@@ -27,7 +27,7 @@
         />
       </q-card-section>
       <q-card-actions align="right">
-        <q-btn flat no-caps :label="$t('common.cancel')" color="grey-5" @click="open = false" />
+        <q-btn flat no-caps :label="$t('common.cancel')" color="kobo-2" @click="open = false" />
         <q-btn
           unelevated
           no-caps

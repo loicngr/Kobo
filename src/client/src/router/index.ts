@@ -14,21 +14,23 @@ export default defineRouter(() => {
 
   // No guard existed anywhere in the client: modified settings, a filled-in
   // creation form and a file edited in the diff viewer all vanished silently.
-  Router.beforeEach((to, from, next) => {
-    if (to.fullPath === from.fullPath || !hasUnsavedWork()) {
-      next()
-      return
-    }
+  //
+  // Returns instead of the `next()` callback (deprecated in Vue Router 4.4+):
+  // the dialog's onOk/onCancel are wrapped in a promise the guard awaits.
+  Router.beforeEach((to, from) => {
+    if (to.fullPath === from.fullPath || !hasUnsavedWork()) return true
     const t = i18n.global.t
-    Dialog.create({
-      title: t('unsaved.title'),
-      message: t('unsaved.message'),
-      dark: true,
-      cancel: { flat: true, label: t('unsaved.stay'), color: 'grey-5' },
-      ok: { flat: true, label: t('unsaved.leave'), color: 'negative' },
+    return new Promise<boolean>((resolve) => {
+      Dialog.create({
+        title: t('unsaved.title'),
+        message: t('unsaved.message'),
+        dark: true,
+        cancel: { flat: true, label: t('unsaved.stay'), color: 'grey-5' },
+        ok: { flat: true, label: t('unsaved.leave'), color: 'negative' },
+      })
+        .onOk(() => resolve(true))
+        .onCancel(() => resolve(false))
     })
-      .onOk(() => next())
-      .onCancel(() => next(false))
   })
 
   // Tab close / reload: modern browsers ignore any custom message here and

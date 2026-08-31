@@ -1,7 +1,7 @@
 <template>
   <div class="git-panel q-px-sm q-py-md">
     <div class="row items-center justify-between q-mb-sm">
-      <div class="text-caption text-uppercase text-weight-bold text-grey-6" style="letter-spacing: 0.05em;">
+      <div class="text-caption text-uppercase text-weight-bold text-kobo-3" style="letter-spacing: 0.05em;">
         {{ $t('git.title') }}
       </div>
       <q-btn
@@ -11,7 +11,7 @@
         dense
         size="xs"
         icon="refresh"
-        color="grey-6"
+        color="kobo-3"
         :loading="loadingStats"
         @click="handleRefreshAll"
       >
@@ -24,7 +24,7 @@
            Replaces every sub-card (Repository / Changes / Actions / PR) so the
            user doesn't see a half-empty panel during the switch. -->
       <div v-if="loadingStats && !gitStats" class="row items-center justify-center q-py-xl">
-        <q-spinner size="32px" color="indigo-4" />
+        <q-spinner size="32px" color="primary" />
       </div>
 
       <template v-else>
@@ -34,29 +34,29 @@
 
         <!-- Repo name -->
         <div class="row items-center q-mb-xs">
-          <q-icon name="folder" size="14px" color="grey-6" class="q-mr-xs" />
-          <span class="text-caption text-grey-3">{{ repoName }}</span>
+          <q-icon name="folder" size="14px" color="kobo-3" class="q-mr-xs" />
+          <span class="text-caption text-kobo-1">{{ repoName }}</span>
         </div>
 
         <!-- Branch -->
         <div class="row items-center q-mb-xs">
           <span
-            style="width: 8px; height: 8px; border-radius: 50%; background-color: #4ade80; display: inline-block;"
+            style="width: 8px; height: 8px; border-radius: 50%; background-color: var(--kobo-success); display: inline-block;"
             class="q-mr-xs"
           />
-          <span class="text-caption text-grey-4" style="font-family: 'Roboto Mono', monospace; font-size: 11px;">
+          <span class="text-caption text-kobo-2" style="font-family: var(--kobo-font-mono); font-size: 11px;">
             {{ workspace.workingBranch }}
           </span>
         </div>
 
         <!-- Source branch info — 1 line, no "from" prefix (section title is enough) -->
-        <div class="text-caption text-grey-8" style="font-size: 11px;">
+        <div class="text-caption text-kobo-3" style="font-size: 11px;">
           {{ workspace.sourceBranch }}
           <template v-if="gitStats">
-            <span v-if="gitStats.commitCount > 0" class="cursor-pointer arrow-clickable" style="color: #4ade80;" @click.stop="openDivergence('ahead')">
+            <span v-if="gitStats.commitCount > 0" class="cursor-pointer arrow-clickable" style="color: var(--kobo-success);" @click.stop="openDivergence('ahead')">
               · ↑{{ gitStats.commitCount }}
             </span>
-            <span v-if="gitStats.behindCount > 0" class="cursor-pointer arrow-clickable" style="color: #f87171;" @click.stop="openDivergence('behind')">
+            <span v-if="gitStats.behindCount > 0" class="cursor-pointer arrow-clickable" style="color: var(--kobo-danger);" @click.stop="openDivergence('behind')">
               · ↓{{ gitStats.behindCount }}
             </span>
             <q-tooltip v-if="gitStats.commitCount > 0 || gitStats.behindCount > 0">
@@ -64,8 +64,8 @@
             </q-tooltip>
             ·
             <span v-if="gitStats.unpushedCount === -1">{{ $t('git.localOnly') }}</span>
-            <span v-else-if="gitStats.unpushedCount === 0" style="color: #4ade80;">{{ $t('git.pushed') }}</span>
-            <span v-else style="color: #f59e0b;">{{ $t('git.unpushed', { count: gitStats.unpushedCount }) }}</span>
+            <span v-else-if="gitStats.unpushedCount === 0" style="color: var(--kobo-success);">{{ $t('git.pushed') }}</span>
+            <span v-else style="color: var(--kobo-warning);">{{ $t('git.unpushed', { count: gitStats.unpushedCount }) }}</span>
           </template>
         </div>
       </div>
@@ -75,7 +75,7 @@
            silently when the stats request failed. -->
       <div v-if="statsError" class="git-subcard git-subcard--error">
         <div class="git-subcard-title text-negative">{{ $t('git.statsFailed') }}</div>
-        <div class="text-caption text-grey-6">{{ statsError }}</div>
+        <div class="text-caption text-kobo-3">{{ statsError }}</div>
         <q-btn
           dense
           flat
@@ -98,22 +98,22 @@
             class="row items-center commit-toggle cursor-pointer"
             @click="toggleCommits"
           >
-            <q-icon name="commit" size="14px" color="grey-6" class="q-mr-xs" />
-            <span class="text-grey-4">{{ $t('git.commits', { count: gitStats.commitCount }, gitStats.commitCount) }}</span>
-            <q-spinner v-if="loadingCommits" size="12px" color="indigo-4" class="q-ml-xs" />
-            <q-icon v-else :name="showCommits ? 'expand_less' : 'expand_more'" size="14px" color="grey-6" class="q-ml-xs" />
+            <q-icon name="commit" size="14px" color="kobo-3" class="q-mr-xs" />
+            <span class="text-kobo-2">{{ $t('git.commits', { count: gitStats.commitCount }, gitStats.commitCount) }}</span>
+            <q-spinner v-if="loadingCommits" size="12px" color="primary" class="q-ml-xs" />
+            <q-icon v-else :name="showCommits ? 'expand_less' : 'expand_more'" size="14px" color="kobo-3" class="q-ml-xs" />
           </div>
           <div v-else class="row items-center">
-            <q-icon name="commit" size="14px" color="grey-6" class="q-mr-xs" />
-            <span class="text-grey-4">{{ $t('git.commits', { count: 0 }, 0) }}</span>
+            <q-icon name="commit" size="14px" color="kobo-3" class="q-mr-xs" />
+            <span class="text-kobo-2">{{ $t('git.commits', { count: 0 }, 0) }}</span>
           </div>
 
           <!-- Files -->
           <div v-if="gitStats.filesChanged > 0" class="row items-center">
-            <q-icon name="insert_drive_file" size="14px" color="grey-6" class="q-mr-xs" />
-            <span class="text-grey-4">{{ gitStats.filesChanged }}</span>
-            <span v-if="gitStats.insertions > 0" class="q-ml-xs" style="color: #4ade80;">+{{ gitStats.insertions }}</span>
-            <span v-if="gitStats.deletions > 0" class="q-ml-xs" style="color: #f87171;">-{{ gitStats.deletions }}</span>
+            <q-icon name="insert_drive_file" size="14px" color="kobo-3" class="q-mr-xs" />
+            <span class="text-kobo-2">{{ gitStats.filesChanged }}</span>
+            <span v-if="gitStats.insertions > 0" class="q-ml-xs" style="color: var(--kobo-success);">+{{ gitStats.insertions }}</span>
+            <span v-if="gitStats.deletions > 0" class="q-ml-xs" style="color: var(--kobo-danger);">-{{ gitStats.deletions }}</span>
           </div>
 
           <!-- Working tree (only if dirty) -->
@@ -122,12 +122,12 @@
             class="row items-center cursor-pointer"
             @click="toggleWorkingTreeFiles"
           >
-            <q-icon name="edit_note" size="14px" color="grey-6" class="q-mr-xs" />
-            <span v-if="gitStats.workingTree.staged > 0" style="color: #4ade80;">{{ gitStats.workingTree.staged }}s</span>
-            <span v-if="gitStats.workingTree.modified > 0" class="q-ml-xs" style="color: #f59e0b;">{{ gitStats.workingTree.modified }}m</span>
-            <span v-if="gitStats.workingTree.untracked > 0" class="q-ml-xs text-grey-6">{{ gitStats.workingTree.untracked }}u</span>
-            <q-spinner v-if="loadingWorkingTreeFiles" size="12px" color="indigo-4" class="q-ml-xs" />
-            <q-icon v-else :name="showWorkingTreeFiles ? 'expand_less' : 'expand_more'" size="14px" color="grey-6" class="q-ml-xs" />
+            <q-icon name="edit_note" size="14px" color="kobo-3" class="q-mr-xs" />
+            <span v-if="gitStats.workingTree.staged > 0" style="color: var(--kobo-success);">{{ gitStats.workingTree.staged }}s</span>
+            <span v-if="gitStats.workingTree.modified > 0" class="q-ml-xs" style="color: var(--kobo-warning);">{{ gitStats.workingTree.modified }}m</span>
+            <span v-if="gitStats.workingTree.untracked > 0" class="q-ml-xs text-kobo-3">{{ gitStats.workingTree.untracked }}u</span>
+            <q-spinner v-if="loadingWorkingTreeFiles" size="12px" color="primary" class="q-ml-xs" />
+            <q-icon v-else :name="showWorkingTreeFiles ? 'expand_less' : 'expand_more'" size="14px" color="kobo-3" class="q-ml-xs" />
             <q-tooltip>
               {{ $t('git.staged', { count: gitStats.workingTree.staged }) }} ·
               {{ $t('git.modified', { count: gitStats.workingTree.modified }) }} ·
@@ -145,15 +145,15 @@
               no-caps
               size="sm"
               icon="difference"
-              color="grey-5"
+              color="kobo-2"
               :label="$t('git.compareCommits')"
               @click="showCompareDialog = true"
             />
           </div>
-          <div v-if="loadingCommits" class="text-caption text-grey-6 q-pa-xs">
+          <div v-if="loadingCommits" class="text-caption text-kobo-3 q-pa-xs">
             <q-spinner size="xs" class="q-mr-xs" />{{ $t('git.commits.loading') }}
           </div>
-          <div v-else-if="commits.length === 0" class="text-caption text-grey-7 q-pa-xs">
+          <div v-else-if="commits.length === 0" class="text-caption text-kobo-3 q-pa-xs">
             {{ $t('git.commits.empty') }}
           </div>
           <template v-else>
@@ -166,18 +166,18 @@
               <q-icon
                 :name="commit.isPushed ? 'cloud_done' : 'cloud_upload'"
                 size="12px"
-                :color="commit.isPushed ? 'grey-6' : 'orange-5'"
+                :color="commit.isPushed ? 'kobo-3' : 'orange-5'"
                 class="q-mr-xs commit-item-icon"
               />
-              <span class="commit-sha text-grey-5">{{ commit.shortSha }}</span>
-              <span class="commit-subject text-grey-4 ellipsis q-ml-sm">{{ commit.subject }}</span>
+              <span class="commit-sha text-kobo-2">{{ commit.shortSha }}</span>
+              <span class="commit-subject text-kobo-2 ellipsis q-ml-sm">{{ commit.subject }}</span>
               <q-btn
                 flat
                 dense
                 round
                 size="xs"
                 icon="difference"
-                color="grey-6"
+                color="kobo-3"
                 class="commit-diff-btn q-ml-xs"
                 @click.stop="openCommitDiff(`${commit.sha}^`, commit.sha)"
               >
@@ -186,8 +186,8 @@
               <q-tooltip anchor="top middle" self="bottom middle" class="commit-tooltip">
                 <div class="text-caption">
                   <div><code>{{ commit.sha }}</code></div>
-                  <div class="text-grey-5 q-mt-xs">{{ commit.author }} · {{ formatCommitDate(commit.date) }}</div>
-                  <div class="text-grey-6 q-mt-xs" style="font-style: italic;">
+                  <div class="text-kobo-2 q-mt-xs">{{ commit.author }} · {{ formatCommitDate(commit.date) }}</div>
+                  <div class="text-kobo-3 q-mt-xs" style="font-style: italic;">
                     {{ commit.isPushed ? $t('git.commits.pushed') : $t('git.commits.unpushed') }}
                     · {{ $t('git.commits.clickToAppend') }}
                   </div>
@@ -199,18 +199,18 @@
 
         <!-- Working-tree file list expand — kept inside the sub-card, below the commit list -->
         <div v-if="showWorkingTreeFiles" class="commit-list q-mt-sm">
-          <div v-if="loadingWorkingTreeFiles" class="text-caption text-grey-6 q-pa-xs">
+          <div v-if="loadingWorkingTreeFiles" class="text-caption text-kobo-3 q-pa-xs">
             <q-spinner size="xs" class="q-mr-xs" />{{ $t('git.commits.loading') }}
           </div>
-          <div v-else-if="workingTreeFiles.length === 0" class="text-caption text-grey-7 q-pa-xs">
+          <div v-else-if="workingTreeFiles.length === 0" class="text-caption text-kobo-3 q-pa-xs">
             {{ $t('git.workingTreeEmpty') }}
           </div>
           <template v-else>
             <div v-for="file in workingTreeFiles" :key="file.path" class="commit-item row no-wrap items-center">
-              <span v-if="file.staged" style="color: #4ade80;" class="q-mr-xs">s<q-tooltip>{{ $t('git.fileStaged') }}</q-tooltip></span>
-              <span v-if="file.modified" style="color: #f59e0b;" class="q-mr-xs">m<q-tooltip>{{ $t('git.fileModified') }}</q-tooltip></span>
-              <span v-if="file.untracked" class="text-grey-6 q-mr-xs">u<q-tooltip>{{ $t('git.fileUntracked') }}</q-tooltip></span>
-              <span class="commit-subject text-grey-4 ellipsis" style="font-family: 'Roboto Mono', monospace;">{{ file.path }}</span>
+              <span v-if="file.staged" style="color: var(--kobo-success);" class="q-mr-xs">s<q-tooltip>{{ $t('git.fileStaged') }}</q-tooltip></span>
+              <span v-if="file.modified" style="color: var(--kobo-warning);" class="q-mr-xs">m<q-tooltip>{{ $t('git.fileModified') }}</q-tooltip></span>
+              <span v-if="file.untracked" class="text-kobo-3 q-mr-xs">u<q-tooltip>{{ $t('git.fileUntracked') }}</q-tooltip></span>
+              <span class="commit-subject text-kobo-2 ellipsis" style="font-family: var(--kobo-font-mono);">{{ file.path }}</span>
             </div>
           </template>
         </div>
@@ -235,7 +235,7 @@
           <q-btn
             v-else
             no-caps unelevated dense size="sm"
-            color="indigo-5"
+            color="primary"
             icon="open_in_new"
             :label="$t('git.createRequest', { request: forge.capabilities.requestTermShort })"
             class="full-width q-mb-xs"
@@ -282,7 +282,7 @@
         <div class="row no-wrap items-stretch q-gutter-xs">
           <div v-if="gitStats" class="col">
             <q-btn-dropdown
-              split dense no-caps size="sm" outline color="grey-5"
+              split dense no-caps size="sm" outline color="kobo-2"
               icon="sync"
               :label="syncLabel"
               class="full-width git-btn"
@@ -297,7 +297,7 @@
                   @click="handlePull"
                 >
                   <q-item-section avatar style="min-width: 28px;">
-                    <q-icon name="download" size="16px" color="grey-5" />
+                    <q-icon name="download" size="16px" color="kobo-2" />
                   </q-item-section>
                   <q-item-section>{{ $t('git.pull') }}</q-item-section>
                   <q-tooltip v-if="gitStats.unpushedCount === -1">{{ $t('git.pullNoUpstream') }}</q-tooltip>
@@ -310,13 +310,13 @@
                 </q-item>
                 <q-item clickable v-close-popup :disable="pulling || rebasing || merging || isArchived" @click="handleMerge">
                   <q-item-section avatar style="min-width: 28px;">
-                    <q-icon name="merge" size="16px" color="purple-4" />
+                    <q-icon name="merge" size="16px" color="primary" />
                   </q-item-section>
                   <q-item-section>{{ $t('git.merge') }}</q-item-section>
                 </q-item>
                 <q-item clickable v-close-popup :disable="pulling || rebasing || merging || fetching || isArchived" @click="handleFetchAll">
                   <q-item-section avatar style="min-width: 28px;">
-                    <q-icon name="cloud_download" size="16px" color="grey-5" />
+                    <q-icon name="cloud_download" size="16px" color="kobo-2" />
                   </q-item-section>
                   <q-item-section>{{ $t('git.fetch') }}</q-item-section>
                 </q-item>
@@ -340,7 +340,7 @@
 
           <div class="col">
             <q-btn
-              dense no-caps size="sm" outline color="indigo-4"
+              dense no-caps size="sm" outline color="primary"
               icon="rate_review"
               :label="$t('git.diffReview')"
               class="full-width git-btn"
@@ -353,7 +353,7 @@
 
           <div v-if="hasOverflowActions" class="col-auto">
             <q-btn
-              dense flat size="sm" color="grey-5"
+              dense flat size="sm" color="kobo-2"
               icon="more_horiz"
               class="git-btn"
             >
@@ -366,7 +366,7 @@
                     @click="openRenameBranchDialog"
                   >
                     <q-item-section avatar style="min-width: 28px;">
-                      <q-icon name="edit" size="16px" color="grey-5" />
+                      <q-icon name="edit" size="16px" color="kobo-2" />
                     </q-item-section>
                     <q-item-section>{{ $t('git.renameBranch') }}</q-item-section>
                   </q-item>
@@ -377,7 +377,7 @@
                     @click="handleChangePrBase"
                   >
                     <q-item-section avatar style="min-width: 28px;">
-                      <q-icon name="swap_horiz" size="16px" color="grey-5" />
+                      <q-icon name="swap_horiz" size="16px" color="kobo-2" />
                     </q-item-section>
                     <q-item-section>{{ $t('git.changeRequestBase', { request: forge.capabilities.requestTermShort }) }}</q-item-section>
                   </q-item>
@@ -388,7 +388,7 @@
                     @click="handleChangeSourceBranch"
                   >
                     <q-item-section avatar style="min-width: 28px;">
-                      <q-icon name="alt_route" size="16px" color="grey-5" />
+                      <q-icon name="alt_route" size="16px" color="kobo-2" />
                     </q-item-section>
                     <q-item-section>{{ $t('git.changeSourceBranch') }}</q-item-section>
                   </q-item>
@@ -419,7 +419,7 @@
       </template>
     </template>
 
-    <div v-else class="text-caption text-grey-8">
+    <div v-else class="text-caption text-kobo-3">
       {{ $t('common.selectWorkspace') }}
     </div>
 
@@ -430,7 +430,7 @@
             <q-icon name="commit" color="green-5" class="q-mr-xs" />
             {{ $t('git.commitDialogTitle') }}
           </div>
-          <div class="text-caption text-grey-6 q-mt-xs">{{ $t('git.commitDialogDescription') }}</div>
+          <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('git.commitDialogDescription') }}</div>
         </q-card-section>
         <q-card-section class="q-pt-none">
           <q-input
@@ -448,7 +448,7 @@
             flat
             no-caps
             :label="$t('common.cancel')"
-            color="grey-5"
+            color="kobo-2"
             :disable="committingDirect || committingWithAgent"
             @click="showCommitDialog = false"
           />
@@ -456,7 +456,7 @@
             flat
             no-caps
             icon="smart_toy"
-            color="indigo-4"
+            color="primary"
             :label="$t('git.commitWithAgent')"
             :loading="committingWithAgent"
             :disable="committingDirect"
@@ -484,7 +484,7 @@
             <q-icon name="warning" class="q-mr-xs" />
             {{ conflictFiles.length === 0 ? $t('git.operationPausedTitle') : conflictOperation === 'merge' ? $t('git.conflictTitleMerge') : $t('git.conflictTitleRebase') }}
           </div>
-          <div class="text-caption text-grey-6 q-mt-xs">
+          <div class="text-caption text-kobo-3 q-mt-xs">
             {{ conflictFiles.length === 0 ? $t('git.operationPausedSubtitle') : $t('git.conflictSubtitle', { count: conflictFiles.length }) }}
           </div>
         </q-card-section>
@@ -503,7 +503,7 @@
             flat
             no-caps
             :label="$t('common.cancel')"
-            color="grey-5"
+            color="kobo-2"
             :disable="conflictAborting || conflictResolving || conflictContinuing"
             @click="conflictDialog = false"
           />
@@ -555,7 +555,7 @@
                 ? $t('git.dirtyTitlePull')
                 : $t('git.dirtyTitleRebase') }}
           </div>
-          <div class="text-caption text-grey-6 q-mt-xs">
+          <div class="text-caption text-kobo-3 q-mt-xs">
             {{ $t('git.dirtySubtitle', {
               modified: dirtyStatus?.modified ?? 0,
               staged: dirtyStatus?.staged ?? 0,
@@ -579,7 +579,7 @@
             flat
             no-caps
             :label="$t('common.cancel')"
-            color="grey-5"
+            color="kobo-2"
             :disable="dirtyBusy"
             @click="dirtyDialog = false"
           />
@@ -597,7 +597,7 @@
             <q-btn
               unelevated
               no-caps
-              color="grey-7"
+              color="kobo-3"
               icon="check"
               :label="$t('git.dirtyCommitConfirm')"
               :loading="dirtyBusy"
@@ -609,7 +609,7 @@
             <q-btn
               flat
               no-caps
-              color="grey-5"
+              color="kobo-2"
               icon="edit"
               :label="$t('git.dirtyCommit')"
               :disable="dirtyBusy"
@@ -639,12 +639,12 @@
             <q-icon name="error" class="q-mr-xs" />
             {{ $t('git.changeSourceBranchErrorTitle') }}
           </div>
-          <div class="text-caption text-grey-6 q-mt-xs">
+          <div class="text-caption text-kobo-3 q-mt-xs">
             {{ $t('git.changeSourceBranchErrorOngoing', { op: sourceChangeErrorOperation }) }}
           </div>
         </q-card-section>
         <q-card-section class="q-pt-none">
-          <div class="text-body2 text-grey-3" style="white-space: pre-wrap; word-break: break-word;">
+          <div class="text-body2 text-kobo-1" style="white-space: pre-wrap; word-break: break-word;">
             {{ sourceChangeErrorMessage }}
           </div>
         </q-card-section>
@@ -653,7 +653,7 @@
             flat
             no-caps
             :label="$t('common.close')"
-            color="grey-5"
+            color="kobo-2"
             :disable="sourceChangeAborting"
             @click="sourceChangeErrorDialog = false"
           />
@@ -681,11 +681,11 @@
           </div>
         </q-card-section>
         <q-card-section class="q-pt-none" style="max-height: 50vh; overflow: auto;">
-          <div class="text-body2 text-grey-3 git-output-pre">{{ gitOutputText }}</div>
+          <div class="text-body2 text-kobo-1 git-output-pre">{{ gitOutputText }}</div>
         </q-card-section>
         <q-card-actions align="right">
-          <q-btn flat no-caps :label="$t('common.copy')" color="grey-5" @click="copyGitOutput" />
-          <q-btn flat no-caps :label="$t('common.close')" color="grey-5" @click="gitOutputDialog = false" />
+          <q-btn flat no-caps :label="$t('common.copy')" color="kobo-2" @click="copyGitOutput" />
+          <q-btn flat no-caps :label="$t('common.close')" color="kobo-2" @click="gitOutputDialog = false" />
         </q-card-actions>
       </q-card>
     </q-dialog>
@@ -1243,8 +1243,8 @@ function openRenameBranchDialog() {
     message: t('git.renameBranchPrompt', { branch: ws.workingBranch }),
     prompt: { model: ws.workingBranch, type: 'text' },
     dark: true,
-    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
-    ok: { flat: true, label: t('git.renameBranch'), color: 'indigo-4' },
+    cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
+    ok: { flat: true, label: t('git.renameBranch'), color: 'primary' },
   }).onOk(async (newName: string) => {
     const trimmed = (newName ?? '').trim()
     if (!trimmed || trimmed === ws.workingBranch) return
@@ -1318,7 +1318,7 @@ function handleRebase() {
     }),
     html: true,
     dark: true,
-    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
     ok: { flat: true, label: t('git.rebase'), color: 'orange-4' },
   }).onOk(() => {
     void runRebase()
@@ -1363,8 +1363,8 @@ function handleMerge() {
     }),
     html: true,
     dark: true,
-    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
-    ok: { flat: true, label: t('git.merge'), color: 'purple-4' },
+    cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
+    ok: { flat: true, label: t('git.merge'), color: 'primary' },
   }).onOk(() => {
     void runMerge()
   })
@@ -1480,7 +1480,7 @@ function dirtyDiscard() {
     title: t('git.dirtyDiscardConfirmTitle'),
     message: t('git.dirtyDiscardConfirmMessage'),
     dark: true,
-    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
     ok: { flat: true, label: t('git.dirtyDiscard'), color: 'red-4' },
   }).onOk(async () => {
     dirtyBusy.value = true
@@ -1512,7 +1512,7 @@ function abortGitOperation() {
     message: t('git.conflictAbortConfirmMessage', { op: conflictOperation.value || 'rebase' }),
     dark: true,
     persistent: true,
-    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
     ok: { unelevated: true, label: t('git.conflictAbort'), color: 'red-6' },
   }).onOk(() => void runAbortGitOperation())
 }
@@ -1618,7 +1618,7 @@ function handleForcePush() {
     message: t('git.forcePushHint'),
     dark: true,
     persistent: true,
-    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
     ok: { unelevated: true, label: t('git.forcePush'), color: 'orange-7' },
   }).onOk(() => void runPush(true))
 }
@@ -1662,8 +1662,8 @@ function handlePull() {
     }),
     html: true,
     dark: true,
-    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
-    ok: { flat: true, label: t('git.pull'), color: 'grey-5' },
+    cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
+    ok: { flat: true, label: t('git.pull'), color: 'kobo-2' },
   }).onOk(() => {
     void runPull()
   })
@@ -1706,7 +1706,7 @@ function handleChangePrBase() {
       type: 'text',
     },
     dark: true,
-    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
     ok: { flat: true, label: t('common.save'), color: 'primary' },
   }).onOk(async (newBase: string) => {
     if (!newBase.trim() || !props.workspace) return
@@ -1746,7 +1746,7 @@ function handleMergeRequest() {
     title: t('git.mergeRequestConfirmTitle', { request }),
     message: t('git.mergeRequestConfirmMessage', { request }),
     dark: true,
-    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
     ok: { flat: true, label: t('git.mergeRequest', { request }), color: 'deep-orange-5' },
   }).onOk(async () => {
     if (!props.workspace) return
@@ -1765,7 +1765,7 @@ function handleMergeRequest() {
           title: t('git.deleteRemoteBranchTitle'),
           message: t('git.deleteRemoteBranchMessage', { branch: data.branch }),
           dark: true,
-          cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+          cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
           ok: { flat: true, label: t('git.deleteRemoteBranch'), color: 'negative' },
         }).onOk(() => void deleteRemoteBranch(data.branch))
       }
@@ -1810,7 +1810,7 @@ function promptForcePush() {
     title: t('git.changeSourceForcePushTitle'),
     message: t('git.changeSourceForcePushMessage'),
     dark: true,
-    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
     ok: { flat: true, label: t('git.forcePush'), color: 'primary' },
   }).onOk(async () => {
     if (!props.workspace) return
@@ -1839,7 +1839,7 @@ async function handleChangeSourceBranch() {
     message: t('git.changeSourceBranchMessage'),
     prompt: { model: '', type: 'text' },
     dark: true,
-    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
     ok: { flat: true, label: t('common.save'), color: 'primary' },
   }).onOk(async (newBase: string) => {
     if (!newBase.trim() || !props.workspace) return
@@ -1978,7 +1978,7 @@ async function handleOpenPr() {
   flex-shrink: 0;
 }
 .commit-sha {
-  font-family: 'Roboto Mono', monospace;
+  font-family: var(--kobo-font-mono);
   font-size: 10.5px;
   flex-shrink: 0;
 }
@@ -1994,14 +1994,19 @@ async function handleOpenPr() {
   text-decoration: underline;
 }
 .git-subcard {
-  background: #1f2538;
+  // DESIGN.md documents --kobo-surface for "cards, panels" and
+  // --kobo-surface-2 for "inputs, popovers" — the mass hex substitution
+  // picked the nearest color, not the matching role. --kobo-surface-2 is
+  // nearly indistinguishable from --kobo-bg, which silently flattened the
+  // visual separation these subcards used to have.
+  background: var(--kobo-surface);
   border-radius: 4px;
   padding: 8px 10px;
   margin-bottom: 8px;
 }
 
 .git-subcard-title {
-  color: #6b7280;
+  color: var(--kobo-text-3);
   font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.08em;
@@ -2025,12 +2030,12 @@ async function handleOpenPr() {
      so a scoped rule wouldn't reach them. -->
 <style lang="scss">
 .git-branch-code {
-  font-family: 'Roboto Mono', monospace;
+  font-family: var(--kobo-font-mono);
   font-size: 11px;
   padding: 1px 5px;
   border-radius: 3px;
   background-color: rgba(129, 140, 248, 0.14);
-  color: #c7d2fe;
+  color: var(--kobo-text-2);
   // Long branch names (e.g. `feature/<TK-id>--<long-slug>`) used to force a
   // horizontal scrollbar inside the push/merge/rebase dialogs because of
   // `white-space: nowrap`. `overflow-wrap: anywhere` keeps short names on

@@ -6,12 +6,12 @@
     <q-separator dark />
 
     <div class="q-px-md q-py-sm">
-      <div class="text-caption text-uppercase text-weight-bold text-grey-5 q-mb-xs">
+      <div class="text-caption text-uppercase text-weight-bold text-kobo-2 q-mb-xs">
         {{ $t('tools.title') }}
       </div>
 
       <template v-if="!workspace">
-        <div class="text-caption text-grey-8">
+        <div class="text-caption text-kobo-3">
           {{ $t('devServer.noWorkspace') }}
         </div>
       </template>
@@ -23,7 +23,7 @@
         no-caps
         dense
         outline
-        color="indigo-4"
+        color="primary"
         icon="replay"
         :label="$t('tools.runSetupScript')"
         :loading="running"
@@ -41,7 +41,7 @@
         no-caps
         dense
         outline
-        color="indigo-4"
+        color="primary"
         icon="open_in_new"
         :label="$t('git.openEditor')"
         :loading="openingEditor"
@@ -54,7 +54,7 @@
         no-caps
         dense
         outline
-        color="indigo-4"
+        color="primary"
         icon="folder_open"
         :label="$t('tools.openFileManager')"
         :loading="openingFileManager"
@@ -69,7 +69,7 @@
         no-caps
         dense
         outline
-        color="indigo-4"
+        color="primary"
         icon="terminal"
         :label="$t('tools.openTerminal')"
         :loading="openingTerminal"
@@ -83,7 +83,7 @@
         no-caps
         dense
         outline
-        color="indigo-4"
+        color="primary"
         icon="rate_review"
         :label="$t('tools.review')"
         :loading="startingReview"
@@ -115,7 +115,7 @@
         no-caps
         dense
         outline
-        color="indigo-4"
+        color="primary"
         icon="open_in_new"
         :label="$t('tools.openNotion')"
         class="full-width q-mb-xs"
@@ -126,16 +126,16 @@
         no-caps
         dense
         outline
-        color="indigo-4"
+        color="primary"
         icon="open_in_new"
         :label="$t('tools.openSentry')"
         class="full-width q-mb-xs"
         @click="openExternal(workspace.sentryUrl)"
       />
 
-        <div v-if="!hasSetupScript" class="text-caption text-grey-8">
+        <div v-if="!hasSetupScript" class="text-caption text-kobo-3">
           {{ $t('tools.noSetupScript') }}
-          <router-link to="/settings" style="color: #6c63ff;">{{ $t('devServer.goToSettings') }}</router-link>
+          <router-link to="/settings" style="color: var(--kobo-text-2);">{{ $t('devServer.goToSettings') }}</router-link>
         </div>
 
       </template>

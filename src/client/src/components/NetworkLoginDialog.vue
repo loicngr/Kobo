@@ -3,7 +3,7 @@
     <q-card style="min-width: 320px; max-width: 90vw">
       <q-card-section>
         <div class="text-h6">{{ t('network.login.title') }}</div>
-        <div class="text-caption text-grey-7 q-mt-sm">{{ t('network.login.description') }}</div>
+        <div class="text-caption text-kobo-3 q-mt-sm">{{ t('network.login.description') }}</div>
       </q-card-section>
       <q-card-section>
         <q-input
@@ -21,7 +21,7 @@
       <q-card-actions align="right">
         <q-btn
           :label="t('network.login.connect')"
-          color="indigo-4"
+          color="primary"
           :loading="loading"
           unelevated
           @click="submit"

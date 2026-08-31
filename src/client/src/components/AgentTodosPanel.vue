@@ -1,7 +1,7 @@
 <template>
   <div class="agent-todos-panel q-pa-md">
     <div class="row items-center q-mb-sm">
-      <div class="text-caption text-uppercase text-weight-bold text-grey-6" style="letter-spacing: 0.05em;">
+      <div class="text-caption text-uppercase text-weight-bold text-kobo-3" style="letter-spacing: 0.05em;">
         {{ $t('agentTodos.title') }}
       </div>
     </div>
@@ -21,14 +21,14 @@
         <span
           class="col todo-title text-caption"
           :class="{ 'text-strike': todo.status === 'completed' }"
-          :style="{ color: todo.status === 'completed' ? '#4ade80' : '#ccc' }"
+          :style="{ color: todo.status === 'completed' ? 'var(--kobo-success)' : 'var(--kobo-text-2)' }"
         >
           {{ todo.content }}
         </span>
       </div>
     </div>
 
-    <div v-else class="text-caption text-grey-8" style="font-size: 11px;">
+    <div v-else class="text-caption text-kobo-3" style="font-size: 11px;">
       {{ $t('agentTodos.empty') }}
     </div>
   </div>
@@ -55,11 +55,11 @@ function statusIcon(status: string): string {
 function statusColor(status: string): string {
   switch (status) {
     case 'completed':
-      return '#4ade80'
+      return 'var(--kobo-success)'
     case 'in_progress':
-      return '#f59e0b'
+      return 'var(--kobo-warning)'
     default:
-      return '#888'
+      return 'var(--kobo-text-3)'
   }
 }
 </script>

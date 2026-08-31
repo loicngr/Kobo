@@ -1,13 +1,13 @@
 <template>
   <q-dialog :model-value="modelValue" @update:model-value="$emit('update:modelValue', $event)">
-    <q-card class="text-grey-3" style="min-width: 700px; max-width: 900px; max-height: 80vh; background: #1e1e3a;">
+    <q-card class="text-kobo-1" style="min-width: 700px; max-width: 900px; max-height: 80vh; background: var(--kobo-surface);">
       <q-card-section class="row items-center">
         <div class="text-h6">{{ t('devServer.logDialog.title') }}</div>
         <q-space />
-        <q-btn flat round dense icon="refresh" color="grey-5" @click="refresh" :loading="loading">
+        <q-btn flat round dense icon="refresh" color="kobo-2" @click="refresh" :loading="loading">
           <q-tooltip>{{ $t('tooltip.refreshLogs') }}</q-tooltip>
         </q-btn>
-        <q-btn flat round dense icon="close" color="grey-5" @click="$emit('update:modelValue', false)">
+        <q-btn flat round dense icon="close" color="kobo-2" @click="$emit('update:modelValue', false)">
           <q-tooltip>{{ $t('tooltip.closeDialog') }}</q-tooltip>
         </q-btn>
       </q-card-section>
@@ -130,8 +130,8 @@ onUnmounted(() => {
 .log-text {
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
   font-size: 11px;
-  color: #ccc;
-  background: #0d0d1a;
+  color: var(--kobo-text-2);
+  background: var(--kobo-bg-deep);
   white-space: pre-wrap;
   word-break: break-all;
   margin: 0;

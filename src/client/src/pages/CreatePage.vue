@@ -3,8 +3,8 @@
     <DrawerToggleButton class="create-page__drawer-toggle" />
     <div class="create-inner q-mx-auto">
       <header class="q-mb-lg">
-        <div class="create-title text-weight-bold text-grey-2">{{ $t('createPage.title') }}</div>
-        <div class="text-body1 text-grey-5 q-mt-xs">{{ $t('createPage.subtitle') }}</div>
+        <div class="create-title text-weight-bold text-kobo-1">{{ $t('createPage.title') }}</div>
+        <div class="text-body1 text-kobo-2 q-mt-xs">{{ $t('createPage.subtitle') }}</div>
       </header>
 
       <!--
@@ -30,10 +30,10 @@
       <div class="create-sections column">
         <q-card flat bordered class="create-section-card">
           <q-card-section class="row items-start no-wrap q-gutter-md">
-            <q-avatar color="indigo-9" text-color="indigo-2" icon="assignment" size="42px" />
+            <q-avatar color="primary" text-color="white" icon="assignment" size="42px" />
             <div>
-              <div class="text-subtitle1 text-weight-medium text-grey-2">{{ $t('createPage.sectionMission') }}</div>
-              <div class="text-body2 text-grey-6">{{ $t('createPage.sectionMissionHint') }}</div>
+              <div class="text-subtitle1 text-weight-medium text-kobo-1">{{ $t('createPage.sectionMission') }}</div>
+              <div class="text-body2 text-kobo-3">{{ $t('createPage.sectionMissionHint') }}</div>
             </div>
           </q-card-section>
 
@@ -82,7 +82,7 @@
                       round
                       size="sm"
                       :icon="isCreateVoiceTranscribing ? 'hourglass_top' : isCreateVoiceRecording ? 'mic' : 'mic_none'"
-                      :color="isCreateVoiceRecording ? 'red-5' : isCreateVoiceTranscribing ? 'amber-6' : 'grey-6'"
+                      :color="isCreateVoiceRecording ? 'red-5' : isCreateVoiceTranscribing ? 'amber-6' : 'kobo-3'"
                       :disable="!createVoiceEnabled || isCreateVoiceTranscribing"
                       :class="{ 'voice-btn--recording': isCreateVoiceRecording }"
                       @mousedown.prevent="startCreateVoiceCapture"
@@ -118,7 +118,7 @@
               v-if="settingsStore.global.notionEnabled || settingsStore.global.sentryEnabled"
               class="column q-gutter-y-sm"
             >
-              <div class="text-caption text-weight-medium text-grey-5">{{ $t('createPage.sources') }}</div>
+              <div class="text-caption text-weight-medium text-kobo-2">{{ $t('createPage.sources') }}</div>
               <div class="row q-gutter-sm">
                 <q-btn
                   v-if="settingsStore.global.notionEnabled"
@@ -126,7 +126,7 @@
                   outline
                   no-caps
                   icon="description"
-                  :color="useNotion ? 'green-4' : 'grey-5'"
+                  :color="useNotion ? 'green-4' : 'kobo-2'"
                   :label="useNotion ? $t('createPage.notionEnabled') : $t('createPage.importNotion')"
                   :disable="useExistingWorktree"
                   @click="toggleNotion"
@@ -137,7 +137,7 @@
                   outline
                   no-caps
                   icon="bug_report"
-                  :color="useSentry ? 'red-4' : 'grey-5'"
+                  :color="useSentry ? 'red-4' : 'kobo-2'"
                   :label="useSentry ? $t('createPage.sentryEnabled') : $t('createPage.importSentry')"
                   :disable="useExistingWorktree"
                   @click="toggleSentry"
@@ -161,12 +161,12 @@
                   :hint="isValidNotionUrl ? $t('createPage.notionAutoExtract') : undefined"
                 >
                   <template #prepend>
-                    <q-icon name="link" :color="isValidNotionUrl ? 'green-4' : 'grey-6'" />
+                    <q-icon name="link" :color="isValidNotionUrl ? 'green-4' : 'kobo-3'" />
                   </template>
                 </q-input>
                 <div v-if="isValidNotionUrl && notionUrlHasPanelPeek">
-                  <div class="text-body2 text-grey-4 q-mb-sm">
-                    <q-icon name="info" color="indigo-4" class="q-mr-xs" />
+                  <div class="text-body2 text-kobo-2 q-mb-sm">
+                    <q-icon name="info" color="primary" class="q-mr-xs" />
                     {{ $t('createPage.notionPanelChoiceLabel') }}
                   </div>
                   <div class="responsive-fields responsive-fields--sm row q-col-gutter-x-sm">
@@ -182,9 +182,9 @@
                           <q-icon name="article" size="24px" class="peek-card-icon" />
                           <div class="col">
                             <div class="text-body2 text-weight-medium">{{ $t('createPage.notionPanelOption') }}</div>
-                            <div class="text-caption text-grey-6">{{ $t('createPage.notionPanelOptionDesc') }}</div>
+                            <div class="text-caption text-kobo-3">{{ $t('createPage.notionPanelOptionDesc') }}</div>
                           </div>
-                          <q-icon v-if="notionPageChoice === 'panel'" name="check_circle" color="indigo-4" />
+                          <q-icon v-if="notionPageChoice === 'panel'" name="check_circle" color="primary" />
                         </q-card-section>
                       </q-card>
                     </div>
@@ -200,9 +200,9 @@
                           <q-icon name="folder_open" size="24px" class="peek-card-icon" />
                           <div class="col">
                             <div class="text-body2 text-weight-medium">{{ $t('createPage.notionParentOption') }}</div>
-                            <div class="text-caption text-grey-6">{{ $t('createPage.notionParentOptionDesc') }}</div>
+                            <div class="text-caption text-kobo-3">{{ $t('createPage.notionParentOptionDesc') }}</div>
                           </div>
-                          <q-icon v-if="notionPageChoice === 'parent'" name="check_circle" color="indigo-4" />
+                          <q-icon v-if="notionPageChoice === 'parent'" name="check_circle" color="primary" />
                         </q-card-section>
                       </q-card>
                     </div>
@@ -227,7 +227,7 @@
                   :hint="isValidSentryUrl ? $t('createPage.sentryAutoExtract') : undefined"
                 >
                   <template #prepend>
-                    <q-icon name="link" :color="isValidSentryUrl ? 'red-4' : 'grey-6'" />
+                    <q-icon name="link" :color="isValidSentryUrl ? 'red-4' : 'kobo-3'" />
                   </template>
                 </q-input>
               </div>
@@ -258,7 +258,7 @@
                           dense
                           round
                           icon="add"
-                          color="indigo-4"
+                          color="primary"
                           :disable="!newManualTask.trim()"
                           @click="addManualTask"
                         >
@@ -273,8 +273,8 @@
                         dark
                         dense
                         removable
-                        color="grey-9"
-                        text-color="grey-3"
+                        color="kobo-surface-2"
+                        text-color="kobo-1"
                         @remove="removeManualTask(idx)"
                       >
                         {{ task }}
@@ -307,7 +307,7 @@
                           dense
                           round
                           icon="add"
-                          color="indigo-4"
+                          color="primary"
                           :disable="!newManualCriterion.trim()"
                           @click="addManualCriterion"
                         >
@@ -322,8 +322,8 @@
                         dark
                         dense
                         removable
-                        color="grey-9"
-                        text-color="grey-3"
+                        color="kobo-surface-2"
+                        text-color="kobo-1"
                         @remove="removeManualCriterion(idx)"
                       >
                         {{ criterion }}
@@ -340,8 +340,8 @@
           <q-card-section class="row items-start no-wrap q-gutter-md">
             <q-avatar color="blue-grey-9" text-color="blue-grey-2" icon="account_tree" size="42px" />
             <div>
-              <div class="text-subtitle1 text-weight-medium text-grey-2">{{ $t('createPage.sectionGit') }}</div>
-              <div class="text-body2 text-grey-6">{{ $t('createPage.sectionGitHint') }}</div>
+              <div class="text-subtitle1 text-weight-medium text-kobo-1">{{ $t('createPage.sectionGit') }}</div>
+              <div class="text-body2 text-kobo-3">{{ $t('createPage.sectionGitHint') }}</div>
             </div>
           </q-card-section>
 
@@ -349,16 +349,16 @@
 
           <q-card-section class="column q-gutter-y-md">
             <div>
-              <div class="text-caption text-weight-medium text-grey-5 q-mb-sm">{{ $t('createPage.worktreeMode') }}</div>
+              <div class="text-caption text-weight-medium text-kobo-2 q-mb-sm">{{ $t('createPage.worktreeMode') }}</div>
               <q-btn-toggle
                 :model-value="useExistingWorktree ? 'existing' : 'new'"
                 dense
                 spread
                 no-caps
                 unelevated
-                toggle-color="indigo-7"
-                color="grey-9"
-                text-color="grey-4"
+                toggle-color="primary"
+                color="kobo-surface-2"
+                text-color="kobo-2"
                 :options="[
                   { label: $t('createPage.worktreeNew'), value: 'new', icon: 'add_box' },
                   { label: $t('createPage.worktreeExisting'), value: 'existing', icon: 'folder_open' },
@@ -401,7 +401,7 @@
                     </q-item>
                   </template>
                   <template #no-option>
-                    <q-item><q-item-section class="text-grey-6">{{ $t('createPage.enterPath') }}</q-item-section></q-item>
+                    <q-item><q-item-section class="text-kobo-3">{{ $t('createPage.enterPath') }}</q-item-section></q-item>
                   </template>
                 </q-select>
               </div>
@@ -426,7 +426,7 @@
                   <template #prepend><q-icon name="call_split" /></template>
                   <template #no-option>
                     <q-item>
-                      <q-item-section class="text-grey-6">
+                      <q-item-section class="text-kobo-3">
                         {{ projectPath.trim() ? $t('createPage.noBranches') : $t('createPage.enterPath') }}
                       </q-item-section>
                     </q-item>
@@ -454,7 +454,7 @@
               <div class="col-12 col-md-8">
                 <q-field dark dense outlined stack-label readonly :label="$t('createPage.workingBranchPreview')">
                   <template #control>
-                    <div class="self-center full-width no-outline text-grey-4 ellipsis" tabindex="0">
+                    <div class="self-center full-width no-outline text-kobo-2 ellipsis" tabindex="0">
                       {{ workingBranchPreview }}
                     </div>
                   </template>
@@ -491,7 +491,7 @@
               </template>
               <template #no-option>
                 <q-item>
-                  <q-item-section class="text-grey-6">
+                  <q-item-section class="text-kobo-3">
                     {{ projectPath.trim() ? $t('createPage.noOrphanWorktrees') : $t('createPage.enterPath') }}
                   </q-item-section>
                 </q-item>
@@ -502,10 +502,10 @@
 
         <q-card flat bordered class="create-section-card">
           <q-card-section class="row items-start no-wrap q-gutter-md">
-            <q-avatar color="deep-purple-9" text-color="deep-purple-2" icon="smart_toy" size="42px" />
+            <q-avatar color="primary" text-color="white" icon="smart_toy" size="42px" />
             <div class="col">
-              <div class="text-subtitle1 text-weight-medium text-grey-2">{{ $t('createPage.sectionAgent') }}</div>
-              <div class="text-body2 text-grey-6">{{ $t('createPage.sectionAgentHint') }}</div>
+              <div class="text-subtitle1 text-weight-medium text-kobo-1">{{ $t('createPage.sectionAgent') }}</div>
+              <div class="text-body2 text-kobo-3">{{ $t('createPage.sectionAgentHint') }}</div>
             </div>
             <q-toggle
               :model-value="autoLoop"
@@ -529,20 +529,20 @@
             header-class="agent-config-header"
           >
             <template #header>
-              <q-item-section avatar><q-icon name="tune" color="indigo-3" /></q-item-section>
+              <q-item-section avatar><q-icon name="tune" color="primary" /></q-item-section>
               <q-item-section>
                 <q-item-label>{{ $t('createPage.configureAgent') }}</q-item-label>
                 <q-item-label caption class="agent-summary row q-gutter-x-xs q-mt-xs">
-                  <q-chip dense color="grey-9" text-color="grey-3" icon="hub">
+                  <q-chip dense color="kobo-surface-2" text-color="kobo-1" icon="hub">
                     {{ selectedEngine?.displayName ?? selectedEngineId }}
                   </q-chip>
-                  <q-chip dense color="grey-9" text-color="grey-3">
+                  <q-chip dense color="kobo-surface-2" text-color="kobo-1">
                     {{ modelOptions.find((item) => item.value === model)?.label ?? model }}
                   </q-chip>
-                  <q-chip dense color="grey-9" text-color="grey-3" icon="psychology">
+                  <q-chip dense color="kobo-surface-2" text-color="kobo-1" icon="psychology">
                     {{ reasoningOptions.find((item) => item.value === reasoningEffort)?.label ?? reasoningEffort }}
                   </q-chip>
-                  <q-chip dense color="grey-9" text-color="grey-3" :icon="agentPermissionModeIcon">
+                  <q-chip dense color="kobo-surface-2" text-color="kobo-1" :icon="agentPermissionModeIcon">
                     {{
                       agentPermissionModeOptions.find((item) => item.value === resolvedOverrides.agentPermissionMode)
                         ?.label ?? resolvedOverrides.agentPermissionMode
@@ -649,9 +649,9 @@
                 no-caps
                 unelevated
                 class="auto-loop-session-toggle"
-                toggle-color="indigo-7"
-                color="grey-9"
-                text-color="grey-4"
+                toggle-color="primary"
+                color="kobo-surface-2"
+                text-color="kobo-2"
                 :options="[
                   { label: $t('autoLoop.sessionMode.perTask'), value: 'per_task', icon: 'restart_alt' },
                   { label: $t('autoLoop.sessionMode.continuous'), value: 'continuous', icon: 'link' },
@@ -715,16 +715,16 @@
 
         <q-card flat bordered class="create-actions-card">
           <q-card-section class="row items-center justify-between q-gutter-md">
-            <div class="text-caption text-grey-6">
+            <div class="text-caption text-kobo-3">
               {{ useNotion ? $t('createPage.notionExtractHint') : $t('createPage.keyboardHint') }}
             </div>
             <div class="row q-gutter-sm create-actions">
-              <q-btn flat dense no-caps color="grey-5" :label="$t('common.cancel')" @click="router.back()" />
+              <q-btn flat dense no-caps color="kobo-2" :label="$t('common.cancel')" @click="router.back()" />
               <q-btn
                 unelevated
                 dense
                 no-caps
-                color="indigo-6"
+                color="primary"
                 icon-right="arrow_forward"
                 :label="$t('createPage.createWorkspace')"
                 :loading="submitting"
@@ -1857,7 +1857,7 @@ async function handleCreate() {
   position: relative;
   min-height: 100%;
   padding: 48px 24px 80px;
-  background: #1a1a2e;
+  background: var(--kobo-bg);
 }
 
 .create-page__drawer-toggle {
@@ -1925,7 +1925,7 @@ async function handleCreate() {
 
 .create-section-card,
 .create-actions-card {
-  background: #22223f;
+  background: var(--kobo-surface);
   border-color: rgba(255, 255, 255, 0.12);
 }
 
@@ -1954,12 +1954,12 @@ async function handleCreate() {
 }
 
 .source-panel {
-  background: #1e1e38;
+  background: var(--kobo-surface-2);
   border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .peek-card {
-  color: #ddd;
+  color: var(--kobo-text-2);
   background: rgba(255, 255, 255, 0.025);
   border-color: rgba(255, 255, 255, 0.1);
   transition:
@@ -1978,28 +1978,28 @@ async function handleCreate() {
 
   &--active {
     background: rgba(99, 102, 241, 0.14);
-    border-color: #818cf8;
+    border-color: var(--kobo-accent);
     box-shadow: inset 0 0 0 1px rgba(129, 140, 248, 0.35);
 
     .peek-card-icon {
-      color: #a5b4fc;
+      color: var(--kobo-text-2);
     }
   }
 }
 
 .peek-card-icon {
   flex-shrink: 0;
-  color: #888;
+  color: var(--kobo-text-3);
 }
 
 .manual-expansion,
 .advanced-options {
   overflow: hidden;
-  background: #1e1e38;
+  background: var(--kobo-surface-2);
   border: 1px solid rgba(255, 255, 255, 0.1);
 
   :deep(.q-expansion-item__content) {
-    background: #19192f;
+    background: var(--kobo-bg-deep);
   }
 }
 

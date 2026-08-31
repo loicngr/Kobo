@@ -1,18 +1,18 @@
 <template>
   <div class="review-draft-panel q-pa-sm">
-    <div class="text-caption text-uppercase text-weight-bold text-grey-6 q-mb-sm" style="letter-spacing: 0.05em;">
+    <div class="text-caption text-uppercase text-weight-bold text-kobo-3 q-mb-sm" style="letter-spacing: 0.05em;">
       {{ $t('diff.reviewDraft') }}
     </div>
 
     <q-scroll-area class="comments-scroll">
-      <div v-if="grouped.length === 0" class="text-caption text-grey-7 q-pa-sm">
+      <div v-if="grouped.length === 0" class="text-caption text-kobo-3 q-pa-sm">
         {{ $t('diff.reviewEmpty') }}
       </div>
       <div v-for="group in grouped" :key="group.filePath" class="file-group q-mb-sm">
-        <div class="file-group-header text-grey-3 cursor-pointer ellipsis" @click="emit('jumpToFile', group.filePath)">
-          <q-icon name="description" size="14px" color="indigo-4" class="q-mr-xs" />
-          <span style="font-family: 'Roboto Mono', monospace; font-size: 11px;">{{ group.filePath }}</span>
-          <q-badge :label="String(group.comments.length)" color="indigo-8" text-color="white" class="q-ml-xs" />
+        <div class="file-group-header text-kobo-1 cursor-pointer ellipsis" @click="emit('jumpToFile', group.filePath)">
+          <q-icon name="description" size="14px" color="primary" class="q-mr-xs" />
+          <span style="font-family: var(--kobo-font-mono); font-size: 11px;">{{ group.filePath }}</span>
+          <q-badge :label="String(group.comments.length)" color="primary" text-color="white" class="q-ml-xs" />
         </div>
         <div
           v-for="c in group.comments"
@@ -20,8 +20,8 @@
           class="draft-line cursor-pointer"
           @click="emit('jumpToComment', c.filePath, c.line)"
         >
-          <span class="text-grey-6 q-mr-xs" style="font-family: monospace;">L{{ c.line }}</span>
-          <span class="text-grey-3 ellipsis">{{ snippet(c.content) }}</span>
+          <span class="text-kobo-3 q-mr-xs" style="font-family: monospace;">L{{ c.line }}</span>
+          <span class="text-kobo-1 ellipsis">{{ snippet(c.content) }}</span>
         </div>
       </div>
     </q-scroll-area>
@@ -99,8 +99,8 @@ function snippet(content: string): string {
   height: 100%;
   display: flex;
   flex-direction: column;
-  background: #1a1a2e;
-  border-right: 1px solid #2a2a4a;
+  background: var(--kobo-bg);
+  border-right: 1px solid var(--kobo-border-subtle);
 }
 /* Absorbs the space between the header and the pinned message box, so the
    textarea + submit button sit flush at the bottom — robust to the autogrow
