@@ -20,12 +20,29 @@ const QScrollAreaStub = defineComponent({
         verticalPosition: 0,
         verticalContainerSize: 400,
       }),
+      getScrollTarget: () => document.createElement('div'),
       setScrollPosition: vi.fn(),
       emitScroll: (info: { verticalPosition: number; verticalSize: number; verticalContainerSize: number }) =>
         emit('scroll', info),
     }
     expose(api)
     return () => h('div', { class: 'q-scroll-area-stub' }, slots.default?.())
+  },
+})
+
+const QVirtualScrollStub = defineComponent({
+  name: 'QVirtualScroll',
+  props: { items: { type: Array, default: () => [] } },
+  setup(props, { slots, expose }) {
+    expose({ scrollTo: vi.fn() })
+    // Render everything: virtualisation is a rendering strategy, not a
+    // behaviour this suite asserts on.
+    return () =>
+      h(
+        'div',
+        { class: 'q-virtual-scroll-stub' },
+        props.items.map((item, index) => slots.default?.({ item, index })),
+      )
   },
 })
 
@@ -36,6 +53,7 @@ const globalStubs = {
   'q-spinner-dots': { template: '<span class="q-spinner-dots"></span>' },
   'q-expansion-item': { template: '<div><slot /></div>' },
   'q-scroll-area': QScrollAreaStub,
+  'q-virtual-scroll': QVirtualScrollStub,
 }
 
 describe('ActivityFeed.vue', () => {
@@ -293,5 +311,74 @@ describe('ActivityFeed.vue', () => {
       null,
     ])
     expect(streamStore.sessionIdsFor('ws-1')).toEqual(['sess-1'])
+  })
+
+  it('ignores a second jump-to-previous click while the first is still walking back', async () => {
+    const workspaceStore = useWorkspaceStore()
+    const streamStore = useAgentStreamStore()
+    workspaceStore.selectedWorkspaceId = 'ws-1'
+    workspaceStore.selectedSessionId = null
+    streamStore.reset(
+      'ws-1',
+      [{ kind: 'message:text', messageId: 'm', text: 'only agent output', streaming: false }],
+      ['2026-01-01T00:00:02Z'],
+      { oldestId: 'cursor-1', hasMoreOlder: true, sessionIds: [null], eventIds: ['cursor-1'] },
+    )
+
+    // Every older page comes back empty: the walk keeps asking until the cap.
+    vi.mocked(fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({ events: [], hasMore: true }),
+    } as Response)
+
+    const wrapper = mount(ActivityFeed, {
+      props: { workspaceId: 'ws-1' },
+      global: { plugins: [i18n], stubs: globalStubs },
+    })
+    await vi.advanceTimersByTimeAsync(250)
+    await nextTick()
+    vi.mocked(fetch).mockClear()
+
+    const buttons = wrapper.findAll('button')
+    const upButton = buttons[buttons.length - 1]
+
+    // Two clicks in a row, before the first walk had any chance to finish.
+    const firstClick = upButton.trigger('click')
+    const secondClick = upButton.trigger('click')
+    await Promise.all([firstClick, secondClick])
+    await vi.advanceTimersByTimeAsync(5000)
+    await nextTick()
+
+    const callsFromOneWalk = vi.mocked(fetch).mock.calls.length
+    // A single walk is capped at MAX_ATTEMPTS = 15 pages. Two concurrent walks
+    // would have produced more.
+    expect(callsFromOneWalk).toBeLessThanOrEqual(15)
+  })
+
+  it('renders its turns through the virtual list', async () => {
+    const workspaceStore = useWorkspaceStore()
+    const streamStore = useAgentStreamStore()
+    workspaceStore.selectedWorkspaceId = 'ws-1'
+    workspaceStore.selectedSessionId = null
+    streamStore.reset(
+      'ws-1',
+      [
+        { kind: 'message:text', messageId: 'm1', text: 'one', streaming: false },
+        { kind: 'message:text', messageId: 'm2', text: 'two', streaming: false },
+      ],
+      ['2026-01-01T00:00:01Z', '2026-01-01T00:00:02Z'],
+      { oldestId: 'c1', hasMoreOlder: false, sessionIds: [null, null], eventIds: ['c1', 'c2'] },
+    )
+    vi.mocked(fetch).mockResolvedValue({ ok: true, json: async () => ({ events: [], hasMore: false }) } as Response)
+
+    const wrapper = mount(ActivityFeed, {
+      props: { workspaceId: 'ws-1' },
+      global: { plugins: [i18n], stubs: globalStubs },
+    })
+    await vi.advanceTimersByTimeAsync(250)
+    await nextTick()
+
+    expect(wrapper.find('.q-virtual-scroll-stub').exists()).toBe(true)
+    expect(wrapper.findAll('.turn-card-stub').length).toBeGreaterThan(0)
   })
 })

@@ -25,15 +25,22 @@ app.get('/branches', (c) => {
   }
 })
 
-// GET /api/git/files?path=<worktreePath> — list a worktree's files (tracked +
-// untracked-but-not-ignored) for the chat's `@file` autocomplete.
+/** Hard ceiling on the worktree listing. `listWorktreeFiles` already truncates
+ *  at this value; exposing it lets a caller ask for LESS, never for more. */
+const MAX_WORKTREE_FILES = 5000
+
+// GET /api/git/files?path=<worktreePath>&limit=<n> — list a worktree's files
+// (tracked + untracked-but-not-ignored) for the chat's `@file` autocomplete.
 app.get('/files', (c) => {
   try {
     const repoPath = c.req.query('path')
     if (!repoPath) {
       return c.json({ error: 'Missing required query parameter: path' }, 400)
     }
-    return c.json({ files: listWorktreeFiles(repoPath) })
+    const requested = Number.parseInt(c.req.query('limit') ?? '', 10)
+    const limit =
+      Number.isFinite(requested) && requested > 0 ? Math.min(requested, MAX_WORKTREE_FILES) : MAX_WORKTREE_FILES
+    return c.json({ files: listWorktreeFiles(repoPath, limit) })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)

@@ -21,7 +21,7 @@
       </span>
     </div>
     <div class="turn-body">
-      <template v-for="(item, i) in turn.items" :key="i">
+      <template v-for="item in turn.items" :key="itemKey(item)">
         <TextMessageItem v-if="item.type === 'text'" :item="item" />
         <ThinkingItem v-else-if="item.type === 'thinking'" :item="item" />
         <ToolCallItem v-else-if="item.type === 'tool'" :item="item" />
@@ -52,7 +52,7 @@
 </template>
 
 <script setup lang="ts">
-import type { Turn } from 'src/services/conversation-turns'
+import { itemKey, type Turn } from 'src/services/conversation-turns'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AgentErrorItem from './items/AgentErrorItem.vue'

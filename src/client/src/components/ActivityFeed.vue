@@ -16,29 +16,34 @@
       </div>
     </transition>
     <q-scroll-area ref="scrollRef" class="activity-feed-scroll" @scroll="onScroll">
-      <!-- Zero-height origin marker — always at scroll position 0 within the
-           scroll content. Used to compute accurate card Y coordinates
-           without depending on Quasar's internal DOM. -->
-      <div ref="contentOriginRef" class="content-origin-marker" />
       <div v-if="loadingOlder" class="text-center q-py-sm text-caption text-grey-6">
         <q-spinner size="sm" /> {{ $t('activity.loading_older') }}
       </div>
-      <div class="q-pa-md">
-        <TurnCard
-          v-for="(turn, i) in turns"
-          :key="i"
-          ref="turnRefs"
-          :turn="turn"
-          :highlighted="turn.items.some((item) => item.eventIds?.includes(highlightedEventId ?? '') ?? false)"
-          @scroll-to="onTurnScrollTo"
-        />
-        <!-- Un workspace neuf n'a rien à montrer : le dire, plutôt que de
-             laisser une zone vide qui ressemble à une panne. -->
-        <div v-if="turns.length === 0 && rawLines.length === 0 && !loadingOlder" class="activity-feed-empty">
-          <q-icon name="forum" size="28px" />
-          <div class="activity-feed-empty__title">{{ $t('activity.empty') }}</div>
-          <div class="activity-feed-empty__hint">{{ $t('activity.emptyHint') }}</div>
-        </div>
+      <q-virtual-scroll
+        ref="virtualScrollRef"
+        class="q-pa-md"
+        :items="turns"
+        :scroll-target="scrollTargetEl ?? undefined"
+        :virtual-scroll-item-size="160"
+        :virtual-scroll-slice-size="20"
+        @virtual-scroll="onVirtualScroll"
+      >
+        <template #default="{ item: turn, index }: { item: Turn; index: number }">
+          <TurnCard
+            :key="turnKey(turn)"
+            :turn="turn"
+            :data-turn-index="index"
+            :highlighted="turn.items.some((i) => i.eventIds?.includes(highlightedEventId ?? '') ?? false)"
+            @scroll-to="onTurnScrollTo"
+          />
+        </template>
+      </q-virtual-scroll>
+      <!-- Un workspace neuf n'a rien à montrer : le dire, plutôt que de
+           laisser une zone vide qui ressemble à une panne. -->
+      <div v-if="turns.length === 0 && rawLines.length === 0 && !loadingOlder" class="activity-feed-empty q-pa-md">
+        <q-icon name="forum" size="28px" />
+        <div class="activity-feed-empty__title">{{ $t('activity.empty') }}</div>
+        <div class="activity-feed-empty__hint">{{ $t('activity.emptyHint') }}</div>
       </div>
       <div v-if="rawLines.length" class="q-px-md q-pb-md">
         <q-expansion-item :label="$t('activity.raw_lines', { n: rawLines.length })" dense>
@@ -72,6 +77,8 @@
         size="sm"
         class="activity-feed-nav-btn"
         :title="$t('activity.prev_user_message')"
+        :loading="navigatingUp"
+        :disable="navigatingUp"
         @click="goToPreviousUserMessage"
       />
     </div>
@@ -80,12 +87,19 @@
 
 <script setup lang="ts">
 import type { QScrollArea } from 'quasar'
-import { foldEvents, isNormalSessionEnd, mergeWithUserMessages, type UserMessage } from 'src/services/agent-event-view'
-import { groupIntoTurns } from 'src/services/conversation-turns'
+import {
+  createFoldCache,
+  foldEventsCached,
+  isNormalSessionEnd,
+  mergeWithUserMessages,
+  type UserMessage,
+} from 'src/services/agent-event-view'
+import { findPreviousUserTurnIndex, groupIntoTurns, type Turn, turnKey } from 'src/services/conversation-turns'
 import { useAgentStreamStore } from 'src/stores/agent-stream'
 import { useSettingsStore } from 'src/stores/settings'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import type { AgentEvent } from 'src/types/agent-event'
+import { waitForCondition } from 'src/utils/wait-for'
 import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import TurnCard from './TurnCard.vue'
@@ -147,6 +161,12 @@ const sessionActive = computed(() => {
   return isBusyStatus(ws?.status)
 })
 
+// One resumable fold state per (workspace, session) view. Re-created whenever
+// the view changes; foldEventsCached also invalidates it on its own whenever
+// the stream is not a pure append.
+let foldCache = createFoldCache()
+let foldCacheKey = ''
+
 const turns = computed(() => {
   // Filter the stream's parallel arrays (events / timestamps / sessionIds) by
   // the currently selected session BEFORE folding. Without this, session #1's
@@ -165,7 +185,12 @@ const turns = computed(() => {
       filteredIds.push(allIds[i] ?? null)
     }
   }
-  const agentItems = foldEvents(filteredEvents, filteredTs, sessionActive.value, filteredIds)
+  const viewKey = `${props.workspaceId}::${selectedSessionId.value ?? '*'}`
+  if (viewKey !== foldCacheKey) {
+    foldCache = createFoldCache()
+    foldCacheKey = viewKey
+  }
+  const agentItems = foldEventsCached(foldCache, filteredEvents, filteredTs, sessionActive.value, filteredIds)
   const merged = mergeWithUserMessages(agentItems, userMessages.value)
   const filtered = merged.filter((item) => {
     if (item.type === 'thinking') return false
@@ -223,7 +248,7 @@ function onScroll(info: ScrollInfo) {
   if (!initialScrollDone) return
 
   if (info.verticalPosition <= FETCH_MORE_THRESHOLD_PX && !loadingOlder.value && currentHasMoreOlder()) {
-    void loadOlder()
+    void loadOlderOnce()
   }
 }
 
@@ -265,6 +290,19 @@ function oldestVisibleEventId(workspaceId: string): string | undefined {
 const MIN_LOADER_MS = 200
 const COOLDOWN_AFTER_PREPEND_MS = 400
 const WORKSPACE_SWITCH_SPINNER_MS = 200
+
+// One load at a time, and the in-flight promise is shareable: callers that
+// need to wait for it can `await` instead of polling `loadingOlder` every
+// fifty milliseconds.
+let inFlightLoadOlder: Promise<void> | null = null
+
+function loadOlderOnce(): Promise<void> {
+  if (inFlightLoadOlder) return inFlightLoadOlder
+  inFlightLoadOlder = loadOlder().finally(() => {
+    inFlightLoadOlder = null
+  })
+  return inFlightLoadOlder
+}
 
 async function loadOlder(): Promise<void> {
   const workspaceId = props.workspaceId
@@ -477,22 +515,19 @@ async function focusHistoryEvent(event: Event): Promise<void> {
     // switch spinner. Wait until the scroll area is mounted, then let the
     // session/filter watchers render the focused window before resolving the
     // corresponding TurnCard template ref.
-    const deadline = Date.now() + 5000
-    while (switching.value && Date.now() < deadline) {
-      await new Promise((resolve) => window.setTimeout(resolve, 20))
-    }
+    // Wake on the actual state change, not fifty times a second for 5 s.
+    await waitForCondition(switching, (isSwitching) => !isSwitching, 5000)
     await nextTick()
     await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
     const turnIndex = turns.value.findIndex((turn) =>
       turn.items.some((item) => item.eventIds?.includes(detail.eventId!) ?? false),
     )
-    const card = turnRefs.value[turnIndex]?.$el as HTMLElement | undefined
-    const area = scrollRef.value
-    const origin = contentOriginRef.value
-    if (!card || !area || !origin) return
-    const y = card.getBoundingClientRect().top - origin.getBoundingClientRect().top
+    if (turnIndex < 0) return
     highlightedEventId.value = detail.eventId
-    area.setScrollPosition('vertical', Math.max(0, y - 16), 250)
+    // Index-based: the target card may not be in the DOM at all until the
+    // virtual list scrolls to it.
+    virtualScrollRef.value?.scrollTo(turnIndex, 'center')
+    firstVisibleTurnIndex.value = turnIndex
     window.setTimeout(() => {
       if (highlightedEventId.value === detail.eventId) highlightedEventId.value = null
     }, 1800)
@@ -501,90 +536,61 @@ async function focusHistoryEvent(event: Event): Promise<void> {
   }
 }
 
-// Collected via Vue template refs on <TurnCard v-for … ref="turnRefs">.
-// Parallel to `turns.value` — same index, same length.
-const turnRefs = ref<Array<{ $el: HTMLElement } | null>>([])
+// Handle on the virtual list, used to scroll by index instead of by pixel.
+const virtualScrollRef = ref<{ scrollTo(index: number, edge?: 'start' | 'center' | 'end'): void } | null>(null)
+// The QScrollArea's inner scrollable element — QVirtualScroll needs an
+// explicit scroll target when it does not own its own scroller.
+const scrollTargetEl = ref<Element | null>(null)
+// First turn index currently in view, fed by QVirtualScroll's own event.
+const firstVisibleTurnIndex = ref(0)
 
-// Zero-height marker rendered at the very top of the scroll content.
-// Its viewport Y gives us a stable "origin" for Y coords inside the
-// content, independent of q-scroll-area's internal DOM structure and
-// whatever transform strategy it uses.
-const contentOriginRef = ref<HTMLElement | null>(null)
-
-// Resolve the list of <user turn> DOM elements in DOM order. Prefers
-// template refs (typed, in sync with `turns`); falls back to querying
-// the `.turn-card--user` class if refs haven't populated yet.
-function collectUserTurnElements(): HTMLElement[] {
-  const turnList = turns.value
-  const refList = turnRefs.value
-  const result: HTMLElement[] = []
-  if (refList.length === turnList.length) {
-    for (let i = 0; i < turnList.length; i++) {
-      if (turnList[i].speaker !== 'user') continue
-      const instance = refList[i]
-      const el = instance?.$el as HTMLElement | undefined
-      if (el) result.push(el)
-    }
-    if (result.length > 0) return result
-  }
-  // Fallback path — direct DOM selector on the content origin's parent
-  // (the scroll content). Covers the first-click-before-refs-populate case.
-  const origin = contentOriginRef.value
-  const host = origin?.parentElement
-  if (host) {
-    const cards = host.querySelectorAll<HTMLElement>('.turn-card--user')
-    for (const c of cards) result.push(c)
-  }
-  return result
+function onVirtualScroll(details: { index: number }): void {
+  firstVisibleTurnIndex.value = details.index
 }
 
-// Find the absolute Y (relative to the content origin marker) of the last
-// user turn card whose top sits strictly *above* the current scroll
-// position. Returns null if no such card exists in the currently-rendered
-// DOM.
-function findPreviousUserTurnY(): number | null {
-  const area = scrollRef.value
-  if (!area) return null
-  const origin = contentOriginRef.value
-  if (!origin) return null
-  const currentPos = area.getScroll().verticalPosition
-  const originTop = origin.getBoundingClientRect().top
-  // Margin so a user card pinned at the top doesn't count as "previous".
-  const margin = 40
-  let bestY: number | null = null
-  for (const el of collectUserTurnElements()) {
-    // cardY = distance from the content-origin marker (at scroll-pos 0)
-    //       = el.top - origin.top in viewport coords.
-    // Since both move together with the scroll, their difference stays
-    // equal to the card's position in the content.
-    const cardY = el.getBoundingClientRect().top - originTop
-    if (cardY < currentPos - margin) bestY = cardY
-    else break
-  }
-  return bestY
-}
+// True while a "jump to previous user message" is walking back through the
+// history. Drives the button's disabled + loading state, and blocks reentrant
+// clicks: three impatient clicks used to start three concurrent walks fighting
+// over the same `loadingOlder` flag.
+const navigatingUp = ref(false)
 
 async function goToPreviousUserMessage(): Promise<void> {
-  const area = scrollRef.value
-  if (!area) return
-  let targetY = findPreviousUserTurnY()
-  // Long workspaces may open with 300 recent agent events and *zero* user
-  // turns in the current DOM (agent dominates the tail of the stream).
-  // Keep fetching older batches until a user turn appears, we run out of
-  // history, or we hit a safety cap (≈15 * 200 = 3000 events back).
-  if (targetY === null) {
-    const MAX_ATTEMPTS = 15
-    for (let i = 0; i < MAX_ATTEMPTS; i++) {
-      if (!currentHasMoreOlder()) break
-      while (loadingOlder.value) await new Promise((r) => setTimeout(r, 50))
-      await loadOlder()
-      await nextTick()
-      targetY = findPreviousUserTurnY()
-      if (targetY !== null) break
+  if (navigatingUp.value) return
+  navigatingUp.value = true
+  // The walk spans several awaits (history fetches). `props.workspaceId` is
+  // reactive: if the user switches workspace mid-walk, every step after the
+  // switch would keep walking — on the NEW workspace — fetching its history
+  // and yanking its scroll position. Pin the workspace the walk started on and
+  // bail out as soon as it no longer matches, exactly as if the component had
+  // been torn down.
+  const walkWorkspaceId = props.workspaceId
+  try {
+    let target = findPreviousUserTurnIndex(turns.value, firstVisibleTurnIndex.value)
+    // Long workspaces may open with 300 recent agent events and *zero* user
+    // turns loaded. Keep fetching older batches until a user turn appears, we
+    // run out of history, or we hit a safety cap (≈15 * 200 = 3000 events).
+    if (target < 0) {
+      const MAX_ATTEMPTS = 15
+      for (let i = 0; i < MAX_ATTEMPTS; i++) {
+        if (walkWorkspaceId !== props.workspaceId) return
+        if (!currentHasMoreOlder()) break
+        const before = turns.value.length
+        await loadOlderOnce()
+        await nextTick()
+        if (walkWorkspaceId !== props.workspaceId) return
+        // Older turns are prepended, so the current position shifts down by
+        // however many turns were added.
+        firstVisibleTurnIndex.value += turns.value.length - before
+        target = findPreviousUserTurnIndex(turns.value, firstVisibleTurnIndex.value)
+        if (target >= 0) break
+      }
     }
-  }
-  if (targetY !== null) {
-    area.setScrollPosition('vertical', Math.max(0, targetY - 12), 250)
+    if (target >= 0 && walkWorkspaceId === props.workspaceId) {
+      virtualScrollRef.value?.scrollTo(target, 'start')
+      firstVisibleTurnIndex.value = target
+    }
+  } finally {
+    navigatingUp.value = false
   }
 }
 
@@ -638,10 +644,10 @@ async function showSwitchingSpinner() {
   switching.value = true
   const startedAt = Date.now()
   await new Promise((r) => setTimeout(r, WORKSPACE_SWITCH_SPINNER_MS))
-  const deadline = startedAt + EMPTY_FEED_GRACE_MS
-  while (rawEventCount.value === 0 && Date.now() < deadline) {
-    await new Promise((r) => setTimeout(r, 50))
-  }
+  // Wait for the sync:response to land, capped — the remaining budget after
+  // the minimum spinner display.
+  const remaining = Math.max(0, startedAt + EMPTY_FEED_GRACE_MS - Date.now())
+  await waitForCondition(rawEventCount, (count) => count > 0, remaining)
   switching.value = false
 }
 
@@ -657,10 +663,23 @@ watch(switching, async (isSwitching) => {
   if (!isSwitching && eventCount.value === 0 && selectedSessionId.value) {
     void fetchSessionIfMissing()
   }
+  // QVirtualScroll needs the QScrollArea's inner scroller; the q-scroll-area
+  // is remounted every time the spinner reappears/disappears (v-if), so its
+  // scroll target must be re-resolved on the same transition.
+  if (!isSwitching) {
+    void nextTick(() => {
+      scrollTargetEl.value = scrollRef.value?.getScrollTarget() ?? null
+    })
+  }
 })
 
 onMounted(() => {
   window.addEventListener('kobo:focus-history-event', focusHistoryEvent)
+  // QVirtualScroll needs the QScrollArea's inner scroller; it only exists once
+  // the scroll area is mounted.
+  void nextTick(() => {
+    scrollTargetEl.value = scrollRef.value?.getScrollTarget() ?? null
+  })
   void showSwitchingSpinner()
   if (eventCount.value > 0) void armInitialScroll()
   // Fire the session-scoped fetch in parallel with sync:response, not after
@@ -860,13 +879,6 @@ async function handleScrollToBottomClick() {
 }
 .activity-feed-nav-btn:hover {
   opacity: 1;
-}
-.content-origin-marker {
-  height: 0;
-  width: 0;
-  margin: 0;
-  padding: 0;
-  pointer-events: none;
 }
 /* Kill any horizontal overflow from long file paths, long words in code
    blocks, or oversized bash commands. We only want vertical scrolling. */

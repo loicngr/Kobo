@@ -1353,6 +1353,22 @@ function goToChangelog() {
   router.push({ name: 'changelog' })
 }
 
+const WORKSPACE_INFO_POLL_MS = 15_000
+
+function pollWorkspacesInfoIfVisible(): void {
+  // A hidden tab has nobody to inform. Skipping the request also stops the
+  // server-side git-stats refresh from running for every tab left open
+  // overnight.
+  if (document.visibilityState === 'hidden') return
+  void store.fetchWorkspacesInfo()
+}
+
+function onVisibilityChange(): void {
+  // Coming back to the tab: refresh straight away instead of showing stale
+  // data for up to WORKSPACE_INFO_POLL_MS.
+  if (document.visibilityState === 'visible') void store.fetchWorkspacesInfo()
+}
+
 onMounted(async () => {
   await store.fetchWorkspaces()
   // Silently fetch archived workspaces so the Archived group header renders
@@ -1376,12 +1392,12 @@ onMounted(async () => {
   // by polling the server-cached bulk endpoint. Fetch once immediately so the
   // git-stats / CI recap are populated at load instead of after the first tick.
   void store.fetchWorkspacesInfo()
-  workspaceInfoInterval = setInterval(() => {
-    void store.fetchWorkspacesInfo()
-  }, 15_000)
+  workspaceInfoInterval = setInterval(pollWorkspacesInfoIfVisible, WORKSPACE_INFO_POLL_MS)
+  document.addEventListener('visibilitychange', onVisibilityChange)
 })
 
 onBeforeUnmount(() => {
+  document.removeEventListener('visibilitychange', onVisibilityChange)
   if (workspaceInfoInterval) {
     clearInterval(workspaceInfoInterval)
     workspaceInfoInterval = null

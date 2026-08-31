@@ -73,3 +73,28 @@ export function countLeaves<T>(nodes: readonly PathTreeNode<T>[]): number {
   }
   return n
 }
+
+/**
+ * Folder node keys of a path tree, down to `maxDepth` levels.
+ *
+ * `default-expand-all` on a two-hundred-file diff mounts every node — each with
+ * its header template, its badges and its context menu — before the user has
+ * clicked anything. Feeding q-tree an explicit, bounded expansion list keeps
+ * small diffs fully open and large ones shallow.
+ */
+export function collectFolderKeys<T>(
+  nodes: readonly PathTreeNode<T>[],
+  maxDepth: number = Number.POSITIVE_INFINITY,
+): string[] {
+  const keys: string[] = []
+  const walk = (level: readonly PathTreeNode<T>[], depth: number): void => {
+    if (depth > maxDepth) return
+    for (const node of level) {
+      if (!node.isFolder) continue
+      keys.push(node.nodeKey)
+      if (node.children) walk(node.children, depth + 1)
+    }
+  }
+  walk(nodes, 1)
+  return keys
+}

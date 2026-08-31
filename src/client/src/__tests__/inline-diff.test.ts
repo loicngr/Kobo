@@ -123,3 +123,71 @@ describe('parseUnifiedDiff — deleted lines that look like a file header', () =
     ])
   })
 })
+
+describe('computeInlineDiff() bounds', () => {
+  it('exposes a line cap', async () => {
+    const { INLINE_DIFF_MAX_LINES } = await import('../services/inline-diff')
+    expect(INLINE_DIFF_MAX_LINES).toBe(800)
+  })
+
+  it('keeps the common prefix and suffix as context around a small edit', async () => {
+    const { computeInlineDiff } = await import('../services/inline-diff')
+    const before = ['a', 'b', 'OLD', 'c', 'd'].join('\n')
+    const after = ['a', 'b', 'NEW', 'c', 'd'].join('\n')
+    expect(computeInlineDiff(before, after)).toEqual([
+      { type: 'context', content: 'a' },
+      { type: 'context', content: 'b' },
+      { type: 'del', content: 'OLD' },
+      { type: 'add', content: 'NEW' },
+      { type: 'context', content: 'c' },
+      { type: 'context', content: 'd' },
+    ])
+  })
+
+  it('degrades to a flat del/add block past the cap instead of allocating a huge table', async () => {
+    const { INLINE_DIFF_MAX_LINES, computeInlineDiff } = await import('../services/inline-diff')
+    const n = INLINE_DIFF_MAX_LINES + 10
+    const before = ['header', ...Array.from({ length: n }, (_, i) => `old-${i}`), 'footer'].join('\n')
+    const after = ['header', ...Array.from({ length: n }, (_, i) => `new-${i}`), 'footer'].join('\n')
+
+    const lines = computeInlineDiff(before, after)
+
+    // The trimmed prefix and suffix survive; the middle is not LCS-matched.
+    expect(lines[0]).toEqual({ type: 'context', content: 'header' })
+    expect(lines[lines.length - 1]).toEqual({ type: 'context', content: 'footer' })
+    expect(lines.filter((l) => l.type === 'del')).toHaveLength(n)
+    expect(lines.filter((l) => l.type === 'add')).toHaveLength(n)
+    // Every deletion comes before every addition — no interleaving.
+    const firstAdd = lines.findIndex((l) => l.type === 'add')
+    const lastDel = lines.map((l) => l.type).lastIndexOf('del')
+    expect(lastDel).toBeLessThan(firstAdd)
+  })
+
+  it('still uses the LCS walk when only the changed middle is small', async () => {
+    const { INLINE_DIFF_MAX_LINES, computeInlineDiff } = await import('../services/inline-diff')
+    // A two-thousand-line file with a one-line change: after trimming, the
+    // middle is a single line, far under the cap.
+    const shared = Array.from({ length: INLINE_DIFF_MAX_LINES * 2 }, (_, i) => `line-${i}`)
+    const before = [...shared, 'OLD', ...shared].join('\n')
+    const after = [...shared, 'NEW', ...shared].join('\n')
+
+    const lines = computeInlineDiff(before, after)
+
+    expect(lines.filter((l) => l.type === 'del')).toEqual([{ type: 'del', content: 'OLD' }])
+    expect(lines.filter((l) => l.type === 'add')).toEqual([{ type: 'add', content: 'NEW' }])
+  })
+
+  it('handles a pure append and a pure truncation', async () => {
+    const { computeInlineDiff } = await import('../services/inline-diff')
+    expect(computeInlineDiff('a\nb', 'a\nb\nc')).toEqual([
+      { type: 'context', content: 'a' },
+      { type: 'context', content: 'b' },
+      { type: 'add', content: 'c' },
+    ])
+    expect(computeInlineDiff('a\nb\nc', 'a\nb')).toEqual([
+      { type: 'context', content: 'a' },
+      { type: 'context', content: 'b' },
+      { type: 'del', content: 'c' },
+    ])
+  })
+})

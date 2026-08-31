@@ -6,6 +6,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 vi.mock('../server/utils/git-ops.js', () => ({
   listBranches: vi.fn(),
   listRemoteBranches: vi.fn(),
+  listWorktreeFiles: vi.fn(),
 }))
 
 vi.mock('../server/services/worktree-service.js', () => ({
@@ -81,6 +82,41 @@ describe('GET /api/git/branches', () => {
     const data = await res.json()
     expect(data.local).toEqual([])
     expect(data.remote).toEqual([])
+  })
+})
+
+describe('GET /api/git/files', () => {
+  it('caps the listing at the server maximum when no limit is asked for', async () => {
+    vi.mocked(gitOps.listWorktreeFiles).mockReturnValue(['a.ts', 'b.ts'])
+    const res = await app.request('/api/git/files?path=/tmp/wt')
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ files: ['a.ts', 'b.ts'] })
+    expect(gitOps.listWorktreeFiles).toHaveBeenCalledWith('/tmp/wt', 5000)
+  })
+
+  it('honours a smaller explicit limit', async () => {
+    vi.mocked(gitOps.listWorktreeFiles).mockReturnValue([])
+    await app.request('/api/git/files?path=/tmp/wt&limit=100')
+    expect(gitOps.listWorktreeFiles).toHaveBeenCalledWith('/tmp/wt', 100)
+  })
+
+  it('never lets a caller ask for more than the server maximum', async () => {
+    vi.mocked(gitOps.listWorktreeFiles).mockReturnValue([])
+    await app.request('/api/git/files?path=/tmp/wt&limit=999999')
+    expect(gitOps.listWorktreeFiles).toHaveBeenCalledWith('/tmp/wt', 5000)
+  })
+
+  it('falls back to the maximum on a nonsense limit', async () => {
+    vi.mocked(gitOps.listWorktreeFiles).mockReturnValue([])
+    await app.request('/api/git/files?path=/tmp/wt&limit=-3')
+    expect(gitOps.listWorktreeFiles).toHaveBeenCalledWith('/tmp/wt', 5000)
+    await app.request('/api/git/files?path=/tmp/wt&limit=abc')
+    expect(gitOps.listWorktreeFiles).toHaveBeenLastCalledWith('/tmp/wt', 5000)
+  })
+
+  it('rejects a missing path', async () => {
+    const res = await app.request('/api/git/files')
+    expect(res.status).toBe(400)
   })
 })
 

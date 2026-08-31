@@ -27,46 +27,82 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
   // part of the persisted event stream — driven by ephemeral session:compacting
   // events and cleared when compaction ends. Reactive via `version`.
   const compacting = ref<Map<string, boolean>>(new Map())
-  const version = ref(0)
+  // Per-workspace index of persisted ws_events ids. `append` used to scan the
+  // whole id array (`idList.includes`) on EVERY event: with Codex emitting 50
+  // to 200 deltas per message on a 5 000-entry buffer, that is up to a million
+  // comparisons per message. A Set makes it O(1). `merge` already built one —
+  // it just threw it away on every call.
+  const eventIdIndex = ref<Map<string, Set<string>>>(new Map())
+
+  // Per-workspace reactive counter. A single global counter meant a burst on a
+  // background workspace invalidated every computed value of the workspace on
+  // screen — and WorkspaceList subscribes to ALL workspaces, so that happened
+  // constantly. Vue tracks `Map.get(key)` per key, so reading this counter
+  // establishes a dependency scoped to exactly one workspace.
+  const versions = ref<Map<string, number>>(new Map())
+
+  /** Register a reactive dependency on THIS workspace's stream. */
+  function track(workspaceId: string): void {
+    versions.value.get(workspaceId)
+  }
+
+  /** Invalidate every consumer of THIS workspace's stream. */
+  function touch(workspaceId: string): void {
+    versions.value.set(workspaceId, (versions.value.get(workspaceId) ?? 0) + 1)
+  }
+
+  /** Current counter of a workspace. Exposed so tests can assert isolation. */
+  function versionFor(workspaceId: string): number {
+    return versions.value.get(workspaceId) ?? 0
+  }
+
+  function idIndexFor(workspaceId: string): Set<string> {
+    let set = eventIdIndex.value.get(workspaceId)
+    if (!set) {
+      set = new Set<string>()
+      eventIdIndex.value.set(workspaceId, set)
+    }
+    return set
+  }
 
   function isCompacting(workspaceId: string): boolean {
-    version.value
+    track(workspaceId)
     return compacting.value.get(workspaceId) ?? false
   }
 
   function setCompacting(workspaceId: string, value: boolean): void {
     if ((compacting.value.get(workspaceId) ?? false) === value) return
     compacting.value.set(workspaceId, value)
-    version.value++
+    touch(workspaceId)
   }
 
   function eventsFor(workspaceId: string): AgentEvent[] {
-    version.value
+    track(workspaceId)
     return events.value.get(workspaceId) ?? []
   }
 
   function timestampsFor(workspaceId: string): string[] {
-    version.value
+    track(workspaceId)
     return timestamps.value.get(workspaceId) ?? []
   }
 
   function sessionIdsFor(workspaceId: string): Array<string | null> {
-    version.value
+    track(workspaceId)
     return sessionIds.value.get(workspaceId) ?? []
   }
 
   function eventIdsFor(workspaceId: string): Array<string | null> {
-    version.value
+    track(workspaceId)
     return eventIds.value.get(workspaceId) ?? []
   }
 
   function oldestIdFor(workspaceId: string): string | undefined {
-    version.value
+    track(workspaceId)
     return oldestIds.value.get(workspaceId)
   }
 
   function hasMoreOlderFor(workspaceId: string): boolean {
-    version.value
+    track(workspaceId)
     return hasMoreOlder.value.get(workspaceId) ?? true
   }
 
@@ -81,12 +117,14 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
     const tsList = timestamps.value.get(workspaceId) ?? []
     const sList = sessionIds.value.get(workspaceId) ?? []
     const idList = eventIds.value.get(workspaceId) ?? []
-    if (eventId && idList.includes(eventId)) return
+    const known = idIndexFor(workspaceId)
+    if (eventId && known.has(eventId)) return
     const isFirst = list.length === 0
     list.push(event)
     tsList.push(ts ?? new Date().toISOString())
     sList.push(sessionId ?? null)
     idList.push(eventId ?? null)
+    if (eventId) known.add(eventId)
     events.value.set(workspaceId, list)
     timestamps.value.set(workspaceId, tsList)
     sessionIds.value.set(workspaceId, sList)
@@ -95,7 +133,7 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
       oldestIds.value.set(workspaceId, eventId)
     }
     trimOldestLiveEvents(workspaceId, list, tsList, sList, idList)
-    version.value++
+    touch(workspaceId)
   }
 
   function trimOldestLiveEvents(
@@ -107,6 +145,11 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
   ): void {
     const overflow = list.length - MAX_LIVE_EVENTS_PER_WORKSPACE
     if (overflow <= 0) return
+    // Capture the ids BEFORE splicing: they have to leave the index too, or a
+    // re-delivered old event could never be appended again after a reconnect.
+    const removedIds = idList.slice(0, overflow)
+    const known = idIndexFor(workspaceId)
+    for (const id of removedIds) if (id) known.delete(id)
     list.splice(0, overflow)
     tsList.splice(0, overflow)
     sList.splice(0, overflow)
@@ -128,18 +171,18 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
     const tsList = timestamps.value.get(workspaceId) ?? []
     const sList = sessionIds.value.get(workspaceId) ?? []
     const idList = eventIds.value.get(workspaceId) ?? []
-    const knownIds = new Set(idList.filter((id): id is string => typeof id === 'string'))
+    const known = idIndexFor(workspaceId)
     const addedIndexes: number[] = []
     for (let i = 0; i < incomingEvents.length; i++) {
       const event = incomingEvents[i]
       if (!event) continue
       const eventId = meta.eventIds[i] ?? null
-      if (eventId && knownIds.has(eventId)) continue
+      if (eventId && known.has(eventId)) continue
       list.push(event)
       tsList.push(incomingTimestamps[i] ?? new Date().toISOString())
       sList.push(meta.sessionIds[i] ?? null)
       idList.push(eventId)
-      if (eventId) knownIds.add(eventId)
+      if (eventId) known.add(eventId)
       addedIndexes.push(i)
     }
     if (addedIndexes.length === 0) return addedIndexes
@@ -152,7 +195,7 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
       if (firstPersistedId) oldestIds.value.set(workspaceId, firstPersistedId)
     }
     trimOldestLiveEvents(workspaceId, list, tsList, sList, idList)
-    version.value++
+    touch(workspaceId)
     return addedIndexes
   }
 
@@ -170,12 +213,18 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
     events.value.set(workspaceId, [...list])
     timestamps.value.set(workspaceId, tsList ? [...tsList] : list.map(() => new Date().toISOString()))
     sessionIds.value.set(workspaceId, meta?.sessionIds ? [...meta.sessionIds] : list.map(() => null))
-    eventIds.value.set(workspaceId, meta?.eventIds ? [...meta.eventIds] : list.map(() => null))
+    const resetIds = meta?.eventIds ? [...meta.eventIds] : list.map(() => null)
+    eventIds.value.set(workspaceId, resetIds)
+    // Rebuild the index from scratch: a reset replaces the whole window, so a
+    // stale id left behind would silently block a legitimate new event.
+    const known = idIndexFor(workspaceId)
+    known.clear()
+    for (const id of resetIds) if (id) known.add(id)
     if (meta?.oldestId) oldestIds.value.set(workspaceId, meta.oldestId)
     else oldestIds.value.delete(workspaceId)
     if (meta && typeof meta.hasMoreOlder === 'boolean') hasMoreOlder.value.set(workspaceId, meta.hasMoreOlder)
     else hasMoreOlder.value.delete(workspaceId)
-    version.value++
+    touch(workspaceId)
   }
 
   function prepend(
@@ -191,7 +240,7 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
   ): void {
     if (olderEvents.length === 0) {
       hasMoreOlder.value.set(workspaceId, meta.hasMoreOlder)
-      version.value++
+      touch(workspaceId)
       return
     }
     const list = events.value.get(workspaceId) ?? []
@@ -204,9 +253,11 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
     timestamps.value.set(workspaceId, [...olderTimestamps, ...tsList])
     sessionIds.value.set(workspaceId, [...olderSids, ...sList])
     eventIds.value.set(workspaceId, [...olderIds, ...idList])
+    const known = idIndexFor(workspaceId)
+    for (const id of olderIds) if (id) known.add(id)
     if (meta.oldestId) oldestIds.value.set(workspaceId, meta.oldestId)
     hasMoreOlder.value.set(workspaceId, meta.hasMoreOlder)
-    version.value++
+    touch(workspaceId)
   }
 
   /**
@@ -227,7 +278,8 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
     idList.splice(idx, 1)
     if (tsList) tsList.splice(idx, 1)
     if (sList) sList.splice(idx, 1)
-    version.value++
+    idIndexFor(workspaceId).delete(eventId)
+    touch(workspaceId)
   }
 
   function clear(workspaceId: string): void {
@@ -238,7 +290,10 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
     oldestIds.value.delete(workspaceId)
     hasMoreOlder.value.delete(workspaceId)
     compacting.value.delete(workspaceId)
-    version.value++
+    eventIdIndex.value.delete(workspaceId)
+    // Bump rather than delete: consumers still tracking this workspace need a
+    // trigger to re-read an empty stream.
+    touch(workspaceId)
   }
 
   return {
@@ -246,7 +301,8 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
     timestamps,
     sessionIds,
     eventIds,
-    version,
+    versions,
+    versionFor,
     eventsFor,
     timestampsFor,
     sessionIdsFor,
