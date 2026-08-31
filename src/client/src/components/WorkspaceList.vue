@@ -2,7 +2,7 @@
   <div class="workspace-list row column full-height" data-tour="workspace-list">
     <!-- Header -->
     <div class="row items-center no-wrap q-pl-md q-pr-xs q-py-sm">
-      <span class="text-caption text-uppercase text-weight-bold text-grey-6 col ellipsis">
+      <span class="text-caption text-uppercase text-weight-bold text-kobo-3 col ellipsis">
         {{ $t('workspaceList.title') }}
       </span>
       <div class="col items-center justify-end row">
@@ -25,7 +25,8 @@
             icon="search"
             class="q-ml-xs"
             size="sm"
-            color="grey-5"
+            color="kobo-2"
+            :aria-label="$t('search.tooltip')"
             @click="goToSearch"
         >
           <q-tooltip>{{ $t('search.tooltip') }}</q-tooltip>
@@ -37,8 +38,9 @@
             icon="monitor_heart"
             class="q-ml-xs"
             size="sm"
-            color="grey-5"
+            color="kobo-2"
             data-tour="health"
+            :aria-label="$t('health.tooltip')"
             @click="goToHealth"
         >
           <q-tooltip>{{ $t('health.tooltip') }}</q-tooltip>
@@ -50,8 +52,9 @@
             icon="history_edu"
             class="q-ml-xs"
             size="sm"
-            color="grey-5"
+            color="kobo-2"
             data-tour="changelog"
+            :aria-label="$t('changelog.tooltip')"
             @click="goToChangelog"
         >
           <q-tooltip>{{ $t('changelog.tooltip') }}</q-tooltip>
@@ -63,20 +66,26 @@
             icon="settings"
             class="q-ml-xs"
             size="sm"
-            color="grey-5"
+            color="kobo-2"
             data-tour="settings"
+            :aria-label="$t('settings.title')"
             @click="goToSettings"
-        />
+        >
+          <q-tooltip>{{ $t('settings.title') }}</q-tooltip>
+        </q-btn>
         <q-btn
             flat
             round
             dense
             icon="add"
             size="sm"
-            color="grey-5"
+            color="kobo-2"
             data-tour="create-workspace"
+            :aria-label="$t('createPage.title')"
             @click="goToCreate"
-        />
+        >
+          <q-tooltip>{{ $t('createPage.title') }}</q-tooltip>
+        </q-btn>
       </div>
     </div>
 
@@ -92,27 +101,31 @@
         data-tour="search"
       >
         <template #prepend>
-          <q-icon name="search" size="xs" color="grey-6" />
+          <q-icon name="search" size="xs" color="kobo-3" />
         </template>
       </q-input>
       <q-btn
         :icon="favoritesOnly ? 'star' : 'star_outline'"
-        :color="favoritesOnly ? 'amber-7' : 'grey-7'"
+        :color="favoritesOnly ? 'amber-7' : 'kobo-3'"
         flat
         dense
         round
         size="sm"
+        :aria-label="$t('workspace.showFavoritesOnly')"
+        :aria-pressed="favoritesOnly"
         @click="favoritesOnly = !favoritesOnly"
       >
         <q-tooltip>{{ $t('workspace.showFavoritesOnly') }}</q-tooltip>
       </q-btn>
       <q-btn
         icon="inventory_2"
-        :color="searchArchived ? 'indigo-4' : 'grey-7'"
+        :color="searchArchived ? 'primary' : 'kobo-3'"
         flat
         dense
         round
         size="sm"
+        :aria-label="$t('workspace.searchArchivedToggle')"
+        :aria-pressed="searchArchived"
         @click="searchArchived = !searchArchived"
       >
         <q-tooltip>{{ $t('workspace.searchArchivedToggle') }}</q-tooltip>
@@ -122,22 +135,35 @@
     <q-separator dark />
 
     <!-- Scrollable groups -->
-    <div class="col overflow-auto">
+    <div
+      class="col overflow-auto"
+      role="listbox"
+      :aria-label="$t('workspaceList.a11y.list')"
+      @keydown.down.prevent="moveFocus(1)"
+      @keydown.up.prevent="moveFocus(-1)"
+    >
       <!-- Needs Attention -->
       <div v-if="filteredNeedsAttention.length > 0" class="wl-group q-mt-xs">
         <div
           class="wl-group-header row items-center q-px-md q-py-xs cursor-pointer non-selectable"
-          @click="attentionExpanded = !attentionExpanded"
+          role="group"
+          tabindex="0"
+          :aria-expanded="attentionExpanded"
+          aria-labelledby="wl-group-label-attention wl-group-count-attention"
+          @click="toggleAttention"
+          @keydown.enter.prevent="toggleAttention"
+          @keydown.space.prevent="toggleAttention"
         >
           <q-icon
             :name="attentionExpanded ? 'expand_more' : 'chevron_right'"
             size="xs"
             color="red-5"
           />
-          <span class="text-caption text-weight-bold q-ml-xs text-red-5">
+          <span id="wl-group-label-attention" class="text-caption text-weight-bold q-ml-xs text-red-5">
             {{ $t('workspaceList.needsAttention') }}
           </span>
           <q-badge
+            id="wl-group-count-attention"
             :label="filteredNeedsAttention.length"
             color="red-9"
             text-color="white"
@@ -150,120 +176,58 @@
           <template v-if="!flatten">
             <div v-for="group in groupedNeedsAttention" :key="group.projectPath" class="wl-project-group">
               <div class="wl-project-label q-px-md q-pt-xs">
-                <q-icon name="folder" size="12px" :color="group.projectColor ?? 'grey-7'" class="q-mr-xs" />
-                <span class="text-caption" :class="group.projectColor ? `text-${group.projectColor}` : 'text-grey-7'">
+                <q-icon name="folder" size="12px" :color="group.projectColor ?? 'kobo-3'" class="q-mr-xs" />
+                <span class="text-caption" :class="group.projectColor ? `text-${group.projectColor}` : 'text-kobo-3'">
                   {{ group.projectName }}
                 </span>
               </div>
-              <div
+              <WorkspaceCard
                 v-for="ws in group.workspaces"
                 :key="ws.id"
-                class="wl-item cursor-pointer q-pa-sm q-mx-xs rounded-borders"
-                :class="{ 'wl-item--selected': ws.id === store.selectedWorkspaceId }"
-                :style="[
-                  { borderLeft: `3px solid ${attentionBorderColor(ws)}` },
-                  ws.favoritedAt ? { borderBottom: '2px solid #f59e0b' } : {},
-                ]"
-                @click="selectWorkspace(ws.id)"
-                @contextmenu.prevent
-              >
-                <WorkspaceContextMenu
-                  :workspace="ws"
-                  @rename="renameWorkspace"
-                  @edit-description="editDescription"
-                  @copy-path="copyWorktreePath"
-                  @open-editor="openInEditor"
-              @open-file-manager="openInFileManager"
-                  @run-setup="runSetupScript"
-                  @toggle-favorite="onToggleFavorite"
-                  @manage-tags="onManageTags"
-                  @archive="onArchiveClick"
-              @purge-worktree="onPurgeWorktreeClick"
-                  @delete="openDeleteDialog"
-                />
-                <div class="col" style="min-width: 0;">
-                  <div class="row items-center no-wrap q-gutter-xs">
-                    <WorkspaceDrawerIndicators :workspace="ws" />
-                    <div class="wl-item-name text-body2 text-grey-3 ellipsis" :style="{ fontWeight: ws.hasUnread ? 700 : 400, opacity: ws.hasUnread ? 1 : 0.75, maxWidth: '400px' }">
-                      {{ ws.name }}
-                      <q-tooltip>{{ ws.name }}</q-tooltip>
-                    </div>
-                  </div>
-                  <div
-                    v-if="ws.agentDescription || ws.description"
-                    class="text-caption text-grey-7 ellipsis q-mt-xs"
-                    :title="ws.agentDescription || ws.description || undefined"
-                    style="max-width: 100%; font-size: 11px;"
-                  >
-                    {{ ws.agentDescription || ws.description }}
-                  </div>
-                  <AutoLoopChip :workspace="ws" class="q-mt-xs" />
-                  <WorkspaceAttentionLabels :workspace="ws" />
-                  <div v-if="ws.tags.length > 0" class="row q-gutter-xs q-mt-xs">
-                    <q-chip v-for="tag in ws.tags" :key="tag" dense size="sm" color="grey-8" text-color="grey-3" :label="tag" />
-                  </div>
-                </div>
-              </div>
-            </div>
-          </template>
-          <template v-else>
-            <div
-              v-for="ws in flatNeedsAttention"
-              :key="ws.id"
-              class="wl-item cursor-pointer q-pa-sm q-mx-xs rounded-borders"
-              :class="{ 'wl-item--selected': ws.id === store.selectedWorkspaceId }"
-              :style="[
-                { borderLeft: `3px solid ${attentionBorderColor(ws)}` },
-                ws.favoritedAt ? { borderBottom: '2px solid #f59e0b' } : {},
-              ]"
-              @click="selectWorkspace(ws.id)"
-              @contextmenu.prevent
-            >
-              <WorkspaceContextMenu
                 :workspace="ws"
+                variant="attention"
+                :selected="ws.id === store.selectedWorkspaceId"
+                :show-project-chip="false"
+                :border-color="attentionBorderColor(ws)"
+                @select="selectWorkspace"
                 @rename="renameWorkspace"
                 @edit-description="editDescription"
                 @copy-path="copyWorktreePath"
                 @open-editor="openInEditor"
-              @open-file-manager="openInFileManager"
+                @open-file-manager="openInFileManager"
                 @run-setup="runSetupScript"
                 @toggle-favorite="onToggleFavorite"
                 @manage-tags="onManageTags"
                 @archive="onArchiveClick"
-              @purge-worktree="onPurgeWorktreeClick"
+                @unarchive="onUnarchiveClick"
+                @purge-worktree="onPurgeWorktreeClick"
                 @delete="openDeleteDialog"
               />
-              <div class="col" style="min-width: 0;">
-                <div class="row items-center no-wrap q-gutter-xs">
-                  <WorkspaceDrawerIndicators :workspace="ws" />
-                  <div class="wl-item-name text-body2 text-grey-3 ellipsis" :style="{ fontWeight: ws.hasUnread ? 700 : 400, opacity: ws.hasUnread ? 1 : 0.75, maxWidth: '400px' }">
-                    {{ ws.name }}
-                    <q-tooltip>{{ ws.name }}</q-tooltip>
-                  </div>
-                </div>
-                <div
-                  v-if="ws.agentDescription || ws.description"
-                  class="text-caption text-grey-7 ellipsis q-mt-xs"
-                  :title="ws.agentDescription || ws.description || undefined"
-                  style="max-width: 100%; font-size: 11px;"
-                >
-                  {{ ws.agentDescription || ws.description }}
-                </div>
-                <AutoLoopChip :workspace="ws" class="q-mt-xs" />
-                <WorkspaceAttentionLabels :workspace="ws" />
-                <div v-if="flatten || ws.tags.length > 0" class="row q-gutter-xs q-mt-xs">
-                  <q-chip
-                    v-if="flatten"
-                    dense
-                    size="sm"
-                    :color="projectColorFor(ws) ?? 'grey-8'"
-                    :text-color="projectTextColorFor(ws)"
-                    :label="projectNameFor(ws)"
-                  />
-                  <q-chip v-for="tag in ws.tags" :key="tag" dense size="sm" color="grey-8" text-color="grey-3" :label="tag" />
-                </div>
-              </div>
             </div>
+          </template>
+          <template v-else>
+            <WorkspaceCard
+              v-for="ws in flatNeedsAttention"
+              :key="ws.id"
+              :workspace="ws"
+              variant="attention"
+              :selected="ws.id === store.selectedWorkspaceId"
+              :show-project-chip="flatten"
+              :border-color="attentionBorderColor(ws)"
+              @select="selectWorkspace"
+              @rename="renameWorkspace"
+              @edit-description="editDescription"
+              @copy-path="copyWorktreePath"
+              @open-editor="openInEditor"
+              @open-file-manager="openInFileManager"
+              @run-setup="runSetupScript"
+              @toggle-favorite="onToggleFavorite"
+              @manage-tags="onManageTags"
+              @archive="onArchiveClick"
+              @unarchive="onUnarchiveClick"
+              @purge-worktree="onPurgeWorktreeClick"
+              @delete="openDeleteDialog"
+            />
           </template>
         </div>
       </div>
@@ -272,17 +236,24 @@
       <div v-if="filteredRunning.length > 0" class="wl-group q-mt-xs">
         <div
           class="wl-group-header row items-center q-px-md q-py-xs cursor-pointer non-selectable"
-          @click="runningExpanded = !runningExpanded"
+          role="group"
+          tabindex="0"
+          :aria-expanded="runningExpanded"
+          aria-labelledby="wl-group-label-running wl-group-count-running"
+          @click="toggleRunning"
+          @keydown.enter.prevent="toggleRunning"
+          @keydown.space.prevent="toggleRunning"
         >
           <q-icon
             :name="runningExpanded ? 'expand_more' : 'chevron_right'"
             size="xs"
             color="green-5"
           />
-          <span class="text-caption text-weight-bold q-ml-xs text-green-4">
+          <span id="wl-group-label-running" class="text-caption text-weight-bold q-ml-xs text-green-4">
             {{ $t('workspaceList.running') }}
           </span>
           <q-badge
+            id="wl-group-count-running"
             :label="filteredRunning.length"
             color="green-9"
             text-color="white"
@@ -295,128 +266,58 @@
           <template v-if="!flatten">
             <div v-for="group in groupedRunning" :key="group.projectPath" class="wl-project-group">
               <div class="wl-project-label q-px-md q-pt-xs">
-                <q-icon name="folder" size="12px" :color="group.projectColor ?? 'grey-7'" class="q-mr-xs" />
-                <span class="text-caption" :class="group.projectColor ? `text-${group.projectColor}` : 'text-grey-7'">
+                <q-icon name="folder" size="12px" :color="group.projectColor ?? 'kobo-3'" class="q-mr-xs" />
+                <span class="text-caption" :class="group.projectColor ? `text-${group.projectColor}` : 'text-kobo-3'">
                   {{ group.projectName }}
                 </span>
               </div>
-              <div
+              <WorkspaceCard
                 v-for="ws in group.workspaces"
                 :key="ws.id"
-                class="wl-item cursor-pointer q-pa-sm q-mx-xs rounded-borders"
-                :class="{ 'wl-item--selected': ws.id === store.selectedWorkspaceId }"
-                :style="[
-                  { borderLeft: '3px solid #4ade80' },
-                  ws.favoritedAt ? { borderBottom: '2px solid #f59e0b' } : {},
-                ]"
-                @click="selectWorkspace(ws.id)"
-                @contextmenu.prevent
-              >
-                <WorkspaceContextMenu
-                  :workspace="ws"
-                  @rename="renameWorkspace"
-                  @edit-description="editDescription"
-                  @copy-path="copyWorktreePath"
-                  @open-editor="openInEditor"
-              @open-file-manager="openInFileManager"
-                  @run-setup="runSetupScript"
-                  @toggle-favorite="onToggleFavorite"
-                  @manage-tags="onManageTags"
-                  @archive="onArchiveClick"
-              @purge-worktree="onPurgeWorktreeClick"
-                  @delete="openDeleteDialog"
-                />
-                <div class="col" style="min-width: 0;">
-                  <div class="row items-center no-wrap q-gutter-xs">
-                    <WorkspaceDrawerIndicators :workspace="ws" />
-                    <div class="wl-item-name text-body2 text-grey-3 ellipsis" :style="{ fontWeight: ws.hasUnread ? 700 : 400, opacity: ws.hasUnread ? 1 : 0.75, maxWidth: '400px' }">
-                      {{ ws.name }}
-                      <q-tooltip>{{ ws.name }}</q-tooltip>
-                    </div>
-                  </div>
-                  <div
-                    v-if="ws.agentDescription || ws.description"
-                    class="text-caption text-grey-7 ellipsis q-mt-xs"
-                    :title="ws.agentDescription || ws.description || undefined"
-                    style="max-width: 100%; font-size: 11px;"
-                  >
-                    {{ ws.agentDescription || ws.description }}
-                  </div>
-                  <AutoLoopChip :workspace="ws" class="q-mt-xs" />
-                  <WorkspaceAttentionLabels :workspace="ws" :ci-recap-only="true" />
-                  <div class="text-caption q-mt-xs">
-                    <span class="text-green-4">{{ statusLabel(ws.status) }}</span>
-                    <span class="q-ml-xs text-grey-8">&middot; {{ timeAgo(ws.updatedAt) }}</span>
-                  </div>
-                  <div v-if="ws.tags.length > 0" class="row q-gutter-xs q-mt-xs">
-                    <q-chip v-for="tag in ws.tags" :key="tag" dense size="sm" color="grey-8" text-color="grey-3" :label="tag" />
-                  </div>
-                </div>
-              </div>
-            </div>
-          </template>
-          <template v-else>
-            <div
-              v-for="ws in flatRunning"
-              :key="ws.id"
-              class="wl-item cursor-pointer q-pa-sm q-mx-xs rounded-borders"
-              :class="{ 'wl-item--selected': ws.id === store.selectedWorkspaceId }"
-              :style="[
-                { borderLeft: '3px solid #4ade80' },
-                ws.favoritedAt ? { borderBottom: '2px solid #f59e0b' } : {},
-              ]"
-              @click="selectWorkspace(ws.id)"
-              @contextmenu.prevent
-            >
-              <WorkspaceContextMenu
                 :workspace="ws"
+                variant="running"
+                :selected="ws.id === store.selectedWorkspaceId"
+                :show-project-chip="false"
+                border-color="var(--kobo-success)"
+                @select="selectWorkspace"
                 @rename="renameWorkspace"
                 @edit-description="editDescription"
                 @copy-path="copyWorktreePath"
                 @open-editor="openInEditor"
-              @open-file-manager="openInFileManager"
+                @open-file-manager="openInFileManager"
                 @run-setup="runSetupScript"
                 @toggle-favorite="onToggleFavorite"
                 @manage-tags="onManageTags"
                 @archive="onArchiveClick"
-              @purge-worktree="onPurgeWorktreeClick"
+                @unarchive="onUnarchiveClick"
+                @purge-worktree="onPurgeWorktreeClick"
                 @delete="openDeleteDialog"
               />
-              <div class="col" style="min-width: 0;">
-                <div class="row items-center no-wrap q-gutter-xs">
-                  <WorkspaceDrawerIndicators :workspace="ws" />
-                  <div class="wl-item-name text-body2 text-grey-3 ellipsis" :style="{ fontWeight: ws.hasUnread ? 700 : 400, opacity: ws.hasUnread ? 1 : 0.75, maxWidth: '400px' }">
-                    {{ ws.name }}
-                    <q-tooltip>{{ ws.name }}</q-tooltip>
-                  </div>
-                </div>
-                <div
-                  v-if="ws.agentDescription || ws.description"
-                  class="text-caption text-grey-7 ellipsis q-mt-xs"
-                  :title="ws.agentDescription || ws.description || undefined"
-                  style="max-width: 100%; font-size: 11px;"
-                >
-                  {{ ws.agentDescription || ws.description }}
-                </div>
-                <AutoLoopChip :workspace="ws" class="q-mt-xs" />
-                <WorkspaceAttentionLabels :workspace="ws" :ci-recap-only="true" />
-                <div class="text-caption q-mt-xs">
-                  <span class="text-green-4">{{ statusLabel(ws.status) }}</span>
-                  <span class="q-ml-xs text-grey-8">&middot; {{ timeAgo(ws.updatedAt) }}</span>
-                </div>
-                <div v-if="flatten || ws.tags.length > 0" class="row q-gutter-xs q-mt-xs">
-                  <q-chip
-                    v-if="flatten"
-                    dense
-                    size="sm"
-                    :color="projectColorFor(ws) ?? 'grey-8'"
-                    :text-color="projectTextColorFor(ws)"
-                    :label="projectNameFor(ws)"
-                  />
-                  <q-chip v-for="tag in ws.tags" :key="tag" dense size="sm" color="grey-8" text-color="grey-3" :label="tag" />
-                </div>
-              </div>
             </div>
+          </template>
+          <template v-else>
+            <WorkspaceCard
+              v-for="ws in flatRunning"
+              :key="ws.id"
+              :workspace="ws"
+              variant="running"
+              :selected="ws.id === store.selectedWorkspaceId"
+              :show-project-chip="flatten"
+              border-color="var(--kobo-success)"
+              @select="selectWorkspace"
+              @rename="renameWorkspace"
+              @edit-description="editDescription"
+              @copy-path="copyWorktreePath"
+              @open-editor="openInEditor"
+              @open-file-manager="openInFileManager"
+              @run-setup="runSetupScript"
+              @toggle-favorite="onToggleFavorite"
+              @manage-tags="onManageTags"
+              @archive="onArchiveClick"
+              @unarchive="onUnarchiveClick"
+              @purge-worktree="onPurgeWorktreeClick"
+              @delete="openDeleteDialog"
+            />
           </template>
         </div>
       </div>
@@ -425,20 +326,27 @@
       <div v-if="filteredIdle.length > 0" class="wl-group q-mt-xs">
         <div
           class="wl-group-header row items-center q-px-md q-py-xs cursor-pointer non-selectable"
-          @click="idleExpanded = !idleExpanded"
+          role="group"
+          tabindex="0"
+          :aria-expanded="idleExpanded"
+          aria-labelledby="wl-group-label-idle wl-group-count-idle"
+          @click="toggleIdle"
+          @keydown.enter.prevent="toggleIdle"
+          @keydown.space.prevent="toggleIdle"
         >
           <q-icon
             :name="idleExpanded ? 'expand_more' : 'chevron_right'"
             size="xs"
-            color="grey-6"
+            color="kobo-3"
           />
-          <span class="text-caption text-weight-bold q-ml-xs text-grey-6">
+          <span id="wl-group-label-idle" class="text-caption text-weight-bold q-ml-xs text-kobo-3">
             {{ $t('workspaceList.idle') }}
           </span>
           <q-badge
+            id="wl-group-count-idle"
             :label="filteredIdle.length"
-            color="grey-8"
-            text-color="grey-4"
+            color="kobo-hover"
+            text-color="kobo-2"
             class="q-ml-auto"
             style="font-size: 10px;"
           />
@@ -448,126 +356,58 @@
           <template v-if="!flatten">
             <div v-for="group in groupedIdle" :key="group.projectPath" class="wl-project-group">
               <div class="wl-project-label q-px-md q-pt-xs">
-                <q-icon name="folder" size="12px" :color="group.projectColor ?? 'grey-7'" class="q-mr-xs" />
-                <span class="text-caption" :class="group.projectColor ? `text-${group.projectColor}` : 'text-grey-7'">
+                <q-icon name="folder" size="12px" :color="group.projectColor ?? 'kobo-3'" class="q-mr-xs" />
+                <span class="text-caption" :class="group.projectColor ? `text-${group.projectColor}` : 'text-kobo-3'">
                   {{ group.projectName }}
                 </span>
               </div>
-              <div
+              <WorkspaceCard
                 v-for="ws in group.workspaces"
                 :key="ws.id"
-                class="wl-item cursor-pointer q-pa-sm q-mx-xs rounded-borders"
-                :class="{ 'wl-item--selected': ws.id === store.selectedWorkspaceId }"
-                :style="[
-                  { borderLeft: '3px solid #666' },
-                  ws.favoritedAt ? { borderBottom: '2px solid #f59e0b' } : {},
-                ]"
-                @click="selectWorkspace(ws.id)"
-                @contextmenu.prevent
-              >
-                <WorkspaceContextMenu
-                  :workspace="ws"
-                  @rename="renameWorkspace"
-                  @edit-description="editDescription"
-                  @copy-path="copyWorktreePath"
-                  @open-editor="openInEditor"
-              @open-file-manager="openInFileManager"
-                  @run-setup="runSetupScript"
-                  @toggle-favorite="onToggleFavorite"
-                  @manage-tags="onManageTags"
-                  @archive="onArchiveClick"
-              @purge-worktree="onPurgeWorktreeClick"
-                  @delete="openDeleteDialog"
-                />
-                <div class="col" style="min-width: 0;">
-                  <div class="row items-center no-wrap q-gutter-xs">
-                    <WorkspaceDrawerIndicators :workspace="ws" />
-                    <div class="wl-item-name text-body2 text-grey-3 ellipsis" :style="{ fontWeight: ws.hasUnread ? 700 : 400, opacity: ws.hasUnread ? 1 : 0.75, maxWidth: '400px' }">
-                      {{ ws.name }}
-                      <q-tooltip>{{ ws.name }}</q-tooltip>
-                    </div>
-                  </div>
-                  <div
-                    v-if="ws.agentDescription || ws.description"
-                    class="text-caption text-grey-7 ellipsis q-mt-xs"
-                    :title="ws.agentDescription || ws.description || undefined"
-                    style="max-width: 100%; font-size: 11px;"
-                  >
-                    {{ ws.agentDescription || ws.description }}
-                  </div>
-                  <AutoLoopChip :workspace="ws" class="q-mt-xs" />
-                  <WorkspaceAttentionLabels :workspace="ws" :ci-recap-only="true" />
-                  <div class="wl-item-meta text-caption text-grey-8">
-                    {{ timeAgo(ws.updatedAt) }}
-                  </div>
-                  <div v-if="ws.tags.length > 0" class="row q-gutter-xs q-mt-xs">
-                    <q-chip v-for="tag in ws.tags" :key="tag" dense size="sm" color="grey-8" text-color="grey-3" :label="tag" />
-                  </div>
-                </div>
-              </div>
-            </div>
-          </template>
-          <template v-else>
-            <div
-              v-for="ws in flatIdle"
-              :key="ws.id"
-              class="wl-item cursor-pointer q-pa-sm q-mx-xs rounded-borders"
-              :class="{ 'wl-item--selected': ws.id === store.selectedWorkspaceId }"
-              :style="[
-                { borderLeft: '3px solid #666' },
-                ws.favoritedAt ? { borderBottom: '2px solid #f59e0b' } : {},
-              ]"
-              @click="selectWorkspace(ws.id)"
-              @contextmenu.prevent
-            >
-              <WorkspaceContextMenu
                 :workspace="ws"
+                variant="idle"
+                :selected="ws.id === store.selectedWorkspaceId"
+                :show-project-chip="false"
+                border-color="var(--kobo-border-strong)"
+                @select="selectWorkspace"
                 @rename="renameWorkspace"
                 @edit-description="editDescription"
                 @copy-path="copyWorktreePath"
                 @open-editor="openInEditor"
-              @open-file-manager="openInFileManager"
+                @open-file-manager="openInFileManager"
                 @run-setup="runSetupScript"
                 @toggle-favorite="onToggleFavorite"
                 @manage-tags="onManageTags"
                 @archive="onArchiveClick"
-              @purge-worktree="onPurgeWorktreeClick"
+                @unarchive="onUnarchiveClick"
+                @purge-worktree="onPurgeWorktreeClick"
                 @delete="openDeleteDialog"
               />
-              <div class="col" style="min-width: 0;">
-                <div class="row items-center no-wrap q-gutter-xs">
-                  <WorkspaceDrawerIndicators :workspace="ws" />
-                  <div class="wl-item-name text-body2 text-grey-3 ellipsis" :style="{ fontWeight: ws.hasUnread ? 700 : 400, opacity: ws.hasUnread ? 1 : 0.75, maxWidth: '400px' }">
-                    {{ ws.name }}
-                    <q-tooltip>{{ ws.name }}</q-tooltip>
-                  </div>
-                </div>
-                <div
-                  v-if="ws.agentDescription || ws.description"
-                  class="text-caption text-grey-7 ellipsis q-mt-xs"
-                  :title="ws.agentDescription || ws.description || undefined"
-                  style="max-width: 100%; font-size: 11px;"
-                >
-                  {{ ws.agentDescription || ws.description }}
-                </div>
-                <AutoLoopChip :workspace="ws" class="q-mt-xs" />
-                <WorkspaceAttentionLabels :workspace="ws" :ci-recap-only="true" />
-                <div class="wl-item-meta text-caption text-grey-8">
-                  {{ timeAgo(ws.updatedAt) }}
-                </div>
-                <div v-if="flatten || ws.tags.length > 0" class="row q-gutter-xs q-mt-xs">
-                  <q-chip
-                    v-if="flatten"
-                    dense
-                    size="sm"
-                    :color="projectColorFor(ws) ?? 'grey-8'"
-                    :text-color="projectTextColorFor(ws)"
-                    :label="projectNameFor(ws)"
-                  />
-                  <q-chip v-for="tag in ws.tags" :key="tag" dense size="sm" color="grey-8" text-color="grey-3" :label="tag" />
-                </div>
-              </div>
             </div>
+          </template>
+          <template v-else>
+            <WorkspaceCard
+              v-for="ws in flatIdle"
+              :key="ws.id"
+              :workspace="ws"
+              variant="idle"
+              :selected="ws.id === store.selectedWorkspaceId"
+              :show-project-chip="flatten"
+              border-color="var(--kobo-border-strong)"
+              @select="selectWorkspace"
+              @rename="renameWorkspace"
+              @edit-description="editDescription"
+              @copy-path="copyWorktreePath"
+              @open-editor="openInEditor"
+              @open-file-manager="openInFileManager"
+              @run-setup="runSetupScript"
+              @toggle-favorite="onToggleFavorite"
+              @manage-tags="onManageTags"
+              @archive="onArchiveClick"
+              @unarchive="onUnarchiveClick"
+              @purge-worktree="onPurgeWorktreeClick"
+              @delete="openDeleteDialog"
+            />
           </template>
         </div>
       </div>
@@ -576,22 +416,29 @@
       <div v-if="filteredArchived.length > 0 || archivedExpanded" class="wl-group q-mt-xs">
         <div
           class="wl-group-header row items-center q-px-md q-py-xs cursor-pointer non-selectable"
+          role="group"
+          tabindex="0"
+          :aria-expanded="archivedExpanded || archivedAutoExpanded"
+          aria-labelledby="wl-group-label-archived wl-group-count-archived"
           @click="toggleArchived"
+          @keydown.enter.prevent="toggleArchived"
+          @keydown.space.prevent="toggleArchived"
         >
           <q-icon
             :name="archivedExpanded || archivedAutoExpanded ? 'expand_more' : 'chevron_right'"
             size="xs"
-            color="grey-7"
+            color="kobo-3"
           />
-          <q-icon name="inventory_2" size="xs" color="grey-7" class="q-ml-xs" />
-          <span class="text-caption text-weight-bold q-ml-xs text-grey-7">
+          <q-icon name="inventory_2" size="xs" color="kobo-3" class="q-ml-xs" />
+          <span id="wl-group-label-archived" class="text-caption text-weight-bold q-ml-xs text-kobo-3">
             {{ $t('workspaceList.archived') }}
           </span>
           <q-badge
             v-if="filteredArchived.length > 0"
+            id="wl-group-count-archived"
             :label="filteredArchived.length"
-            color="grey-9"
-            text-color="grey-5"
+            color="kobo-surface-2"
+            text-color="kobo-2"
             class="q-ml-auto"
             style="font-size: 10px;"
           />
@@ -602,7 +449,7 @@
             round
             size="xs"
             icon="delete_sweep"
-            color="grey-7"
+            color="kobo-3"
             class="q-ml-xs"
             @click.stop="openBulkDeleteArchivedDialog"
           >
@@ -611,64 +458,28 @@
         </div>
 
         <div v-show="archivedExpanded || archivedAutoExpanded">
-          <div
+          <WorkspaceCard
             v-for="ws in filteredArchived"
             :key="ws.id"
-            class="wl-item wl-item--archived cursor-pointer q-pa-sm q-mx-xs rounded-borders"
-            :class="{ 'wl-item--selected': ws.id === store.selectedWorkspaceId }"
-            :style="[
-              { borderLeft: '3px solid #555' },
-              ws.favoritedAt ? { borderBottom: '2px solid #f59e0b' } : {},
-            ]"
-            @click="selectWorkspace(ws.id)"
-            @contextmenu.prevent
-          >
-            <WorkspaceContextMenu
-              :workspace="ws"
-              archived
-              @rename="renameWorkspace"
-              @edit-description="editDescription"
-              @copy-path="copyWorktreePath"
-              @open-editor="openInEditor"
-              @open-file-manager="openInFileManager"
-              @run-setup="runSetupScript"
-              @toggle-favorite="onToggleFavorite"
-              @manage-tags="onManageTags"
-              @archive="onArchiveClick"
-              @purge-worktree="onPurgeWorktreeClick"
-              @unarchive="onUnarchiveClick"
-              @delete="openDeleteDialog"
-            />
-            <div class="col" style="min-width: 0;">
-              <div class="wl-item-name text-body2 text-grey-5 ellipsis" style="max-width: 400px;">
-                {{ ws.name }}
-                <q-tooltip>{{ ws.name }}</q-tooltip>
-              </div>
-              <div
-                v-if="ws.agentDescription || ws.description"
-                class="text-caption text-grey-7 ellipsis q-mt-xs"
-                :title="ws.agentDescription || ws.description || undefined"
-                style="max-width: 100%; font-size: 11px;"
-              >
-                {{ ws.agentDescription || ws.description }}
-              </div>
-              <AutoLoopChip :workspace="ws" class="q-mt-xs" />
-              <div class="wl-item-meta text-caption text-grey-8">
-                {{ $t('workspaceList.archived') }} {{ timeAgo(ws.archivedAt!) }}
-              </div>
-              <div v-if="flatten || ws.tags.length > 0" class="row q-gutter-xs q-mt-xs">
-                <q-chip
-                  v-if="flatten"
-                  dense
-                  size="sm"
-                  :color="projectColorFor(ws) ?? 'grey-8'"
-                  :text-color="projectTextColorFor(ws)"
-                  :label="projectNameFor(ws)"
-                />
-                <q-chip v-for="tag in ws.tags" :key="tag" dense size="sm" color="grey-8" text-color="grey-3" :label="tag" />
-              </div>
-            </div>
-          </div>
+            :workspace="ws"
+            variant="archived"
+            :selected="ws.id === store.selectedWorkspaceId"
+            :show-project-chip="flatten"
+            border-color="var(--kobo-border)"
+            @select="selectWorkspace"
+            @rename="renameWorkspace"
+            @edit-description="editDescription"
+            @copy-path="copyWorktreePath"
+            @open-editor="openInEditor"
+            @open-file-manager="openInFileManager"
+            @run-setup="runSetupScript"
+            @toggle-favorite="onToggleFavorite"
+            @manage-tags="onManageTags"
+            @archive="onArchiveClick"
+            @unarchive="onUnarchiveClick"
+            @purge-worktree="onPurgeWorktreeClick"
+            @delete="openDeleteDialog"
+          />
         </div>
       </div>
 
@@ -676,8 +487,8 @@
       <div v-if="store.listLoadError" class="q-pa-lg text-center">
         <q-icon name="cloud_off" size="28px" class="text-negative" />
         <div class="text-caption text-negative q-mt-sm">{{ $t('workspaceList.loadFailed') }}</div>
-        <div class="text-caption text-grey-6 q-mt-xs">{{ store.listLoadError }}</div>
-        <div class="text-caption text-grey-7 q-mt-xs">{{ $t('workspaceList.loadFailedHint') }}</div>
+        <div class="text-caption text-kobo-3 q-mt-xs">{{ store.listLoadError }}</div>
+        <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('workspaceList.loadFailedHint') }}</div>
         <q-btn
           dense
           flat
@@ -692,7 +503,7 @@
       <!-- Empty state -->
       <div
         v-else-if="filteredNeedsAttention.length === 0 && filteredRunning.length === 0 && filteredIdle.length === 0 && filteredArchived.length === 0"
-        class="q-pa-lg text-center text-grey-6 text-caption"
+        class="q-pa-lg text-center text-kobo-3 text-caption"
       >
         <template v-if="store.loading">{{ $t('common.loading') }}</template>
         <template v-else-if="searchQuery">{{ $t('common.noResults', { query: searchQuery }) }}</template>
@@ -703,23 +514,23 @@
     <q-separator dark />
 
     <!-- Footer counter -->
-    <div class="q-px-md q-py-xs text-caption text-grey-8">
+    <div class="q-px-md q-py-xs text-caption text-kobo-3">
       {{ $t('workspaceList.footer', { count: totalCount }, totalCount) }} &middot; {{ $t('workspaceList.footerRunning', { count: runningCount }) }}
     </div>
   </div>
 
   <!-- Delete confirmation dialog -->
   <q-dialog v-model="deleteDialog" persistent>
-    <q-card class="text-grey-3" style="min-width: 360px; background: #1e1e3a;">
+    <q-card class="text-kobo-1" style="min-width: 360px; background: var(--kobo-surface);">
       <q-card-section>
         <div class="text-h6">{{ $t('workspaceList.deleteDialog.title') }}</div>
       </q-card-section>
 
       <q-card-section class="q-pt-none">
-        <div class="text-body2 q-mb-sm text-grey-6">
+        <div class="text-body2 q-mb-sm text-kobo-3">
           {{ deleteTarget?.name }}
         </div>
-        <div class="text-caption q-mb-md text-grey-7" style="font-family: monospace;">
+        <div class="text-caption q-mb-md text-kobo-3" style="font-family: monospace;">
           {{ deleteTarget?.workingBranch }}
         </div>
 
@@ -746,7 +557,7 @@
       </q-card-section>
 
       <q-card-actions align="right">
-        <q-btn flat :label="$t('common.cancel')" color="grey-5" @click="deleteDialog = false" :disable="deleting" />
+        <q-btn flat :label="$t('common.cancel')" color="kobo-2" @click="deleteDialog = false" :disable="deleting" />
         <q-btn
           flat
           :label="$t('common.delete')"
@@ -759,13 +570,13 @@
   </q-dialog>
 
   <q-dialog v-model="bulkDeleteArchivedDialog" persistent>
-    <q-card class="text-grey-3" style="min-width: 360px; background: #1e1e3a;">
+    <q-card class="text-kobo-1" style="min-width: 360px; background: var(--kobo-surface);">
       <q-card-section>
         <div class="text-h6">{{ $t('workspaceList.deleteArchivedDialog.title') }}</div>
       </q-card-section>
 
       <q-card-section class="q-pt-none">
-        <div class="text-body2 q-mb-md text-grey-6">
+        <div class="text-body2 q-mb-md text-kobo-3">
           {{ $t('workspaceList.deleteArchivedDialog.message', { count: store.archived.length }) }}
         </div>
 
@@ -795,7 +606,7 @@
         <q-btn
           flat
           :label="$t('common.cancel')"
-          color="grey-5"
+          color="kobo-2"
           :disable="bulkDeleting"
           @click="bulkDeleteArchivedDialog = false"
         />
@@ -819,11 +630,8 @@
 
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
-import AutoLoopChip from 'src/components/AutoLoopChip.vue'
 import ManageTagsDialog from 'src/components/ManageTagsDialog.vue'
-import WorkspaceAttentionLabels from 'src/components/WorkspaceAttentionLabels.vue'
-import WorkspaceContextMenu from 'src/components/WorkspaceContextMenu.vue'
-import WorkspaceDrawerIndicators from 'src/components/WorkspaceDrawerIndicators.vue'
+import WorkspaceCard from 'src/components/WorkspaceCard.vue'
 import { useIsMobile } from 'src/composables/use-is-mobile'
 import { useDevServerStore } from 'src/stores/dev-server'
 import { useLayoutStore } from 'src/stores/layout'
@@ -831,25 +639,18 @@ import { useSettingsStore } from 'src/stores/settings'
 import { useWebSocketStore } from 'src/stores/websocket'
 import type { Workspace } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
-import { useTimeAgo } from 'src/utils/formatters'
 import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
 import type { ProjectColor } from 'src/utils/project-color'
-import { projectColorFor, projectNameFor, projectNameForPath, projectTextColorFor } from 'src/utils/project-color'
+import { projectNameForPath } from 'src/utils/project-color'
 import { getAttentionReasons } from 'src/utils/workspace-attention'
 import { filterWorkspaces } from 'src/utils/workspace-search'
-import { isBusyStatus, workspaceStatusKey } from 'src/utils/workspace-status'
+import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 
 const { t } = useI18n()
 const $q = useQuasar()
-const { timeAgo } = useTimeAgo()
-
-function statusLabel(status: string): string {
-  const key = workspaceStatusKey(status)
-  return key ? t(key) : status
-}
 const store = useWorkspaceStore()
 const wsStore = useWebSocketStore()
 const devServerStore = useDevServerStore()
@@ -860,11 +661,11 @@ const { isDrawerCollapsed } = useIsMobile()
 
 function attentionBorderColor(ws: Workspace): string {
   const reasons = getAttentionReasons(ws, store.prSnapshots[ws.id])
-  if (reasons.some((r) => r.color === 'red-5')) return '#ef4444' // a real problem → red
+  if (reasons.some((r) => r.color === 'red-5')) return 'var(--kobo-danger)' // a real problem → red
   // Purely positive state (ready to merge, nothing else pending) → green, so the
   // border matches the green badge instead of falsely warning with amber.
-  if (reasons.length > 0 && reasons.every((r) => r.kind === 'ready-to-merge')) return '#22c55e'
-  return '#f59e0b' // awaiting-user / other intermediate states → amber
+  if (reasons.length > 0 && reasons.every((r) => r.kind === 'ready-to-merge')) return 'var(--kobo-success)'
+  return 'var(--kobo-warning)' // awaiting-user / other intermediate states → amber
 }
 
 let workspaceInfoInterval: ReturnType<typeof setInterval> | null = null
@@ -970,6 +771,18 @@ const attentionExpanded = ref(true)
 const runningExpanded = ref(true)
 const idleExpanded = ref(true)
 const archivedExpanded = ref(false)
+
+function toggleAttention() {
+  attentionExpanded.value = !attentionExpanded.value
+}
+
+function toggleRunning() {
+  runningExpanded.value = !runningExpanded.value
+}
+
+function toggleIdle() {
+  idleExpanded.value = !idleExpanded.value
+}
 
 async function toggleArchived() {
   archivedExpanded.value = !archivedExpanded.value
@@ -1143,7 +956,7 @@ function onPurgeWorktreeClick(ws: Workspace, event: Event) {
   $q.dialog({
     title: t('contextMenu.purgeWorktreeDialogTitle'),
     message: t('contextMenu.purgeWorktreeDialogMessage', { name: ws.name }),
-    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
     ok: { unelevated: true, label: t('contextMenu.purgeWorktreeDialogConfirm'), color: 'orange-7' },
     persistent: true,
     dark: true,
@@ -1219,6 +1032,20 @@ function selectWorkspace(id: string) {
   if (isDrawerCollapsed.value) layout.setLeft(false)
 }
 
+/**
+ * Roving focus across every rendered card. Reading the DOM rather than keeping
+ * an index in sync is deliberate: the four groups can collapse and the flatten
+ * setting can reshuffle the rows at any time, so the DOM order is the only
+ * ordering that is always right.
+ */
+function moveFocus(delta: number) {
+  const cards = Array.from(document.querySelectorAll<HTMLElement>('.workspace-list [data-testid="workspace-card"]'))
+  if (cards.length === 0) return
+  const current = cards.indexOf(document.activeElement as HTMLElement)
+  const next = current === -1 ? 0 : (current + delta + cards.length) % cards.length
+  cards[next]?.focus()
+}
+
 function copyWorktreePath(ws: Workspace) {
   navigator.clipboard.writeText(ws.worktreePath).catch(() => {})
 }
@@ -1232,8 +1059,8 @@ function renameWorkspace(ws: Workspace) {
       isValid: (val: string) => val.trim().length > 0,
       type: 'text',
     },
-    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
-    ok: { unelevated: true, label: t('common.save'), color: 'indigo-6' },
+    cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
+    ok: { unelevated: true, label: t('common.save'), color: 'primary' },
   }).onOk(async (name: string) => {
     const trimmed = name.trim()
     if (!trimmed || trimmed === ws.name) return
@@ -1256,8 +1083,8 @@ function editDescription(ws: Workspace) {
       isValid: (val: string) => val.length <= 200,
       type: 'textarea',
     },
-    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
-    ok: { unelevated: true, label: t('common.save'), color: 'indigo-6' },
+    cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
+    ok: { unelevated: true, label: t('common.save'), color: 'primary' },
   }).onOk(async (description: string) => {
     const trimmed = description.trim()
     const next = trimmed.length > 0 ? trimmed : null
@@ -1407,19 +1234,19 @@ onBeforeUnmount(() => {
 
 <style lang="scss" scoped>
 .workspace-list {
-  background-color: #16162a;
+  background-color: var(--kobo-bg-deep);
   overflow-x: hidden;
 }
 
 .wl-search {
-  background-color: #222244;
+  background-color: var(--kobo-surface);
   padding: 0 8px;
 
   :deep(.q-field__control) {
     height: 32px;
   }
   :deep(input) {
-    color: #ccc;
+    color: var(--kobo-text-2);
     font-size: 12px;
   }
 }
@@ -1444,53 +1271,4 @@ onBeforeUnmount(() => {
   padding-bottom: 2px;
   font-size: 11px;
 }
-
-.wl-item {
-  background-color: #222244;
-  position: relative;
-  transition: background-color 0.15s, box-shadow 0.15s;
-  margin-bottom: 4px;
-
-  &:last-child { margin-bottom: 0; }
-  &:hover { background-color: #2a2a4a; }
-  &--selected {
-    background-color: #393969;
-    outline: 1.5px solid rgba(108, 99, 255, 0.95);
-    box-shadow: 0 0 0 1px rgba(108, 99, 255, 0.3), 0 2px 8px rgba(108, 99, 255, 0.25);
-
-    &:hover { background-color: #41417a; }
-
-    .wl-item-name {
-      color: #ffffff !important;
-      opacity: 1 !important;
-    }
-  }
-}
-
-.wl-item-action {
-  position: absolute;
-  top: 4px;
-  right: 4px;
-}
-
-.wl-item--archived .wl-item-action {
-  opacity: 0;
-  transition: opacity 0.15s;
-}
-
-.wl-item--archived:hover .wl-item-action {
-  opacity: 1;
-}
-
-.wl-item-unarchive { right: 28px; }
-.wl-item-delete { right: 4px; }
-
-.wl-item--archived {
-  opacity: 0.6;
-  background-color: #1a1a30;
-
-  &:hover { opacity: 0.85; }
-  &.wl-item--selected { opacity: 1; }
-}
-
 </style>

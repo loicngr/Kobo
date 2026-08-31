@@ -21,7 +21,7 @@
         <q-separator v-if="!scope.opt.isSession" spaced />
         <q-item v-bind="scope.itemProps" clickable dense class="row items-center no-wrap">
           <q-item-section>
-            <q-item-label :class="!scope.opt.isSession ? 'text-grey-5' : ''">
+            <q-item-label :class="!scope.opt.isSession ? 'text-kobo-2' : ''">
               {{ scope.opt.label }}
             </q-item-label>
             <q-item-label v-if="scope.opt.caption" caption>{{ scope.opt.caption }}</q-item-label>
@@ -33,7 +33,7 @@
               dense
               round
               size="xs"
-              color="grey-6"
+              color="kobo-3"
               @click.stop
             >
               <q-menu auto-close>
@@ -64,8 +64,8 @@
     </q-select>
     <q-badge
       v-if="activeSessionModelLabel !== null"
-      color="indigo-8"
-      text-color="indigo-1"
+      color="primary"
+      text-color="primary"
       class="q-ml-sm"
       style="font-size: 10px;"
     >
@@ -87,7 +87,7 @@
       style="min-width: 80px; max-width: 140px; font-size: 11px;"
     >
       <template #selected>
-        <span class="row items-center no-wrap text-caption text-grey-5">
+        <span class="row items-center no-wrap text-caption text-kobo-2">
           <q-icon :name="permissionModeIcon" size="12px" color="amber-6" class="q-mr-xs" />
           {{ permissionModeLabel }}
           <q-icon v-if="pendingSpawnChanges.has('agentPermissionMode')" name="schedule" size="11px" color="orange-6" class="q-ml-xs">
@@ -109,8 +109,8 @@
       style="min-width: 100px; max-width: 160px; font-size: 11px;"
     >
       <template #selected>
-        <span class="row items-center no-wrap text-caption text-grey-5">
-          <q-icon name="auto_awesome" size="12px" color="indigo-4" class="q-mr-xs" />
+        <span class="row items-center no-wrap text-caption text-kobo-2">
+          <q-icon name="auto_awesome" size="12px" color="primary" class="q-mr-xs" />
           {{ modelLabel }}
           <q-icon v-if="pendingSpawnChanges.has('model')" name="schedule" size="11px" color="orange-6" class="q-ml-xs">
             <q-tooltip>{{ $t('workspacePage.pendingNextRun') }}</q-tooltip>
@@ -131,7 +131,7 @@
       style="min-width: 90px; max-width: 140px; font-size: 11px;"
     >
       <template #selected>
-        <span class="row items-center no-wrap text-caption text-grey-5">
+        <span class="row items-center no-wrap text-caption text-kobo-2">
           <q-icon name="psychology" size="12px" color="amber-6" class="q-mr-xs" />
           {{ reasoningLabel }}
           <q-icon v-if="pendingSpawnChanges.has('reasoningEffort')" name="schedule" size="11px" color="orange-6" class="q-ml-xs">
@@ -168,7 +168,7 @@
             <q-separator v-if="!scope.opt.isSession" spaced />
             <q-item v-bind="scope.itemProps" clickable dense class="row items-center no-wrap">
               <q-item-section>
-                <q-item-label :class="!scope.opt.isSession ? 'text-grey-5' : ''">
+                <q-item-label :class="!scope.opt.isSession ? 'text-kobo-2' : ''">
                   {{ scope.opt.label }}
                 </q-item-label>
                 <q-item-label v-if="scope.opt.caption" caption>{{ scope.opt.caption }}</q-item-label>
@@ -180,7 +180,7 @@
                   dense
                   round
                   size="xs"
-                  color="grey-6"
+                  color="kobo-3"
                   @click.stop
                 >
                   <q-menu auto-close>
@@ -225,7 +225,7 @@
           style="min-width: 160px; font-size: 11px;"
         >
           <template #selected>
-            <span class="row items-center no-wrap text-caption text-grey-5">
+            <span class="row items-center no-wrap text-caption text-kobo-2">
               <q-icon :name="permissionModeIcon" size="12px" color="amber-6" class="q-mr-xs" />
               {{ permissionModeLabel }}
               <q-icon v-if="pendingSpawnChanges.has('agentPermissionMode')" name="schedule" size="11px" color="orange-6" class="q-ml-xs">
@@ -251,8 +251,8 @@
           style="min-width: 160px; font-size: 11px;"
         >
           <template #selected>
-            <span class="row items-center no-wrap text-caption text-grey-5">
-              <q-icon name="auto_awesome" size="12px" color="indigo-4" class="q-mr-xs" />
+            <span class="row items-center no-wrap text-caption text-kobo-2">
+              <q-icon name="auto_awesome" size="12px" color="primary" class="q-mr-xs" />
               {{ modelLabel }}
               <q-icon v-if="pendingSpawnChanges.has('model')" name="schedule" size="11px" color="orange-6" class="q-ml-xs">
                 <q-tooltip>{{ $t('workspacePage.pendingNextRun') }}</q-tooltip>
@@ -276,7 +276,7 @@
           style="min-width: 160px; font-size: 11px;"
         >
           <template #selected>
-            <span class="row items-center no-wrap text-caption text-grey-5">
+            <span class="row items-center no-wrap text-caption text-kobo-2">
               <q-icon name="psychology" size="12px" color="amber-6" class="q-mr-xs" />
               {{ reasoningLabel }}
               <q-icon v-if="pendingSpawnChanges.has('reasoningEffort')" name="schedule" size="11px" color="orange-6" class="q-ml-xs">

@@ -3,12 +3,12 @@
     <q-card style="min-width: 600px; max-width: 90vw;" dark>
       <q-card-section class="q-pb-none">
         <div class="text-h6">{{ $t('git.divergence.title') }}</div>
-        <div class="text-body2 text-grey-5 q-mt-xs">
+        <div class="text-body2 text-kobo-2 q-mt-xs">
           {{ $t('git.divergence.subtitle', { source: sourceBranch }) }}
         </div>
       </q-card-section>
 
-      <q-tabs v-model="activeTab" dense align="left" inline-label class="q-mt-sm" indicator-color="indigo-4">
+      <q-tabs v-model="activeTab" dense align="left" inline-label class="q-mt-sm" indicator-color="primary">
         <q-tab name="ahead" :label="$t('git.divergence.ahead', { count: aheadCount })" />
         <q-tab name="behind" :label="$t('git.divergence.behind', { count: behindCount })" />
       </q-tabs>
@@ -16,14 +16,14 @@
 
       <q-tab-panels v-model="activeTab" animated style="max-height: 60vh;">
         <q-tab-panel name="ahead" class="q-pa-md">
-          <div v-if="loading" class="text-caption text-grey-6 row items-center">
+          <div v-if="loading" class="text-caption text-kobo-3 row items-center">
             <q-spinner size="xs" class="q-mr-xs" />{{ $t('git.divergence.loading') }}
           </div>
           <div v-else-if="error" class="row items-center q-gutter-sm">
             <span class="text-caption text-negative">{{ error }}</span>
-            <q-btn flat dense no-caps :label="$t('git.divergence.retry')" color="indigo-4" @click="reload" />
+            <q-btn flat dense no-caps :label="$t('git.divergence.retry')" color="primary" @click="reload" />
           </div>
-          <div v-else-if="ahead.length === 0" class="text-caption text-grey-6">
+          <div v-else-if="ahead.length === 0" class="text-caption text-kobo-3">
             {{ $t('git.divergence.empty.ahead') }}
           </div>
           <div v-else>
@@ -36,15 +36,15 @@
               <q-icon
                 :name="commit.isPushed ? 'cloud_done' : 'cloud_upload'"
                 size="12px"
-                :color="commit.isPushed ? 'grey-6' : 'orange-5'"
+                :color="commit.isPushed ? 'kobo-3' : 'orange-5'"
                 class="q-mr-xs"
               />
-              <span class="commit-sha text-grey-5">{{ commit.shortSha }}</span>
-              <span class="commit-subject text-grey-4 ellipsis q-ml-sm">{{ commit.subject }}</span>
+              <span class="commit-sha text-kobo-2">{{ commit.shortSha }}</span>
+              <span class="commit-subject text-kobo-2 ellipsis q-ml-sm">{{ commit.subject }}</span>
               <q-tooltip anchor="top middle" self="bottom middle">
                 <div class="text-caption">
                   <div><code>{{ commit.sha }}</code></div>
-                  <div class="text-grey-5 q-mt-xs">{{ commit.author }} · {{ formatDate(commit.date) }}</div>
+                  <div class="text-kobo-2 q-mt-xs">{{ commit.author }} · {{ formatDate(commit.date) }}</div>
                 </div>
               </q-tooltip>
             </div>
@@ -52,14 +52,14 @@
         </q-tab-panel>
 
         <q-tab-panel name="behind" class="q-pa-md">
-          <div v-if="loading" class="text-caption text-grey-6 row items-center">
+          <div v-if="loading" class="text-caption text-kobo-3 row items-center">
             <q-spinner size="xs" class="q-mr-xs" />{{ $t('git.divergence.loading') }}
           </div>
           <div v-else-if="error" class="row items-center q-gutter-sm">
             <span class="text-caption text-negative">{{ error }}</span>
-            <q-btn flat dense no-caps :label="$t('git.divergence.retry')" color="indigo-4" @click="reload" />
+            <q-btn flat dense no-caps :label="$t('git.divergence.retry')" color="primary" @click="reload" />
           </div>
-          <div v-else-if="behind.length === 0" class="text-caption text-grey-6">
+          <div v-else-if="behind.length === 0" class="text-caption text-kobo-3">
             {{ $t('git.divergence.empty.behind') }}
           </div>
           <div v-else>
@@ -69,12 +69,12 @@
               class="commit-item row no-wrap items-center cursor-pointer q-py-xs"
               @click="onCommitClick(commit.sha)"
             >
-              <span class="commit-sha text-grey-5">{{ commit.shortSha }}</span>
-              <span class="commit-subject text-grey-4 ellipsis q-ml-sm">{{ commit.subject }}</span>
+              <span class="commit-sha text-kobo-2">{{ commit.shortSha }}</span>
+              <span class="commit-subject text-kobo-2 ellipsis q-ml-sm">{{ commit.subject }}</span>
               <q-tooltip anchor="top middle" self="bottom middle">
                 <div class="text-caption">
                   <div><code>{{ commit.sha }}</code></div>
-                  <div class="text-grey-5 q-mt-xs">{{ commit.author }} · {{ formatDate(commit.date) }}</div>
+                  <div class="text-kobo-2 q-mt-xs">{{ commit.author }} · {{ formatDate(commit.date) }}</div>
                 </div>
               </q-tooltip>
             </div>
@@ -83,7 +83,7 @@
       </q-tab-panels>
 
       <q-card-actions align="right" class="q-pa-md">
-        <q-btn flat no-caps :label="$t('git.divergence.close')" color="grey-5" @click="close" />
+        <q-btn flat no-caps :label="$t('git.divergence.close')" color="kobo-2" @click="close" />
       </q-card-actions>
     </q-card>
   </q-dialog>
@@ -190,7 +190,7 @@ onBeforeUnmount(() => {
   background: rgba(255, 255, 255, 0.04);
 }
 .commit-sha {
-  font-family: 'Roboto Mono', monospace;
+  font-family: var(--kobo-font-mono);
   font-size: 11px;
 }
 .commit-subject {

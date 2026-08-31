@@ -1,19 +1,19 @@
 <template>
   <div class="dd-panel q-px-md q-py-sm">
-    <div class="text-caption text-uppercase text-weight-bold text-grey-5 q-mb-xs">
+    <div class="text-caption text-uppercase text-weight-bold text-kobo-2 q-mb-xs">
       {{ $t('devServer.title') }}
     </div>
 
     <template v-if="!workspace">
-      <div class="text-caption text-grey-8">
+      <div class="text-caption text-kobo-3">
         {{ $t('devServer.noWorkspace') }}
       </div>
     </template>
 
     <template v-else-if="!hasDevServer">
-      <div class="text-caption text-grey-8">
+      <div class="text-caption text-kobo-3">
         {{ $t('devServer.notConfigured') }}
-        <router-link to="/settings" style="color: #6c63ff;">{{ $t('devServer.goToSettings') }}</router-link>
+        <router-link to="/settings" style="color: var(--kobo-text-2);">{{ $t('devServer.goToSettings') }}</router-link>
       </div>
     </template>
 
@@ -29,18 +29,18 @@
         <q-btn v-if="canStop" flat round dense icon="stop" size="xs" color="red-5" @click="stop" :loading="stopping">
           <q-tooltip>{{ $t('tooltip.stopDevServer') }}</q-tooltip>
         </q-btn>
-        <q-btn flat round dense icon="article" size="xs" color="grey-5" @click="showLogs = true">
+        <q-btn flat round dense icon="article" size="xs" color="kobo-2" @click="showLogs = true">
           <q-tooltip>{{ $t('devServer.logs') }}</q-tooltip>
         </q-btn>
       </div>
 
       <!-- URL when running -->
       <div v-if="status.status === 'running' && status.url" class="text-caption q-mb-xs">
-        <a :href="status.url" target="_blank" style="color: #6c63ff;">{{ status.url }}</a>
+        <a :href="status.url" target="_blank" style="color: var(--kobo-text-2);">{{ status.url }}</a>
       </div>
 
       <!-- Containers -->
-      <div v-if="status.containers.length > 0" class="text-caption text-grey-7" style="font-size: 10px;">
+      <div v-if="status.containers.length > 0" class="text-caption text-kobo-3" style="font-size: 10px;">
         {{ $t('devServer.containers', { count: status.containers.length }, status.containers.length) }}
       </div>
 
@@ -99,7 +99,7 @@ const statusColor = computed(() => {
     case 'error':
       return 'red-9'
     default:
-      return 'grey-8'
+      return 'kobo-3'
   }
 })
 

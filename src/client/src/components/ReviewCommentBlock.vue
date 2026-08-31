@@ -27,11 +27,11 @@
         <!-- eslint-disable-next-line vue/no-v-html -->
         <div class="comment-content" v-html="renderMarkdown(comment.content)" />
         <div class="comment-footer">
-          <span class="comment-time text-caption text-grey-7">{{ relativeTime(comment.createdAt) }}</span>
-          <q-btn flat dense round size="xs" icon="edit" color="grey-5" @click="startEdit(comment)">
+          <span class="comment-time text-caption text-kobo-3">{{ relativeTime(comment.createdAt) }}</span>
+          <q-btn flat dense round size="xs" icon="edit" color="kobo-2" @click="startEdit(comment)">
             <q-tooltip>{{ $t('diff.editComment') }}</q-tooltip>
           </q-btn>
-          <q-btn flat dense round size="xs" icon="delete" color="grey-5" @click="confirmDelete(comment.id)">
+          <q-btn flat dense round size="xs" icon="delete" color="kobo-2" @click="confirmDelete(comment.id)">
             <q-tooltip>{{ $t('diff.deleteComment') }}</q-tooltip>
           </q-btn>
         </div>

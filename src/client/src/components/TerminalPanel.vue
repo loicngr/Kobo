@@ -1,6 +1,6 @@
 <template>
   <div class="column" style="height: 100%;">
-    <div class="row items-center q-pa-xs q-px-sm text-caption text-grey-5">
+    <div class="row items-center q-pa-xs q-px-sm text-caption text-kobo-2">
       <q-icon name="terminal" size="14px" class="q-mr-xs" />
       <span>{{ t('terminal.title') }}</span>
       <q-space />
@@ -11,7 +11,7 @@
         round
         size="xs"
         icon="close"
-        color="grey-6"
+        color="kobo-3"
         @click="closeTerminal"
       >
         <q-tooltip>{{ t('terminal.close') }}</q-tooltip>
@@ -21,7 +21,7 @@
 
     <div
       v-if="!workspaceId"
-      class="col column items-center justify-center text-grey-7 text-caption"
+      class="col column items-center justify-center text-kobo-3 text-caption"
     >
       {{ t('terminal.noWorkspace') }}
     </div>
@@ -32,7 +32,7 @@
     >
       <q-icon name="error" size="24px" class="q-mb-sm" />
       {{ t('terminal.error') }}: {{ terminalError }}
-      <q-btn flat dense no-caps color="indigo-4" class="q-mt-sm" @click="reopenTerminal">
+      <q-btn flat dense no-caps color="primary" class="q-mt-sm" @click="reopenTerminal">
         {{ t('terminal.open') }}
       </q-btn>
     </div>
@@ -52,7 +52,7 @@
     >
       <q-icon name="info" size="24px" class="q-mb-sm" />
       {{ t('terminal.exited') }}
-      <q-btn flat dense no-caps color="indigo-4" class="q-mt-sm" @click="reopenTerminal">
+      <q-btn flat dense no-caps color="primary" class="q-mt-sm" @click="reopenTerminal">
         {{ t('terminal.open') }}
       </q-btn>
     </div>
@@ -65,7 +65,7 @@
         flat
         dense
         no-caps
-        color="indigo-4"
+        color="primary"
         icon="terminal"
         :label="t('terminal.open')"
         :disable="!hasWorktree || isArchived"
@@ -268,14 +268,18 @@ function openTerminal() {
   if (!wid || !hasWorktree.value || isArchived.value) return
   if (terminalMap.has(wid)) return
 
+  // xterm.js parses `theme` colours with its own hex/rgb parser for canvas
+  // rendering — it never resolves `var(--...)`, so the design tokens are read
+  // to their literal value here instead of hardcoding hex in source.
+  const rootStyle = getComputedStyle(document.documentElement)
   const terminal = new Terminal({
     cursorBlink: true,
     fontSize: 12,
-    fontFamily: "'Roboto Mono', monospace",
+    fontFamily: 'var(--kobo-font-mono)',
     theme: {
-      background: '#16162a',
-      foreground: '#cccccc',
-      cursor: '#6c63ff',
+      background: rootStyle.getPropertyValue('--kobo-bg-deep').trim(),
+      foreground: rootStyle.getPropertyValue('--kobo-text-2').trim(),
+      cursor: rootStyle.getPropertyValue('--kobo-accent').trim(),
     },
     scrollback: 1000,
   })

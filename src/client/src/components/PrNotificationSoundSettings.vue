@@ -2,14 +2,14 @@
   <div class="notification-sounds-grid q-mt-md">
     <div v-for="row in rows" :key="row.soundKey" class="notification-sound-card q-pa-md rounded-borders">
       <div class="text-subtitle2">{{ row.title }}</div>
-      <div class="text-grey-6 text-caption q-mb-sm">{{ row.description }}</div>
+      <div class="text-kobo-3 text-caption q-mb-sm">{{ row.description }}</div>
       <q-toggle
         :model-value="modelValue[row.enabledKey]"
         :label="t('settings.enableAudio')"
         dark
         dense
-        color="indigo-4"
-        class="text-grey-5 text-caption q-mb-sm"
+        color="primary"
+        class="text-kobo-2 text-caption q-mb-sm"
         @update:model-value="update(row.enabledKey, Boolean($event))"
       />
       <div class="row items-center q-gutter-sm">
@@ -23,14 +23,14 @@
           outlined
           emit-value
           map-options
-          color="indigo-4"
+          color="primary"
           class="col"
           @update:model-value="update(row.soundKey, String($event))"
         />
         <q-btn
           flat
           dense
-          color="indigo-4"
+          color="primary"
           icon="play_arrow"
           :label="t('settings.notificationSoundPreview')"
           :disable="!modelValue[row.enabledKey]"
@@ -38,7 +38,7 @@
         />
       </div>
       <div class="row items-center q-gutter-sm q-mt-sm">
-        <div class="text-grey-5 text-caption volume-label">{{ t('settings.notificationVolume') }}</div>
+        <div class="text-kobo-2 text-caption volume-label">{{ t('settings.notificationVolume') }}</div>
         <q-slider
           :model-value="modelValue[row.volumeKey]"
           :min="0"
@@ -48,11 +48,11 @@
           :aria-label="t('settings.notificationVolume')"
           dark
           dense
-          color="indigo-4"
+          color="primary"
           class="col"
           @update:model-value="update(row.volumeKey, Number($event))"
         />
-        <div class="text-grey-5 text-caption volume-value">
+        <div class="text-kobo-2 text-caption volume-value">
           {{ Math.round(modelValue[row.volumeKey] * 100) }}%
         </div>
       </div>

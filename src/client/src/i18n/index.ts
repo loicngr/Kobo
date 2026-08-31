@@ -31,9 +31,11 @@ function detectLocale(): SupportedLocale {
   return 'en'
 }
 
+export const initialLocale = detectLocale()
+
 const i18n = createI18n<[MessageSchema], SupportedLocale>({
   legacy: false,
-  locale: detectLocale(),
+  locale: initialLocale,
   fallbackLocale: 'en',
   messages: {
     en,
@@ -43,5 +45,17 @@ const i18n = createI18n<[MessageSchema], SupportedLocale>({
     it,
   },
 })
+
+/**
+ * Mirror the active locale onto `<html lang>`. The static attribute in
+ * index.html only covers the very first paint; a screen reader needs the real
+ * language or it will read French copy with an English voice.
+ */
+export function applyDocumentLocale(locale: string): void {
+  if (typeof document === 'undefined') return
+  document.documentElement.lang = locale
+}
+
+applyDocumentLocale(initialLocale)
 
 export default i18n

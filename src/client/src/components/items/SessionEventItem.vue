@@ -1,5 +1,5 @@
 <template>
-  <span class="text-caption text-grey-6">{{ $t(i18nKey) }}</span>
+  <span class="text-caption text-kobo-3">{{ $t(i18nKey) }}</span>
 </template>
 
 <script setup lang="ts">

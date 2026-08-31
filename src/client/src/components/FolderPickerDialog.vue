@@ -3,16 +3,16 @@
     :model-value="modelValue"
     @update:model-value="$emit('update:modelValue', $event)"
   >
-    <q-card class="text-grey-3" style="min-width: 480px; max-width: 90vw; background: #1e1e3a;">
+    <q-card class="text-kobo-1" style="min-width: 480px; max-width: 90vw; background: var(--kobo-surface);">
       <q-card-section class="row items-center q-pb-none">
         <div class="text-h6">{{ $t('folderPicker.title') }}</div>
         <q-space />
-        <q-btn v-close-popup flat dense round icon="close" color="grey-5" />
+        <q-btn v-close-popup flat dense round icon="close" color="kobo-2" />
       </q-card-section>
 
       <q-card-section>
         <div
-          class="text-caption text-grey-6 ellipsis q-mb-sm"
+          class="text-caption text-kobo-3 ellipsis q-mb-sm"
           style="font-family: monospace;"
           :title="currentPath"
         >
@@ -26,7 +26,7 @@
         <q-list bordered separator class="rounded-borders" style="max-height: 320px; overflow-y: auto;">
           <q-item v-if="parent" v-ripple clickable @click="navigate(parent)">
             <q-item-section avatar>
-              <q-icon name="arrow_upward" color="grey-5" />
+              <q-icon name="arrow_upward" color="kobo-2" />
             </q-item-section>
             <q-item-section>{{ $t('folderPicker.parent') }}</q-item-section>
           </q-item>
@@ -43,17 +43,17 @@
             <q-item-section>{{ entry.name }}</q-item-section>
           </q-item>
           <q-item v-if="!loading && entries.length === 0">
-            <q-item-section class="text-grey-7">{{ $t('folderPicker.empty') }}</q-item-section>
+            <q-item-section class="text-kobo-3">{{ $t('folderPicker.empty') }}</q-item-section>
           </q-item>
         </q-list>
 
         <div v-if="loading" class="row justify-center q-mt-sm">
-          <q-spinner size="20px" color="grey-5" />
+          <q-spinner size="20px" color="kobo-2" />
         </div>
       </q-card-section>
 
       <q-card-actions align="right">
-        <q-btn v-close-popup flat :label="$t('common.cancel')" color="grey-5" />
+        <q-btn v-close-popup flat :label="$t('common.cancel')" color="kobo-2" />
         <q-btn
           flat
           :label="$t('folderPicker.select')"

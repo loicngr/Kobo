@@ -1,10 +1,10 @@
 <template>
   <span>
-    <span class="text-grey-3">
+    <span class="text-kobo-1">
       {{ isOther ? t('askUserQuestion.otherOption') : label }}
     </span>
-    <span v-if="isOther" class="text-grey-6 q-ml-xs">— {{ t('askUserQuestion.otherOptionHint') }}</span>
-    <span v-else-if="description" class="text-grey-6 q-ml-xs">— {{ description }}</span>
+    <span v-if="isOther" class="text-kobo-3 q-ml-xs">— {{ t('askUserQuestion.otherOptionHint') }}</span>
+    <span v-else-if="description" class="text-kobo-3 q-ml-xs">— {{ description }}</span>
     <q-tooltip v-if="preview" max-width="480px" class="aukq-option-preview">
       <pre class="q-ma-none text-body2" style="white-space: pre-wrap;">{{ preview }}</pre>
     </q-tooltip>

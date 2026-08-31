@@ -6,31 +6,31 @@
            de droite restent épinglés. Sans cela, sous ~900 px le bouton de
            fermeture sortait du cadre et il ne restait qu'Échap. -->
       <div class="diff-header__scroll row items-center no-wrap">
-      <q-icon name="difference" size="18px" color="indigo-4" class="q-mr-xs" />
-      <span class="text-body1 text-weight-medium text-grey-3">{{ $t('diff.title') }}</span>
+      <q-icon name="difference" size="18px" color="primary" class="q-mr-xs" />
+      <span class="text-body1 text-weight-medium text-kobo-1">{{ $t('diff.title') }}</span>
       <q-badge
         :label="`${files.length}`"
-        color="grey-8"
-        text-color="grey-4"
+        color="kobo-hover"
+        text-color="kobo-2"
         class="q-ml-sm"
         style="font-size: 10px;"
       />
-      <span v-if="sourceBranch" class="text-caption text-grey-6 q-ml-md" style="font-size: 11px;">
+      <span v-if="sourceBranch" class="text-caption text-kobo-3 q-ml-md" style="font-size: 11px;">
         <template v-if="diffMode === 'branch'">
-          <span class="text-grey-7">{{ sourceBranch }}</span>
-          <q-icon name="arrow_forward" size="11px" color="grey-8" class="q-mx-xs" />
+          <span class="text-kobo-3">{{ sourceBranch }}</span>
+          <q-icon name="arrow_forward" size="11px" color="kobo-3" class="q-mx-xs" />
           <span class="text-green-4">{{ workingBranch }}</span>
         </template>
         <template v-else>
-          <span class="text-grey-7">origin/{{ workingBranch }}</span>
-          <q-icon name="arrow_forward" size="11px" color="grey-8" class="q-mx-xs" />
+          <span class="text-kobo-3">origin/{{ workingBranch }}</span>
+          <q-icon name="arrow_forward" size="11px" color="kobo-3" class="q-mx-xs" />
           <span class="text-green-4">HEAD</span>
         </template>
       </span>
       <span
         v-if="selectedFile"
-        class="text-caption text-grey-5 q-ml-md ellipsis"
-        style="font-size: 11px; font-family: 'Roboto Mono', monospace; max-width: 400px;"
+        class="text-caption text-kobo-2 q-ml-md ellipsis"
+        style="font-size: 11px; font-family: var(--kobo-font-mono); max-width: 400px;"
       >
         {{ selectedFile }}
       </span>
@@ -45,7 +45,7 @@
         no-caps
         icon="save"
         :label="$t('diffViewer.save')"
-        color="indigo-4"
+        color="primary"
         :loading="savingFile"
         :disable="!canEdit"
         class="q-ml-sm"
@@ -66,8 +66,8 @@
         v-if="isCommitsMode"
         dense
         square
-        color="grey-9"
-        text-color="grey-4"
+        color="kobo-surface-2"
+        text-color="kobo-2"
         icon="difference"
         class="q-mr-sm"
       >
@@ -79,9 +79,9 @@
         dense
         no-caps
         size="sm"
-        toggle-color="indigo-8"
-        color="grey-9"
-        text-color="grey-5"
+        toggle-color="primary"
+        color="kobo-surface-2"
+        text-color="kobo-2"
         :options="[
           { label: $t('diff.scopeBranch'), value: 'branch' },
           { label: $t('diff.scopeUnpushed'), value: 'unpushed' },
@@ -93,9 +93,9 @@
         dense
         no-caps
         size="sm"
-        toggle-color="indigo-8"
-        color="grey-9"
-        text-color="grey-5"
+        toggle-color="primary"
+        color="kobo-surface-2"
+        text-color="kobo-2"
         :options="[
           { label: $t('diff.modeInspect'), value: 'inspect' },
           { label: $t('diff.modeReview'), value: 'review' },
@@ -107,9 +107,9 @@
         dense
         no-caps
         size="sm"
-        toggle-color="indigo-8"
-        color="grey-9"
-        text-color="grey-5"
+        toggle-color="primary"
+        color="kobo-surface-2"
+        text-color="kobo-2"
         :options="[
           { label: $t('diff.side'), value: 'side' },
           { label: $t('diff.inline'), value: 'inline' },
@@ -121,7 +121,7 @@
         dense
         flat
         size="sm"
-        :color="hideUnchanged ? 'indigo-4' : 'grey-5'"
+        :color="hideUnchanged ? 'primary' : 'kobo-2'"
         class="q-mr-sm"
         @click="hideUnchanged = !hideUnchanged"
       >
@@ -135,7 +135,7 @@
         dense
         flat
         size="sm"
-        :color="includeUntracked ? 'indigo-4' : 'grey-5'"
+        :color="includeUntracked ? 'primary' : 'kobo-2'"
         class="q-mr-sm"
         @click="includeUntracked = !includeUntracked"
       >
@@ -150,7 +150,7 @@
         dense
         flat
         size="sm"
-        :color="fileTreeOpen ? 'indigo-4' : 'grey-5'"
+        :color="fileTreeOpen ? 'primary' : 'kobo-2'"
         class="q-ml-sm q-mr-sm diff-header__pinned"
         @click="fileTreeOpen = !fileTreeOpen"
       >
@@ -163,7 +163,7 @@
         dense
         flat
         size="sm"
-        :color="criteriaRailOpen ? 'indigo-4' : 'grey-5'"
+        :color="criteriaRailOpen ? 'primary' : 'kobo-2'"
         class="q-mr-sm diff-header__pinned"
         @click="criteriaRailOpen = !criteriaRailOpen"
       >
@@ -176,7 +176,7 @@
         round
         dense
         icon="close"
-        color="grey-5"
+        color="kobo-2"
         size="sm"
         :disable="submittingReview"
         class="diff-header__pinned"
@@ -240,8 +240,8 @@
           <q-icon name="search" size="16px" />
         </template>
       </q-input>
-      <q-scroll-area class="diff-file-list q-pa-xs" style="width: 100%; border-right: 1px solid #2a2a4a;">
-        <q-spinner-dots v-if="loading" size="24px" color="grey-6" class="q-ma-md" />
+      <q-scroll-area class="diff-file-list q-pa-xs" style="width: 100%; border-right: 1px solid var(--kobo-border-subtle);">
+        <q-spinner-dots v-if="loading" size="24px" color="kobo-3" class="q-ma-md" />
         <template v-else>
         <!-- A file list that is empty because the request failed is NOT a
              branch without changes. The banner sits above whatever was
@@ -251,8 +251,8 @@
             <q-icon name="error" size="16px" color="negative" />
             <span class="text-negative">{{ $t('diff.fileListLoadFailed') }}</span>
           </div>
-          <div class="text-grey-6 q-mt-xs">{{ fileListError }}</div>
-          <div class="text-grey-7 q-mt-xs">{{ $t('diff.fileListLoadFailedHint') }}</div>
+          <div class="text-kobo-3 q-mt-xs">{{ fileListError }}</div>
+          <div class="text-kobo-3 q-mt-xs">{{ $t('diff.fileListLoadFailedHint') }}</div>
           <q-btn
             dense
             flat
@@ -263,10 +263,10 @@
             @click="retryFileList"
           />
         </div>
-        <div v-if="files.length === 0 && !fileListError" class="text-caption text-grey-8 q-pa-sm">
+        <div v-if="files.length === 0 && !fileListError" class="text-caption text-kobo-3 q-pa-sm">
           {{ $t('diff.noChanges') }}
         </div>
-        <div v-else-if="noFilterMatch" class="text-caption text-grey-8 q-pa-sm">{{ $t('diff.noFileMatch') }}</div>
+        <div v-else-if="noFilterMatch" class="text-caption text-kobo-3 q-pa-sm">{{ $t('diff.noFileMatch') }}</div>
         <q-tree
           v-else
           :nodes="tree"
@@ -290,23 +290,23 @@
         >
           <template #default-header="{ node }">
             <template v-if="node.isFolder">
-              <q-icon name="folder" size="14px" color="indigo-4" class="q-mr-xs" />
+              <q-icon name="folder" size="14px" color="primary" class="q-mr-xs" />
               <span
-                class="text-grey-4"
-                style="font-family: 'Roboto Mono', monospace; font-size: 11px;"
+                class="text-kobo-2"
+                style="font-family: var(--kobo-font-mono); font-size: 11px;"
               >{{ node.label }}</span>
               <q-badge
                 :label="node.children ? countLeaves(node.children) : 0"
-                color="grey-9"
-                text-color="grey-5"
+                color="kobo-surface-2"
+                text-color="kobo-2"
                 class="q-ml-xs"
                 style="font-size: 9px;"
               />
               <q-badge
                 v-if="reviewMode === 'review' && commentCountForFolder(folderPathOf(node)) > 0"
                 :label="String(commentCountForFolder(folderPathOf(node)))"
-                color="grey-7"
-                text-color="grey-3"
+                color="kobo-3"
+                text-color="kobo-1"
                 class="q-ml-xs"
                 style="font-size: 9px;"
               />
@@ -321,14 +321,14 @@
                 <q-tooltip>{{ node.file.status }}</q-tooltip>
               </q-icon>
               <span
-                class="text-grey-3 ellipsis"
-                style="font-family: 'Roboto Mono', monospace; font-size: 11px;"
+                class="text-kobo-1 ellipsis"
+                style="font-family: var(--kobo-font-mono); font-size: 11px;"
               >{{ node.label }}</span>
               <span v-if="dirty && node.file.path === selectedFile" class="dirty-dot">●</span>
               <q-badge
                 v-if="reviewMode === 'review' && (commentsByFile.get(node.file.path) ?? 0) > 0"
                 :label="String(commentsByFile.get(node.file.path))"
-                color="indigo-8"
+                color="primary"
                 text-color="white"
                 class="q-ml-xs"
                 style="font-size: 9px;"
@@ -368,7 +368,7 @@
       <!-- Monaco diff editor -->
       <div class="col column" style="min-width: 0; position: relative;">
         <div v-if="loadingFile" class="col column items-center justify-center">
-          <q-spinner-dots size="32px" color="indigo-4" />
+          <q-spinner-dots size="32px" color="primary" />
         </div>
         <!-- Explicit failure state — the editor was already disposed above, so
              there is nothing stale left behind under the new file's name.
@@ -382,13 +382,13 @@
         >
           <q-icon name="error" size="24px" color="negative" />
           <div class="text-negative">{{ $t('diff.fileLoadFailed') }}</div>
-          <div class="text-grey-6">{{ fileLoadError }}</div>
-          <div class="text-grey-7">{{ $t('diff.fileLoadFailedHint') }}</div>
+          <div class="text-kobo-3">{{ fileLoadError }}</div>
+          <div class="text-kobo-3">{{ $t('diff.fileLoadFailedHint') }}</div>
           <q-btn dense flat no-caps icon="refresh" :label="$t('common.retry')" @click="retryFileDiff" />
         </div>
         <div
           v-else-if="!selectedFile"
-          class="col column items-center justify-center text-grey-8 text-caption"
+          class="col column items-center justify-center text-kobo-3 text-caption"
         >
           {{ $t('diff.selectFile') }}
         </div>
@@ -449,18 +449,18 @@
       <q-card dark style="min-width: 420px; max-width: 560px;">
         <q-card-section>
           <div class="text-subtitle1">{{ $t('diffViewer.conflict.title') }}</div>
-          <div class="text-body2 text-grey-5 q-mt-sm">{{ $t('diffViewer.conflict.message') }}</div>
+          <div class="text-body2 text-kobo-2 q-mt-sm">{{ $t('diffViewer.conflict.message') }}</div>
         </q-card-section>
         <q-card-section class="q-pt-none">
-          <div class="text-caption text-grey-6">{{ $t('diffViewer.conflict.keepHint') }}</div>
-          <div class="text-caption text-grey-6 q-mt-xs">{{ $t('diffViewer.conflict.overwriteHint') }}</div>
+          <div class="text-caption text-kobo-3">{{ $t('diffViewer.conflict.keepHint') }}</div>
+          <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('diffViewer.conflict.overwriteHint') }}</div>
         </q-card-section>
         <q-card-actions align="right">
           <q-btn
             flat
             no-caps
             :label="$t('diffViewer.conflict.reload')"
-            color="grey-5"
+            color="kobo-2"
             :disable="overwriting"
             @click="conflictReload"
           />
@@ -468,7 +468,7 @@
             flat
             no-caps
             :label="$t('diffViewer.conflict.keep')"
-            color="indigo-4"
+            color="primary"
             :disable="overwriting"
             @click="conflictKeepMine"
           />
@@ -491,10 +491,10 @@
       <q-card dark style="min-width: 420px; max-width: 560px;">
         <q-card-section>
           <div class="text-subtitle1">{{ $t('diffViewer.closeConfirm.title') }}</div>
-          <div class="text-body2 text-grey-5 q-mt-sm">{{ $t('diffViewer.closeConfirm.message') }}</div>
+          <div class="text-body2 text-kobo-2 q-mt-sm">{{ $t('diffViewer.closeConfirm.message') }}</div>
         </q-card-section>
         <q-card-actions align="right">
-          <q-btn flat no-caps :label="$t('common.cancel')" color="grey-5" :disable="savingFile" v-close-popup />
+          <q-btn flat no-caps :label="$t('common.cancel')" color="kobo-2" :disable="savingFile" v-close-popup />
           <q-btn
             flat
             no-caps
@@ -507,7 +507,7 @@
             unelevated
             no-caps
             :label="$t('diffViewer.closeConfirm.saveAndClose')"
-            color="indigo-6"
+            color="primary"
             :loading="savingFile"
             @click="closeSaving"
           />
@@ -1243,14 +1243,22 @@ async function loadFileDiff(filePath: string) {
       self.MonacoEnvironment = { getWorker: () => new EditorWorker() }
       monaco = await import('monaco-editor')
       disableWorkerBackedLanguageServices(monaco)
+      // Monaco's theme service parses each colour with `Color.fromHex` and
+      // rejects `var(--...)` references, so the design tokens are resolved to
+      // their literal hex value here at runtime instead of hardcoding hex in
+      // source.
+      const rootStyle = getComputedStyle(document.documentElement)
+      const koboBg = rootStyle.getPropertyValue('--kobo-bg').trim()
+      const koboSuccess = rootStyle.getPropertyValue('--kobo-success').trim()
+      const koboDanger = rootStyle.getPropertyValue('--kobo-danger').trim()
       monaco.editor.defineTheme('kobo-dark', {
         base: 'vs-dark',
         inherit: true,
         rules: [],
         colors: {
-          'editor.background': '#1a1a2e',
-          'diffEditor.insertedTextBackground': '#22c55e20',
-          'diffEditor.removedTextBackground': '#ef444420',
+          'editor.background': koboBg,
+          'diffEditor.insertedTextBackground': `${koboSuccess}20`,
+          'diffEditor.removedTextBackground': `${koboDanger}20`,
         },
       })
     }
@@ -1676,8 +1684,8 @@ watch(selectedFile, async (filePath, previousPath) => {
         message: t('diffViewer.unsavedChanges.message'),
         dark: true,
         persistent: true,
-        ok: { flat: true, label: t('diffViewer.unsavedChanges.save'), color: 'indigo-4' },
-        cancel: { flat: true, label: t('diffViewer.unsavedChanges.cancel'), color: 'grey-5' },
+        ok: { flat: true, label: t('diffViewer.unsavedChanges.save'), color: 'primary' },
+        cancel: { flat: true, label: t('diffViewer.unsavedChanges.cancel'), color: 'kobo-2' },
       })
         .onOk(() => resolve('save'))
         .onCancel(() => resolve('cancel'))
@@ -1763,18 +1771,18 @@ watch(includeUntracked, async (enabled) => {
 function statusColor(status: DiffFile['status']): string {
   switch (status) {
     case 'added':
-      return '#4ade80'
+      return 'var(--kobo-success)'
     case 'untracked':
       // Same green family as `added` but lighter, to hint that the file is
       // brand-new and not yet `git add`-ed (only visible when the user
       // toggled "show untracked files" ON).
-      return '#86efac'
+      return 'var(--kobo-success)'
     case 'deleted':
-      return '#f87171'
+      return 'var(--kobo-danger)'
     case 'renamed':
-      return '#60a5fa'
+      return 'var(--kobo-accent)'
     default:
-      return '#f59e0b'
+      return 'var(--kobo-warning)'
   }
 }
 
@@ -1818,7 +1826,7 @@ onUnmounted(() => {
 <style lang="scss" scoped>
 // Match the main app color scheme from MainLayout / WorkspaceList
 .diff-viewer {
-  background-color: #1a1a2e;
+  background-color: var(--kobo-bg);
 }
 
 /* L'en-tête ne passe pas à la ligne (les contrôles perdraient leur
@@ -1870,8 +1878,8 @@ onUnmounted(() => {
 // Same as .wp-header in WorkspacePage
 .diff-header {
   min-height: 48px;
-  background-color: #16162a;
-  border-bottom: 1px solid #2a2a4a;
+  background-color: var(--kobo-bg-deep);
+  border-bottom: 1px solid var(--kobo-border-subtle);
   // `.diff-header` est un item flex de la colonne `.diff-viewer` : sans
   // width: 100% + min-width: 0, son contenu (largement plus large que
   // l'écran sous ~550 px) le fait déborder de la page entière au lieu de
@@ -1903,13 +1911,13 @@ onUnmounted(() => {
 
   &:hover,
   &:active {
-    background-color: rgba(108, 99, 255, 0.5);
+    background-color: rgba(102, 95, 221, 0.5);
   }
 }
 // Same as .left-sidebar in MainLayout
 .diff-file-list {
-  background-color: #16162a;
-  border-color: #2a2a4a;
+  background-color: var(--kobo-bg-deep);
+  border-color: var(--kobo-border-subtle);
   flex: 1;
   min-height: 0;
 }
@@ -1927,8 +1935,8 @@ onUnmounted(() => {
   // `!important` keeps the selected style winning against Quasar's `q-hoverable`
   // pseudo-class hover background.
   :deep(.q-tree__node-header.q-tree__node--selected) {
-    background-color: rgba(108, 99, 255, 0.18) !important;
-    border-left: 2px solid #6c63ff !important;
+    background-color: rgba(102, 95, 221, 0.18) !important;
+    border-left: 2px solid var(--kobo-accent) !important;
   }
   // Hover style applied only on non-selected rows so the selected background
   // stays clean while the cursor browses other files.
@@ -1954,7 +1962,7 @@ onUnmounted(() => {
 }
 :deep(.review-mode-active .line-numbers:hover) {
   background: rgba(99, 102, 241, 0.25);
-  color: #c7d2fe;
+  color: var(--kobo-text-2);
 }
 /* Review overlays are rendered OUTSIDE Monaco's DOM (in our editorWrapperRef
    container) and absolutely positioned to align with the corresponding
@@ -1975,7 +1983,7 @@ onUnmounted(() => {
 }
 
 .dirty-dot {
-  color: var(--kobo-accent, #6c63ff);
+  color: var(--kobo-warning);
   margin-left: 4px;
   font-size: 10px;
 }

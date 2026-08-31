@@ -10,7 +10,7 @@
       <span class="turn-badge" :class="header.badgeClass">{{ header.label }}</span>
       <span v-if="timeLabel" class="turn-time">{{ timeLabel }}</span>
       <template v-if="showUpdatedTime">
-        <q-icon name="arrow_forward" size="10px" color="grey-7" class="turn-time-arrow" />
+        <q-icon name="arrow_forward" size="10px" color="kobo-3" class="turn-time-arrow" />
         <span class="turn-time turn-time-updated">
           {{ updatedTimeLabel }}
           <q-tooltip>{{ t('chat.lastUpdatedAt', { time: updatedTimeLabel }) }}</q-tooltip>
@@ -41,7 +41,7 @@
         dense
         size="xs"
         icon="arrow_upward"
-        color="grey-6"
+        color="kobo-3"
         class="turn-scroll-top-btn"
         @click="scrollToTop"
       >
@@ -101,13 +101,13 @@ interface HeaderMeta {
 const header = computed<HeaderMeta>(() => {
   switch (props.turn.speaker) {
     case 'user':
-      return { label: t('chat.you'), accent: '#ce93d8', badgeClass: 'turn-badge-user' }
+      return { label: t('chat.you'), accent: 'var(--kobo-text)', badgeClass: 'turn-badge-user' }
     case 'agent':
-      return { label: t('chat.agent'), accent: '#7986cb', badgeClass: 'turn-badge-agent' }
+      return { label: t('chat.agent'), accent: 'var(--kobo-text-2)', badgeClass: 'turn-badge-agent' }
     case 'system-prompt':
-      return { label: t('chat.systemPrompt'), accent: '#757575', badgeClass: 'turn-badge-system' }
+      return { label: t('chat.systemPrompt'), accent: 'var(--kobo-text-3)', badgeClass: 'turn-badge-system' }
     case 'session':
-      return { label: t('chat.session'), accent: '#616161', badgeClass: 'turn-badge-session' }
+      return { label: t('chat.session'), accent: 'var(--kobo-text-3)', badgeClass: 'turn-badge-session' }
     case 'script': {
       // The speaker is the generic 'script'; the precise label (cleanup /
       // archive / setup) comes from the first item's activity-feed sender.
@@ -119,7 +119,7 @@ const header = computed<HeaderMeta>(() => {
           : sender === 'setup'
             ? t('chat.setupScript')
             : t('chat.cleanupScript')
-      return { label, accent: '#4db6ac', badgeClass: 'turn-badge-script' }
+      return { label, accent: 'var(--kobo-success)', badgeClass: 'turn-badge-script' }
     }
   }
 })
@@ -197,7 +197,7 @@ const actionCount = computed(() => props.turn.items.filter((i) => i.type === 'to
   background: rgba(255, 255, 255, 0.03);
   border-bottom: 1px solid rgba(255, 255, 255, 0.05);
   font-size: 11px;
-  color: #888;
+  color: var(--kobo-text-3);
 }
 .turn-badge {
   font-size: 11px;
@@ -208,28 +208,28 @@ const actionCount = computed(() => props.turn.items.filter((i) => i.type === 'to
 }
 .turn-badge-user {
   background: rgba(206, 147, 216, 0.15);
-  color: #ce93d8;
+  color: var(--kobo-text);
 }
 .turn-badge-agent {
   background: rgba(121, 134, 203, 0.15);
-  color: #7986cb;
+  color: var(--kobo-text-2);
 }
 .turn-badge-system {
   background: rgba(117, 117, 117, 0.2);
-  color: #bdbdbd;
+  color: var(--kobo-text-2);
   font-style: italic;
 }
 .turn-badge-session {
   background: rgba(97, 97, 97, 0.2);
-  color: #9e9e9e;
+  color: var(--kobo-text-3);
 }
 .turn-badge-script {
   background: rgba(77, 182, 172, 0.15);
-  color: #4db6ac;
+  color: var(--kobo-success);
 }
 .turn-time {
-  color: #666;
-  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  color: var(--kobo-text-disabled);
+  font-family: var(--kobo-font-mono);
   font-size: 11px;
 }
 .turn-time-arrow {
@@ -237,10 +237,10 @@ const actionCount = computed(() => props.turn.items.filter((i) => i.type === 'to
   opacity: 0.7;
 }
 .turn-time-updated {
-  color: #8891a3;
+  color: var(--kobo-text-3);
 }
 .turn-actions {
-  color: #777;
+  color: var(--kobo-text-3);
   font-size: 11px;
 }
 .turn-body {

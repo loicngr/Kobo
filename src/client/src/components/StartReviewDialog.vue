@@ -1,9 +1,9 @@
 <template>
   <q-dialog :model-value="modelValue" @update:model-value="emit('update:modelValue', $event)">
-    <q-card class="text-grey-3" style="min-width: 480px; background: #1e1e3a;">
+    <q-card class="text-kobo-1" style="min-width: 480px; background: var(--kobo-surface);">
       <q-card-section>
         <div class="text-h6">{{ $t('review.title') }}</div>
-        <div class="text-body2 text-grey-5 q-mt-xs">{{ $t('review.subtitle') }}</div>
+        <div class="text-body2 text-kobo-2 q-mt-xs">{{ $t('review.subtitle') }}</div>
       </q-card-section>
 
       <q-separator dark />
@@ -17,17 +17,17 @@
           :rows="4"
           outlined
           dark
-          color="indigo-4"
+          color="primary"
         />
       </q-card-section>
 
       <q-card-section class="q-pt-none">
-        <q-toggle v-model="newSession" :label="$t('review.newSession')" color="indigo-4" dark />
-        <div class="text-caption text-grey-6 q-mt-xs">{{ $t('review.newSessionHint') }}</div>
+        <q-toggle v-model="newSession" :label="$t('review.newSession')" color="primary" dark />
+        <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('review.newSessionHint') }}</div>
       </q-card-section>
 
       <q-card-actions align="right" class="q-pa-md">
-        <q-btn flat no-caps :label="$t('review.cancel')" color="grey-5" @click="cancel" />
+        <q-btn flat no-caps :label="$t('review.cancel')" color="kobo-2" @click="cancel" />
         <q-btn
           no-caps
           color="primary"

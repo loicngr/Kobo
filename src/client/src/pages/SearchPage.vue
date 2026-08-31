@@ -29,11 +29,11 @@
           :label="$t('search.includeArchived')"
           dense
           dark
-          color="indigo-4"
+          color="primary"
           size="sm"
         />
         <q-space />
-        <span v-if="store.results.length > 0" class="text-caption text-grey-6">
+        <span v-if="store.results.length > 0" class="text-caption text-kobo-3">
           {{ $t('search.resultCount', { n: store.results.length }) }}
         </span>
       </div>
@@ -41,7 +41,7 @@
 
     <q-separator dark class="q-my-md" />
 
-    <div v-if="store.loading" class="text-grey-6 text-caption">{{ $t('search.loading') }}</div>
+    <div v-if="store.loading" class="text-kobo-3 text-caption">{{ $t('search.loading') }}</div>
 
     <div v-else-if="store.error" class="text-negative text-caption">
       {{ $t('search.error', { message: store.error }) }}
@@ -49,7 +49,7 @@
 
     <div
       v-else-if="store.query.trim().length > 0 && store.results.length === 0"
-      class="text-grey-6 text-caption"
+      class="text-kobo-3 text-caption"
     >
       {{ $t('search.noResults') }}
     </div>
@@ -62,17 +62,17 @@
         @click="openResult(r)"
       >
         <div class="row items-center q-mb-xs text-caption">
-          <span class="text-grey-5 text-weight-medium">{{ r.workspaceName }}</span>
-          <q-badge v-if="r.archived" color="grey-7" class="q-ml-xs" :label="$t('common.archive')" />
+          <span class="text-kobo-2 text-weight-medium">{{ r.workspaceName }}</span>
+          <q-badge v-if="r.archived" color="kobo-3" class="q-ml-xs" :label="$t('common.archive')" />
           <q-space />
           <q-badge
-            :color="r.type === 'user:message' ? 'blue-grey-7' : 'indigo-7'"
+            :color="r.type === 'user:message' ? 'blue-grey-7' : 'primary'"
             class="q-mr-sm"
             :label="typeLabel(r.type)"
           />
-          <span class="text-grey-6">{{ timeAgo(r.timestamp) }}</span>
+          <span class="text-kobo-3">{{ timeAgo(r.timestamp) }}</span>
         </div>
-        <div class="search-snippet text-body2 text-grey-4">{{ r.snippet }}</div>
+        <div class="search-snippet text-body2 text-kobo-2">{{ r.snippet }}</div>
       </div>
     </div>
   </q-page>
@@ -135,13 +135,13 @@ function typeLabel(type: string): string {
   margin: 0 auto;
 }
 .search-result {
-  background-color: #1e1e38;
-  border: 1px solid #2a2a4a;
+  background-color: var(--kobo-surface-2);
+  border: 1px solid var(--kobo-border-subtle);
   border-radius: 6px;
   transition: border-color 120ms;
 
   &:hover {
-    border-color: #6c63ff;
+    border-color: var(--kobo-accent);
   }
 }
 .search-snippet {

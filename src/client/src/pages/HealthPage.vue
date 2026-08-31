@@ -8,7 +8,7 @@
       <q-btn flat dense icon="refresh" :loading="loading" :label="$t('common.refresh')" @click="refresh" />
     </div>
 
-    <div v-if="!report && loading" class="text-grey-6 text-center q-pa-lg">{{ $t('common.loading') }}</div>
+    <div v-if="!report && loading" class="text-kobo-3 text-center q-pa-lg">{{ $t('common.loading') }}</div>
 
     <div v-else-if="report" class="column q-gutter-md">
       <!-- Kōbō home -->
@@ -17,19 +17,19 @@
           <div class="text-subtitle2 q-mb-sm">{{ $t('health.envTitle') }}</div>
           <div class="row q-col-gutter-md">
             <div class="col-12 col-sm-auto">
-              <div class="text-caption text-grey-6">{{ $t('health.version') }}</div>
+              <div class="text-caption text-kobo-3">{{ $t('health.version') }}</div>
               <div class="text-body2" style="font-family: var(--kobo-font-mono, monospace);">
                 {{ report.version }}
               </div>
             </div>
             <div class="col-12 col-sm-auto">
-              <div class="text-caption text-grey-6">{{ $t('health.settingsSchemaVersion') }}</div>
+              <div class="text-caption text-kobo-3">{{ $t('health.settingsSchemaVersion') }}</div>
               <div class="text-body2" style="font-family: var(--kobo-font-mono, monospace);">
                 {{ report.settings.schemaVersion }}
               </div>
             </div>
             <div class="col-12 col-sm">
-              <div class="text-caption text-grey-6">{{ $t('health.koboHome') }}</div>
+              <div class="text-caption text-kobo-3">{{ $t('health.koboHome') }}</div>
               <div class="text-body2 health-path">{{ report.koboHome }}</div>
             </div>
           </div>
@@ -46,15 +46,15 @@
           </div>
           <div class="row q-col-gutter-md q-mt-xs">
             <div class="col-12 col-sm">
-              <div class="text-caption text-grey-6">{{ $t('health.dbPath') }}</div>
+              <div class="text-caption text-kobo-3">{{ $t('health.dbPath') }}</div>
               <div class="text-body2 health-path">{{ report.db.path }}</div>
             </div>
             <div class="col-12 col-sm-auto">
-              <div class="text-caption text-grey-6">{{ $t('health.dbSize') }}</div>
+              <div class="text-caption text-kobo-3">{{ $t('health.dbSize') }}</div>
               <div class="text-body2">{{ dbSizeHuman }}</div>
             </div>
             <div class="col-12 col-sm-auto">
-              <div class="text-caption text-grey-6">{{ $t('health.schemaVersion') }}</div>
+              <div class="text-caption text-kobo-3">{{ $t('health.schemaVersion') }}</div>
               <div class="text-body2">{{ report.db.schemaVersion }} / {{ report.db.currentSchemaVersion }}</div>
             </div>
           </div>
@@ -74,7 +74,7 @@
               />
               <span class="q-ml-sm text-body2">{{ $t('health.claudeCliTitle') }}</span>
               <q-space />
-              <span v-if="report.claudeCli.available" class="text-caption text-grey-5">
+              <span v-if="report.claudeCli.available" class="text-caption text-kobo-2">
                 {{ report.claudeCli.version }}
               </span>
               <span v-else class="text-caption text-negative">
@@ -89,7 +89,7 @@
               />
               <span class="q-ml-sm text-body2">{{ $t('health.codexCliTitle') }}</span>
               <q-space />
-              <span v-if="report.codexCli.available" class="text-caption text-grey-5">
+              <span v-if="report.codexCli.available" class="text-caption text-kobo-2">
                 {{ report.codexCli.version }}
               </span>
               <span v-else class="text-caption text-negative">
@@ -106,11 +106,11 @@
               <q-space />
               <span
                 v-if="report.forgeCli.gh.available || report.forgeCli.glab.available"
-                class="text-caption text-grey-5"
+                class="text-caption text-kobo-2"
               >
                 {{ [report.forgeCli.gh.version, report.forgeCli.glab.version].filter(Boolean).join(' · ') }}
               </span>
-              <span v-else class="text-caption text-grey-5">
+              <span v-else class="text-caption text-kobo-2">
                 {{ $t('health.forgeCliMissing') }}
               </span>
             </div>
@@ -129,7 +129,7 @@
               :color="statusColor(report.workspaces.worktreesMissing.length === 0)"
             />
           </div>
-          <div class="text-caption text-grey-6 q-mt-xs">
+          <div class="text-caption text-kobo-3 q-mt-xs">
             {{ $t('health.workspacesCount', { total: report.workspaces.total, archived: report.workspaces.archived }) }}
           </div>
           <div v-if="report.workspaces.worktreesMissing.length > 0" class="q-mt-sm">
@@ -140,7 +140,7 @@
               <q-item v-for="w in report.workspaces.worktreesMissing" :key="w.workspaceId">
                 <q-item-section>
                   <div class="text-body2">{{ w.name }}</div>
-                  <div class="text-caption text-grey-6 health-path">{{ w.path }}</div>
+                  <div class="text-caption text-kobo-3 health-path">{{ w.path }}</div>
                 </q-item-section>
               </q-item>
             </q-list>
@@ -159,14 +159,14 @@
               :color="statusColor(report.agentSessions.orphaned === 0)"
             />
           </div>
-          <div class="text-caption q-mt-xs" :class="report.agentSessions.orphaned > 0 ? 'text-negative' : 'text-grey-6'">
+          <div class="text-caption q-mt-xs" :class="report.agentSessions.orphaned > 0 ? 'text-negative' : 'text-kobo-3'">
             {{ $t('health.sessionsOrphaned', { n: report.agentSessions.orphaned }) }}
           </div>
         </q-card-section>
       </q-card>
 
       <!-- Active state — quota backoffs, wakeups, auto-loops, sessions, dev servers -->
-      <div class="text-subtitle1 q-mt-md q-mb-xs text-grey-5">{{ $t('health.activeTitle') }}</div>
+      <div class="text-subtitle1 q-mt-md q-mb-xs text-kobo-2">{{ $t('health.activeTitle') }}</div>
 
       <q-card dark flat bordered>
         <q-card-section>
@@ -174,9 +174,9 @@
             <q-icon name="hourglass_top" size="sm" color="amber-6" class="q-mr-sm" />
             <div class="text-subtitle2">{{ $t('health.activeQuotaBackoffs') }}</div>
             <q-space />
-            <q-badge :label="report.active.quotaBackoffs.length" color="grey-8" text-color="grey-3" />
+            <q-badge :label="report.active.quotaBackoffs.length" color="kobo-hover" text-color="kobo-1" />
           </div>
-          <div v-if="report.active.quotaBackoffs.length === 0" class="text-caption text-grey-7 q-mt-xs">
+          <div v-if="report.active.quotaBackoffs.length === 0" class="text-caption text-kobo-3 q-mt-xs">
             {{ $t('health.noneActive') }}
           </div>
           <q-list v-else dense dark class="q-mt-xs">
@@ -188,7 +188,7 @@
             >
               <q-item-section>
                 <div class="text-body2">{{ row.name }}</div>
-                <div class="text-caption text-grey-6">
+                <div class="text-caption text-kobo-3">
                   {{ $t('health.quotaResumeAt', { time: formatTime(row.targetAt) }) }}
                   · {{ row.source }} · retry #{{ row.retryCount }}
                 </div>
@@ -201,12 +201,12 @@
       <q-card dark flat bordered>
         <q-card-section>
           <div class="row items-center">
-            <q-icon name="schedule" size="sm" color="indigo-4" class="q-mr-sm" />
+            <q-icon name="schedule" size="sm" color="primary" class="q-mr-sm" />
             <div class="text-subtitle2">{{ $t('health.activeWakeups') }}</div>
             <q-space />
-            <q-badge :label="report.active.pendingWakeups.length" color="grey-8" text-color="grey-3" />
+            <q-badge :label="report.active.pendingWakeups.length" color="kobo-hover" text-color="kobo-1" />
           </div>
-          <div v-if="report.active.pendingWakeups.length === 0" class="text-caption text-grey-7 q-mt-xs">
+          <div v-if="report.active.pendingWakeups.length === 0" class="text-caption text-kobo-3 q-mt-xs">
             {{ $t('health.noneActive') }}
           </div>
           <q-list v-else dense dark class="q-mt-xs">
@@ -218,7 +218,7 @@
             >
               <q-item-section>
                 <div class="text-body2">{{ row.name }}</div>
-                <div class="text-caption text-grey-6">
+                <div class="text-caption text-kobo-3">
                   {{ $t('health.wakeupAt', { time: formatTime(row.targetAt) }) }}
                   <span v-if="row.reason"> · {{ row.reason }}</span>
                 </div>
@@ -234,9 +234,9 @@
             <q-icon name="autorenew" size="sm" color="amber-7" class="q-mr-sm" />
             <div class="text-subtitle2">{{ $t('health.activeAutoLoop') }}</div>
             <q-space />
-            <q-badge :label="report.active.autoLoopActive.length" color="grey-8" text-color="grey-3" />
+            <q-badge :label="report.active.autoLoopActive.length" color="kobo-hover" text-color="kobo-1" />
           </div>
-          <div v-if="report.active.autoLoopActive.length === 0" class="text-caption text-grey-7 q-mt-xs">
+          <div v-if="report.active.autoLoopActive.length === 0" class="text-caption text-kobo-3 q-mt-xs">
             {{ $t('health.noneActive') }}
           </div>
           <q-list v-else dense dark class="q-mt-xs">
@@ -248,7 +248,7 @@
             >
               <q-item-section>
                 <div class="text-body2">{{ row.name }}</div>
-                <div class="text-caption text-grey-6">
+                <div class="text-caption text-kobo-3">
                   {{ row.ready ? $t('health.autoLoopReady') : $t('health.autoLoopGrooming') }}
                 </div>
               </q-item-section>
@@ -263,9 +263,9 @@
             <q-icon name="play_arrow" size="sm" color="green-5" class="q-mr-sm" />
             <div class="text-subtitle2">{{ $t('health.activeAgentSessions') }}</div>
             <q-space />
-            <q-badge :label="report.active.agentSessionsAlive.length" color="grey-8" text-color="grey-3" />
+            <q-badge :label="report.active.agentSessionsAlive.length" color="kobo-hover" text-color="kobo-1" />
           </div>
-          <div v-if="report.active.agentSessionsAlive.length === 0" class="text-caption text-grey-7 q-mt-xs">
+          <div v-if="report.active.agentSessionsAlive.length === 0" class="text-caption text-kobo-3 q-mt-xs">
             {{ $t('health.noneActive') }}
           </div>
           <q-list v-else dense dark class="q-mt-xs">
@@ -277,7 +277,7 @@
             >
               <q-item-section>
                 <div class="text-body2">{{ row.workspaceName }}</div>
-                <div class="text-caption text-grey-6">
+                <div class="text-caption text-kobo-3">
                   pid {{ row.pid }} · {{ $t('health.startedAgo', { time: formatRelative(row.startedAt) }) }}
                 </div>
               </q-item-section>
@@ -292,9 +292,9 @@
             <q-icon name="dns" size="sm" color="cyan-5" class="q-mr-sm" />
             <div class="text-subtitle2">{{ $t('health.activeDevServers') }}</div>
             <q-space />
-            <q-badge :label="report.active.devServersRunning.length" color="grey-8" text-color="grey-3" />
+            <q-badge :label="report.active.devServersRunning.length" color="kobo-hover" text-color="kobo-1" />
           </div>
-          <div v-if="report.active.devServersRunning.length === 0" class="text-caption text-grey-7 q-mt-xs">
+          <div v-if="report.active.devServersRunning.length === 0" class="text-caption text-kobo-3 q-mt-xs">
             {{ $t('health.noneActive') }}
           </div>
           <q-list v-else dense dark class="q-mt-xs">
@@ -320,21 +320,21 @@
             <div class="row items-center">
               <q-icon :name="statusIcon(report.integrations.notion.enabled && report.integrations.notion.configured)" :color="statusColor(report.integrations.notion.enabled && report.integrations.notion.configured)" size="sm" />
               <span class="q-ml-sm text-body2">Notion</span>
-              <span class="q-ml-sm text-caption text-grey-6">
+              <span class="q-ml-sm text-caption text-kobo-3">
                 {{ !report.integrations.notion.enabled ? $t('health.integrationDisabled') : report.integrations.notion.configured ? $t('health.integrationConfigured') : $t('health.integrationMissing') }}
               </span>
             </div>
             <div class="row items-center">
               <q-icon :name="statusIcon(report.integrations.sentry.enabled && report.integrations.sentry.configured)" :color="statusColor(report.integrations.sentry.enabled && report.integrations.sentry.configured)" size="sm" />
               <span class="q-ml-sm text-body2">Sentry</span>
-              <span class="q-ml-sm text-caption text-grey-6">
+              <span class="q-ml-sm text-caption text-kobo-3">
                 {{ !report.integrations.sentry.enabled ? $t('health.integrationDisabled') : report.integrations.sentry.configured ? $t('health.integrationConfigured') : $t('health.integrationMissing') }}
               </span>
             </div>
             <div class="row items-center">
               <q-icon :name="statusIcon(report.integrations.editor.configured)" :color="statusColor(report.integrations.editor.configured)" size="sm" />
               <span class="q-ml-sm text-body2">Editor</span>
-              <span class="q-ml-sm text-caption text-grey-6">
+              <span class="q-ml-sm text-caption text-kobo-3">
                 {{ report.integrations.editor.configured ? $t('health.integrationConfigured') : $t('health.integrationMissing') }}
               </span>
             </div>

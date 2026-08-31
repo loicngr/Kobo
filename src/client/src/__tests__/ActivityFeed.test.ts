@@ -355,6 +355,99 @@ describe('ActivityFeed.vue', () => {
     expect(callsFromOneWalk).toBeLessThanOrEqual(15)
   })
 
+  it('announces settled messages and tool calls in a dedicated live region', async () => {
+    const workspaceStore = useWorkspaceStore()
+    const streamStore = useAgentStreamStore()
+    workspaceStore.selectedWorkspaceId = 'ws-1'
+    workspaceStore.selectedSessionId = null
+    // Busy status keeps the fold from force-closing the streaming text item
+    // (closeStaleStreamingText only fires when the session isn't active) —
+    // without it the "must not announce partial fragments" case below would
+    // be vacuously true because the fragment gets closed immediately.
+    workspaceStore.workspaces = [
+      {
+        id: 'ws-1',
+        name: 'Test',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        status: 'executing',
+        notionUrl: null,
+        sentryUrl: null,
+        notionPageId: null,
+        model: 'claude-opus-4-5',
+        engine: 'claude-code',
+        reasoningEffort: 'normal',
+        agentPermissionMode: 'bypass',
+        devServerStatus: 'stopped',
+        hasUnread: false,
+        archivedAt: null,
+        favoritedAt: null,
+        prWatchDisabledAt: null,
+        tags: [],
+        description: null,
+        agentDescription: null,
+        initialPrompt: null,
+        prChangesDismissedAt: null,
+        prCiFailureDismissedAt: null,
+        worktreePurgedAt: null,
+        worktreePurgeRestoreData: null,
+        autoLoop: false,
+        autoLoopReady: false,
+        noProgressStreak: 0,
+        worktreePath: '/tmp/project/.worktrees/feature/test',
+        worktreeOwned: true,
+        createdAt: '2026-01-01T00:00:00Z',
+        updatedAt: '2026-01-01T00:00:00Z',
+      },
+    ]
+
+    streamStore.reset(
+      'ws-1',
+      // A streaming fragment must NOT be announced: Codex emits 50-200 of
+      // them per message and each one would be read out.
+      [{ kind: 'message:text', messageId: 'm1', text: 'partial', streaming: true }],
+      ['2026-01-01T00:00:01Z'],
+      { hasMoreOlder: false, sessionIds: [null], eventIds: ['e1'] },
+    )
+
+    const wrapper = mount(ActivityFeed, {
+      props: { workspaceId: 'ws-1' },
+      global: { plugins: [i18n], stubs: globalStubs },
+    })
+    await vi.advanceTimersByTimeAsync(250)
+    await nextTick()
+
+    const region = wrapper.find('[data-testid="activity-live-region"]')
+    expect(region.exists()).toBe(true)
+    expect(region.attributes('aria-live')).toBe('polite')
+    expect(region.attributes('role')).toBe('log')
+    expect(region.text()).toBe('')
+
+    // The store has no batched `append`; replay the accumulated stream via
+    // `reset` instead — behaviourally identical for the fold.
+    streamStore.reset(
+      'ws-1',
+      [{ kind: 'message:text', messageId: 'm1', text: 'partial then done', streaming: false }],
+      ['2026-01-01T00:00:02Z'],
+      { hasMoreOlder: false, sessionIds: [null], eventIds: ['e2'] },
+    )
+    await nextTick()
+    expect(wrapper.find('[data-testid="activity-live-region"]').text()).toContain('partial then done')
+
+    streamStore.reset(
+      'ws-1',
+      [
+        { kind: 'message:text', messageId: 'm1', text: 'partial then done', streaming: false },
+        { kind: 'tool:call', messageId: 'm1', toolCallId: 't1', name: 'Bash', input: {} },
+      ],
+      ['2026-01-01T00:00:02Z', '2026-01-01T00:00:03Z'],
+      { hasMoreOlder: false, sessionIds: [null, null], eventIds: ['e2', 'e3'] },
+    )
+    await nextTick()
+    expect(wrapper.find('[data-testid="activity-live-region"]').text()).toContain('Bash')
+  })
+
   it('renders its turns through the virtual list', async () => {
     const workspaceStore = useWorkspaceStore()
     const streamStore = useAgentStreamStore()

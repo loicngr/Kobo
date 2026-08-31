@@ -93,10 +93,10 @@
                 :label="$t('settings.flattenWorkspaceList')"
                 dark
                 dense
-                color="indigo-4"
-                class="text-grey-5 text-caption"
+                color="primary"
+                class="text-kobo-2 text-caption"
               />
-              <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.flattenWorkspaceListHint') }}</div>
+              <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('settings.flattenWorkspaceListHint') }}</div>
             </div>
 
             <!-- Skill suite -->
@@ -118,18 +118,18 @@
                   { label: $t('settings.skillSuite.custom'),              value: 'custom' },
                 ]"
                 type="radio"
-                color="indigo-4"
+                color="primary"
                 dense
                 dark
                 inline
               />
-              <div class="text-caption text-grey-6 q-mt-xs">
+              <div class="text-caption text-kobo-3 q-mt-xs">
                 {{ $t(skillSuiteHintKey) }}
               </div>
 
               <q-btn
                 flat dense no-caps size="sm"
-                color="grey-5"
+                color="kobo-2"
                 icon="restart_alt"
                 :label="$t('settings.skillSuite.reloadDefaults')"
                 :disable="globalSkillSuite !== 'custom'"
@@ -141,7 +141,7 @@
             <div v-if="activeTab === 'skills' && globalSkillSuite === 'custom'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.skillSuite.customPrompts') }}</div>
 
-              <div class="text-caption text-grey-6 q-mb-xs q-mt-sm">{{ $t('settings.skillSuite.reviewTemplate') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-xs q-mt-sm">{{ $t('settings.skillSuite.reviewTemplate') }}</div>
               <q-input
                 v-model="globalCustomReviewTemplate"
                 type="textarea"
@@ -150,7 +150,7 @@
                 class="settings-input mono-textarea"
               />
 
-              <div class="text-caption text-grey-6 q-mt-md q-mb-xs">{{ $t('settings.skillSuite.autoLoopReviewGate') }}</div>
+              <div class="text-caption text-kobo-3 q-mt-md q-mb-xs">{{ $t('settings.skillSuite.autoLoopReviewGate') }}</div>
               <q-input
                 v-model="globalCustomAutoLoopReviewGate"
                 type="textarea"
@@ -159,7 +159,7 @@
                 class="settings-input mono-textarea"
               />
 
-              <div class="text-caption text-grey-6 q-mt-md q-mb-xs">{{ $t('settings.skillSuite.autoLoopGroomingIntro') }}</div>
+              <div class="text-caption text-kobo-3 q-mt-md q-mb-xs">{{ $t('settings.skillSuite.autoLoopGroomingIntro') }}</div>
               <q-input
                 v-model="globalCustomAutoLoopGroomingIntro"
                 type="textarea"
@@ -168,7 +168,7 @@
                 class="settings-input mono-textarea"
               />
 
-              <div class="text-caption text-grey-6 q-mt-md q-mb-xs">{{ $t('settings.skillSuite.qaTemplate') }}</div>
+              <div class="text-caption text-kobo-3 q-mt-md q-mb-xs">{{ $t('settings.skillSuite.qaTemplate') }}</div>
               <q-input
                 v-model="globalCustomQaPromptTemplate"
                 type="textarea"
@@ -177,7 +177,7 @@
                 class="settings-input mono-textarea"
               />
 
-              <div class="text-caption text-grey-6 q-mt-md q-mb-xs">{{ $t('settings.skillSuite.brainstormingInstruction') }}</div>
+              <div class="text-caption text-kobo-3 q-mt-md q-mb-xs">{{ $t('settings.skillSuite.brainstormingInstruction') }}</div>
               <q-input
                 v-model="globalCustomBrainstormingInstruction"
                 type="textarea"
@@ -222,7 +222,7 @@
               />
 
               <div class="text-subtitle2 q-mb-sm q-mt-md">{{ $t('settings.defaultPermissionModeClaude') }}</div>
-              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.defaultPermissionModeHint') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.defaultPermissionModeHint') }}</div>
               <q-select
                 v-model="globalClaudePermissionMode"
                 :options="claudePermissionModeOptions"
@@ -256,16 +256,16 @@
                   :label="$t('settings.verboseMessages')"
                   dark
                   dense
-                  color="indigo-4"
-                  class="text-grey-5 text-caption"
+                  color="primary"
+                  class="text-kobo-2 text-caption"
                 />
                 <q-toggle
                   v-model="globalShowThinkingBlocks"
                   :label="$t('settings.showThinkingBlocks')"
                   dark
                   dense
-                  color="indigo-4"
-                  class="text-grey-5 text-caption"
+                  color="primary"
+                  class="text-kobo-2 text-caption"
                 />
               </div>
             </div>
@@ -273,21 +273,21 @@
             <!-- Whip settings -->
             <div v-if="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-xs">{{ $t('settings.whipSettings') }}</div>
-              <div class="text-grey-6 text-caption q-mb-md">{{ $t('settings.whipSettingsHint') }}</div>
+              <div class="text-kobo-3 text-caption q-mb-md">{{ $t('settings.whipSettingsHint') }}</div>
               <q-toggle
                 v-model="globalWhipEnabled"
                 :label="$t('settings.whipEnabled')"
                 dark
                 dense
-                color="indigo-4"
-                class="text-grey-5 text-caption"
+                color="primary"
+                class="text-kobo-2 text-caption"
               >
                 <q-tooltip>{{ $t('settings.whipEnabledHint') }}</q-tooltip>
               </q-toggle>
               <div v-if="globalWhipEnabled" class="column q-gutter-sm q-mt-md">
                 <WhipShortcutRecorder v-model="globalWhipShortcut" />
                 <div class="row items-center q-gutter-sm">
-                  <div class="text-grey-5 text-caption" style="min-width: 58px;">
+                  <div class="text-kobo-2 text-caption" style="min-width: 58px;">
                     {{ $t('settings.whipVolume') }}
                   </div>
                   <q-slider
@@ -299,14 +299,14 @@
                     :aria-label="$t('settings.whipVolume')"
                     dark
                     dense
-                    color="indigo-4"
+                    color="primary"
                     class="col"
                   />
-                  <div class="text-grey-5 text-caption" style="min-width: 40px; text-align: right;">
+                  <div class="text-kobo-2 text-caption" style="min-width: 40px; text-align: right;">
                     {{ Math.round(globalWhipVolume * 100) }}%
                   </div>
                 </div>
-                <div v-if="whipVolumeAvailability.hintKey" class="text-grey-6 text-caption">
+                <div v-if="whipVolumeAvailability.hintKey" class="text-kobo-3 text-caption">
                   {{ $t(whipVolumeAvailability.hintKey) }}
                 </div>
               </div>
@@ -322,23 +322,23 @@
               <div class="notification-sounds-grid q-mt-md">
                 <div class="notification-sound-card q-pa-md rounded-borders">
                   <div class="text-subtitle2">{{ $t('settings.notificationSound') }}</div>
-                  <div class="text-grey-6 text-caption q-mb-sm">{{ $t('settings.notificationSoundHint') }}</div>
+                  <div class="text-kobo-3 text-caption q-mb-sm">{{ $t('settings.notificationSoundHint') }}</div>
                   <div class="column q-gutter-xs q-mb-sm">
                     <q-toggle
                       v-model="globalBrowserNotifications"
                       :label="$t('settings.enableBrowserNotifications')"
                       dark
                       dense
-                      color="indigo-4"
-                      class="text-grey-5 text-caption"
+                      color="primary"
+                      class="text-kobo-2 text-caption"
                     />
                     <q-toggle
                       v-model="globalAudioNotifications"
                       :label="$t('settings.enableAudio')"
                       dark
                       dense
-                      color="indigo-4"
-                      class="text-grey-5 text-caption"
+                      color="primary"
+                      class="text-kobo-2 text-caption"
                     />
                   </div>
                   <div class="row items-center q-gutter-sm q-mb-sm">
@@ -349,7 +349,7 @@
                       flat
                       dense
                       no-caps
-                      color="indigo-4"
+                      color="primary"
                       icon="notifications_active"
                       :label="$t('settings.testBrowserNotification')"
                       @click="testBrowserNotification"
@@ -366,13 +366,13 @@
                       outlined
                       emit-value
                       map-options
-                      color="indigo-4"
+                      color="primary"
                       class="col"
                     />
                     <q-btn
                       flat
                       dense
-                      color="indigo-4"
+                      color="primary"
                       icon="play_arrow"
                       :label="$t('settings.notificationSoundPreview')"
                       :disable="!globalAudioNotifications"
@@ -380,7 +380,7 @@
                     />
                   </div>
                   <div class="row items-center q-gutter-sm q-mt-sm">
-                    <div class="text-grey-5 text-caption" style="min-width: 58px;">{{ $t('settings.notificationVolume') }}</div>
+                    <div class="text-kobo-2 text-caption" style="min-width: 58px;">{{ $t('settings.notificationVolume') }}</div>
                     <q-slider
                       v-model="globalAudioNotificationVolume"
                       :min="0"
@@ -390,24 +390,24 @@
                       :aria-label="$t('settings.notificationVolume')"
                       dark
                       dense
-                      color="indigo-4"
+                      color="primary"
                       class="col"
                     />
-                    <div class="text-grey-5 text-caption" style="min-width: 40px; text-align: right;">
+                    <div class="text-kobo-2 text-caption" style="min-width: 40px; text-align: right;">
                       {{ Math.round(globalAudioNotificationVolume * 100) }}%
                     </div>
                   </div>
                 </div>
                 <div class="notification-sound-card q-pa-md rounded-borders">
                   <div class="text-subtitle2">{{ $t('settings.questionSound') }}</div>
-                  <div class="text-grey-6 text-caption q-mb-sm">{{ $t('settings.questionSoundHint') }}</div>
+                  <div class="text-kobo-3 text-caption q-mb-sm">{{ $t('settings.questionSoundHint') }}</div>
                   <q-toggle
                     v-model="globalAudioQuestionNotifications"
                     :label="$t('settings.enableAudio')"
                     dark
                     dense
-                    color="indigo-4"
-                    class="text-grey-5 text-caption q-mb-sm"
+                    color="primary"
+                    class="text-kobo-2 text-caption q-mb-sm"
                   />
                   <div class="row items-center q-gutter-sm">
                     <q-select
@@ -420,13 +420,13 @@
                       outlined
                       emit-value
                       map-options
-                      color="indigo-4"
+                      color="primary"
                       class="col"
                     />
                     <q-btn
                       flat
                       dense
-                      color="indigo-4"
+                      color="primary"
                       icon="play_arrow"
                       :label="$t('settings.notificationSoundPreview')"
                       :disable="!globalAudioQuestionNotifications"
@@ -434,7 +434,7 @@
                     />
                   </div>
                   <div class="row items-center q-gutter-sm q-mt-sm">
-                    <div class="text-grey-5 text-caption" style="min-width: 58px;">{{ $t('settings.notificationVolume') }}</div>
+                    <div class="text-kobo-2 text-caption" style="min-width: 58px;">{{ $t('settings.notificationVolume') }}</div>
                     <q-slider
                       v-model="globalAudioQuestionVolume"
                       :min="0"
@@ -444,24 +444,24 @@
                       :aria-label="$t('settings.notificationVolume')"
                       dark
                       dense
-                      color="indigo-4"
+                      color="primary"
                       class="col"
                     />
-                    <div class="text-grey-5 text-caption" style="min-width: 40px; text-align: right;">
+                    <div class="text-kobo-2 text-caption" style="min-width: 40px; text-align: right;">
                       {{ Math.round(globalAudioQuestionVolume * 100) }}%
                     </div>
                   </div>
                 </div>
                 <div class="notification-sound-card q-pa-md rounded-borders">
                   <div class="text-subtitle2">{{ $t('settings.workspaceCreatedSound') }}</div>
-                  <div class="text-grey-6 text-caption q-mb-sm">{{ $t('settings.workspaceCreatedSoundHint') }}</div>
+                  <div class="text-kobo-3 text-caption q-mb-sm">{{ $t('settings.workspaceCreatedSoundHint') }}</div>
                   <q-toggle
                     v-model="globalAudioWorkspaceCreatedNotifications"
                     :label="$t('settings.enableAudio')"
                     dark
                     dense
-                    color="indigo-4"
-                    class="text-grey-5 text-caption q-mb-sm"
+                    color="primary"
+                    class="text-kobo-2 text-caption q-mb-sm"
                   />
                   <div class="row items-center q-gutter-sm">
                     <q-select
@@ -474,13 +474,13 @@
                       outlined
                       emit-value
                       map-options
-                      color="indigo-4"
+                      color="primary"
                       class="col"
                     />
                     <q-btn
                       flat
                       dense
-                      color="indigo-4"
+                      color="primary"
                       icon="play_arrow"
                       :label="$t('settings.notificationSoundPreview')"
                       :disable="!globalAudioWorkspaceCreatedNotifications"
@@ -488,7 +488,7 @@
                     />
                   </div>
                   <div class="row items-center q-gutter-sm q-mt-sm">
-                    <div class="text-grey-5 text-caption" style="min-width: 58px;">{{ $t('settings.notificationVolume') }}</div>
+                    <div class="text-kobo-2 text-caption" style="min-width: 58px;">{{ $t('settings.notificationVolume') }}</div>
                     <q-slider
                       v-model="globalAudioWorkspaceCreatedVolume"
                       :min="0"
@@ -498,26 +498,26 @@
                       :aria-label="$t('settings.notificationVolume')"
                       dark
                       dense
-                      color="indigo-4"
+                      color="primary"
                       class="col"
                     />
-                    <div class="text-grey-5 text-caption" style="min-width: 40px; text-align: right;">
+                    <div class="text-kobo-2 text-caption" style="min-width: 40px; text-align: right;">
                       {{ Math.round(globalAudioWorkspaceCreatedVolume * 100) }}%
                     </div>
                   </div>
                 </div>
                 <div class="notification-sound-card q-pa-md rounded-borders">
                   <div class="text-subtitle2">{{ $t('settings.agentErrorSound') }}</div>
-                  <div class="text-grey-6 text-caption q-mb-sm">{{ $t('settings.agentErrorSoundHint') }}</div>
-                  <q-toggle v-model="globalAudioAgentErrorNotifications" :label="$t('settings.enableAudio')" dark dense color="indigo-4" class="text-grey-5 text-caption q-mb-sm" />
+                  <div class="text-kobo-3 text-caption q-mb-sm">{{ $t('settings.agentErrorSoundHint') }}</div>
+                  <q-toggle v-model="globalAudioAgentErrorNotifications" :label="$t('settings.enableAudio')" dark dense color="primary" class="text-kobo-2 text-caption q-mb-sm" />
                   <div class="row items-center q-gutter-sm">
-                    <q-select v-model="globalAudioAgentErrorSound" :options="eventSoundSelectOptions" :label="$t('settings.agentErrorSound')" :disable="!globalAudioAgentErrorNotifications" dark dense outlined emit-value map-options color="indigo-4" class="col" />
-                    <q-btn flat dense color="indigo-4" icon="play_arrow" :label="$t('settings.notificationSoundPreview')" :disable="!globalAudioAgentErrorNotifications" @click="previewAgentErrorSound" />
+                    <q-select v-model="globalAudioAgentErrorSound" :options="eventSoundSelectOptions" :label="$t('settings.agentErrorSound')" :disable="!globalAudioAgentErrorNotifications" dark dense outlined emit-value map-options color="primary" class="col" />
+                    <q-btn flat dense color="primary" icon="play_arrow" :label="$t('settings.notificationSoundPreview')" :disable="!globalAudioAgentErrorNotifications" @click="previewAgentErrorSound" />
                   </div>
                   <div class="row items-center q-gutter-sm q-mt-sm">
-                    <div class="text-grey-5 text-caption" style="min-width: 58px;">{{ $t('settings.notificationVolume') }}</div>
-                    <q-slider v-model="globalAudioAgentErrorVolume" :min="0" :max="1" :step="0.05" :disable="!globalAudioAgentErrorNotifications" :aria-label="$t('settings.notificationVolume')" dark dense color="indigo-4" class="col" />
-                    <div class="text-grey-5 text-caption" style="min-width: 40px; text-align: right;">{{ Math.round(globalAudioAgentErrorVolume * 100) }}%</div>
+                    <div class="text-kobo-2 text-caption" style="min-width: 58px;">{{ $t('settings.notificationVolume') }}</div>
+                    <q-slider v-model="globalAudioAgentErrorVolume" :min="0" :max="1" :step="0.05" :disable="!globalAudioAgentErrorNotifications" :aria-label="$t('settings.notificationVolume')" dark dense color="primary" class="col" />
+                    <div class="text-kobo-2 text-caption" style="min-width: 40px; text-align: right;">{{ Math.round(globalAudioAgentErrorVolume * 100) }}%</div>
                   </div>
                 </div>
               </div>
@@ -542,7 +542,7 @@
                   no-caps
                   size="sm"
                   icon="refresh"
-                  color="grey-5"
+                  color="kobo-2"
                   :label="t('common.refresh')"
                   @click="store.fetchVoiceRuntime()"
                 />
@@ -590,19 +590,19 @@
                 :label="$t('voice.installGuideTitle')"
                 class="variables-panel rounded-borders q-mt-sm"
               >
-                <div class="q-pa-sm text-caption text-grey-5">
+                <div class="q-pa-sm text-caption text-kobo-2">
                   <div class="q-mb-sm">{{ $t('voice.installGuideIntro') }}</div>
                   <div class="q-mb-sm">
                     <a
                       href="https://github.com/ggml-org/whisper.cpp"
                       target="_blank"
                       rel="noopener noreferrer"
-                      class="text-indigo-4"
+                      class="text-kobo-2"
                     >
                       {{ $t('voice.installLink') }}
                     </a>
                   </div>
-                  <div class="q-mb-xs text-grey-4">{{ $t('voice.installGuideUbuntuTitle') }}</div>
+                  <div class="q-mb-xs text-kobo-2">{{ $t('voice.installGuideUbuntuTitle') }}</div>
                   <pre class="mono-guide q-mb-sm">sudo apt update
 sudo apt install -y cmake build-essential ffmpeg
 git clone https://github.com/ggml-org/whisper.cpp.git
@@ -610,7 +610,7 @@ cd whisper.cpp
 cmake -B build
 cmake --build build -j</pre>
                   <div class="q-mb-sm">{{ $t('voice.installGuideBinaryPathHint') }}</div>
-                  <div class="q-mb-xs text-grey-4">{{ $t('voice.installGuideWindowsTitle') }}</div>
+                  <div class="q-mb-xs text-kobo-2">{{ $t('voice.installGuideWindowsTitle') }}</div>
                   <pre class="mono-guide q-mb-sm"># Install CMake + Visual Studio Build Tools (C/C++)
 # Install ffmpeg (choco/scoop)
 where whisper-cli
@@ -628,8 +628,8 @@ where ffmpeg</pre>
                 :label="$t('voice.enabled')"
                 dark
                 dense
-                color="indigo-4"
-                class="text-grey-5 text-caption q-mb-sm"
+                color="primary"
+                class="text-kobo-2 text-caption q-mb-sm"
               />
               <div class="row q-col-gutter-sm">
                 <div class="col-12 col-sm-6">
@@ -679,8 +679,8 @@ where ffmpeg</pre>
                 class="settings-input q-mb-md"
               />
               <div v-if="store.voiceModelsDir" class="voice-models-dir row items-center q-gutter-sm q-mb-md">
-                <q-icon name="folder" color="grey-5" size="xs" />
-                <span class="text-caption text-grey-5 ellipsis-2-lines" style="flex: 1; min-width: 0; word-break: break-all;">
+                <q-icon name="folder" color="kobo-2" size="xs" />
+                <span class="text-caption text-kobo-2 ellipsis-2-lines" style="flex: 1; min-width: 0; word-break: break-all;">
                   {{ store.voiceModelsDir }}
                 </span>
                 <q-btn
@@ -689,7 +689,7 @@ where ffmpeg</pre>
                   round
                   size="xs"
                   icon="content_copy"
-                  color="grey-5"
+                  color="kobo-2"
                   :title="t('common.copy')"
                   @click="copyToClipboard(store.voiceModelsDir)"
                 />
@@ -704,13 +704,13 @@ where ffmpeg</pre>
                   <div class="row items-center q-gutter-sm">
                     <q-icon
                       :name="m.download ? 'downloading' : m.installed ? 'check_circle' : 'circle'"
-                      :color="m.download ? 'indigo-4' : m.installed ? 'green-5' : 'grey-7'"
+                      :color="m.download ? 'primary' : m.installed ? 'green-5' : 'kobo-3'"
                       size="xs"
                     />
-                    <span class="text-body2 text-grey-3" style="font-family: var(--kobo-font-mono, monospace);">
+                    <span class="text-body2 text-kobo-1" style="font-family: var(--kobo-font-mono, monospace);">
                       {{ m.name }}
                     </span>
-                    <span class="text-caption text-grey-6">
+                    <span class="text-caption text-kobo-3">
                       {{ formatBytes(m.installedSizeBytes ?? m.sizeBytes) }}
                     </span>
                     <q-space />
@@ -720,7 +720,7 @@ where ffmpeg</pre>
                       dense
                       no-caps
                       size="sm"
-                      color="grey-5"
+                      color="kobo-2"
                       icon="close"
                       :label="$t('common.cancel')"
                       @click="cancelVoiceDownload(m.name)"
@@ -731,7 +731,7 @@ where ffmpeg</pre>
                       dense
                       no-caps
                       size="sm"
-                      :color="m.installed ? 'red-5' : 'indigo-4'"
+                      :color="m.installed ? 'red-5' : 'primary'"
                       :icon="m.installed ? 'delete_outline' : 'download'"
                       :label="m.installed ? $t('voice.delete') : $t('voice.download')"
                       :loading="voiceActionModel === m.name"
@@ -742,17 +742,17 @@ where ffmpeg</pre>
                     <q-linear-progress
                       :value="m.download.total > 0 ? Math.min(1, m.download.downloaded / m.download.total) : 0"
                       :indeterminate="!m.download.total"
-                      color="indigo-4"
-                      track-color="grey-9"
+                      color="primary"
+                      track-color="kobo-surface-2"
                       size="6px"
                       rounded
                     />
                     <div class="row items-center q-mt-xs">
-                      <span class="text-caption text-grey-6">
+                      <span class="text-caption text-kobo-3">
                         {{ formatBytes(m.download.downloaded) }} / {{ formatBytes(m.download.total) }}
                       </span>
                       <q-space />
-                      <span class="text-caption text-indigo-4">
+                      <span class="text-caption text-kobo-2">
                         {{
                           m.download.total > 0
                             ? `${Math.floor((m.download.downloaded / m.download.total) * 100)}%`
@@ -763,7 +763,7 @@ where ffmpeg</pre>
                   </div>
                   <div
                     v-else-if="m.installed"
-                    class="text-caption text-grey-7 q-mt-xs ellipsis"
+                    class="text-caption text-kobo-3 q-mt-xs ellipsis"
                     style="font-family: var(--kobo-font-mono, monospace); word-break: break-all;"
                   >
                     {{ m.fileName }}
@@ -784,7 +784,7 @@ where ffmpeg</pre>
               >
                 <div class="q-pa-sm column q-gutter-sm">
                   <div class="row items-center q-gutter-sm">
-                    <div class="text-caption text-grey-5">{{ $t('voice.temperature') }}</div>
+                    <div class="text-caption text-kobo-2">{{ $t('voice.temperature') }}</div>
                     <q-slider
                       v-model="globalVoiceTemperature"
                       :min="0"
@@ -792,14 +792,14 @@ where ffmpeg</pre>
                       :step="0.05"
                       dark
                       dense
-                      color="indigo-4"
+                      color="primary"
                       class="col"
                     />
-                    <div class="text-caption text-grey-5" style="min-width: 40px; text-align: right;">
+                    <div class="text-caption text-kobo-2" style="min-width: 40px; text-align: right;">
                       {{ globalVoiceTemperature.toFixed(2) }}
                     </div>
                   </div>
-                  <div class="text-caption text-grey-7">{{ $t('voice.temperatureHint') }}</div>
+                  <div class="text-caption text-kobo-3">{{ $t('voice.temperatureHint') }}</div>
                   <q-input
                     v-model="globalVoicePrompt"
                     :label="$t('voice.initialPrompt')"
@@ -810,25 +810,25 @@ where ffmpeg</pre>
                     :rows="2"
                     class="settings-input"
                   />
-                  <div class="text-caption text-grey-7">{{ $t('voice.initialPromptHint') }}</div>
+                  <div class="text-caption text-kobo-3">{{ $t('voice.initialPromptHint') }}</div>
                   <q-toggle
                     v-model="globalVoiceTranslateToEnglish"
                     :label="$t('voice.translateToEnglish')"
                     dark
                     dense
-                    color="indigo-4"
-                    class="text-grey-5 text-caption"
+                    color="primary"
+                    class="text-kobo-2 text-caption"
                   />
-                  <div class="text-caption text-grey-7">{{ $t('voice.translateToEnglishHint') }}</div>
+                  <div class="text-caption text-kobo-3">{{ $t('voice.translateToEnglishHint') }}</div>
                   <q-toggle
                     v-model="globalVoiceSuppressNst"
                     :label="$t('voice.suppressNst')"
                     dark
                     dense
-                    color="indigo-4"
-                    class="text-grey-5 text-caption"
+                    color="primary"
+                    class="text-kobo-2 text-caption"
                   />
-                  <div class="text-caption text-grey-7">{{ $t('voice.suppressNstHint') }}</div>
+                  <div class="text-caption text-kobo-3">{{ $t('voice.suppressNstHint') }}</div>
                 </div>
               </q-expansion-item>
               <q-expansion-item
@@ -872,7 +872,7 @@ where ffmpeg</pre>
                   dense
                   no-caps
                   size="sm"
-                  color="grey-5"
+                  color="kobo-2"
                   icon="restart_alt"
                   :label="t('settings.resetToDefault')"
                   :loading="resettingField === 'prPromptTemplate'"
@@ -880,7 +880,7 @@ where ffmpeg</pre>
                   @click="resetFieldToDefault('prPromptTemplate')"
                 />
               </div>
-              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.prPromptHint') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.prPromptHint') }}</div>
               <q-input
                 v-model="globalPrPrompt"
                 type="textarea"
@@ -904,7 +904,7 @@ where ffmpeg</pre>
                     <q-item v-for="v in availableVariables" :key="v.name" dense>
                       <q-item-section>
                         <q-item-label class="text-caption" style="font-family: monospace;">{{ v.name }}</q-item-label>
-                        <q-item-label caption class="text-grey-7">{{ v.description }}</q-item-label>
+                        <q-item-label caption class="text-kobo-3">{{ v.description }}</q-item-label>
                       </q-item-section>
                     </q-item>
                   </q-list>
@@ -919,7 +919,7 @@ where ffmpeg</pre>
                   dense
                   no-caps
                   size="sm"
-                  color="grey-5"
+                  color="kobo-2"
                   icon="restart_alt"
                   :label="t('settings.resetToDefault')"
                   :loading="resettingField === 'reviewPromptTemplate'"
@@ -927,7 +927,7 @@ where ffmpeg</pre>
                   @click="resetFieldToDefault('reviewPromptTemplate')"
                 />
               </div>
-              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.prPromptHint') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.prPromptHint') }}</div>
               <q-input
                 v-model="globalReviewPrompt"
                 type="textarea"
@@ -947,7 +947,7 @@ where ffmpeg</pre>
                   dense
                   no-caps
                   size="sm"
-                  color="grey-5"
+                  color="kobo-2"
                   icon="restart_alt"
                   :label="t('settings.resetToDefault')"
                   :loading="resettingField === 'ciFixPromptTemplate'"
@@ -955,7 +955,7 @@ where ffmpeg</pre>
                   @click="resetFieldToDefault('ciFixPromptTemplate')"
                 />
               </div>
-              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.ciFixPromptHint') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.ciFixPromptHint') }}</div>
               <q-input
                 v-model="globalCiFixPrompt"
                 type="textarea"
@@ -975,7 +975,7 @@ where ffmpeg</pre>
                   dense
                   no-caps
                   size="sm"
-                  color="grey-5"
+                  color="kobo-2"
                   icon="restart_alt"
                   :label="t('settings.resetToDefault')"
                   :loading="resettingField === 'finalizationPrompt'"
@@ -983,7 +983,7 @@ where ffmpeg</pre>
                   @click="resetFieldToDefault('finalizationPrompt')"
                 />
               </div>
-              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.finalizationPromptHint') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.finalizationPromptHint') }}</div>
               <q-input
                 v-model="globalFinalizationPrompt"
                 type="textarea"
@@ -1003,7 +1003,7 @@ where ffmpeg</pre>
                   dense
                   no-caps
                   size="sm"
-                  color="grey-5"
+                  color="kobo-2"
                   icon="restart_alt"
                   :label="t('settings.resetToDefault')"
                   :loading="resettingField === 'gitConventions'"
@@ -1011,7 +1011,7 @@ where ffmpeg</pre>
                   @click="resetFieldToDefault('gitConventions')"
                 />
               </div>
-              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.gitConventionsHint') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.gitConventionsHint') }}</div>
               <q-input
                 v-model="globalGitConventions"
                 type="textarea"
@@ -1027,7 +1027,7 @@ where ffmpeg</pre>
             <!-- Editor -->
             <div v-if="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.editorCommand') }}</div>
-              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.editorCommandHint') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.editorCommandHint') }}</div>
               <q-input
                 v-model="globalEditorCommand"
                 dense
@@ -1041,7 +1041,7 @@ where ffmpeg</pre>
             <!-- File manager -->
             <div v-if="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.fileManagerCommand') }}</div>
-              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.fileManagerCommandHint') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.fileManagerCommandHint') }}</div>
               <q-input
                 v-model="globalFileManagerCommand"
                 dense
@@ -1055,7 +1055,7 @@ where ffmpeg</pre>
             <!-- Terminal -->
             <div v-if="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.terminalCommand') }}</div>
-              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.terminalCommandHint') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.terminalCommandHint') }}</div>
               <q-input
                 v-model="globalTerminalCommand"
                 dense
@@ -1067,7 +1067,7 @@ where ffmpeg</pre>
             </div>
 
             <div v-if="activeTab === 'notion'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
-              <q-toggle v-model="globalNotionEnabled" :label="$t('settings.integrationEnabled')" dark dense color="indigo-4" />
+              <q-toggle v-model="globalNotionEnabled" :label="$t('settings.integrationEnabled')" dark dense color="primary" />
             </div>
             <div
               v-if="activeTab === 'notion'"
@@ -1075,9 +1075,9 @@ where ffmpeg</pre>
               :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalNotionEnabled }]"
             >
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.mcpSelection') }}</div>
-              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.mcpSelectionHint') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.mcpSelectionHint') }}</div>
               <div class="q-mb-sm">
-                <div class="field-label-sub text-caption q-mb-xs text-grey-7">{{ $t('settings.notionMcp') }}</div>
+                <div class="field-label-sub text-caption q-mb-xs text-kobo-3">{{ $t('settings.notionMcp') }}</div>
                 <q-select
                   v-model="globalNotionMcpKey"
                   :options="mcpServerOptions"
@@ -1098,7 +1098,7 @@ where ffmpeg</pre>
                 flat
                 dense
                 no-caps
-                color="indigo-4"
+                color="primary"
                 icon="health_and_safety"
                 :label="$t('settings.testIntegration')"
                 :loading="integrationTestLoading === 'notion'"
@@ -1115,14 +1115,14 @@ where ffmpeg</pre>
               data-tour="settings-card-sentry"
               class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
             >
-              <q-toggle v-model="globalSentryEnabled" :label="$t('settings.integrationEnabled')" dark dense color="indigo-4" />
+              <q-toggle v-model="globalSentryEnabled" :label="$t('settings.integrationEnabled')" dark dense color="primary" />
             </div>
 
             <div v-if="activeTab === 'sentry'" :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalSentryEnabled }]">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.mcpSelection') }}</div>
-              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.mcpSelectionHint') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.mcpSelectionHint') }}</div>
               <div class="q-mb-sm">
-                <div class="field-label-sub text-caption q-mb-xs text-grey-7">{{ $t('settings.sentryMcp') }}</div>
+                <div class="field-label-sub text-caption q-mb-xs text-kobo-3">{{ $t('settings.sentryMcp') }}</div>
                 <q-select
                   v-model="globalSentryMcpKey"
                   :options="mcpServerOptions"
@@ -1138,7 +1138,7 @@ where ffmpeg</pre>
                 flat
                 dense
                 no-caps
-                color="indigo-4"
+                color="primary"
                 icon="health_and_safety"
                 :label="$t('settings.testIntegration')"
                 :loading="integrationTestLoading === 'sentry'"
@@ -1157,16 +1157,16 @@ where ffmpeg</pre>
               class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
             >
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.bitbucketCommunity') }}</div>
-              <div class="text-caption text-grey-6 q-mb-md">{{ $t('settings.bitbucketCommunityHint') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-md">{{ $t('settings.bitbucketCommunityHint') }}</div>
               <q-input v-model="globalBitbucketUsername" :label="$t('settings.bitbucketUsername')" autocomplete="username" dark dense outlined class="q-mb-sm" />
               <q-input v-model="globalBitbucketToken" :label="$t('settings.bitbucketToken')" type="password" autocomplete="off" dark dense outlined />
             </div>
 
             <div v-if="activeTab === 'notion'" :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalNotionEnabled }]">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.notionStatus') }}</div>
-              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.notionStatusHint') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.notionStatusHint') }}</div>
               <div class="q-mb-sm">
-                <div class="field-label-sub text-caption q-mb-xs text-grey-7">{{ $t('settings.notionStatusProperty') }}</div>
+                <div class="field-label-sub text-caption q-mb-xs text-kobo-3">{{ $t('settings.notionStatusProperty') }}</div>
                 <q-input
                   v-model="globalNotionStatusProperty"
                   dense
@@ -1177,7 +1177,7 @@ where ffmpeg</pre>
                 />
               </div>
               <div class="q-mb-sm">
-                <div class="field-label-sub text-caption q-mb-xs text-grey-7">{{ $t('settings.notionInProgressStatus') }}</div>
+                <div class="field-label-sub text-caption q-mb-xs text-kobo-3">{{ $t('settings.notionInProgressStatus') }}</div>
                 <q-input
                   v-model="globalNotionStatus"
                   dense
@@ -1195,7 +1195,7 @@ where ffmpeg</pre>
                   dense
                   no-caps
                   size="sm"
-                  color="grey-5"
+                  color="kobo-2"
                   icon="restart_alt"
                   :label="t('settings.resetToDefault')"
                   :loading="resettingField === 'notionInitialPromptTemplate'"
@@ -1203,7 +1203,7 @@ where ffmpeg</pre>
                   @click="resetFieldToDefault('notionInitialPromptTemplate')"
                 />
               </div>
-              <div class="text-caption text-grey-7 q-mb-xs">{{ t('settings.notionInitialPrompt.help', { variables: '{ticket_id}, {notion_url}, {notion_file_path}' }) }}</div>
+              <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.notionInitialPrompt.help', { variables: '{ticket_id}, {notion_url}, {notion_file_path}' }) }}</div>
               <q-input
                 v-model="globalNotionInitialPrompt"
                 type="textarea"
@@ -1216,9 +1216,9 @@ where ffmpeg</pre>
             <!-- Notion assignment -->
             <div v-if="activeTab === 'notion'" :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalNotionEnabled }]">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.notionAssignee') }}</div>
-              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.notionAssigneeHint') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.notionAssigneeHint') }}</div>
               <div class="q-mb-sm">
-                <div class="field-label-sub text-caption q-mb-xs text-grey-7">{{ $t('settings.notionAssigneeProperty') }}</div>
+                <div class="field-label-sub text-caption q-mb-xs text-kobo-3">{{ $t('settings.notionAssigneeProperty') }}</div>
                 <q-input
                   v-model="globalNotionAssigneeProperty"
                   dense
@@ -1230,14 +1230,14 @@ where ffmpeg</pre>
               </div>
               <div class="q-mb-sm">
                 <div class="row items-center q-mb-xs">
-                  <div class="field-label-sub text-caption text-grey-7 col">{{ $t('settings.notionUserId') }}</div>
+                  <div class="field-label-sub text-caption text-kobo-3 col">{{ $t('settings.notionUserId') }}</div>
                   <q-btn
                     flat
                     dense
                     no-caps
                     size="sm"
                     icon="refresh"
-                    color="grey-5"
+                    color="kobo-2"
                     :loading="loadingNotionUsers"
                     :label="$t('settings.notionUsersRefresh')"
                     @click="loadNotionUsers(true)"
@@ -1271,7 +1271,7 @@ where ffmpeg</pre>
                     </q-item>
                   </template>
                 </q-select>
-                <div v-else-if="loadingNotionUsers" class="text-caption text-grey-7 q-py-sm">
+                <div v-else-if="loadingNotionUsers" class="text-caption text-kobo-3 q-py-sm">
                   {{ $t('settings.notionUsersLoading') }}
                 </div>
                 <template v-else>
@@ -1301,7 +1301,7 @@ where ffmpeg</pre>
                   dense
                   no-caps
                   size="sm"
-                  color="grey-5"
+                  color="kobo-2"
                   icon="restart_alt"
                   :label="t('settings.resetToDefault')"
                   :loading="resettingField === 'sentryInitialPromptTemplate'"
@@ -1309,7 +1309,7 @@ where ffmpeg</pre>
                   @click="resetFieldToDefault('sentryInitialPromptTemplate')"
                 />
               </div>
-              <div class="text-caption text-grey-7 q-mb-xs">{{ t('settings.sentryInitialPrompt.help', { variables: '{issue_id}, {sentry_url}, {sentry_file_path}' }) }}</div>
+              <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.sentryInitialPrompt.help', { variables: '{issue_id}, {sentry_url}, {sentry_file_path}' }) }}</div>
               <q-input
                 v-model="globalSentryInitialPrompt"
                 type="textarea"
@@ -1322,7 +1322,7 @@ where ffmpeg</pre>
             <!-- Workspace tags -->
             <div v-if="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.tagsTitle') }}</div>
-              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.tagsHint') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.tagsHint') }}</div>
               <q-select
                 v-model="globalTags"
                 :label="$t('settings.tagsLabel')"
@@ -1341,7 +1341,7 @@ where ffmpeg</pre>
             <!-- Branch prefixes -->
             <div v-if="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.branchPrefixesTitle') }}</div>
-              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.branchPrefixesHint') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.branchPrefixesHint') }}</div>
 
               <q-list
                 v-if="globalBranchPrefixes.length > 0"
@@ -1379,7 +1379,7 @@ where ffmpeg</pre>
                         round
                         size="sm"
                         icon="keyboard_arrow_up"
-                        color="grey-6"
+                        color="kobo-3"
                         :disable="index === 0"
                         :title="$t('settings.branchPrefixesMoveUp')"
                         @click="moveBranchPrefix(index, -1)"
@@ -1390,7 +1390,7 @@ where ffmpeg</pre>
                         round
                         size="sm"
                         icon="keyboard_arrow_down"
-                        color="grey-6"
+                        color="kobo-3"
                         :disable="index === globalBranchPrefixes.length - 1"
                         :title="$t('settings.branchPrefixesMoveDown')"
                         @click="moveBranchPrefix(index, 1)"
@@ -1401,7 +1401,7 @@ where ffmpeg</pre>
                         round
                         size="sm"
                         icon="delete"
-                        color="grey-6"
+                        color="kobo-3"
                         :title="$t('common.delete')"
                         @click="removeBranchPrefix(index)"
                       />
@@ -1409,7 +1409,7 @@ where ffmpeg</pre>
                   </q-item-section>
                 </q-item>
               </q-list>
-              <div v-else class="text-caption text-grey-7 q-mb-sm">
+              <div v-else class="text-caption text-kobo-3 q-mb-sm">
                 {{ $t('settings.branchPrefixesEmpty') }}
               </div>
 
@@ -1441,7 +1441,7 @@ where ffmpeg</pre>
               class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
             >
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.setupScript') }}</div>
-              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.setupScriptHint') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.setupScriptHint') }}</div>
               <q-input
                 v-model="globalSetupScript"
                 type="textarea"
@@ -1457,12 +1457,12 @@ where ffmpeg</pre>
             <!-- Onboarding tour -->
             <div v-if="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.onboardingTitle') }}</div>
-              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.onboardingHint') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.onboardingHint') }}</div>
               <q-btn
                 flat
                 no-caps
                 icon="play_circle"
-                color="indigo-4"
+                color="primary"
                 :label="$t('settings.onboardingReplay')"
                 @click="startTour"
               />
@@ -1471,7 +1471,7 @@ where ffmpeg</pre>
             <!-- Cleanup script -->
             <div v-if="activeTab === 'scripts'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.cleanupScript') }}</div>
-              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.cleanupScriptHint') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.cleanupScriptHint') }}</div>
               <q-input
                 v-model="globalCleanupScript"
                 type="textarea"
@@ -1482,7 +1482,7 @@ where ffmpeg</pre>
                 :placeholder="$t('settings.cleanupScriptPlaceholder')"
                 class="settings-input mono-textarea"
               />
-              <div class="text-caption text-grey-6 q-mt-md q-mb-xs">{{ $t('settings.cleanupScriptMode') }}</div>
+              <div class="text-caption text-kobo-3 q-mt-md q-mb-xs">{{ $t('settings.cleanupScriptMode') }}</div>
               <q-option-group
                 v-model="globalCleanupScriptMode"
                 :options="[
@@ -1490,7 +1490,7 @@ where ffmpeg</pre>
                   { label: $t('settings.cleanupScriptMode.noTasks'), value: 'no-tasks' },
                 ]"
                 type="radio"
-                color="indigo-4"
+                color="primary"
                 dense
               />
               <q-checkbox
@@ -1498,7 +1498,7 @@ where ffmpeg</pre>
                 :label="$t('settings.cleanupScriptOnlyOnChanges')"
                 dark
                 dense
-                color="indigo-4"
+                color="primary"
                 class="q-mt-sm"
               />
             </div>
@@ -1506,7 +1506,7 @@ where ffmpeg</pre>
             <!-- Archive script -->
             <div v-if="activeTab === 'scripts'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.archiveScript') }}</div>
-              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.archiveScriptHint') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.archiveScriptHint') }}</div>
               <q-input
                 v-model="globalArchiveScript"
                 type="textarea"
@@ -1534,8 +1534,8 @@ where ffmpeg</pre>
                   @click="insertDefaultChangeSourceBranchScript('global')"
                 />
               </div>
-              <div class="text-caption text-grey-7 q-mb-xs">{{ $t('settings.changeSourceBranchScript.help') }}</div>
-              <pre class="text-caption text-grey-6 mono-guide q-mb-sm">{{ $t('settings.changeSourceBranchScript.envHelp') }}</pre>
+              <div class="text-caption text-kobo-3 q-mb-xs">{{ $t('settings.changeSourceBranchScript.help') }}</div>
+              <pre class="text-caption text-kobo-3 mono-guide q-mb-sm">{{ $t('settings.changeSourceBranchScript.envHelp') }}</pre>
               <q-input
                 v-model="globalChangeSourceBranchScript"
                 type="textarea"
@@ -1553,7 +1553,7 @@ where ffmpeg</pre>
               class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
             >
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.worktreesTitle') }}</div>
-              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.worktreesHint') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.worktreesHint') }}</div>
               <q-input
                 ref="globalWorktreesPathInput"
                 v-model="globalWorktreesPath"
@@ -1571,10 +1571,10 @@ where ffmpeg</pre>
                 :label="$t('settings.worktreesPrefixByProject')"
                 dark
                 dense
-                color="indigo-4"
-                class="text-grey-5 text-caption q-mt-sm"
+                color="primary"
+                class="text-kobo-2 text-caption q-mt-sm"
               />
-              <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.worktreesPrefixByProjectHint') }}</div>
+              <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('settings.worktreesPrefixByProjectHint') }}</div>
 
               <q-separator dark class="q-my-md" />
 
@@ -1584,10 +1584,10 @@ where ffmpeg</pre>
                   :label="$t('settings.autoPurgeOnPrMerged')"
                   dark
                   dense
-                  color="indigo-4"
-                  class="text-grey-5 text-caption"
+                  color="primary"
+                  class="text-kobo-2 text-caption"
                 />
-                <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.autoPurgeOnPrMergedHint') }}</div>
+                <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('settings.autoPurgeOnPrMergedHint') }}</div>
               </div>
 
               <q-input
@@ -1608,7 +1608,7 @@ where ffmpeg</pre>
               <div data-tour="settings-card-worktrees-retention">
                 <div class="text-subtitle2 q-mb-sm">{{ $t('settings.retentionTitle') }}</div>
                 <div class="text-caption text-negative q-mb-sm">{{ $t('settings.retentionWarning') }}</div>
-                <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.retentionHint') }}</div>
+                <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.retentionHint') }}</div>
                 <q-input
                   v-model.number="globalWsEventsRetentionDays"
                   :label="$t('settings.retentionDaysLabel')"
@@ -1633,7 +1633,7 @@ where ffmpeg</pre>
                   outlined
                   class="settings-input q-mt-md"
                 />
-                <div v-if="globalWsEventsRetentionDays === 0" class="text-caption text-grey-6 q-mt-sm">
+                <div v-if="globalWsEventsRetentionDays === 0" class="text-caption text-kobo-3 q-mt-sm">
                   {{ $t('settings.retentionDisabledHint') }}
                 </div>
               </div>
@@ -1645,15 +1645,15 @@ where ffmpeg</pre>
                 :label="$t('settings.purgeDocsTitle')"
                 class="purge-docs q-mt-md rounded-borders"
               >
-                <div class="q-pa-sm text-caption text-grey-5" style="line-height: 1.55;">
-                  <div class="text-weight-medium text-grey-3 q-mb-xs">
+                <div class="q-pa-sm text-caption text-kobo-2" style="line-height: 1.55;">
+                  <div class="text-weight-medium text-kobo-1 q-mb-xs">
                     {{ $t('settings.purgeDocsRestoreTitle') }}
                   </div>
                   <div class="q-mb-xs">{{ $t('settings.purgeDocsRestoreIntro') }}</div>
                   <pre class="purge-docs-code">{{ $t('settings.purgeDocsRestoreCommands') }}</pre>
-                  <div class="text-grey-7 q-mb-md">{{ $t('settings.purgeDocsRestoreFootnote') }}</div>
+                  <div class="text-kobo-3 q-mb-md">{{ $t('settings.purgeDocsRestoreFootnote') }}</div>
 
-                  <div class="text-weight-medium text-grey-3 q-mb-xs">
+                  <div class="text-weight-medium text-kobo-1 q-mb-xs">
                     {{ $t('settings.purgeDocsPermissionsTitle') }}
                   </div>
                   <div class="q-mb-xs">{{ $t('settings.purgeDocsPermissionsIntro') }}</div>
@@ -1662,17 +1662,17 @@ where ffmpeg</pre>
                     <li>{{ $t('settings.purgeDocsPermissionsAcl') }}</li>
                   </ul>
                   <pre class="purge-docs-code">{{ $t('settings.purgeDocsPermissionsAclCommand') }}</pre>
-                  <div class="text-grey-7 q-mb-md">{{ $t('settings.purgeDocsPermissionsFootnote') }}</div>
+                  <div class="text-kobo-3 q-mb-md">{{ $t('settings.purgeDocsPermissionsFootnote') }}</div>
 
-                  <div class="text-weight-medium text-grey-3 q-mb-xs">
+                  <div class="text-weight-medium text-kobo-1 q-mb-xs">
                     {{ $t('settings.purgeDocsPermissionsRecoverTitle') }}
                   </div>
                   <div class="q-mb-xs">{{ $t('settings.purgeDocsPermissionsRecoverIntro') }}</div>
-                  <div class="q-mb-xs text-grey-6">{{ $t('settings.purgeDocsPermissionsRecoverAclIntro') }}</div>
+                  <div class="q-mb-xs text-kobo-3">{{ $t('settings.purgeDocsPermissionsRecoverAclIntro') }}</div>
                   <pre class="purge-docs-code">{{ $t('settings.purgeDocsPermissionsRecoverAclCommand') }}</pre>
-                  <div class="q-mb-xs text-grey-6">{{ $t('settings.purgeDocsPermissionsRecoverChownIntro') }}</div>
+                  <div class="q-mb-xs text-kobo-3">{{ $t('settings.purgeDocsPermissionsRecoverChownIntro') }}</div>
                   <pre class="purge-docs-code">{{ $t('settings.purgeDocsPermissionsRecoverChownCommand') }}</pre>
-                  <div class="text-grey-7">{{ $t('settings.purgeDocsPermissionsRecoverFootnote') }}</div>
+                  <div class="text-kobo-3">{{ $t('settings.purgeDocsPermissionsRecoverFootnote') }}</div>
                 </div>
               </q-expansion-item>
             </div>
@@ -1683,13 +1683,13 @@ where ffmpeg</pre>
               class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
             >
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.network.title') }}</div>
-              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.network.hint') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.network.hint') }}</div>
 
               <q-toggle
                 :model-value="network.enabled"
                 :label="$t('settings.network.enable')"
                 dark
-                color="indigo-4"
+                color="primary"
                 @update:model-value="onToggleNetwork"
               />
 
@@ -1702,15 +1702,15 @@ where ffmpeg</pre>
                   :model-value="network.behindProxy"
                   :label="$t('settings.network.behindProxy')"
                   dark
-                  color="indigo-4"
+                  color="primary"
                   @update:model-value="onToggleBehindProxy"
                 />
-                <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.network.behindProxyHint') }}</div>
+                <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('settings.network.behindProxyHint') }}</div>
               </div>
 
               <template v-if="network.enabled && network.token">
                 <div class="q-mt-md">
-                  <div class="text-caption text-grey-7 q-mb-xs">{{ $t('settings.network.token') }}</div>
+                  <div class="text-caption text-kobo-3 q-mb-xs">{{ $t('settings.network.token') }}</div>
                   <q-input :model-value="network.token" readonly dense dark outlined>
                     <template #append>
                       <q-btn flat dense icon="content_copy" :title="$t('settings.network.copy')" @click="copyToken" />
@@ -1719,7 +1719,7 @@ where ffmpeg</pre>
                   <q-btn
                     class="q-mt-sm"
                     :label="$t('settings.network.regenerate')"
-                    color="indigo-4"
+                    color="primary"
                     outline
                     dense
                     @click="onRegenerateToken"
@@ -1727,15 +1727,15 @@ where ffmpeg</pre>
                 </div>
 
                 <div class="q-mt-md">
-                  <div class="text-caption text-grey-7 q-mb-xs">{{ $t('settings.network.urls') }}</div>
-                  <div v-if="networkDisplayUrls.length === 0" class="text-caption text-grey-6">
+                  <div class="text-caption text-kobo-3 q-mb-xs">{{ $t('settings.network.urls') }}</div>
+                  <div v-if="networkDisplayUrls.length === 0" class="text-caption text-kobo-3">
                     {{ $t('settings.network.noUrls') }}
                   </div>
                   <div v-for="u in networkDisplayUrls" :key="u" class="text-body2">{{ u }}</div>
                 </div>
 
                 <div v-if="networkQrDataUrl" class="q-mt-md">
-                  <div class="text-caption text-grey-7 q-mb-xs">{{ $t('settings.network.scan') }}</div>
+                  <div class="text-caption text-kobo-3 q-mb-xs">{{ $t('settings.network.scan') }}</div>
                   <img :src="networkQrDataUrl" :alt="$t('settings.network.scan')" width="200" height="200" />
                 </div>
               </template>
@@ -1748,14 +1748,14 @@ where ffmpeg</pre>
               class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
             >
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.shareTitle') }}</div>
-              <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.shareHint') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.shareHint') }}</div>
               <div class="row q-gutter-sm">
                 <q-btn
                   :label="$t('settings.exportConfig')"
                   icon="download"
                   no-caps
                   outline
-                  color="grey-4"
+                  color="kobo-2"
                   @click="exportConfig"
                 />
                 <q-btn
@@ -1763,7 +1763,7 @@ where ffmpeg</pre>
                   icon="upload"
                   no-caps
                   outline
-                  color="grey-4"
+                  color="kobo-2"
                   @click="triggerImport"
                 />
                 <input
@@ -1785,7 +1785,7 @@ where ffmpeg</pre>
             <div class="project-list-col">
               <div class="settings-card rounded-borders" style="height: 100%;">
                 <div class="q-pa-sm">
-                  <div class="text-caption text-uppercase text-weight-bold q-px-sm q-py-xs text-grey-6" style="letter-spacing: 0.05em;">
+                  <div class="text-caption text-uppercase text-weight-bold q-px-sm q-py-xs text-kobo-3" style="letter-spacing: 0.05em;">
                     {{ $t('settings.configuredProjects') }}
                   </div>
                 </div>
@@ -1804,10 +1804,10 @@ where ffmpeg</pre>
                     @click="selectProject(index)"
                   >
                     <q-item-section>
-                      <q-item-label class="text-body2 text-grey-3">
+                      <q-item-label class="text-body2 text-kobo-1">
                         {{ projectDisplayName(project) }}
                       </q-item-label>
-                      <q-item-label caption class="text-grey-7 ellipsis" style="font-size: 11px; font-family: monospace;">
+                      <q-item-label caption class="text-kobo-3 ellipsis" style="font-size: 11px; font-family: monospace;">
                         {{ project.path }}
                       </q-item-label>
                     </q-item-section>
@@ -1817,7 +1817,7 @@ where ffmpeg</pre>
                 <!-- Empty state -->
                 <div
                   v-if="store.projects.length === 0 && !store.loading"
-                  class="q-pa-md text-center text-caption text-grey-8"
+                  class="q-pa-md text-center text-caption text-kobo-3"
                 >
                   {{ $t('settings.noProjects') }}
                 </div>
@@ -1833,7 +1833,7 @@ where ffmpeg</pre>
                     flat
                     dense
                     class="full-width"
-                    color="indigo-4"
+                    color="primary"
                     @click="addNewProject"
                   />
                 </div>
@@ -1845,7 +1845,7 @@ where ffmpeg</pre>
               <div class="settings-card rounded-borders q-pa-lg" style="height: 100%;">
                 <template v-if="selectedProject || isNewProject">
                   <div class="row items-center q-mb-md">
-                    <div class="text-subtitle1 text-weight-medium text-grey-3">
+                    <div class="text-subtitle1 text-weight-medium text-kobo-1">
                       {{ isNewProject ? $t('settings.newProject') : $t('settings.editProject') }}
                     </div>
                     <q-space />
@@ -1867,7 +1867,7 @@ where ffmpeg</pre>
 
                   <!-- Copy settings from existing project (new-project mode only) -->
                   <div v-if="isNewProject && store.projects.length > 0" class="q-mb-md">
-                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">
+                    <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">
                       {{ $t('settings.copyFrom') }}
                     </div>
                     <q-select
@@ -1885,7 +1885,7 @@ where ffmpeg</pre>
                       class="settings-input"
                       @update:model-value="onCopyFromChange"
                     />
-                    <div class="text-caption text-grey-7 q-mt-xs">
+                    <div class="text-caption text-kobo-3 q-mt-xs">
                       {{ $t('settings.copyFromHint') }}
                     </div>
                   </div>
@@ -1895,7 +1895,7 @@ where ffmpeg</pre>
                     <div class="text-subtitle2 q-mb-md">{{ $t('settings.projectGroup.identity') }}</div>
 
                     <div class="q-mb-md">
-                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.projectPath') }}</div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.projectPath') }}</div>
                       <q-input
                         v-model="projectForm.path"
                         dense
@@ -1913,7 +1913,7 @@ where ffmpeg</pre>
                             round
                             size="sm"
                             icon="folder_open"
-                            color="grey-5"
+                            color="kobo-2"
                             @click="folderPickerOpen = true"
                           >
                             <q-tooltip>{{ $t('folderPicker.title') }}</q-tooltip>
@@ -1923,7 +1923,7 @@ where ffmpeg</pre>
                     </div>
 
                     <div class="q-mb-md">
-                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.displayName') }}</div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.displayName') }}</div>
                       <q-input
                         v-model="projectForm.displayName"
                         dense
@@ -1935,7 +1935,7 @@ where ffmpeg</pre>
                     </div>
 
                     <div>
-                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">
                         {{ $t('settings.projectColor') }}
                       </div>
                       <div class="row items-center q-gutter-xs">
@@ -1955,12 +1955,12 @@ where ffmpeg</pre>
                           no-caps
                           size="xs"
                           :label="$t('settings.projectColorClear')"
-                          color="grey-5"
+                          color="kobo-2"
                           :disable="!projectForm.color"
                           @click="projectForm.color = null"
                         />
                       </div>
-                      <div class="text-caption text-grey-6 q-mt-xs">
+                      <div class="text-caption text-kobo-3 q-mt-xs">
                         {{ projectForm.color ?? $t('settings.projectColorDefault') }}
                       </div>
                     </div>
@@ -1971,7 +1971,7 @@ where ffmpeg</pre>
                     <div class="text-subtitle2 q-mb-md">{{ $t('settings.projectGroup.defaults') }}</div>
 
                     <div class="q-mb-md">
-                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.defaultSourceBranch') }}</div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.defaultSourceBranch') }}</div>
                       <q-select
                         v-model="projectForm.defaultSourceBranch"
                         :options="branchFilterOptions"
@@ -1987,7 +1987,7 @@ where ffmpeg</pre>
                       >
                         <template #no-option>
                           <q-item>
-                            <q-item-section class="text-grey-6 text-caption">
+                            <q-item-section class="text-kobo-3 text-caption">
                               {{ projectForm.path.trim() ? $t('createPage.noBranches') : $t('createPage.enterPath') }}
                             </q-item-section>
                           </q-item>
@@ -1996,7 +1996,7 @@ where ffmpeg</pre>
                     </div>
 
                     <div class="q-mb-md">
-                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.defaultModel.project') }}</div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.defaultModel.project') }}</div>
                       <q-select
                         v-model="projectForm.defaultModel"
                         :options="projectModelOptions"
@@ -2012,7 +2012,7 @@ where ffmpeg</pre>
                     </div>
 
                     <div>
-                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.forge') }}</div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.forge') }}</div>
                       <q-select
                         v-model="projectForm.forge"
                         :options="forgeOptions"
@@ -2033,8 +2033,8 @@ where ffmpeg</pre>
                     <div class="text-subtitle2 q-mb-md">{{ $t('settings.projectGroup.prompts') }}</div>
 
                     <div class="q-mb-md">
-                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.prPromptTemplate.project') }}</div>
-                      <div class="text-caption text-grey-7 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.prPromptTemplate.project') }}</div>
+                      <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
                       <q-input
                         v-model="projectForm.prPromptTemplate"
                         type="textarea"
@@ -2047,8 +2047,8 @@ where ffmpeg</pre>
                     </div>
 
                     <div class="q-mb-md">
-                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.reviewPromptTemplate.project') }}</div>
-                      <div class="text-caption text-grey-7 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.reviewPromptTemplate.project') }}</div>
+                      <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
                       <q-input
                         v-model="projectForm.reviewPromptTemplate"
                         type="textarea"
@@ -2061,8 +2061,8 @@ where ffmpeg</pre>
                     </div>
 
                     <div class="q-mb-md">
-                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.ciFixPromptTemplate.project') }}</div>
-                      <div class="text-caption text-grey-7 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.ciFixPromptTemplate.project') }}</div>
+                      <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
                       <q-input
                         v-model="projectForm.ciFixPromptTemplate"
                         type="textarea"
@@ -2075,8 +2075,8 @@ where ffmpeg</pre>
                     </div>
 
                     <div v-if="globalNotionEnabled" class="q-mb-md">
-                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ t('settings.notionInitialPrompt.project') }}</div>
-                      <div class="text-caption text-grey-7 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ t('settings.notionInitialPrompt.project') }}</div>
+                      <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
                       <q-input
                         v-model="projectForm.notionInitialPromptTemplate"
                         type="textarea"
@@ -2087,8 +2087,8 @@ where ffmpeg</pre>
                     </div>
 
                     <div v-if="globalSentryEnabled" class="q-mb-md">
-                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ t('settings.sentryInitialPrompt.project') }}</div>
-                      <div class="text-caption text-grey-7 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ t('settings.sentryInitialPrompt.project') }}</div>
+                      <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
                       <q-input
                         v-model="projectForm.sentryInitialPromptTemplate"
                         type="textarea"
@@ -2099,8 +2099,8 @@ where ffmpeg</pre>
                     </div>
 
                     <div class="q-mb-md">
-                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.gitConventions.project') }}</div>
-                      <div class="text-caption text-grey-7 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.gitConventions.project') }}</div>
+                      <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
                       <q-input
                         v-model="projectForm.gitConventions"
                         type="textarea"
@@ -2113,7 +2113,7 @@ where ffmpeg</pre>
                     </div>
 
                     <div>
-                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.taskPromptTemplate') }}</div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.taskPromptTemplate') }}</div>
                       <q-input
                         v-model="projectForm.taskPromptTemplate"
                         type="textarea"
@@ -2123,7 +2123,7 @@ where ffmpeg</pre>
                         :placeholder="$t('settings.taskPromptTemplatePlaceholder')"
                         class="settings-input"
                       />
-                      <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.taskPromptTemplateHint') }}</div>
+                      <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('settings.taskPromptTemplateHint') }}</div>
                     </div>
                   </div>
 
@@ -2132,8 +2132,8 @@ where ffmpeg</pre>
                     <div class="text-subtitle2 q-mb-md">{{ $t('settings.projectGroup.scripts') }}</div>
 
                     <div class="q-mb-md">
-                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.setupScript') }}</div>
-                      <div class="text-caption text-grey-7 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.setupScript') }}</div>
+                      <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
                       <q-input
                         v-model="projectForm.setupScript"
                         type="textarea"
@@ -2143,12 +2143,12 @@ where ffmpeg</pre>
                         :placeholder="$t('settings.setupScriptPlaceholder')"
                         class="settings-input mono-textarea"
                       />
-                      <div class="text-caption text-grey-7 q-mt-xs">{{ $t('settings.setupScriptHint') }}</div>
+                      <div class="text-caption text-kobo-3 q-mt-xs">{{ $t('settings.setupScriptHint') }}</div>
                     </div>
 
                     <div class="q-mb-md">
-                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.cleanupScript') }}</div>
-                      <div class="text-caption text-grey-7 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.cleanupScript') }}</div>
+                      <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
                       <q-input
                         v-model="projectForm.cleanupScript"
                         type="textarea"
@@ -2158,7 +2158,7 @@ where ffmpeg</pre>
                         :placeholder="$t('settings.cleanupScriptPlaceholder')"
                         class="settings-input mono-textarea"
                       />
-                      <div class="field-label-sub text-caption q-mt-sm q-mb-xs text-grey-7">{{ $t('settings.cleanupScriptMode') }}</div>
+                      <div class="field-label-sub text-caption q-mt-sm q-mb-xs text-kobo-3">{{ $t('settings.cleanupScriptMode') }}</div>
                       <q-select
                         v-model="projectForm.cleanupScriptMode"
                         :options="cleanupModeProjectOptions"
@@ -2171,8 +2171,8 @@ where ffmpeg</pre>
                     </div>
 
                     <div>
-                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-grey-6">{{ $t('settings.archiveScript') }}</div>
-                      <div class="text-caption text-grey-7 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.archiveScript') }}</div>
+                      <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
                       <q-input
                         v-model="projectForm.archiveScript"
                         type="textarea"
@@ -2186,7 +2186,7 @@ where ffmpeg</pre>
 
                     <div>
                       <div class="row items-center justify-between q-mb-xs">
-                        <div class="field-label text-body2 text-weight-medium text-grey-6">{{ $t('settings.changeSourceBranchScript') }}</div>
+                        <div class="field-label text-body2 text-weight-medium text-kobo-3">{{ $t('settings.changeSourceBranchScript') }}</div>
                         <q-btn
                           flat
                           dense
@@ -2198,8 +2198,8 @@ where ffmpeg</pre>
                           @click="insertDefaultChangeSourceBranchScript('project')"
                         />
                       </div>
-                      <div class="text-caption text-grey-7 q-mb-xs">{{ $t('settings.changeSourceBranchScript.help') }}</div>
-                      <pre class="text-caption text-grey-6 mono-guide q-mb-sm">{{ $t('settings.changeSourceBranchScript.envHelp') }}</pre>
+                      <div class="text-caption text-kobo-3 q-mb-xs">{{ $t('settings.changeSourceBranchScript.help') }}</div>
+                      <pre class="text-caption text-kobo-3 mono-guide q-mb-sm">{{ $t('settings.changeSourceBranchScript.envHelp') }}</pre>
                       <q-input
                         v-model="projectForm.changeSourceBranchScript"
                         type="textarea"
@@ -2215,7 +2215,7 @@ where ffmpeg</pre>
                   <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
                     <div class="text-subtitle2 q-mb-md">{{ $t('settings.devServer') }}</div>
                     <div class="q-mb-md">
-                      <div class="field-label-sub text-caption q-mb-xs text-grey-7">{{ $t('settings.devServerStart') }}</div>
+                      <div class="field-label-sub text-caption q-mb-xs text-kobo-3">{{ $t('settings.devServerStart') }}</div>
                       <q-input
                         v-model="projectForm.devServer.startCommand"
                         type="textarea"
@@ -2227,7 +2227,7 @@ where ffmpeg</pre>
                       />
                     </div>
                     <div>
-                      <div class="field-label-sub text-caption q-mb-xs text-grey-7">{{ $t('settings.devServerStop') }}</div>
+                      <div class="field-label-sub text-caption q-mb-xs text-kobo-3">{{ $t('settings.devServerStop') }}</div>
                       <q-input
                         v-model="projectForm.devServer.stopCommand"
                         type="textarea"
@@ -2243,7 +2243,7 @@ where ffmpeg</pre>
                   <!-- E2E tests -->
                   <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
                     <div class="text-subtitle2 q-mb-xs">{{ $t('settings.e2e.title') }}</div>
-                    <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.e2e.helpText') }}</div>
+                    <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.e2e.helpText') }}</div>
 
                     <q-select
                       v-model="projectForm.e2e.framework"
@@ -2299,7 +2299,7 @@ where ffmpeg</pre>
                   <!-- Auto-loop finalization -->
                   <div class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
                     <div class="text-subtitle2 q-mb-xs">{{ $t('settings.finalization.title') }}</div>
-                    <div class="text-caption text-grey-7 q-mb-sm">
+                    <div class="text-caption text-kobo-3 q-mb-sm">
                       {{ $t('settings.finalization.helpText') }}
                     </div>
                     <q-input
@@ -2321,8 +2321,8 @@ where ffmpeg</pre>
                 <!-- No selection state -->
                 <template v-else>
                   <div class="column items-center justify-center" style="height: 100%; min-height: 300px;">
-                    <q-icon name="folder_open" size="48px" color="grey-7" class="q-mb-md" />
-                    <div class="text-body2 text-grey-8">
+                    <q-icon name="folder_open" size="48px" color="kobo-3" class="q-mb-md" />
+                    <div class="text-body2 text-kobo-3">
                       {{ $t('settings.selectProject') }}
                     </div>
                   </div>
@@ -2335,13 +2335,13 @@ where ffmpeg</pre>
         <div v-if="activeTab === 'templates'" class="q-pa-none">
           <div data-tour="settings-card-templates" class="settings-card rounded-borders q-pa-lg">
             <div class="row items-center justify-between q-mb-md">
-              <div class="text-subtitle1 text-weight-medium text-grey-3">
+              <div class="text-subtitle1 text-weight-medium text-kobo-1">
                 {{ $t('templates.title') }}
               </div>
               <div class="row q-gutter-sm items-center">
                 <q-btn
                   flat
-                  color="grey-4"
+                  color="kobo-2"
                   icon="restart_alt"
                   :label="$t('templates.reloadDefaults')"
                   dense
@@ -2364,7 +2364,7 @@ where ffmpeg</pre>
 
             <q-separator dark class="q-mb-md" />
 
-            <div v-if="sortedTemplates.length === 0" class="text-grey-6 q-py-lg text-center">
+            <div v-if="sortedTemplates.length === 0" class="text-kobo-3 q-py-lg text-center">
               {{ $t('templates.empty') }}
             </div>
 
@@ -2379,10 +2379,10 @@ where ffmpeg</pre>
               >
                 <div class="row items-start justify-between no-wrap">
                   <div class="col">
-                    <div class="text-body1 text-weight-medium" style="font-family: 'Roboto Mono', monospace;">
+                    <div class="text-body1 text-weight-medium" style="font-family: var(--kobo-font-mono);">
                       /{{ template.slug }}
                     </div>
-                    <div class="text-caption text-grey-5 q-mt-xs">{{ template.description }}</div>
+                    <div class="text-caption text-kobo-2 q-mt-xs">{{ template.description }}</div>
                   </div>
                   <div class="row no-wrap q-gutter-xs">
                     <q-btn
@@ -2392,12 +2392,12 @@ where ffmpeg</pre>
                       round
                       size="sm"
                       icon="settings_backup_restore"
-                      color="grey-5"
+                      color="kobo-2"
                       @click="confirmResetTemplate(template)"
                     >
                       <q-tooltip>{{ $t('templates.resetToDefault') }}</q-tooltip>
                     </q-btn>
-                    <q-btn flat dense round size="sm" icon="edit" color="grey-5" @click="openEditDialog(template)">
+                    <q-btn flat dense round size="sm" icon="edit" color="kobo-2" @click="openEditDialog(template)">
                       <q-tooltip>{{ $t('templates.editTemplate') }}</q-tooltip>
                     </q-btn>
                     <q-btn flat dense round size="sm" icon="delete" color="red-4" @click="confirmDeleteTemplate(template)">
@@ -2408,7 +2408,7 @@ where ffmpeg</pre>
               </q-card>
             </div>
 
-            <div class="text-caption text-grey-7 q-mt-lg" style="font-family: 'Roboto Mono', monospace;">
+            <div class="text-caption text-kobo-3 q-mt-lg" style="font-family: var(--kobo-font-mono);">
               {{ $t('templates.filePath', { path: '~/.config/kobo/templates.json' }) }}
             </div>
           </div>
@@ -2480,11 +2480,11 @@ where ffmpeg</pre>
             dense
             dense-toggle
             :label="$t('templates.availableVars')"
-            header-class="text-grey-6 text-caption q-pa-none"
+            header-class="text-kobo-3 text-caption q-pa-none"
             style="font-size: 11px;"
           >
-            <div class="q-pl-md q-pt-xs" style="font-size: 11px; font-family: 'Roboto Mono', monospace; columns: 2; column-gap: 24px;">
-              <div v-for="v in availableVarsDisplay" :key="v" class="text-grey-5 q-mb-xs">
+            <div class="q-pl-md q-pt-xs" style="font-size: 11px; font-family: var(--kobo-font-mono); columns: 2; column-gap: 24px;">
+              <div v-for="v in availableVarsDisplay" :key="v" class="text-kobo-2 q-mb-xs">
                 {{ v }}
               </div>
             </div>
@@ -2525,6 +2525,7 @@ import { useIsMobile } from 'src/composables/use-is-mobile'
 import { useOnboarding } from 'src/composables/use-onboarding'
 import { CODEX_MODEL_OPTION_DEFS, MODEL_OPTION_DEFS } from 'src/constants/models'
 import { type AgentPermissionMode, PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
+import { applyDocumentLocale } from 'src/i18n'
 import { useLayoutStore } from 'src/stores/layout'
 import type { ProjectSettings } from 'src/stores/settings'
 import { useSettingsStore } from 'src/stores/settings'
@@ -2768,7 +2769,7 @@ const browserNotificationStatus = computed(() => {
     case 'default':
       return { color: 'warning', label: t('settings.browserNotificationAsk') }
     default:
-      return { color: 'grey-7', label: t('settings.browserNotificationUnsupported') }
+      return { color: 'kobo-3', label: t('settings.browserNotificationUnsupported') }
   }
 })
 
@@ -3298,7 +3299,7 @@ function confirmReloadDefaults() {
     title: t('templates.reloadDefaults'),
     message: t('templates.reloadDefaultsConfirmMessage'),
     dark: true,
-    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
     ok: { flat: true, label: t('templates.reloadDefaults'), color: 'primary' },
   }).onOk(async () => {
     reloadingDefaults.value = true
@@ -3327,7 +3328,7 @@ async function confirmDeleteTemplate(template: Template) {
     title: t('templates.deleteTemplate'),
     message: `${t('templates.deleteConfirm', { slug: template.slug })}\n\n${t('templates.deleteConfirmMessage')}`,
     dark: true,
-    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
     ok: { flat: true, label: t('templates.deleteTemplate'), color: 'red-5' },
   }).onOk(async () => {
     try {
@@ -3347,7 +3348,7 @@ function confirmResetTemplate(template: Template) {
     title: t('templates.resetConfirmTitle'),
     message: t('templates.resetConfirmMessage', { slug: template.slug }),
     dark: true,
-    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
     ok: { flat: true, label: t('templates.resetToDefault'), color: 'primary' },
   }).onOk(async () => {
     try {
@@ -3374,6 +3375,7 @@ const languageOptions = [
 
 function onLanguageChange(val: string) {
   locale.value = val
+  applyDocumentLocale(val)
   localStorage.setItem('kobo:locale', val)
 }
 
@@ -4223,7 +4225,7 @@ function deleteProject() {
     title: t('settings.deleteProjectConfirmTitle'),
     message: t('settings.deleteProjectConfirmMessage', { name: projectName }),
     dark: true,
-    cancel: { flat: true, label: t('common.cancel'), color: 'grey-5' },
+    cancel: { flat: true, label: t('common.cancel'), color: 'kobo-2' },
     ok: { flat: true, label: t('common.delete'), color: 'red-5' },
   }).onOk(async () => {
     if (!selectedProject.value) return
@@ -4263,7 +4265,7 @@ function selectProject(index: number) {
       dark: true,
       persistent: true,
       ok: { flat: true, label: t('settings.unsavedChanges.discard'), color: 'negative' },
-      cancel: { flat: true, label: t('settings.unsavedChanges.cancel'), color: 'grey-5' },
+      cancel: { flat: true, label: t('settings.unsavedChanges.cancel'), color: 'kobo-2' },
     }).onOk(() => {
       isNewProject.value = false
       selectedProjectIndex.value = index
@@ -4357,7 +4359,7 @@ onUnmounted(() => {
   margin: 6px 0;
   font-family: var(--kobo-font-mono, monospace);
   font-size: 11px;
-  color: #cfcfe0;
+  color: var(--kobo-text-2);
   white-space: pre-wrap;
   word-break: break-all;
 }

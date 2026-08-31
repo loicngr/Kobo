@@ -1,5 +1,5 @@
 <template>
-  <div v-if="pending" class="permission-request-panel q-pa-sm bg-dark text-grey-3" :class="{ collapsed }">
+  <div v-if="pending" class="permission-request-panel q-pa-sm bg-dark text-kobo-1" :class="{ collapsed }">
     <div class="row items-center q-mb-sm">
       <q-icon name="security" size="16px" color="amber-4" class="q-mr-sm" />
       <div class="text-caption text-uppercase text-weight-bold text-amber-4" style="letter-spacing: 0.05em;">
@@ -11,7 +11,7 @@
         flat
         dense
         size="sm"
-        color="grey-4"
+        color="kobo-2"
         :aria-label="t(collapsed ? 'permissionRequest.expand' : 'permissionRequest.collapse')"
         @click="collapsed = !collapsed"
       >
@@ -19,16 +19,16 @@
       </q-btn>
     </div>
 
-    <div v-show="!collapsed" class="text-body2 text-grey-2 q-mb-xs">
+    <div v-show="!collapsed" class="text-body2 text-kobo-1 q-mb-xs">
       <span class="text-weight-medium">{{ t('permissionRequest.tool') }}:</span>
       <code class="q-ml-xs">{{ pending.toolName }}</code>
     </div>
     <template v-if="!collapsed">
-    <div class="text-caption text-grey-6 q-mb-xs">{{ t('permissionRequest.input') }}</div>
+    <div class="text-caption text-kobo-3 q-mb-xs">{{ t('permissionRequest.input') }}</div>
     <template v-if="fileWritePreview">
       <div class="permission-file-path"><q-icon name="description" size="15px" class="q-mr-xs" />{{ fileWritePreview.path }}</div>
       <pre class="permission-input-pre">{{ fileWritePreview.content }}</pre>
-      <q-expansion-item dense :label="t('permissionRequest.rawInput')" header-class="text-caption text-grey-6">
+      <q-expansion-item dense :label="t('permissionRequest.rawInput')" header-class="text-caption text-kobo-3">
         <pre class="permission-input-pre q-mt-xs">{{ formattedInput }}</pre>
       </q-expansion-item>
     </template>
@@ -38,7 +38,7 @@
     <div v-show="!collapsed" class="row items-center q-gutter-sm q-mt-sm">
       <q-btn
         :label="t('permissionRequest.allowOnce')"
-        color="indigo-5"
+        color="primary"
         dense
         unelevated
         :loading="submitting"
@@ -52,7 +52,7 @@
         :label="t('permissionRequest.deny')"
         flat
         dense
-        color="grey-4"
+        color="kobo-2"
         :disable="submitting"
         @click="decide('deny')"
       />
@@ -152,9 +152,9 @@ async function decide(
   margin: 0;
 }
 .permission-file-path {
-  font-family: 'SF Mono', Menlo, Consolas, monospace;
+  font-family: var(--kobo-font-mono);
   font-size: 12px;
-  color: #b6c4ff;
+  color: var(--kobo-text-2);
   margin-bottom: 0.4em;
   word-break: break-all;
 }

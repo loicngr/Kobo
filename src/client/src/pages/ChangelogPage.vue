@@ -8,7 +8,7 @@
       <q-btn flat dense icon="refresh" :loading="loading" :label="$t('common.refresh')" @click="load" />
     </div>
 
-    <div v-if="loading && versions.length === 0" class="text-grey-6 text-center q-pa-lg">
+    <div v-if="loading && versions.length === 0" class="text-kobo-3 text-center q-pa-lg">
       {{ $t('common.loading') }}
     </div>
 
@@ -16,27 +16,27 @@
       {{ error }}
     </div>
 
-    <div v-else-if="versions.length === 0" class="text-grey-6 text-center q-pa-lg">
+    <div v-else-if="versions.length === 0" class="text-kobo-3 text-center q-pa-lg">
       {{ $t('changelog.empty') }}
     </div>
 
     <div v-else class="column q-gutter-md">
-      <div v-if="currentVersion" class="text-caption text-grey-6">
+      <div v-if="currentVersion" class="text-caption text-kobo-3">
         {{ $t('changelog.currentVersion', { version: currentVersion }) }}
       </div>
 
       <q-card v-for="entry in versions" :key="entry.version" dark flat bordered>
         <q-card-section>
           <div class="row items-center q-mb-sm">
-            <div class="text-subtitle1 text-indigo-3" style="font-family: var(--kobo-font-mono, monospace);">
+            <div class="text-subtitle1 text-kobo-2" style="font-family: var(--kobo-font-mono, monospace);">
               v{{ entry.version }}
             </div>
             <q-chip
               v-if="entry.version === currentVersion"
               dense
               size="sm"
-              color="indigo-7"
-              text-color="grey-2"
+              color="primary"
+              text-color="kobo-1"
               :label="$t('changelog.current')"
               class="q-ml-sm"
             />
@@ -91,14 +91,14 @@ onMounted(load)
 
 <style scoped>
 .changelog-notes {
-  color: #cfcfe0;
+  color: var(--kobo-text-2);
   font-size: 13px;
   line-height: 1.55;
 }
 .changelog-notes :deep(h3) {
   font-size: 14px;
   font-weight: 600;
-  color: #d8d8e8;
+  color: var(--kobo-text);
   margin: 0.8em 0 0.3em;
 }
 .changelog-notes :deep(ul) {
@@ -115,6 +115,6 @@ onMounted(load)
   font-size: 12px;
 }
 .changelog-notes :deep(a) {
-  color: #8a93ff;
+  color: var(--kobo-text-2);
 }
 </style>

@@ -1,5 +1,5 @@
 <template>
-  <q-banner v-if="visible" class="bg-indigo-9 text-white q-ma-sm" rounded>
+  <q-banner v-if="visible" class="bg-kobo-surface text-white q-ma-sm" rounded>
     <template #avatar>
       <q-icon :name="mode === 'autoloop' ? 'loop' : 'history'" />
     </template>

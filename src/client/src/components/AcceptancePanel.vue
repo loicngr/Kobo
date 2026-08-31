@@ -1,7 +1,7 @@
 <template>
   <div class="acceptance-panel q-pa-md">
     <div class="row items-center q-mb-sm">
-      <div class="text-caption text-uppercase text-weight-bold text-grey-6" style="letter-spacing: 0.05em;">
+      <div class="text-caption text-uppercase text-weight-bold text-kobo-3" style="letter-spacing: 0.05em;">
         {{ $t('acceptance.title') }}
       </div>
       <q-space />
@@ -12,7 +12,7 @@
         round
         size="xs"
         icon="fact_check"
-        color="grey-5"
+        color="kobo-2"
         @click="askAgentProgress"
       >
         <q-tooltip>{{ $t('tasks.askProgress') }}</q-tooltip>
@@ -24,7 +24,7 @@
         round
         size="xs"
         icon="add"
-        color="indigo-4"
+        color="primary"
         @click="startAdd"
       >
         <q-tooltip>{{ $t('tooltip.addCriterion') }}</q-tooltip>
@@ -79,7 +79,7 @@
           <span
             class="col acceptance-title text-caption"
             :class="{ 'text-strike': task.status === 'done' }"
-            :style="{ color: task.status === 'done' ? '#4ade80' : '#ccc' }"
+            :style="{ color: task.status === 'done' ? 'var(--kobo-success)' : 'var(--kobo-text-2)' }"
             @dblclick="startEdit(task)"
           >
             {{ task.title }}
@@ -90,7 +90,7 @@
             round
             size="xs"
             icon="close"
-            color="grey-6"
+            color="kobo-3"
             class="criterion-delete-btn"
             @click="removeCriterion(task)"
           >
@@ -100,7 +100,7 @@
       </div>
     </div>
 
-    <div v-else-if="!adding" class="text-caption text-grey-8" style="font-size: 11px;">
+    <div v-else-if="!adding" class="text-caption text-kobo-3" style="font-size: 11px;">
       {{ $t('acceptance.empty') }}
     </div>
   </div>
@@ -158,11 +158,11 @@ function statusIcon(status: string): string {
 function statusColor(status: string): string {
   switch (status) {
     case 'done':
-      return '#4ade80'
+      return 'var(--kobo-success)'
     case 'in_progress':
-      return '#f59e0b'
+      return 'var(--kobo-warning)'
     default:
-      return '#888'
+      return 'var(--kobo-text-3)'
   }
 }
 
@@ -298,10 +298,10 @@ async function removeCriterion(task: Task) {
 
   :deep(input) {
     font-size: 12px;
-    color: #e0e0e0;
+    color: var(--kobo-text-2);
 
     &::placeholder {
-      color: #555;
+      color: var(--kobo-text-disabled);
     }
   }
 }

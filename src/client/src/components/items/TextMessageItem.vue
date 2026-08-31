@@ -61,7 +61,7 @@ function onMessageClick(event: MouseEvent) {
 
 <style scoped>
 .markdown-message {
-  color: #e0e0e0;
+  color: var(--kobo-text-2);
   font-size: 13px;
   line-height: 1.55;
   word-break: break-word;
@@ -105,16 +105,16 @@ function onMessageClick(event: MouseEvent) {
   margin: 0.15em 0;
 }
 .markdown-message :deep(a) {
-  color: #7986cb;
+  color: var(--kobo-text-2);
   text-decoration: underline;
 }
 .markdown-message :deep(.document-link) {
-  color: #9fa8da;
+  color: var(--kobo-text-2);
   text-decoration: underline dotted;
   cursor: pointer;
 }
 .markdown-message :deep(.document-link:hover) {
-  color: #c5cae9;
+  color: var(--kobo-text);
   text-decoration: underline solid;
 }
 .markdown-message :deep(h1),

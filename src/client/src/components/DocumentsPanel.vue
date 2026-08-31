@@ -2,7 +2,7 @@
   <div class="documents-panel q-pa-md">
     <!-- Header -->
     <div class="row items-center justify-between q-mb-sm">
-      <div class="text-caption text-uppercase text-weight-bold text-grey-6" style="letter-spacing: 0.05em;">
+      <div class="text-caption text-uppercase text-weight-bold text-kobo-3" style="letter-spacing: 0.05em;">
         {{ $t('documents.title') }}
       </div>
       <q-btn
@@ -12,7 +12,7 @@
         dense
         size="xs"
         icon="refresh"
-        color="grey-6"
+        color="kobo-3"
         :loading="store.loadingList"
         @click="refresh"
       >
@@ -26,22 +26,22 @@
         size="sm"
         icon="arrow_back"
         :label="$t('documents.back')"
-        color="grey-5"
+        color="kobo-2"
         @click="closeDocument"
       />
     </div>
 
     <!-- Tree view -->
     <template v-if="!store.selected">
-      <div v-if="!workspace" class="text-caption text-grey-8">
+      <div v-if="!workspace" class="text-caption text-kobo-3">
         {{ $t('common.selectWorkspace') }}
       </div>
 
       <div v-else-if="store.loadingList" class="text-center q-py-lg">
-        <q-spinner size="24px" color="grey-6" />
+        <q-spinner size="24px" color="kobo-3" />
       </div>
 
-      <div v-else-if="documents.length === 0" class="text-caption text-grey-8 text-center q-py-lg">
+      <div v-else-if="documents.length === 0" class="text-caption text-kobo-3 text-center q-py-lg">
         {{ $t('documents.empty') }}
       </div>
 
@@ -68,13 +68,13 @@
         <template #default-header="{ node }">
           <q-icon
             :name="node.isFolder ? 'folder' : 'description'"
-            :color="node.isFolder ? 'indigo-4' : 'grey-5'"
+            :color="node.isFolder ? 'primary' : 'kobo-2'"
             size="14px"
             class="q-mr-xs"
           />
           <span
-            :class="node.isFolder ? 'text-grey-4' : 'text-grey-3'"
-            style="font-family: 'Roboto Mono', monospace; font-size: 11px;"
+            :class="node.isFolder ? 'text-kobo-2' : 'text-kobo-1'"
+            style="font-family: var(--kobo-font-mono); font-size: 11px;"
           >{{ node.label }}</span>
         </template>
       </q-tree>
@@ -83,7 +83,7 @@
     <!-- Detail view -->
     <template v-else>
       <div v-if="store.loadingContent" class="text-center q-py-lg">
-        <q-spinner size="24px" color="grey-6" />
+        <q-spinner size="24px" color="kobo-3" />
       </div>
       <div v-else class="document-content" v-html="renderedMarkdown" />
     </template>
@@ -158,22 +158,22 @@ watch(
 }
 .document-content {
   font-size: 12px;
-  color: #d0d0d0;
+  color: var(--kobo-text-2);
   line-height: 1.6;
   overflow-wrap: break-word;
 
-  :deep(h1) { font-size: 16px; color: #e0e0e0; margin: 16px 0 8px; }
-  :deep(h2) { font-size: 14px; color: #e0e0e0; margin: 14px 0 6px; }
-  :deep(h3) { font-size: 13px; color: #e0e0e0; margin: 12px 0 4px; }
+  :deep(h1) { font-size: 16px; color: var(--kobo-text-2); margin: 16px 0 8px; }
+  :deep(h2) { font-size: 14px; color: var(--kobo-text-2); margin: 14px 0 6px; }
+  :deep(h3) { font-size: 13px; color: var(--kobo-text-2); margin: 12px 0 4px; }
   :deep(code) {
-    background: #1a1a2e;
+    background: var(--kobo-bg);
     padding: 1px 4px;
     border-radius: 3px;
-    font-family: 'Roboto Mono', monospace;
+    font-family: var(--kobo-font-mono);
     font-size: 11px;
   }
   :deep(pre) {
-    background: #1a1a2e;
+    background: var(--kobo-bg);
     padding: 8px 12px;
     border-radius: 6px;
     overflow-x: auto;
@@ -200,26 +200,26 @@ watch(
     margin: 8px 0;
   }
   :deep(th), :deep(td) {
-    border: 1px solid #2a2a4a;
+    border: 1px solid var(--kobo-border-subtle);
     padding: 4px 8px;
     text-align: left;
   }
   :deep(th) {
-    background: #1a1a2e;
-    color: #e0e0e0;
+    background: var(--kobo-bg);
+    color: var(--kobo-text-2);
   }
   :deep(blockquote) {
-    border-left: 3px solid #4a4a6a;
+    border-left: 3px solid var(--kobo-border-strong);
     margin: 8px 0;
     padding: 4px 12px;
-    color: #a0a0b0;
+    color: var(--kobo-text-3);
   }
   :deep(a) {
-    color: #818cf8;
+    color: var(--kobo-text-2);
   }
   :deep(hr) {
     border: none;
-    border-top: 1px solid #2a2a4a;
+    border-top: 1px solid var(--kobo-border-subtle);
     margin: 12px 0;
   }
 }

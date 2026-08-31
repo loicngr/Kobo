@@ -15,7 +15,7 @@
       v-else
       dense
       no-caps
-      color="indigo-4"
+      color="primary"
       icon="play_arrow"
       :label="t('autoLoop.start')"
       :disable="startDisabled"
@@ -29,7 +29,7 @@
       dense
       no-caps
       outline
-      color="indigo-4"
+      color="primary"
       icon="build"
       :label="isReady ? t('autoLoop.reprepare') : t('autoLoop.prepare')"
       :disable="isAgentBusy || isArchived"
@@ -45,7 +45,7 @@
       no-caps
       flat
       size="sm"
-      color="grey-5"
+      color="kobo-2"
       :label="t('autoLoop.forceReady')"
       :disable="isAgentBusy || isArchived"
       @click="onForceReady"

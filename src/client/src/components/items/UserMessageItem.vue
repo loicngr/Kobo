@@ -5,7 +5,7 @@
     dense
     dense-toggle
     :label="$t('chat.systemPrompt')"
-    header-class="text-grey-5 text-caption"
+    header-class="text-kobo-2 text-caption"
   >
     <!-- eslint-disable-next-line vue/no-v-html -->
     <div class="q-py-xs markdown-user-prompt" v-html="html" />
@@ -69,7 +69,7 @@ function onMessageClick(event: MouseEvent) {
 
 <style scoped>
 .markdown-message {
-  color: #e0e0e0;
+  color: var(--kobo-text-2);
   font-size: 13px;
   line-height: 1.55;
   word-break: break-word;
@@ -131,7 +131,7 @@ function onMessageClick(event: MouseEvent) {
   font-size: 1em;
 }
 .markdown-user-prompt {
-  color: #aaa;
+  color: var(--kobo-text-2);
   font-size: 12px;
   font-style: italic;
 }

@@ -1,5 +1,6 @@
 // App global styles
 @import 'design-tokens';
+@import 'fonts';
 
 * {
   box-sizing: border-box;
@@ -11,6 +12,23 @@ body,
   height: 100%;
   margin: 0;
   padding: 0;
+}
+
+// Form controls do not inherit font-family from `body` — without this rule the
+// inputs, textareas and buttons would keep rendering in the UA default while
+// the rest of the app switched to Geist.
+input,
+textarea,
+select,
+button {
+  font-family: inherit;
+}
+
+code,
+kbd,
+pre,
+samp {
+  font-family: var(--kobo-font-mono);
 }
 
 .bg-dark-sidebar {
@@ -27,42 +45,83 @@ body,
 
 // ── Onboarding tour (driver.js) — dark theme override ──────────────────────
 .driver-popover.kobo-onboarding-popover {
-  background-color: #1e1e3a;
-  color: #e0e0e0;
-  border-radius: 8px;
+  background-color: var(--kobo-surface);
+  color: var(--kobo-text-2);
+  border-radius: var(--kobo-radius-lg);
 }
 .kobo-onboarding-popover .driver-popover-title {
-  color: #fff;
+  color: var(--kobo-text);
 }
 .kobo-onboarding-popover .driver-popover-description {
-  color: #bdbdbd;
+  color: var(--kobo-text-2);
 }
-.kobo-onboarding-popover .driver-popover-progress-text {
-  color: #888;
-}
+.kobo-onboarding-popover .driver-popover-progress-text,
 .kobo-onboarding-popover .driver-popover-close-btn {
-  color: #888;
+  color: var(--kobo-text-3);
 }
 .kobo-onboarding-popover .driver-popover-navigation-btns button {
-  background-color: #2a2a4a;
-  color: #e0e0e0;
+  background-color: var(--kobo-hover);
+  color: var(--kobo-text-2);
   text-shadow: none;
-  border-radius: 4px;
+  border-radius: var(--kobo-radius-sm);
 }
 .kobo-onboarding-popover .driver-popover-navigation-btns button:hover {
-  background-color: #6c63ff;
-  color: #fff;
+  background-color: var(--kobo-accent);
+  color: var(--kobo-accent-fg);
 }
 // Tooltip arrow — match the dark popover background on every side.
 .kobo-onboarding-popover .driver-popover-arrow-side-left.driver-popover-arrow {
-  border-left-color: #1e1e3a;
+  border-left-color: var(--kobo-surface);
 }
 .kobo-onboarding-popover .driver-popover-arrow-side-right.driver-popover-arrow {
-  border-right-color: #1e1e3a;
+  border-right-color: var(--kobo-surface);
 }
 .kobo-onboarding-popover .driver-popover-arrow-side-top.driver-popover-arrow {
-  border-top-color: #1e1e3a;
+  border-top-color: var(--kobo-surface);
 }
 .kobo-onboarding-popover .driver-popover-arrow-side-bottom.driver-popover-arrow {
-  border-bottom-color: #1e1e3a;
+  border-bottom-color: var(--kobo-surface);
+}
+
+// ── Design-system colour utilities ─────────────────────────────────────────
+// Quasar renders `color="foo"` as `.text-foo` or `.bg-foo` depending on the
+// component, so every token name gets both. `!important` matches the
+// specificity of Quasar's own `.text-grey-*` utilities, which these replace.
+$kobo-colors: (
+  'kobo-1': var(--kobo-text),
+  'kobo-2': var(--kobo-text-2),
+  'kobo-3': var(--kobo-text-3),
+  'kobo-off': var(--kobo-text-disabled),
+  'kobo-ink': var(--kobo-bg),
+  'kobo-bg': var(--kobo-bg),
+  'kobo-bg-deep': var(--kobo-bg-deep),
+  'kobo-surface': var(--kobo-surface),
+  'kobo-surface-2': var(--kobo-surface-2),
+  'kobo-hover': var(--kobo-hover),
+  'kobo-danger': var(--kobo-danger),
+  'kobo-success': var(--kobo-success),
+  'kobo-warning': var(--kobo-warning),
+);
+
+@each $name, $value in $kobo-colors {
+  .text-#{$name} {
+    color: $value !important;
+  }
+  .bg-#{$name} {
+    background: $value !important;
+  }
+}
+
+// Visually hidden but exposed to assistive technology. Used by the activity
+// feed's live region, which must be announced without ever being painted.
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }

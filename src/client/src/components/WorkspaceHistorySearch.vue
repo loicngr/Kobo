@@ -3,7 +3,7 @@
     <q-input ref="searchInput" v-model="query" dense dark outlined debounce="250" :placeholder="$t('chat.searchWorkspaceHistory')" clearable>
       <template #prepend><q-icon name="search" size="18px" /></template>
       <template #append>
-        <q-btn flat round dense size="sm" icon="close" color="grey-5" @click="close">
+        <q-btn flat round dense size="sm" icon="close" color="kobo-2" @click="close">
           <q-tooltip>{{ $t('common.close') }}</q-tooltip>
         </q-btn>
       </template>
@@ -17,7 +17,7 @@
           <q-item-label class="row items-center no-wrap">
             <span class="text-caption text-weight-medium" :class="`text-${resultColor(result.kind)}`">{{ resultLabel(result.kind) }}</span>
             <q-space />
-            <span class="text-caption text-grey-7">{{ formatDate(result.createdAt) }}</span>
+            <span class="text-caption text-kobo-3">{{ formatDate(result.createdAt) }}</span>
           </q-item-label>
           <q-item-label class="history-result-snippet">{{ result.snippet }}</q-item-label>
         </q-item-section>
@@ -85,7 +85,7 @@ function resultIcon(kind: SearchResult['kind']): string {
 }
 
 function resultColor(kind: SearchResult['kind']): string {
-  return kind === 'user' ? 'deep-purple-3' : 'indigo-3'
+  return kind === 'user' ? 'primary' : 'primary'
 }
 
 function resultLabel(kind: SearchResult['kind']): string {
@@ -104,8 +104,8 @@ onMounted(() => {
 
 <style scoped>
 .history-results {
-  border: 1px solid #303650;
-  background: #171a2c;
+  border: 1px solid var(--kobo-border);
+  background: var(--kobo-bg-deep);
   max-height: 360px;
   overflow-y: auto;
 }
@@ -115,10 +115,10 @@ onMounted(() => {
   border-left: 2px solid transparent;
 }
 .history-result + .history-result { border-top: 1px solid rgba(255, 255, 255, 0.06); }
-.history-result:hover { background: rgba(129, 140, 248, 0.1); border-left-color: #818cf8; }
+.history-result:hover { background: rgba(129, 140, 248, 0.1); border-left-color: var(--kobo-accent); }
 .history-result-avatar { min-width: 32px; padding-right: 4px; }
 .history-result-snippet {
-  color: #b9bfd0;
+  color: var(--kobo-text-2);
   font-size: 12px;
   line-height: 1.4;
   margin-top: 3px;

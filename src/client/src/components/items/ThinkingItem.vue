@@ -1,12 +1,12 @@
 <template>
-  <div class="text-caption text-grey-5" style="font-style: italic;">
+  <div class="text-caption text-kobo-2" style="font-style: italic;">
     <q-expansion-item
       v-if="needsExpand"
       dense
       dense-toggle
       default-opened
       class="thinking-expansion"
-      header-class="text-grey-5 text-caption"
+      header-class="text-kobo-2 text-caption"
       style="font-style: italic;"
     >
       <template #header>

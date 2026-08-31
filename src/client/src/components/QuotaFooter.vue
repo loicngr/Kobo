@@ -1,7 +1,7 @@
 <template>
   <span class="quota-footer">
     <template v-if="!snapshot">
-      <span class="text-grey-7">{{ $t('quotaFooter.empty') }}</span>
+      <span class="text-kobo-3">{{ $t('quotaFooter.empty') }}</span>
     </template>
 
     <template v-else-if="snapshot.status === 'unauthenticated'">
@@ -50,11 +50,11 @@
         :key="bucket.id"
         class="quota-bucket-compact"
       >
-        <span class="text-grey-8">{{ bucketLabelFor(bucket.label, idx) }}</span>
+        <span class="text-kobo-3">{{ bucketLabelFor(bucket.label, idx) }}</span>
         <q-linear-progress
           :value="Math.max(0, Math.min(1, bucket.usedPct / 100))"
           :color="usagePctColor(bucket.usedPct)"
-          track-color="grey-9"
+          track-color="kobo-surface-2"
           class="quota-bar"
         />
         <span :class="['bucket-pct', `text-${usagePctColor(bucket.usedPct)}`]">{{ bucket.usedPct.toFixed(0) }}%</span>
@@ -73,7 +73,7 @@
           <q-linear-progress
             :value="Math.max(0, Math.min(1, bucket.usedPct / 100))"
             :color="usagePctColor(bucket.usedPct)"
-            track-color="grey-9"
+            track-color="kobo-surface-2"
             class="full-bar"
           />
           <div v-if="bucket.resetsAt" class="text-caption q-mt-xs">

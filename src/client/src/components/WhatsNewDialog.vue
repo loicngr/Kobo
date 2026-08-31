@@ -3,17 +3,17 @@
     :model-value="modelValue"
     @update:model-value="$emit('update:modelValue', $event)"
   >
-    <q-card class="text-grey-3" style="min-width: 480px; max-width: 90vw; background: #1e1e3a;">
+    <q-card class="text-kobo-1" style="min-width: 480px; max-width: 90vw; background: var(--kobo-surface);">
       <q-card-section class="row items-center q-pb-none">
-        <q-icon name="auto_awesome" size="sm" color="indigo-4" class="q-mr-sm" />
+        <q-icon name="auto_awesome" size="sm" color="primary" class="q-mr-sm" />
         <div class="text-h6">{{ $t('whatsNew.title') }}</div>
         <q-space />
-        <q-btn v-close-popup flat dense round icon="close" color="grey-5" />
+        <q-btn v-close-popup flat dense round icon="close" color="kobo-2" />
       </q-card-section>
 
       <q-card-section style="max-height: 60vh; overflow-y: auto;">
         <div v-for="entry in versions" :key="entry.version" class="q-mb-md">
-          <div class="text-subtitle2 text-indigo-3 q-mb-xs">{{ entry.version }}</div>
+          <div class="text-subtitle2 text-kobo-2 q-mb-xs">{{ entry.version }}</div>
           <!-- eslint-disable-next-line vue/no-v-html -->
           <div class="whats-new-notes" v-html="renderNotes(entry.notes)" />
         </div>
@@ -43,7 +43,7 @@ function renderNotes(notes: string): string {
 
 <style scoped>
 .whats-new-notes {
-  color: #cfcfe0;
+  color: var(--kobo-text-2);
   font-size: 13px;
   line-height: 1.55;
 }

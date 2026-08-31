@@ -73,9 +73,20 @@ Text
   --kobo-text-disabled #5a5a7a
 
 Accent (rare, indigo — only for active states, primary CTAs, focus ring)
-  --kobo-accent        #6c63ff    /* Kobo brand indigo */
-  --kobo-accent-hover  #5a51e6
+  --kobo-accent        #665fdd    /* Kobo brand indigo */
+  --kobo-accent-hover  #4e47cc
   --kobo-accent-fg     #ffffff
+
+  Measured contrast (WCAG 2.1, sRGB):
+    --kobo-accent-fg on --kobo-accent      4.95:1  AA text ✓
+    --kobo-accent-fg on --kobo-accent-hover 6.78:1  AA text ✓
+    --kobo-accent    on --kobo-bg          3.45:1  AA non-text (1.4.11) ✓
+    --kobo-accent    on --kobo-surface     3.08:1  AA non-text (1.4.11) ✓
+
+  The accent is a BACKGROUND and a UI-component colour. It is never a text
+  colour: white on the accent needs Y <= 0.1833 while the accent read as text
+  on --kobo-bg needs Y >= 0.2270, so no single value can clear 4.5:1 on both
+  sides. Link and emphasis text uses --kobo-text-2 instead.
 
 Semantic (used only when conveying status — keep desaturated)
   --kobo-success       #34d399
@@ -225,8 +236,8 @@ them everywhere. Quasar component theming overrides go through these.
   --kobo-text-3: #9a9ab5;
   --kobo-text-disabled: #5a5a7a;
 
-  --kobo-accent: #6c63ff;
-  --kobo-accent-hover: #5a51e6;
+  --kobo-accent: #665fdd;
+  --kobo-accent-hover: #4e47cc;
   --kobo-accent-fg: #ffffff;
 
   --kobo-success: #34d399;

@@ -6,7 +6,7 @@
     dense
     square
     size="sm"
-    color="indigo-4"
+    color="primary"
     text-color="white"
     icon="hourglass_top"
     class="q-ml-sm"

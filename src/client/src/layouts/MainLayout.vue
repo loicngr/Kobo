@@ -32,17 +32,32 @@
             :model-value="rightTab"
             dense
             dark
-            active-color="indigo-4"
-            indicator-color="indigo-4"
+            active-color="primary"
+            indicator-color="primary"
             narrow-indicator
             @update:model-value="setRightTab"
           >
-            <q-tab name="git" icon="commit" />
-            <q-tab name="timeline" icon="timeline" />
-            <q-tab name="tasks" icon="checklist" />
-            <q-tab v-if="subagentsTabVisible" name="subagents" icon="smart_toy" />
-            <q-tab name="documents" icon="description" />
-            <q-tab name="schedule" icon="event">
+            <q-tab name="git" icon="commit" :aria-label="$t('git.title')">
+              <q-tooltip>{{ $t('git.title') }}</q-tooltip>
+            </q-tab>
+            <q-tab name="timeline" icon="timeline" :aria-label="$t('timeline.title')">
+              <q-tooltip>{{ $t('timeline.title') }}</q-tooltip>
+            </q-tab>
+            <q-tab name="tasks" icon="checklist" :aria-label="$t('tasks.title')">
+              <q-tooltip>{{ $t('tasks.title') }}</q-tooltip>
+            </q-tab>
+            <q-tab
+              v-if="subagentsTabVisible"
+              name="subagents"
+              icon="smart_toy"
+              :aria-label="$t('subagents.title')"
+            >
+              <q-tooltip>{{ $t('subagents.title') }}</q-tooltip>
+            </q-tab>
+            <q-tab name="documents" icon="description" :aria-label="$t('documents.title')">
+              <q-tooltip>{{ $t('documents.title') }}</q-tooltip>
+            </q-tab>
+            <q-tab name="schedule" icon="event" :aria-label="$t('schedule.tabLabel')">
               <q-tooltip>{{ $t('schedule.tabLabel') }}</q-tooltip>
             </q-tab>
           </q-tabs>
@@ -90,12 +105,16 @@
             v-model="bottomTab"
             dense
             dark
-            active-color="indigo-4"
-            indicator-color="indigo-4"
+            active-color="primary"
+            indicator-color="primary"
             narrow-indicator
           >
-            <q-tab name="tools" icon="build" />
-            <q-tab name="terminal" icon="terminal" />
+            <q-tab name="tools" icon="build" :aria-label="$t('tools.title')">
+              <q-tooltip>{{ $t('tools.title') }}</q-tooltip>
+            </q-tab>
+            <q-tab name="terminal" icon="terminal" :aria-label="$t('terminal.title')">
+              <q-tooltip>{{ $t('terminal.title') }}</q-tooltip>
+            </q-tab>
           </q-tabs>
 
           <q-separator dark />
@@ -359,8 +378,8 @@ function startVerticalResize(event: MouseEvent) {
 
 <style lang="scss" scoped>
 .bg-dark {
-  background-color: #16162a !important;
-  border-color: #2a2a4a !important;
+  background-color: var(--kobo-bg-deep) !important;
+  border-color: var(--kobo-border-subtle) !important;
 }
 
 .resize-handle {
@@ -375,7 +394,7 @@ function startVerticalResize(event: MouseEvent) {
 
   &:hover,
   &:active {
-    background-color: rgba(108, 99, 255, 0.5);
+    background-color: rgba(102, 95, 221, 0.5);
   }
 
   &--right {
@@ -387,12 +406,12 @@ function startVerticalResize(event: MouseEvent) {
 .vertical-resize-handle {
   height: 4px;
   cursor: row-resize;
-  background-color: #2a2a4a;
+  background-color: var(--kobo-hover);
   transition: background-color 0.15s;
 
   &:hover,
   &:active {
-    background-color: rgba(108, 99, 255, 0.5);
+    background-color: rgba(102, 95, 221, 0.5);
   }
 }
 </style>

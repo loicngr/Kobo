@@ -10,7 +10,7 @@
         <q-item-section>
           <q-item-label>{{ session.name || session.model || $t('timeline.unnamed') }}</q-item-label>
           <q-item-label caption>{{ session.status }} · {{ duration(session) }}</q-item-label>
-          <div v-if="metricsBySession.get(session.id)" class="row items-center q-gutter-sm q-mt-xs text-caption text-grey-6">
+          <div v-if="metricsBySession.get(session.id)" class="row items-center q-gutter-sm q-mt-xs text-caption text-kobo-3">
             <span><q-icon name="build" size="13px" class="q-mr-xs" />{{ $t('timeline.tools', { count: metricsBySession.get(session.id)?.toolCalls ?? 0 }) }}</span>
             <span><q-icon name="token" size="13px" class="q-mr-xs" />{{ formatTokens(metricsBySession.get(session.id)) }}</span>
             <span v-if="(metricsBySession.get(session.id)?.errors ?? 0) > 0" class="text-negative"><q-icon name="error_outline" size="13px" class="q-mr-xs" />{{ $t('timeline.errors', { count: metricsBySession.get(session.id)?.errors ?? 0 }) }}</span>

@@ -10,7 +10,7 @@
         :class="{ 'slash-item--active': flatDropdown.indexOf(item) === selectedIndex }"
         @mousedown.prevent="emit('select', item)"
       >
-        <q-icon name="bolt" size="12px" color="indigo-4" class="q-mr-xs" />
+        <q-icon name="bolt" size="12px" color="primary" class="q-mr-xs" />
         <span class="slash-name text-caption">{{ item.name }}</span>
       </div>
     </template>
@@ -29,7 +29,7 @@
         <span class="slash-name text-caption">/{{ item.name }}</span>
         <span
           v-if="koboDescription(item.name)"
-          class="slash-description text-caption text-grey-7 q-ml-xs"
+          class="slash-description text-caption text-kobo-3 q-ml-xs"
         >— {{ koboDescription(item.name) }}</span>
       </div>
     </template>
@@ -48,7 +48,7 @@
         <span class="slash-name text-caption">/{{ item.name }}</span>
         <span
           v-if="item.description"
-          class="slash-description text-caption text-grey-7 q-ml-xs"
+          class="slash-description text-caption text-kobo-3 q-ml-xs"
         >— {{ item.description }}</span>
       </div>
     </template>
@@ -92,15 +92,15 @@ function koboDescription(slug: string): string {
 .slash-suggestions {
   max-height: 300px;
   overflow-y: auto;
-  background-color: #1e1e3a;
-  border: 1px solid #2a2a4a;
+  background-color: var(--kobo-surface);
+  border: 1px solid var(--kobo-border-subtle);
   box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.4);
 }
 .slash-section-header {
   padding: 4px 12px;
   font-size: 10px;
   text-transform: uppercase;
-  color: #6b7280;
+  color: var(--kobo-text-3);
   letter-spacing: 0.05em;
   border-top: 1px solid rgba(255, 255, 255, 0.05);
 
@@ -109,11 +109,11 @@ function koboDescription(slug: string): string {
   }
 }
 .slash-item {
-  font-family: 'Roboto Mono', monospace;
+  font-family: var(--kobo-font-mono);
 
   &:hover,
   &--active {
-    background-color: rgba(108, 99, 255, 0.15);
+    background-color: rgba(102, 95, 221, 0.15);
   }
 }
 </style>
