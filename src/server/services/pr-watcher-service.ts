@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import { fetchSourceBranchAsync, isGitWorktree } from '../utils/git-ops.js'
+import { withGitRepoLock } from '../utils/git-repo-lock.js'
 import { stopDevServer } from './dev-server-service.js'
 import { getForgeProvider } from './forge/registry.js'
 import { resolveForge } from './forge/resolve.js'
@@ -189,7 +190,13 @@ export async function checkPrStatuses(): Promise<void> {
       // logic below. Its own try/catch so a git failure neither skips PR
       // transitions nor poisons other workspaces.
       try {
-        void fetchSourceBranchAsync(ws.worktreePath, ws.sourceBranch).catch(() => {})
+        // AWAITED, and serialised on the repository's common git dir: remote
+        // refs live there, shared by every worktree of the project. Firing this
+        // without awaiting made the stats below read the refs from BEFORE the
+        // fetch, so ahead/behind counters were always one tick stale; firing it
+        // concurrently across four worktrees made them fight over the same file
+        // lock, with the error swallowed.
+        await withGitRepoLock(ws.worktreePath, () => fetchSourceBranchAsync(ws.worktreePath, ws.sourceBranch))
         lastKnownGitStats.set(ws.id, await computeGitStats(ws, pr))
       } catch (err) {
         console.error(`[pr-watcher] computeGitStats failed for '${ws.name}':`, err instanceof Error ? err.message : err)
@@ -248,12 +255,23 @@ export async function checkPrStatuses(): Promise<void> {
           try {
             const { autoPurgeOnPrMerged } = getGlobalSettings()
             if (autoPurgeOnPrMerged) {
-              void purgeWorktree(ws.id).catch((err) => {
-                console.error(
-                  `[pr-watcher] auto-purge failed for '${ws.name}':`,
-                  err instanceof Error ? err.message : err,
-                )
-              })
+              void purgeWorktree(ws.id)
+                .then((result) => {
+                  // Auto-purge runs with nobody watching: without this trace an
+                  // outcome of 'removal-failed' left no record anywhere.
+                  if (result.outcome !== 'purged') {
+                    console.warn(
+                      `[pr-watcher] auto-purge for '${ws.name}' ended as '${result.outcome}':`,
+                      result.warnings.join('\n') || '(no warning)',
+                    )
+                  }
+                })
+                .catch((err) => {
+                  console.error(
+                    `[pr-watcher] auto-purge failed for '${ws.name}':`,
+                    err instanceof Error ? err.message : err,
+                  )
+                })
             }
           } catch (err) {
             console.error(

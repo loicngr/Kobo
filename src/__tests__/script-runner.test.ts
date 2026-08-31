@@ -4,6 +4,13 @@ import { runScript } from '../server/utils/script-runner.js'
 
 vi.mock('node:child_process', () => ({
   spawn: vi.fn(),
+  // `script-runner.ts` now imports `git-ops.js`, which wires `execFileSync`/
+  // `execFile` at module load time (`promisify(execFile)` throws immediately
+  // if the arg isn't a function). These stubs just need to exist; the timeout
+  // path calls `getIndexLockPath`, which swallows any error from them and
+  // returns `null`, so an empty worktree path here is harmless.
+  execFile: vi.fn(),
+  execFileSync: vi.fn(),
 }))
 vi.mock('../server/services/websocket-service.js', () => ({
   emit: vi.fn(),
@@ -14,7 +21,9 @@ vi.mock('node:fs', () => ({
     mkdirSync: vi.fn(),
     writeFileSync: vi.fn(),
     unlinkSync: vi.fn(),
+    existsSync: vi.fn(),
   },
+  existsSync: vi.fn(),
 }))
 
 describe('runScript — process group on timeout', () => {

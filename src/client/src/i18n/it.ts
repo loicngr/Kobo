@@ -1274,6 +1274,23 @@ export default {
   'settings.autoLoopMaxRetries': 'Numero massimo di tentativi automatici',
   'settings.autoLoopMaxRetriesHint':
     'Interrompe l’auto-loop dopo questo numero di errori di quota o server temporanei.',
+  'settings.retentionTitle': 'Conservazione della cronologia delle conversazioni (disattivata di default)',
+  'settings.retentionWarning':
+    'Attivare questa opzione elimina definitivamente dal database la cronologia delle conversazioni degli agenti, a partire da tutto ciò che è già più vecchio della finestra. Gli eventi eliminati non sono recuperabili.',
+  'settings.retentionHint':
+    "Viene eseguita una volta all'avvio del server. Workspace, attività, sessioni, branch e worktree non vengono mai toccati — solo l'output registrato degli agenti.",
+  'settings.retentionDaysLabel': 'Elimina gli eventi più vecchi di (giorni)',
+  'settings.retentionDaysHint':
+    '0 — il valore predefinito — conserva tutti gli eventi per sempre. Indica un valore per attivare la conservazione.',
+  'settings.retentionKeepLabel': 'Eventi sempre conservati per workspace',
+  'settings.retentionKeepHint':
+    'Gli eventi più recenti di ogni workspace sopravvivono a prescindere dalla loro età, così un workspace vecchio ma ancora aperto mantiene una cronologia leggibile. Consigliato: 5000.',
+  'settings.retentionDisabledHint': 'Conservazione disattivata: non verrà mai eliminato nulla.',
+  'settings.retentionConfirmTitle': 'Eliminare definitivamente la cronologia delle conversazioni?',
+  'settings.retentionConfirmMessage':
+    "Conservare solo {days} giorno/i di cronologia eliminerà definitivamente, al prossimo avvio del server, {count} dei {total} eventi degli agenti registrati — compreso tutto ciò che è già più vecchio. L'operazione è irreversibile. Continuare?",
+  'settings.retentionConfirmMessageUnknown':
+    "Conservare solo {days} giorno/i di cronologia eliminerà definitivamente, al prossimo avvio del server, tutti gli eventi degli agenti più vecchi — compreso tutto ciò che è già accumulato. Non è stato possibile calcolare il volume esatto. L'operazione è irreversibile. Continuare?",
   'settings.purgeDocsTitle': 'Come funziona la pulizia — ripristino e permessi',
   'settings.purgeDocsRestoreTitle': 'Ripristinare un worktree eliminato (rilevamento automatico)',
   'settings.purgeDocsRestoreIntro':

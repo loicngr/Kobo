@@ -55,6 +55,7 @@ vi.mock('../server/services/workspace-service.js', () => ({
   updateWorkspaceSourceBranch: vi.fn(),
   setInitialPrompt: vi.fn(),
   clearInitialPrompt: vi.fn(),
+  recomputeSessionMetrics: vi.fn(),
 }))
 
 vi.mock('../server/services/worktree-service.js', () => ({
@@ -154,6 +155,13 @@ vi.mock('../server/utils/git-ops.js', () => ({
       .replace(/^-+|-+$/g, '')
       .slice(0, maxLen)
       .replace(/-+$/g, ''),
+  // Mirror the real validator so rename-branch tests exercise real behavior.
+  isValidBranchName: (name: string) => {
+    if (!/^[A-Za-z0-9][A-Za-z0-9/_.-]*$/.test(name)) return false
+    if (name.includes('..') || name.includes('//')) return false
+    if (name.endsWith('/') || name.endsWith('.') || name.endsWith('.lock')) return false
+    return true
+  },
   deleteLocalBranch: vi.fn(),
   deleteRemoteBranch: vi.fn(),
   pushBranch: vi.fn(),
@@ -217,6 +225,7 @@ vi.mock('../server/utils/git-ops.js', () => ({
   renameBranch: vi.fn(),
   branchExists: vi.fn().mockReturnValue(false),
   listBackupBranches: vi.fn().mockReturnValue([]),
+  pruneBackupBranches: vi.fn().mockReturnValue([]),
   restoreBranchFromBackup: vi.fn(),
   getWorkingTreeFiles: vi.fn().mockReturnValue([]),
 }))
@@ -5116,6 +5125,19 @@ describe('POST /api/workspaces/:id/rename-branch', () => {
     expect(vi.mocked(workspaceService.updateWorktreePath)).not.toHaveBeenCalled()
     expect(vi.mocked(workspaceService.updateWorkingBranch)).toHaveBeenCalledWith('ws-1', 'feature/new')
   })
+
+  it('rejects a branch name git would read as an option', async () => {
+    const res = await app.request('/api/workspaces/ws-1/rename-branch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ newName: '--force' }),
+    })
+    expect(res.status).toBe(400)
+    expect((await res.json()) as { error: string }).toMatchObject({
+      error: expect.stringContaining('Invalid branch name'),
+    })
+    expect(vi.mocked(gitOps.renameBranch)).not.toHaveBeenCalled()
+  })
 })
 
 describe('POST /api/workspaces — pre-flight URL validation', () => {
@@ -6189,6 +6211,20 @@ describe('POST /api/workspaces/:id/cancel-source-change', () => {
     expect(res.status).toBe(409)
     const body = await res.json()
     expect((body as { code: string }).code).toBe('no_backup')
+    expect(gitOps.restoreBranchFromBackup).not.toHaveBeenCalled()
+  })
+
+  it('answers 500 with backup_list_failed when the backup list cannot be read', async () => {
+    vi.mocked(gitOps.listBackupBranches).mockImplementation(() => {
+      throw new Error("Failed to list backup branches for 'feature': index.lock exists")
+    })
+    const res = await app.request('/api/workspaces/ws-1/cancel-source-change', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ previousBase: 'main' }),
+    })
+    expect(res.status).toBe(500)
+    expect((await res.json()) as { code: string }).toMatchObject({ code: 'backup_list_failed' })
     expect(gitOps.restoreBranchFromBackup).not.toHaveBeenCalled()
   })
 

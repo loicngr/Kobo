@@ -1278,6 +1278,23 @@ export default {
   'settings.autoLoopMaxRetries': 'Maximale automatische Wiederholungen',
   'settings.autoLoopMaxRetriesHint':
     'Stoppt die Auto-Loop nach dieser Anzahl von Quota- oder vorübergehenden Serverfehlern.',
+  'settings.retentionTitle': 'Aufbewahrung des Konversationsverlaufs (standardmäßig aus)',
+  'settings.retentionWarning':
+    'Wird diese Option aktiviert, löscht sie den Konversationsverlauf der Agenten endgültig aus der Datenbank — zuerst alles, was bereits älter als das Zeitfenster ist. Gelöschte Ereignisse lassen sich nicht wiederherstellen.',
+  'settings.retentionHint':
+    'Läuft einmal beim Start des Servers. Workspaces, Aufgaben, Sessions, Branches und Worktrees bleiben unberührt — betroffen ist nur die aufgezeichnete Agentenausgabe.',
+  'settings.retentionDaysLabel': 'Ereignisse löschen, die älter sind als (Tage)',
+  'settings.retentionDaysHint':
+    '0 — der Standard — behält alle Ereignisse dauerhaft. Tragen Sie einen Wert ein, um die Aufbewahrung zu aktivieren.',
+  'settings.retentionKeepLabel': 'Immer behaltene Ereignisse pro Workspace',
+  'settings.retentionKeepHint':
+    'Die neuesten Ereignisse jedes Workspace bleiben unabhängig von ihrem Alter erhalten, damit ein alter, aber noch offener Workspace einen lesbaren Verlauf behält. Empfohlen: 5000.',
+  'settings.retentionDisabledHint': 'Aufbewahrung deaktiviert: Es wird nie etwas gelöscht.',
+  'settings.retentionConfirmTitle': 'Konversationsverlauf endgültig löschen?',
+  'settings.retentionConfirmMessage':
+    'Nur {days} Tag(e) Verlauf zu behalten löscht beim nächsten Serverstart endgültig {count} der {total} aufgezeichneten Agentenereignisse — einschließlich allem, was bereits älter ist. Das lässt sich nicht rückgängig machen. Fortfahren?',
+  'settings.retentionConfirmMessageUnknown':
+    'Nur {days} Tag(e) Verlauf zu behalten löscht beim nächsten Serverstart endgültig alle älteren Agentenereignisse — einschließlich allem, was bereits angesammelt wurde. Die genaue Menge konnte nicht ermittelt werden. Das lässt sich nicht rückgängig machen. Fortfahren?',
   'settings.purgeDocsTitle': 'Wie Purge funktioniert — Wiederherstellung & Berechtigungen',
   'settings.purgeDocsRestoreTitle': 'Einen bereinigten Worktree wiederherstellen (automatisch erkannt)',
   'settings.purgeDocsRestoreIntro':

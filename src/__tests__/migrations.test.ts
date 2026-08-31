@@ -42,8 +42,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 35', () => {
-    expect(SCHEMA_VERSION).toBe(35)
+  it('exporte SCHEMA_VERSION = 36', () => {
+    expect(SCHEMA_VERSION).toBe(36)
   })
 
   it('migration v33 records and backfills the engine on agent sessions', () => {
@@ -122,8 +122,17 @@ describe('runMigrations(db)', () => {
     )
     expect((db.prepare('SELECT errors FROM session_event_metrics').get() as { errors: number }).errors).toBe(1)
 
+    // v36 drops the AFTER DELETE trigger: metrics are recomputed once,
+    // application-side, at the end of the deleting transaction (see
+    // recomputeSessionMetrics in workspace-service.ts). The stored value is
+    // therefore intentionally stale until that call runs.
     db.prepare("DELETE FROM ws_events WHERE id = 'e3'").run()
-    expect((db.prepare('SELECT errors FROM session_event_metrics').get() as { errors: number }).errors).toBe(0)
+    expect((db.prepare('SELECT errors FROM session_event_metrics').get() as { errors: number }).errors).toBe(1)
+    expect(
+      (db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'trigger' AND name = ?")
+        .get('trg_ws_events_metrics_delete') as { name: string } | undefined) ?? null,
+    ).toBeNull()
     db.close()
   })
 
@@ -156,7 +165,7 @@ describe('runMigrations(db)', () => {
       status: 'completed',
       task_progress_baseline: null,
     })
-    expect(getMigrationHistory(upgraded).at(-1)).toMatchObject({
+    expect(getMigrationHistory(upgraded).find((record) => record.version === 35)).toMatchObject({
       version: 35,
       name: 'add-agent-session-task-progress-baseline',
     })
@@ -169,6 +178,65 @@ describe('runMigrations(db)', () => {
         (column) => column.name,
       ),
     ).toContain('task_progress_baseline')
+    fresh.close()
+  })
+
+  it('migration v36 drops the delete trigger and adds the hot indexes, converging with a fresh install', () => {
+    const upgraded = new Database(':memory:')
+    initSchema(upgraded)
+    // Re-create the v34 shape on purpose: an installation migrated through v34
+    // carries the trigger, a fresh install created after v36 never does.
+    upgraded.exec(`
+      CREATE TRIGGER IF NOT EXISTS trg_ws_events_metrics_delete
+      AFTER DELETE ON ws_events
+      WHEN OLD.type = 'agent:event' AND OLD.session_id IS NOT NULL
+      BEGIN
+        DELETE FROM session_event_metrics
+        WHERE workspace_id = OLD.workspace_id AND session_id = OLD.session_id;
+      END;
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+    `)
+    for (let version = 1; version <= 35; version++) {
+      upgraded.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(version, `v${version}`, 'now')
+    }
+
+    runMigrations(upgraded)
+
+    const upgradedObjects = (
+      upgraded
+        .prepare("SELECT name FROM sqlite_master WHERE type IN ('trigger', 'index') AND name NOT LIKE 'sqlite_%'")
+        .all() as Array<{ name: string }>
+    )
+      .map((row) => row.name)
+      .sort()
+    expect(upgradedObjects).not.toContain('trg_ws_events_metrics_delete')
+    expect(upgradedObjects).toContain('trg_ws_events_metrics_insert')
+    for (const name of [
+      'idx_tasks_workspace_sort',
+      'idx_agent_sessions_workspace_started',
+      'idx_agent_sessions_engine_session',
+      'idx_workspaces_archived_updated',
+      'idx_session_event_metrics_session',
+    ]) {
+      expect(upgradedObjects).toContain(name)
+    }
+    expect(getMigrationHistory(upgraded).at(-1)).toMatchObject({
+      version: 36,
+      name: 'drop-metrics-delete-trigger-add-hot-indexes',
+    })
+
+    const fresh = new Database(':memory:')
+    runMigrations(fresh)
+    const freshObjects = (
+      fresh
+        .prepare("SELECT name FROM sqlite_master WHERE type IN ('trigger', 'index') AND name NOT LIKE 'sqlite_%'")
+        .all() as Array<{ name: string }>
+    )
+      .map((row) => row.name)
+      .sort()
+    expect(freshObjects).toEqual(upgradedObjects)
+
+    upgraded.close()
     fresh.close()
   })
 

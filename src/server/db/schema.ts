@@ -127,45 +127,6 @@ export function initSchema(db: Database.Database): void {
         output_tokens = MAX(output_tokens, excluded.output_tokens);
     END;
 
-    CREATE TRIGGER IF NOT EXISTS trg_ws_events_metrics_delete
-    AFTER DELETE ON ws_events
-    WHEN OLD.type = 'agent:event' AND OLD.session_id IS NOT NULL
-    BEGIN
-      DELETE FROM session_event_metrics
-      WHERE workspace_id = OLD.workspace_id AND session_id = OLD.session_id;
-
-      INSERT INTO session_event_metrics (
-        workspace_id, session_id, tool_calls, errors, input_tokens, output_tokens
-      )
-      SELECT
-        e.workspace_id,
-        e.session_id,
-        SUM(CASE WHEN json_extract(e.payload, '$.kind') = 'tool:call' THEN 1 ELSE 0 END),
-        SUM(CASE
-          WHEN json_extract(e.payload, '$.kind') = 'error'
-            OR (json_extract(e.payload, '$.kind') = 'tool:result'
-              AND json_extract(e.payload, '$.isError') = 1)
-          THEN 1 ELSE 0
-        END),
-        MAX(CASE
-          WHEN json_extract(e.payload, '$.kind') = 'usage'
-            AND json_type(e.payload, '$.inputTokens') IN ('integer', 'real')
-          THEN CAST(json_extract(e.payload, '$.inputTokens') AS INTEGER) ELSE 0
-        END),
-        MAX(CASE
-          WHEN json_extract(e.payload, '$.kind') = 'usage'
-            AND json_type(e.payload, '$.outputTokens') IN ('integer', 'real')
-          THEN CAST(json_extract(e.payload, '$.outputTokens') AS INTEGER) ELSE 0
-        END)
-      FROM ws_events e
-      JOIN agent_sessions s ON s.id = e.session_id AND s.workspace_id = e.workspace_id
-      WHERE e.workspace_id = OLD.workspace_id
-        AND e.session_id = OLD.session_id
-        AND e.type = 'agent:event'
-        AND json_valid(e.payload)
-      GROUP BY e.workspace_id, e.session_id;
-    END;
-
     CREATE TABLE IF NOT EXISTS workspace_permission_rules (
       id TEXT PRIMARY KEY,
       workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -238,5 +199,15 @@ export function initSchema(db: Database.Database): void {
       ON ws_events(type, created_at DESC, id DESC);
     CREATE INDEX IF NOT EXISTS idx_workspace_chat_history_workspace_id_id
       ON workspace_chat_history(workspace_id, id DESC);
+    CREATE INDEX IF NOT EXISTS idx_tasks_workspace_sort
+      ON tasks(workspace_id, sort_order);
+    CREATE INDEX IF NOT EXISTS idx_agent_sessions_workspace_started
+      ON agent_sessions(workspace_id, started_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_agent_sessions_engine_session
+      ON agent_sessions(engine_session_id);
+    CREATE INDEX IF NOT EXISTS idx_workspaces_archived_updated
+      ON workspaces(archived_at, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_session_event_metrics_session
+      ON session_event_metrics(session_id);
   `)
 }

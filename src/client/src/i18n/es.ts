@@ -1275,6 +1275,23 @@ export default {
   'settings.autoLoopMaxRetries': 'Máximo de reintentos automáticos',
   'settings.autoLoopMaxRetriesHint':
     'Detiene el bucle automático tras este número de errores de cuota o de servidor temporales.',
+  'settings.retentionTitle': 'Retención del historial de conversación (desactivada por defecto)',
+  'settings.retentionWarning':
+    'Activar esta opción elimina definitivamente de la base de datos el historial de conversación de los agentes, empezando por todo lo que ya sea más antiguo que la ventana. Los eventos eliminados no se pueden recuperar.',
+  'settings.retentionHint':
+    'Se ejecuta una vez al arrancar el servidor. Los workspaces, tareas, sesiones, branches y worktrees nunca se tocan — solo la salida registrada de los agentes.',
+  'settings.retentionDaysLabel': 'Eliminar eventos más antiguos de (días)',
+  'settings.retentionDaysHint':
+    '0 — el valor por defecto — conserva todos los eventos indefinidamente. Indica un valor para activar la retención.',
+  'settings.retentionKeepLabel': 'Eventos siempre conservados por workspace',
+  'settings.retentionKeepHint':
+    'Los eventos más recientes de cada workspace sobreviven sea cual sea su antigüedad, para que un workspace antiguo pero aún abierto conserve un historial legible. Sugerido: 5000.',
+  'settings.retentionDisabledHint': 'Retención desactivada: nunca se eliminará nada.',
+  'settings.retentionConfirmTitle': '¿Eliminar definitivamente el historial de conversación?',
+  'settings.retentionConfirmMessage':
+    'Conservar solo {days} día(s) de historial eliminará definitivamente, en el próximo arranque del servidor, {count} de los {total} eventos de agente registrados — incluido todo lo que ya sea más antiguo. Es irreversible. ¿Continuar?',
+  'settings.retentionConfirmMessageUnknown':
+    'Conservar solo {days} día(s) de historial eliminará definitivamente, en el próximo arranque del servidor, todos los eventos de agente más antiguos — incluido todo lo ya acumulado. No se ha podido calcular el volumen exacto. Es irreversible. ¿Continuar?',
   'settings.purgeDocsTitle': 'Cómo funciona el borrado — restauración y permisos',
   'settings.purgeDocsRestoreTitle': 'Restaurar un worktree borrado (detección automática)',
   'settings.purgeDocsRestoreIntro':

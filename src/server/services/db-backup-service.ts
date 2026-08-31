@@ -26,17 +26,33 @@ interface BackupEntry {
   mtimeMs: number
 }
 
-function listBackups(dir: string): BackupEntry[] {
+function listBackups(dir: string, prefix: string = BACKUP_PREFIX): BackupEntry[] {
   if (!fs.existsSync(dir)) return []
   return fs
     .readdirSync(dir)
-    .filter((f) => f.startsWith(BACKUP_PREFIX))
+    .filter((f) => f.startsWith(prefix))
     .map((f) => {
       const full = path.join(dir, f)
       const stat = fs.statSync(full)
       return { path: full, mtimeMs: stat.mtimeMs }
     })
     .sort((a, b) => b.mtimeMs - a.mtimeMs)
+}
+
+/** Delete every backup of `prefix` beyond the `keepCount` most recent. */
+function rotateBackups(dir: string, prefix: string, keepCount: number): string[] {
+  const deleted: string[] = []
+  const all = listBackups(dir, prefix)
+  if (all.length <= keepCount) return deleted
+  for (const entry of all.slice(keepCount)) {
+    try {
+      fs.unlinkSync(entry.path)
+      deleted.push(entry.path)
+    } catch (err) {
+      console.error(`[kobo] Failed to delete old DB backup ${entry.path}:`, err)
+    }
+  }
+  return deleted
 }
 
 /**
@@ -73,17 +89,7 @@ export async function createDailyDbBackupIfNeeded(
     await db.backup(backupPath)
     result.created = backupPath
 
-    const all = listBackups(dir)
-    if (all.length > keepCount) {
-      for (const entry of all.slice(keepCount)) {
-        try {
-          fs.unlinkSync(entry.path)
-          result.deleted.push(entry.path)
-        } catch (err) {
-          console.error(`[kobo] Failed to delete old DB backup ${entry.path}:`, err)
-        }
-      }
-    }
+    result.deleted.push(...rotateBackups(dir, BACKUP_PREFIX, keepCount))
   } catch (err) {
     console.error('[kobo] DB daily backup failed:', err)
   }
@@ -93,10 +99,15 @@ export async function createDailyDbBackupIfNeeded(
 
 const PREMIGRATION_PREFIX = 'kobo.db.premigration-'
 
+/** Backups of this prefix kept. One full-size copy was added per shipped
+ *  migration — of schema AND of settings — and nothing ever removed them. */
+const DEFAULT_PREMIGRATION_KEEP = 5
+
 export async function createPreMigrationBackup(
   db: Database.Database,
   dbPath: string,
   tag: string,
+  keepCount: number = DEFAULT_PREMIGRATION_KEEP,
 ): Promise<DbBackupResult> {
   const dir = path.dirname(dbPath)
   const stamp = new Date().toISOString().replace(/[:.]/g, '-')
@@ -104,7 +115,9 @@ export async function createPreMigrationBackup(
   const backupPath = path.join(dir, `${PREMIGRATION_PREFIX}${tag}-${stamp}-${backupSequence}`)
   try {
     await db.backup(backupPath)
-    return { created: backupPath, deleted: [] }
+    // Rotation is scoped to the pre-migration prefix: the daily backups are a
+    // separate net with its own retention and must never be touched here.
+    return { created: backupPath, deleted: rotateBackups(dir, PREMIGRATION_PREFIX, keepCount) }
   } catch (err) {
     console.error('[kobo] Pre-migration backup failed:', err)
     throw err

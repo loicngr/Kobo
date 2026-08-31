@@ -141,4 +141,25 @@ describe('createPreMigrationBackup', () => {
 
     rmSync(tmpDir, { recursive: true, force: true })
   })
+
+  it('rotates its own backups instead of growing one full DB copy per migration', async () => {
+    const { createPreMigrationBackup } = await import('../server/services/db-backup-service.js')
+    for (const tag of ['v10', 'v11', 'v12', 'v13', 'v14', 'v15']) {
+      await createPreMigrationBackup(db, dbPath, tag, 3)
+    }
+
+    const remaining = fs.readdirSync(path.dirname(dbPath)).filter((f) => f.startsWith('kobo.db.premigration-'))
+    expect(remaining).toHaveLength(3)
+  })
+
+  it('never rotates the daily backups away', async () => {
+    const { createDailyDbBackupIfNeeded, createPreMigrationBackup } = await import(
+      '../server/services/db-backup-service.js'
+    )
+    await createDailyDbBackupIfNeeded(db, dbPath)
+    const result = await createPreMigrationBackup(db, dbPath, 'v10', 1)
+
+    expect(result.deleted).toEqual([])
+    expect(fs.readdirSync(path.dirname(dbPath)).filter((f) => f.startsWith('kobo.db.backup-'))).toHaveLength(1)
+  })
 })

@@ -380,6 +380,41 @@ alternatives).
   on named Docker volumes, NTFS / exFAT / tmpfs, strict SELinux with `:Z`, or
   `userns-remap`.
 
+## Conversation history retention (opt-in)
+
+Every agent message, tool call and diff Kōbō displays is persisted in the
+`ws_events` table so the activity feed survives a reload. At roughly 25 rows per
+second per running session, that table is the one that grows without bound —
+and SQLite never gives the space back on its own.
+
+Kōbō can prune it, but **the feature is off by default and always has to be
+turned on deliberately**: it permanently deletes conversation history, and a
+silent loss of history is worse than a large file. Leave it off and nothing is
+ever deleted, exactly as before.
+
+**Settings → Worktrees → Conversation history retention** exposes two values,
+both global (the database is single):
+
+| Setting | Default | Meaning |
+|---|---|---|
+| Delete events older than (days) | `0` | Age above which an agent event is deleted. **`0` means retention is disabled — nothing is ever deleted.** |
+| Events always kept per workspace | `0` | The most recent events of each workspace survive whatever their age. Set it (5000 is a good starting point) at the same time you enable retention, so an old but still-open workspace keeps a readable history. |
+
+The prune runs **once, at server start-up**, before the daily backup, in batches
+of 5 000 rows so the SQLite write lock is never held for more than a few
+milliseconds. When enough pages have been freed, a `VACUUM` returns the space to
+the filesystem.
+
+**What it deletes:** rows of `ws_events` — the recorded agent output.
+**What it never touches:** workspaces, tasks, sessions, branches, worktrees, or
+any file in your repositories.
+
+Enabling retention — or shortening an existing window — asks for confirmation
+first, and the dialog states how many of your recorded events the new window
+would delete. Note that the first run is the largest one: switching a year-old
+database to a 30-day window deletes eleven months in one go. Deleted events
+cannot be recovered, and the server logs how many each prune removed.
+
 ## Network access
 
 By default, Kōbō binds its HTTP and WebSocket server to `127.0.0.1` (localhost

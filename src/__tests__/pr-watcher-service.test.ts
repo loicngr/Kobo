@@ -19,8 +19,13 @@ vi.mock('../server/services/workspace-service.js', () => ({
   updateWorkspaceSourceBranch: vi.fn(),
 }))
 vi.mock('../server/services/git-stats-service.js', () => ({ computeGitStats: vi.fn() }))
+const gitTrace: string[] = []
 vi.mock('../server/utils/git-ops.js', () => ({
-  fetchSourceBranchAsync: vi.fn(() => Promise.resolve()),
+  fetchSourceBranchAsync: vi.fn(async () => {
+    gitTrace.push('fetch:start')
+    await new Promise((resolve) => setTimeout(resolve, 10))
+    gitTrace.push('fetch:end')
+  }),
   isGitWorktree: vi.fn(() => false),
 }))
 vi.mock('node:fs', async () => {
@@ -194,6 +199,27 @@ describe('checkPrStatuses — base change detection', () => {
 
     expect(wsService.updateWorkspaceSourceBranch).not.toHaveBeenCalled()
     expect(wsSvc.emitEphemeral).not.toHaveBeenCalled()
+  })
+})
+
+describe('checkPrStatuses — git stats fetch ordering', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    _resetForTest()
+  })
+
+  it('waits for the fetch before computing git stats, so counters are not one tick late', async () => {
+    gitTrace.length = 0
+    vi.mocked(wsService.listWorkspaces).mockReturnValue([makeWorkspace()] as never)
+    vi.mocked(computeGitStats).mockImplementation(async () => {
+      gitTrace.push('stats')
+      return {} as never
+    })
+    getPrStatusMock.mockResolvedValue(null)
+
+    await checkPrStatuses()
+
+    expect(gitTrace).toEqual(['fetch:start', 'fetch:end', 'stats'])
   })
 })
 

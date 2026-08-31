@@ -14,7 +14,7 @@ import {
 } from './workspace-service.js'
 import { isPermissionError, removeWorktree } from './worktree-service.js'
 
-export type PurgeOutcome = 'purged' | 'already-purged' | 'worktree-not-owned' | 'not-found'
+export type PurgeOutcome = 'purged' | 'already-purged' | 'worktree-not-owned' | 'not-found' | 'removal-failed'
 
 export interface PurgeResult {
   outcome: PurgeOutcome
@@ -63,11 +63,20 @@ export async function purgeWorktree(workspaceId: string): Promise<PurgeResult> {
 
   if (fs.existsSync(workspace.worktreePath)) {
     try {
-      removeWorktree(workspace.projectPath, workspace.worktreePath)
+      await removeWorktree(workspace.projectPath, workspace.worktreePath)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       warnings.push(buildRemovalFailureMessage(workspace.worktreePath, workspace.projectPath, msg))
     }
+  }
+
+  // `worktree_purged_at` is not cosmetic: it drives the "restore" UI and the
+  // PR watcher's auto-restore probe, which tests whether the folder reappeared.
+  // Setting it on a directory that never left puts both in contradiction with
+  // the disk — and told the user the space was reclaimed when it wasn't.
+  if (fs.existsSync(workspace.worktreePath)) {
+    emitEphemeral(workspaceId, 'workspace:worktree-purge-failed', { workspaceId, warnings })
+    return { outcome: 'removal-failed', warnings }
   }
 
   try {

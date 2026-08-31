@@ -11,6 +11,7 @@ import {
   getOngoingGitOperation,
   listBackupBranches,
   listProperCommits,
+  pruneBackupBranches,
   reconstructBranchOnto,
   restoreBranchFromBackup,
 } from '../server/utils/git-ops.js'
@@ -140,6 +141,48 @@ describe('backup branch restore', () => {
 
     restoreBranchFromBackup(repo, 'feature', backups[0])
     expect(g(repo, ['rev-parse', 'HEAD'])).toBe(originalTip)
+  })
+})
+
+describe('pruneBackupBranches', () => {
+  it('keeps only the newest backups and reports what it deleted', () => {
+    g(repo, ['checkout', '-q', '-b', 'feature'])
+    for (const stamp of ['1000', '2000', '3000', '4000', '5000']) {
+      g(repo, ['branch', `kobo-backup/feature-${stamp}`, 'feature'])
+    }
+    expect(listBackupBranches(repo, 'feature')).toHaveLength(5)
+
+    const { removed, warnings } = pruneBackupBranches(repo, 'feature', 3)
+
+    expect(warnings).toEqual([])
+    expect(removed.sort()).toEqual(['kobo-backup/feature-1000', 'kobo-backup/feature-2000'])
+    expect(listBackupBranches(repo, 'feature')).toEqual([
+      'kobo-backup/feature-5000',
+      'kobo-backup/feature-4000',
+      'kobo-backup/feature-3000',
+    ])
+  })
+
+  it('leaves everything alone when there are fewer backups than the retention count', () => {
+    g(repo, ['checkout', '-q', '-b', 'feature'])
+    g(repo, ['branch', 'kobo-backup/feature-1000', 'feature'])
+    expect(pruneBackupBranches(repo, 'feature', 3).removed).toEqual([])
+    expect(listBackupBranches(repo, 'feature')).toEqual(['kobo-backup/feature-1000'])
+  })
+
+  it('reports a warning instead of silently disabling itself when the listing fails', () => {
+    const result = pruneBackupBranches('/definitely/not/a/repository', 'feature', 3)
+    expect(result.removed).toEqual([])
+    expect(result.warnings).toHaveLength(1)
+    expect(result.warnings[0]).toMatch(/backup/i)
+  })
+})
+
+describe('listBackupBranches error handling', () => {
+  it('throws instead of pretending there is no backup when git fails', () => {
+    expect(() => listBackupBranches('/definitely/not/a/repository', 'feature')).toThrow(
+      /Failed to list backup branches/,
+    )
   })
 })
 

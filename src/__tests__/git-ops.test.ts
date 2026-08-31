@@ -4,6 +4,7 @@ import os, { tmpdir } from 'node:os'
 import path, { join } from 'node:path'
 import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest'
 import {
+  assertNoIndexLock,
   BranchAlreadyExistsError,
   buildNonInteractiveGitEnv,
   commitAllChanges,
@@ -16,6 +17,8 @@ import {
   EMPTY_TREE_SHA,
   fetchSourceBranch,
   fetchSourceBranchAsync,
+  findStashIndexByLabel,
+  GitIndexLockError,
   getChangedFiles,
   getChangedFilesBetween,
   getCommitCount,
@@ -25,11 +28,13 @@ import {
   getDiffStats,
   getDiffStatsBetween,
   getFileAtRef,
+  getIndexLockPath,
   getStructuredDiffStatsBetween,
   getWorkingTreeDiffStats,
   getWorkingTreeFiles,
   getWorkingTreeStatus,
   isGitWorktree,
+  isValidBranchName,
   listBranchCommits,
   listBranches,
   listCommitsBehind,
@@ -41,6 +46,8 @@ import {
   rebaseBranch,
   rollbackFile,
   slugifyBranchSegment,
+  stashPop,
+  stashPush,
   worktreeHasChangesStrict,
 } from '../server/utils/git-ops.js'
 
@@ -1442,6 +1449,26 @@ describe('slugifyBranchSegment', () => {
   })
 })
 
+describe('isValidBranchName(name)', () => {
+  it('accepts the shapes Kōbō actually produces', () => {
+    for (const name of ['feature/my-thing', 'fix/bug_42', 'release-1.2.3', 'main']) {
+      expect(isValidBranchName(name)).toBe(true)
+    }
+  })
+
+  it('rejects anything git would read as an option', () => {
+    for (const name of ['--force', '-x', '--exec=rm -rf /']) {
+      expect(isValidBranchName(name)).toBe(false)
+    }
+  })
+
+  it('rejects the shapes git check-ref-format refuses', () => {
+    for (const name of ['', 'feature/..//x', 'feature/x.lock', 'feature/', 'feature/x.', 'a b']) {
+      expect(isValidBranchName(name)).toBe(false)
+    }
+  })
+})
+
 describe('getFileAtRef', () => {
   it('reads a file larger than the default 1 MB buffer instead of returning null', () => {
     const repo = mkdtempSync(join(tmpdir(), 'kobo-bigfile-'))
@@ -1489,5 +1516,70 @@ describe('buildNonInteractiveGitEnv — SSH prompt suppression', () => {
     const built = buildNonInteractiveGitEnv().GIT_SSH_COMMAND
     expect(built).toContain('-i /tmp/k')
     expect(built).toContain('-o BatchMode=yes')
+  })
+})
+
+describe('index lock detection', () => {
+  it('returns null when no lock is held', () => {
+    expect(getIndexLockPath(repoDir)).toBeNull()
+    expect(() => assertNoIndexLock(repoDir)).not.toThrow()
+  })
+
+  it('reports the absolute lock path and a removal command when a lock was left behind', () => {
+    const lockPath = path.join(repoDir, '.git', 'index.lock')
+    fs.writeFileSync(lockPath, '')
+    try {
+      expect(getIndexLockPath(repoDir)).toBe(lockPath)
+      expect(() => assertNoIndexLock(repoDir)).toThrow(GitIndexLockError)
+      expect(() => assertNoIndexLock(repoDir)).toThrow(`rm -f '${lockPath}'`)
+    } finally {
+      fs.rmSync(lockPath, { force: true })
+    }
+  })
+
+  it('never throws outside a git repository', () => {
+    const plain = fs.mkdtempSync(path.join(os.tmpdir(), 'kobo-nolock-'))
+    expect(getIndexLockPath(plain)).toBeNull()
+    fs.rmSync(plain, { recursive: true, force: true })
+  })
+})
+
+describe('stashPop(repoPath, label)', () => {
+  it('restores the Kōbō entry even when another stash was pushed on top of it', () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'kobo-stash-'))
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 't@t.t'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'T'], { cwd: repo })
+    fs.writeFileSync(path.join(repo, 'f.txt'), 'base\n')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-q', '-m', 'base'], { cwd: repo })
+
+    // Kōbō stashes the user's work, under its own label.
+    fs.writeFileSync(path.join(repo, 'f.txt'), 'USER WORK\n')
+    stashPush(repo, 'kobo-change-source-branch')
+
+    // The agent (or the integrated terminal) stashes something else meanwhile.
+    fs.writeFileSync(path.join(repo, 'f.txt'), 'AGENT WORK\n')
+    execFileSync('git', ['stash', 'push', '-m', 'agent-wip'], { cwd: repo })
+
+    expect(findStashIndexByLabel(repo, 'kobo-change-source-branch')).toBe(1)
+
+    stashPop(repo, 'kobo-change-source-branch')
+
+    expect(fs.readFileSync(path.join(repo, 'f.txt'), 'utf-8')).toBe('USER WORK\n')
+    fs.rmSync(repo, { recursive: true, force: true })
+  })
+
+  it('throws instead of popping a random entry when the label is gone', () => {
+    const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'kobo-stash-missing-'))
+    execFileSync('git', ['init', '-q', '-b', 'main'], { cwd: repo })
+    execFileSync('git', ['config', 'user.email', 't@t.t'], { cwd: repo })
+    execFileSync('git', ['config', 'user.name', 'T'], { cwd: repo })
+    fs.writeFileSync(path.join(repo, 'f.txt'), 'base\n')
+    execFileSync('git', ['add', '.'], { cwd: repo })
+    execFileSync('git', ['commit', '-q', '-m', 'base'], { cwd: repo })
+
+    expect(() => stashPop(repo, 'kobo-change-source-branch')).toThrow(/kobo-change-source-branch/)
+    fs.rmSync(repo, { recursive: true, force: true })
   })
 })

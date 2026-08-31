@@ -1261,6 +1261,22 @@ export default {
     'When ON, the worktree is deleted from disk as soon as the PR is merged (in addition to the auto-archive). Chat history is kept.',
   'settings.autoLoopMaxRetries': 'Maximum automatic retries',
   'settings.autoLoopMaxRetriesHint': 'Stops the auto-loop after this many quota or temporary server failures.',
+  'settings.retentionTitle': 'Conversation history retention (off by default)',
+  'settings.retentionWarning':
+    'Turning this on permanently deletes agent conversation history from the database, starting with everything already older than the window. Deleted events cannot be recovered.',
+  'settings.retentionHint':
+    'Runs once at server start-up. Workspaces, tasks, sessions, branches and worktrees are never touched — only the recorded agent output.',
+  'settings.retentionDaysLabel': 'Delete events older than (days)',
+  'settings.retentionDaysHint': '0 — the default — keeps every event for ever. Set a value to enable retention.',
+  'settings.retentionKeepLabel': 'Events always kept per workspace',
+  'settings.retentionKeepHint':
+    'The most recent events of each workspace survive whatever their age, so an old but still-open workspace keeps a readable history. Suggested: 5000.',
+  'settings.retentionDisabledHint': 'Retention is disabled: nothing will ever be deleted.',
+  'settings.retentionConfirmTitle': 'Permanently delete conversation history?',
+  'settings.retentionConfirmMessage':
+    'Keeping only {days} day(s) of history will permanently delete {count} of the {total} recorded agent events at the next server start-up, including everything already older than that. This cannot be undone. Continue?',
+  'settings.retentionConfirmMessageUnknown':
+    'Keeping only {days} day(s) of history will permanently delete every older agent event at the next server start-up, including everything already accumulated. The exact volume could not be counted. This cannot be undone. Continue?',
   'settings.purgeDocsTitle': 'How purge works — restore & permissions',
   'settings.purgeDocsRestoreTitle': 'Restoring a purged worktree (auto-detected)',
   'settings.purgeDocsRestoreIntro':

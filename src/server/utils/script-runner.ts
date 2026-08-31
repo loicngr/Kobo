@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import * as wsService from '../services/websocket-service.js'
+import { getIndexLockPath } from './git-ops.js'
 
 /** Default wall-clock budget for a user script before it is force-killed. */
 export const SCRIPT_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes
@@ -74,6 +75,16 @@ export function runScript(opts: RunScriptOptions): Promise<{ exitCode: number }>
       wsService.emit(workspaceId, `${eventPrefix}:output`, {
         text: `[kobo] Script timed out after ${Math.round(timeoutMs / 60000)} minutes`,
       })
+      // SIGKILL on the process group gives a running `git commit` no chance to
+      // release its index lock. Name the file here, while the user is looking
+      // at this feed — otherwise the next git write fails with a raw git error
+      // whose cause is three screens above.
+      const lockPath = getIndexLockPath(worktreePath)
+      if (lockPath) {
+        wsService.emit(workspaceId, `${eventPrefix}:output`, {
+          text: `[kobo] A git index lock was left behind at ${lockPath}. Remove it before the next git command: rm -f '${lockPath}'`,
+        })
+      }
     }, timeoutMs)
 
     const ansiPattern = new RegExp(`${String.fromCharCode(27)}\\[[0-9;]*[a-zA-Z]`, 'g')

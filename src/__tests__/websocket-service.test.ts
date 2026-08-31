@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import Database from 'better-sqlite3'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { initSchema } from '../server/db/schema.js'
 
 // ── DB setup (same pattern as workspace-service tests) ──
@@ -29,9 +29,25 @@ async function resetDb() {
 class MockWebSocket extends EventEmitter {
   readyState = 1 // OPEN
   sentMessages: string[] = []
+  bufferedAmount = 0
+  pings = 0
+  terminated = false
+  /** When false, the socket stops answering pings — a half-open connection. */
+  answersPing = true
 
   send(data: string): void {
     this.sentMessages.push(data)
+  }
+
+  ping(): void {
+    this.pings += 1
+    if (this.answersPing) this.emit('pong')
+  }
+
+  terminate(): void {
+    this.terminated = true
+    this.readyState = 3 // CLOSED
+    this.emit('close')
   }
 
   close(): void {
@@ -552,6 +568,117 @@ describe('emitEphemeral()', () => {
 
     expect(wsSub.sentMessages.length).toBe(1)
     expect(wsNotSub.sentMessages.length).toBe(0)
+  })
+})
+
+describe('handleSyncRequest() bounds', () => {
+  it('caps the delta replay instead of streaming a whole night in one message', async () => {
+    const { emit, handleConnection, handleSyncRequest } = await import('../server/services/websocket-service.js')
+    const { getDb } = await import('../server/db/index.js')
+    const db = getDb()
+    const now = new Date().toISOString()
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, model, created_at, updated_at)
+       VALUES ('ws-1', 'w', '/tmp/w', 'main', 'feature/w', 'claude-opus-4-8', ?, ?)`,
+    ).run(now, now)
+
+    const cursor = emit('ws-1', 'agent:output', { text: 'cursor' })
+    for (let i = 0; i < 2_500; i++) emit('ws-1', 'agent:output', { text: `line ${i}` })
+
+    const ws = new MockWebSocket()
+    handleConnection(ws as unknown as import('ws').WebSocket)
+    ws.sentMessages.length = 0
+    handleSyncRequest(ws as unknown as import('ws').WebSocket, cursor, ['ws-1'])
+
+    const payload = JSON.parse(ws.sentMessages.at(-1) as string) as {
+      type: string
+      payload: { events: unknown[]; mode: string; truncated: boolean }
+    }
+    expect(payload.type).toBe('sync:response')
+    expect(payload.payload.mode).toBe('delta')
+    expect(payload.payload.events.length).toBeLessThanOrEqual(2_000)
+    expect(payload.payload.truncated).toBe(true)
+  })
+
+  it('keeps the most recent events when the snapshot replay overflows the cap', async () => {
+    const { emit, handleConnection, handleSyncRequest } = await import('../server/services/websocket-service.js')
+    const { getDb } = await import('../server/db/index.js')
+    const db = getDb()
+    const now = new Date().toISOString()
+    const insertWorkspace = db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, model, created_at, updated_at)
+       VALUES (?, ?, '/tmp/w', 'main', 'feature/w', 'claude-opus-4-8', ?, ?)`,
+    )
+
+    // 7 workspaces × the 300-event initial window = 2 100 rows, above the
+    // 2 000-event cap. Emitting workspace by workspace makes rowid order match
+    // emission order, so "oldest" and "newest" are unambiguous.
+    const workspaceIds: string[] = []
+    let oldestId = ''
+    let newestId = ''
+    for (let w = 0; w < 7; w++) {
+      const workspaceId = `ws-snap-${w}`
+      workspaceIds.push(workspaceId)
+      insertWorkspace.run(workspaceId, `w${w}`, now, now)
+      for (let i = 0; i < 300; i++) {
+        const id = emit(workspaceId, 'agent:output', { text: `${workspaceId}-${i}` })
+        if (w === 0 && i === 0) oldestId = id
+        newestId = id
+      }
+    }
+
+    const ws = new MockWebSocket()
+    handleConnection(ws as unknown as import('ws').WebSocket)
+    ws.sentMessages.length = 0
+    // No cursor at all → snapshot mode.
+    handleSyncRequest(ws as unknown as import('ws').WebSocket, '', workspaceIds)
+
+    const payload = JSON.parse(ws.sentMessages.at(-1) as string) as {
+      type: string
+      payload: { events: { id: string }[]; mode: string; truncated: boolean }
+    }
+    expect(payload.payload.mode).toBe('snapshot')
+    expect(payload.payload.events.length).toBe(2_000)
+    expect(payload.payload.truncated).toBe(true)
+    const ids = payload.payload.events.map((e) => e.id)
+    expect(ids).toContain(newestId)
+    expect(ids).not.toContain(oldestId)
+  })
+
+  it('answers sync:error instead of throwing when the query fails', async () => {
+    const { handleConnection, handleSyncRequest } = await import('../server/services/websocket-service.js')
+    const { closeDb } = await import('../server/db/index.js')
+    const ws = new MockWebSocket()
+    handleConnection(ws as unknown as import('ws').WebSocket)
+    ws.sentMessages.length = 0
+    closeDb() // every statement now throws "The database connection is not open"
+
+    expect(() => handleSyncRequest(ws as unknown as import('ws').WebSocket, '', ['ws-1'])).not.toThrow()
+    expect(JSON.parse(ws.sentMessages.at(-1) as string)).toMatchObject({ type: 'sync:error' })
+  })
+})
+
+describe('heartbeat', () => {
+  it('terminates a client that stops answering, and drops it from the map', async () => {
+    vi.useFakeTimers()
+    try {
+      const { handleConnection, getClientCount } = await import('../server/services/websocket-service.js')
+      const ws = new MockWebSocket()
+      handleConnection(ws as unknown as import('ws').WebSocket)
+
+      vi.advanceTimersByTime(30_000)
+      expect(ws.pings).toBe(1)
+      expect(ws.terminated).toBe(false)
+
+      ws.answersPing = false
+      vi.advanceTimersByTime(30_000) // ping #2, still answered? no — pong never comes
+      vi.advanceTimersByTime(30_000) // this tick sees the missing pong
+
+      expect(ws.terminated).toBe(true)
+      expect(getClientCount()).toBe(0)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })
 
