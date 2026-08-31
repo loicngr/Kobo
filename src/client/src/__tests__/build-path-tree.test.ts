@@ -88,3 +88,32 @@ describe('countLeaves()', () => {
     expect(aFolder?.children ? countLeaves(aFolder.children) : 0).toBe(3)
   })
 })
+
+describe('collectFolderKeys', () => {
+  const files = [{ path: 'src/server/routes/git.ts' }, { path: 'src/client/src/utils/color.ts' }, { path: 'README.md' }]
+
+  it('collects every folder key when no depth is given', async () => {
+    const { buildPathTree, collectFolderKeys } = await import('../utils/build-path-tree')
+    const keys = collectFolderKeys(buildPathTree(files))
+    expect(keys).toContain('dir:src')
+    expect(keys).toContain('dir:src/server')
+    expect(keys).toContain('dir:src/server/routes')
+    expect(keys).toContain('dir:src/client/src/utils')
+    expect(keys).not.toContain('file:README.md')
+  })
+
+  it('stops at the requested depth', async () => {
+    const { buildPathTree, collectFolderKeys } = await import('../utils/build-path-tree')
+    expect(collectFolderKeys(buildPathTree(files), 1)).toEqual(['dir:src'])
+  })
+
+  it('returns an empty list for a flat tree', async () => {
+    const { buildPathTree, collectFolderKeys } = await import('../utils/build-path-tree')
+    expect(collectFolderKeys(buildPathTree([{ path: 'a.ts' }, { path: 'b.ts' }]))).toEqual([])
+  })
+
+  it('returns an empty list for a zero depth', async () => {
+    const { buildPathTree, collectFolderKeys } = await import('../utils/build-path-tree')
+    expect(collectFolderKeys(buildPathTree(files), 0)).toEqual([])
+  })
+})

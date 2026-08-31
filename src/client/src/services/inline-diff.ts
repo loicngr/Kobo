@@ -4,21 +4,72 @@ export interface DiffLine {
 }
 
 /**
+ * Above this many changed lines on either side, the quadratic LCS table would
+ * allocate tens of megabytes and block the main thread. 800 caps the flat
+ * Int32Array at 801 × 801 × 4 ≈ 2.5 MB.
+ */
+export const INLINE_DIFF_MAX_LINES = 800
+
+/**
  * Compute a line-by-line diff using the Longest Common Subsequence algorithm.
  * Shared lines become `context`, differing lines are split into `del` (from
  * `oldText`) and `add` (from `newText`).
+ *
+ * The common prefix and suffix are trimmed first: a three-line edit inside a
+ * two-thousand-line file collapses to a three-by-three table instead of a
+ * two-thousand-square one. Past INLINE_DIFF_MAX_LINES of remaining difference
+ * the LCS walk is skipped entirely and the change is rendered as a wholesale
+ * replacement — which is what a reviewer gets from `git diff` on a rewrite
+ * anyway, and what this UI showed after freezing the tab for a second.
  */
 export function computeInlineDiff(oldText: string, newText: string): DiffLine[] {
   const a = oldText.split('\n')
   const b = newText.split('\n')
+
+  let start = 0
+  while (start < a.length && start < b.length && a[start] === b[start]) start++
+  let endA = a.length
+  let endB = b.length
+  while (endA > start && endB > start && a[endA - 1] === b[endB - 1]) {
+    endA--
+    endB--
+  }
+
+  const head: DiffLine[] = a.slice(0, start).map((content) => ({ type: 'context', content }))
+  const tail: DiffLine[] = a.slice(endA).map((content) => ({ type: 'context', content }))
+  const midA = a.slice(start, endA)
+  const midB = b.slice(start, endB)
+
+  if (midA.length > INLINE_DIFF_MAX_LINES || midB.length > INLINE_DIFF_MAX_LINES) {
+    return [
+      ...head,
+      ...midA.map((content): DiffLine => ({ type: 'del', content })),
+      ...midB.map((content): DiffLine => ({ type: 'add', content })),
+      ...tail,
+    ]
+  }
+
+  return [...head, ...lcsDiff(midA, midB), ...tail]
+}
+
+/** LCS walk over two already-trimmed, already-bounded line lists. */
+function lcsDiff(a: readonly string[], b: readonly string[]): DiffLine[] {
   const m = a.length
   const n = b.length
+  if (m === 0 && n === 0) return []
+  if (m === 0) return b.map((content) => ({ type: 'add', content }))
+  if (n === 0) return a.map((content) => ({ type: 'del', content }))
 
-  const lcs: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0))
+  const width = n + 1
+  // One flat typed array instead of (m+1) JavaScript arrays: same values,
+  // a quarter of the memory and no per-row allocation.
+  const lcs = new Int32Array((m + 1) * width)
   for (let i = m - 1; i >= 0; i--) {
     for (let j = n - 1; j >= 0; j--) {
-      if (a[i] === b[j]) lcs[i][j] = lcs[i + 1][j + 1] + 1
-      else lcs[i][j] = Math.max(lcs[i + 1][j], lcs[i][j + 1])
+      lcs[i * width + j] =
+        a[i] === b[j]
+          ? lcs[(i + 1) * width + (j + 1)] + 1
+          : Math.max(lcs[(i + 1) * width + j], lcs[i * width + (j + 1)])
     }
   }
 
@@ -30,7 +81,7 @@ export function computeInlineDiff(oldText: string, newText: string): DiffLine[] 
       result.push({ type: 'context', content: a[i] })
       i++
       j++
-    } else if (lcs[i + 1][j] >= lcs[i][j + 1]) {
+    } else if (lcs[(i + 1) * width + j] >= lcs[i * width + (j + 1)]) {
       result.push({ type: 'del', content: a[i] })
       i++
     } else {

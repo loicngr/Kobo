@@ -65,3 +65,56 @@ export function groupIntoTurns(items: ConversationItem[]): Turn[] {
 
   return turns
 }
+
+/**
+ * Stable identity for a single conversation item, usable as a Vue list key.
+ *
+ * Index keys break as soon as older history is prepended on scroll-up: every
+ * index shifts, so Vue rebuilds each card instead of moving it — and the local
+ * state of the children (a tool card's `expanded` flag) follows the index, not
+ * the data. Concretely, an expanded tool call ends up expanded on a different
+ * tool. The prefix per type guarantees no cross-type collision.
+ */
+export function itemKey(item: ConversationItem): string {
+  switch (item.type) {
+    case 'text':
+      return `text:${item.messageId}`
+    case 'thinking':
+      // A message id can carry several thinking blocks, so the event id (or,
+      // failing that, the timestamp) disambiguates them.
+      return `thinking:${item.messageId}:${item.eventIds?.[0] ?? item.ts ?? ''}`
+    case 'tool':
+      return `tool:${item.toolCallId}`
+    case 'session':
+      return `session:${item.kind}:${item.eventIds?.[0] ?? item.ts ?? ''}`
+    case 'user':
+      return `user:${item.eventIds?.[0] ?? `${item.sender}:${item.ts ?? ''}`}`
+    case 'error':
+      return `error:${item.eventIds?.[0] ?? `${item.category}:${item.ts ?? ''}`}`
+  }
+}
+
+/**
+ * Stable identity for a turn card. A turn always holds at least one item
+ * (groupIntoTurns never creates an empty one), and the first item of a turn is
+ * unique across the conversation, so it identifies the turn.
+ */
+export function turnKey(turn: Turn): string {
+  const first = turn.items[0]
+  return `${turn.speaker}:${first ? itemKey(first) : 'empty'}`
+}
+
+/**
+ * Index of the last `user` turn strictly before `fromIndex`, or -1.
+ *
+ * Replaces the DOM walk that measured every rendered user card's bounding
+ * rectangle: with a virtualised feed most cards are not in the DOM at all, and
+ * an index is both cheaper and exact.
+ */
+export function findPreviousUserTurnIndex(turns: readonly { speaker: string }[], fromIndex: number): number {
+  const start = Math.min(fromIndex, turns.length) - 1
+  for (let i = start; i >= 0; i--) {
+    if (turns[i]?.speaker === 'user') return i
+  }
+  return -1
+}

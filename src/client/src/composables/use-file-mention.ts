@@ -1,4 +1,4 @@
-import { fuzzyRank } from 'src/utils/fuzzy-match'
+import { fuzzyRankTop } from 'src/utils/fuzzy-match'
 import { computed, type Ref, ref, watch } from 'vue'
 
 /**
@@ -10,6 +10,10 @@ import { computed, type Ref, ref, watch } from 'vue'
  * @param getInputEl      accessor for the live `<textarea>` (for caret position)
  * @param getWorktreePath accessor for the current workspace's worktree path
  */
+
+/** Rows the mention popup can usefully show. */
+const MAX_FILE_MATCHES = 50
+
 export function useFileMention(
   message: Ref<string>,
   getInputEl: () => HTMLTextAreaElement | HTMLInputElement | null,
@@ -87,8 +91,10 @@ export function useFileMention(
     closeDropdown()
   }
 
-  /** Fuzzy-ranked file matches, capped for popup rendering. */
-  const fileMatches = computed<string[]>(() => fuzzyRank(fileFilter.value, files.value).slice(0, 50))
+  /** Fuzzy-ranked file matches, capped for popup rendering. Bounded top-K
+   *  selection: ranking then slicing meant a full sort of the whole worktree
+   *  on every keystroke. */
+  const fileMatches = computed<string[]>(() => fuzzyRankTop(fileFilter.value, files.value, MAX_FILE_MATCHES))
 
   // Keep the selection index inside bounds when the filter shrinks the list.
   watch(

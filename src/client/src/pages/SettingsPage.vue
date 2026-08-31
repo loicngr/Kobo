@@ -65,7 +65,7 @@
 
             <!-- Localization -->
             <div
-              v-show="activeTab === 'general'"
+              v-if="activeTab === 'general'"
               data-tour="settings-card-general"
               class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
             >
@@ -86,7 +86,7 @@
             </div>
 
             <!-- Workspace list display -->
-            <div v-show="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-if="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.workspaceListSection') }}</div>
               <q-toggle
                 v-model="globalFlattenWorkspaceList"
@@ -101,7 +101,7 @@
 
             <!-- Skill suite -->
             <div
-              v-show="activeTab === 'skills'"
+              v-if="activeTab === 'skills'"
               data-tour="settings-card-skills"
               class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
             >
@@ -189,7 +189,7 @@
 
             <!-- Default agent configuration -->
             <div
-              v-show="activeTab === 'agents'"
+              v-if="activeTab === 'agents'"
               data-tour="settings-card-agents"
               class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
             >
@@ -248,7 +248,7 @@
             </div>
 
             <!-- Activity feed display -->
-            <div v-show="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-if="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.activityFeed') }}</div>
               <div class="row items-center q-gutter-lg">
                 <q-toggle
@@ -271,7 +271,7 @@
             </div>
 
             <!-- Whip settings -->
-            <div v-show="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-if="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-xs">{{ $t('settings.whipSettings') }}</div>
               <div class="text-grey-6 text-caption q-mb-md">{{ $t('settings.whipSettingsHint') }}</div>
               <q-toggle
@@ -314,7 +314,7 @@
 
             <!-- Notifications -->
             <div
-              v-show="activeTab === 'notifications'"
+              v-if="activeTab === 'notifications'"
               data-tour="settings-card-notifications"
               class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
             >
@@ -529,7 +529,7 @@
 
             <!-- Voice transcription — Runtime status -->
             <div
-              v-show="activeTab === 'voice'"
+              v-if="activeTab === 'voice'"
               data-tour="settings-card-voice"
               class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
             >
@@ -621,7 +621,7 @@ where ffmpeg</pre>
             </div>
 
             <!-- Voice transcription — Activation -->
-            <div v-show="activeTab === 'voice'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-if="activeTab === 'voice'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('voice.sectionActivation') }}</div>
               <q-toggle
                 v-model="globalVoiceEnabled"
@@ -665,7 +665,7 @@ where ffmpeg</pre>
             </div>
 
             <!-- Voice transcription — Models -->
-            <div v-show="activeTab === 'voice'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-if="activeTab === 'voice'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('voice.sectionModels') }}</div>
               <q-select
                 v-model="globalVoiceModel"
@@ -773,7 +773,7 @@ where ffmpeg</pre>
             </div>
 
             <!-- Voice transcription — Advanced options -->
-            <div v-show="activeTab === 'voice'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-if="activeTab === 'voice'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('voice.sectionAdvanced') }}</div>
               <q-expansion-item
                 dense
@@ -1025,7 +1025,7 @@ where ffmpeg</pre>
             </div>
 
             <!-- Editor -->
-            <div v-show="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-if="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.editorCommand') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.editorCommandHint') }}</div>
               <q-input
@@ -1039,7 +1039,7 @@ where ffmpeg</pre>
             </div>
 
             <!-- File manager -->
-            <div v-show="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-if="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.fileManagerCommand') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.fileManagerCommandHint') }}</div>
               <q-input
@@ -1053,7 +1053,7 @@ where ffmpeg</pre>
             </div>
 
             <!-- Terminal -->
-            <div v-show="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-if="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.terminalCommand') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.terminalCommandHint') }}</div>
               <q-input
@@ -1066,11 +1066,11 @@ where ffmpeg</pre>
               />
             </div>
 
-            <div v-show="activeTab === 'notion'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-if="activeTab === 'notion'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <q-toggle v-model="globalNotionEnabled" :label="$t('settings.integrationEnabled')" dark dense color="indigo-4" />
             </div>
             <div
-              v-show="activeTab === 'notion'"
+              v-if="activeTab === 'notion'"
               data-tour="settings-card-notion"
               :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalNotionEnabled }]"
             >
@@ -1111,14 +1111,14 @@ where ffmpeg</pre>
             </div>
 
             <div
-              v-show="activeTab === 'sentry'"
+              v-if="activeTab === 'sentry'"
               data-tour="settings-card-sentry"
               class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
             >
               <q-toggle v-model="globalSentryEnabled" :label="$t('settings.integrationEnabled')" dark dense color="indigo-4" />
             </div>
 
-            <div v-show="activeTab === 'sentry'" :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalSentryEnabled }]">
+            <div v-if="activeTab === 'sentry'" :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalSentryEnabled }]">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.mcpSelection') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.mcpSelectionHint') }}</div>
               <div class="q-mb-sm">
@@ -1152,7 +1152,7 @@ where ffmpeg</pre>
             </div>
 
             <div
-              v-show="activeTab === 'forge'"
+              v-if="activeTab === 'forge'"
               data-tour="settings-card-forge"
               class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
             >
@@ -1214,7 +1214,7 @@ where ffmpeg</pre>
             </div>
 
             <!-- Notion assignment -->
-            <div v-show="activeTab === 'notion'" :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalNotionEnabled }]">
+            <div v-if="activeTab === 'notion'" :class="['settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md', { 'opacity-50': !globalNotionEnabled }]">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.notionAssignee') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.notionAssigneeHint') }}</div>
               <div class="q-mb-sm">
@@ -1320,7 +1320,7 @@ where ffmpeg</pre>
             </div>
 
             <!-- Workspace tags -->
-            <div v-show="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-if="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.tagsTitle') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.tagsHint') }}</div>
               <q-select
@@ -1339,7 +1339,7 @@ where ffmpeg</pre>
             </div>
 
             <!-- Branch prefixes -->
-            <div v-show="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-if="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.branchPrefixesTitle') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.branchPrefixesHint') }}</div>
 
@@ -1436,7 +1436,7 @@ where ffmpeg</pre>
 
             <!-- Setup script -->
             <div
-              v-show="activeTab === 'scripts'"
+              v-if="activeTab === 'scripts'"
               data-tour="settings-card-scripts"
               class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
             >
@@ -1455,7 +1455,7 @@ where ffmpeg</pre>
             </div>
 
             <!-- Onboarding tour -->
-            <div v-show="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-if="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.onboardingTitle') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.onboardingHint') }}</div>
               <q-btn
@@ -1469,7 +1469,7 @@ where ffmpeg</pre>
             </div>
 
             <!-- Cleanup script -->
-            <div v-show="activeTab === 'scripts'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-if="activeTab === 'scripts'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.cleanupScript') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.cleanupScriptHint') }}</div>
               <q-input
@@ -1504,7 +1504,7 @@ where ffmpeg</pre>
             </div>
 
             <!-- Archive script -->
-            <div v-show="activeTab === 'scripts'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-if="activeTab === 'scripts'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.archiveScript') }}</div>
               <div class="text-caption text-grey-7 q-mb-sm">{{ $t('settings.archiveScriptHint') }}</div>
               <q-input
@@ -1520,7 +1520,7 @@ where ffmpeg</pre>
             </div>
 
             <!-- Change-source-branch script -->
-            <div v-show="activeTab === 'scripts'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+            <div v-if="activeTab === 'scripts'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="row items-center justify-between q-mb-sm">
                 <div class="text-subtitle2">{{ $t('settings.changeSourceBranchScript') }}</div>
                 <q-btn
@@ -1548,7 +1548,7 @@ where ffmpeg</pre>
             </div>
 
             <div
-              v-show="activeTab === 'worktrees'"
+              v-if="activeTab === 'worktrees'"
               data-tour="settings-card-worktrees"
               class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
             >
@@ -1679,7 +1679,7 @@ where ffmpeg</pre>
 
             <!-- Network access -->
             <div
-              v-show="activeTab === 'general'"
+              v-if="activeTab === 'general'"
               class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
             >
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.network.title') }}</div>
@@ -1743,7 +1743,7 @@ where ffmpeg</pre>
 
             <!-- Import / Export config -->
             <div
-              v-show="activeTab === 'export'"
+              v-if="activeTab === 'export'"
               data-tour="settings-card-export"
               class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
             >
@@ -1779,7 +1779,7 @@ where ffmpeg</pre>
           </div>
 
         <!-- Projects panel -->
-        <div v-show="activeTab === 'projects'" class="q-pa-none">
+        <div v-if="activeTab === 'projects'" class="q-pa-none">
           <div class="row q-gutter-md" style="min-height: 500px;">
             <!-- Left column: project list (30%) -->
             <div class="project-list-col">
@@ -2332,7 +2332,7 @@ where ffmpeg</pre>
           </div>
         </div>
         <!-- Templates panel -->
-        <div v-show="activeTab === 'templates'" class="q-pa-none">
+        <div v-if="activeTab === 'templates'" class="q-pa-none">
           <div data-tour="settings-card-templates" class="settings-card rounded-borders q-pa-lg">
             <div class="row items-center justify-between q-mb-md">
               <div class="text-subtitle1 text-weight-medium text-grey-3">
@@ -2529,6 +2529,8 @@ import { useLayoutStore } from 'src/stores/layout'
 import type { ProjectSettings } from 'src/stores/settings'
 import { useSettingsStore } from 'src/stores/settings'
 import { type Template, useTemplatesStore } from 'src/stores/templates'
+import { formFieldsEqual } from 'src/utils/form-fields-equal'
+import { captureFormSnapshot } from 'src/utils/form-snapshot'
 import {
   DEFAULT_NOTIFICATION_SOUND,
   DEFAULT_PR_NOTIFICATION_AUDIO_SETTINGS,
@@ -3508,11 +3510,18 @@ const selectedProject = computed<ProjectSettings | null>(() => {
 // rendu et la barre « modifications non enregistrées » clignotait à chaque
 // ouverture, le temps que `onMounted` finisse ses `await` et appelle
 // `syncGlobalForm()`.
-const globalSavedSnapshot = ref<string>(captureGlobalSnapshot())
-const projectSavedSnapshot = ref<string>('')
+// Snapshots are OBJECTS, not JSON strings: serialising 76 fields — five of them
+// multi-kilobyte scripts — on every keystroke was what made typing stutter.
+const globalSavedSnapshot = ref<Record<string, unknown>>(captureGlobalSnapshot())
+const projectSavedSnapshot = ref<Record<string, unknown>>({})
 
-function captureGlobalSnapshot(): string {
-  return JSON.stringify({
+/**
+ * Live view of the global form. Shares references with the refs it reads, so
+ * it is cheap enough to recompute on every keystroke — but it must NEVER be
+ * stored as a saved-state snapshot: use `captureGlobalSnapshot()` for that.
+ */
+function readGlobalForm(): Record<string, unknown> {
+  return {
     claudeModel: globalClaudeModel.value,
     codexModel: globalCodexModel.value,
     prPrompt: globalPrPrompt.value,
@@ -3587,15 +3596,31 @@ function captureGlobalSnapshot(): string {
     voicePrompt: globalVoicePrompt.value,
     voiceTranslateToEnglish: globalVoiceTranslateToEnglish.value,
     voiceSuppressNst: globalVoiceSuppressNst.value,
-  })
+  }
 }
 
-function captureProjectSnapshot(): string {
-  return JSON.stringify(projectForm.value)
+/** Live view of the project form — same caveat as `readGlobalForm`. */
+function readProjectForm(): Record<string, unknown> {
+  return { ...projectForm.value }
 }
 
-const isGlobalDirty = computed(() => captureGlobalSnapshot() !== globalSavedSnapshot.value)
-const isProjectDirty = computed(() => captureProjectSnapshot() !== projectSavedSnapshot.value)
+// Saved-state snapshots must be DETACHED from the live form: arrays (tags,
+// branch prefixes) and nested objects (devServer, e2e, finalization) are edited
+// in place, and a snapshot sharing those references would mutate along with the
+// value it is compared against — the savebar would never appear and the edit
+// would be lost silently.
+function captureGlobalSnapshot(): Record<string, unknown> {
+  return captureFormSnapshot(readGlobalForm())
+}
+
+function captureProjectSnapshot(): Record<string, unknown> {
+  return captureFormSnapshot(readProjectForm())
+}
+
+// The dirty checks compare the LIVE form against the detached snapshot: no
+// deep clone on every keystroke, and any in-place mutation still shows up.
+const isGlobalDirty = computed(() => !formFieldsEqual(readGlobalForm(), globalSavedSnapshot.value))
+const isProjectDirty = computed(() => !formFieldsEqual(readProjectForm(), projectSavedSnapshot.value))
 
 const savebarVisible = computed(() => {
   // A failed load must never offer a Save: the form is on defaults.
@@ -4117,12 +4142,19 @@ function formatBytes(bytes: number | undefined | null): string {
   return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[i]}`
 }
 
+// 800 ms was ~75 requests per minute for the whole duration of a model
+// download — minutes, not seconds — with every failure silently discarded.
+const VOICE_MODELS_POLL_MS = 2500
+
 let voiceModelsPollTimer: ReturnType<typeof setInterval> | null = null
 function startVoiceModelsPolling() {
   if (voiceModelsPollTimer) return
   voiceModelsPollTimer = setInterval(() => {
-    store.fetchVoiceModels().catch(() => {})
-  }, 800)
+    if (document.visibilityState === 'hidden') return
+    store.fetchVoiceModels().catch((err) => {
+      console.error('[settings] voice model polling failed:', err)
+    })
+  }, VOICE_MODELS_POLL_MS)
 }
 function stopVoiceModelsPolling() {
   if (voiceModelsPollTimer) {
@@ -4223,7 +4255,7 @@ function addNewProject() {
 function selectProject(index: number) {
   // Same gate as savebarVisible / the settings:project unsaved-scope: dirty
   // alone is trivially true before any project was ever selected, since
-  // projectSavedSnapshot starts at '' while captureProjectSnapshot() never is.
+  // projectSavedSnapshot starts at {} while captureProjectSnapshot() never is.
   if (isProjectDirty.value && (selectedProject.value !== null || isNewProject.value)) {
     $q.dialog({
       title: t('settings.unsavedChanges.title'),

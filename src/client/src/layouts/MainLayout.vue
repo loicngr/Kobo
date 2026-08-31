@@ -126,14 +126,10 @@
 import { useQuasar } from 'quasar'
 import AcceptancePanel from 'src/components/AcceptancePanel.vue'
 import AgentTodosPanel from 'src/components/AgentTodosPanel.vue'
-import DocumentsPanel from 'src/components/DocumentsPanel.vue'
-import GitPanel from 'src/components/GitPanel.vue'
 import PwaStatusBanner from 'src/components/PwaStatusBanner.vue'
-import SchedulePanel from 'src/components/SchedulePanel.vue'
 import SessionTimelinePanel from 'src/components/SessionTimelinePanel.vue'
 import SubagentsPanel from 'src/components/SubagentsPanel.vue'
 import TasksPanel from 'src/components/TasksPanel.vue'
-import TerminalPanel from 'src/components/TerminalPanel.vue'
 import ToolsPanel from 'src/components/ToolsPanel.vue'
 import WhatsNewDialog from 'src/components/WhatsNewDialog.vue'
 import WorkspaceList from 'src/components/WorkspaceList.vue'
@@ -144,8 +140,18 @@ import { useDocumentsStore } from 'src/stores/documents'
 import { useLayoutStore } from 'src/stores/layout'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { cappedDrawerWidth } from 'src/utils/drawer-width'
-import { computed, nextTick, onMounted, onUnmounted, provide, ref, watch } from 'vue'
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, provide, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
+
+// The four heaviest panels of the right drawer. q-tab-panels only renders the
+// active panel, so deferring their chunk means they are not downloaded until
+// the user actually opens their tab — and never at all on the settings page.
+// GitPanel drags DiffViewer + monaco, TerminalPanel drags @xterm/xterm and its
+// stylesheet, DocumentsPanel drags marked + dompurify.
+const DocumentsPanel = defineAsyncComponent(() => import('src/components/DocumentsPanel.vue'))
+const GitPanel = defineAsyncComponent(() => import('src/components/GitPanel.vue'))
+const SchedulePanel = defineAsyncComponent(() => import('src/components/SchedulePanel.vue'))
+const TerminalPanel = defineAsyncComponent(() => import('src/components/TerminalPanel.vue'))
 
 // First-run onboarding tour, and the post-update "What's new" dialog.
 const { maybeStartOnFirstVisit } = useOnboarding()

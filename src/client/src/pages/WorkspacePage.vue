@@ -410,11 +410,10 @@ import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, 
 import { useI18n } from 'vue-i18n'
 import { useRoute, useRouter } from 'vue-router'
 
-const ActivityFeed = defineAsyncComponent(() =>
-  Promise.all([import('src/components/ActivityFeed.vue'), new Promise((resolve) => setTimeout(resolve, 500))]).then(
-    ([module]) => module,
-  ),
-)
+// No artificial delay: ActivityFeed shows its own 200 ms switch spinner
+// (WORKSPACE_SWITCH_SPINNER_MS), so padding the chunk load with half a second
+// added latency to every workspace open and hid nothing.
+const ActivityFeed = defineAsyncComponent(() => import('src/components/ActivityFeed.vue'))
 
 import AgentBusyBanner from 'src/components/AgentBusyBanner.vue'
 import AgentErrorBanner from 'src/components/AgentErrorBanner.vue'

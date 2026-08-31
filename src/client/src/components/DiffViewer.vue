@@ -275,7 +275,7 @@
           children-key="children"
           dark
           dense
-          default-expand-all
+          v-model:expanded="expandedNodes"
           no-selection-unset
           :selected="selectedNodeKey"
           :filter="fileFilter"
@@ -519,19 +519,18 @@
 
 <script setup lang="ts">
 import EditorWorker from 'monaco-editor/editor/editor.worker.js?worker'
-import CssWorker from 'monaco-editor/language/css/css.worker.js?worker'
-import HtmlWorker from 'monaco-editor/language/html/html.worker.js?worker'
-import JsonWorker from 'monaco-editor/language/json/json.worker.js?worker'
-import TypeScriptWorker from 'monaco-editor/language/typescript/ts.worker.js?worker'
 import { useQuasar } from 'quasar'
 import { useIsMobile } from 'src/composables/use-is-mobile'
 import { type ReviewComment, useReviewDraft } from 'src/composables/use-review-draft'
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { ApiError, apiFetch } from 'src/utils/api'
-import { buildPathTree, countLeaves, type PathTreeNode } from 'src/utils/build-path-tree'
+import { buildPathTree, collectFolderKeys, countLeaves, type PathTreeNode } from 'src/utils/build-path-tree'
+import { createLatestRequest, isAbortError } from 'src/utils/latest-request'
 import { monacoLanguageForPath } from 'src/utils/monaco-language'
 import { takePendingDiffOpen } from 'src/utils/pending-diff-open'
+import { coalesceFrames } from 'src/utils/raf-coalesce'
+import { countCommentsByPath } from 'src/utils/review-comment-counts'
 import { registerUnsavedScope, unregisterUnsavedScope } from 'src/utils/unsaved-guard'
 import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
@@ -577,6 +576,10 @@ const loadingFile = ref(false)
 const fileLoadError = ref<string | null>(null)
 /** Failure of the file-list request itself, told apart from "no changes". */
 const fileListError = ref<string | null>(null)
+// Two independent single-flight guards: selecting a file must not cancel the
+// file-list refresh, and vice-versa.
+const filesRequest = createLatestRequest()
+const fileDiffRequest = createLatestRequest()
 const editorContainer = ref<HTMLElement | null>(null)
 const viewMode = ref<'side' | 'inline'>('side')
 // Compact mode: collapse unchanged regions in the Monaco diff editor so the
@@ -692,23 +695,18 @@ async function onSubmitReview() {
   }
 }
 
-// Per-file comment count (computed reactively from the draft state).
-const commentsByFile = computed(() => {
-  const m = new Map<string, number>()
-  if (reviewMode.value !== 'review') return m
-  for (const c of reviewDraft.draft.value.comments) {
-    m.set(c.filePath, (m.get(c.filePath) ?? 0) + 1)
-  }
-  return m
-})
+// Per-file AND per-folder comment counts, computed once per draft change
+// instead of re-scanning the comment list for every folder node, twice per
+// render, on every scroll frame.
+const commentCounts = computed(() =>
+  countCommentsByPath(reviewMode.value === 'review' ? reviewDraft.draft.value.comments : []),
+)
+
+const commentsByFile = computed(() => commentCounts.value.byFile)
 
 function commentCountForFolder(folderPath: string): number {
-  if (reviewMode.value !== 'review' || !folderPath) return 0
-  let count = 0
-  for (const c of reviewDraft.draft.value.comments) {
-    if (c.filePath.startsWith(`${folderPath}/`)) count++
-  }
-  return count
+  if (!folderPath) return 0
+  return commentCounts.value.byFolder.get(folderPath) ?? 0
 }
 
 // Folder nodes have nodeKey `dir:src/components`. Derive the relative folder
@@ -766,6 +764,72 @@ function startFileListResize(event: MouseEvent) {
   document.addEventListener('mouseup', onMouseUp)
 }
 
+/**
+ * Every boolean provider flag of the four worker-backed language services.
+ * `dataProviders` (html) is deliberately absent: it is not a boolean.
+ * Unspecified fields become undefined — falsy — so a single object safely
+ * covers services whose ModeConfiguration shapes differ.
+ */
+const NO_LANGUAGE_PROVIDERS = {
+  codeActions: false,
+  colors: false,
+  completionItems: false,
+  definitions: false,
+  diagnostics: false,
+  documentFormattingEdits: false,
+  documentHighlights: false,
+  documentRangeFormattingEdits: false,
+  documentSymbols: false,
+  foldingRanges: false,
+  hovers: false,
+  inlayHints: false,
+  links: false,
+  onTypeFormattingEdits: false,
+  references: false,
+  rename: false,
+  selectionRanges: false,
+  signatureHelp: false,
+  tokens: false,
+} as const
+
+/**
+ * `import('monaco-editor')` resolves to esm/vs/index.js, which registers four
+ * worker-backed language services (typescript, css, html, json). Each hooks
+ * `languages.onLanguage(<id>)` and, when a model of that language is created,
+ * registers providers that ask MonacoEnvironment.getWorker for their OWN
+ * worker. We ship only the base worker — 274 kB instead of ~12 MB — so every
+ * provider must be off, otherwise the base worker would be handed a protocol
+ * it does not implement.
+ *
+ * A diff viewer needs none of them: it renders a diff and allows a plain edit
+ * saved through POST /save-file. Syntax colouring comes from
+ * languages/definitions/* (Monarch, main thread) and is unaffected.
+ *
+ * Note the accessors: in the ESM build these services are TOP-LEVEL exports
+ * (`monaco.typescript`, `monaco.css`, …), not `monaco.languages.*` as in the
+ * global build's monaco.d.ts.
+ */
+function disableWorkerBackedLanguageServices(m: typeof import('monaco-editor')): void {
+  const noDiagnostics = {
+    noSemanticValidation: true,
+    noSyntaxValidation: true,
+    noSuggestionDiagnostics: true,
+  }
+  m.typescript.typescriptDefaults.setDiagnosticsOptions(noDiagnostics)
+  m.typescript.javascriptDefaults.setDiagnosticsOptions(noDiagnostics)
+  m.typescript.typescriptDefaults.setEagerModelSync(false)
+  m.typescript.javascriptDefaults.setEagerModelSync(false)
+  m.typescript.typescriptDefaults.setModeConfiguration(NO_LANGUAGE_PROVIDERS)
+  m.typescript.javascriptDefaults.setModeConfiguration(NO_LANGUAGE_PROVIDERS)
+  m.css.cssDefaults.setModeConfiguration(NO_LANGUAGE_PROVIDERS)
+  m.css.scssDefaults.setModeConfiguration(NO_LANGUAGE_PROVIDERS)
+  m.css.lessDefaults.setModeConfiguration(NO_LANGUAGE_PROVIDERS)
+  m.json.jsonDefaults.setModeConfiguration(NO_LANGUAGE_PROVIDERS)
+  m.html.htmlDefaults.setModeConfiguration(NO_LANGUAGE_PROVIDERS)
+  m.html.handlebarDefaults.setModeConfiguration(NO_LANGUAGE_PROVIDERS)
+  m.html.razorDefaults.setModeConfiguration(NO_LANGUAGE_PROVIDERS)
+}
+
 // Monaco instances (lazy loaded)
 let monaco: typeof import('monaco-editor') | null = null
 let diffEditor: import('monaco-editor').editor.IStandaloneDiffEditor | null = null
@@ -799,16 +863,24 @@ const editorWrapperRef = ref<HTMLElement | null>(null)
 function refreshZonePositions() {
   if (!diffEditor) return
   const me = diffEditor.getModifiedEditor()
+  const scrollTop = me.getScrollTop()
   for (const z of mountedZones.value) {
     // `getTopForLineNumber(N)` accounts for view zones inserted before N,
     // so for our placeholder inserted `afterLineNumber: zone.line` we want
     // the position of `zone.line + 1` (the line BELOW the zone) MINUS the
     // zone height, which gives us the top of the placeholder itself.
-    z.topPx = me.getTopForLineNumber(z.line + 1) - me.getScrollTop() - z.heightPx
+    const top = me.getTopForLineNumber(z.line + 1) - scrollTop - z.heightPx
+    // Skip the write when nothing moved: mutating a deeply reactive object
+    // triggers a full re-render even when the value is identical.
+    if (z.topPx !== top) z.topPx = top
   }
 }
 
+// One position pass per animation frame, not one per scroll event.
+const zonePositionRefresh = coalesceFrames(refreshZonePositions)
+
 function disposeAllZones() {
+  zonePositionRefresh.cancel()
   if (!diffEditor) {
     mountedZones.value = []
     return
@@ -932,9 +1004,10 @@ function setupGutterAddButton() {
       if (line < 1 || !selectedFile.value) return
       addCommentOnLine(selectedFile.value, line)
     }),
-    // Keep overlay positions in sync with editor scroll + relayout.
-    modifiedEditor.onDidScrollChange(() => refreshZonePositions()),
-    modifiedEditor.onDidLayoutChange(() => refreshZonePositions()),
+    // Keep overlay positions in sync with editor scroll + relayout, at most
+    // once per animation frame.
+    modifiedEditor.onDidScrollChange(() => zonePositionRefresh.request()),
+    modifiedEditor.onDidLayoutChange(() => zonePositionRefresh.request()),
   )
 }
 
@@ -1072,6 +1145,23 @@ watch(isDrawerCollapsed, (collapsed) => {
 const tree = computed(() => buildPathTree(files.value))
 const selectedNodeKey = computed(() => (selectedFile.value ? `file:${selectedFile.value}` : ''))
 
+/** Above this many files, expanding the whole tree costs more than it helps. */
+const AUTO_EXPAND_FILE_LIMIT = 200
+
+const expandedNodes = ref<string[]>([])
+
+// Recompute the initial expansion whenever the file list changes: everything
+// open on a small diff, first level only on a large one. The user's manual
+// expansions afterwards are preserved by v-model.
+watch(
+  tree,
+  (nodes) => {
+    expandedNodes.value =
+      files.value.length <= AUTO_EXPAND_FILE_LIMIT ? collectFolderKeys(nodes) : collectFolderKeys(nodes, 1)
+  },
+  { immediate: true },
+)
+
 // ── File tree search ─────────────────────────────────────────────────────────
 
 const fileFilter = ref('')
@@ -1101,15 +1191,22 @@ async function loadFiles() {
     if (!isCommitsMode.value && diffMode.value === 'branch' && includeUntracked.value) {
       params.set('includeUntracked', '1')
     }
+    const signal = filesRequest.begin()
     const data = await apiFetch<{ files: DiffFile[]; sourceBranch?: string; workingBranch?: string }>(
       `/api/workspaces/${props.workspaceId}/diff?${params}`,
-      { cache: 'no-store' },
+      { cache: 'no-store', signal },
     )
+    // A response that is no longer the current one must never touch the view:
+    // the fetch may have resolved just before a newer call aborted it.
+    if (!filesRequest.isCurrent(signal)) return
     files.value = data.files
     sourceBranch.value = data.sourceBranch ?? ''
     workingBranch.value = data.workingBranch ?? ''
     fileListError.value = null
   } catch (err) {
+    // A cancelled request is the expected outcome of a fast second call, not
+    // a failure worth logging or surfacing in the file-list error state.
+    if (isAbortError(err)) return
     // This used to be a bare `console.error`, in the very component whose job
     // is to show failures: the tree simply stayed empty and the user read it
     // as "no changes". Record the failure; never clear `files`.
@@ -1137,25 +1234,15 @@ async function loadFileDiff(filePath: string) {
     fileLoadError.value = null
 
     if (!monaco) {
-      // Configure Monaco workers per language for proper syntax support
-      self.MonacoEnvironment = {
-        getWorker(_workerId: string, label: string) {
-          if (label === 'json') {
-            return new JsonWorker()
-          }
-          if (label === 'css' || label === 'scss' || label === 'less') {
-            return new CssWorker()
-          }
-          if (label === 'html' || label === 'handlebars' || label === 'razor') {
-            return new HtmlWorker()
-          }
-          if (label === 'typescript' || label === 'javascript') {
-            return new TypeScriptWorker()
-          }
-          return new EditorWorker()
-        },
-      }
+      // The base worker computes the diff, resolves links and does basic
+      // tokenisation — everything this viewer actually needs. The four
+      // language-service workers (TypeScript 6.6 MB, its secondary API 3.5 MB,
+      // CSS 1.1 MB, HTML 704 kB, JSON 401 kB) served diagnostics and
+      // IntelliSense that this read-mostly view never surfaced, yet Vite
+      // emitted their bundles unconditionally.
+      self.MonacoEnvironment = { getWorker: () => new EditorWorker() }
       monaco = await import('monaco-editor')
+      disableWorkerBackedLanguageServices(monaco)
       monaco.editor.defineTheme('kobo-dark', {
         base: 'vs-dark',
         inherit: true,
@@ -1171,10 +1258,15 @@ async function loadFileDiff(filePath: string) {
     const fileQuery = isCommitsMode.value
       ? `path=${encodeURIComponent(filePath)}&mode=commits&from=${encodeURIComponent(props.compareFrom!)}&to=${encodeURIComponent(props.compareTo!)}`
       : `path=${encodeURIComponent(filePath)}&mode=${diffMode.value}`
+    const signal = fileDiffRequest.begin()
     const data = await apiFetch<{ original?: string; modified?: string; modifiedSha?: string }>(
       `/api/workspaces/${props.workspaceId}/diff-file?${fileQuery}`,
-      { cache: 'no-store' },
+      { cache: 'no-store', signal },
     )
+    // Bail out BEFORE building the new editor: a superseded response must
+    // leave the view — and the baseSha/baseContent snapshot that the save
+    // path relies on — exactly as the newest request left it.
+    if (!fileDiffRequest.isCurrent(signal)) return
 
     const language = monacoLanguageForPath(filePath)
 
@@ -1228,6 +1320,9 @@ async function loadFileDiff(filePath: string) {
       renderCommentZonesForFile(filePath)
     }
   } catch (err) {
+    // A cancelled request is the expected outcome of a fast second click, not
+    // a failure worth surfacing in the inline error state.
+    if (isAbortError(err)) return
     const message = err instanceof Error ? err.message : String(err)
     fileLoadError.value = message
     console.error('Failed to load file diff:', err)
@@ -1714,6 +1809,8 @@ onUnmounted(() => {
   // editor and (in Review mode) view zones / mounted Vue apps.
   reviewDraft.flush() // before disposeEditor in case the user closed mid-edit
   disposeEditor()
+  filesRequest.abort()
+  fileDiffRequest.abort()
   unregisterUnsavedScope('diff:file')
 })
 </script>

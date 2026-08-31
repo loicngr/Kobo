@@ -12,7 +12,7 @@ import type { ConversationItem } from 'src/services/agent-event-view'
 import { useDocumentsStore } from 'src/stores/documents'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { injectDocumentLinks } from 'src/utils/inject-document-links'
-import { sanitizeChatHtml } from 'src/utils/render-chat-markdown'
+import { escapeStreamingText, renderChatMarkdownCached, sanitizeChatHtml } from 'src/utils/render-chat-markdown'
 import { computed } from 'vue'
 
 const props = defineProps<{
@@ -29,10 +29,23 @@ const knownDocumentPaths = computed(() => {
 })
 
 const html = computed(() => {
-  const raw = marked.parse(props.item.text, { async: false, breaks: true, gfm: true }) as string
-  const withLinks = injectDocumentLinks(raw, knownDocumentPaths.value)
-  // Allow the data-document-path attribute through the sanitizer.
-  return sanitizeChatHtml(withLinks, { addAttr: ['data-document-path'] })
+  const item = props.item
+  // While the engine is typing, the text is a truncated markdown fragment.
+  // Parsing it on every token is the single most expensive thing this
+  // component does, and the intermediate render is unstable anyway (an
+  // unterminated code fence flips the whole message in and out of <pre>).
+  if (item.streaming) return escapeStreamingText(item.text)
+
+  const paths = knownDocumentPaths.value
+  // The key carries BOTH the message identity and the document paths, because
+  // injectDocumentLinks changes the output when the workspace's document list
+  // changes. renderChatMarkdownCached appends the text length itself.
+  return renderChatMarkdownCached(`${item.messageId}|${paths.join(',')}`, item.text, (raw) => {
+    const parsed = marked.parse(raw, { async: false, breaks: true, gfm: true }) as string
+    const withLinks = injectDocumentLinks(parsed, paths)
+    // Allow the data-document-path attribute through the sanitizer.
+    return sanitizeChatHtml(withLinks, { addAttr: ['data-document-path'] })
+  })
 })
 
 function onMessageClick(event: MouseEvent) {

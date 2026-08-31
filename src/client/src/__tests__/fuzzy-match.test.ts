@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { fuzzyMatch, fuzzyRank } from '../utils/fuzzy-match'
 
 describe('fuzzyMatch', () => {
@@ -47,5 +47,58 @@ describe('fuzzyRank', () => {
   it('returns every item for an empty query', () => {
     const items = ['a.ts', 'b.ts']
     expect(fuzzyRank('', items)).toHaveLength(2)
+  })
+})
+
+describe('fuzzyRankTop', () => {
+  const corpus = [
+    'src/server/routes/git.ts',
+    'src/client/src/utils/fuzzy-match.ts',
+    'src/client/src/components/GitPanel.vue',
+    'docs/git.md',
+    'README.md',
+    'src/__tests__/routes-git.test.ts',
+  ]
+
+  it('returns exactly what fuzzyRank would return, truncated', async () => {
+    const { fuzzyRank, fuzzyRankTop } = await import('../utils/fuzzy-match')
+    for (const query of ['git', 'gt', 'srcgit', 'md', '']) {
+      expect(fuzzyRankTop(query, corpus, 3)).toEqual(fuzzyRank(query, corpus).slice(0, 3))
+    }
+  })
+
+  it('keeps the earlier item on a score tie, like the stable sort did', async () => {
+    const { fuzzyRank, fuzzyRankTop } = await import('../utils/fuzzy-match')
+    const ties = ['aa/x.ts', 'bb/x.ts', 'cc/x.ts']
+    expect(fuzzyRankTop('x', ties, 2)).toEqual(fuzzyRank('x', ties).slice(0, 2))
+  })
+
+  it('scores every item exactly once — a single pass, no sort', async () => {
+    const { fuzzyMatch, fuzzyRankTop } = await import('../utils/fuzzy-match')
+    const items = Array.from({ length: 5000 }, (_, i) => `src/pkg/module-${i}/index.ts`)
+    const score = vi.fn(fuzzyMatch)
+
+    fuzzyRankTop('index', items, 50, score)
+
+    // The old path scored every item, wrapped each one in an object, then
+    // sorted the whole list before slicing fifty. One call per item and no
+    // second traversal is the whole point.
+    expect(score).toHaveBeenCalledTimes(items.length)
+  })
+
+  it('never returns more than the limit', async () => {
+    const { fuzzyRankTop } = await import('../utils/fuzzy-match')
+    const items = Array.from({ length: 200 }, (_, i) => `file-${i}.ts`)
+    expect(fuzzyRankTop('file', items, 50)).toHaveLength(50)
+  })
+
+  it('returns an empty list for a non-zero corpus and a zero limit', async () => {
+    const { fuzzyRankTop } = await import('../utils/fuzzy-match')
+    expect(fuzzyRankTop('a', ['abc'], 0)).toEqual([])
+  })
+
+  it('drops non-matching items', async () => {
+    const { fuzzyRankTop } = await import('../utils/fuzzy-match')
+    expect(fuzzyRankTop('zzz', corpus, 10)).toEqual([])
   })
 })

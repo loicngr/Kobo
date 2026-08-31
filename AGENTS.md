@@ -240,7 +240,7 @@ Sequence: `captureRestoreData` (best-effort forge lookup for PR number / URL / m
 
 ### Bulk workspace info refresh
 
-`GET /api/workspaces/info` returns `{ workspaces, prSnapshots, gitStats }` in one shot. The client polls this endpoint every 30 s so every non-archived workspace stays ≤ 30 s fresh without a per-card stats request. The server-side pr-watcher feeds the same caches (`lastKnownGitStats` map, PR snapshots) so the work is shared between the polling client and the watchdog loop.
+`GET /api/workspaces/info` returns `{ workspaces, prSnapshots, gitStats }` in one shot. The client polls this endpoint every 15 s so every non-archived workspace stays ≤ 15 s fresh without a per-card stats request. The poll is skipped while the browser tab is hidden and fires once immediately when the tab becomes visible again. The server-side pr-watcher feeds the same caches (`lastKnownGitStats` map, PR snapshots) so the work is shared between the polling client and the watchdog loop.
 
 ### File editing in the diff viewer
 

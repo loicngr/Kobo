@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import {
   type ConversationItem,
   foldEvents,
@@ -262,5 +262,232 @@ describe('mergeWithUserMessages', () => {
     const texts = merged.filter((i) => i.type === 'text') as Array<Extract<ConversationItem, { type: 'text' }>>
     expect(texts.find((t) => t.messageId === 'm1')?.streaming).toBe(false)
     expect(texts.find((t) => t.messageId === 'm2')?.streaming).toBe(true)
+  })
+})
+
+describe('foldEventsCached', () => {
+  it('produces the same items as a full fold when events are appended one by one', async () => {
+    const { createFoldCache, foldEvents, foldEventsCached } = await import('../services/agent-event-view')
+    const events: AgentEvent[] = [
+      { kind: 'message:text', messageId: 'm1', text: 'Hel', streaming: true },
+      { kind: 'message:text', messageId: 'm1', text: 'lo', streaming: true },
+      { kind: 'tool:call', messageId: 'm1', toolCallId: 'tc1', name: 'Bash', input: { command: 'ls' } },
+      { kind: 'tool:result', toolCallId: 'tc1', output: 'a.ts', isError: false },
+      { kind: 'message:end', messageId: 'm1' },
+    ]
+
+    const cache = createFoldCache()
+    for (let i = 1; i <= events.length; i++) {
+      foldEventsCached(cache, events.slice(0, i), undefined, true)
+    }
+
+    expect(foldEventsCached(cache, events, undefined, true)).toEqual(foldEvents(events, undefined, true))
+  })
+
+  it('only folds the newly appended tail', async () => {
+    const { createFoldCache, foldEventsCached } = await import('../services/agent-event-view')
+    const events: AgentEvent[] = [
+      { kind: 'message:text', messageId: 'm1', text: 'one', streaming: false },
+      { kind: 'message:text', messageId: 'm2', text: 'two', streaming: false },
+    ]
+    const cache = createFoldCache()
+    const first = foldEventsCached(cache, events, undefined, true)
+    const firstItem = first[0]
+
+    events.push({ kind: 'message:text', messageId: 'm3', text: 'three', streaming: false })
+    const second = foldEventsCached(cache, events, undefined, true)
+
+    // The item objects of already-folded events are REUSED, not rebuilt — this
+    // is what lets the markdown memo hold on to a frozen message.
+    expect(second[0]).toBe(firstItem)
+    expect(second).toHaveLength(3)
+  })
+
+  it('rebuilds from scratch when older history is prepended', async () => {
+    const { createFoldCache, foldEvents, foldEventsCached } = await import('../services/agent-event-view')
+    const recent: AgentEvent[] = [{ kind: 'message:text', messageId: 'm2', text: 'now', streaming: false }]
+    const cache = createFoldCache()
+    foldEventsCached(cache, recent, undefined, true)
+
+    const withOlder: AgentEvent[] = [
+      { kind: 'message:text', messageId: 'm1', text: 'before', streaming: false },
+      ...recent,
+    ]
+    expect(foldEventsCached(cache, withOlder, undefined, true)).toEqual(foldEvents(withOlder, undefined, true))
+  })
+
+  it('rebuilds from scratch when the stream is replaced by a shorter one', async () => {
+    const { createFoldCache, foldEvents, foldEventsCached } = await import('../services/agent-event-view')
+    const cache = createFoldCache()
+    foldEventsCached(
+      cache,
+      [
+        { kind: 'message:text', messageId: 'a', text: '1', streaming: false },
+        { kind: 'message:text', messageId: 'b', text: '2', streaming: false },
+      ],
+      undefined,
+      true,
+    )
+    const replacement: AgentEvent[] = [{ kind: 'message:text', messageId: 'z', text: 'z', streaming: false }]
+    expect(foldEventsCached(cache, replacement, undefined, true)).toEqual(foldEvents(replacement, undefined, true))
+  })
+
+  it('closes the trailing streaming message when the session goes idle', async () => {
+    const { createFoldCache, foldEventsCached } = await import('../services/agent-event-view')
+    const events: AgentEvent[] = [{ kind: 'message:text', messageId: 'm1', text: 'typing', streaming: true }]
+    const cache = createFoldCache()
+
+    const live = foldEventsCached(cache, events, undefined, true)
+    expect((live[0] as { streaming: boolean }).streaming).toBe(true)
+
+    const idle = foldEventsCached(cache, events, undefined, false)
+    expect((idle[0] as { streaming: boolean }).streaming).toBe(false)
+  })
+
+  // Vue re-renders a child component only when the props it receives change by
+  // REFERENCE. The feed passes each ConversationItem as a prop under a stable
+  // key, so an item mutated in place would keep its reference and freeze the
+  // card forever: text deltas invisible, spinner stuck, tool result missing.
+  // Every update must therefore publish a NEW object.
+  it('publishes a new object reference when a text delta extends an existing item', async () => {
+    const { createFoldCache, foldEventsCached } = await import('../services/agent-event-view')
+    const events: AgentEvent[] = [{ kind: 'message:text', messageId: 'm1', text: 'Hel', streaming: true }]
+    const cache = createFoldCache()
+    const first = foldEventsCached(cache, events, undefined, true)
+    const firstItem = first[0]
+
+    events.push({ kind: 'message:text', messageId: 'm1', text: 'lo', streaming: true })
+    const second = foldEventsCached(cache, events, undefined, true)
+
+    expect(second[0]).not.toBe(firstItem)
+    expect((second[0] as { text: string }).text).toBe('Hello')
+    expect((firstItem as { text: string }).text).toBe('Hel')
+  })
+
+  it('publishes a new object reference when message:end closes a streaming item', async () => {
+    const { createFoldCache, foldEventsCached } = await import('../services/agent-event-view')
+    const events: AgentEvent[] = [{ kind: 'message:text', messageId: 'm1', text: 'hi', streaming: true }]
+    const cache = createFoldCache()
+    const firstItem = foldEventsCached(cache, events, undefined, true)[0]
+
+    events.push({ kind: 'message:end', messageId: 'm1' })
+    const second = foldEventsCached(cache, events, undefined, true)
+
+    expect(second[0]).not.toBe(firstItem)
+    expect((second[0] as { streaming: boolean }).streaming).toBe(false)
+  })
+
+  it('publishes a new object reference when the session goes idle (closeStaleStreamingText)', async () => {
+    const { createFoldCache, foldEventsCached } = await import('../services/agent-event-view')
+    const events: AgentEvent[] = [{ kind: 'message:text', messageId: 'm1', text: 'typing', streaming: true }]
+    const cache = createFoldCache()
+    const liveItem = foldEventsCached(cache, events, undefined, true)[0]
+
+    const idle = foldEventsCached(cache, events, undefined, false)
+
+    expect(idle[0]).not.toBe(liveItem)
+    expect((idle[0] as { streaming: boolean }).streaming).toBe(false)
+
+    // Idempotent: a second idle fold changes nothing, so the reference is kept.
+    expect(foldEventsCached(cache, events, undefined, false)[0]).toBe(idle[0])
+  })
+
+  it('publishes a new object reference when a tool result lands on an existing call', async () => {
+    const { createFoldCache, foldEventsCached } = await import('../services/agent-event-view')
+    const events: AgentEvent[] = [
+      { kind: 'tool:call', messageId: 'm1', toolCallId: 'tc1', name: 'Bash', input: { command: 'ls' } },
+    ]
+    const cache = createFoldCache()
+    const callItem = foldEventsCached(cache, events, undefined, true)[0]
+
+    events.push({ kind: 'tool:result', toolCallId: 'tc1', output: 'a.ts', isError: false })
+    const second = foldEventsCached(cache, events, undefined, true)
+
+    expect(second[0]).not.toBe(callItem)
+    expect((second[0] as { result?: { output: unknown } }).result).toEqual({ output: 'a.ts', isError: false })
+  })
+
+  it('keeps folding text deltas correctly after the item has been replaced', async () => {
+    const { createFoldCache, foldEvents, foldEventsCached } = await import('../services/agent-event-view')
+    const events: AgentEvent[] = [{ kind: 'message:text', messageId: 'm1', text: 'a', streaming: true }]
+    const cache = createFoldCache()
+    // Force a copy-on-write pass (idle close), then keep streaming into it.
+    foldEventsCached(cache, events, undefined, false)
+    events.push({ kind: 'message:text', messageId: 'm1', text: 'b', streaming: true })
+    events.push({ kind: 'message:end', messageId: 'm1' })
+    expect(foldEventsCached(cache, events, undefined, true)).toEqual(foldEvents(events, undefined, true))
+  })
+
+  it('carries timestamps and event ids onto the appended items', async () => {
+    const { createFoldCache, foldEventsCached } = await import('../services/agent-event-view')
+    const cache = createFoldCache()
+    const events: AgentEvent[] = [{ kind: 'message:text', messageId: 'm1', text: 'a', streaming: false }]
+    foldEventsCached(cache, events, ['2026-01-01T00:00:00Z'], true, ['evt-1'])
+
+    events.push({ kind: 'message:text', messageId: 'm2', text: 'b', streaming: false })
+    const items = foldEventsCached(cache, events, ['2026-01-01T00:00:00Z', '2026-01-01T00:00:01Z'], true, [
+      'evt-1',
+      'evt-2',
+    ])
+
+    expect(items[1].ts).toBe('2026-01-01T00:00:01Z')
+    expect(items[1].eventIds).toEqual(['evt-2'])
+  })
+})
+
+describe('mergeWithUserMessages fast path', () => {
+  it('merges two already-sorted lists without calling sort', async () => {
+    const { mergeWithUserMessages } = await import('../services/agent-event-view')
+    const agentItems = [
+      { type: 'text' as const, messageId: 'm1', text: 'a', streaming: false, ts: '2026-01-01T00:00:01Z' },
+      { type: 'text' as const, messageId: 'm2', text: 'b', streaming: false, ts: '2026-01-01T00:00:03Z' },
+    ]
+    const userMessages = [
+      { content: 'u1', sender: 'user', ts: '2026-01-01T00:00:00Z' },
+      { content: 'u2', sender: 'user', ts: '2026-01-01T00:00:02Z' },
+    ]
+
+    const sortSpy = vi.spyOn(Array.prototype, 'sort')
+    const merged = mergeWithUserMessages(agentItems, userMessages)
+    const sorted = sortSpy.mock.calls.length
+    sortSpy.mockRestore()
+
+    expect(merged.map((i) => i.ts)).toEqual([
+      '2026-01-01T00:00:00Z',
+      '2026-01-01T00:00:01Z',
+      '2026-01-01T00:00:02Z',
+      '2026-01-01T00:00:03Z',
+    ])
+    expect(sorted).toBe(0)
+  })
+
+  it('publishes a new object reference for a streaming item closed by a newer user message', async () => {
+    const { mergeWithUserMessages } = await import('../services/agent-event-view')
+    const streaming = {
+      type: 'text' as const,
+      messageId: 'm1',
+      text: 'half',
+      streaming: true,
+      ts: '2026-01-01T00:00:01Z',
+    }
+    const agentItems: ConversationItem[] = [streaming]
+    const merged = mergeWithUserMessages(agentItems, [{ content: 'u1', sender: 'user', ts: '2026-01-01T00:00:02Z' }])
+
+    const closed = merged.find((i) => i.type === 'text')
+    expect(closed).not.toBe(streaming)
+    expect((closed as { streaming: boolean }).streaming).toBe(false)
+    // The source list is realigned too, so the next merge is a no-op and the
+    // reference stays stable afterwards.
+    expect(agentItems[0]).toBe(closed)
+  })
+
+  it('still falls back to a sort when a list is out of order', async () => {
+    const { mergeWithUserMessages } = await import('../services/agent-event-view')
+    const agentItems = [
+      { type: 'text' as const, messageId: 'm2', text: 'b', streaming: false, ts: '2026-01-01T00:00:03Z' },
+      { type: 'text' as const, messageId: 'm1', text: 'a', streaming: false, ts: '2026-01-01T00:00:01Z' },
+    ]
+    const merged = mergeWithUserMessages(agentItems, [{ content: 'u1', sender: 'user', ts: '2026-01-01T00:00:02Z' }])
+    expect(merged.map((i) => i.ts)).toEqual(['2026-01-01T00:00:01Z', '2026-01-01T00:00:02Z', '2026-01-01T00:00:03Z'])
   })
 })
