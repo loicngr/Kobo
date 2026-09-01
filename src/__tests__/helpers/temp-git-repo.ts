@@ -39,6 +39,19 @@ export function createTempRepo(): TempRepo {
   run(['init', '--bare', '--initial-branch=main', '.'], originPath)
   run(['clone', originPath, repoPath], root)
 
+  // The GIT_AUTHOR_*/GIT_COMMITTER_* env vars above only cover git commands
+  // run through this file's own `run()` wrapper. The service under test
+  // (`pr-checkout-service.ts`) spawns its own `git` calls with a bare
+  // environment, so a rebase that needs to create a commit (replaying local
+  // work onto origin) has no identity to fall back on unless one is
+  // configured directly on the repo. On a dev machine this is masked by
+  // `~/.gitconfig`; CI runners have no such global config, so the rebase
+  // stalls with no committer identity — visible as a misleading
+  // `GitConflictError: rebase produced 0 conflicted file(s)` (see git-ops.test.ts
+  // for the same fix applied to the equivalent production helper).
+  run(['config', 'user.email', 't@e.x'], repoPath)
+  run(['config', 'user.name', 'T'], repoPath)
+
   const repo: TempRepo = {
     path: repoPath,
     originPath,
