@@ -1021,6 +1021,14 @@ Kōbō only invokes the CLI binary. If the CLI is missing from `PATH` or not aut
 - When `forge` is `none` (or auto-resolves to `none`), the PR/MR block is hidden entirely: no errors, no placeholders.
 - When the CLI is absent or unauthenticated, the button is disabled with a tooltip explaining the issue instead of surfacing a raw error.
 
+### Creating a workspace from a PR/MR
+
+The **Create workspace** page's **Import from a PR** button (Project Git section) opens a picker listing open pull/merge requests on the resolved forge, with pagination and quick filters (all / mine / review-requested) plus a text search.
+
+- Requires a forge that supports listing PRs/MRs (GitHub, GitLab, or Bitbucket Community — see [CLI prerequisites](#cli-prerequisites) above); the button is disabled with a tooltip when the project's resolved forge is `none` or the CLI is unauthenticated. Forks are listed but not selectable.
+- Selecting a PR/MR opens a guided stepper that diagnoses the local state (fetches the branch first) and walks through every conflict it finds one step at a time: an existing Kōbō workspace already tracking the branch (open it, or continue past an archived one), a worktree that already exists at the target path (attach to it or pick another path), local branch divergence from the remote (fast-forward, rebase your local commits on top, discard them, or keep as-is), uncommitted changes, and an in-progress rebase/merge/cherry-pick to resolve or cancel first. A rebase conflict leaves the worktree in that state for you (or the agent, via **Resolve with agent** in the Git panel) to finish.
+- Once resolved, the worktree-mode toggle, project, and branch fields lock to the imported PR/MR (an **Unlock** control reverts to the normal "new worktree" flow). The workspace is then created through the exact same pipeline as any other — setup script included — with the PR/MR url stored on the workspace and its title/description available to seed the mission context. Your own **Description** text, if you've written one, is never overwritten.
+
 ## Notion integration
 
 Pulls the body, title, and checklists of a Notion page to seed a workspace's tasks and acceptance criteria.
