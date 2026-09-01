@@ -1486,6 +1486,15 @@ describe('workspace store', () => {
       )
       expect(store.pendingQuotaBackoffs.w1).toBeUndefined()
     })
+
+    it('starts the workspace immediately when resuming a backoff', async () => {
+      const store = useWorkspaceStore()
+      const start = vi.spyOn(store, 'startWorkspace').mockResolvedValue()
+
+      await store.resumeQuotaBackoffNow('w1')
+
+      expect(start).toHaveBeenCalledWith('w1')
+    })
   })
 
   describe('cron WS handlers', () => {

@@ -237,6 +237,15 @@ vi.mock('../server/services/wakeup-service.js', () => ({
   getPending: vi.fn(() => null),
 }))
 
+vi.mock('../server/services/quota-backoff-service.js', () => ({
+  arm: vi.fn(),
+  cancel: vi.fn(),
+  getPending: vi.fn(),
+  listPending: vi.fn(() => []),
+  restoreOnBoot: vi.fn(),
+  setOnFireCallback: vi.fn(),
+}))
+
 vi.mock('../server/services/cron-service.js', () => ({
   arm: vi.fn(),
   cancel: vi.fn(),

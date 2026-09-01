@@ -1138,6 +1138,8 @@ export default {
   'agent.error.resume_failed': 'Sesión no encontrada — iniciando sesión nueva',
   'agent.error.other': 'Error del agente',
   'quotaBackoff.banner.title': 'Reanudación automática a las {time}',
+  'quotaBackoff.banner.transientTitle': 'Reanudación automática tras interrupción a las {time}',
+  'quotaBackoff.resumeNow': 'Reanudar ahora',
   'quotaBackoff.banner.tooltip':
     'Cuota de Claude agotada. El auto-loop se reanudará automáticamente cuando la cuota se restablezca a las {resets_at}.',
   'quotaBackoff.banner.cancel': 'Cancelar reanudación',
@@ -1638,6 +1640,7 @@ export default {
   'workspaceStatus.idle': 'inactivo',
   'workspaceStatus.error': 'error',
   'workspaceStatus.quota': 'cuota alcanzada',
+  'workspaceStatus.retrying': 'reanudación automática',
 
   // Workspace list drawer indicators
   'workspaceList.prOpen': '#{n} — Pull request abierta',

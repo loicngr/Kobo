@@ -43,6 +43,16 @@ samp {
   background-color: var(--kobo-surface);
 }
 
+// `--kobo-accent` is calibrated for white text on filled CTAs. On a dark
+// surface it only reaches the non-text 3:1 threshold, so reusing it for
+// outline/flat button labels made controls blend into the background. Use the
+// AA-compliant secondary text token there; Quasar derives the outline border
+// from `currentColor`, improving both the label and the button boundary.
+.q-btn--outline.text-primary,
+.q-btn--flat.text-primary {
+  color: var(--kobo-text-2) !important;
+}
+
 // ── Onboarding tour (driver.js) — dark theme override ──────────────────────
 .driver-popover.kobo-onboarding-popover {
   background-color: var(--kobo-surface);

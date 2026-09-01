@@ -1141,6 +1141,8 @@ export default {
   'agent.error.resume_failed': 'Session introuvable — démarrage en session fraîche',
   'agent.error.other': "Erreur de l'agent",
   'quotaBackoff.banner.title': 'Reprise auto à {time}',
+  'quotaBackoff.banner.transientTitle': 'Reprise auto après interruption à {time}',
+  'quotaBackoff.resumeNow': 'Reprendre maintenant',
   'quotaBackoff.banner.tooltip':
     "Quota Claude épuisé. L'auto-loop reprendra automatiquement quand le quota se libère à {resets_at}.",
   'quotaBackoff.banner.cancel': 'Annuler la reprise',
@@ -1639,6 +1641,7 @@ export default {
   'workspaceStatus.idle': 'inactif',
   'workspaceStatus.error': 'erreur',
   'workspaceStatus.quota': 'quota atteint',
+  'workspaceStatus.retrying': 'reprise automatique',
 
   // Workspace list drawer indicators
   'workspaceList.prOpen': '#{n} — Pull request ouverte',

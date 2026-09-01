@@ -1141,6 +1141,8 @@ export default {
   'agent.error.resume_failed': 'Sitzung nicht gefunden — neue Sitzung wird gestartet',
   'agent.error.other': 'Agent-Fehler',
   'quotaBackoff.banner.title': 'Auto-Wiederaufnahme um {time}',
+  'quotaBackoff.banner.transientTitle': 'Auto-Wiederaufnahme nach Unterbrechung um {time}',
+  'quotaBackoff.resumeNow': 'Jetzt fortsetzen',
   'quotaBackoff.banner.tooltip':
     'Claude-Kontingent erschöpft. Der Auto-Loop wird automatisch fortgesetzt, sobald sich das Kontingent bei {resets_at} zurücksetzt.',
   'quotaBackoff.banner.cancel': 'Wiederaufnahme abbrechen',
@@ -1644,6 +1646,7 @@ export default {
   'workspaceStatus.idle': 'inaktiv',
   'workspaceStatus.error': 'Fehler',
   'workspaceStatus.quota': 'Kontingent erreicht',
+  'workspaceStatus.retrying': 'automatische Wiederaufnahme',
 
   // Workspace list drawer indicators
   'workspaceList.prOpen': '#{n} — Pull Request offen',

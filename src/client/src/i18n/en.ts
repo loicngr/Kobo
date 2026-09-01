@@ -1129,6 +1129,8 @@ export default {
   'agent.error.resume_failed': 'Session not found — starting fresh',
   'agent.error.other': 'Agent error',
   'quotaBackoff.banner.title': 'Auto-resume at {time}',
+  'quotaBackoff.banner.transientTitle': 'Auto-resume after interruption at {time}',
+  'quotaBackoff.resumeNow': 'Resume now',
   'quotaBackoff.banner.tooltip':
     'Claude quota exhausted. Auto-loop will resume automatically when the quota resets at {resets_at}.',
   'quotaBackoff.banner.cancel': 'Cancel resume',
@@ -1620,6 +1622,7 @@ export default {
   'workspaceStatus.idle': 'idle',
   'workspaceStatus.error': 'error',
   'workspaceStatus.quota': 'quota reached',
+  'workspaceStatus.retrying': 'auto-resuming',
 
   // Workspace list drawer indicators
   'workspaceList.prOpen': '#{n} — Pull request open',

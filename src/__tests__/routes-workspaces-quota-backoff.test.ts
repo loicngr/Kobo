@@ -190,6 +190,7 @@ vi.mock('node:fs', async () => {
 // ── Imports (after mocks) ────────────────────────────────────────────────────
 
 import router from '../server/routes/workspaces.js'
+import * as agentManager from '../server/services/agent/orchestrator.js'
 import * as quotaBackoffService from '../server/services/quota-backoff-service.js'
 import * as workspaceService from '../server/services/workspace-service.js'
 
@@ -256,5 +257,25 @@ describe('DELETE /api/workspaces/:id/quota-backoff', () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
     const res = await app.request('/api/workspaces/missing/quota-backoff', { method: 'DELETE' })
     expect(res.status).toBe(404)
+  })
+})
+
+describe('POST /api/workspaces/:id/start', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('cancels a pending backoff before starting the agent manually', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      id: 'w1',
+      worktreePath: '/tmp/w1',
+      model: 'sonnet',
+      reasoningEffort: 'auto',
+      agentPermissionMode: 'bypass',
+    } as never)
+
+    const res = await app.request('/api/workspaces/w1/start', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(quotaBackoffService.cancel).toHaveBeenCalledWith('w1', 'user')
+    expect(agentManager.startAgent).toHaveBeenCalled()
   })
 })

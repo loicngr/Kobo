@@ -19,13 +19,8 @@
           <q-tooltip>{{ selectedWs.name }}</q-tooltip>
         </span>
         <q-badge
-          :label="statusLabel(selectedWs.status)"
-          :color="
-            ['error', 'quota'].includes(selectedWs.status) ? 'red-9' :
-            selectedWs.status === 'awaiting-user' ? 'amber-9' :
-            isBusyStatus(selectedWs.status) ? 'green-9' :
-            'kobo-3'
-          "
+          :label="workspaceStatusLabel(selectedWs.id, selectedWs.status)"
+          :color="workspaceStatusColor(selectedWs.id, selectedWs.status)"
           class="q-ml-sm"
           style="font-size: 10px;"
         />
@@ -377,6 +372,20 @@ function statusLabel(status: string): string {
   // Statut inconnu de ce build : on rend la valeur brute plutôt que rien —
   // un serveur plus récent reste lisible.
   return key ? t(key) : status
+}
+
+function workspaceStatusLabel(workspaceId: string, status: string): string {
+  if (status === 'quota' && store.pendingQuotaBackoffs[workspaceId]?.source === 'fallback_ladder') {
+    return t('workspaceStatus.retrying')
+  }
+  return statusLabel(status)
+}
+
+function workspaceStatusColor(workspaceId: string, status: string): string {
+  if (status === 'quota' && store.pendingQuotaBackoffs[workspaceId]?.source === 'fallback_ladder') return 'amber-9'
+  if (['error', 'quota'].includes(status)) return 'red-9'
+  if (status === 'awaiting-user') return 'amber-9'
+  return isBusyStatus(status) ? 'green-9' : 'kobo-3'
 }
 
 const starting = ref(false)

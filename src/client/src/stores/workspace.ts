@@ -1834,6 +1834,10 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
+    async resumeQuotaBackoffNow(workspaceId: string): Promise<void> {
+      await this.startWorkspace(workspaceId)
+    },
+
     /** Append an item to the pending queue for a workspace. */
     enqueuePending(workspaceId: string, item: PendingItem): void {
       const arr = this.pendingQueue[workspaceId] ?? []

@@ -3187,6 +3187,11 @@ app.post('/:id/start', migrationGuard, async (c) => {
     const agentSessionId = body.agentSessionId
     const resume = body.resume === true
 
+    // A manual start supersedes any scheduled retry (quota or transient
+    // watchdog recovery). Leaving its timer armed could spawn a second agent
+    // after the user has already resumed the workspace.
+    quotaBackoffService.cancel(id, 'user')
+
     // Stop the existing agent and wait: a fresh one starts right below.
     try {
       await agentManager.stopAgentAndWait(id)
