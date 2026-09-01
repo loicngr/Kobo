@@ -9,10 +9,6 @@ section — the in-app "What's new" dialog reads this file.
 - fix(test): configure git identity on the pr-checkout temp repo
 - feat: create workspaces from an existing PR/MR
 
-## 1.11.22
-
-- feat: create workspaces from an existing PR/MR
-
 ## 1.11.21
 
 - fix: refine session liveness and interface feedback
