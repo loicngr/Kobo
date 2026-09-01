@@ -19,6 +19,8 @@
       <template v-else>
       <AutoLoopPanel class="q-mb-md" />
 
+      <EngineSwitchButton :workspace="workspace" />
+
       <q-btn
         no-caps
         dense
@@ -153,6 +155,7 @@
 import { useQuasar } from 'quasar'
 import AutoLoopPanel from 'src/components/AutoLoopPanel.vue'
 import DevServerPanel from 'src/components/DevServerPanel.vue'
+import EngineSwitchButton from 'src/components/EngineSwitchButton.vue'
 import StartReviewDialog from 'src/components/StartReviewDialog.vue'
 import { useSettingsStore } from 'src/stores/settings'
 import { useWorkspaceStore, type Workspace } from 'src/stores/workspace'

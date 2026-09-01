@@ -661,11 +661,9 @@ async function armInitialScroll() {
   // we rely on the watcher below to re-arm whenever turns populate.
   await nextTick()
   await scrollToBottom(0)
-  requestAnimationFrame(() => {
-    requestAnimationFrame(() => {
-      initialScrollDone = true
-    })
-  })
+  await new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))
+  await scrollToBottom(0)
+  initialScrollDone = true
 }
 
 // Count of events *in the currently selected session*. Used by the auto-scroll

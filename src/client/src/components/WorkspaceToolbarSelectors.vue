@@ -65,7 +65,7 @@
     <q-badge
       v-if="activeSessionModelLabel !== null"
       color="primary"
-      text-color="primary"
+      text-color="white"
       class="q-ml-sm"
       style="font-size: 10px;"
     >
