@@ -447,10 +447,15 @@ export default {
   'settings.skillSuite.allThree': 'Superpowers + gstack + ECC',
   'settings.skillSuite.allThreeHint':
     'All three stack — superpowers for process discipline, gstack for concrete workflows, ECC for structured multi-agent review/implementation passes.',
-  'settings.skillSuite.customHint': 'Edit the four prompts below yourself. Starts from the agnostic baseline.',
+  'settings.skillSuite.customHint':
+    'Compose the five prompts below from any templates you choose, then edit them freely.',
   'settings.skillSuite.reloadDefaults': 'Reload defaults',
-  'settings.skillSuite.reloadDefaultsConfirm': 'Replace the four custom prompts with the agnostic defaults?',
+  'settings.skillSuite.reloadDefaultsConfirm': 'Replace the five custom prompts with the agnostic defaults?',
   'settings.skillSuite.customPrompts': 'Custom prompts',
+  'settings.skillSuite.agnostic': 'Agnostic baseline',
+  'settings.skillSuite.importPrompt': 'Import a template',
+  'settings.skillSuite.imported': 'Template imported. You can now edit it.',
+  'settings.skillSuite.importFailed': 'Unable to import the template',
   'settings.skillSuite.reviewTemplate': 'Review template',
   'settings.skillSuite.autoLoopReviewGate': 'Auto-loop review gate',
   'settings.skillSuite.autoLoopGroomingIntro': 'Auto-loop grooming intro',

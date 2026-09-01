@@ -1,4 +1,5 @@
 import { Hono } from 'hono'
+import { isValidSkillSuite } from '../../shared/skill-suite-prompts.js'
 import { getDb } from '../db/index.js'
 import { getBackendPort } from '../services/agent/orchestrator.js'
 import {
@@ -18,6 +19,7 @@ import {
   type GlobalSettings,
   type ProjectSettings,
 } from '../services/settings-service.js'
+import { getSuitePrompts } from '../services/skill-suite-prompts.js'
 import { listTemplates, replaceAllTemplates } from '../services/templates-service.js'
 import { countPrunableWsEvents } from '../services/ws-events-retention-service.js'
 
@@ -44,6 +46,16 @@ app.get('/global', (c) => {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
   }
+})
+
+// GET /api/settings/skill-suite-prompts/:suite — source presets that can be
+// copied field-by-field into a custom suite before the user edits them.
+app.get('/skill-suite-prompts/:suite', (c) => {
+  const suite = c.req.param('suite')
+  if (!isValidSkillSuite(suite)) {
+    return c.json({ error: `Unknown skill suite: '${suite}'` }, 400)
+  }
+  return c.json(getSuitePrompts(suite, {}))
 })
 
 // GET /api/settings/defaults — expose the in-code DEFAULT_* constants for

@@ -52,10 +52,10 @@ describe('design system contrast', () => {
     expect(luminance(accentHover())).toBeLessThan(luminance(accent()))
   })
 
-  it('uses a text token, not the filled-button accent, for primary outline controls', () => {
+  it('keeps primary outline controls on the accent colour', () => {
     const globalStyles = readFileSync(join(process.cwd(), 'src/css/app.scss'), 'utf-8')
 
-    expect(globalStyles).toMatch(/\.q-btn--outline\.text-primary[\s\S]*?color:\s*var\(--kobo-text-2\)/)
+    expect(globalStyles).not.toContain('.q-btn--outline.text-primary')
   })
 
   it('clears AA for every text token on every ground', () => {

@@ -142,6 +142,16 @@
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.skillSuite.customPrompts') }}</div>
 
               <div class="text-caption text-kobo-3 q-mb-xs q-mt-sm">{{ $t('settings.skillSuite.reviewTemplate') }}</div>
+              <q-btn-dropdown
+                flat dense no-caps size="sm" color="kobo-2" icon="download"
+                :label="$t('settings.skillSuite.importPrompt')"
+                :loading="importingCustomPrompt === 'reviewTemplate'"
+                class="q-mb-sm"
+              >
+                <q-list dense>
+                  <q-item v-for="suite in importableSkillSuites" :key="suite.value" v-close-popup clickable @click="importCustomPrompt('reviewTemplate', suite.value)"><q-item-section>{{ suite.label }}</q-item-section></q-item>
+                </q-list>
+              </q-btn-dropdown>
               <q-input
                 v-model="globalCustomReviewTemplate"
                 type="textarea"
@@ -151,6 +161,16 @@
               />
 
               <div class="text-caption text-kobo-3 q-mt-md q-mb-xs">{{ $t('settings.skillSuite.autoLoopReviewGate') }}</div>
+              <q-btn-dropdown
+                flat dense no-caps size="sm" color="kobo-2" icon="download"
+                :label="$t('settings.skillSuite.importPrompt')"
+                :loading="importingCustomPrompt === 'autoLoopReviewGate'"
+                class="q-mb-sm"
+              >
+                <q-list dense>
+                  <q-item v-for="suite in importableSkillSuites" :key="suite.value" v-close-popup clickable @click="importCustomPrompt('autoLoopReviewGate', suite.value)"><q-item-section>{{ suite.label }}</q-item-section></q-item>
+                </q-list>
+              </q-btn-dropdown>
               <q-input
                 v-model="globalCustomAutoLoopReviewGate"
                 type="textarea"
@@ -160,6 +180,16 @@
               />
 
               <div class="text-caption text-kobo-3 q-mt-md q-mb-xs">{{ $t('settings.skillSuite.autoLoopGroomingIntro') }}</div>
+              <q-btn-dropdown
+                flat dense no-caps size="sm" color="kobo-2" icon="download"
+                :label="$t('settings.skillSuite.importPrompt')"
+                :loading="importingCustomPrompt === 'autoLoopGroomingIntro'"
+                class="q-mb-sm"
+              >
+                <q-list dense>
+                  <q-item v-for="suite in importableSkillSuites" :key="suite.value" v-close-popup clickable @click="importCustomPrompt('autoLoopGroomingIntro', suite.value)"><q-item-section>{{ suite.label }}</q-item-section></q-item>
+                </q-list>
+              </q-btn-dropdown>
               <q-input
                 v-model="globalCustomAutoLoopGroomingIntro"
                 type="textarea"
@@ -169,6 +199,16 @@
               />
 
               <div class="text-caption text-kobo-3 q-mt-md q-mb-xs">{{ $t('settings.skillSuite.qaTemplate') }}</div>
+              <q-btn-dropdown
+                flat dense no-caps size="sm" color="kobo-2" icon="download"
+                :label="$t('settings.skillSuite.importPrompt')"
+                :loading="importingCustomPrompt === 'qaPromptTemplate'"
+                class="q-mb-sm"
+              >
+                <q-list dense>
+                  <q-item v-for="suite in importableSkillSuites" :key="suite.value" v-close-popup clickable @click="importCustomPrompt('qaPromptTemplate', suite.value)"><q-item-section>{{ suite.label }}</q-item-section></q-item>
+                </q-list>
+              </q-btn-dropdown>
               <q-input
                 v-model="globalCustomQaPromptTemplate"
                 type="textarea"
@@ -178,6 +218,16 @@
               />
 
               <div class="text-caption text-kobo-3 q-mt-md q-mb-xs">{{ $t('settings.skillSuite.brainstormingInstruction') }}</div>
+              <q-btn-dropdown
+                flat dense no-caps size="sm" color="kobo-2" icon="download"
+                :label="$t('settings.skillSuite.importPrompt')"
+                :loading="importingCustomPrompt === 'brainstormingInstruction'"
+                class="q-mb-sm"
+              >
+                <q-list dense>
+                  <q-item v-for="suite in importableSkillSuites" :key="suite.value" v-close-popup clickable @click="importCustomPrompt('brainstormingInstruction', suite.value)"><q-item-section>{{ suite.label }}</q-item-section></q-item>
+                </q-list>
+              </q-btn-dropdown>
               <q-input
                 v-model="globalCustomBrainstormingInstruction"
                 type="textarea"
@@ -2962,6 +3012,56 @@ const globalCustomAutoLoopReviewGate = ref('')
 const globalCustomAutoLoopGroomingIntro = ref('')
 const globalCustomQaPromptTemplate = ref('')
 const globalCustomBrainstormingInstruction = ref('')
+type CustomPromptField =
+  | 'reviewTemplate'
+  | 'autoLoopReviewGate'
+  | 'autoLoopGroomingIntro'
+  | 'qaPromptTemplate'
+  | 'brainstormingInstruction'
+
+interface ImportedSuitePrompts {
+  reviewTemplate: string
+  autoLoopReviewGate: string
+  autoLoopGroomingIntro: string
+  qaPromptTemplate: string
+  brainstormingInstruction: string
+}
+
+const importingCustomPrompt = ref<CustomPromptField | null>(null)
+const importableSkillSuites = computed(() => [
+  { value: 'custom' as SkillSuite, label: t('settings.skillSuite.agnostic') },
+  { value: 'superpowers' as SkillSuite, label: t('settings.skillSuite.superpowers') },
+  { value: 'gstack' as SkillSuite, label: t('settings.skillSuite.gstack') },
+  { value: 'ecc' as SkillSuite, label: t('settings.skillSuite.ecc') },
+  { value: 'superpowers+gstack' as SkillSuite, label: t('settings.skillSuite.superpowersGstack') },
+  { value: 'superpowers+gstack+ecc' as SkillSuite, label: t('settings.skillSuite.allThree') },
+])
+
+async function importCustomPrompt(field: CustomPromptField, suite: SkillSuite): Promise<void> {
+  importingCustomPrompt.value = field
+  try {
+    const res = await fetch(`/api/settings/skill-suite-prompts/${suite}`)
+    if (!res.ok) throw new Error(await res.text())
+    const prompts = (await res.json()) as ImportedSuitePrompts
+    const targets: Record<CustomPromptField, { value: string }> = {
+      reviewTemplate: globalCustomReviewTemplate,
+      autoLoopReviewGate: globalCustomAutoLoopReviewGate,
+      autoLoopGroomingIntro: globalCustomAutoLoopGroomingIntro,
+      qaPromptTemplate: globalCustomQaPromptTemplate,
+      brainstormingInstruction: globalCustomBrainstormingInstruction,
+    }
+    targets[field].value = prompts[field]
+    $q.notify({ type: 'positive', message: t('settings.skillSuite.imported'), position: 'top' })
+  } catch (err) {
+    $q.notify({
+      type: 'negative',
+      message: `${t('settings.skillSuite.importFailed')}: ${String(err)}`,
+      position: 'top',
+    })
+  } finally {
+    importingCustomPrompt.value = null
+  }
+}
 const globalVoiceEnabled = ref(false)
 const globalVoicePttKey = ref<'alt' | 'ctrl+space'>('alt')
 const globalVoiceLanguage = ref('auto')

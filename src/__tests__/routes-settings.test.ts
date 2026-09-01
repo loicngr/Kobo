@@ -115,6 +115,26 @@ describe('GET /api/settings/global', () => {
   })
 })
 
+describe('GET /api/settings/skill-suite-prompts/:suite', () => {
+  it('returns the selected preset prompts for custom-suite composition', async () => {
+    const res = await app.request('/api/settings/skill-suite-prompts/ecc')
+
+    expect(res.status).toBe(200)
+    await expect(res.json()).resolves.toMatchObject({
+      reviewTemplate: expect.stringContaining('ecc:code-review'),
+      autoLoopReviewGate: expect.stringContaining('ecc:code-reviewer'),
+      brainstormingInstruction: expect.stringContaining('ecc:plan'),
+    })
+  })
+
+  it('rejects an unknown skill suite', async () => {
+    const res = await app.request('/api/settings/skill-suite-prompts/unknown')
+
+    expect(res.status).toBe(400)
+    await expect(res.json()).resolves.toEqual({ error: "Unknown skill suite: 'unknown'" })
+  })
+})
+
 describe('GET /api/settings/mcp-servers', () => {
   it('returns active MCP servers only', async () => {
     vi.mocked(settingsService.listActiveClaudeMcpServers).mockReturnValue([

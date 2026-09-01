@@ -451,11 +451,16 @@ export default {
   'settings.skillSuite.allThree': 'Superpowers + gstack + ECC',
   'settings.skillSuite.allThreeHint':
     'Alle drei lassen sich kombinieren — superpowers für Methodik, gstack für konkrete Workflows, ECC für strukturierte Multi-Agent-Review-/Implementierungsdurchläufe.',
-  'settings.skillSuite.customHint': 'Bearbeite die vier Prompts unten selbst. Beginnt mit der agnostischen Basis.',
+  'settings.skillSuite.customHint':
+    'Stelle die fünf Prompts unten aus beliebigen Vorlagen zusammen und bearbeite sie frei.',
   'settings.skillSuite.reloadDefaults': 'Standard wiederherstellen',
   'settings.skillSuite.reloadDefaultsConfirm':
-    'Die vier benutzerdefinierten Prompts durch die agnostischen Standardwerte ersetzen?',
+    'Die fünf benutzerdefinierten Prompts durch die agnostischen Standardwerte ersetzen?',
   'settings.skillSuite.customPrompts': 'Benutzerdefinierte Prompts',
+  'settings.skillSuite.agnostic': 'Agnostische Basis',
+  'settings.skillSuite.importPrompt': 'Vorlage importieren',
+  'settings.skillSuite.imported': 'Vorlage importiert. Du kannst sie jetzt bearbeiten.',
+  'settings.skillSuite.importFailed': 'Vorlage konnte nicht importiert werden',
   'settings.skillSuite.reviewTemplate': 'Review-Vorlage',
   'settings.skillSuite.autoLoopReviewGate': 'Auto-Loop Review-Gate',
   'settings.skillSuite.autoLoopGroomingIntro': 'Auto-Loop Grooming-Intro',

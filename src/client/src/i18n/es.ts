@@ -450,11 +450,16 @@ export default {
   'settings.skillSuite.allThree': 'Superpowers + gstack + ECC',
   'settings.skillSuite.allThreeHint':
     'Las tres suites se combinan — superpowers para la metodología, gstack para flujos concretos, ECC para pases de revisión/implementación multiagente estructurados.',
-  'settings.skillSuite.customHint': 'Edita los cuatro prompts a continuación tú mismo. Parte de la base agnóstica.',
+  'settings.skillSuite.customHint':
+    'Compón los cinco prompts a continuación con los templates que elijas y edítalos libremente.',
   'settings.skillSuite.reloadDefaults': 'Restaurar predeterminados',
   'settings.skillSuite.reloadDefaultsConfirm':
-    '¿Reemplazar los cuatro prompts personalizados con los valores agnósticos predeterminados?',
+    '¿Reemplazar los cinco prompts personalizados con los valores agnósticos predeterminados?',
   'settings.skillSuite.customPrompts': 'Prompts personalizados',
+  'settings.skillSuite.agnostic': 'Base agnóstica',
+  'settings.skillSuite.importPrompt': 'Importar un template',
+  'settings.skillSuite.imported': 'Template importado. Ahora puedes editarlo.',
+  'settings.skillSuite.importFailed': 'No se pudo importar el template',
   'settings.skillSuite.reviewTemplate': 'Template de revisión',
   'settings.skillSuite.autoLoopReviewGate': 'Compuerta de revisión auto-loop',
   'settings.skillSuite.autoLoopGroomingIntro': 'Intro de grooming auto-loop',
