@@ -4,6 +4,10 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.11.19
+
+- fix(client): improve workspace activity controls
+
 ## 1.11.18
 
 - fix(workspaces): reject an option-shaped branch name at creation
