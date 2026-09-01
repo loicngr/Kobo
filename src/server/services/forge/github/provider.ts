@@ -1,7 +1,17 @@
 // src/server/services/forge/github/provider.ts
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import type { CreatePrOptions, ForgeAvailability, ForgeProvider, PrCiCheck, PrReviewer, PrSnapshot } from '../types.js'
+import type {
+  CreatePrOptions,
+  ForgeAvailability,
+  ForgeProvider,
+  ListPullRequestsOptions,
+  ListPullRequestsResult,
+  PrCiCheck,
+  PrReviewer,
+  PrSnapshot,
+  PullRequestSummary,
+} from '../types.js'
 import { deriveReadyToMerge } from '../types.js'
 
 const execFileAsync = promisify(execFile)
@@ -103,6 +113,65 @@ function mapGhPrToSnapshot(raw: RawGhPr): PrSnapshot {
   }
 }
 
+function record(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : {}
+}
+
+const GH_LIST_QUERY = `
+query($q:String!,$first:Int!,$after:String){
+  search(query:$q, type:ISSUE, first:$first, after:$after){
+    pageInfo{ hasNextPage endCursor }
+    nodes{
+      ... on PullRequest {
+        number title url isDraft updatedAt
+        author{ login }
+        headRefName baseRefName isCrossRepository reviewDecision
+        commits(last:1){ nodes{ commit{ statusCheckRollup{ state } } } }
+      }
+    }
+  }
+}`
+
+/** Build the `search` qualifier string. Exported for tests. */
+export function buildGithubSearchQuery(nameWithOwner: string, opts: ListPullRequestsOptions): string {
+  const parts = [`repo:${nameWithOwner}`, 'is:pr', 'is:open']
+  if (opts.filter === 'mine') parts.push('author:@me')
+  if (opts.filter === 'review-requested') parts.push('review-requested:@me')
+  parts.push('sort:updated-desc')
+  const query = parts.join(' ')
+  const search = opts.search?.trim()
+  return search ? `${query} ${search}` : query
+}
+
+/** Map a raw `gh api graphql` response into a page. Exported for tests. */
+export function mapGithubSearchPage(raw: unknown): ListPullRequestsResult {
+  const search = record(record(record(raw).data).search)
+  const pageInfo = record(search.pageInfo)
+  const nodes = Array.isArray(search.nodes) ? search.nodes : []
+
+  const items: PullRequestSummary[] = nodes.map((node) => {
+    const pr = record(node)
+    const commitNodes = Array.isArray(record(pr.commits).nodes) ? (record(pr.commits).nodes as unknown[]) : []
+    const rollup = record(record(record(commitNodes[0]).commit).statusCheckRollup).state
+    const decision = pr.reviewDecision
+    return {
+      number: typeof pr.number === 'number' ? pr.number : 0,
+      title: typeof pr.title === 'string' ? pr.title : '',
+      url: typeof pr.url === 'string' ? pr.url : '',
+      author: typeof record(pr.author).login === 'string' ? (record(pr.author).login as string) : '',
+      headBranch: typeof pr.headRefName === 'string' ? pr.headRefName : '',
+      baseBranch: typeof pr.baseRefName === 'string' ? pr.baseRefName : '',
+      isFork: pr.isCrossRepository === true,
+      isDraft: pr.isDraft === true,
+      updatedAt: typeof pr.updatedAt === 'string' ? pr.updatedAt : '',
+      ci: typeof rollup === 'string' ? (rollup as PrSnapshot['ci']['rollup']) : null,
+      reviewDecision: typeof decision === 'string' ? (decision as PrSnapshot['reviewDecision']) : null,
+    }
+  })
+
+  return { items, nextCursor: pageInfo.hasNextPage === true ? String(pageInfo.endCursor ?? '') || null : null }
+}
+
 /** Map an execFile rejection to a ForgeAvailability reason. */
 function availabilityFromError(err: unknown): ForgeAvailability {
   const code = (err as { code?: string }).code
@@ -121,6 +190,7 @@ export const githubProvider: ForgeProvider = {
     canChangePrBase: true,
     canMergeRequest: true,
     canDeleteRemoteBranch: true,
+    canListPullRequests: true,
     requestTermShort: 'PR',
   },
 
@@ -164,5 +234,30 @@ export const githubProvider: ForgeProvider = {
   },
   async deleteRemoteBranch(repoPath: string, branch: string): Promise<void> {
     await execFileAsync('git', ['push', 'origin', '--delete', branch], cliOptions(repoPath))
+  },
+
+  async listPullRequests(repoPath: string, opts: ListPullRequestsOptions): Promise<ListPullRequestsResult> {
+    const { stdout: repoJson } = await execFileAsync(
+      'gh',
+      ['repo', 'view', '--json', 'nameWithOwner'],
+      cliOptions(repoPath),
+    )
+    const nameWithOwner = String(JSON.parse(repoJson).nameWithOwner ?? '')
+    if (!nameWithOwner) throw new Error('Could not determine the GitHub repository for this path')
+
+    const args = [
+      'api',
+      'graphql',
+      '-f',
+      `query=${GH_LIST_QUERY}`,
+      '-f',
+      `q=${buildGithubSearchQuery(nameWithOwner, opts)}`,
+      '-F',
+      `first=${opts.perPage}`,
+    ]
+    if (opts.cursor) args.push('-f', `after=${opts.cursor}`)
+
+    const { stdout } = await execFileAsync('gh', args, cliOptions(repoPath))
+    return mapGithubSearchPage(JSON.parse(stdout))
   },
 }

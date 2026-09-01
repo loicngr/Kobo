@@ -123,13 +123,14 @@ export function createWorktree(
   baseRef: string,
   worktreesPath?: string | null,
   projectSlug?: string,
+  explicitPath?: string | null,
 ): { worktreePath: string; base: 'origin' | 'local'; branchCreated: boolean } {
   const worktreesDir = resolveWorktreesRoot(projectPath, worktreesPath)
   if (!fs.existsSync(worktreesDir)) {
     fs.mkdirSync(worktreesDir, { recursive: true })
   }
 
-  const worktreePath = resolveWorkspaceWorktreePath(projectPath, branchName, worktreesPath, projectSlug)
+  const worktreePath = explicitPath || resolveWorkspaceWorktreePath(projectPath, branchName, worktreesPath, projectSlug)
   const base: 'origin' | 'local' = baseRef.startsWith('origin/') ? 'origin' : 'local'
 
   // Tracks which of the two git commands below actually ran. Callers use it to
@@ -188,11 +189,11 @@ export function removeWorktree(projectPath: string, worktreePath: string): Promi
   // the same lock. The whole removal sequence is held, Docker chown included:
   // it sits between the `remove` and the `prune` that repairs its metadata, so
   // releasing in the middle would expose a half-removed repository.
-  return withGitRepoLock(projectPath, () => removeWorktreeLocked(projectPath, worktreePath))
+  return withGitRepoLock(projectPath, () => removeWorktreeUnlocked(projectPath, worktreePath))
 }
 
-/** The actual removal. Always called with the repository lock held. */
-function removeWorktreeLocked(projectPath: string, worktreePath: string): void {
+/** Remove a worktree. Call ONLY while already holding the repository lock. */
+export function removeWorktreeUnlocked(projectPath: string, worktreePath: string): void {
   try {
     git(projectPath, ['worktree', 'remove', worktreePath, '--force'])
   } catch (err) {

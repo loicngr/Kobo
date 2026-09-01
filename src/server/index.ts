@@ -18,6 +18,7 @@ import healthRouter from './routes/health.js'
 import imagesRouter from './routes/images.js'
 import { migrationRouter } from './routes/migration.js'
 import notionRouter from './routes/notion.js'
+import pullRequestsRouter from './routes/pull-requests.js'
 import searchRouter from './routes/search.js'
 import sentryRouter from './routes/sentry.js'
 import settingsRouter from './routes/settings.js'
@@ -156,6 +157,7 @@ app.get('/api/health', (c) => c.json({ status: 'ok', version: getPackageVersion(
 
 // Mount route sub-routers
 app.route('/api/workspaces', workspacesRouter)
+app.route('/api/pull-requests', pullRequestsRouter)
 app.route('/api/workspaces', imagesRouter)
 app.route('/api/notion', notionRouter)
 app.route('/api/sentry', sentryRouter)

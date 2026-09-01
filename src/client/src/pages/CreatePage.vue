@@ -115,7 +115,6 @@
             </div>
 
             <div
-              v-if="settingsStore.global.notionEnabled || settingsStore.global.sentryEnabled"
               class="column q-gutter-y-sm"
             >
               <div class="text-caption text-weight-medium text-kobo-2">{{ $t('createPage.sources') }}</div>
@@ -142,6 +141,19 @@
                   :disable="useExistingWorktree"
                   @click="toggleSentry"
                 />
+                <q-btn
+                  dense
+                  outline
+                  no-caps
+                  icon="call_merge"
+                  color="kobo-2"
+                  :label="$t('createPage.importPr')"
+                  :disable="useExistingWorktree || !projectPath.trim() || !canImportFromPr"
+                  @click="showPrPicker = true"
+                >
+                  <q-tooltip v-if="!projectPath.trim()">{{ $t('createPage.importPrRequiresProject') }}</q-tooltip>
+                  <q-tooltip v-else-if="!canImportFromPr">{{ $t('createPage.importPrNotSupported') }}</q-tooltip>
+                </q-btn>
               </div>
             </div>
 
@@ -359,12 +371,29 @@
                 toggle-color="primary"
                 color="kobo-surface-2"
                 text-color="kobo-2"
+                :disable="prCheckoutLocked"
                 :options="[
                   { label: $t('createPage.worktreeNew'), value: 'new', icon: 'add_box' },
                   { label: $t('createPage.worktreeExisting'), value: 'existing', icon: 'folder_open' },
                 ]"
                 @update:model-value="setWorktreeMode"
               />
+              <div v-if="prCheckoutLocked" class="row items-center q-mt-xs q-gutter-x-xs">
+                <div class="text-caption text-kobo-3">
+                  <q-icon name="lock" size="14px" class="q-mr-xs" />
+                  {{ $t('createPage.lockedToPr', { number: lockedPrNumber }) }}
+                </div>
+                <q-btn
+                  flat
+                  dense
+                  no-caps
+                  size="sm"
+                  color="primary"
+                  icon="lock_open"
+                  :label="$t('createPage.unlockPrCheckout')"
+                  @click="unlockPrCheckout"
+                />
+              </div>
             </div>
 
             <div class="responsive-fields row q-col-gutter-x-md">
@@ -388,6 +417,7 @@
                   :placeholder="$t('createPage.projectPath')"
                   :behavior="settingsStore.projectPaths.length > 0 ? 'menu' : 'dialog'"
                   :option-label="(opt: string) => (opt ? projectNameForPath(opt) : '')"
+                  :disable="prCheckoutLocked"
                   @filter="filterProjectPaths"
                   @input-value="onProjectPathInput"
                 >
@@ -420,7 +450,7 @@
                   input-debounce="0"
                   :label="$t('createPage.sourceBranch')"
                   :loading="loadingBranches"
-                  :disable="!projectPath.trim() || loadingBranches"
+                  :disable="!projectPath.trim() || loadingBranches || prCheckoutLocked"
                   @filter="filterBranches"
                 >
                   <template #prepend><q-icon name="call_split" /></template>
@@ -463,8 +493,24 @@
               </div>
             </div>
 
+            <q-field
+              v-if="useExistingWorktree && prCheckoutLocked"
+              dark
+              dense
+              outlined
+              stack-label
+              readonly
+              :label="$t('createPage.worktreePickerLabel')"
+            >
+              <template #control>
+                <div class="self-center full-width no-outline text-kobo-2 ellipsis" tabindex="0">
+                  {{ selectedWorktreePath }}
+                </div>
+              </template>
+              <template #prepend><q-icon name="folder_open" color="cyan-5" /></template>
+            </q-field>
             <q-select
-              v-if="useExistingWorktree"
+              v-else-if="useExistingWorktree"
               v-model="selectedWorktreePath"
               :options="orphanWorktrees"
               dark
@@ -742,6 +788,16 @@
         </q-card>
       </div>
     </div>
+
+    <PrPickerDialog v-model="showPrPicker" :project-path="projectPath" @select="onPrSelected" />
+    <PrCheckoutStepper
+      v-if="selectedPr"
+      v-model="showPrCheckoutStepper"
+      :project-path="projectPath"
+      :pr="selectedPr"
+      @resolved="onPrResolved"
+      @open-workspace="onPrOpenWorkspace"
+    />
   </q-page>
 </template>
 
@@ -749,6 +805,8 @@
 import type { QInput } from 'quasar'
 import { useQuasar } from 'quasar'
 import DrawerToggleButton from 'src/components/DrawerToggleButton.vue'
+import PrCheckoutStepper from 'src/components/PrCheckoutStepper.vue'
+import PrPickerDialog, { type PullRequestSummary } from 'src/components/PrPickerDialog.vue'
 import SlashSuggestionsPopup from 'src/components/SlashSuggestionsPopup.vue'
 import { type SlashDropdownItem, useSlashAutocomplete } from 'src/composables/use-slash-autocomplete'
 import { EFFORT_OPTION_DEFS_BY_ENGINE } from 'src/constants/efforts'
@@ -1288,6 +1346,101 @@ const selectedWorktreePath = ref<string | null>(null)
 const orphanWorktrees = ref<Array<{ path: string; branch: string; head: string; suggestedSourceBranch: string }>>([])
 const loadingOrphanWorktrees = ref(false)
 
+// PR checkout flow: import a workspace from an existing forge pull request
+// instead of starting fresh. `canImportFromPr` reflects whether the CURRENT
+// project's forge can list PRs at all (only knowable via a network call,
+// unlike the Notion/Sentry toggles which read a synchronous global setting).
+// Once `PrCheckoutStepper` resolves, the Git-project section is locked to the
+// resulting worktree/branch — see `prCheckoutLocked`.
+const canImportFromPr = ref(false)
+const showPrPicker = ref(false)
+const showPrCheckoutStepper = ref(false)
+const selectedPr = ref<PullRequestSummary | null>(null)
+const prCheckoutLocked = ref(false)
+const lockedPrNumber = ref<number | null>(null)
+// Captured separately from `selectedPr` because that ref is cleared whenever
+// the stepper dialog closes (see the watcher below) — including on the
+// success path, before the user ever clicks "Create workspace". `handleCreate`
+// must read the PR URL from here, not from `selectedPr.value.url`.
+const lockedPrUrl = ref<string | null>(null)
+
+async function checkPrImportCapability(path: string) {
+  if (!path.trim()) {
+    canImportFromPr.value = false
+    return
+  }
+  try {
+    const res = await fetch(`/api/pull-requests?projectPath=${encodeURIComponent(path.trim())}&perPage=1`)
+    // A 403 means the forge can't list PRs (or none is configured); any other
+    // non-ok status or network failure also means "can't" — fail closed
+    // rather than showing a button that will error when clicked.
+    canImportFromPr.value = res.ok
+  } catch {
+    canImportFromPr.value = false
+  }
+}
+
+function onPrSelected(pr: PullRequestSummary) {
+  showPrPicker.value = false
+  selectedPr.value = pr
+  showPrCheckoutStepper.value = true
+}
+
+function onPrOpenWorkspace(workspaceId: string) {
+  showPrCheckoutStepper.value = false
+  void router.push({ name: 'workspace', params: { id: workspaceId } })
+}
+
+function onPrResolved(result: {
+  worktreePath: string
+  workingBranch: string
+  sourceBranch: string
+  applied: unknown[]
+}) {
+  showPrCheckoutStepper.value = false
+  showPrPicker.value = false
+  useExistingWorktree.value = true
+  selectedWorktreePath.value = result.worktreePath
+  branch.value = result.sourceBranch
+  prCheckoutLocked.value = true
+  lockedPrNumber.value = selectedPr.value?.number ?? null
+  lockedPrUrl.value = selectedPr.value?.url ?? null
+  $q.notify({
+    type: 'positive',
+    message: t('createPage.prReadyToCreate', { number: lockedPrNumber.value ?? '' }),
+    position: 'top',
+    timeout: 4000,
+  })
+}
+
+// The stepper's Cancel button and its successful "resolved" path both close
+// the dialog the same way (`update:modelValue: false`), with no signal
+// distinguishing abandonment from success. Clear `selectedPr` whenever the
+// dialog closes, for ANY reason: on a genuine cancel this prevents the
+// picked-but-abandoned PR from leaking into `handleCreate`'s `prUrl` payload.
+// On a successful resolve this is also safe — `onPrResolved` above has
+// already copied everything `handleCreate` needs (worktree path, branch, lock
+// state, AND the PR url into `lockedPrUrl`) into other refs before this
+// watcher runs, so `selectedPr` itself is disposable either way.
+watch(showPrCheckoutStepper, (isOpen) => {
+  if (!isOpen) selectedPr.value = null
+})
+
+// Escape hatch for `prCheckoutLocked`: once a PR checkout resolves, the
+// worktree-mode toggle / project / branch fields lock to the imported PR with
+// no other way to change course short of reloading the page. Unlocking
+// restores the "new worktree" defaults so the user can pick a different
+// project/branch or abandon the PR import entirely.
+function unlockPrCheckout() {
+  prCheckoutLocked.value = false
+  useExistingWorktree.value = false
+  selectedWorktreePath.value = null
+  branch.value = null
+  selectedPr.value = null
+  lockedPrNumber.value = null
+  lockedPrUrl.value = null
+}
+
 // Single source of truth for both silent overrides this form applies
 // (forced skip-setup-script on worktree reuse, plan->bypass under auto-loop).
 // The template and the request payload both read from here, so what the UI
@@ -1420,6 +1573,7 @@ watch(projectPath, (val) => {
     branch.value = null
     void fetchBranches(val)
     applyProjectDefaults(val)
+    void checkPrImportCapability(val)
   }, 500)
 })
 
@@ -1755,6 +1909,7 @@ async function handleCreate() {
       reasoningEffort: reasoningEffort.value,
       ...(useNotion.value && isValidNotionUrl.value ? { notionUrl: getEffectiveNotionUrl() } : {}),
       ...(useSentry.value && isValidSentryUrl.value ? { sentryUrl: sentryUrl.value.trim() } : {}),
+      ...(lockedPrUrl.value ? { prUrl: lockedPrUrl.value } : {}),
       ...(showManualSections.value && manualTasks.value.length > 0 ? { tasks: manualTasks.value } : {}),
       ...(showManualSections.value && manualCriteria.value.length > 0
         ? { acceptanceCriteria: manualCriteria.value }

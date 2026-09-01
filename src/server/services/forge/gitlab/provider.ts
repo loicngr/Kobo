@@ -1,7 +1,16 @@
 // src/server/services/forge/gitlab/provider.ts
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
-import type { CreatePrOptions, ForgeAvailability, ForgeProvider, PrCiCheck, PrSnapshot } from '../types.js'
+import type {
+  CreatePrOptions,
+  ForgeAvailability,
+  ForgeProvider,
+  ListPullRequestsOptions,
+  ListPullRequestsResult,
+  PrCiCheck,
+  PrSnapshot,
+  PullRequestSummary,
+} from '../types.js'
 import { deriveReadyToMerge } from '../types.js'
 
 const execFileAsync = promisify(execFile)
@@ -145,6 +154,45 @@ async function fetchGlabCi(repoPath: string, branch: string): Promise<PrSnapshot
   }
 }
 
+/** Build the `glab mr list` argv. Exported for tests. */
+export function buildGitlabListArgs(opts: ListPullRequestsOptions): string[] {
+  const page = opts.cursor && /^\d+$/.test(opts.cursor) ? opts.cursor : '1'
+  const args = ['mr', 'list', '--output', 'json', '--per-page', String(opts.perPage), '--page', page]
+  if (opts.filter === 'mine') args.push('--author=@me')
+  if (opts.filter === 'review-requested') args.push('--reviewer=@me')
+  const search = opts.search?.trim()
+  if (search) args.push('--search', search)
+  return args
+}
+
+/** Map a `glab mr list --output json` array into a page. Exported for tests. */
+export function mapGitlabPage(raw: unknown, opts: ListPullRequestsOptions): ListPullRequestsResult {
+  const rows = Array.isArray(raw) ? raw : []
+  const items: PullRequestSummary[] = rows.map((row) => {
+    const mr = (row ?? {}) as Record<string, unknown>
+    const author = (mr.author ?? {}) as Record<string, unknown>
+    return {
+      number: typeof mr.iid === 'number' ? mr.iid : 0,
+      title: typeof mr.title === 'string' ? mr.title : '',
+      url: typeof mr.web_url === 'string' ? mr.web_url : '',
+      author: typeof author.username === 'string' ? author.username : '',
+      headBranch: typeof mr.source_branch === 'string' ? mr.source_branch : '',
+      baseBranch: typeof mr.target_branch === 'string' ? mr.target_branch : '',
+      isFork: mr.source_project_id !== mr.target_project_id,
+      isDraft: mr.draft === true || mr.work_in_progress === true,
+      updatedAt: typeof mr.updated_at === 'string' ? mr.updated_at : '',
+      // `glab mr list` carries no pipeline status; the picker shows no CI pill
+      // for GitLab rather than paying one `glab ci get` per row.
+      ci: null,
+      reviewDecision: null,
+    }
+  })
+
+  const page = Number(opts.cursor && /^\d+$/.test(opts.cursor) ? opts.cursor : '1')
+  const nextCursor = rows.length >= opts.perPage ? String(page + 1) : null
+  return { items, nextCursor }
+}
+
 function availabilityFromError(err: unknown): ForgeAvailability {
   const code = (err as { code?: string }).code
   if (code === 'ENOENT') return { available: false, reason: 'cli_missing' }
@@ -162,6 +210,7 @@ export const gitlabProvider: ForgeProvider = {
     canChangePrBase: true,
     canMergeRequest: true,
     canDeleteRemoteBranch: true,
+    canListPullRequests: true,
     requestTermShort: 'MR',
   },
 
@@ -220,5 +269,10 @@ export const gitlabProvider: ForgeProvider = {
   },
   async deleteRemoteBranch(repoPath: string, branch: string): Promise<void> {
     await execFileAsync('git', ['push', 'origin', '--delete', branch], cliOptions(repoPath))
+  },
+
+  async listPullRequests(repoPath: string, opts: ListPullRequestsOptions): Promise<ListPullRequestsResult> {
+    const { stdout } = await execFileAsync('glab', buildGitlabListArgs(opts), cliOptions(repoPath))
+    return mapGitlabPage(JSON.parse(stdout || '[]'), opts)
   },
 }

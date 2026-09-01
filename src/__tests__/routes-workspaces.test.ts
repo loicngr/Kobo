@@ -5579,6 +5579,334 @@ describe('POST /api/workspaces — reuse existing worktree', () => {
   })
 })
 
+describe('POST /api/workspaces — PR context extraction', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(gitOps.fetchSourceBranch).mockReturnValue(undefined)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
+      model: 'auto',
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      gitConventions: '',
+      sourceBranch: 'main',
+      devServer: null,
+      setupScript: '',
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
+    })
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
+      defaultModel: 'auto',
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      gitConventions: '',
+      editorCommand: '',
+      browserNotifications: true,
+      audioNotifications: true,
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
+      defaultPermissionMode: 'plan',
+      notionMcpKey: '',
+      sentryMcpKey: '',
+      notionEnabled: true,
+      sentryEnabled: true,
+      tags: [],
+      worktreesPath: '.worktrees',
+      worktreesPrefixByProject: false,
+    })
+    vi.mocked(workspaceService.updateWorkspaceFields).mockImplementation((_id, fields) => ({
+      ...fakeWorkspace,
+      ...fields,
+    }))
+  })
+
+  it('writes a PR context file and keeps the user description', async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true)
+    vi.mocked(execFileSync)
+      .mockImplementationOnce(() => '/repo/.git\n' as never)
+      .mockImplementationOnce(() => 'feature/derived\n' as never)
+    vi.mocked(getDb).mockReturnValue({
+      prepare: vi.fn().mockReturnValue({
+        run: vi.fn(),
+        get: vi.fn().mockReturnValue(undefined),
+        all: vi.fn().mockReturnValue([]),
+      }),
+    } as never)
+    const fakeGithubProvider = {
+      id: 'github',
+      capabilities: {
+        canCreatePr: true,
+        canChangePrBase: true,
+        canMergeRequest: true,
+        canListPullRequests: true,
+        requestTermShort: 'PR',
+      },
+      isAvailable: vi.fn(async () => ({ available: true })),
+      listPullRequests: vi.fn().mockResolvedValue({
+        items: [
+          {
+            number: 42,
+            title: 'Fix the retry logic',
+            url: 'https://github.com/acme/app/pull/42',
+            author: 'octocat',
+            headBranch: 'fix/retry-logic',
+            baseBranch: 'main',
+            isFork: false,
+            isDraft: false,
+            updatedAt: '2026-01-01T00:00:00.000Z',
+            ci: null,
+            reviewDecision: null,
+          },
+        ],
+        nextCursor: null,
+      }),
+    } as never
+    // Resolved once during extract-pr and reused (not re-resolved) in
+    // write-context-files, so a single mocked return covers both.
+    vi.mocked(getForgeProvider).mockReturnValueOnce(fakeGithubProvider)
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      name: 'workspace',
+    })
+    vi.mocked(workspaceService.updateWorkspaceName).mockReturnValue({
+      ...fakeWorkspace,
+      name: 'Fix the retry logic',
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/repo',
+        sourceBranch: 'main',
+        worktreePath: '/repo/.worktrees/feat-x',
+        prUrl: 'https://github.com/acme/app/pull/42',
+        description: 'Focus on the retry logic',
+      }),
+    })
+    expect(res.status).toBe(201)
+
+    const written = vi.mocked(fs.writeFileSync).mock.calls.find(([p]) => String(p).includes('PR-42.md'))
+    expect(written).toBeDefined()
+    const contents = String(written?.[1])
+    expect(contents).toContain('## User instructions')
+    expect(contents).toContain('Focus on the retry logic')
+    expect(contents).toContain('https://github.com/acme/app/pull/42')
+  })
+
+  it('returns 422 when the pull request cannot be found', async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true)
+    vi.mocked(execFileSync)
+      .mockImplementationOnce(() => '/repo/.git\n' as never)
+      .mockImplementationOnce(() => 'feature/derived\n' as never)
+    vi.mocked(getDb).mockReturnValue({
+      prepare: vi.fn().mockReturnValue({
+        run: vi.fn(),
+        get: vi.fn().mockReturnValue(undefined),
+        all: vi.fn().mockReturnValue([]),
+      }),
+    } as never)
+    const fakeGithubProvider = {
+      id: 'github',
+      capabilities: {
+        canCreatePr: true,
+        canChangePrBase: true,
+        canMergeRequest: true,
+        canListPullRequests: true,
+        requestTermShort: 'PR',
+      },
+      isAvailable: vi.fn(async () => ({ available: true })),
+      // No item matches the requested prUrl's number (999), so extraction
+      // must fail with a clear 422 instead of silently defaulting to PR #0.
+      listPullRequests: vi.fn().mockResolvedValue({
+        items: [
+          {
+            number: 42,
+            title: 'Fix the retry logic',
+            url: 'https://github.com/acme/app/pull/42',
+            author: 'octocat',
+            headBranch: 'fix/retry-logic',
+            baseBranch: 'main',
+            isFork: false,
+            isDraft: false,
+            updatedAt: '2026-01-01T00:00:00.000Z',
+            ci: null,
+            reviewDecision: null,
+          },
+        ],
+        nextCursor: null,
+      }),
+    } as never
+    vi.mocked(getForgeProvider).mockReturnValueOnce(fakeGithubProvider)
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/repo',
+        sourceBranch: 'main',
+        worktreePath: '/repo/.worktrees/feat-x',
+        prUrl: 'https://github.com/acme/app/pull/999',
+      }),
+    })
+    expect(res.status).toBe(422)
+    const body = await res.json()
+    expect(body.step).toBe('extract-pr')
+  })
+
+  it('does not let a PR title override an already-named workspace', async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true)
+    vi.mocked(execFileSync)
+      .mockImplementationOnce(() => '/repo/.git\n' as never)
+      .mockImplementationOnce(() => 'feature/derived\n' as never)
+    vi.mocked(getDb).mockReturnValue({
+      prepare: vi.fn().mockReturnValue({
+        run: vi.fn(),
+        get: vi.fn().mockReturnValue(undefined),
+        all: vi.fn().mockReturnValue([]),
+      }),
+    } as never)
+    const fakeGithubProvider = {
+      id: 'github',
+      capabilities: {
+        canCreatePr: true,
+        canChangePrBase: true,
+        canMergeRequest: true,
+        canListPullRequests: true,
+        requestTermShort: 'PR',
+      },
+      isAvailable: vi.fn(async () => ({ available: true })),
+      listPullRequests: vi.fn().mockResolvedValue({
+        items: [
+          {
+            number: 42,
+            title: 'Fix the retry logic',
+            url: 'https://github.com/acme/app/pull/42',
+            author: 'octocat',
+            headBranch: 'fix/retry-logic',
+            baseBranch: 'main',
+            isFork: false,
+            isDraft: false,
+            updatedAt: '2026-01-01T00:00:00.000Z',
+            ci: null,
+            reviewDecision: null,
+          },
+        ],
+        nextCursor: null,
+      }),
+    } as never
+    vi.mocked(getForgeProvider).mockReturnValueOnce(fakeGithubProvider)
+    // The workspace already has a non-default name (from the request body),
+    // so the route's `workspace.name === 'workspace'` guard must skip the
+    // PR-title rename.
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      name: 'My Custom Name',
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue({
+      ...fakeWorkspaceWithTasks,
+      name: 'My Custom Name',
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'My Custom Name',
+        projectPath: '/repo',
+        sourceBranch: 'main',
+        worktreePath: '/repo/.worktrees/feat-x',
+        prUrl: 'https://github.com/acme/app/pull/42',
+      }),
+    })
+    expect(res.status).toBe(201)
+    const body = await res.json()
+    expect(body.name).toBe('My Custom Name')
+    expect(workspaceService.updateWorkspaceName).not.toHaveBeenCalled()
+  })
+
+  it('persists prUrl on the created workspace', async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(true)
+    vi.mocked(execFileSync)
+      .mockImplementationOnce(() => '/repo/.git\n' as never)
+      .mockImplementationOnce(() => 'feature/derived\n' as never)
+    vi.mocked(getDb).mockReturnValue({
+      prepare: vi.fn().mockReturnValue({
+        run: vi.fn(),
+        get: vi.fn().mockReturnValue(undefined),
+        all: vi.fn().mockReturnValue([]),
+      }),
+    } as never)
+    const fakeGithubProvider = {
+      id: 'github',
+      capabilities: {
+        canCreatePr: true,
+        canChangePrBase: true,
+        canMergeRequest: true,
+        canListPullRequests: true,
+        requestTermShort: 'PR',
+      },
+      isAvailable: vi.fn(async () => ({ available: true })),
+      listPullRequests: vi.fn().mockResolvedValue({
+        items: [
+          {
+            number: 42,
+            title: 'Fix the retry logic',
+            url: 'https://github.com/acme/app/pull/42',
+            author: 'octocat',
+            headBranch: 'fix/retry-logic',
+            baseBranch: 'main',
+            isFork: false,
+            isDraft: false,
+            updatedAt: '2026-01-01T00:00:00.000Z',
+            ci: null,
+            reviewDecision: null,
+          },
+        ],
+        nextCursor: null,
+      }),
+    } as never
+    vi.mocked(getForgeProvider).mockReturnValueOnce(fakeGithubProvider)
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      name: 'workspace',
+      prUrl: 'https://github.com/acme/app/pull/42',
+    })
+    vi.mocked(workspaceService.updateWorkspaceName).mockReturnValue({
+      ...fakeWorkspace,
+      name: 'Fix the retry logic',
+      prUrl: 'https://github.com/acme/app/pull/42',
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue({
+      ...fakeWorkspaceWithTasks,
+      prUrl: 'https://github.com/acme/app/pull/42',
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/repo',
+        sourceBranch: 'main',
+        worktreePath: '/repo/.worktrees/feat-x',
+        prUrl: 'https://github.com/acme/app/pull/42',
+      }),
+    })
+    expect(res.status).toBe(201)
+    const body = await res.json()
+    expect(body.prUrl).toBe('https://github.com/acme/app/pull/42')
+    expect(vi.mocked(workspaceService.createWorkspace).mock.calls[0][0]).toMatchObject({
+      prUrl: 'https://github.com/acme/app/pull/42',
+    })
+  })
+})
+
 describe('GET /api/workspaces/:id/prep-autoloop-prompt', () => {
   beforeEach(() => vi.clearAllMocks())
 

@@ -207,6 +207,7 @@ describe('Bitbucket Community forge provider', () => {
       canChangePrBase: false,
       canMergeRequest: true,
       canDeleteRemoteBranch: true,
+      canListPullRequests: true,
       requestTermShort: 'PR',
     })
   })

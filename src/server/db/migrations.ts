@@ -684,6 +684,20 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 37,
+    name: 'add-workspace-pr-url',
+    migrate: (db) => {
+      const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'workspaces'").get()
+      if (!table) return
+      const columns = (db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>).map(
+        (column) => column.name,
+      )
+      if (!columns.includes('pr_url')) {
+        db.exec('ALTER TABLE workspaces ADD COLUMN pr_url TEXT')
+      }
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

@@ -74,8 +74,42 @@ export interface ForgeCapabilities {
   canChangePrBase: boolean
   canMergeRequest: boolean
   canDeleteRemoteBranch: boolean
+  canListPullRequests: boolean
   /** Short request term for UI labels. */
   requestTermShort: 'PR' | 'MR'
+}
+
+/** How the PR list is narrowed. `mine` = authored by the current user. */
+export type PullRequestFilter = 'all' | 'mine' | 'review-requested'
+
+/** One page request. `cursor` is opaque and comes from a previous result. */
+export interface ListPullRequestsOptions {
+  filter: PullRequestFilter
+  search?: string
+  cursor?: string | null
+  perPage: number
+}
+
+/** A PR/MR as shown in the picker. Cheaper than a full PrSnapshot. */
+export interface PullRequestSummary {
+  number: number
+  title: string
+  url: string
+  author: string
+  headBranch: string
+  baseBranch: string
+  /** Head lives in another repository: Kōbō refuses to check it out. */
+  isFork: boolean
+  isDraft: boolean
+  updatedAt: string
+  ci: PrSnapshot['ci']['rollup']
+  reviewDecision: PrSnapshot['reviewDecision']
+}
+
+/** One page. `nextCursor === null` means the listing is exhausted. */
+export interface ListPullRequestsResult {
+  items: PullRequestSummary[]
+  nextCursor: string | null
 }
 
 /** Result of probing whether the forge CLI is usable. */
@@ -112,4 +146,6 @@ export interface ForgeProvider {
   changePrBase(repoPath: string, base: string): Promise<void>
   mergeRequest(repoPath: string, number: number): Promise<void>
   deleteRemoteBranch(repoPath: string, branch: string): Promise<void>
+  /** List open PRs/MRs, newest first. The cursor is provider-defined and opaque. */
+  listPullRequests(repoPath: string, opts: ListPullRequestsOptions): Promise<ListPullRequestsResult>
 }

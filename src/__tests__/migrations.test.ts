@@ -42,8 +42,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 36', () => {
-    expect(SCHEMA_VERSION).toBe(36)
+  it('exporte SCHEMA_VERSION = 37', () => {
+    expect(SCHEMA_VERSION).toBe(37)
   })
 
   it('migration v33 records and backfills the engine on agent sessions', () => {
@@ -220,7 +220,7 @@ describe('runMigrations(db)', () => {
     ]) {
       expect(upgradedObjects).toContain(name)
     }
-    expect(getMigrationHistory(upgraded).at(-1)).toMatchObject({
+    expect(getMigrationHistory(upgraded).find((record) => record.version === 36)).toMatchObject({
       version: 36,
       name: 'drop-metrics-delete-trigger-add-hot-indexes',
     })
@@ -237,6 +237,48 @@ describe('runMigrations(db)', () => {
     expect(freshObjects).toEqual(upgradedObjects)
 
     upgraded.close()
+    fresh.close()
+  })
+
+  it('migration v37 adds a nullable pr_url column to workspaces without losing data', () => {
+    const upgraded = new Database(':memory:')
+    upgraded.exec(`
+      CREATE TABLE workspaces (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        project_path TEXT NOT NULL,
+        source_branch TEXT NOT NULL,
+        working_branch TEXT NOT NULL,
+        status TEXT NOT NULL
+      );
+      INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, status)
+        VALUES ('w1', 'Keep me', '/repo', 'main', 'feat/x', 'idle');
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+    `)
+    for (let version = 1; version <= 36; version++) {
+      upgraded.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(version, `v${version}`, 'now')
+    }
+
+    runMigrations(upgraded)
+
+    expect(
+      (upgraded.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>).map((column) => column.name),
+    ).toContain('pr_url')
+    expect(upgraded.prepare("SELECT name, pr_url FROM workspaces WHERE id = 'w1'").get()).toEqual({
+      name: 'Keep me',
+      pr_url: null,
+    })
+    expect(getMigrationHistory(upgraded).find((record) => record.version === 37)).toMatchObject({
+      version: 37,
+      name: 'add-workspace-pr-url',
+    })
+    upgraded.close()
+
+    const fresh = new Database(':memory:')
+    initSchema(fresh)
+    expect(
+      (fresh.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>).map((column) => column.name),
+    ).toContain('pr_url')
     fresh.close()
   })
 

@@ -48,6 +48,8 @@ export interface Workspace {
   notionUrl: string | null
   notionPageId: string | null
   sentryUrl: string | null
+  /** URL of the PR/MR this workspace was created from (PR Checkout Workspace feature). Null when not created that way. */
+  prUrl: string | null
   model: string
   /**
    * Model used ONLY for the initial brainstorming session of a workspace
@@ -125,6 +127,7 @@ export interface CreateWorkspaceInput {
   notionUrl?: string
   notionPageId?: string
   sentryUrl?: string
+  prUrl?: string
   model?: string
   brainstormModel?: string
   reasoningEffort?: string
@@ -170,6 +173,7 @@ interface WorkspaceRow {
   notion_url: string | null
   notion_page_id: string | null
   sentry_url: string | null
+  pr_url: string | null
   model: string
   brainstorm_model: string | null
   reasoning_effort: string
@@ -238,6 +242,7 @@ function mapWorkspace(row: WorkspaceRow): Workspace {
     notionUrl: row.notion_url,
     notionPageId: row.notion_page_id,
     sentryUrl: row.sentry_url,
+    prUrl: row.pr_url,
     model: row.model,
     brainstormModel: row.brainstorm_model,
     reasoningEffort: row.reasoning_effort ?? 'auto',
@@ -310,9 +315,9 @@ export function createWorkspace(data: CreateWorkspaceInput): Workspace {
   db.prepare(`
     INSERT INTO workspaces (
       id, name, project_path, source_branch, working_branch, status,
-      notion_url, notion_page_id, sentry_url, worktree_path, worktree_owned,
+      notion_url, notion_page_id, sentry_url, pr_url, worktree_path, worktree_owned,
       model, brainstorm_model, reasoning_effort, permission_mode, permission_profile, agent_permission_mode, engine, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ) VALUES (?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     data.name,
@@ -322,6 +327,7 @@ export function createWorkspace(data: CreateWorkspaceInput): Workspace {
     data.notionUrl ?? null,
     data.notionPageId ?? null,
     data.sentryUrl ?? null,
+    data.prUrl ?? null,
     computedWorktreePath,
     owned ? 1 : 0,
     data.model ?? 'claude-opus-4-8',

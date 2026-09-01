@@ -13,6 +13,7 @@ export const noneProvider: ForgeProvider = {
     canChangePrBase: false,
     canMergeRequest: false,
     canDeleteRemoteBranch: false,
+    canListPullRequests: false,
     requestTermShort: 'PR',
   },
   async isAvailable() {
@@ -32,5 +33,8 @@ export const noneProvider: ForgeProvider = {
   },
   async deleteRemoteBranch() {
     throw new ForgeUnavailableError('This project has no supported forge configured')
+  },
+  async listPullRequests() {
+    return { items: [], nextCursor: null }
   },
 }

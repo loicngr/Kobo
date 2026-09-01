@@ -22,7 +22,7 @@ import { buildEngineHandoff } from '../services/engine-handoff-service.js'
 import { saveWorkspaceFile, shaOf } from '../services/file-editor-service.js'
 import { getForgeProvider } from '../services/forge/registry.js'
 import { resolveForge } from '../services/forge/resolve.js'
-import { ForgeUnavailableError } from '../services/forge/types.js'
+import { ForgeUnavailableError, type PullRequestSummary } from '../services/forge/types.js'
 import { computeGitStats } from '../services/git-stats-service.js'
 import {
   DEFAULT_NOTION_INITIAL_PROMPT,
@@ -77,6 +77,7 @@ export const CREATE_WORKSPACE_STEPS = [
   'inspect-worktree',
   'extract-notion',
   'extract-sentry',
+  'extract-pr',
   'create-record',
   'create-tasks',
   'create-worktree',
@@ -253,6 +254,27 @@ function resolveCreateAgentPermissionMode(
   return 'bypass'
 }
 
+/**
+ * Extract the numeric PR/MR number from a forge URL.
+ *
+ * Strips any query string or fragment first (a comment-anchor link like
+ * `.../merge_requests/42#note_123` would otherwise have its trailing
+ * fragment digits greedily matched instead of the actual PR number), then
+ * takes the last path segment and requires it to be purely numeric. Throws
+ * a clear error rather than silently defaulting to 0 when the URL doesn't
+ * end on a plain PR/MR number (e.g. a "Files changed" sub-tab URL).
+ */
+function parsePrNumberFromUrl(prUrl: string): number {
+  const withoutQueryOrFragment = prUrl.split(/[?#]/)[0]
+  const segments = withoutQueryOrFragment.replace(/\/+$/, '').split('/')
+  const last = segments[segments.length - 1]
+  const number = Number(last)
+  if (!last || !Number.isInteger(number) || number <= 0) {
+    throw new Error(`Could not parse a pull request number from '${prUrl}'`)
+  }
+  return number
+}
+
 app.get('/', (c) => {
   try {
     const workspaces = workspaceService.listWorkspaces()
@@ -374,6 +396,7 @@ app.post('/', migrationGuard, async (c) => {
       notionUrl?: string
       notionPageId?: string
       sentryUrl?: string
+      prUrl?: string
       model?: string
       brainstormModel?: string
       brainstormReasoningEffort?: string
@@ -586,6 +609,46 @@ app.post('/', migrationGuard, async (c) => {
       }
     }
 
+    // Pre-flight: extract the PR/MR before any DB write, mirroring the
+    // Notion / Sentry extraction above. A throw here must not leave a
+    // half-built workspace behind, so we run extraction before
+    // createWorkspace and surface failures as 422.
+    let prContent: PullRequestSummary | null = null
+    // Captured here so the write-context-files block below can reuse it
+    // instead of calling resolveForge/getForgeProvider (which shells out to
+    // git when the project's forge setting is 'auto') a second time.
+    let prForgeRequestTermShort: string | undefined
+    if (body.prUrl) {
+      currentStep = 'extract-pr'
+      emitCreateProgress(creationId, currentStep)
+      try {
+        const provider = getForgeProvider(resolveForge(body.projectPath))
+        prForgeRequestTermShort = provider.capabilities.requestTermShort
+        if (!provider.capabilities.canListPullRequests) {
+          throw new Error('This project has no forge that can list pull requests')
+        }
+        const number = parsePrNumberFromUrl(body.prUrl)
+        // Page through the full list rather than only the first 100 (by
+        // recency) — a PR the user explicitly picked by URL must never be
+        // reported "not found" just because it hasn't been touched recently.
+        let cursor: string | null = null
+        do {
+          const page: { items: PullRequestSummary[]; nextCursor: string | null } = await provider.listPullRequests(
+            body.projectPath,
+            { filter: 'all', perPage: 100, cursor },
+          )
+          prContent = page.items.find((item) => item.number === number) ?? null
+          cursor = page.nextCursor
+        } while (!prContent && cursor !== null)
+        if (!prContent) throw new Error(`Pull request #${number} not found`)
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err)
+        const failure = `Failed to read the pull request: ${message}`
+        emitCreateFailed(creationId, 'extract-pr', failure)
+        return c.json({ error: failure, step: 'extract-pr' }, 422)
+      }
+    }
+
     // Create workspace record
     const globalSettings = settingsService.getGlobalSettings()
     // workingBranch may be updated after Notion extraction to inject the ticket ID,
@@ -671,6 +734,7 @@ app.post('/', migrationGuard, async (c) => {
       notionUrl: body.notionUrl,
       notionPageId: body.notionPageId,
       sentryUrl: body.sentryUrl,
+      prUrl: body.prUrl,
       worktreePath: prospectiveWorktreePath,
       worktreeOwned: !useReusedWorktree,
       model: body.model,
@@ -763,6 +827,14 @@ app.post('/', migrationGuard, async (c) => {
       if (notionContent.title && workspace.name === 'workspace') {
         workspace = workspaceService.updateWorkspaceName(workspace.id, notionContent.title)
       }
+    }
+
+    // Update workspace name with the PR/MR title if the user did not provide
+    // a custom name and neither Notion nor Sentry already claimed it. This
+    // makes the PR a THIRD context source, lowest priority of the three
+    // (Notion > Sentry > PR), consistent with the checks above.
+    if (prContent && !notionContent?.title && !sentryContent?.title && workspace.name === 'workspace') {
+      workspace = workspaceService.updateWorkspaceName(workspace.id, prContent.title)
     }
 
     // Create manual tasks/criteria if no Notion content was extracted
@@ -1012,6 +1084,40 @@ app.post('/', migrationGuard, async (c) => {
           error: err instanceof Error ? err.message : String(err),
         })
         sentryFilePath = null
+      }
+    }
+    // ------------------------------------------------------------------------
+
+    // --- PR/MR file (extraction already done before worktree creation) -----
+    if (prContent && body.prUrl) {
+      try {
+        const thoughtsDir = path.join(worktreePath, '.ai', 'thoughts')
+        fs.mkdirSync(thoughtsDir, { recursive: true })
+        const today = new Date().toISOString().split('T')[0]
+        const term =
+          prForgeRequestTermShort ?? getForgeProvider(resolveForge(body.projectPath)).capabilities.requestTermShort
+        let md = `# ${prContent.title}\n\n`
+        md += `## Source\n\n`
+        md += `- ${term === 'MR' ? 'Merge request' : 'Pull request'}: ${body.prUrl}\n`
+        md += `- Author: ${prContent.author}\n`
+        md += `- Branches: ${prContent.headBranch} → ${prContent.baseBranch}\n`
+        md += `- Retrieved: ${today}\n\n`
+
+        // Persist the user's initial instructions, exactly like the Notion
+        // and Sentry context writes above — the description field is never
+        // overwritten, only incorporated under this heading.
+        if (body.description?.trim()) {
+          md += `## User instructions\n\n${body.description.trim()}\n\n`
+        }
+
+        fs.writeFileSync(path.join(thoughtsDir, `PR-${prContent.number}.md`), md, 'utf-8')
+      } catch (err) {
+        // Best-effort, like the Notion and Sentry context writes: never break
+        // creation because a context file could not be written.
+        logError('workspaces', 'Failed to save PR content', {
+          workspaceId: workspace.id,
+          error: err instanceof Error ? err.message : String(err),
+        })
       }
     }
     // ------------------------------------------------------------------------

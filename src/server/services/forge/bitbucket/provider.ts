@@ -1,7 +1,17 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { getGlobalSettings } from '../../settings-service.js'
-import type { CreatePrOptions, ForgeAvailability, ForgeProvider, PrCiCheck, PrReviewer, PrSnapshot } from '../types.js'
+import type {
+  CreatePrOptions,
+  ForgeAvailability,
+  ForgeProvider,
+  ListPullRequestsOptions,
+  ListPullRequestsResult,
+  PrCiCheck,
+  PrReviewer,
+  PrSnapshot,
+  PullRequestSummary,
+} from '../types.js'
 import { deriveReadyToMerge } from '../types.js'
 
 const execFileAsync = promisify(execFile)
@@ -110,6 +120,84 @@ function mapBktPr(raw: RawRecord, ci: PrSnapshot['ci'] = { rollup: null, checks:
     mergeable,
     readyToMerge: deriveReadyToMerge({ state, ci, reviewDecision, reviewers, mergeable }),
   }
+}
+
+/** Bitbucket Cloud's `next` URL always carries a `page` query parameter.
+ *  Extract the bare page number so it matches Data Center's `nextPageStart`
+ *  shape — both then feed the same `--page <n>` flag on the next call. */
+function extractCloudPageCursor(next: string): string {
+  try {
+    const page = new URL(next).searchParams.get('page')
+    if (page) return page
+  } catch {
+    // fall through to regex fallback below
+  }
+  const match = next.match(/[?&]page=(\d+)/)
+  return match ? match[1] : next
+}
+
+/** Map a Bitbucket Cloud or Data Center PR page. Exported for tests. */
+export function mapBitbucketPage(raw: unknown): ListPullRequestsResult {
+  const payload = record(raw)
+  const rows = Array.isArray(payload.values) ? payload.values : []
+
+  const items: PullRequestSummary[] = rows.map((row) => {
+    const pr = record(row)
+    const sourceRepo = record(record(pr.source).repository)
+    const destRepo = record(record(pr.destination).repository)
+    const fromRepo = record(record(pr.fromRef).repository)
+    const toRepo = record(record(pr.toRef).repository)
+    const sourceId = string(sourceRepo.uuid) || String(fromRepo.id ?? '')
+    const destId = string(destRepo.uuid) || String(toRepo.id ?? '')
+    const updated = pr.updated_on ?? pr.updatedDate
+    return {
+      number: number(pr.id),
+      title: string(pr.title),
+      url: url(pr),
+      author: login(pr.author),
+      headBranch: branch(pr, 'source', 'fromRef'),
+      baseBranch: branch(pr, 'destination', 'toRef'),
+      isFork: Boolean(sourceId) && Boolean(destId) && sourceId !== destId,
+      isDraft: pr.draft === true,
+      updatedAt:
+        typeof updated === 'string' ? updated : typeof updated === 'number' ? new Date(updated).toISOString() : '',
+      // `bkt pr list` doesn't expose CI/review status in list output; avoiding a per-row lookup call here.
+      ci: null,
+      reviewDecision: null,
+    }
+  })
+
+  const next = string(payload.next)
+  if (next) return { items, nextCursor: extractCloudPageCursor(next) }
+  if (payload.isLastPage === false && payload.nextPageStart != null) {
+    return { items, nextCursor: String(payload.nextPageStart) }
+  }
+  return { items, nextCursor: null }
+}
+
+/**
+ * Narrow a Bitbucket page client-side: `bkt` has no author/reviewer filter.
+ *
+ * `review-requested` is a KNOWN, DELIBERATE no-op here: `PullRequestSummary`
+ * (shared across all four forge providers) carries no reviewer information,
+ * and fetching it would mean one extra Bitbucket API call per row in the
+ * list — every other filter/search operation here works on data already in
+ * hand. Rather than guess at reviewer data this provider doesn't have,
+ * `review-requested` falls through to "no filtering" like `'all'`, same as
+ * before this comment was added; `mine`, unlike before, is now genuinely
+ * narrowed once `currentUser` is supplied by the caller.
+ */
+export function filterBitbucketItems(
+  items: PullRequestSummary[],
+  opts: ListPullRequestsOptions,
+  currentUser?: string,
+): PullRequestSummary[] {
+  const search = opts.search?.trim().toLowerCase()
+  return items.filter((item) => {
+    if (search && !item.title.toLowerCase().includes(search)) return false
+    if (opts.filter === 'mine' && currentUser) return item.author === currentUser
+    return true
+  })
 }
 
 function availabilityFromError(err: unknown): ForgeAvailability {
@@ -232,6 +320,7 @@ export const bitbucketProvider: ForgeProvider = {
     canChangePrBase: false,
     canMergeRequest: true,
     canDeleteRemoteBranch: true,
+    canListPullRequests: true,
     requestTermShort: 'PR',
   },
 
@@ -322,5 +411,16 @@ export const bitbucketProvider: ForgeProvider = {
 
   async deleteRemoteBranch(repoPath: string, branchName: string): Promise<void> {
     await execFileAsync('git', ['push', 'origin', '--delete', branchName], bktOptions(repoPath))
+  },
+
+  async listPullRequests(repoPath: string, opts: ListPullRequestsOptions): Promise<ListPullRequestsResult> {
+    const target = await resolveTarget(repoPath)
+    const args = ['pr', 'list', '--limit', String(opts.perPage), ...targetArgs(target), '--json']
+    if (opts.cursor) args.push('--page', opts.cursor)
+    const { stdout } = await execFileAsync('bkt', bktArgs(target, args), bktOptions(repoPath))
+    const page = mapBitbucketPage(JSON.parse(stdout || '{}'))
+    if (opts.filter === 'all' && !opts.search?.trim()) return page
+    const currentUser = getGlobalSettings().bitbucketUsername || undefined
+    return { ...page, items: filterBitbucketItems(page.items, opts, currentUser) }
   },
 }
