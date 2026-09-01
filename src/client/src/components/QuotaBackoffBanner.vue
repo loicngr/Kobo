@@ -11,14 +11,14 @@
     </q-tooltip>
     <q-space />
     <q-btn
-      flat dense no-caps size="sm" color="kobo-1"
+      outline dense no-caps size="sm" color="kobo-ink"
       :label="t('quotaBackoff.resumeNow')"
       :loading="resuming"
       :disable="cancelling"
       @click="onResume"
     />
     <q-btn
-      flat dense no-caps size="sm" color="kobo-1"
+      outline dense no-caps size="sm" color="kobo-ink"
       :label="t('quotaBackoff.banner.cancel')"
       :loading="cancelling"
       :disable="resuming"

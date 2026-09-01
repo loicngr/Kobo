@@ -163,9 +163,10 @@ async function refresh(): Promise<void> {
 }
 
 .quota-bar {
-  width: 32px;
-  height: 5px;
-  border-radius: 3px;
+  width: 48px;
+  height: 7px;
+  border: 1px solid var(--kobo-border-strong);
+  border-radius: 4px;
 }
 
 .full-bar {

@@ -2,16 +2,16 @@
 // at build time by Quasar's own stylesheets; quasar.config.ts:framework.config
 // .brand carries the same values for the runtime API (Notify, colour props).
 // The two MUST stay in sync.
-$primary: #665fdd; // --kobo-accent (Task 2)
-$secondary: #34d399; // --kobo-success
-$accent: #665fdd; // --kobo-accent — a single accent, never a second hue
+$primary: #6c63ff; // Temporary visual comparison with the palette before PR #34.
+$secondary: #26a69a;
+$accent: #9c27b0;
 $dark: #1a1a2e; // --kobo-bg
 $dark-page: #1a1a2e; // --kobo-bg
 
-$positive: #34d399; // --kobo-success
-$negative: #f87171; // --kobo-danger
-$info: #665fdd; // DESIGN.md: --kobo-info aliases the accent
-$warning: #fbbf24; // --kobo-warning
+$positive: #21ba45;
+$negative: #c10015;
+$info: #31ccec;
+$warning: #f2c037;
 
 // Quasar paints `body { font-family: $typography-font-family }` in
 // core/typography.sass. Pointing that variable at the design-system token is

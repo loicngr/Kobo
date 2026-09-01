@@ -8,15 +8,17 @@ import { describe, expect, it } from 'vitest'
 const CLIENT_ROOT = process.cwd()
 const read = (p: string) => readFileSync(join(CLIENT_ROOT, p), 'utf-8')
 
-// Source of truth: DESIGN.md § CSS Variables, mirrored in design-tokens.scss.
-// --kobo-accent was rebranded to #665fdd in Task 2 (was #6c63ff); this test
-// asserts against the current token value, not the pre-Task-2 one.
-const TOKENS = {
-  accent: '#665fdd',
-  danger: '#f87171',
-  success: '#34d399',
-  warning: '#fbbf24',
-  surface: '#222244',
+// The current visual comparison deliberately restores Quasar's previous brand
+// palette. Keep SCSS and runtime configuration aligned so the comparison is
+// reproducible, while design-tokens.scss remains the component token source.
+const QUASAR_BRAND = {
+  primary: '#6c63ff',
+  secondary: '#26a69a',
+  accentLegacy: '#9c27b0',
+  positive: '#21ba45',
+  negative: '#c10015',
+  info: '#31ccec',
+  warning: '#f2c037',
 }
 
 function collectVueFiles(dir = join(CLIENT_ROOT, 'src'), out: string[] = []): string[] {
@@ -30,19 +32,19 @@ function collectVueFiles(dir = join(CLIENT_ROOT, 'src'), out: string[] = []): st
 }
 
 describe('design system palette', () => {
-  it('aligns the SCSS brand variables on the design tokens', () => {
+  it('keeps the SCSS comparison palette explicit', () => {
     const scss = read('src/css/quasar.variables.scss')
-    expect(scss).toMatch(new RegExp(`\\$primary:\\s*${TOKENS.accent}`))
-    expect(scss).toMatch(new RegExp(`\\$negative:\\s*${TOKENS.danger}`))
-    expect(scss).toMatch(new RegExp(`\\$positive:\\s*${TOKENS.success}`))
-    expect(scss).toMatch(new RegExp(`\\$warning:\\s*${TOKENS.warning}`))
-    expect(scss).not.toMatch(/#9c27b0|#c10015|#21ba45|#f2c037|#31ccec|#26a69a/)
+    expect(scss).toMatch(new RegExp(`\\$primary:\\s*${QUASAR_BRAND.primary}`))
+    expect(scss).toMatch(new RegExp(`\\$secondary:\\s*${QUASAR_BRAND.secondary}`))
+    expect(scss).toMatch(new RegExp(`\\$accent:\\s*${QUASAR_BRAND.accentLegacy}`))
+    expect(scss).toMatch(new RegExp(`\\$negative:\\s*${QUASAR_BRAND.negative}`))
+    expect(scss).toMatch(new RegExp(`\\$positive:\\s*${QUASAR_BRAND.positive}`))
+    expect(scss).toMatch(new RegExp(`\\$warning:\\s*${QUASAR_BRAND.warning}`))
   })
 
-  it('aligns the runtime brand config on the same values', () => {
+  it('aligns the runtime brand config on the comparison palette', () => {
     const conf = read('quasar.config.ts')
-    expect(conf).not.toMatch(/#9c27b0|#c10015|#21ba45|#f2c037|#31ccec|#26a69a/)
-    expect(conf).toMatch(new RegExp(`negative:\\s*'${TOKENS.danger}'`))
+    for (const value of Object.values(QUASAR_BRAND)) expect(conf).toContain(value)
     expect(conf).toMatch(/boot:\s*\[[^\]]*'notify-theme'/)
   })
 

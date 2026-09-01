@@ -4,6 +4,7 @@ let abortSignal: AbortSignal | undefined
 let emitSubagentStarted = false
 let skipSecondResult = false
 let emitStalledExtraTurn = false
+let emitActivityAfterSubagentCompletion = false
 let completeSubagent: (() => void) | undefined
 let extraTurnGate: (() => void) | undefined
 let releaseStream: (() => void) | undefined
@@ -46,6 +47,16 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
             tool_use_id: 'review-1',
             status: 'completed',
           }
+          if (emitActivityAfterSubagentCompletion) {
+            yield {
+              type: 'assistant',
+              message: {
+                id: 'msg-after-subagent',
+                content: [{ type: 'text', text: 'continuation after subagent completion' }],
+                stop_reason: null,
+              },
+            }
+          }
           if (!skipSecondResult) {
             yield { type: 'result', subtype: 'success', usage: { input_tokens: 2, output_tokens: 2 } }
           }
@@ -79,6 +90,7 @@ function resetControls(): void {
   emitSubagentStarted = false
   skipSecondResult = false
   emitStalledExtraTurn = false
+  emitActivityAfterSubagentCompletion = false
 }
 
 describe('claude-code engine — result drain watchdog', () => {
@@ -170,6 +182,36 @@ describe('claude-code engine — result drain watchdog', () => {
 
       expect(events).toContainEqual({ kind: 'session:ended', reason: 'watchdog', exitCode: null })
       expect(abortSignal?.aborted).toBe(true)
+    } finally {
+      completeSubagent?.()
+      await vi.advanceTimersByTimeAsync(0)
+      releaseStream?.()
+      resetControls()
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not drain a stream that continues after its final subagent reports done', async () => {
+    vi.useFakeTimers()
+    try {
+      emitSubagentStarted = true
+      skipSecondResult = true
+      emitActivityAfterSubagentCompletion = true
+      const events: AgentEvent[] = []
+      const engine = createClaudeCodeEngine()
+      await engine.start(BASE_OPTIONS, (event) => events.push(event))
+
+      await vi.advanceTimersByTimeAsync(1_000)
+      completeSubagent?.()
+      await vi.advanceTimersByTimeAsync(1_000)
+
+      // The parent stream has emitted a real assistant message after the
+      // subagent settled. It is still alive, so the 15-second result-drain
+      // guard must not terminate it.
+      await vi.advanceTimersByTimeAsync(15_000)
+
+      expect(events).not.toContainEqual({ kind: 'session:ended', reason: 'watchdog', exitCode: null })
+      expect(abortSignal?.aborted).toBe(false)
     } finally {
       completeSubagent?.()
       await vi.advanceTimersByTimeAsync(0)

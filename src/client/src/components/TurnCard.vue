@@ -101,9 +101,9 @@ interface HeaderMeta {
 const header = computed<HeaderMeta>(() => {
   switch (props.turn.speaker) {
     case 'user':
-      return { label: t('chat.you'), accent: 'var(--kobo-text)', badgeClass: 'turn-badge-user' }
+      return { label: t('chat.you'), accent: 'var(--kobo-turn-user)', badgeClass: 'turn-badge-user' }
     case 'agent':
-      return { label: t('chat.agent'), accent: 'var(--kobo-text-2)', badgeClass: 'turn-badge-agent' }
+      return { label: t('chat.agent'), accent: 'var(--kobo-turn-agent)', badgeClass: 'turn-badge-agent' }
     case 'system-prompt':
       return { label: t('chat.systemPrompt'), accent: 'var(--kobo-text-3)', badgeClass: 'turn-badge-system' }
     case 'session':
@@ -208,11 +208,11 @@ const actionCount = computed(() => props.turn.items.filter((i) => i.type === 'to
 }
 .turn-badge-user {
   background: rgba(206, 147, 216, 0.15);
-  color: var(--kobo-text);
+  color: var(--kobo-turn-user);
 }
 .turn-badge-agent {
   background: rgba(121, 134, 203, 0.15);
-  color: var(--kobo-text-2);
+  color: var(--kobo-turn-agent);
 }
 .turn-badge-system {
   background: rgba(117, 117, 117, 0.2);

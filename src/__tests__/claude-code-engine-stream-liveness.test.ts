@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 let abortSignal: AbortSignal | undefined
 let releaseStream: (() => void) | undefined
+let emitCompactingStatus = false
 
 // The SDK yields an init message and one assistant message that carries a
 // TOOL CALL — the majority shape — then parks forever. No `result` ever
@@ -12,6 +13,9 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
     return {
       async *[Symbol.asyncIterator]() {
         yield { type: 'system', subtype: 'init', session_id: 'sess-live', model: 'm', slash_commands: [] }
+        if (emitCompactingStatus) {
+          yield { type: 'system', subtype: 'status', status: 'compacting', session_id: 'sess-live' }
+        }
         yield {
           type: 'assistant',
           message: {
@@ -64,6 +68,27 @@ describe('claude-code engine — shared turn liveness', () => {
     } finally {
       releaseStream?.()
       releaseStream = undefined
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not force-end while Claude reports that it is compacting context', async () => {
+    vi.useFakeTimers()
+    try {
+      emitCompactingStatus = true
+      const events: AgentEvent[] = []
+      const engine = createClaudeCodeEngine()
+      await engine.start(BASE_OPTIONS, (event) => events.push(event))
+
+      await vi.advanceTimersByTimeAsync(CLAUDE_STREAM_IDLE_TIMEOUT_MS * 2)
+
+      expect(events).toContainEqual({ kind: 'session:compacting', active: true })
+      expect(events.some((event) => event.kind === 'session:ended')).toBe(false)
+      expect(abortSignal?.aborted).toBe(false)
+    } finally {
+      releaseStream?.()
+      releaseStream = undefined
+      emitCompactingStatus = false
       vi.useRealTimers()
     }
   })

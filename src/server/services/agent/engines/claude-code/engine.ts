@@ -308,6 +308,7 @@ export function createClaudeCodeEngine(): AgentEngine {
       // Guard so the post-result drain watchdog and the natural loop exit (or
       // catch block) never both emit `session:ended` for the same run.
       let sessionEndedEmitted = false
+      let isCompacting = false
       const emitSessionEnded = (
         reason: 'completed' | 'error' | 'killed' | 'watchdog',
         exitCode: number | null,
@@ -356,6 +357,11 @@ export function createClaudeCodeEngine(): AgentEngine {
         }, RESULT_DRAIN_TIMEOUT_MS)
         resultDrainTimer.unref?.()
       }
+      const clearResultDrainWatchdog = (): void => {
+        if (!resultDrainTimer) return
+        clearTimeout(resultDrainTimer)
+        resultDrainTimer = undefined
+      }
 
       // Safety net for the "waiting on a background subagent" branch below:
       // if `activeSubagentToolCallIds` never empties (a missed/unrecognised
@@ -398,11 +404,22 @@ export function createClaudeCodeEngine(): AgentEngine {
         turnLiveness.start()
         try {
           for await (const msg of q as AsyncIterable<SDKMessage>) {
+            // This SDK message proves that any drain condition armed by a
+            // *previous* message is no longer current. A drain armed while
+            // processing this message remains active if the generator then
+            // goes silent.
+            clearResultDrainWatchdog()
             const events = mapSdkMessage(msg, mapperState)
             for (const ev of events) {
               if (ev.kind !== 'subagent:progress') continue
               if (ev.status === 'running') activeSubagentTaskIds.set(ev.toolCallId, ev.taskId ?? ev.toolCallId)
               else activeSubagentTaskIds.delete(ev.toolCallId)
+            }
+            for (const ev of events) {
+              if (ev.kind === 'session:compacting') isCompacting = ev.active
+              // Older SDKs can emit only compact_boundary, without a trailing
+              // status update. This boundary marks compaction as complete.
+              else if (ev.kind === 'session:compacted') isCompacting = false
             }
             // The stall watchdog is only armed while we're waiting purely on
             // background subagents (no further SDK turn expected unless one
@@ -427,7 +444,7 @@ export function createClaudeCodeEngine(): AgentEngine {
             // A background subagent or a pending permission card can stay
             // legitimately quiet for minutes; their own dedicated watchdogs
             // own those windows, so suspend the turn deadline meanwhile.
-            if (activeSubagentTaskIds.size > 0 || pendingResolvers.size > 0) turnLiveness.pause()
+            if (activeSubagentTaskIds.size > 0 || pendingResolvers.size > 0 || isCompacting) turnLiveness.pause()
             else turnLiveness.resume()
             if ((msg as { type?: string }).type === 'result') {
               completedResponses++
@@ -478,10 +495,7 @@ export function createClaudeCodeEngine(): AgentEngine {
           // The post-result drain watchdog (if armed) is moot once the
           // iterator has exited — clear it so a healthy run never triggers a
           // stray abort after it already ended.
-          if (resultDrainTimer) {
-            clearTimeout(resultDrainTimer)
-            resultDrainTimer = undefined
-          }
+          clearResultDrainWatchdog()
           turnLiveness.stop()
           clearSubagentStallWatchdog()
           // Drain any callback still pending (SDK terminated while awaiting an

@@ -16,19 +16,19 @@
   --kobo-text-3: #9a9ab5;
   --kobo-text-disabled: #5a5a7a;
 
-  // #6c63ff paired with white measured 4.32:1 — below the 4.5:1 AA threshold,
-  // on the product's primary button. Same hue (243°), desaturated to 65% and
-  // dropped to 62% lightness: desaturating is the only lever that satisfies
-  // both sides, because at S=100 the blue channel pins luminance too high.
-  // white on accent 4.95:1 · accent on --kobo-bg 3.45:1 · on --kobo-surface 3.08:1
-  --kobo-accent: #665fdd;
-  // Same -8L / -8S offset the previous hover already had. 6.78:1 with white.
-  --kobo-accent-hover: #4e47cc;
+  // Temporary visual comparison with the palette before PR #34.
+  --kobo-accent: #6c63ff;
+  --kobo-accent-hover: #5a51e6;
   --kobo-accent-fg: #ffffff;
 
   --kobo-success: #34d399;
   --kobo-warning: #fbbf24;
   --kobo-danger: #f87171;
+
+  // Conversation speaker accents keep the left rail and badge legible at a
+  // glance without reintroducing raw colours in individual components.
+  --kobo-turn-user: #ce93d8;
+  --kobo-turn-agent: #7986cb;
 
   --kobo-radius-sm: 4px;
   --kobo-radius-md: 6px;
@@ -56,4 +56,3 @@
   --kobo-font-mono:
     "Geist Mono", "JetBrains Mono", "SF Mono", "Menlo", "Monaco", "Consolas", monospace;
 }
-
