@@ -4,6 +4,12 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.11.21
+
+- fix: refine session liveness and interface feedback
+- fix(client): restore outline accent
+- feat(settings): compose custom skill prompts
+
 ## 1.11.20
 
 - fix(client): clarify automatic recovery
