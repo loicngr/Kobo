@@ -4,6 +4,10 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.11.24
+
+- docs: redesign README as a landing page, document PR/MR import
+
 ## 1.11.23
 
 - fix(test): configure git identity on the pr-checkout temp repo
