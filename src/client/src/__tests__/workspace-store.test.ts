@@ -1464,20 +1464,21 @@ describe('workspace store', () => {
         targetAt: '2026-05-06T13:30:00Z',
         resetsAt: null,
         source: 'fallback_ladder',
+        reason: 'quota',
       })
       expect(store.pendingQuotaBackoffs.w1?.targetAt).toBe('2026-05-06T13:30:00Z')
     })
 
     it('clearPendingQuotaBackoff removes the entry', () => {
       const store = useWorkspaceStore()
-      store.setPendingQuotaBackoff('w1', { targetAt: 't', resetsAt: null, source: 'fallback_ladder' })
+      store.setPendingQuotaBackoff('w1', { targetAt: 't', resetsAt: null, source: 'fallback_ladder', reason: 'quota' })
       store.clearPendingQuotaBackoff('w1')
       expect(store.pendingQuotaBackoffs.w1).toBeUndefined()
     })
 
     it('cancelQuotaBackoff issues DELETE and clears state optimistically', async () => {
       const store = useWorkspaceStore()
-      store.setPendingQuotaBackoff('w1', { targetAt: 't', resetsAt: null, source: 'fallback_ladder' })
+      store.setPendingQuotaBackoff('w1', { targetAt: 't', resetsAt: null, source: 'fallback_ladder', reason: 'quota' })
       const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(null, { status: 204 }))
       await store.cancelQuotaBackoff('w1')
       expect(fetchSpy).toHaveBeenCalledWith(

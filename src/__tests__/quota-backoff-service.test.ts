@@ -76,7 +76,7 @@ describe('quota-backoff-service', () => {
     const wsId = await makeWorkspace()
     const service = await import('../server/services/quota-backoff-service.js')
 
-    service.arm(wsId, 60_000, { resetsAt: '2026-05-06T13:30:00Z', source: 'usage_api' })
+    service.arm(wsId, 60_000, { resetsAt: '2026-05-06T13:30:00Z', source: 'usage_api', reason: 'quota' })
     const pending = service.getPending(wsId)
 
     expect(pending).toBeDefined()
@@ -89,8 +89,8 @@ describe('quota-backoff-service', () => {
     const wsId = await makeWorkspace()
     const service = await import('../server/services/quota-backoff-service.js')
 
-    service.arm(wsId, 60_000, { resetsAt: null, source: 'fallback_ladder' })
-    service.arm(wsId, 30_000, { resetsAt: null, source: 'fallback_ladder' })
+    service.arm(wsId, 60_000, { resetsAt: null, source: 'fallback_ladder', reason: 'quota' })
+    service.arm(wsId, 30_000, { resetsAt: null, source: 'fallback_ladder', reason: 'quota' })
     const pending = service.getPending(wsId)
 
     expect(pending?.retryCount).toBe(2)
@@ -100,7 +100,7 @@ describe('quota-backoff-service', () => {
     const wsId = await makeWorkspace()
     const service = await import('../server/services/quota-backoff-service.js')
 
-    service.arm(wsId, 60_000, { resetsAt: null, source: 'fallback_ladder' })
+    service.arm(wsId, 60_000, { resetsAt: null, source: 'fallback_ladder', reason: 'quota' })
     expect(service.cancel(wsId, 'user')).toBe(true)
     expect(service.getPending(wsId)).toBeNull()
   })
@@ -115,8 +115,8 @@ describe('quota-backoff-service', () => {
     const w2 = await makeWorkspace('w2')
     const service = await import('../server/services/quota-backoff-service.js')
 
-    service.arm(w1, 60_000, { resetsAt: null, source: 'fallback_ladder' })
-    service.arm(w2, 60_000, { resetsAt: null, source: 'fallback_ladder' })
+    service.arm(w1, 60_000, { resetsAt: null, source: 'fallback_ladder', reason: 'quota' })
+    service.arm(w2, 60_000, { resetsAt: null, source: 'fallback_ladder', reason: 'quota' })
 
     expect(service.listPending().length).toBe(2)
   })
@@ -168,7 +168,7 @@ describe('quota-backoff-service', () => {
     const service = await import('../server/services/quota-backoff-service.js')
     const ws = await import('../server/services/websocket-service.js')
 
-    service.arm(wsId, 60_000, { resetsAt: null, source: 'fallback_ladder' })
+    service.arm(wsId, 60_000, { resetsAt: null, source: 'fallback_ladder', reason: 'quota' })
     service.cancel(wsId, 'user')
 
     const cancelled = (ws.emitEphemeral as ReturnType<typeof vi.fn>).mock.calls.find(
@@ -187,7 +187,7 @@ describe('quota-backoff-service', () => {
 
     const fired = vi.fn()
     service.setOnFireCallback(fired)
-    service.arm(wsId, 60_000, { resetsAt: null, source: 'fallback_ladder' })
+    service.arm(wsId, 60_000, { resetsAt: null, source: 'fallback_ladder', reason: 'quota' })
     expect(service.getPending(wsId)).not.toBeNull()
 
     await vi.advanceTimersByTimeAsync(60_001)
@@ -201,7 +201,7 @@ describe('quota-backoff-service', () => {
     const service = await import('../server/services/quota-backoff-service.js')
     const ws = await import('../server/services/websocket-service.js')
 
-    service.arm(wsId, 60_000, { resetsAt: null, source: 'fallback_ladder' })
+    service.arm(wsId, 60_000, { resetsAt: null, source: 'fallback_ladder', reason: 'quota' })
     service.cancel(wsId, 'deleted')
 
     const cancelled = (ws.emitEphemeral as ReturnType<typeof vi.fn>).mock.calls.find(

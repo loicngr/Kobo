@@ -275,6 +275,27 @@ function parsePrNumberFromUrl(prUrl: string): number {
   return number
 }
 
+// Mirrors the private `WORKSPACE_NAME_MAX_LENGTH` in workspace-service.ts —
+// duplicated rather than exported to avoid coupling this route to that
+// module's internals (and the many `vi.mock(workspace-service.js, factory)`
+// test files that would otherwise need updating for an export nothing else
+// consumes).
+const WORKSPACE_NAME_MAX_LENGTH = 200
+
+/**
+ * Cap an auto-derived title (Notion page title, Sentry issue title, PR/MR
+ * title) before handing it to `updateWorkspaceName`. That function throws on
+ * anything longer — the right behaviour for a name the user typed
+ * themselves, but titles pulled from an external source (a long exception
+ * message, a verbose PR title) are not user input: truncating them is the
+ * sane default, matching the existing `slugifyBranchSegment` precedent for
+ * auto-derived branch names.
+ */
+function truncateWorkspaceName(name: string): string {
+  if (name.length <= WORKSPACE_NAME_MAX_LENGTH) return name
+  return `${name.slice(0, WORKSPACE_NAME_MAX_LENGTH - 1)}…`
+}
+
 app.get('/', (c) => {
   try {
     const workspaces = workspaceService.listWorkspaces()
@@ -796,7 +817,10 @@ app.post('/', migrationGuard, async (c) => {
     // identifiable in the sidebar without opening the panel.
     if (sentryContent?.title && !notionContent?.title && workspace.name === 'workspace') {
       const prefix = sentryContent.issueId ? `${sentryContent.issueId} | ` : ''
-      workspace = workspaceService.updateWorkspaceName(workspace.id, `${prefix}${sentryContent.title}`)
+      workspace = workspaceService.updateWorkspaceName(
+        workspace.id,
+        truncateWorkspaceName(`${prefix}${sentryContent.title}`),
+      )
     }
 
     currentStep = 'create-tasks'
@@ -825,7 +849,7 @@ app.post('/', migrationGuard, async (c) => {
       // provide a custom name. Prefix with the Notion unique-id (e.g.
       // Use the Notion page title when the user left the generic placeholder.
       if (notionContent.title && workspace.name === 'workspace') {
-        workspace = workspaceService.updateWorkspaceName(workspace.id, notionContent.title)
+        workspace = workspaceService.updateWorkspaceName(workspace.id, truncateWorkspaceName(notionContent.title))
       }
     }
 
@@ -834,7 +858,7 @@ app.post('/', migrationGuard, async (c) => {
     // makes the PR a THIRD context source, lowest priority of the three
     // (Notion > Sentry > PR), consistent with the checks above.
     if (prContent && !notionContent?.title && !sentryContent?.title && workspace.name === 'workspace') {
-      workspace = workspaceService.updateWorkspaceName(workspace.id, prContent.title)
+      workspace = workspaceService.updateWorkspaceName(workspace.id, truncateWorkspaceName(prContent.title))
     }
 
     // Create manual tasks/criteria if no Notion content was extracted

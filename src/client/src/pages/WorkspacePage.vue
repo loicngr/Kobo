@@ -375,14 +375,14 @@ function statusLabel(status: string): string {
 }
 
 function workspaceStatusLabel(workspaceId: string, status: string): string {
-  if (status === 'quota' && store.pendingQuotaBackoffs[workspaceId]?.source === 'fallback_ladder') {
+  if (status === 'quota' && store.pendingQuotaBackoffs[workspaceId]?.reason === 'transient') {
     return t('workspaceStatus.retrying')
   }
   return statusLabel(status)
 }
 
 function workspaceStatusColor(workspaceId: string, status: string): string {
-  if (status === 'quota' && store.pendingQuotaBackoffs[workspaceId]?.source === 'fallback_ladder') return 'amber-9'
+  if (status === 'quota' && store.pendingQuotaBackoffs[workspaceId]?.reason === 'transient') return 'amber-9'
   if (['error', 'quota'].includes(status)) return 'red-9'
   if (status === 'awaiting-user') return 'amber-9'
   return isBusyStatus(status) ? 'green-9' : 'kobo-3'

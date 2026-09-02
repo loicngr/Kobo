@@ -1991,6 +1991,43 @@ describe('POST /api/workspaces — Notion/Sentry initial prompt injection', () =
     expect(prompt).not.toContain('Notion ticket:')
   })
 
+  it('truncates an overlong Sentry issue title instead of failing workspace creation', async () => {
+    commonHappyPathMocks()
+    const sentryService = await import('../server/services/sentry-service.js')
+    vi.mocked(sentryService.extractSentryIssue).mockResolvedValue({
+      title: 'x'.repeat(250),
+      issueId: 'ACME-API-3',
+      issueNumericId: '42',
+      culprit: 'fn',
+      url: 'https://my-org.sentry.io/issues/42',
+      platform: 'js',
+      occurrences: 1,
+      firstSeen: '2026-01-01',
+      lastSeen: '2026-01-02',
+      tags: {},
+      offendingSpans: [],
+      extraContext: '',
+      assignee: '',
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        sentryUrl: 'https://my-org.sentry.io/issues/42/',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    const namePassed = vi.mocked(workspaceService.updateWorkspaceName).mock.calls[0]?.[1] as string
+    expect(namePassed.length).toBeLessThanOrEqual(200)
+    expect(namePassed.endsWith('…')).toBe(true)
+  })
+
   it('appends both Notion and Sentry rendered prompts (Notion before Sentry) when both URLs are set', async () => {
     commonHappyPathMocks()
     mockNotionExtraction({ ticketId: 'TK-9' })

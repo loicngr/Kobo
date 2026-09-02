@@ -281,6 +281,7 @@ describe('handleQuota → quotaBackoffService.arm', () => {
     expect(vi.mocked(quotaBackoffService.arm)).toHaveBeenCalledWith('w-transient', 15 * 60_000, {
       resetsAt: null,
       source: 'fallback_ladder',
+      reason: 'transient',
     })
   })
 

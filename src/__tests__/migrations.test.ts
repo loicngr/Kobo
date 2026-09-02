@@ -42,8 +42,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 37', () => {
-    expect(SCHEMA_VERSION).toBe(37)
+  it('exporte SCHEMA_VERSION = 38', () => {
+    expect(SCHEMA_VERSION).toBe(38)
   })
 
   it('migration v33 records and backfills the engine on agent sessions', () => {
@@ -279,6 +279,67 @@ describe('runMigrations(db)', () => {
     expect(
       (fresh.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>).map((column) => column.name),
     ).toContain('pr_url')
+    fresh.close()
+  })
+
+  it('migration v38 adds a reason column to pending_quota_backoffs, backfilled to quota', () => {
+    const upgraded = new Database(':memory:')
+    upgraded.exec(`
+      CREATE TABLE workspaces (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        project_path TEXT NOT NULL,
+        source_branch TEXT NOT NULL,
+        working_branch TEXT NOT NULL,
+        status TEXT NOT NULL
+      );
+      INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, status)
+        VALUES ('w1', 'Keep me', '/repo', 'main', 'feat/x', 'quota');
+      CREATE TABLE pending_quota_backoffs (
+        workspace_id TEXT PRIMARY KEY REFERENCES workspaces(id) ON DELETE CASCADE,
+        target_at    TEXT NOT NULL,
+        resets_at    TEXT,
+        source       TEXT NOT NULL CHECK (source IN ('rate_limit_info', 'usage_api', 'fallback_ladder')),
+        retry_count  INTEGER NOT NULL DEFAULT 0,
+        created_at   TEXT NOT NULL
+      );
+      INSERT INTO pending_quota_backoffs (workspace_id, target_at, resets_at, source, retry_count, created_at)
+        VALUES ('w1', '2026-05-06T13:30:00Z', NULL, 'fallback_ladder', 2, '2026-05-06T13:00:00Z');
+      CREATE TABLE schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+    `)
+    for (let version = 1; version <= 37; version++) {
+      upgraded.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(version, `v${version}`, 'now')
+    }
+
+    runMigrations(upgraded)
+
+    expect(
+      (upgraded.prepare('PRAGMA table_info(pending_quota_backoffs)').all() as Array<{ name: string }>).map(
+        (column) => column.name,
+      ),
+    ).toContain('reason')
+    expect(
+      upgraded
+        .prepare("SELECT workspace_id, retry_count, reason FROM pending_quota_backoffs WHERE workspace_id = 'w1'")
+        .get(),
+    ).toEqual({
+      workspace_id: 'w1',
+      retry_count: 2,
+      reason: 'quota',
+    })
+    expect(getMigrationHistory(upgraded).find((record) => record.version === 38)).toMatchObject({
+      version: 38,
+      name: 'add-quota-backoff-reason',
+    })
+    upgraded.close()
+
+    const fresh = new Database(':memory:')
+    initSchema(fresh)
+    expect(
+      (fresh.prepare('PRAGMA table_info(pending_quota_backoffs)').all() as Array<{ name: string }>).map(
+        (column) => column.name,
+      ),
+    ).toContain('reason')
     fresh.close()
   })
 

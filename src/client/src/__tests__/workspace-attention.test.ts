@@ -44,6 +44,18 @@ describe('getAttentionReasons', () => {
     expect(getAttentionReasons(ws('quota'), undefined)).toEqual([{ kind: 'quota', icon: 'warning', color: 'red-5' }])
   })
 
+  it('returns the quota reason for a quota workspace with no backoff reason info', () => {
+    expect(getAttentionReasons(ws('quota'), undefined, 'quota')).toEqual([
+      { kind: 'quota', icon: 'warning', color: 'red-5' },
+    ])
+  })
+
+  it('returns quota-retry instead of quota when the backoff was a transient (internal) failure, not a real rate limit', () => {
+    expect(getAttentionReasons(ws('quota'), undefined, 'transient')).toEqual([
+      { kind: 'quota-retry', icon: 'autorenew', color: 'amber-5' },
+    ])
+  })
+
   it('returns the ci-failed reason for an executing workspace with failing CI', () => {
     const reasons = getAttentionReasons(ws('executing'), snap({ ci: { rollup: 'FAILURE', checks: [] } }))
     expect(reasons).toEqual([{ kind: 'ci-failed', icon: 'cancel', color: 'red-5' }])

@@ -2157,7 +2157,7 @@ async function handleQuota(workspaceId: string, _agentSessionId?: string): Promi
 
   // The quotaBackoffService owns the timer + the persistent row + the
   // 'agent:quota-backoff' WS emit. Hand off everything to it.
-  quotaBackoffService.arm(workspaceId, delayMs, { resetsAt: resetsAt ?? null, source })
+  quotaBackoffService.arm(workspaceId, delayMs, { resetsAt: resetsAt ?? null, source, reason: 'quota' })
 }
 
 /**
@@ -2188,7 +2188,7 @@ async function handleTransientAutoLoopFailure(workspaceId: string): Promise<void
   }
   const { delayMs, resetsAt, source } = await computeQuotaBackoffMs(workspaceId, retryCount, false)
   retryCounts.set(workspaceId, retryCount + 1)
-  quotaBackoffService.arm(workspaceId, delayMs, { resetsAt: resetsAt ?? null, source })
+  quotaBackoffService.arm(workspaceId, delayMs, { resetsAt: resetsAt ?? null, source, reason: 'transient' })
 }
 
 /** @internal test-only — re-export of `handleQuota` for direct testing. */

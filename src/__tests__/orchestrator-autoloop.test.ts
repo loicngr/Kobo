@@ -328,7 +328,7 @@ describe('orchestrator auto-loop integration', () => {
     updateTaskStatus(secondTask.id, 'done')
 
     orch._getRetryCounts().set(wsId, 2)
-    quotaBackoff.arm(wsId, 60_000, { resetsAt: null, source: 'fallback_ladder' })
+    quotaBackoff.arm(wsId, 60_000, { resetsAt: null, source: 'fallback_ladder', reason: 'quota' })
     vi.clearAllMocks()
 
     emitters[0]?.({ kind: 'session:started', engineSessionId: 'late-engine-1' })

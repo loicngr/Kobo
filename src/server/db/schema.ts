@@ -156,6 +156,7 @@ export function initSchema(db: Database.Database): void {
       target_at    TEXT NOT NULL,
       resets_at    TEXT,
       source       TEXT NOT NULL CHECK (source IN ('rate_limit_info', 'usage_api', 'fallback_ladder')),
+      reason       TEXT NOT NULL DEFAULT 'quota',
       retry_count  INTEGER NOT NULL DEFAULT 0,
       created_at   TEXT NOT NULL
     );

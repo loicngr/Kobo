@@ -1317,12 +1317,13 @@ export const useWebSocketStore = defineStore('websocket', {
 
         case 'agent:quota-backoff': {
           if (!wid) break
-          const p = payload as { targetAt?: string; resetsAt?: string | null; source?: string }
+          const p = payload as { targetAt?: string; resetsAt?: string | null; source?: string; reason?: string }
           if (typeof p.targetAt === 'string' && typeof p.source === 'string') {
             workspaceStore.setPendingQuotaBackoff(wid, {
               targetAt: p.targetAt,
               resetsAt: p.resetsAt ?? null,
               source: p.source,
+              reason: p.reason === 'transient' ? 'transient' : 'quota',
             })
           }
           break

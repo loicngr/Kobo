@@ -92,7 +92,13 @@ const $q = useQuasar()
 const { t } = useI18n()
 const { timeAgo } = useTimeAgo()
 
-const reasons = computed(() => getAttentionReasons(props.workspace, store.prSnapshots[props.workspace.id]))
+const reasons = computed(() =>
+  getAttentionReasons(
+    props.workspace,
+    store.prSnapshots[props.workspace.id],
+    store.pendingQuotaBackoffs[props.workspace.id]?.reason === 'transient' ? 'transient' : 'quota',
+  ),
+)
 
 // Compact CI recap, surfaced only while the CI is still in flight.
 const ciSummary = computed(() => summarizeCiChecks(store.prSnapshots[props.workspace.id]?.ci.checks ?? []))
@@ -128,14 +134,18 @@ function labelFor(kind: AttentionKind): string {
   switch (kind) {
     case 'awaiting-user':
       return t('workspaceStatus.awaitingUser')
+    case 'error':
+      return t('workspaceStatus.error')
+    case 'quota':
+      return t('workspaceStatus.quota')
+    case 'quota-retry':
+      return t('workspaceStatus.retrying')
     case 'ci-failed':
       return t('workspaceList.attentionCiFailed')
     case 'changes-requested':
       return t('workspaceList.attentionChangesRequested')
     case 'ready-to-merge':
       return t('workspaceList.attentionReadyToMerge')
-    default:
-      return kind // 'error' | 'quota' — raw, matching the prior card behaviour
   }
 }
 </script>

@@ -698,6 +698,25 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 38,
+    name: 'add-quota-backoff-reason',
+    migrate: (db) => {
+      const table = db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'pending_quota_backoffs'")
+        .get()
+      if (!table) return
+      const columns = (db.prepare('PRAGMA table_info(pending_quota_backoffs)').all() as Array<{ name: string }>).map(
+        (column) => column.name,
+      )
+      if (!columns.includes('reason')) {
+        // Existing rows predate the quota/transient split — every one of them
+        // was armed by the old code path that only ever meant "real quota",
+        // so 'quota' is the correct backfill, not a placeholder guess.
+        db.exec("ALTER TABLE pending_quota_backoffs ADD COLUMN reason TEXT NOT NULL DEFAULT 'quota'")
+      }
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

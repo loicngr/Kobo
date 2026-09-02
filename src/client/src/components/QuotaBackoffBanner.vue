@@ -48,7 +48,7 @@ const visible = computed(
   () => ws.value?.status === 'quota' && autoLoopState.value?.auto_loop === true && pending.value !== undefined,
 )
 
-const isTransientRecovery = computed(() => pending.value?.source === 'fallback_ladder')
+const isTransientRecovery = computed(() => pending.value?.reason === 'transient')
 const bannerTitle = computed(() =>
   t(isTransientRecovery.value ? 'quotaBackoff.banner.transientTitle' : 'quotaBackoff.banner.title', {
     time: formattedTime.value,

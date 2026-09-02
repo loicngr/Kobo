@@ -4,11 +4,26 @@ import { getWorkspace } from './workspace-service.js'
 
 export type QuotaBackoffSource = 'rate_limit_info' | 'usage_api' | 'fallback_ladder'
 
+/**
+ * WHY the backoff was armed, independent of `QuotaBackoffSource` (which only
+ * describes how its *duration* was computed). `source` alone can't tell a
+ * genuine Anthropic/OpenAI rate limit apart from Kōbō's own transient-failure
+ * retry (server 500s, or the drain watchdog force-ending a stuck session) —
+ * both can legitimately land on `fallback_ladder` when no precise reset time
+ * is available. The UI previously used `source === 'fallback_ladder'` as a
+ * proxy for "not a real quota hit", which mislabelled genuine quota hits
+ * lacking reset info as "auto-resuming", and — the actual bug report this
+ * fixed — could never distinguish an internal watchdog recovery from a real
+ * quota hit at all once precise reset info happened to be present.
+ */
+export type QuotaBackoffReason = 'quota' | 'transient'
+
 export interface PendingQuotaBackoff {
   workspaceId: string
   targetAt: string
   resetsAt: string | null
   source: QuotaBackoffSource
+  reason: QuotaBackoffReason
   retryCount: number
   createdAt: string
 }
@@ -18,6 +33,7 @@ interface PendingQuotaBackoffRow {
   target_at: string
   resets_at: string | null
   source: QuotaBackoffSource
+  reason: QuotaBackoffReason
   retry_count: number
   created_at: string
 }
@@ -31,6 +47,7 @@ function rowToPending(row: PendingQuotaBackoffRow): PendingQuotaBackoff {
     targetAt: row.target_at,
     resetsAt: row.resets_at,
     source: row.source,
+    reason: row.reason,
     retryCount: row.retry_count,
     createdAt: row.created_at,
   }
@@ -47,7 +64,7 @@ function rowToPending(row: PendingQuotaBackoffRow): PendingQuotaBackoff {
 export function arm(
   workspaceId: string,
   delayMs: number,
-  meta: { resetsAt: string | null; source: QuotaBackoffSource },
+  meta: { resetsAt: string | null; source: QuotaBackoffSource; reason: QuotaBackoffReason },
 ): void {
   const db = getDb()
   const now = new Date()
@@ -59,15 +76,16 @@ export function arm(
   const retryCount = (existing?.retry_count ?? 0) + 1
 
   db.prepare(
-    `INSERT INTO pending_quota_backoffs (workspace_id, target_at, resets_at, source, retry_count, created_at)
-     VALUES (?, ?, ?, ?, ?, ?)
+    `INSERT INTO pending_quota_backoffs (workspace_id, target_at, resets_at, source, reason, retry_count, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(workspace_id) DO UPDATE SET
        target_at = excluded.target_at,
        resets_at = excluded.resets_at,
        source = excluded.source,
+       reason = excluded.reason,
        retry_count = excluded.retry_count,
        created_at = excluded.created_at`,
-  ).run(workspaceId, targetAt, meta.resetsAt, meta.source, retryCount, now.toISOString())
+  ).run(workspaceId, targetAt, meta.resetsAt, meta.source, meta.reason, retryCount, now.toISOString())
 
   const previous = timers.get(workspaceId)
   if (previous) clearTimeout(previous)
@@ -79,6 +97,7 @@ export function arm(
     targetAt,
     resetsAt: meta.resetsAt,
     source: meta.source,
+    reason: meta.reason,
     retryCount,
   })
 }

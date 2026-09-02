@@ -160,7 +160,11 @@ const VALID_TRANSITIONS: Record<WorkspaceStatus, WorkspaceStatus[]> = {
   completed: ['idle', 'executing'],
   idle: ['executing', 'brainstorming', 'extracting', 'error'],
   error: ['idle', 'executing', 'brainstorming', 'extracting'],
-  quota: ['idle', 'executing'],
+  // `awaiting-user` is reachable from `quota` too: a resumed quota-backoff
+  // session can hit an interactive tool-approval/question before its status
+  // flips to `executing` — the same reasoning as the entering-quota comment
+  // above, just for the other direction.
+  quota: ['idle', 'executing', 'awaiting-user'],
 }
 
 interface WorkspaceRow {

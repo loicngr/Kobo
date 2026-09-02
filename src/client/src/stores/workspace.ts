@@ -421,7 +421,10 @@ export const useWorkspaceStore = defineStore('workspace', {
     gitRefreshTrigger: 0,
     gitStatsCache: {} as Record<string, GitStats>,
     pendingWakeups: {} as Record<string, PendingWakeup>,
-    pendingQuotaBackoffs: {} as Record<string, { targetAt: string; resetsAt: string | null; source: string }>,
+    pendingQuotaBackoffs: {} as Record<
+      string,
+      { targetAt: string; resetsAt: string | null; source: string; reason: string }
+    >,
     pendingDeferred: {} as Record<string, PendingDeferredToolUse>,
     pendingQueue: {} as Record<string, PendingItem[]>,
     prSnapshots: {} as Record<string, PrSnapshot>,
@@ -1803,9 +1806,20 @@ export const useWorkspaceStore = defineStore('workspace', {
       try {
         const res = await fetch(`/api/workspaces/${workspaceId}/quota-backoff`, { cache: 'no-store' })
         if (!res.ok) return
-        const data = (await res.json()) as { targetAt: string; resetsAt: string | null; source: string } | null
-        if (data) this.pendingQuotaBackoffs[workspaceId] = data
-        else delete this.pendingQuotaBackoffs[workspaceId]
+        const data = (await res.json()) as {
+          targetAt: string
+          resetsAt: string | null
+          source: string
+          reason?: string
+        } | null
+        if (data) {
+          this.pendingQuotaBackoffs[workspaceId] = {
+            ...data,
+            reason: data.reason === 'transient' ? 'transient' : 'quota',
+          }
+        } else {
+          delete this.pendingQuotaBackoffs[workspaceId]
+        }
       } catch (err) {
         console.error('[workspace-store] fetchPendingQuotaBackoff failed:', err)
       }
@@ -1813,7 +1827,7 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     setPendingQuotaBackoff(
       workspaceId: string,
-      payload: { targetAt: string; resetsAt: string | null; source: string },
+      payload: { targetAt: string; resetsAt: string | null; source: string; reason: string },
     ): void {
       this.pendingQuotaBackoffs[workspaceId] = payload
     },

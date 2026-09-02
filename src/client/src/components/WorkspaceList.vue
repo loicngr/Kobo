@@ -660,7 +660,11 @@ const layout = useLayoutStore()
 const { isDrawerCollapsed } = useIsMobile()
 
 function attentionBorderColor(ws: Workspace): string {
-  const reasons = getAttentionReasons(ws, store.prSnapshots[ws.id])
+  const reasons = getAttentionReasons(
+    ws,
+    store.prSnapshots[ws.id],
+    store.pendingQuotaBackoffs[ws.id]?.reason === 'transient' ? 'transient' : 'quota',
+  )
   if (reasons.some((r) => r.color === 'red-5')) return 'var(--kobo-danger)' // a real problem → red
   // Purely positive state (ready to merge, nothing else pending) → green, so the
   // border matches the green badge instead of falsely warning with amber.

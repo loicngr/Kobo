@@ -351,6 +351,20 @@ describe('updateWorkspaceStatus(id, status)', () => {
     updateWorkspaceStatus(extracting.id, 'quota')
     expect(getWorkspace(extracting.id)?.status).toBe('quota')
   })
+
+  it('allows a resumed quota-backoff session to hit an interactive tool approval', async () => {
+    const { createWorkspace, updateWorkspaceStatus } = await import('../server/services/workspace-service.js')
+    // A quota-backoff retry can resume straight into a tool-approval /
+    // interactive-question request before its status flips to `executing` —
+    // production hit "Invalid status transition from 'quota' to
+    // 'awaiting-user'" here.
+    const ws = createWorkspace({ name: 'Quota resume', projectPath: '/p', sourceBranch: 'main', workingBranch: 'b' })
+    updateWorkspaceStatus(ws.id, 'brainstorming')
+    updateWorkspaceStatus(ws.id, 'executing')
+    updateWorkspaceStatus(ws.id, 'quota')
+    const updated = updateWorkspaceStatus(ws.id, 'awaiting-user')
+    expect(updated.status).toBe('awaiting-user')
+  })
 })
 
 describe('deleteWorkspace(id)', () => {
