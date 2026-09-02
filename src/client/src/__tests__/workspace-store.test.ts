@@ -1488,13 +1488,38 @@ describe('workspace store', () => {
       expect(store.pendingQuotaBackoffs.w1).toBeUndefined()
     })
 
-    it('starts the workspace immediately when resuming a backoff', async () => {
+    it('resumes the interrupted session instead of starting a fresh one', async () => {
       const store = useWorkspaceStore()
+      store.selectedWorkspaceId = 'w1'
       const start = vi.spyOn(store, 'startWorkspace').mockResolvedValue()
+      const session = {
+        id: 'sess-1',
+        workspaceId: 'w1',
+        pid: null,
+        engineSessionId: null,
+        status: 'error',
+        startedAt: '2026-01-01T00:00:00Z',
+        endedAt: '2026-01-01T00:00:01Z',
+        name: null,
+      }
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => [session] } as Response))
+
+      await store.resumeQuotaBackoffNow('w1')
+
+      expect(start).toHaveBeenCalledWith('w1', undefined, 'sess-1', true)
+      vi.unstubAllGlobals()
+    })
+
+    it('falls back to a fresh start when there is no resumable session', async () => {
+      const store = useWorkspaceStore()
+      store.selectedWorkspaceId = 'w1'
+      const start = vi.spyOn(store, 'startWorkspace').mockResolvedValue()
+      vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true, json: async () => [] } as Response))
 
       await store.resumeQuotaBackoffNow('w1')
 
       expect(start).toHaveBeenCalledWith('w1')
+      vi.unstubAllGlobals()
     })
   })
 

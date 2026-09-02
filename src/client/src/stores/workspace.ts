@@ -1849,7 +1849,18 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async resumeQuotaBackoffNow(workspaceId: string): Promise<void> {
-      await this.startWorkspace(workspaceId)
+      // A quota backoff cuts an active session's turn short mid-conversation.
+      // Resuming it must behave like continuing an ended session from chat
+      // (see ChatInput.vue's 'completed' | 'error' branch): reuse the same
+      // engine session via `resume: true` instead of silently discarding its
+      // context for a brand new one with a generic "continue" prompt.
+      await this.fetchSessions(workspaceId)
+      const mostRecent = this.sessions[0]
+      if (mostRecent && (mostRecent.status === 'completed' || mostRecent.status === 'error')) {
+        await this.startWorkspace(workspaceId, undefined, mostRecent.id, true)
+      } else {
+        await this.startWorkspace(workspaceId)
+      }
     },
 
     /** Append an item to the pending queue for a workspace. */
