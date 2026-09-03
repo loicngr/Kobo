@@ -4,6 +4,10 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.11.27
+
+- fix: session watchdog false-positives, sync drain, and terminal leaks, audit npm
+
 ## 1.11.26
 
 - fix(client): resume the interrupted session on manual quota resume
