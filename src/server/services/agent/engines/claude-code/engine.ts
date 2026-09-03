@@ -34,7 +34,7 @@ type McpStdioServerConfigWithAlwaysLoad = McpStdioServerConfig & { alwaysLoad: b
  * post-result drain watchdog force-emits `session:ended` so the orchestrator
  * and auto-loop are not frozen forever.
  */
-const RESULT_DRAIN_TIMEOUT_MS = 15_000
+export const RESULT_DRAIN_TIMEOUT_MS = 15_000
 /**
  * Deadline for a stream that stops reporting ANY activity. The former
  * text-only guard was re-armed solely on a message with text and no tool call
@@ -43,12 +43,23 @@ const RESULT_DRAIN_TIMEOUT_MS = 15_000
  * forever with zero trace. Exported so tests never hard-code the value.
  */
 export const CLAUDE_STREAM_IDLE_TIMEOUT_MS = 120_000
+/**
+ * Idle ceiling while a FOREGROUND tool call is in flight (tool:call seen, no
+ * tool:result yet). A long Bash run — a test suite, a CI-poll sleep — emits no
+ * SDK message until its tool_result, so the short deadline would kill a
+ * healthy session mid-tool (the "random session stops" bug). A genuinely dead
+ * stream is still reaped once this longer ceiling elapses.
+ */
+export const CLAUDE_TOOL_IDLE_TIMEOUT_MS = 30 * 60_000
+/** Ceiling on a context compaction: past this, assume it wedged and let the
+ *  liveness deadline take over instead of pausing forever. */
+export const COMPACTION_STALL_TIMEOUT_MS = 10 * 60_000
 // Safety net for a subagent whose terminal `task_notification` carries a
 // status outside the mapper's known-terminal set (SDK schema drift) — it
 // never clears `activeSubagentToolCallIds`, which otherwise blocks
 // `inputStream.close()`/the result-drain watchdog forever. Generous window:
 // legitimate subagents can run for several minutes.
-const SUBAGENT_STALL_TIMEOUT_MS = 10 * 60_000
+export const SUBAGENT_STALL_TIMEOUT_MS = 10 * 60_000
 const MAX_PENDING_USER_MESSAGES = 20
 
 function toMcpServersMap(specs: StartOptions['mcpServers']): Options['mcpServers'] | undefined {
@@ -136,6 +147,9 @@ export function createClaudeCodeEngine(): AgentEngine {
       // UI/tool ids can differ from the SDK task id. Key by the stable UI id
       // so a terminal notification that omits task_id still clears the task.
       const activeSubagentTaskIds = new Map<string, string>()
+      // Foreground tool calls currently awaiting their tool_result. Cleared on
+      // every `result` message: a turn cannot end with a tool still in flight.
+      const pendingToolCallIds = new Set<string>()
 
       // Pending canUseTool callbacks, keyed by SDK ctx.toolUseID.
       const pendingResolvers = new Map<string, PendingResolver>()
@@ -335,15 +349,71 @@ export function createClaudeCodeEngine(): AgentEngine {
       const turnLiveness = createTurnLiveness({
         timeoutMs: CLAUDE_STREAM_IDLE_TIMEOUT_MS,
         onTimeout() {
-          console.warn(
-            `[claude-engine] SDK stream reported no activity for ${CLAUDE_STREAM_IDLE_TIMEOUT_MS}ms — forcing session:ended`,
-          )
+          // The armed deadline tracks whether a foreground tool call is in
+          // flight (see `turnLiveness.setTimeoutMs` below) — log the duration
+          // that actually elapsed, not always the shorter baseline, so the
+          // watchdog's own diagnostic message stays trustworthy.
+          const timeoutMs = pendingToolCallIds.size > 0 ? CLAUDE_TOOL_IDLE_TIMEOUT_MS : CLAUDE_STREAM_IDLE_TIMEOUT_MS
+          console.warn(`[claude-engine] SDK stream reported no activity for ${timeoutMs}ms — forcing session:ended`)
           if (userInterrupted) emitSessionEnded('killed', null)
           else if (mapperState.sawErrorResult) emitSessionEnded('error', null)
-          else emitSessionEnded('watchdog', null)
+          else {
+            safeEmit({
+              kind: 'error',
+              category: 'other',
+              message:
+                'Session force-ended by the liveness watchdog: no SDK activity within the deadline. If the agent was legitimately busy, this is a bug worth reporting.',
+            })
+            emitSessionEnded('watchdog', null)
+          }
           abortController.abort()
         },
       })
+      // The single source of truth for "should the idle deadline be paused
+      // right now" — a background subagent, a pending permission/question
+      // card, or an in-progress compaction can each legitimately keep the
+      // stream quiet for minutes; their own dedicated watchdogs own those
+      // windows. Every call site that changes one of these three conditions
+      // must re-evaluate through this helper, not duplicate the check.
+      const reevaluateLivenessPause = (): void => {
+        if (activeSubagentTaskIds.size > 0 || pendingResolvers.size > 0 || isCompacting) turnLiveness.pause()
+        else turnLiveness.resume()
+      }
+      // Backstop for a compaction that never reports completion (stuck
+      // `session:compacting` with `active: true` forever): `isCompacting`
+      // pauses `turnLiveness` indefinitely, and a wedged-but-alive generator
+      // never trips `isAlive()`'s own sweep either. Past this ceiling, assume
+      // it wedged and resume the liveness deadline so the existing tool-aware
+      // / short deadline can reap it, mirroring `armSubagentStallWatchdog`.
+      let compactionStallTimer: ReturnType<typeof setTimeout> | undefined
+      const clearCompactionStallTimer = (): void => {
+        if (!compactionStallTimer) return
+        clearTimeout(compactionStallTimer)
+        compactionStallTimer = undefined
+      }
+      const armCompactionStallTimer = (): void => {
+        clearCompactionStallTimer()
+        compactionStallTimer = setTimeout(() => {
+          compactionStallTimer = undefined
+          if (!isCompacting) return
+          console.warn(
+            `[claude-engine] Compaction still reported active ${COMPACTION_STALL_TIMEOUT_MS}ms after it started — resuming the liveness deadline.`,
+          )
+          isCompacting = false
+          reevaluateLivenessPause()
+          if (activeSubagentTaskIds.size > 0 && !subagentStallTimer) {
+            // Resume declined because a subagent is still tracked — but the
+            // subagent stall net is only armed from the `result` branch, which
+            // a fully wedged generator may never reach. Arm it here as a
+            // second stage so this combination can't hang forever. The
+            // `!subagentStallTimer` guard matters: arming re-sets the
+            // deadline, and a net already armed by a prior `result` must not
+            // be extended by this backstop (it is not new activity).
+            armSubagentStallWatchdog()
+          }
+        }, COMPACTION_STALL_TIMEOUT_MS)
+        compactionStallTimer.unref?.()
+      }
       const armResultDrainWatchdog = (): void => {
         if (resultDrainTimer) return
         resultDrainTimer = setTimeout(() => {
@@ -352,7 +422,14 @@ export function createClaudeCodeEngine(): AgentEngine {
           )
           if (userInterrupted) emitSessionEnded('killed', null)
           else if (mapperState.sawErrorResult) emitSessionEnded('error', null)
-          else emitSessionEnded('watchdog', null)
+          else {
+            safeEmit({
+              kind: 'error',
+              category: 'other',
+              message: 'Session force-ended: the SDK generator stayed open after its final result (drain watchdog).',
+            })
+            emitSessionEnded('watchdog', null)
+          }
           abortController.abort()
         }, RESULT_DRAIN_TIMEOUT_MS)
         resultDrainTimer.unref?.()
@@ -416,10 +493,21 @@ export function createClaudeCodeEngine(): AgentEngine {
               else activeSubagentTaskIds.delete(ev.toolCallId)
             }
             for (const ev of events) {
-              if (ev.kind === 'session:compacting') isCompacting = ev.active
+              if (ev.kind === 'session:compacting') {
+                isCompacting = ev.active
+                if (ev.active) armCompactionStallTimer()
+                else clearCompactionStallTimer()
+              }
               // Older SDKs can emit only compact_boundary, without a trailing
               // status update. This boundary marks compaction as complete.
-              else if (ev.kind === 'session:compacted') isCompacting = false
+              else if (ev.kind === 'session:compacted') {
+                isCompacting = false
+                clearCompactionStallTimer()
+              }
+            }
+            for (const ev of events) {
+              if (ev.kind === 'tool:call') pendingToolCallIds.add(ev.toolCallId)
+              else if (ev.kind === 'tool:result') pendingToolCallIds.delete(ev.toolCallId)
             }
             // The stall watchdog is only armed while we're waiting purely on
             // background subagents (no further SDK turn expected unless one
@@ -444,9 +532,14 @@ export function createClaudeCodeEngine(): AgentEngine {
             // A background subagent or a pending permission card can stay
             // legitimately quiet for minutes; their own dedicated watchdogs
             // own those windows, so suspend the turn deadline meanwhile.
-            if (activeSubagentTaskIds.size > 0 || pendingResolvers.size > 0 || isCompacting) turnLiveness.pause()
-            else turnLiveness.resume()
+            // A FOREGROUND tool call in flight keeps the deadline armed but
+            // stretched to the tool-aware ceiling.
+            turnLiveness.setTimeoutMs(
+              pendingToolCallIds.size > 0 ? CLAUDE_TOOL_IDLE_TIMEOUT_MS : CLAUDE_STREAM_IDLE_TIMEOUT_MS,
+            )
+            reevaluateLivenessPause()
             if ((msg as { type?: string }).type === 'result') {
+              pendingToolCallIds.clear()
               completedResponses++
               emitTurnCompletedIfSettled()
               // A queued forced message starts the next response on this same SDK stream.
@@ -498,6 +591,7 @@ export function createClaudeCodeEngine(): AgentEngine {
           clearResultDrainWatchdog()
           turnLiveness.stop()
           clearSubagentStallWatchdog()
+          clearCompactionStallTimer()
           // Drain any callback still pending (SDK terminated while awaiting an
           // answer). canUseTool's abort path covers signalled stops; this
           // covers natural iterator completion.
@@ -575,9 +669,11 @@ export function createClaudeCodeEngine(): AgentEngine {
           const resolver = pendingResolvers.get(toolCallId)
           if (!resolver) return false
           pendingResolvers.delete(toolCallId)
-          // Only resume the deadline once every outstanding card is answered —
-          // a sibling request may still be waiting on a human.
-          if (pendingResolvers.size === 0) turnLiveness.resume()
+          // Re-evaluate rather than unconditionally resuming: a sibling
+          // request, a still-active subagent, or an in-progress compaction
+          // may each still have their own legitimate reason to keep the
+          // deadline paused.
+          reevaluateLivenessPause()
 
           if (response.kind === 'question') {
             // Echo the original questions array + answers so the SDK

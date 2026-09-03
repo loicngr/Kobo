@@ -1176,7 +1176,17 @@ function onSessionEnded(
   // `reason` is authoritative (with the SDK engine `exitCode` is often null,
   // so reason='error'+exitCode=null would otherwise map wrongly to 'completed').
   // `resumeFailed` is benign: stale id cleared, next iteration starts fresh.
-  const isErrorOutcome = !resumeFailed && (reason === 'error' || (exitCode !== null && exitCode !== 0))
+  // 'watchdog' is a forced kill, never a success. For an auto-loop workspace,
+  // handleTransientAutoLoopFailure (called above, before onSessionEnded) runs
+  // synchronously up to its first await and writes status 'quota' as its very
+  // first statement — that write lands before `currentWorkspace` is read above
+  // (line ~1144), so `preserveQuotaBackoff` is already true and this function
+  // returns early at the `if (preserveQuotaBackoff) return true` branch above.
+  // This computation is therefore never reached at all for that path, not
+  // merely short-circuited afterwards — it only runs on session ends that
+  // don't go through the auto-loop transient-failure path.
+  const isErrorOutcome =
+    !resumeFailed && (reason === 'error' || reason === 'watchdog' || (exitCode !== null && exitCode !== 0))
   const targetStatus: WorkspaceStatus = isErrorOutcome ? 'error' : 'completed'
   // Skip the transition when the workspace is already in a terminal state.
   // This happens when stopAgent (or an equivalent caller) synchronously
@@ -2160,6 +2170,11 @@ async function handleQuota(workspaceId: string, _agentSessionId?: string): Promi
   quotaBackoffService.arm(workspaceId, delayMs, { resetsAt: resetsAt ?? null, source, reason: 'quota' })
 }
 
+/** First retry after a transient failure (watchdog recovery, HTTP 500). The
+ *  quota ladder's 15-minute floor is tuned for real quota windows — a forced
+ *  kill or a server blip deserves a much faster first attempt. */
+const TRANSIENT_FIRST_RETRY_MS = 2 * 60_000
+
 /**
  * Use the same persisted retry path for temporary upstream failures (HTTP 500
  * and overloads) while deliberately ignoring quota-reset data: a server error
@@ -2187,8 +2202,9 @@ async function handleTransientAutoLoopFailure(workspaceId: string): Promise<void
     return
   }
   const { delayMs, resetsAt, source } = await computeQuotaBackoffMs(workspaceId, retryCount, false)
+  const effectiveDelayMs = retryCount === 0 ? Math.min(delayMs, TRANSIENT_FIRST_RETRY_MS) : delayMs
   retryCounts.set(workspaceId, retryCount + 1)
-  quotaBackoffService.arm(workspaceId, delayMs, { resetsAt: resetsAt ?? null, source, reason: 'transient' })
+  quotaBackoffService.arm(workspaceId, effectiveDelayMs, { resetsAt: resetsAt ?? null, source, reason: 'transient' })
 }
 
 /** @internal test-only — re-export of `handleQuota` for direct testing. */

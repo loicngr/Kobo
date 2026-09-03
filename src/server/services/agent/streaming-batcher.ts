@@ -30,6 +30,7 @@ export function createStreamingBatcher(
           return
         }
         const timer = setTimeout(() => flush(event.messageId), windowMs)
+        timer.unref?.()
         pending.set(event.messageId, { text: event.text, timer })
         return
       }

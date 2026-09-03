@@ -2043,13 +2043,18 @@ app.delete('/:id/events/:eventId', (c) => {
     const db = getDb()
     // Capture the session BEFORE deleting: since v36 there is no AFTER DELETE
     // trigger, so the metrics of that session must be recomputed once, here.
-    const row = db
-      .prepare('SELECT session_id FROM ws_events WHERE id = ? AND workspace_id = ?')
-      .get(eventId, workspaceId) as { session_id: string | null } | undefined
-    db.prepare('DELETE FROM ws_events WHERE id = ? AND workspace_id = ?').run(eventId, workspaceId)
-    if (row?.session_id) {
-      workspaceService.recomputeSessionMetrics(workspaceId, row.session_id)
-    }
+    // Transactional for the same reason deleteSession is: a crash between the
+    // delete and the recompute must not leave stale metrics behind.
+    const transaction = db.transaction(() => {
+      const row = db
+        .prepare('SELECT session_id FROM ws_events WHERE id = ? AND workspace_id = ?')
+        .get(eventId, workspaceId) as { session_id: string | null } | undefined
+      db.prepare('DELETE FROM ws_events WHERE id = ? AND workspace_id = ?').run(eventId, workspaceId)
+      if (row?.session_id) {
+        workspaceService.recomputeSessionMetrics(workspaceId, row.session_id)
+      }
+    })
+    transaction()
     return c.json({ ok: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'unknown'
@@ -2224,6 +2229,11 @@ app.post('/:id/tasks/:taskId/notify-done', (c) => {
   }
 })
 
+// Cap how many recent rows one search may scan: the LIKE below cannot use an
+// index past the workspace_id prefix, and better-sqlite3 is synchronous — an
+// unbounded scan of a months-old workspace blocks every request and WS emit.
+const HISTORY_SEARCH_SCAN_CAP = 20_000
+
 // GET /api/workspaces/:id/history-search — full-workspace persisted conversation search.
 app.get('/:id/history-search', (c) => {
   try {
@@ -2235,11 +2245,14 @@ app.get('/:id/history-search', (c) => {
     const needle = `%${query.replace(/[%_]/g, '\\$&')}%`
     const rows = getDb()
       .prepare(
-        `SELECT id, session_id, type, payload, created_at FROM ws_events
-         WHERE workspace_id = ? AND payload LIKE ? ESCAPE '\\'
-         ORDER BY rowid DESC LIMIT ?`,
+        `SELECT id, session_id, type, payload, created_at FROM (
+           SELECT rowid AS rid, id, session_id, type, payload, created_at FROM ws_events
+           WHERE workspace_id = ? ORDER BY rowid DESC LIMIT ?
+         )
+         WHERE payload LIKE ? ESCAPE '\\'
+         ORDER BY rid DESC LIMIT ?`,
       )
-      .all(id, needle, limit * 4) as Array<{
+      .all(id, HISTORY_SEARCH_SCAN_CAP, needle, limit * 4) as Array<{
       id: string
       session_id: string | null
       type: string
@@ -3202,6 +3215,12 @@ async function deleteWorkspaceWithSideEffects(
 
   // Delete workspace from DB (cascades to tasks, sessions, events)
   workspaceService.deleteWorkspace(workspace.id)
+
+  // Announce the deletion so any other tab with this workspace open (or a
+  // live terminal attached to it) can react — mirrors workspace:archived's
+  // cross-tab-sync purpose. Ephemeral: a deleted workspace has no future
+  // ws_events history to replay, so persisting this would be pointless.
+  wsService.emitEphemeral(workspace.id, 'workspace:deleted', { workspaceId: workspace.id })
 
   return warnings
 }

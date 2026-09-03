@@ -4,6 +4,8 @@ export interface TurnLiveness {
   pause(): void
   resume(): void
   stop(): void
+  /** Change the idle deadline; re-arms the pending timer with the new duration. */
+  setTimeoutMs(ms: number): void
 }
 
 /**
@@ -19,6 +21,7 @@ export function createTurnLiveness(input: { timeoutMs: number; onTimeout: () => 
   let active = false
   let paused = false
   let timedOut = false
+  let currentTimeoutMs = input.timeoutMs
 
   const arm = (): void => {
     if (!active || paused || timedOut) return
@@ -28,7 +31,8 @@ export function createTurnLiveness(input: { timeoutMs: number; onTimeout: () => 
       if (!active || paused || timedOut) return
       timedOut = true
       input.onTimeout()
-    }, input.timeoutMs)
+    }, currentTimeoutMs)
+    timer.unref?.()
   }
 
   return {
@@ -56,6 +60,13 @@ export function createTurnLiveness(input: { timeoutMs: number; onTimeout: () => 
       paused = false
       if (timer) clearTimeout(timer)
       timer = undefined
+    },
+    setTimeoutMs(ms: number) {
+      if (ms === currentTimeoutMs) return
+      currentTimeoutMs = ms
+      // Re-arm only if a deadline is currently pending; a paused/stopped
+      // liveness picks the new duration up on its next arm().
+      if (timer) arm()
     },
   }
 }

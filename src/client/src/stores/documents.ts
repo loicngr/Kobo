@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { createLatestRequest, isAbortError } from 'src/utils/latest-request'
 import { ref } from 'vue'
 
 export interface DocumentFile {
@@ -26,6 +27,7 @@ export const useDocumentsStore = defineStore('documents', () => {
   const loadingContent = ref(false)
   const selected = ref<DocumentContent | null>(null)
   const requestOpen = ref(0)
+  const latestOpen = createLatestRequest()
 
   function documentsFor(workspaceId: string): DocumentFile[] {
     return documentsByWorkspace.value[workspaceId] ?? []
@@ -47,17 +49,22 @@ export const useDocumentsStore = defineStore('documents', () => {
   }
 
   async function openDocument(workspaceId: string, file: DocumentFile): Promise<void> {
+    const signal = latestOpen.begin()
     loadingContent.value = true
     try {
-      const res = await fetch(`/api/workspaces/${workspaceId}/document?path=${encodeURIComponent(file.path)}`)
+      const res = await fetch(`/api/workspaces/${workspaceId}/document?path=${encodeURIComponent(file.path)}`, {
+        signal,
+      })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const body = (await res.json()) as { content: string; path: string }
+      if (!latestOpen.isCurrent(signal)) return
       selected.value = { path: body.path, name: file.name, content: body.content }
     } catch (err) {
+      if (isAbortError(err)) return
       console.error('[documents-store] openDocument failed:', err)
       throw err
     } finally {
-      loadingContent.value = false
+      if (latestOpen.isCurrent(signal)) loadingContent.value = false
     }
   }
 
@@ -86,6 +93,10 @@ export const useDocumentsStore = defineStore('documents', () => {
   function clearForWorkspace(workspaceId: string): void {
     delete documentsByWorkspace.value[workspaceId]
     selected.value = null
+    // Abort any in-flight openDocument so a slow response from this
+    // workspace can't land later and overwrite `selected` after the user
+    // has already switched away.
+    latestOpen.abort()
   }
 
   return {

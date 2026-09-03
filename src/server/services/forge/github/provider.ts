@@ -1,6 +1,7 @@
 // src/server/services/forge/github/provider.ts
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { parseCliJson } from '../parse-cli-json.js'
 import type {
   CreatePrOptions,
   ForgeAvailability,
@@ -208,7 +209,7 @@ export const githubProvider: ForgeProvider = {
       const { stdout } = await execFileAsync('gh', ['pr', 'view', branch, '--json', GH_PR_FIELDS], cliOptions(repoPath))
       const raw = stdout.trim()
       if (!raw) return null
-      return mapGhPrToSnapshot(JSON.parse(raw) as RawGhPr)
+      return mapGhPrToSnapshot(parseCliJson<RawGhPr>(raw, 'gh pr view'))
     } catch {
       return null
     }
@@ -242,7 +243,9 @@ export const githubProvider: ForgeProvider = {
       ['repo', 'view', '--json', 'nameWithOwner'],
       cliOptions(repoPath),
     )
-    const nameWithOwner = String(JSON.parse(repoJson).nameWithOwner ?? '')
+    const nameWithOwner = String(
+      parseCliJson<{ nameWithOwner?: unknown }>(repoJson, 'gh repo view').nameWithOwner ?? '',
+    )
     if (!nameWithOwner) throw new Error('Could not determine the GitHub repository for this path')
 
     const args = [
@@ -258,6 +261,6 @@ export const githubProvider: ForgeProvider = {
     if (opts.cursor) args.push('-f', `after=${opts.cursor}`)
 
     const { stdout } = await execFileAsync('gh', args, cliOptions(repoPath))
-    return mapGithubSearchPage(JSON.parse(stdout))
+    return mapGithubSearchPage(parseCliJson(stdout, 'gh api graphql (list PRs)'))
   },
 }

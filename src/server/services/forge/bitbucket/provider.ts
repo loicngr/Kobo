@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
 import { getGlobalSettings } from '../../settings-service.js'
+import { parseCliJson } from '../parse-cli-json.js'
 import type {
   CreatePrOptions,
   ForgeAvailability,
@@ -262,14 +263,14 @@ async function resolveTarget(repoPath: string): Promise<BitbucketTarget> {
   if (bktEnv().BKT_TOKEN) return { ...target, context: null }
 
   const { stdout: contextOutput } = await execFileAsync('bkt', ['context', 'list', '--json'], bktOptions(repoPath))
-  const contexts = record(JSON.parse(contextOutput)).contexts
+  const contexts = record(parseCliJson(contextOutput, 'bkt context list')).contexts
   const existing = (Array.isArray(contexts) ? contexts : [])
     .map(record)
     .find((context) => string(context.workspace) === target.workspace && string(context.default_repo) === target.repo)
   if (existing && string(existing.name)) return { ...target, context: string(existing.name) }
 
   const { stdout: authOutput } = await execFileAsync('bkt', ['auth', 'status', '--json'], bktOptions(repoPath))
-  const hosts = record(JSON.parse(authOutput)).hosts
+  const hosts = record(parseCliJson(authOutput, 'bkt auth status')).hosts
   const host = (Array.isArray(hosts) ? hosts : []).map(record).find((item) => string(item.kind) === 'cloud')
   const hostKey = string(host?.key)
   if (!hostKey) throw new Error('No authenticated Bitbucket Cloud host found; run bkt auth login first')
@@ -294,7 +295,7 @@ async function fetchCi(repoPath: string, number: number, target: BitbucketTarget
       bktArgs(target, ['pr', 'checks', String(number), ...targetArgs(target), '--json']),
       bktOptions(repoPath),
     )
-    const statuses = record(JSON.parse(stdout)).statuses
+    const statuses = record(parseCliJson(stdout, 'bkt pr checks')).statuses
     const checks = (Array.isArray(statuses) ? statuses : []).map(mapCheck)
     const rollup: PrSnapshot['ci']['rollup'] =
       checks.length === 0
@@ -327,7 +328,7 @@ export const bitbucketProvider: ForgeProvider = {
   async isAvailable(repoPath: string): Promise<ForgeAvailability> {
     try {
       const { stdout } = await execFileAsync('bkt', ['auth', 'status', '--json'], bktOptions(repoPath))
-      const status = record(JSON.parse(stdout))
+      const status = record(parseCliJson(stdout, 'bkt auth status'))
       const hosts = status.hosts
       if ((Array.isArray(hosts) && hosts.length > 0) || bktEnv().BKT_TOKEN) return { available: true }
       return { available: false, reason: 'not_authenticated' }
@@ -348,7 +349,7 @@ export const bitbucketProvider: ForgeProvider = {
           bktArgs(target, ['pr', 'list', '--state', state, '--limit', '50', ...targetArgs(target), '--json']),
           bktOptions(repoPath),
         )
-        const pullRequests = record(JSON.parse(listOutput)).pull_requests
+        const pullRequests = record(parseCliJson(listOutput, 'bkt pr list')).pull_requests
         match = (Array.isArray(pullRequests) ? pullRequests : [])
           .map(record)
           .find((pullRequest) => branch(pullRequest, 'source', 'fromRef') === branchName)
@@ -360,7 +361,7 @@ export const bitbucketProvider: ForgeProvider = {
         bktArgs(target, ['pr', 'view', String(number(match.id)), ...targetArgs(target), '--json']),
         bktOptions(repoPath),
       )
-      const raw = record(record(JSON.parse(viewOutput)).pull_request)
+      const raw = record(record(parseCliJson(viewOutput, 'bkt pr view')).pull_request)
       if (!number(raw.id)) return null
       const ci = await fetchCi(repoPath, number(raw.id), target)
       return mapBktPr(raw, ci)
@@ -389,7 +390,7 @@ export const bitbucketProvider: ForgeProvider = {
       ]),
       bktOptions(repoPath),
     )
-    const raw = record(JSON.parse(stdout))
+    const raw = record(parseCliJson(stdout, 'bkt pr create'))
     const prNumber = number(raw.id)
     const prUrl = string(raw.url)
     if (!prNumber || !prUrl) throw new Error('Could not parse PR URL from bkt output')
@@ -418,7 +419,7 @@ export const bitbucketProvider: ForgeProvider = {
     const args = ['pr', 'list', '--limit', String(opts.perPage), ...targetArgs(target), '--json']
     if (opts.cursor) args.push('--page', opts.cursor)
     const { stdout } = await execFileAsync('bkt', bktArgs(target, args), bktOptions(repoPath))
-    const page = mapBitbucketPage(JSON.parse(stdout || '{}'))
+    const page = mapBitbucketPage(parseCliJson(stdout || '{}', 'bkt pr list'))
     if (opts.filter === 'all' && !opts.search?.trim()) return page
     const currentUser = getGlobalSettings().bitbucketUsername || undefined
     return { ...page, items: filterBitbucketItems(page.items, opts, currentUser) }

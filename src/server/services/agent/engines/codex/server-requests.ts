@@ -2,7 +2,7 @@ import type { AgentEvent } from '../types.js'
 
 export interface PendingApproval {
   requestId: number | string
-  kind: 'command' | 'file_change' | 'user_input' | 'permissions'
+  kind: 'command' | 'file_change' | 'user_input'
   payload: unknown
 }
 
@@ -95,14 +95,11 @@ export function handleServerRequest(args: HandleServerRequestArgs): boolean {
   }
 
   if (method === 'item/permissions/requestApproval') {
-    register(callId, { requestId, kind: 'permissions', payload: p })
-    emit({
-      kind: 'session:user-input-requested',
-      requestKind: 'permission',
-      toolCallId: callId,
-      toolName: 'Permissions',
-      payload: p,
-    })
+    // Kōbō doesn't model granular permission grants: the only answer we can
+    // send is the empty grant (Codex then falls back to the turn policy), so
+    // an Allow/Deny card would be a lie — "Allow" and "Deny" produced the
+    // same decline. Answer immediately and keep the session moving.
+    respond?.(requestId, { permissions: {}, scope: 'turn' })
     return true
   }
 
@@ -123,23 +120,11 @@ export type ResolveResponse =
  * (and the matching `FileChangeApprovalDecision`): `'accept' | 'acceptForSession' | 'decline' | 'cancel'`.
  * NOT `'approve' / 'reject'` — those would be silently rejected as unknown
  * variants, which breaks the strict and interactive permission modes.
- *
- * `PermissionsRequestApprovalResponse` has a completely different shape:
- * `{ permissions, scope, strictAutoReview? }` — no `decision` field. Since
- * Kōbō doesn't yet model permission grants, we deny the request by sending
- * an empty permissions response. A future iteration could add a UI for
- * granular permission grants.
  */
 export function buildResponseForResolve(pending: PendingApproval, response: ResolveResponse): unknown {
   if (pending.kind === 'command' || pending.kind === 'file_change') {
     if (response.kind === 'permission-allow') return { decision: 'accept' }
     return { decision: 'decline' }
-  }
-  if (pending.kind === 'permissions') {
-    // Codex's PermissionsRequestApprovalResponse shape — not { decision }.
-    // We don't yet model granular permission grants, so deny by returning an
-    // empty permissions object; Codex falls back to the existing turn policy.
-    return { permissions: {}, scope: 'turn' }
   }
   if (pending.kind === 'user_input') {
     if (response.kind === 'question') {

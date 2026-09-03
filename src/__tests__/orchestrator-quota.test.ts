@@ -269,7 +269,7 @@ describe('handleQuota → quotaBackoffService.arm', () => {
     expect(meta.source).toBe('fallback_ladder')
   })
 
-  it('retries a transient server failure on the fallback ladder, not a quota reset', async () => {
+  it('retries a FIRST transient server failure after 2 minutes, not the 15-minute quota ladder floor', async () => {
     const orch = await import('../server/services/agent/orchestrator.js')
     const quotaBackoffService = await import('../server/services/quota-backoff-service.js')
 
@@ -278,7 +278,7 @@ describe('handleQuota → quotaBackoffService.arm', () => {
     })
     await orch._handleTransientAutoLoopFailure('w-transient')
 
-    expect(vi.mocked(quotaBackoffService.arm)).toHaveBeenCalledWith('w-transient', 15 * 60_000, {
+    expect(vi.mocked(quotaBackoffService.arm)).toHaveBeenCalledWith('w-transient', 2 * 60_000, {
       resetsAt: null,
       source: 'fallback_ladder',
       reason: 'transient',

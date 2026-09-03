@@ -113,7 +113,7 @@ function koboDescription(slug: string): string {
 
   &:hover,
   &--active {
-    background-color: rgba(102, 95, 221, 0.15);
+    background-color: rgba(var(--kobo-accent-rgb), 0.15);
   }
 }
 </style>

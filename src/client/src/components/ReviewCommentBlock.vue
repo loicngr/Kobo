@@ -170,13 +170,13 @@ function confirmAdd() {
 <style scoped>
 .review-comment-block {
   background: rgba(40, 40, 60, 0.7);
-  border: 1px solid rgba(99, 102, 241, 0.4);
+  border: 1px solid rgba(var(--kobo-accent-rgb), 0.4);
   border-radius: 6px;
   padding: 8px 10px;
   font-size: 12px;
 }
 .comment-thread-item.with-separator {
-  border-top: 1px solid rgba(99, 102, 241, 0.2);
+  border-top: 1px solid rgba(var(--kobo-accent-rgb), 0.2);
   margin-top: 6px;
   padding-top: 6px;
 }

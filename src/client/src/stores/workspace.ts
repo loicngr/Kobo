@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { disposeTerminalEntry } from 'src/services/terminal-registry'
 import { apiFetch } from 'src/utils/api'
 import type { ProviderId, UsageSnapshot } from '../types/usage'
 import { hasPrAttention } from '../utils/pr-status'
@@ -951,6 +952,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         // after the backend row is gone.
         this.archivedWorkspaces = this.archivedWorkspaces.filter((w) => w.id !== id)
         this.clearWorkspaceLocalState(id)
+        disposeTerminalEntry(id)
         if (this.selectedWorkspaceId === id) {
           this.selectedWorkspaceId = null
           this.tasks = []
@@ -991,6 +993,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         this.archivedWorkspaces = []
         for (const id of ids) {
           this.clearWorkspaceLocalState(id)
+          disposeTerminalEntry(id)
           if (this.selectedWorkspaceId === id) {
             this.selectedWorkspaceId = null
             this.tasks = []

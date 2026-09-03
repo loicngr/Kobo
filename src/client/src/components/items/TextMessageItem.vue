@@ -8,12 +8,14 @@
 
 <script setup lang="ts">
 import { marked } from 'marked'
+import { useQuasar } from 'quasar'
 import type { ConversationItem } from 'src/services/agent-event-view'
 import { useDocumentsStore } from 'src/stores/documents'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { injectDocumentLinks } from 'src/utils/inject-document-links'
 import { escapeStreamingText, renderChatMarkdownCached, sanitizeChatHtml } from 'src/utils/render-chat-markdown'
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{
   item: Extract<ConversationItem, { type: 'text' }>
@@ -21,6 +23,8 @@ const props = defineProps<{
 
 const documentsStore = useDocumentsStore()
 const workspaceStore = useWorkspaceStore()
+const $q = useQuasar()
+const { t } = useI18n()
 
 const knownDocumentPaths = computed(() => {
   const wsId = workspaceStore.selectedWorkspaceId
@@ -55,7 +59,10 @@ function onMessageClick(event: MouseEvent) {
   const path = target.getAttribute('data-document-path')
   const wsId = workspaceStore.selectedWorkspaceId
   if (!path || !wsId) return
-  void documentsStore.openDocumentByPath(wsId, path)
+  documentsStore.openDocumentByPath(wsId, path).catch((err: unknown) => {
+    console.error('[TextMessageItem] openDocumentByPath failed:', err)
+    $q.notify({ type: 'negative', message: t('documents.loadFailed'), position: 'top' })
+  })
 }
 </script>
 

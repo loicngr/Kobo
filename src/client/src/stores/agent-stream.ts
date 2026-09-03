@@ -210,10 +210,13 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
       eventIds?: Array<string | null>
     },
   ): void {
-    events.value.set(workspaceId, [...list])
-    timestamps.value.set(workspaceId, tsList ? [...tsList] : list.map(() => new Date().toISOString()))
-    sessionIds.value.set(workspaceId, meta?.sessionIds ? [...meta.sessionIds] : list.map(() => null))
+    const resetList = [...list]
+    const resetTsList = tsList ? [...tsList] : list.map(() => new Date().toISOString())
+    const resetSList = meta?.sessionIds ? [...meta.sessionIds] : list.map(() => null)
     const resetIds = meta?.eventIds ? [...meta.eventIds] : list.map(() => null)
+    events.value.set(workspaceId, resetList)
+    timestamps.value.set(workspaceId, resetTsList)
+    sessionIds.value.set(workspaceId, resetSList)
     eventIds.value.set(workspaceId, resetIds)
     // Rebuild the index from scratch: a reset replaces the whole window, so a
     // stale id left behind would silently block a legitimate new event.
@@ -224,6 +227,11 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
     else oldestIds.value.delete(workspaceId)
     if (meta && typeof meta.hasMoreOlder === 'boolean') hasMoreOlder.value.set(workspaceId, meta.hasMoreOlder)
     else hasMoreOlder.value.delete(workspaceId)
+    // Same invariant as append()/merge(): the live window never exceeds the
+    // cap, even if the server's snapshot window grows some day. Runs AFTER
+    // the oldestIds/hasMoreOlder assignment above so its own adjustment (when
+    // it actually trims something) is the one that sticks.
+    trimOldestLiveEvents(workspaceId, resetList, resetTsList, resetSList, resetIds)
     touch(workspaceId)
   }
 

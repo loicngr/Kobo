@@ -123,7 +123,7 @@ function snippet(content: string): string {
   align-items: center;
 }
 .draft-line:hover {
-  background: rgba(99, 102, 241, 0.1);
+  background: rgba(var(--kobo-accent-rgb), 0.1);
 }
 .global-message-box {
   flex-shrink: 0;

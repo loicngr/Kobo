@@ -9,9 +9,11 @@ import type { AgentEvent } from '../../server/services/agent/engines/types.js'
 function makeArgs(method: string, params: unknown, requestId: number | string = 1) {
   const emitted: AgentEvent[] = []
   const registered: Array<{ callId: string; pending: PendingApproval }> = []
+  const responses: Array<{ id: number | string; result: unknown }> = []
   const emit = vi.fn((ev: AgentEvent) => emitted.push(ev))
   const register = vi.fn((callId: string, pending: PendingApproval) => registered.push({ callId, pending }))
-  return { emit, register, emitted, registered, requestId, method, params }
+  const respond = vi.fn((id: number | string, result: unknown) => responses.push({ id, result }))
+  return { emit, register, respond, emitted, registered, responses, requestId, method, params }
 }
 
 // ── 1. item/commandExecution/requestApproval ──────────────────────────────────
@@ -101,19 +103,16 @@ describe('handleServerRequest — item/tool/requestUserInput', () => {
 // ── 4. item/permissions/requestApproval ───────────────────────────────────────
 
 describe('handleServerRequest — item/permissions/requestApproval', () => {
-  it('emits session:user-input-requested with toolName=Permissions, kind=permissions', () => {
-    const { emit, register, emitted, registered, method, params, requestId } = makeArgs(
+  it('responds immediately with the empty grant and surfaces no approval card', () => {
+    const { emit, register, respond, emitted, registered, responses, method, params, requestId } = makeArgs(
       'item/permissions/requestApproval',
       { scope: 'filesystem', paths: ['/tmp'] },
     )
-    const result = handleServerRequest({ requestId, method, params, emit, register })
+    const result = handleServerRequest({ requestId, method, params, emit, register, respond })
     expect(result).toBe(true)
-    expect(emitted[0]).toMatchObject({
-      kind: 'session:user-input-requested',
-      requestKind: 'permission',
-      toolName: 'Permissions',
-    })
-    expect(registered[0].pending.kind).toBe('permissions')
+    expect(registered).toHaveLength(0)
+    expect(emitted).toHaveLength(0)
+    expect(responses).toContainEqual({ id: requestId, result: { permissions: {}, scope: 'turn' } })
   })
 })
 
@@ -176,15 +175,5 @@ describe('buildResponseForResolve — file_change + permission-allow', () => {
     const pending: PendingApproval = { requestId: 3, kind: 'file_change', payload: {} }
     const result = buildResponseForResolve(pending, { kind: 'permission-allow' })
     expect(result).toEqual({ decision: 'accept' })
-  })
-})
-
-// ── 11. buildResponseForResolve — permissions has a different response shape ─
-
-describe('buildResponseForResolve — permissions', () => {
-  it('returns { permissions: {}, scope: "turn" } (PermissionsRequestApprovalResponse shape, no decision field)', () => {
-    const pending: PendingApproval = { requestId: 4, kind: 'permissions', payload: {} }
-    const result = buildResponseForResolve(pending, { kind: 'permission-allow' })
-    expect(result).toEqual({ permissions: {}, scope: 'turn' })
   })
 })

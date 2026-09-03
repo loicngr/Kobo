@@ -88,6 +88,14 @@
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal } from '@xterm/xterm'
 import '@xterm/xterm/css/xterm.css'
+import type { TerminalEntry } from 'src/services/terminal-registry'
+import {
+  bumpTerminalState,
+  clearReconnectTimer,
+  disposeTerminalEntry,
+  terminalMap,
+  terminalStateVersion,
+} from 'src/services/terminal-registry'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { appendTokenToWsUrl, getToken } from 'src/utils/auth-token'
 import {
@@ -101,32 +109,9 @@ import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
 const store = useWorkspaceStore()
 
-interface TerminalEntry {
-  terminal: Terminal
-  fitAddon: FitAddon
-  ws: WebSocket | null
-  exited: boolean
-  exitCode: number | null
-  error: string | null
-  container: HTMLDivElement // persistent DOM container for this terminal
-  opened: boolean // whether terminal.open() has been called
-  onDataDisposable?: { dispose: () => void }
-  /** Connection lost while the shell is still alive — distinct from `exited`. */
-  disconnected: boolean
-  /** 1-based count of consecutive reconnection attempts. 0 when connected. */
-  reconnectAttempt: number
-  reconnectTimer?: ReturnType<typeof setTimeout>
-}
-
-// Singleton map — survives component remount
-const terminalMap = new Map<string, TerminalEntry>()
-
 const containerRef = ref<HTMLElement | null>(null)
 let currentAttachedId: string | null = null
 let resizeObserver: ResizeObserver | null = null
-
-// Force reactivity for terminal state changes
-const terminalStateVersion = ref(0)
 
 const workspace = computed(() => store.selectedWorkspace)
 const workspaceId = computed(() => store.selectedWorkspaceId)
@@ -153,10 +138,6 @@ const reconnectAttempt = computed(() => currentEntry.value?.reconnectAttempt ?? 
 const reconnectMax = TERMINAL_RECONNECT_MAX_ATTEMPTS
 const terminalError = computed(() => currentEntry.value?.error ?? null)
 
-function bumpState() {
-  terminalStateVersion.value++
-}
-
 function connectWs(wid: string, entry: TerminalEntry) {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
   const ws = new WebSocket(appendTokenToWsUrl(`${protocol}//${window.location.host}/ws/terminal/${wid}`, getToken()))
@@ -182,7 +163,7 @@ function connectWs(wid: string, entry: TerminalEntry) {
         entry.error = null
         entry.disconnected = false
         entry.reconnectAttempt = 0
-        bumpState()
+        bumpTerminalState()
         try {
           entry.fitAddon.fit()
         } catch {
@@ -194,11 +175,11 @@ function connectWs(wid: string, entry: TerminalEntry) {
         }
       } else if (msg.type === 'error') {
         entry.error = msg.message ?? 'Unknown error'
-        bumpState()
+        bumpTerminalState()
       } else if (msg.type === 'exited') {
         entry.exited = true
         entry.exitCode = msg.code ?? null
-        bumpState()
+        bumpTerminalState()
       }
     }
   }
@@ -210,7 +191,7 @@ function connectWs(wid: string, entry: TerminalEntry) {
 
   ws.onerror = () => {
     entry.error = t('terminal.error')
-    bumpState()
+    bumpTerminalState()
   }
 
   // Dispose any listener from a previous connectWs() call on this same
@@ -225,19 +206,6 @@ function connectWs(wid: string, entry: TerminalEntry) {
   })
 }
 
-// Shared cleanup gesture — reused at every site that must not leave a stale
-// reconnect timer armed: closing the terminal, reopening it, the manual
-// "Reconnect" button, and refocusing a workspace tab. Repeating the inline
-// `if (entry.reconnectTimer) clearTimeout(...)` at four call sites is exactly
-// how one of them gets missed; centralizing it here means there's only one
-// place to get right.
-function clearReconnectTimer(entry: TerminalEntry) {
-  if (entry.reconnectTimer) {
-    clearTimeout(entry.reconnectTimer)
-    entry.reconnectTimer = undefined
-  }
-}
-
 // Declared with `function` (hoisted) — connectWs's onclose calls this, and
 // this calls back into connectWs on the retry timer, so neither can be a
 // `const` without breaking the mutual reference.
@@ -250,7 +218,7 @@ function scheduleReconnect(wid: string, target: TerminalEntry) {
   if (delay === null) return // give up; the user gets a manual Reconnect button
   target.reconnectAttempt = attempt
   target.disconnected = true
-  bumpState()
+  bumpTerminalState()
   // Light jitter (same 0.8-1.2x spread as the main WS store's
   // `_scheduleReconnect`), applied here rather than inside
   // `terminalReconnectDelayMs` so that function stays a deterministic,
@@ -305,7 +273,7 @@ function openTerminal() {
   }
 
   terminalMap.set(wid, entry)
-  bumpState()
+  bumpTerminalState()
   attachTerminal(wid, entry)
   connectWs(wid, entry)
 }
@@ -314,46 +282,21 @@ function closeTerminal() {
   const wid = workspaceId.value
   if (!wid) return
 
-  const entry = terminalMap.get(wid)
-  if (!entry) return
-
   // Detach from DOM only if this terminal is currently displayed
   if (currentAttachedId === wid) {
     detachTerminal()
   }
 
-  // Clear any pending reconnect timer AND stop this close from scheduling a
-  // new one — the classic leak this kind of fix introduces if skipped:
-  // ws.close() fires `onclose` asynchronously, and by then the entry is gone
-  // from terminalMap but scheduleReconnect doesn't consult the map, so it
-  // would happily reconnect a terminal the user just closed.
-  clearReconnectTimer(entry)
-  if (entry.ws) {
-    entry.ws.onclose = null
-    if (entry.ws.readyState === WebSocket.OPEN) entry.ws.close()
-  }
-  entry.onDataDisposable?.dispose()
-  entry.terminal.dispose()
-  terminalMap.delete(wid)
-  bumpState()
+  disposeTerminalEntry(wid)
 }
 
 function reopenTerminal() {
   const wid = workspaceId.value
   if (!wid) return
 
-  const old = terminalMap.get(wid)
-  if (old) {
-    clearReconnectTimer(old)
-    if (old.ws) {
-      old.ws.onclose = null
-      if (old.ws.readyState === WebSocket.OPEN) old.ws.close()
-    }
-    old.terminal.dispose()
-    terminalMap.delete(wid)
-  }
+  disposeTerminalEntry(wid)
   currentAttachedId = null
-  bumpState()
+  bumpTerminalState()
   nextTick(() => openTerminal())
 }
 
@@ -414,7 +357,7 @@ watch(workspaceId, (newId, oldId) => {
       })
     }
   }
-  bumpState()
+  bumpTerminalState()
 })
 
 onMounted(() => {

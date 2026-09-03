@@ -7,9 +7,11 @@
     </div>
 
     <div v-if="store.currentAgentTodos.length > 0" class="todos-list">
+      <!-- id/taskNumber are stable across reorders (Task-tool origin); content is the
+           best fallback for legacy TodoWrite snapshots that lack them; idx is the last resort -->
       <div
         v-for="(todo, idx) in store.currentAgentTodos"
-        :key="idx"
+        :key="todo.id ?? todo.taskNumber ?? todo.content ?? idx"
         class="todo-item row items-start q-py-xxs"
       >
         <q-icon

@@ -3028,6 +3028,7 @@ describe('DELETE /api/workspaces/:id', () => {
     expect(gitOps.deleteLocalBranch).toHaveBeenCalledWith('/tmp/project', 'feature/test')
     expect(gitOps.deleteRemoteBranch).toHaveBeenCalledWith('/tmp/project', 'feature/test')
     expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-1')
+    expect(wsService.emitEphemeral).toHaveBeenCalledWith('ws-1', 'workspace:deleted', { workspaceId: 'ws-1' })
   })
 
   it('waits for the agent to actually stop before removing the worktree', async () => {

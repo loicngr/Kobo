@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { Notify } from 'quasar'
 import i18n from 'src/i18n'
+import { disposeTerminalEntry } from 'src/services/terminal-registry'
 import { useAgentStreamStore } from 'src/stores/agent-stream'
 import { type GlobalSettings, useSettingsStore } from 'src/stores/settings'
 import type { AgentEvent } from 'src/types/agent-event'
@@ -473,6 +474,13 @@ export const useWebSocketStore = defineStore('websocket', {
     reconnectAttempt: 0,
     lastEventId: null as string | null,
     _replaying: false,
+    // Set while a truncated-sync-response drain loop is catching up the
+    // backlog (see the `sync:response` handler below). Used to self-heal a
+    // narrow race: a subscribe() call mid-drain resets a workspace to a
+    // fresh snapshot, but a later drain-round response can still carry
+    // older events for that workspace and merge() them in afterward.
+    _drainInProgress: false,
+    _workspacesToRefreshAfterDrain: new Set<string>(),
   }),
 
   actions: {
@@ -563,6 +571,13 @@ export const useWebSocketStore = defineStore('websocket', {
     },
 
     subscribe(workspaceId: string) {
+      // A global drain is in progress: a later drain-round response could
+      // still carry stale events for this workspace and merge() them in
+      // after the fresh reset below. Track it for one final targeted
+      // re-sync once the drain settles (see `sync:response` handling).
+      if (this._drainInProgress) {
+        this._workspacesToRefreshAfterDrain.add(workspaceId)
+      }
       this._send({
         type: 'subscribe',
         payload: { workspaceId },
@@ -942,10 +957,43 @@ export const useWebSocketStore = defineStore('websocket', {
                 }
               }
             }
+            const previousCursor = this.lastEventId
             const newestReplayable = events.findLast(
               (event) => event.replayable !== false && typeof event.id === 'string',
             )
             if (newestReplayable) this.lastEventId = newestReplayable.id
+            // The server hard-caps one replay message (MAX_REPLAY_EVENTS) and
+            // sets `truncated` when the backlog continues past it. Ask again
+            // from the advanced cursor until the backlog is fully drained.
+            // Guard on actual cursor PROGRESS (not just a non-empty frame) so
+            // a malformed or repeating truncated response can't loop forever.
+            if (payload.truncated === true && newestReplayable && this.lastEventId !== previousCursor) {
+              this._drainInProgress = true
+              this._send({
+                type: 'sync:request',
+                payload: {
+                  lastEventId: this.lastEventId,
+                  workspaceIds: workspaceStore.workspaces.map((w) => w.id),
+                },
+              })
+            } else if (this._drainInProgress) {
+              // This response was not truncated: the drain just completed.
+              // A workspace that got a manual subscribe()-triggered reset
+              // mid-drain might have had an older drain-round response merge
+              // stale content on top of it afterward; one final targeted
+              // re-sync for exactly those workspaces makes the client state
+              // provably consistent once the drain settles, at negligible
+              // cost.
+              this._drainInProgress = false
+              if (this._workspacesToRefreshAfterDrain.size > 0) {
+                const toRefresh = [...this._workspacesToRefreshAfterDrain]
+                this._workspacesToRefreshAfterDrain.clear()
+                this._send({
+                  type: 'sync:request',
+                  payload: { lastEventId: this.lastEventId, workspaceIds: toRefresh },
+                })
+              }
+            }
           } finally {
             this._replaying = false
             _setReplayingForDispatch(false)
@@ -1170,10 +1218,28 @@ export const useWebSocketStore = defineStore('websocket', {
         case 'workspace:unarchived':
         case 'workspace:worktree-restored':
         case 'workspace:worktree-purged': {
+          if ((msg.type === 'workspace:archived' || msg.type === 'workspace:worktree-purged') && wid) {
+            disposeTerminalEntry(wid)
+          }
           // WorkspacePage redirects home when its selectedWorkspaceId goes null,
           // so this drops the user off the page when their workspace gets archived
           // from any source (manual, auto-archive on PR merge, another tab).
           if (msg.type === 'workspace:archived' && wid && workspaceStore.selectedWorkspaceId === wid) {
+            workspaceStore.selectedWorkspaceId = null
+          }
+          workspaceStore.fetchWorkspaces()
+          if (workspaceStore.archivedLoaded) {
+            workspaceStore.fetchArchivedWorkspaces()
+          }
+          break
+        }
+
+        case 'workspace:deleted': {
+          // Deletion is permanent — unlike archive/worktree-purge (both
+          // reversible), so this is its own case rather than being folded
+          // into the shared archived/purged block above.
+          if (wid) disposeTerminalEntry(wid)
+          if (wid && workspaceStore.selectedWorkspaceId === wid) {
             workspaceStore.selectedWorkspaceId = null
           }
           workspaceStore.fetchWorkspaces()

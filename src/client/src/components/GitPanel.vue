@@ -13,6 +13,7 @@
         icon="refresh"
         color="kobo-3"
         :loading="loadingStats"
+        :aria-label="$t('tooltip.refreshGitStats')"
         @click="handleRefreshAll"
       >
         <q-tooltip>{{ $t('tooltip.refreshGitStats') }}</q-tooltip>
@@ -179,6 +180,7 @@
                 icon="difference"
                 color="kobo-3"
                 class="commit-diff-btn q-ml-xs"
+                :aria-label="$t('git.commits.diffThisCommit')"
                 @click.stop="openCommitDiff(`${commit.sha}^`, commit.sha)"
               >
                 <q-tooltip anchor="top middle" self="bottom middle">{{ $t('git.commits.diffThisCommit') }}</q-tooltip>
@@ -356,6 +358,8 @@
               dense flat size="sm" color="kobo-2"
               icon="more_horiz"
               class="git-btn"
+              :aria-label="$t('workspacePage.moreActions')"
+              aria-haspopup="true"
             >
               <q-menu>
                 <q-list dark dense style="min-width: 160px;">
@@ -405,7 +409,7 @@
                   </q-item>
                 </q-list>
               </q-menu>
-              <q-tooltip>{{ $t('git.actions.more') }}</q-tooltip>
+              <q-tooltip>{{ $t('workspacePage.moreActions') }}</q-tooltip>
             </q-btn>
           </div>
         </div>

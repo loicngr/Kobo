@@ -49,14 +49,14 @@ describe('saveWorkspaceFile', () => {
   })
 
   it('throws on a path that escapes the worktree via `..`', () => {
-    expect(() => saveWorkspaceFile(worktree, '../../etc/passwd', 'x', shaOf(''))).toThrow(/escapes the worktree/i)
+    expect(() => saveWorkspaceFile(worktree, '../../etc/passwd', 'x', shaOf(''))).toThrow(/escapes allowed root/i)
   })
 
   it('throws on a sibling directory whose name shares the worktree prefix', () => {
     // `/tmp/wt` must NOT treat `/tmp/wt-evil` as inside it — this is exactly
     // what the `+ path.sep` boundary in the lexical containment check guards.
     const escapePath = `../${basename(worktree)}-evil/pwned.txt`
-    expect(() => saveWorkspaceFile(worktree, escapePath, 'x', shaOf(''))).toThrow(/escapes the worktree/i)
+    expect(() => saveWorkspaceFile(worktree, escapePath, 'x', shaOf(''))).toThrow(/escapes allowed root/i)
   })
 
   it('throws on a symlink that points outside the worktree', () => {
@@ -64,7 +64,7 @@ describe('saveWorkspaceFile', () => {
     try {
       writeFileSync(join(outside, 'target.txt'), 'sensitive')
       symlinkSync(join(outside, 'target.txt'), join(worktree, 'escape.txt'))
-      expect(() => saveWorkspaceFile(worktree, 'escape.txt', 'x', shaOf('sensitive'))).toThrow(/escapes the worktree/i)
+      expect(() => saveWorkspaceFile(worktree, 'escape.txt', 'x', shaOf('sensitive'))).toThrow(/escapes allowed root/i)
       expect(readFileSync(join(outside, 'target.txt'), 'utf-8')).toBe('sensitive')
     } finally {
       rmSync(outside, { recursive: true, force: true })
@@ -88,7 +88,7 @@ describe('saveWorkspaceFile', () => {
     const outside = mkdtempSync(join(tmpdir(), 'kobo-outside-'))
     try {
       symlinkSync(outside, join(worktree, 'symdir'))
-      expect(() => saveWorkspaceFile(worktree, 'symdir/pwned.txt', 'x', shaOf(''))).toThrow(/escapes the worktree/i)
+      expect(() => saveWorkspaceFile(worktree, 'symdir/pwned.txt', 'x', shaOf(''))).toThrow(/escapes allowed root/i)
       expect(existsSync(join(outside, 'pwned.txt'))).toBe(false)
     } finally {
       rmSync(outside, { recursive: true, force: true })
@@ -96,6 +96,6 @@ describe('saveWorkspaceFile', () => {
   })
 
   it('rejects an absolute path that escapes the worktree', () => {
-    expect(() => saveWorkspaceFile(worktree, '/etc/passwd', 'x', shaOf(''))).toThrow(/escapes the worktree/i)
+    expect(() => saveWorkspaceFile(worktree, '/etc/passwd', 'x', shaOf(''))).toThrow(/escapes allowed root/i)
   })
 })

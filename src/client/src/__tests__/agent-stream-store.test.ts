@@ -120,4 +120,15 @@ describe('agent-stream store', () => {
     store.append('w1', { kind: 'message:end', messageId: 'm-1' }, undefined, 'evt-1')
     expect(store.eventIdsFor('w1')).toEqual(['evt-1'])
   })
+
+  it('reset() enforces the live-events cap like append/merge do', async () => {
+    const { MAX_LIVE_EVENTS_PER_WORKSPACE, useAgentStreamStore } = await import('../stores/agent-stream.js')
+    const store = useAgentStreamStore()
+    const oversized = Array.from({ length: MAX_LIVE_EVENTS_PER_WORKSPACE + 10 }, (_, i) => ({
+      kind: 'message:end' as const,
+      messageId: `m${i}`,
+    }))
+    store.reset('w1', oversized)
+    expect(store.eventsFor('w1').length).toBeLessThanOrEqual(MAX_LIVE_EVENTS_PER_WORKSPACE)
+  })
 })

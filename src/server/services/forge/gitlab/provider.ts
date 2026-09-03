@@ -1,6 +1,7 @@
 // src/server/services/forge/gitlab/provider.ts
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { parseCliJson } from '../parse-cli-json.js'
 import type {
   CreatePrOptions,
   ForgeAvailability,
@@ -144,7 +145,7 @@ async function fetchGlabCi(repoPath: string, branch: string): Promise<PrSnapshot
     const { stdout } = await execFileAsync('glab', ['ci', 'get', '-b', branch, '-F', 'json'], cliOptions(repoPath))
     const raw = stdout.trim()
     if (!raw) return { rollup: null, checks: [] }
-    const pipeline = JSON.parse(raw) as { status?: string; jobs?: RawGlabJob[] }
+    const pipeline = parseCliJson<{ status?: string; jobs?: RawGlabJob[] }>(raw, 'glab ci get')
     return {
       rollup: mapPipelineRollup(pipeline.status),
       checks: (pipeline.jobs ?? []).map(mapGlabJobToCheck),
@@ -228,7 +229,7 @@ export const gitlabProvider: ForgeProvider = {
       const { stdout } = await execFileAsync('glab', ['mr', 'view', branch, '--output', 'json'], cliOptions(repoPath))
       const raw = stdout.trim()
       if (!raw) return null
-      const snapshot = mapGlabMrToSnapshot(JSON.parse(raw) as RawGlabMr)
+      const snapshot = mapGlabMrToSnapshot(parseCliJson<RawGlabMr>(raw, 'glab mr view'))
       snapshot.ci = await fetchGlabCi(repoPath, branch)
       snapshot.readyToMerge = deriveReadyToMerge(snapshot)
       return snapshot
@@ -273,6 +274,6 @@ export const gitlabProvider: ForgeProvider = {
 
   async listPullRequests(repoPath: string, opts: ListPullRequestsOptions): Promise<ListPullRequestsResult> {
     const { stdout } = await execFileAsync('glab', buildGitlabListArgs(opts), cliOptions(repoPath))
-    return mapGitlabPage(JSON.parse(stdout || '[]'), opts)
+    return mapGitlabPage(parseCliJson(stdout || '[]', 'glab mr list'), opts)
   },
 }

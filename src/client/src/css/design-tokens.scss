@@ -18,6 +18,9 @@
 
   // Temporary visual comparison with the palette before PR #34.
   --kobo-accent: #6c63ff;
+  // RGB triplet of --kobo-accent, for alpha-blended usages:
+  // rgba(var(--kobo-accent-rgb), 0.4). Keep in sync with --kobo-accent.
+  --kobo-accent-rgb: 108, 99, 255;
   --kobo-accent-hover: #5a51e6;
   --kobo-accent-fg: #ffffff;
 

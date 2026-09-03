@@ -123,6 +123,7 @@
         size="sm"
         :color="hideUnchanged ? 'primary' : 'kobo-2'"
         class="q-mr-sm"
+        :aria-label="hideUnchanged ? $t('diff.showUnchanged') : $t('diff.hideUnchanged')"
         @click="hideUnchanged = !hideUnchanged"
       >
         <q-tooltip anchor="bottom middle" self="top middle" :delay="400">
@@ -137,6 +138,7 @@
         size="sm"
         :color="includeUntracked ? 'primary' : 'kobo-2'"
         class="q-mr-sm"
+        :aria-label="includeUntracked ? $t('diff.hideUntracked') : $t('diff.showUntracked')"
         @click="includeUntracked = !includeUntracked"
       >
         <q-tooltip anchor="bottom middle" self="top middle" :delay="400">
@@ -152,6 +154,8 @@
         size="sm"
         :color="fileTreeOpen ? 'primary' : 'kobo-2'"
         class="q-ml-sm q-mr-sm diff-header__pinned"
+        :aria-label="fileTreeOpen ? $t('diffViewer.fileTreeHide') : $t('diffViewer.fileTreeShow')"
+        :aria-expanded="fileTreeOpen"
         @click="fileTreeOpen = !fileTreeOpen"
       >
         <q-tooltip anchor="bottom middle" self="top middle" :delay="400">
@@ -165,6 +169,8 @@
         size="sm"
         :color="criteriaRailOpen ? 'primary' : 'kobo-2'"
         class="q-mr-sm diff-header__pinned"
+        :aria-label="criteriaRailOpen ? $t('diffViewer.criteriaRailHide') : $t('diffViewer.criteriaRailShow')"
+        :aria-expanded="criteriaRailOpen"
         @click="criteriaRailOpen = !criteriaRailOpen"
       >
         <q-tooltip anchor="bottom middle" self="top middle" :delay="400">
@@ -180,6 +186,7 @@
         size="sm"
         :disable="submittingReview"
         class="diff-header__pinned"
+        :aria-label="$t('tooltip.closeDiffViewer')"
         @click="requestClose"
       >
         <q-tooltip>{{ $t('tooltip.closeDiffViewer') }}</q-tooltip>
@@ -1911,7 +1918,7 @@ onUnmounted(() => {
 
   &:hover,
   &:active {
-    background-color: rgba(102, 95, 221, 0.5);
+    background-color: rgba(var(--kobo-accent-rgb), 0.5);
   }
 }
 // Same as .left-sidebar in MainLayout
@@ -1935,7 +1942,7 @@ onUnmounted(() => {
   // `!important` keeps the selected style winning against Quasar's `q-hoverable`
   // pseudo-class hover background.
   :deep(.q-tree__node-header.q-tree__node--selected) {
-    background-color: rgba(102, 95, 221, 0.18) !important;
+    background-color: rgba(var(--kobo-accent-rgb), 0.18) !important;
     border-left: 2px solid var(--kobo-accent) !important;
   }
   // Hover style applied only on non-selected rows so the selected background
@@ -1961,7 +1968,7 @@ onUnmounted(() => {
   transition: background 0.15s ease, color 0.15s ease;
 }
 :deep(.review-mode-active .line-numbers:hover) {
-  background: rgba(99, 102, 241, 0.25);
+  background: rgba(var(--kobo-accent-rgb), 0.25);
   color: var(--kobo-text-2);
 }
 /* Review overlays are rendered OUTSIDE Monaco's DOM (in our editorWrapperRef
@@ -1979,7 +1986,7 @@ onUnmounted(() => {
   padding: 4px;
   box-sizing: border-box;
   overflow: auto;
-  border-left: 3px solid rgba(99, 102, 241, 0.6);
+  border-left: 3px solid rgba(var(--kobo-accent-rgb), 0.6);
 }
 
 .dirty-dot {

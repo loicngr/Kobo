@@ -627,6 +627,50 @@ describe('workspace store', () => {
       expect(result.warnings).toEqual(['worktree stuck'])
     })
 
+    it('disposes any live terminal for every bulk-deleted workspace', async () => {
+      const { terminalMap } = await import('../services/terminal-registry')
+      const store = useWorkspaceStore()
+      store.archivedWorkspaces = [{ ...archivedA }, { ...archivedB }]
+      terminalMap.set('a1', {
+        terminal: { dispose: vi.fn() } as never,
+        fitAddon: {} as never,
+        ws: { onclose: () => {}, readyState: WebSocket.OPEN, close: vi.fn() } as never,
+        exited: false,
+        exitCode: null,
+        error: null,
+        container: document.createElement('div'),
+        opened: true,
+        onDataDisposable: { dispose: vi.fn() },
+        disconnected: false,
+        reconnectAttempt: 0,
+        reconnectTimer: setTimeout(() => {}, 60_000),
+      })
+      terminalMap.set('a2', {
+        terminal: { dispose: vi.fn() } as never,
+        fitAddon: {} as never,
+        ws: { onclose: () => {}, readyState: WebSocket.OPEN, close: vi.fn() } as never,
+        exited: false,
+        exitCode: null,
+        error: null,
+        container: document.createElement('div'),
+        opened: true,
+        onDataDisposable: { dispose: vi.fn() },
+        disconnected: false,
+        reconnectAttempt: 0,
+        reconnectTimer: setTimeout(() => {}, 60_000),
+      })
+
+      vi.mocked(fetch).mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({ ok: true, deleted: 2, warnings: [] }),
+      } as Response)
+
+      await store.deleteAllArchived()
+
+      expect(terminalMap.has('a1')).toBe(false)
+      expect(terminalMap.has('a2')).toBe(false)
+    })
+
     it('throws and keeps the archived list intact on API error', async () => {
       const store = useWorkspaceStore()
       store.archivedWorkspaces = [{ ...archivedA }]

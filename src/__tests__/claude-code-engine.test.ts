@@ -328,8 +328,15 @@ describe('claude-code engine — hung SDK generator after result', () => {
       if (ended && ended.kind === 'session:ended') {
         expect(ended.reason).toBe('watchdog')
       }
-      // A clean (non-error) result must not surface a spurious error event.
-      expect(events.find((e) => e.kind === 'error')).toBeUndefined()
+      // The drain watchdog force-ending the session must surface a visible
+      // error event (a `reason: 'watchdog'` end is a forced kill, not a
+      // silent success) — see Task 4 of the remediation plan.
+      const errorEvent = events.find((e) => e.kind === 'error')
+      expect(errorEvent).toBeDefined()
+      if (errorEvent && errorEvent.kind === 'error') {
+        expect(errorEvent.category).toBe('other')
+        expect(errorEvent.message).toMatch(/watchdog/i)
+      }
     } finally {
       vi.useRealTimers()
       vi.doUnmock('@anthropic-ai/claude-agent-sdk')

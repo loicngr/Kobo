@@ -65,6 +65,12 @@ const renderCache = new Map<string, string>()
  * by appending, so its length is a sound content fingerprint and a frozen
  * message hits the cache forever. `cacheKey` must therefore carry everything
  * else the render depends on (the message id AND the known document paths).
+ *
+ * @warning This length-only fingerprint is safe ONLY for append-only content.
+ * Do NOT reuse this cache for content that can be edited or replaced in place
+ * (e.g. a corrected message, an in-place edit flow) — an equal-length
+ * replacement would silently serve stale, sanitized HTML from before the
+ * edit. Call `renderChatMarkdown` directly for any such caller instead.
  */
 export function renderChatMarkdownCached(
   cacheKey: string,

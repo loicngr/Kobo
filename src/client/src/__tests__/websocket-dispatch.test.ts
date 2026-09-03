@@ -1,10 +1,29 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import type { TerminalEntry } from '../services/terminal-registry'
+import { terminalMap } from '../services/terminal-registry'
 import type { Workspace } from '../stores/workspace'
 
 vi.mock('src/utils/notifications', () => ({ notify: vi.fn() }))
 
 import { notify } from 'src/utils/notifications'
+
+function fakeTerminalEntry(): TerminalEntry {
+  return {
+    terminal: { dispose: vi.fn() } as unknown as TerminalEntry['terminal'],
+    fitAddon: {} as TerminalEntry['fitAddon'],
+    ws: { onclose: () => {}, readyState: WebSocket.OPEN, close: vi.fn() } as unknown as WebSocket,
+    exited: false,
+    exitCode: null,
+    error: null,
+    container: document.createElement('div'),
+    opened: true,
+    onDataDisposable: { dispose: vi.fn() },
+    disconnected: false,
+    reconnectAttempt: 0,
+    reconnectTimer: setTimeout(() => {}, 60_000),
+  }
+}
 
 function workspaceFixture(status = 'executing'): Workspace {
   return {
@@ -1032,5 +1051,251 @@ describe('_routeMessage — user:message reconciliation', () => {
 
     const items = workspaceStore.activityFeeds.w1 ?? []
     expect(items).toHaveLength(2)
+  })
+})
+
+describe('_routeMessage — sync:response truncation', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
+
+  it('re-requests the remaining backlog when a sync:response is truncated', async () => {
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const wsStore = useWebSocketStore()
+    const sent: unknown[] = []
+    ;(wsStore as unknown as { _send: (frame: unknown) => void })._send = (frame: unknown) => sent.push(frame)
+
+    ;(wsStore as unknown as { _routeMessage: (msg: unknown) => void })._routeMessage({
+      type: 'sync:response',
+      payload: {
+        mode: 'delta',
+        truncated: true,
+        events: [
+          {
+            id: 'evt-1',
+            workspaceId: 'w1',
+            type: 'agent:event',
+            payload: { kind: 'message:end', messageId: 'm1' },
+            createdAt: new Date().toISOString(),
+            replayable: true,
+          },
+        ],
+      },
+    })
+
+    expect(wsStore.lastEventId).toBe('evt-1')
+    expect(sent).toContainEqual(
+      expect.objectContaining({
+        type: 'sync:request',
+        payload: expect.objectContaining({ lastEventId: 'evt-1' }),
+      }),
+    )
+  })
+
+  it('does NOT re-request when a sync:response is not truncated', async () => {
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const wsStore = useWebSocketStore()
+    const sent: unknown[] = []
+    ;(wsStore as unknown as { _send: (frame: unknown) => void })._send = (frame: unknown) => sent.push(frame)
+
+    ;(wsStore as unknown as { _routeMessage: (msg: unknown) => void })._routeMessage({
+      type: 'sync:response',
+      payload: {
+        mode: 'delta',
+        truncated: false,
+        events: [
+          {
+            id: 'evt-1',
+            workspaceId: 'w1',
+            type: 'agent:event',
+            payload: { kind: 'message:end', messageId: 'm1' },
+            createdAt: new Date().toISOString(),
+            replayable: true,
+          },
+        ],
+      },
+    })
+
+    expect(wsStore.lastEventId).toBe('evt-1')
+    expect(sent).toEqual([])
+  })
+
+  it('does not treat a follow-up truncated response as drain-completion (stays in-progress, no re-sync)', async () => {
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const wsStore = useWebSocketStore()
+    const sent: unknown[] = []
+    ;(wsStore as unknown as { _send: (frame: unknown) => void })._send = (frame: unknown) => sent.push(frame)
+    ;(wsStore as unknown as { _drainInProgress: boolean })._drainInProgress = true
+    ;(wsStore as unknown as { _workspacesToRefreshAfterDrain: Set<string> })._workspacesToRefreshAfterDrain.add(
+      'other-ws',
+    )
+
+    ;(wsStore as unknown as { _routeMessage: (msg: unknown) => void })._routeMessage({
+      type: 'sync:response',
+      payload: {
+        mode: 'delta',
+        truncated: true,
+        events: [
+          {
+            id: 'evt-2',
+            workspaceId: 'w1',
+            type: 'agent:event',
+            payload: { kind: 'message:end', messageId: 'm2' },
+            createdAt: new Date().toISOString(),
+            replayable: true,
+          },
+        ],
+      },
+    })
+
+    expect((wsStore as unknown as { _drainInProgress: boolean })._drainInProgress).toBe(true)
+    expect(
+      (wsStore as unknown as { _workspacesToRefreshAfterDrain: Set<string> })._workspacesToRefreshAfterDrain.has(
+        'other-ws',
+      ),
+    ).toBe(true)
+  })
+})
+
+describe('_routeMessage — workspace:deleted', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+    terminalMap.clear()
+  })
+
+  it('disposes the terminal, clears the matching selected workspace, and refreshes both lists', async () => {
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const wsStore = useWebSocketStore()
+    const workspaceStore = useWorkspaceStore()
+    workspaceStore.selectedWorkspaceId = 'ws_1'
+    workspaceStore.archivedLoaded = true
+    const entry = fakeTerminalEntry()
+    terminalMap.set('ws_1', entry)
+    const fetchSpy = vi.spyOn(workspaceStore, 'fetchWorkspaces').mockResolvedValue(undefined)
+    const fetchArchivedSpy = vi.spyOn(workspaceStore, 'fetchArchivedWorkspaces').mockResolvedValue(undefined)
+
+    ;(wsStore as unknown as { _routeMessage: (msg: unknown) => void })._routeMessage({
+      type: 'workspace:deleted',
+      workspaceId: 'ws_1',
+      payload: { workspaceId: 'ws_1' },
+    })
+
+    expect(terminalMap.has('ws_1')).toBe(false)
+    expect(entry.terminal.dispose).toHaveBeenCalled()
+    expect(workspaceStore.selectedWorkspaceId).toBeNull()
+    expect(fetchSpy).toHaveBeenCalled()
+    expect(fetchArchivedSpy).toHaveBeenCalled()
+  })
+
+  it('does not clear the selected workspace when a different workspace is deleted', async () => {
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const wsStore = useWebSocketStore()
+    const workspaceStore = useWorkspaceStore()
+    workspaceStore.selectedWorkspaceId = 'ws_selected'
+    vi.spyOn(workspaceStore, 'fetchWorkspaces').mockResolvedValue(undefined)
+
+    ;(wsStore as unknown as { _routeMessage: (msg: unknown) => void })._routeMessage({
+      type: 'workspace:deleted',
+      workspaceId: 'ws_other',
+      payload: { workspaceId: 'ws_other' },
+    })
+
+    expect(workspaceStore.selectedWorkspaceId).toBe('ws_selected')
+  })
+})
+
+describe('_routeMessage — subscribe-vs-drain self-heal', () => {
+  beforeEach(() => {
+    setActivePinia(createPinia())
+  })
+
+  it('re-syncs workspaces that were subscribed mid-drain once the drain completes', async () => {
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const wsStore = useWebSocketStore()
+    const sent: unknown[] = []
+    ;(wsStore as unknown as { _send: (frame: unknown) => void })._send = (frame: unknown) => sent.push(frame)
+
+    // A truncated sync:response starts a drain round.
+    ;(wsStore as unknown as { _routeMessage: (msg: unknown) => void })._routeMessage({
+      type: 'sync:response',
+      payload: {
+        mode: 'delta',
+        truncated: true,
+        events: [
+          {
+            id: 'evt-1',
+            workspaceId: 'w1',
+            type: 'agent:event',
+            payload: { kind: 'message:end', messageId: 'm1' },
+            createdAt: new Date().toISOString(),
+            replayable: true,
+          },
+        ],
+      },
+    })
+    expect((wsStore as unknown as { _drainInProgress: boolean })._drainInProgress).toBe(true)
+
+    // The user opens/subscribes to a different workspace mid-drain — its own
+    // immediate sync:request still fires normally, and it's queued for a
+    // final re-sync once the drain settles.
+    sent.length = 0
+    wsStore.subscribe('other-ws')
+    expect(
+      (wsStore as unknown as { _workspacesToRefreshAfterDrain: Set<string> })._workspacesToRefreshAfterDrain.has(
+        'other-ws',
+      ),
+    ).toBe(true)
+    expect(sent).toContainEqual({ type: 'subscribe', payload: { workspaceId: 'other-ws' } })
+    expect(sent).toContainEqual({ type: 'sync:request', payload: { workspaceIds: ['other-ws'] } })
+
+    // The final, non-truncated response arrives — the drain completes.
+    sent.length = 0
+    ;(wsStore as unknown as { _routeMessage: (msg: unknown) => void })._routeMessage({
+      type: 'sync:response',
+      payload: {
+        mode: 'delta',
+        truncated: false,
+        events: [
+          {
+            id: 'evt-2',
+            workspaceId: 'w1',
+            type: 'agent:event',
+            payload: { kind: 'message:end', messageId: 'm2' },
+            createdAt: new Date().toISOString(),
+            replayable: true,
+          },
+        ],
+      },
+    })
+
+    expect((wsStore as unknown as { _drainInProgress: boolean })._drainInProgress).toBe(false)
+    expect(
+      (wsStore as unknown as { _workspacesToRefreshAfterDrain: Set<string> })._workspacesToRefreshAfterDrain.size,
+    ).toBe(0)
+    expect(sent).toContainEqual(
+      expect.objectContaining({
+        type: 'sync:request',
+        payload: expect.objectContaining({ workspaceIds: ['other-ws'] }),
+      }),
+    )
+  })
+
+  it('does not fire a spurious re-sync when subscribe() happens outside a drain', async () => {
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const wsStore = useWebSocketStore()
+    const sent: unknown[] = []
+    ;(wsStore as unknown as { _send: (frame: unknown) => void })._send = (frame: unknown) => sent.push(frame)
+
+    wsStore.subscribe('other-ws')
+
+    expect(
+      (wsStore as unknown as { _workspacesToRefreshAfterDrain: Set<string> })._workspacesToRefreshAfterDrain.size,
+    ).toBe(0)
+    expect(sent).toEqual([
+      { type: 'subscribe', payload: { workspaceId: 'other-ws' } },
+      { type: 'sync:request', payload: { workspaceIds: ['other-ws'] } },
+    ])
   })
 })

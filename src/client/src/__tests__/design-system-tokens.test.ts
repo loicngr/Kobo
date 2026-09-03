@@ -55,4 +55,21 @@ describe('design system tokens', () => {
     const app = readFileSync(join(CLIENT_ROOT, 'src/css/app.scss'), 'utf-8')
     expect(app.match(HEX) ?? []).toEqual([])
   })
+
+  it('keeps --kobo-accent-rgb in sync with --kobo-accent', () => {
+    const tokens = readFileSync(join(CLIENT_ROOT, 'src/css/design-tokens.scss'), 'utf-8')
+    const hexMatch = tokens.match(/--kobo-accent:\s*#([0-9a-fA-F]{6})/)
+    const rgbMatch = tokens.match(/--kobo-accent-rgb:\s*([\d]+),\s*([\d]+),\s*([\d]+)/)
+    expect(hexMatch, 'expected --kobo-accent to be defined as a 6-digit hex value').toBeTruthy()
+    expect(rgbMatch, 'expected --kobo-accent-rgb to be defined as an r, g, b triplet').toBeTruthy()
+    const hex = hexMatch![1]
+    const expectedR = parseInt(hex.slice(0, 2), 16)
+    const expectedG = parseInt(hex.slice(2, 4), 16)
+    const expectedB = parseInt(hex.slice(4, 6), 16)
+    expect([Number(rgbMatch![1]), Number(rgbMatch![2]), Number(rgbMatch![3])]).toEqual([
+      expectedR,
+      expectedG,
+      expectedB,
+    ])
+  })
 })
