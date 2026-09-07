@@ -4,6 +4,12 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.11.28
+
+- feat: lifecycle hooks, reminders, engine comparison and audit follow-ups
+- fix(security): trust the page we served, not a guessed port list
+- fix(security): close browser-driven access paths and credential leaks
+
 ## 1.11.27
 
 - fix: session watchdog false-positives, sync drain, and terminal leaks, audit npm
