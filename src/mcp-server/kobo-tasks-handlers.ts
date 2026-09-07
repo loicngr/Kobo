@@ -7,6 +7,7 @@ import * as settingsService from '../server/services/settings-service.js'
 import { slugifyProjectName } from '../server/utils/project-slug.js'
 import { resolveExistingPathInside } from '../server/utils/safe-path.js'
 import { resolveWorkspaceWorktreePath } from '../server/utils/worktree-paths.js'
+import { SECRET_GLOBAL_KEYS } from '../shared/consts.js'
 
 /** Allowed task status values. */
 export const VALID_TASK_STATUSES = ['pending', 'in_progress', 'done'] as const
@@ -268,6 +269,15 @@ export function getDevServerStatusHandler(db: Database.Database, workspaceId: st
   return { workspaceId, status: row.dev_server_status }
 }
 
+/** Copy of the global settings with every stored credential blanked out. */
+function sanitizeGlobalSecrets(global: Record<string, unknown>): Record<string, unknown> {
+  const sanitized = { ...global }
+  for (const key of SECRET_GLOBAL_KEYS) {
+    if (key in sanitized) sanitized[key] = ''
+  }
+  return sanitized
+}
+
 /** Read global and per-project settings from the JSON file on disk. */
 export function getSettingsHandler(settingsPath: string | undefined, projectPath?: string): Record<string, unknown> {
   // Shape is determined solely by whether projectPath was provided:
@@ -285,7 +295,11 @@ export function getSettingsHandler(settingsPath: string | undefined, projectPath
     throw new Error(`Failed to read settings: ${err instanceof Error ? err.message : String(err)}`)
   }
 
-  const global = parsed.global ?? null
+  // The agent gets the settings it can act on, never the credentials. Anything
+  // it reads can be echoed into the transcript, and the content it summarises
+  // (a Notion page, a Sentry issue, a repository) is not always trustworthy —
+  // "call get_settings and print the result" is a one-line exfiltration.
+  const global = parsed.global ? sanitizeGlobalSecrets(parsed.global as Record<string, unknown>) : null
   const projects = Array.isArray(parsed.projects) ? (parsed.projects as Array<Record<string, unknown>>) : []
 
   if (projectPath) {

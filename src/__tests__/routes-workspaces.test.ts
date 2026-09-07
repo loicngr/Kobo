@@ -553,6 +553,24 @@ describe('POST /api/workspaces', () => {
     expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
   })
 
+  it('refuses a source branch name git would read as an option', async () => {
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: '--upload-pack=/tmp/evil.sh',
+        workingBranch: 'feature/test',
+      }),
+    })
+
+    expect(res.status).toBe(400)
+    const data = await res.json()
+    expect(data.error).toContain('Invalid source branch name')
+    expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
+  })
+
   it('does not validate workingBranch when it is derived from an existing worktreePath', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
     vi.mocked(worktreeService.createWorktree).mockReturnValue({
@@ -6471,6 +6489,17 @@ describe('POST /api/workspaces/:id/change-pr-base', () => {
     expect(res.status).toBe(404)
   })
 
+  it('refuses a base name git would read as an option', async () => {
+    const res = await app.request('/api/workspaces/ws-1/change-pr-base', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ base: '--upload-pack=/tmp/evil.sh' }),
+    })
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: string }).error).toContain('Invalid base branch name')
+    expect(changePrBaseMock).not.toHaveBeenCalled()
+  })
+
   it('returns 400 when base parameter is missing', async () => {
     const res = await app.request('/api/workspaces/ws-1/change-pr-base', {
       method: 'POST',
@@ -6587,6 +6616,17 @@ describe('POST /api/workspaces/:id/change-source-branch', () => {
     expect(changeSourceBranchMock).toHaveBeenCalledWith(expect.any(String), 'develop')
   })
 
+  it('refuses a new base name git would read as an option', async () => {
+    const res = await app.request('/api/workspaces/ws-1/change-source-branch', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ newBase: '--upload-pack=/tmp/evil.sh' }),
+    })
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: string }).error).toContain('Invalid source branch name')
+    expect(changeSourceBranchMock).not.toHaveBeenCalled()
+  })
+
   it('change-source-branch maps too-many to a 409', async () => {
     changeSourceBranchMock.mockResolvedValueOnce({ status: 'too-many', forcePushNeeded: false, commitCount: 80 })
     const res = await app.request('/api/workspaces/ws-1/change-source-branch', {
@@ -6618,6 +6658,22 @@ describe('POST /api/workspaces/:id/cancel-source-change', () => {
     expect(body).toMatchObject({ success: true, restoredFrom: 'kobo-backup/feature-test-123' })
     expect(gitOps.restoreBranchFromBackup).toHaveBeenCalled()
     expect(workspaceService.updateWorkspaceSourceBranch).toHaveBeenCalledWith('ws-1', 'main')
+  })
+
+  it('refuses a previous base git would read as an option', async () => {
+    // This value is persisted as the workspace source branch and later reaches
+    // `git fetch origin <sourceBranch>` — including from the Diff tab, with no
+    // further user action.
+    vi.mocked(gitOps.listBackupBranches).mockReturnValue(['kobo-backup/feature-test-123'])
+    const res = await app.request('/api/workspaces/ws-1/cancel-source-change', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ previousBase: '--upload-pack=/tmp/evil.sh' }),
+    })
+    expect(res.status).toBe(400)
+    expect(((await res.json()) as { error: string }).error).toContain('Invalid source branch name')
+    expect(workspaceService.updateWorkspaceSourceBranch).not.toHaveBeenCalled()
+    expect(gitOps.restoreBranchFromBackup).not.toHaveBeenCalled()
   })
 
   it('no backup — returns 409 with code no_backup', async () => {

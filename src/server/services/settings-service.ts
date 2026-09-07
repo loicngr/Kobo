@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { WORKTREES_PATH } from '../../shared/consts.js'
+import { MASKED_SECRET, SECRET_GLOBAL_KEYS, WORKTREES_PATH } from '../../shared/consts.js'
 import { isValidProjectColor, type ProjectColor } from '../../shared/project-colors.js'
 import { isValidSkillSuite, type SkillSuite } from '../../shared/skill-suite-prompts.js'
 import { DEFAULT_WHIP_SHORTCUT, isValidWhipShortcut } from '../../shared/whip-shortcut.js'
@@ -1463,8 +1463,26 @@ export function getSettings(): Settings {
   return readSettings()
 }
 
-/** Keys stripped from exports — secrets that should stay on the machine. */
-const SECRET_GLOBAL_KEYS = ['notionMcpKey', 'sentryMcpKey', 'networkAccessToken', 'bitbucketToken'] as const
+export { SECRET_GLOBAL_KEYS }
+
+/**
+ * Copy of the global settings safe to hand to a client: every stored credential
+ * becomes `MASKED_SECRET`, an unset one stays empty so the UI can tell "not
+ * configured" from "configured, hidden". The caller's object is left alone.
+ *
+ * The credentials are of no use to the settings screen — it only ever shows
+ * them in a password field — but they are very useful to anything else that
+ * gets to read a response: a paired device on the LAN, a proxy log, a
+ * screenshot. `updateGlobalSettings` reads the mask back as "keep the stored
+ * value", so a round-trip through the form is lossless.
+ */
+export function redactGlobalSecrets(global: GlobalSettings): GlobalSettings {
+  const redacted: GlobalSettings = { ...global }
+  for (const key of SECRET_GLOBAL_KEYS) {
+    if (redacted[key]) redacted[key] = MASKED_SECRET
+  }
+  return redacted
+}
 
 export interface ConfigBundle {
   bundleVersion: number
@@ -1608,8 +1626,18 @@ export function getEffectiveSettings(projectPath: string): EffectiveSettings {
 }
 
 /** Merge partial updates into global settings and persist. */
-export function updateGlobalSettings(data: Partial<GlobalSettings>): GlobalSettings {
+export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSettings {
   const settings = readSettings()
+  // Work on a copy: the validation below drops keys, and mutating the caller's
+  // object would be a surprise (the route hands us its parsed request body).
+  const data: Partial<GlobalSettings> = { ...input }
+  // A client only ever sees the mask in place of a stored credential, so it
+  // hands the mask back on every save. Dropping the key preserves the stored
+  // value (same "drop it and keep the previous one" pattern as below), while a
+  // real value still overwrites and an empty one still clears.
+  for (const key of SECRET_GLOBAL_KEYS) {
+    if (data[key] === MASKED_SECRET) delete data[key]
+  }
   // Validate skillSuite before merging: drop invalid values so the previous
   // value is preserved (same pattern as `upsertProject`'s color validation).
   if ('skillSuite' in data) {

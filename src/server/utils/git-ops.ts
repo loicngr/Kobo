@@ -1207,6 +1207,9 @@ export function isGitWorktree(repoPath: string): boolean {
  * The remaining rules mirror `git check-ref-format`.
  */
 export function isValidBranchName(name: string): boolean {
+  // Guard the type too: a non-string would otherwise be coerced, and the
+  // string "undefined" happens to satisfy the pattern below.
+  if (typeof name !== 'string') return false
   if (!/^[A-Za-z0-9][A-Za-z0-9/_.-]*$/.test(name)) return false
   if (name.includes('..') || name.includes('//')) return false
   if (name.endsWith('/') || name.endsWith('.') || name.endsWith('.lock')) return false

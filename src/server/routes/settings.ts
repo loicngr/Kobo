@@ -26,22 +26,22 @@ import { countPrunableWsEvents } from '../services/ws-events-retention-service.j
 /** Hono sub-router for global and per-project settings CRUD. */
 const app = new Hono()
 
-// GET /api/settings — return full settings
+// GET /api/settings — return full settings, credentials masked
 app.get('/', (c) => {
   try {
     const settings = settingsService.getSettings()
-    return c.json(settings)
+    return c.json({ ...settings, global: settingsService.redactGlobalSecrets(settings.global) })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
   }
 })
 
-// GET /api/settings/global — return global settings
+// GET /api/settings/global — return global settings, credentials masked
 app.get('/global', (c) => {
   try {
     const global = settingsService.getGlobalSettings()
-    return c.json(global)
+    return c.json(settingsService.redactGlobalSecrets(global))
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
@@ -169,7 +169,10 @@ app.put('/global', async (c) => {
   try {
     const body = await c.req.json<Partial<GlobalSettings>>()
     const updated = settingsService.updateGlobalSettings(body)
-    return c.json(updated)
+    // The client assigns this response straight into its store, so echoing the
+    // real credentials back would undo the masking on GET the first time
+    // anyone saves anything.
+    return c.json(settingsService.redactGlobalSecrets(updated))
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     const status = err instanceof Error && err.name === 'InvalidWorktreesPathError' ? 400 : 500

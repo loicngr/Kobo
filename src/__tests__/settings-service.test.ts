@@ -16,6 +16,7 @@ import {
   getSettings,
   importConfigBundle,
   listProjects,
+  redactGlobalSecrets,
   runSettingsMigrations,
   SETTINGS_SCHEMA_VERSION,
   sanitizeBranchPrefixes,
@@ -23,6 +24,7 @@ import {
   updateNetworkAccessSettings,
   upsertProject,
 } from '../server/services/settings-service.js'
+import { MASKED_SECRET } from '../shared/consts.js'
 
 let tmpDir: string
 let settingsPath: string
@@ -144,6 +146,38 @@ describe('getGlobalSettings()', () => {
   })
 })
 
+describe('redactGlobalSecrets()', () => {
+  it('replaces a stored credential with the mask and leaves an unset one empty', () => {
+    updateGlobalSettings({ notionMcpKey: 'ntn_real_key', sentryMcpKey: '' })
+
+    const redacted = redactGlobalSecrets(getGlobalSettings())
+
+    expect(redacted.notionMcpKey).toBe(MASKED_SECRET)
+    expect(redacted.sentryMcpKey).toBe('')
+    expect(JSON.stringify(redacted)).not.toContain('ntn_real_key')
+  })
+
+  it('leaves every non-secret setting untouched', () => {
+    updateGlobalSettings({ notionMcpKey: 'ntn_real_key', showThinkingBlocks: false })
+
+    const global = getGlobalSettings()
+    const redacted = redactGlobalSecrets(global)
+
+    expect(redacted.showThinkingBlocks).toBe(false)
+    expect(redacted.defaultModelByEngine).toEqual(global.defaultModelByEngine)
+  })
+
+  it('does not mutate the settings it is handed', () => {
+    updateGlobalSettings({ notionMcpKey: 'ntn_real_key' })
+
+    const global = getGlobalSettings()
+    redactGlobalSecrets(global)
+
+    expect(global.notionMcpKey).toBe('ntn_real_key')
+    expect(getGlobalSettings().notionMcpKey).toBe('ntn_real_key')
+  })
+})
+
 describe('updateGlobalSettings()', () => {
   it('persists the thinking-block visibility preference', () => {
     expect(getGlobalSettings().showThinkingBlocks).toBe(true)
@@ -152,6 +186,23 @@ describe('updateGlobalSettings()', () => {
 
     expect(updated.showThinkingBlocks).toBe(false)
     expect(getGlobalSettings().showThinkingBlocks).toBe(false)
+  })
+
+  it('keeps a stored secret when the caller echoes the mask back', () => {
+    updateGlobalSettings({ notionMcpKey: 'ntn_real_key' })
+
+    // What a client that only ever saw the masked value sends back on save.
+    const updated = updateGlobalSettings({ notionMcpKey: MASKED_SECRET, sentryEnabled: false })
+
+    expect(updated.notionMcpKey).toBe('ntn_real_key')
+    expect(getGlobalSettings().notionMcpKey).toBe('ntn_real_key')
+    expect(updated.sentryEnabled).toBe(false)
+  })
+
+  it('still writes a new secret and still clears one on an empty value', () => {
+    updateGlobalSettings({ notionMcpKey: 'ntn_first' })
+    expect(updateGlobalSettings({ notionMcpKey: 'ntn_second' }).notionMcpKey).toBe('ntn_second')
+    expect(updateGlobalSettings({ notionMcpKey: '' }).notionMcpKey).toBe('')
   })
 
   it('persists global Notion and Sentry integration switches', () => {

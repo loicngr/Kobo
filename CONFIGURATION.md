@@ -11,6 +11,7 @@ Complete reference for every Kōbō setting, environment variable, and external 
 - [Custom change-source-branch script](#custom-change-source-branch-script)
 - [Auto-purge worktree on PR merged](#auto-purge-worktree-on-pr-merged)
 - [Network access](#network-access)
+  - [Reachable addresses](#reachable-addresses)
 - [Docker deployment](#docker-deployment)
   - [Choosing a compose file](#choosing-a-compose-file)
   - [The image](#the-image)
@@ -82,6 +83,7 @@ A production-installed Kōbō (`npx @loicngr/kobo`) and a dev server can run sid
 | `DEBUG_MCP_STDERR` | — | When set, pipe spawned MCP servers' stderr to the Kōbō log. Useful for debugging Notion/Sentry MCP issues. |
 | `KOBO_NETWORK_ACCESS_ENABLED` | — | Set `true` to enable [network access](#network-access) at boot, without going through Settings. Mainly useful for headless/Docker deployments. |
 | `KOBO_NETWORK_ACCESS_BEHIND_PROXY` | — | Set `true` to enable [behind a reverse proxy](#behind-a-reverse-proxy) mode at boot (disables the loopback bypass entirely). Requires `KOBO_NETWORK_ACCESS_ENABLED=true`. |
+| `KOBO_NETWORK_ACCESS_PROXY_HOST` | — | Domain your proxy serves Kōbō under (`kobo.example.com`). Makes the [host check](#reachable-addresses) enforce that name in behind-a-reverse-proxy mode instead of accepting any. A scheme and port are ignored. |
 | `GH_TOKEN` | — | Non-interactive auth for the `gh` CLI (used by the [forge integration](#forge-integration)). Needed in headless containers where `gh auth login`'s browser flow isn't practical. |
 | `GITLAB_TOKEN` | — | Non-interactive auth for the `glab` CLI, same rationale as `GH_TOKEN`. |
 | `KOBO_WORKTREE_CLEANUP_IMAGE` | `alpine` | Docker image used to reclaim ownership of root-owned files when removing a worktree fails on a permission error. Override with a locally cached image to avoid a pull. |
@@ -506,6 +508,74 @@ query param manually.
 The IP address used for the loopback exemption is taken **from the OS socket**,
 never from forwarded headers (`X-Forwarded-For` etc.), so a remote client cannot
 spoof a loopback address to bypass authentication.
+
+### Reachable addresses
+
+Kōbō only answers to the names it is legitimately reachable at: `localhost`,
+`127.0.0.1`, `::1`, and — once network access is enabled — the LAN IPv4
+addresses listed in Settings. A request carrying any other `Host` gets a
+**403 `forbidden host`**, and a WebSocket handshake carrying any other `Origin`
+gets a **403** as well.
+
+This is what stops DNS rebinding: a page you visit can make its own domain
+re-resolve to `127.0.0.1`, after which the browser treats Kōbō's responses as
+same-origin and can read them — your settings, your workspaces — and can open
+`/ws/terminal/<id>`, which is a real shell on your machine. The connection
+genuinely comes from loopback, so the token gate lets it through; only the
+`Host` and `Origin` headers tell it apart from your own tab.
+
+The `Origin` check also closes cross-site writes. A page on another site can
+reach `http://localhost:3000` with a legitimate `Host`, and while it cannot read
+the reply, the write would otherwise land — so a request whose `Origin` names
+another site is refused with **403 `forbidden origin`**. A request with no
+`Origin` at all is allowed: browsers always send one, so its absence means a
+command-line caller.
+
+Practical consequences:
+
+- **Reaching Kōbō by a custom hostname does not work** (`http://my-nas.local:3000`,
+  a `/etc/hosts` alias, a container name). Use the LAN IP shown in Settings, or
+  turn on [behind a reverse proxy](#behind-a-reverse-proxy) mode.
+- **In Docker, the LAN IP shown in Settings is the container's**, not the host's,
+  because Kōbō reads its own interfaces. Reaching a containerised Kōbō from
+  another device on the LAN therefore requires behind-a-reverse-proxy mode,
+  which `docker-compose.example.yml` and `docker-compose.local-traefik.yml`
+  already set. `docker-compose.local.yml` does not need it: it is opened at
+  `http://localhost:3000` from the host, which is allowed as-is.
+- **`/api/health` is exempt**, so a Docker or Compose healthcheck reaching it
+  through the service name keeps working. `/api/health/logs` and
+  `/api/health/report` are not exempt.
+- **A page is trusted only on a port Kōbō serves.** Being on loopback is not
+  enough: Kōbō starts a dev server per workspace, on a loopback port, serving
+  whatever code an agent just wrote, and such a page must not count as the real
+  interface. Only Kōbō's own port is trusted, plus the Quasar dev server
+  (`8080`, `9000`) when running `npm run dev`. Running the client dev server on
+  another port therefore needs that port added to `QUASAR_DEV_PORTS` in
+  `src/server/services/network-access-service.ts`.
+- **Behind-a-reverse-proxy mode accepts any host by default**, because only the
+  operator knows the expected domain. Declare it with
+  `KOBO_NETWORK_ACCESS_PROXY_HOST` (see below) to close that. That mode also
+  disables the loopback exemption, so every `/api/*` request has to carry the
+  token — but the SPA itself is served outside `/api/*` and behind no token, so
+  without a declared hostname a rebinding page can be served the real interface
+  and ask the user to paste their token into it. Authenticate at the proxy, and
+  do not rely on Kōbō's token there.
+
+#### `KOBO_NETWORK_ACCESS_PROXY_HOST`
+
+Set it to the domain your proxy serves Kōbō under, and the host check is
+enforced in behind-a-reverse-proxy mode instead of being skipped:
+
+```yaml
+environment:
+  - KOBO_NETWORK_ACCESS_ENABLED=true
+  - KOBO_NETWORK_ACCESS_BEHIND_PROXY=true
+  - KOBO_NETWORK_ACCESS_PROXY_HOST=kobo.example.com
+```
+
+A scheme and a port are accepted and ignored (`https://kobo.example.com:8443`
+reads as `kobo.example.com`). Loopback stays reachable so a local healthcheck
+keeps working. Leaving it unset preserves the previous behaviour.
 
 ### Security caveats
 

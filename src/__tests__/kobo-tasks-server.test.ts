@@ -330,6 +330,32 @@ describe('MCP tasks server handlers', () => {
       expect(result.projects).toHaveLength(1)
     })
 
+    it('blanchit les secrets pour que le prompt injecte ne puisse pas les exfiltrer', () => {
+      fs.writeFileSync(
+        settingsPath,
+        JSON.stringify({
+          global: {
+            defaultModelByEngine: { 'claude-code': 'auto', codex: 'auto' },
+            notionMcpKey: 'ntn_secret_value',
+            sentryMcpKey: 'sntrys_secret_value',
+            bitbucketToken: 'bb_secret_value',
+            networkAccessToken: 'lan_secret_value',
+          },
+          projects: [],
+        }),
+      )
+      const result = getSettingsHandler(settingsPath) as {
+        global: Record<string, unknown>
+      }
+      expect(result.global.notionMcpKey).toBe('')
+      expect(result.global.sentryMcpKey).toBe('')
+      expect(result.global.bitbucketToken).toBe('')
+      expect(result.global.networkAccessToken).toBe('')
+      // Le reste des réglages doit rester lisible : c'est l'intérêt de l'outil.
+      expect((result.global.defaultModelByEngine as Record<string, string>)['claude-code']).toBe('auto')
+      expect(JSON.stringify(result)).not.toContain('secret_value')
+    })
+
     it('filtre par project_path', () => {
       fs.writeFileSync(
         settingsPath,

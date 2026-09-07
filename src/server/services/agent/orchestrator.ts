@@ -2150,24 +2150,56 @@ async function handleQuota(workspaceId: string, _agentSessionId?: string): Promi
     console.warn(`[orchestrator] Could not transition workspace '${workspaceId}' to quota:`, err)
   }
 
-  const retryCount = retryCounts.get(workspaceId) ?? 0
-  const autoLoopEnabled = getWs(workspaceId)?.autoLoop === true
-  const maxRetries = autoLoopEnabled ? (getGlobalSettings().autoLoopMaxRetries ?? 5) : 5
-  if (autoLoopEnabled && retryCount >= maxRetries) {
-    autoLoopService.disable(workspaceId, 'error')
-    try {
-      updateWorkspaceStatus(workspaceId, 'error')
-    } catch {
-      // The loop is disabled even if an already-terminal status rejects this transition.
+  // Everything below reads the settings file, the workspace row and the
+  // backoff table. Both call sites are fire-and-forget (`void handleQuota(…)`)
+  // and the process treats an unhandled rejection as fatal, so a transient
+  // failure here must not escape: hitting a quota while the database is busy
+  // would otherwise kill Kōbō and every agent running under it.
+  try {
+    const retryCount = retryCounts.get(workspaceId) ?? 0
+    const autoLoopEnabled = getWs(workspaceId)?.autoLoop === true
+    const maxRetries = autoLoopEnabled ? (getGlobalSettings().autoLoopMaxRetries ?? 5) : 5
+    if (autoLoopEnabled && retryCount >= maxRetries) {
+      autoLoopService.disable(workspaceId, 'error')
+      try {
+        updateWorkspaceStatus(workspaceId, 'error')
+      } catch {
+        // The loop is disabled even if an already-terminal status rejects this transition.
+      }
+      return
     }
-    return
-  }
-  const { delayMs, resetsAt, source } = await computeQuotaBackoffMs(workspaceId, retryCount)
-  retryCounts.set(workspaceId, retryCount + 1)
+    const { delayMs, resetsAt, source } = await computeQuotaBackoffMs(workspaceId, retryCount)
+    retryCounts.set(workspaceId, retryCount + 1)
 
-  // The quotaBackoffService owns the timer + the persistent row + the
-  // 'agent:quota-backoff' WS emit. Hand off everything to it.
-  quotaBackoffService.arm(workspaceId, delayMs, { resetsAt: resetsAt ?? null, source, reason: 'quota' })
+    // The quotaBackoffService owns the timer + the persistent row + the
+    // 'agent:quota-backoff' WS emit. Hand off everything to it.
+    quotaBackoffService.arm(workspaceId, delayMs, { resetsAt: resetsAt ?? null, source, reason: 'quota' })
+  } catch (err) {
+    console.error(`[orchestrator] Could not arm the quota backoff for workspace '${workspaceId}':`, err)
+    // The status was already moved to 'quota' above, and the banner offering
+    // "resume now" only renders once a backoff row exists. Leaving it there
+    // would strand the workspace waiting on a timer nobody armed, with the
+    // console line as its only trace. 'error' has a banner of its own.
+    failVisibly(workspaceId)
+  }
+}
+
+/**
+ * Last resort when the retry machinery itself fails: stop the loop and move the
+ * workspace to a status the UI actually surfaces, so the user sees something to
+ * act on instead of a workspace that has quietly stopped moving.
+ */
+function failVisibly(workspaceId: string): void {
+  try {
+    autoLoopService.disable(workspaceId, 'error')
+  } catch (err) {
+    console.error(`[orchestrator] Could not disable the auto-loop for workspace '${workspaceId}':`, err)
+  }
+  try {
+    updateWorkspaceStatus(workspaceId, 'error')
+  } catch {
+    // An already-terminal status refusing this transition is fine.
+  }
 }
 
 /** First retry after a transient failure (watchdog recovery, HTTP 500). The
@@ -2190,21 +2222,28 @@ async function handleTransientAutoLoopFailure(workspaceId: string): Promise<void
     )
   }
 
-  const retryCount = retryCounts.get(workspaceId) ?? 0
-  const maxRetries = getGlobalSettings().autoLoopMaxRetries ?? 5
-  if (retryCount >= maxRetries) {
-    autoLoopService.disable(workspaceId, 'error')
-    try {
-      updateWorkspaceStatus(workspaceId, 'error')
-    } catch {
-      // The loop is disabled even if an already-terminal status rejects this transition.
+  // Same reasoning as handleQuota: fire-and-forget call sites plus a fatal
+  // unhandled-rejection policy mean a failure here must stay contained.
+  try {
+    const retryCount = retryCounts.get(workspaceId) ?? 0
+    const maxRetries = getGlobalSettings().autoLoopMaxRetries ?? 5
+    if (retryCount >= maxRetries) {
+      autoLoopService.disable(workspaceId, 'error')
+      try {
+        updateWorkspaceStatus(workspaceId, 'error')
+      } catch {
+        // The loop is disabled even if an already-terminal status rejects this transition.
+      }
+      return
     }
-    return
+    const { delayMs, resetsAt, source } = await computeQuotaBackoffMs(workspaceId, retryCount, false)
+    const effectiveDelayMs = retryCount === 0 ? Math.min(delayMs, TRANSIENT_FIRST_RETRY_MS) : delayMs
+    retryCounts.set(workspaceId, retryCount + 1)
+    quotaBackoffService.arm(workspaceId, effectiveDelayMs, { resetsAt: resetsAt ?? null, source, reason: 'transient' })
+  } catch (err) {
+    console.error(`[orchestrator] Could not arm the transient retry for workspace '${workspaceId}':`, err)
+    failVisibly(workspaceId)
   }
-  const { delayMs, resetsAt, source } = await computeQuotaBackoffMs(workspaceId, retryCount, false)
-  const effectiveDelayMs = retryCount === 0 ? Math.min(delayMs, TRANSIENT_FIRST_RETRY_MS) : delayMs
-  retryCounts.set(workspaceId, retryCount + 1)
-  quotaBackoffService.arm(workspaceId, effectiveDelayMs, { resetsAt: resetsAt ?? null, source, reason: 'transient' })
 }
 
 /** @internal test-only — re-export of `handleQuota` for direct testing. */

@@ -1,12 +1,17 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it } from 'vitest'
 import {
   authorizeWsUpgrade,
   evaluateNetworkAccess,
   generateToken,
+  isAllowedOrigin,
+  isAllowedRequestHost,
+  isLocalRequestHost,
   isLoopbackAddress,
   resolveBindHost,
   resolveNetworkAccessEnvOverrides,
+  resolveProxyHostname,
   tokenMatches,
+  trustedLocalOriginPorts,
 } from '../server/services/network-access-service.js'
 
 describe('isLoopbackAddress', () => {
@@ -187,5 +192,171 @@ describe('resolveNetworkAccessEnvOverrides', () => {
         KOBO_NETWORK_ACCESS_BEHIND_PROXY: 'true',
       }),
     ).toEqual({ networkAccessEnabled: true, networkAccessBehindProxy: true })
+  })
+})
+
+describe('isAllowedRequestHost', () => {
+  const base = { enabled: false, lanHostnames: [] as string[] }
+
+  it('accepts the host machine own names, with or without a port', () => {
+    expect(isAllowedRequestHost({ ...base, host: 'localhost:3000' })).toBe(true)
+    expect(isAllowedRequestHost({ ...base, host: '127.0.0.1:3000' })).toBe(true)
+    expect(isAllowedRequestHost({ ...base, host: 'localhost' })).toBe(true)
+    expect(isAllowedRequestHost({ ...base, host: '[::1]:3000' })).toBe(true)
+  })
+
+  it('rejects a foreign hostname (DNS rebinding)', () => {
+    expect(isAllowedRequestHost({ ...base, host: 'evil.com' })).toBe(false)
+    expect(isAllowedRequestHost({ ...base, host: 'evil.com:3000' })).toBe(false)
+  })
+
+  it('accepts a LAN address only when network access is enabled', () => {
+    const lanHostnames = ['192.168.1.20']
+    expect(isAllowedRequestHost({ enabled: false, lanHostnames, host: '192.168.1.20:3000' })).toBe(false)
+    expect(isAllowedRequestHost({ enabled: true, lanHostnames, host: '192.168.1.20:3000' })).toBe(true)
+    expect(isAllowedRequestHost({ enabled: true, lanHostnames, host: '192.168.1.99:3000' })).toBe(false)
+  })
+
+  it('accepts any host behind a reverse proxy, where the token gate owns the boundary', () => {
+    expect(isAllowedRequestHost({ ...base, host: 'kobo.example.com', behindProxy: true })).toBe(true)
+  })
+
+  it('enforces the declared proxy hostname when the operator supplies one', () => {
+    // Without a declared hostname we cannot tell the operator's domain from an
+    // attacker's, so proxy mode accepts anything. Declaring it closes that.
+    const proxied = { ...base, behindProxy: true, proxyHostname: 'kobo.example.com' }
+    expect(isAllowedRequestHost({ ...proxied, host: 'kobo.example.com' })).toBe(true)
+    expect(isAllowedRequestHost({ ...proxied, host: 'kobo.example.com:8443' })).toBe(true)
+    expect(isAllowedRequestHost({ ...proxied, host: 'evil.com' })).toBe(false)
+    // Loopback stays reachable so a local healthcheck still works.
+    expect(isAllowedRequestHost({ ...proxied, host: 'localhost:3000' })).toBe(true)
+  })
+
+  it('denies a missing or unparseable host (deny-safe)', () => {
+    expect(isAllowedRequestHost({ ...base, host: undefined })).toBe(false)
+    expect(isAllowedRequestHost({ ...base, host: '' })).toBe(false)
+    expect(isAllowedRequestHost({ ...base, host: 'ht tp://x' })).toBe(false)
+  })
+})
+
+describe('isAllowedOrigin', () => {
+  const base = { enabled: false, lanHostnames: [] as string[] }
+
+  it('allows a request with no Origin (non-browser client)', () => {
+    expect(isAllowedOrigin({ ...base, origin: undefined })).toBe(true)
+  })
+
+  it('allows a loopback page on any port, so the Quasar dev server keeps working', () => {
+    expect(isAllowedOrigin({ ...base, origin: 'http://localhost:3000' })).toBe(true)
+    expect(isAllowedOrigin({ ...base, origin: 'http://localhost:8080' })).toBe(true)
+    expect(isAllowedOrigin({ ...base, origin: 'http://127.0.0.1:9999' })).toBe(true)
+  })
+
+  it('rejects a page served from another site', () => {
+    expect(isAllowedOrigin({ ...base, origin: 'http://evil.com' })).toBe(false)
+    expect(isAllowedOrigin({ ...base, origin: 'https://evil.com:3000' })).toBe(false)
+  })
+
+  it('rejects the opaque null origin sent by a sandboxed iframe', () => {
+    expect(isAllowedOrigin({ ...base, origin: 'null' })).toBe(false)
+  })
+
+  it('accepts a LAN origin only when network access is enabled', () => {
+    const lanHostnames = ['192.168.1.20']
+    expect(isAllowedOrigin({ enabled: false, lanHostnames, origin: 'http://192.168.1.20:3000' })).toBe(false)
+    expect(isAllowedOrigin({ enabled: true, lanHostnames, origin: 'http://192.168.1.20:3000' })).toBe(true)
+  })
+
+  it('accepts any origin behind a reverse proxy, where the token gate owns the boundary', () => {
+    expect(isAllowedOrigin({ ...base, origin: 'https://kobo.example.com', behindProxy: true })).toBe(true)
+  })
+
+  it('accepts a LAN IPv6 origin, not just IPv4', () => {
+    const lanHostnames = ['fd00::1']
+    expect(isAllowedOrigin({ enabled: true, lanHostnames, origin: 'http://[fd00::1]:3000' })).toBe(true)
+  })
+
+  it('trusts a local page only on a port we actually serve', () => {
+    // Kōbō starts dev servers of its own on loopback ports, serving code an
+    // agent wrote. Being on localhost cannot be enough to reach the terminal.
+    const ports = { ...base, allowedPorts: [3000] }
+    expect(isAllowedOrigin({ ...ports, origin: 'http://localhost:3000' })).toBe(true)
+    expect(isAllowedOrigin({ ...ports, origin: 'http://127.0.0.1:3000' })).toBe(true)
+    expect(isAllowedOrigin({ ...ports, origin: 'http://localhost:5173' })).toBe(false)
+    expect(isAllowedOrigin({ ...ports, origin: 'http://localhost:8080' })).toBe(false)
+  })
+
+  it('reads the implicit port of a scheme when the origin carries none', () => {
+    expect(isAllowedOrigin({ ...base, allowedPorts: [80], origin: 'http://localhost' })).toBe(true)
+    expect(isAllowedOrigin({ ...base, allowedPorts: [443], origin: 'https://localhost' })).toBe(true)
+    expect(isAllowedOrigin({ ...base, allowedPorts: [3000], origin: 'http://localhost' })).toBe(false)
+  })
+
+  it('applies the port rule to LAN origins too', () => {
+    const lanHostnames = ['192.168.1.20']
+    expect(
+      isAllowedOrigin({ enabled: true, lanHostnames, allowedPorts: [3000], origin: 'http://192.168.1.20:3000' }),
+    ).toBe(true)
+    expect(
+      isAllowedOrigin({ enabled: true, lanHostnames, allowedPorts: [3000], origin: 'http://192.168.1.20:5173' }),
+    ).toBe(false)
+  })
+
+  it('keeps accepting every port when no list is given', () => {
+    expect(isAllowedOrigin({ ...base, origin: 'http://localhost:5173' })).toBe(true)
+  })
+})
+
+describe('resolveProxyHostname', () => {
+  it('reads the declared hostname, with or without a scheme or port', () => {
+    expect(resolveProxyHostname({ KOBO_NETWORK_ACCESS_PROXY_HOST: 'kobo.example.com' })).toBe('kobo.example.com')
+    expect(resolveProxyHostname({ KOBO_NETWORK_ACCESS_PROXY_HOST: 'https://kobo.example.com' })).toBe(
+      'kobo.example.com',
+    )
+    expect(resolveProxyHostname({ KOBO_NETWORK_ACCESS_PROXY_HOST: 'kobo.example.com:8443' })).toBe('kobo.example.com')
+  })
+
+  it('returns null when unset, empty or unparseable, keeping today behaviour', () => {
+    expect(resolveProxyHostname({})).toBeNull()
+    expect(resolveProxyHostname({ KOBO_NETWORK_ACCESS_PROXY_HOST: '   ' })).toBeNull()
+    expect(resolveProxyHostname({ KOBO_NETWORK_ACCESS_PROXY_HOST: 'ht tp://x' })).toBeNull()
+  })
+})
+
+describe('trustedLocalOriginPorts', () => {
+  const previous = process.env.KOBO_ENFORCE_LOCAL_HOME
+
+  afterEach(() => {
+    if (previous === undefined) delete process.env.KOBO_ENFORCE_LOCAL_HOME
+    else process.env.KOBO_ENFORCE_LOCAL_HOME = previous
+  })
+
+  it('trusts only our own port in production', () => {
+    delete process.env.KOBO_ENFORCE_LOCAL_HOME
+    expect(trustedLocalOriginPorts(3000)).toEqual([3000])
+  })
+
+  it('also trusts the Quasar dev server when running npm run dev', () => {
+    // In dev the browser sits on the Quasar port and proxies through to us, so
+    // that is the origin we see.
+    process.env.KOBO_ENFORCE_LOCAL_HOME = '1'
+    expect(trustedLocalOriginPorts(3300)).toContain(3300)
+    expect(trustedLocalOriginPorts(3300)).toContain(8080)
+  })
+})
+
+describe('isLocalRequestHost', () => {
+  it('recognises every form of the machine own address', () => {
+    expect(isLocalRequestHost('localhost:3000')).toBe(true)
+    expect(isLocalRequestHost('127.0.0.1')).toBe(true)
+    expect(isLocalRequestHost('[::1]:3000')).toBe(true)
+    expect(isLocalRequestHost('[::ffff:127.0.0.1]:3000')).toBe(true)
+    expect(isLocalRequestHost('http://localhost:8080')).toBe(true)
+  })
+
+  it('rejects anything else, including undefined', () => {
+    expect(isLocalRequestHost('evil.com')).toBe(false)
+    expect(isLocalRequestHost('192.168.1.20:3000')).toBe(false)
+    expect(isLocalRequestHost(undefined)).toBe(false)
   })
 })

@@ -34,6 +34,9 @@ vi.mock('../server/services/quota-backoff-service.js', () => ({
 
 vi.mock('../server/services/auto-loop-service.js', () => ({
   onQuotaBackoffExpired: vi.fn(),
+  // Called by handleQuota when the retry ladder runs out, and by failVisibly
+  // when the retry machinery itself fails.
+  disable: vi.fn(),
 }))
 
 describe('computeQuotaBackoffMs', () => {
@@ -252,6 +255,62 @@ describe('handleQuota → quotaBackoffService.arm', () => {
     expect(delayMs).toBe(30 * 60_000 + 30_000)
     expect(meta.resetsAt).toBe('2026-04-23T10:30:00Z')
     expect(meta.source).toBe('rate_limit_info')
+  })
+
+  it('resolves instead of rejecting when arming the backoff throws', async () => {
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const quotaBackoffService = await import('../server/services/quota-backoff-service.js')
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    // A busy database is the realistic case: the call site is `void
+    // handleQuota(...)`, and the process treats an unhandled rejection as
+    // fatal — so hitting a quota during DB contention would kill Kōbō.
+    vi.mocked(quotaBackoffService.arm).mockImplementationOnce(() => {
+      throw new Error('SQLITE_BUSY: database is locked')
+    })
+
+    await expect(orch._handleQuota('w-arm-throws')).resolves.toBeUndefined()
+    expect(errorSpy).toHaveBeenCalled()
+
+    errorSpy.mockRestore()
+  })
+
+  it('handleTransientAutoLoopFailure resolves and fails visibly when arming throws', async () => {
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const quotaBackoffService = await import('../server/services/quota-backoff-service.js')
+    const workspaceService = await import('../server/services/workspace-service.js')
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    vi.mocked(quotaBackoffService.arm).mockImplementationOnce(() => {
+      throw new Error('SQLITE_BUSY: database is locked')
+    })
+
+    await expect(orch._handleTransientAutoLoopFailure('w-transient-throws')).resolves.toBeUndefined()
+    expect(vi.mocked(workspaceService.updateWorkspaceStatus)).toHaveBeenCalledWith('w-transient-throws', 'error')
+
+    errorSpy.mockRestore()
+  })
+
+  it('leaves a visibly failed workspace rather than a silent one when arming throws', async () => {
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const quotaBackoffService = await import('../server/services/quota-backoff-service.js')
+    const workspaceService = await import('../server/services/workspace-service.js')
+    const autoLoopService = await import('../server/services/auto-loop-service.js')
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    vi.mocked(quotaBackoffService.arm).mockImplementationOnce(() => {
+      throw new Error('SQLITE_BUSY: database is locked')
+    })
+
+    await orch._handleQuota('w-stuck')
+
+    // Status 'quota' was set before the failure, and the banner that offers
+    // "resume now" only renders when a backoff row exists. Left as is, the
+    // workspace would sit there waiting for a timer nobody armed.
+    expect(vi.mocked(workspaceService.updateWorkspaceStatus)).toHaveBeenCalledWith('w-stuck', 'error')
+    expect(vi.mocked(autoLoopService.disable)).toHaveBeenCalledWith('w-stuck', 'error')
+
+    errorSpy.mockRestore()
   })
 
   it('calls arm() with fallback ladder values when no info is available', async () => {

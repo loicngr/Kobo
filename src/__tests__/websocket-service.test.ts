@@ -297,6 +297,58 @@ describe('setMessageHandler()', () => {
     // Reset handler
     setMessageHandler(() => {})
   })
+
+  it('ne laisse pas un handler asynchrone en echec devenir un rejet non gere', async () => {
+    const { handleConnection, setMessageHandler } = await import('../server/services/websocket-service.js')
+
+    // Le process installe une politique fatale sur unhandledRejection : un
+    // handler qui rejette (une erreur SQLITE_BUSY, par exemple) tuerait Kōbō
+    // et tous ses agents. On observe le meme signal que cette politique.
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown) => unhandled.push(reason)
+    process.on('unhandledRejection', onUnhandled)
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    setMessageHandler(async () => {
+      throw new Error('database is locked')
+    })
+
+    const ws = new MockWebSocket()
+    handleConnection(ws as unknown as import('ws').WebSocket)
+    ws.simulateMessage({ type: 'chat:message', payload: { content: 'hello' } })
+
+    await new Promise((resolve) => setTimeout(resolve, 20))
+
+    expect(unhandled).toEqual([])
+    expect(errorSpy).toHaveBeenCalled()
+
+    process.off('unhandledRejection', onUnhandled)
+    errorSpy.mockRestore()
+    setMessageHandler(() => {})
+  })
+
+  it('ne laisse pas un handler synchrone en echec remonter a uncaughtException', async () => {
+    const { handleConnection, setMessageHandler } = await import('../server/services/websocket-service.js')
+
+    // MessageHandler accepte aussi une fonction synchrone. Un throw immediat
+    // n'est pas un rejet : il remonte a l'emetteur 'message' du socket, donc a
+    // uncaughtException, que le process traite comme fatal.
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+    setMessageHandler(() => {
+      throw new Error('database is locked')
+    })
+
+    const ws = new MockWebSocket()
+    handleConnection(ws as unknown as import('ws').WebSocket)
+
+    expect(() => ws.simulateMessage({ type: 'chat:message', payload: { content: 'hello' } })).not.toThrow()
+    // Le throw est capture par le wrapper async, donc le log arrive au tick suivant.
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(errorSpy).toHaveBeenCalled()
+
+    errorSpy.mockRestore()
+    setMessageHandler(() => {})
+  })
 })
 
 describe('handleSyncRequest()', () => {

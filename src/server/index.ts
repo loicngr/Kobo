@@ -6,6 +6,7 @@ import { Hono } from 'hono'
 import WebSocket, { WebSocketServer } from 'ws'
 import { closeDb, getDb } from './db/index.js'
 import { getPendingMigrations, runMigrations } from './db/migrations.js'
+import { hostCheckMiddleware } from './middleware/host-check-middleware.js'
 import { networkAuthMiddleware } from './middleware/network-auth-middleware.js'
 import changelogRouter from './routes/changelog.js'
 import devServerRouter from './routes/dev-server.js'
@@ -47,9 +48,12 @@ import { startDevServer, stopAllDevServers, stopDevServer } from './services/dev
 import {
   authorizeWsUpgrade,
   generateToken,
+  getLanHostnames,
   getLanUrls,
+  isAllowedOrigin,
   resolveBindHost,
   resolveNetworkAccessEnvOverrides,
+  trustedLocalOriginPorts,
 } from './services/network-access-service.js'
 import { startPrWatcher, stopPrWatcher } from './services/pr-watcher-service.js'
 import * as quotaBackoffService from './services/quota-backoff-service.js'
@@ -113,14 +117,21 @@ try {
 // Daily DB backup (best-effort, fire-and-forget — never blocks boot).
 // Creates a WAL-safe snapshot alongside kobo.db if no backup exists in the
 // last 24h, and rotates out older backups beyond the retention window.
-void createDailyDbBackupIfNeeded(db, getDbPath()).then((r) => {
-  if (r.created) {
-    console.log(`[kobo] Daily DB backup: ${r.created}`)
-    if (r.deleted.length > 0) {
-      console.log(`[kobo] Rotated ${r.deleted.length} old DB backup(s)`)
+void createDailyDbBackupIfNeeded(db, getDbPath())
+  .then((r) => {
+    if (r.created) {
+      console.log(`[kobo] Daily DB backup: ${r.created}`)
+      if (r.deleted.length > 0) {
+        console.log(`[kobo] Rotated ${r.deleted.length} old DB backup(s)`)
+      }
     }
-  }
-})
+  })
+  .catch((err) => {
+    // A full disk or an unwritable backup directory must not stop the server
+    // from booting: without this catch the rejection reaches the last-resort
+    // handler below and Kōbō exits before it ever listens.
+    console.error('[kobo] Daily DB backup failed (continuing):', err)
+  })
 
 // Initialize process cleanup, agent watchdog, PR watcher, and wakeup rehydration
 reconcileOrphanSessions()
@@ -148,6 +159,12 @@ startUsagePoller()
 
 // Create Hono app
 const app = new Hono()
+
+// Refuse requests addressed to a hostname we are not reachable at, so a page
+// that re-resolves its own domain to 127.0.0.1 cannot read our responses as
+// same-origin. Mounted on every path, ahead of the token gate: the SPA shell
+// is served outside /api/*, and rebinding targets the browser, not the socket.
+app.use('*', hostCheckMiddleware)
 
 // Gate non-loopback requests behind the network-access token (loopback exempt).
 app.use('/api/*', networkAuthMiddleware)
@@ -517,6 +534,27 @@ server.on('upgrade', (request, socket, head) => {
   const { pathname } = new URL(request.url ?? '/', `http://localhost:${PORT}`)
 
   const wsGlobal = getGlobalSettings()
+
+  // WebSockets are exempt from the same-origin policy and send no preflight,
+  // so without this any page the user visits could open /ws/terminal/<id> and
+  // drive a real shell here. Checked before the token gate: on loopback the
+  // token gate lets everything through, which is exactly the case a malicious
+  // page exploits.
+  if (
+    !isAllowedOrigin({
+      origin: request.headers.origin,
+      enabled: wsGlobal.networkAccessEnabled,
+      lanHostnames: getLanHostnames(),
+      behindProxy: wsGlobal.networkAccessBehindProxy,
+      allowedPorts: trustedLocalOriginPorts(PORT),
+    })
+  ) {
+    console.warn(`[origin-check] WS 403 (forbidden origin '${request.headers.origin ?? 'unknown'}') ${pathname}`)
+    socket.write('HTTP/1.1 403 Forbidden\r\n\r\n')
+    socket.destroy()
+    return
+  }
+
   if (
     !authorizeWsUpgrade({
       address: request.socket.remoteAddress,

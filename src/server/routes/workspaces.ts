@@ -450,6 +450,11 @@ app.post('/', migrationGuard, async (c) => {
     if (body.workingBranch && !gitOps.isValidBranchName(body.workingBranch)) {
       return c.json({ error: `Invalid working branch name: ${body.workingBranch}` }, 400)
     }
+    // Same reasoning for the source branch, which is always caller-supplied and
+    // reaches `git fetch <remote> <sourceBranch>` as a bare argument.
+    if (!gitOps.isValidBranchName(body.sourceBranch)) {
+      return c.json({ error: `Invalid source branch name: ${body.sourceBranch}` }, 400)
+    }
 
     creationId = typeof body.creationId === 'string' && body.creationId.length > 0 ? body.creationId : undefined
     currentStep = 'validate'
@@ -4162,6 +4167,11 @@ app.post('/:id/change-pr-base', async (c) => {
     const id = c.req.param('id')
     const body = await c.req.json<{ base: string }>()
     if (!body.base) return c.json({ error: 'Missing base parameter' }, 400)
+    // Forwarded to `gh pr edit --base <base>` / the GitLab equivalent, so a
+    // name starting with `-` would read as a CLI option rather than a branch.
+    if (!gitOps.isValidBranchName(body.base)) {
+      return c.json({ error: `Invalid base branch name: ${body.base}` }, 400)
+    }
 
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
@@ -4266,6 +4276,11 @@ app.post('/:id/change-source-branch', async (c) => {
   try {
     const body = await c.req.json<{ newBase: string }>()
     if (!body.newBase) return c.json({ error: 'Missing newBase parameter' }, 400)
+    // Reaches git (fetch/reset/cherry-pick) and the forge CLI as a bare
+    // argument, and is exported to the custom script as KOBO_NEW_BASE.
+    if (!gitOps.isValidBranchName(body.newBase)) {
+      return c.json({ error: `Invalid source branch name: ${body.newBase}` }, 400)
+    }
 
     if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
 
@@ -4305,6 +4320,12 @@ app.post('/:id/cancel-source-change', async (c) => {
     const id = c.req.param('id')
     const body = await c.req.json<{ previousBase: string }>()
     if (!body.previousBase) return c.json({ error: 'Missing previousBase parameter' }, 400)
+    // Persisted as the workspace source branch, and from there it reaches
+    // `git fetch origin <sourceBranch>` as a bare argument — including from a
+    // plain visit to the Diff tab, with no further user action.
+    if (!gitOps.isValidBranchName(body.previousBase)) {
+      return c.json({ error: `Invalid source branch name: ${body.previousBase}` }, 400)
+    }
 
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)

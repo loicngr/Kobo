@@ -3,7 +3,11 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
-vi.mock('../server/services/settings-service.js', () => ({
+vi.mock('../server/services/settings-service.js', async (importOriginal) => ({
+  // Real redaction: masking the credentials is the point of these routes, so
+  // stubbing it would make the assertions below vacuous.
+  redactGlobalSecrets: (await importOriginal<typeof import('../server/services/settings-service.js')>())
+    .redactGlobalSecrets,
   getSettings: vi.fn(),
   getGlobalSettings: vi.fn(),
   updateGlobalSettings: vi.fn(),
@@ -38,6 +42,7 @@ vi.mock('../server/services/ws-events-retention-service.js', () => ({
 
 import router from '../server/routes/settings.js'
 import * as settingsService from '../server/services/settings-service.js'
+import { MASKED_SECRET } from '../shared/consts.js'
 
 // ── App setup ────────────────────────────────────────────────────────────────
 
@@ -91,6 +96,21 @@ describe('GET /api/settings', () => {
     expect(settingsService.getSettings).toHaveBeenCalledOnce()
   })
 
+  it('masks the stored credentials instead of returning them', async () => {
+    vi.mocked(settingsService.getSettings).mockReturnValue({
+      ...fakeSettings,
+      global: { ...fakeSettings.global, notionMcpKey: 'ntn_real_key', sentryMcpKey: '' },
+    } as never)
+
+    const res = await app.request('/api/settings')
+
+    expect(res.status).toBe(200)
+    const data = (await res.json()) as { global: Record<string, string> }
+    expect(data.global.notionMcpKey).toBe(MASKED_SECRET)
+    expect(data.global.sentryMcpKey).toBe('')
+    expect(JSON.stringify(data)).not.toContain('ntn_real_key')
+  })
+
   it('returns 500 on service error', async () => {
     vi.mocked(settingsService.getSettings).mockImplementation(() => {
       throw new Error('File read error')
@@ -112,6 +132,20 @@ describe('GET /api/settings/global', () => {
     const data = await res.json()
     expect(data).toEqual(fakeGlobalSettings)
     expect(settingsService.getGlobalSettings).toHaveBeenCalledOnce()
+  })
+
+  it('masks the stored credentials instead of returning them', async () => {
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
+      ...fakeGlobalSettings,
+      bitbucketToken: 'bb_real_token',
+    } as never)
+
+    const res = await app.request('/api/settings/global')
+
+    expect(res.status).toBe(200)
+    const data = (await res.json()) as Record<string, string>
+    expect(data.bitbucketToken).toBe(MASKED_SECRET)
+    expect(JSON.stringify(data)).not.toContain('bb_real_token')
   })
 })
 
@@ -178,6 +212,26 @@ describe('PUT /api/settings/global', () => {
     const data = await res.json()
     expect(data).toEqual(updated)
     expect(settingsService.updateGlobalSettings).toHaveBeenCalledWith({ defaultModel: 'claude-sonnet-4-20250514' })
+  })
+
+  it('masks the stored credentials in the response it echoes back', async () => {
+    // The client assigns this response straight into its settings store, so an
+    // unmasked echo would undo the masking on GET the first time anyone saves.
+    vi.mocked(settingsService.updateGlobalSettings).mockReturnValue({
+      ...fakeGlobalSettings,
+      notionMcpKey: 'ntn_real_key',
+    } as never)
+
+    const res = await app.request('/api/settings/global', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ defaultModel: 'claude-sonnet-4-20250514' }),
+    })
+
+    expect(res.status).toBe(200)
+    const data = (await res.json()) as Record<string, string>
+    expect(data.notionMcpKey).toBe(MASKED_SECRET)
+    expect(JSON.stringify(data)).not.toContain('ntn_real_key')
   })
 
   it('returns 500 on service error', async () => {

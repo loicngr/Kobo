@@ -35,7 +35,7 @@ const MAX_BUFFERED_BYTES = 1024 * 1024
 // ── Message handler (decoupled routing) ────────────────────────────────────────
 
 /** Callback for routed WS messages (chat, workspace, devserver commands). */
-export type MessageHandler = (type: string, payload: unknown) => void
+export type MessageHandler = (type: string, payload: unknown) => void | Promise<void>
 let messageHandler: MessageHandler | null = null
 
 /** Register the handler that processes routed WS messages (e.g. chat:message, workspace:start). */
@@ -116,7 +116,14 @@ export function handleConnection(ws: WebSocket): void {
       case 'devserver:start':
       case 'devserver:stop': {
         if (messageHandler) {
-          messageHandler(type, payload)
+          // The handler does DB work before its own try/catch, so it can fail
+          // both ways: a rejection if it is async, a plain throw if it is not.
+          // The process treats either as fatal, which would turn one bad frame
+          // into "Kōbō died and took every running agent with it". Calling it
+          // inside the async wrapper funnels both into the same catch.
+          void (async () => messageHandler?.(type, payload))().catch((err) => {
+            console.error(`[ws] Message handler failed for '${type}':`, err)
+          })
         }
         break
       }
