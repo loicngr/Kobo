@@ -21,3 +21,6 @@ export const SECRET_GLOBAL_KEYS = ['notionMcpKey', 'sentryMcpKey', 'networkAcces
  * only an untouched field is preserved.
  */
 export const MASKED_SECRET = '••••••••'
+
+/** The single character `MASKED_SECRET` is made of. */
+export const MASK_CHARACTER = '•'

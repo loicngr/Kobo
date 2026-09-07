@@ -47,6 +47,7 @@ import {
 import { closeDb, getDb } from '../server/db/index.js'
 import { runMigrations } from '../server/db/migrations.js'
 import { initSchema } from '../server/db/schema.js'
+import { MASKED_SECRET } from '../shared/consts.js'
 
 describe('MCP tasks server handlers', () => {
   let tmpDir: string
@@ -347,10 +348,12 @@ describe('MCP tasks server handlers', () => {
       const result = getSettingsHandler(settingsPath) as {
         global: Record<string, unknown>
       }
-      expect(result.global.notionMcpKey).toBe('')
-      expect(result.global.sentryMcpKey).toBe('')
-      expect(result.global.bitbucketToken).toBe('')
-      expect(result.global.networkAccessToken).toBe('')
+      // Le masque plutot qu'une chaine vide : vide se lirait « non configure »
+      // et l'agent proposerait de configurer l'integration.
+      expect(result.global.notionMcpKey).toBe(MASKED_SECRET)
+      expect(result.global.sentryMcpKey).toBe(MASKED_SECRET)
+      expect(result.global.bitbucketToken).toBe(MASKED_SECRET)
+      expect(result.global.networkAccessToken).toBe(MASKED_SECRET)
       // Le reste des réglages doit rester lisible : c'est l'intérêt de l'outil.
       expect((result.global.defaultModelByEngine as Record<string, string>)['claude-code']).toBe('auto')
       expect(JSON.stringify(result)).not.toContain('secret_value')

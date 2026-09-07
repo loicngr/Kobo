@@ -1462,6 +1462,14 @@ describe('isValidBranchName(name)', () => {
     }
   })
 
+  it('rejects a non-string, which would otherwise be coerced', () => {
+    // `String(undefined)` happens to satisfy the pattern, so an unvalidated
+    // body field reaching here must not slip through on a type mismatch.
+    for (const value of [undefined, null, 123, {}, ['main']]) {
+      expect(isValidBranchName(value as never)).toBe(false)
+    }
+  })
+
   it('rejects the shapes git check-ref-format refuses', () => {
     for (const name of ['', 'feature/..//x', 'feature/x.lock', 'feature/', 'feature/x.', 'a b']) {
       expect(isValidBranchName(name)).toBe(false)

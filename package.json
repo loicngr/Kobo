@@ -48,7 +48,7 @@
     "node": ">=24.15.0"
   },
   "scripts": {
-    "dev": "KOBO_ENFORCE_LOCAL_HOME=1 KOBO_HOME=./data PORT=3300 tsx watch src/server/index.ts",
+    "dev": "KOBO_ENFORCE_LOCAL_HOME=1 KOBO_HOME=./data PORT=3300 KOBO_DEV_CLIENT_ORIGIN=http://localhost:8080 tsx watch src/server/index.ts",
     "dev:client": "cd src/client && KOBO_BACKEND_PORT=3300 npx quasar dev",
     "dev:all": "concurrently \"npm run dev\" \"npm run dev:client\"",
     "build:client": "cd src/client && npx quasar build -m pwa",

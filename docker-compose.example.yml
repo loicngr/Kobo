@@ -44,6 +44,11 @@ services:
       - GITLAB_TOKEN=${GITLAB_TOKEN}
       - KOBO_NETWORK_ACCESS_ENABLED=true
       - KOBO_NETWORK_ACCESS_BEHIND_PROXY=true
+      # Must match the Host() rule below. Behind a proxy Kōbō cannot guess the
+      # domain you serve it under, so without this it has to accept any Host —
+      # which lets a page that re-resolves its own domain to this container be
+      # handed the real interface and ask the user for their token.
+      - KOBO_NETWORK_ACCESS_PROXY_HOST=kobo.example.com
     volumes:
       # Named volume: Kōbō's own state (SQLite DB, settings.json, etc).
       - kobo-data:/root/.config/kobo

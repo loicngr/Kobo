@@ -243,6 +243,33 @@ describe('updateWorkspaceStatus(id, status)', () => {
     expect(updated.updatedAt >= updatedAt).toBe(true)
   })
 
+  it('refuse une branche source que git lirait comme une option', async () => {
+    // Ce champ est persiste puis atteint `git fetch origin <sourceBranch>` en
+    // argument nu. Le garde vit ici pour couvrir tous les ecrivains, y compris
+    // le pr-watcher qui reprend la base annoncee par la forge.
+    const { createWorkspace, updateWorkspaceSourceBranch } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'Bad base', projectPath: '/p', sourceBranch: 'main', workingBranch: 'b' })
+
+    expect(() => updateWorkspaceSourceBranch(ws.id, '--upload-pack=/tmp/evil.sh')).toThrow(/Invalid source branch/)
+    const { getWorkspace } = await import('../server/services/workspace-service.js')
+    expect(getWorkspace(ws.id)?.sourceBranch).toBe('main')
+  })
+
+  it('autorise quota → error, la sortie de secours quand le backoff ne peut pas etre arme', async () => {
+    // Sans cette transition, le filet de securite de l'orchestrateur est
+    // inoperant : le workspace reste bloque en quota, sans timer arme et sans
+    // banniere, puisque QuotaBackoffBanner exige une ligne de backoff.
+    const { createWorkspace, updateWorkspaceStatus } = await import('../server/services/workspace-service.js')
+    const ws = createWorkspace({ name: 'Quota escape', projectPath: '/p', sourceBranch: 'main', workingBranch: 'b' })
+    updateWorkspaceStatus(ws.id, 'brainstorming')
+    updateWorkspaceStatus(ws.id, 'executing')
+    updateWorkspaceStatus(ws.id, 'quota')
+
+    const updated = updateWorkspaceStatus(ws.id, 'error')
+
+    expect(updated.status).toBe('error')
+  })
+
   it('autorise la self-transition extracting → extracting', async () => {
     const { createWorkspace, updateWorkspaceStatus } = await import('../server/services/workspace-service.js')
     const ws = createWorkspace({ name: 'Self-transition', projectPath: '/p', sourceBranch: 'main', workingBranch: 'b' })

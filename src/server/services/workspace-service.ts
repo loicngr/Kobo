@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3'
 import { nanoid } from 'nanoid'
 import { getDb } from '../db/index.js'
+import { isValidBranchName } from '../utils/git-ops.js'
 import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 import * as orchestrator from './agent/orchestrator.js'
 import * as autoLoopService from './auto-loop-service.js'
@@ -164,7 +165,11 @@ const VALID_TRANSITIONS: Record<WorkspaceStatus, WorkspaceStatus[]> = {
   // session can hit an interactive tool-approval/question before its status
   // flips to `executing` — the same reasoning as the entering-quota comment
   // above, just for the other direction.
-  quota: ['idle', 'executing', 'awaiting-user'],
+  // `error` is the escape hatch when the retry machinery itself fails: the
+  // status is moved to `quota` before the backoff is armed, so a failure in
+  // between would otherwise strand the workspace there — no timer, and no
+  // banner either, since QuotaBackoffBanner needs a backoff row to render.
+  quota: ['idle', 'executing', 'awaiting-user', 'error'],
 }
 
 interface WorkspaceRow {
@@ -517,6 +522,14 @@ export function updateWorkspaceSourceBranch(id: string, sourceBranch: string): W
   const sanitized = sourceBranch.trim()
   if (!sanitized) {
     throw new Error('Source branch cannot be empty')
+  }
+  // The stored value reaches `git fetch origin <sourceBranch>` as a bare
+  // argument, from paths as ordinary as opening the Diff tab, so a name git
+  // would read as an option must never land here. Guarding the writer rather
+  // than each route covers the pr-watcher too, which takes the base the forge
+  // reports — and a leading dash is a perfectly valid ref name upstream.
+  if (!isValidBranchName(sanitized)) {
+    throw new Error(`Invalid source branch name: ${sanitized}`)
   }
   const db = getDb()
   const now = new Date().toISOString()

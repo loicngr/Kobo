@@ -199,6 +199,16 @@ describe('updateGlobalSettings()', () => {
     expect(updated.sentryEnabled).toBe(false)
   })
 
+  it('keeps a stored secret when the mask was partly edited', () => {
+    // The field shows the mask; a stray Backspace leaves seven bullets, which
+    // is not the sentinel and would otherwise be written as the new token,
+    // silently breaking the integration much later.
+    updateGlobalSettings({ notionMcpKey: 'ntn_real_key' })
+
+    expect(updateGlobalSettings({ notionMcpKey: '•••••••' }).notionMcpKey).toBe('ntn_real_key')
+    expect(updateGlobalSettings({ notionMcpKey: '•' }).notionMcpKey).toBe('ntn_real_key')
+  })
+
   it('still writes a new secret and still clears one on an empty value', () => {
     updateGlobalSettings({ notionMcpKey: 'ntn_first' })
     expect(updateGlobalSettings({ notionMcpKey: 'ntn_second' }).notionMcpKey).toBe('ntn_second')

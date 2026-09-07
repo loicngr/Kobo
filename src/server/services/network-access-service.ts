@@ -56,8 +56,11 @@ function collectLanAddresses(family: 'IPv4' | null): string[] {
  * server (localhost:8080 proxying to localhost:3000) working.
  */
 // `::ffff:7f00:1` is what the URL parser normalises `::ffff:127.0.0.1` into,
-// so both spellings of the IPv4-mapped loopback land here.
-const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1', '::ffff:127.0.0.1', '::ffff:7f00:1'])
+// so both spellings of the IPv4-mapped loopback land here. `0.0.0.0` and `::`
+// name the wildcard bind rather than a host, but Linux routes them to loopback
+// and `http://0.0.0.0:3000` is a common bookmark; a rebinding page can never
+// produce them, since the browser puts its own domain in the Host.
+const LOCAL_HOSTNAMES = new Set(['localhost', '127.0.0.1', '::1', '::ffff:127.0.0.1', '::ffff:7f00:1', '0.0.0.0', '::'])
 
 /**
  * Hostname carried by a raw `Host` or `Origin` header, or null when the value
@@ -101,16 +104,16 @@ function isAllowedHostname(hostname: string | null, enabled: boolean, lanHostnam
  * legitimately reachable are accepted — its own loopback names, plus its LAN
  * addresses once network access is enabled.
  *
- * Behind a reverse proxy the Host is whatever domain the operator chose, and we
- * have no way to know it, so the check is skipped there. That mode also turns
- * off the loopback exemption, so every `/api/*` request has to carry the token,
- * which a rebinding page cannot obtain.
+ * Behind a reverse proxy the Host is whatever domain the operator chose. When
+ * they declare it via `KOBO_NETWORK_ACCESS_PROXY_HOST` it is enforced like any
+ * other name; without it we cannot tell their domain from an attacker's, so
+ * anything is accepted. That mode also turns off the loopback exemption, so
+ * every `/api/*` request has to carry the token.
  *
- * Known residual risk in that mode: the SPA shell itself is served outside
- * `/api/*` and therefore behind no token at all, so a rebinding page can get
- * the real interface served on its own origin and ask the user to paste their
- * token into it. Closing that needs the operator to declare the expected
- * hostname; until then, proxy deployments must authenticate at the proxy.
+ * Residual risk when the hostname is left undeclared: the SPA shell is served
+ * outside `/api/*` and therefore behind no token, so a rebinding page can be
+ * handed the real interface and ask the user to paste their token into it.
+ * Declaring the hostname closes that; otherwise, authenticate at the proxy.
  */
 export function isAllowedRequestHost(params: {
   host: string | undefined
@@ -165,57 +168,60 @@ export function resolveProxyHostname(env: NodeJS.ProcessEnv = process.env): stri
  * curl, or Kōbō's own MCP server calling back into the API. Such a caller on
  * loopback already has the machine, and over the LAN still needs the token.
  *
- * Note this is per-host, not per-port: any page served from a loopback port
- * counts as local, including the dev servers Kōbō itself spawns.
+ * The rule is that the page must have been served by us: its authority has to
+ * match the Host this very request carries. That survives a port remap
+ * (`docker -p 3001:3000`, `ssh -L`) which a fixed port list would break, while
+ * still rejecting a page on another loopback port — including the per-workspace
+ * dev servers Kōbō itself spawns, serving whatever code an agent just wrote.
+ *
+ * Matching the Host is not a defense on its own, since a rebinding page matches
+ * it too. The Host check above is what rejects that one; this must simply not
+ * undo it.
  */
 export function isAllowedOrigin(params: {
   origin: string | undefined
-  enabled: boolean
-  lanHostnames: string[]
+  /** Raw `Host` header of the same request — what the page was served from. */
+  requestHost: string | undefined
   behindProxy?: boolean
-  /**
-   * Ports a page may be served from and still be trusted. Omitted means any
-   * port, which is only right where the port carries no meaning.
-   */
-  allowedPorts?: number[]
+  proxyHostname?: string | null
+  /** Origin the dev client is served from, when `npm run dev` declares one. */
+  devOrigin?: string | null
 }): boolean {
-  if (params.behindProxy) return true
   if (params.origin === undefined) return true
-  if (params.allowedPorts) {
-    const port = originPort(params.origin)
-    if (port === null || !params.allowedPorts.includes(port)) return false
+
+  const origin = authority(params.origin)
+  if (origin === null) return false
+
+  if (params.behindProxy) {
+    if (!params.proxyHostname) return true
+    return headerHostname(params.origin) === params.proxyHostname
   }
-  return isAllowedHostname(headerHostname(params.origin), params.enabled, params.lanHostnames)
+
+  // `quasar dev` proxies to the backend with changeOrigin, so it rewrites the
+  // Host to ours while the browser stays on the Quasar port. The two cannot
+  // match there, hence the explicit declaration.
+  if (params.devOrigin && origin === authority(params.devOrigin)) return true
+
+  return params.requestHost !== undefined && origin === authority(params.requestHost)
 }
 
-/** Port an origin resolves to, falling back to the scheme's implicit one. */
-function originPort(origin: string): number | null {
+/** Host and port of a raw `Host`/`Origin` value, or null when unparseable. */
+function authority(value: string): string | null {
   try {
-    const url = new URL(origin)
-    if (url.port) return Number(url.port)
-    return url.protocol === 'https:' ? 443 : 80
+    return new URL(value.includes('://') ? value : `http://${value}`).host || null
   } catch {
     return null
   }
 }
 
-/** Ports the Quasar dev server binds; it proxies /api and /ws to the backend. */
-const QUASAR_DEV_PORTS = [8080, 9000]
-
 /**
- * Ports a local page may be served from and still count as Kōbō's own UI.
- *
- * Being on loopback is not enough on its own: Kōbō starts a dev server per
- * workspace, on a loopback port, serving whatever code an agent just wrote.
- * Without this, such a page would be as trusted as the real interface and could
- * open a terminal WebSocket or drive a cross-site write.
- *
- * In development the browser sits on the Quasar port and proxies through to the
- * backend, so that is the origin we see — trusted only when `npm run dev` set
- * `KOBO_ENFORCE_LOCAL_HOME`, never in a published build.
+ * Origin the development client is served from, declared by the `dev` script
+ * via `KOBO_DEV_CLIENT_ORIGIN`. Never set in a published build, so it cannot
+ * widen anything in production.
  */
-export function trustedLocalOriginPorts(backendPort: number): number[] {
-  return process.env.KOBO_ENFORCE_LOCAL_HOME === '1' ? [backendPort, ...QUASAR_DEV_PORTS] : [backendPort]
+export function resolveDevClientOrigin(env: NodeJS.ProcessEnv = process.env): string | null {
+  const raw = env.KOBO_DEV_CLIENT_ORIGIN?.trim()
+  return raw ? raw : null
 }
 
 /** ~32-char url-safe random token. */

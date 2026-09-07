@@ -84,6 +84,7 @@ A production-installed Kōbō (`npx @loicngr/kobo`) and a dev server can run sid
 | `KOBO_NETWORK_ACCESS_ENABLED` | — | Set `true` to enable [network access](#network-access) at boot, without going through Settings. Mainly useful for headless/Docker deployments. |
 | `KOBO_NETWORK_ACCESS_BEHIND_PROXY` | — | Set `true` to enable [behind a reverse proxy](#behind-a-reverse-proxy) mode at boot (disables the loopback bypass entirely). Requires `KOBO_NETWORK_ACCESS_ENABLED=true`. |
 | `KOBO_NETWORK_ACCESS_PROXY_HOST` | — | Domain your proxy serves Kōbō under (`kobo.example.com`). Makes the [host check](#reachable-addresses) enforce that name in behind-a-reverse-proxy mode instead of accepting any. A scheme and port are ignored. |
+| `KOBO_DEV_CLIENT_ORIGIN` | — | Origin the Quasar dev server is served from (`http://localhost:8080`), so its page counts as Kōbō's own UI despite the proxy rewriting the `Host`. Set by the `dev` npm script; never set in a published build. |
 | `GH_TOKEN` | — | Non-interactive auth for the `gh` CLI (used by the [forge integration](#forge-integration)). Needed in headless containers where `gh auth login`'s browser flow isn't practical. |
 | `GITLAB_TOKEN` | — | Non-interactive auth for the `glab` CLI, same rationale as `GH_TOKEN`. |
 | `KOBO_WORKTREE_CLEANUP_IMAGE` | `alpine` | Docker image used to reclaim ownership of root-owned files when removing a worktree fails on a permission error. Override with a locally cached image to avoid a pull. |
@@ -512,10 +513,11 @@ spoof a loopback address to bypass authentication.
 ### Reachable addresses
 
 Kōbō only answers to the names it is legitimately reachable at: `localhost`,
-`127.0.0.1`, `::1`, and — once network access is enabled — the LAN IPv4
-addresses listed in Settings. A request carrying any other `Host` gets a
-**403 `forbidden host`**, and a WebSocket handshake carrying any other `Origin`
-gets a **403** as well.
+`127.0.0.1`, `::1`, `0.0.0.0` and — once network access is enabled — its own
+non-internal addresses, IPv4 and IPv6 alike. A request carrying any other
+`Host` gets a **403 `forbidden host`**. Note that Settings lists only the IPv4
+URLs, since those are the ones meant to be read off a screen or scanned; the
+IPv6 addresses of the same machine are accepted too.
 
 This is what stops DNS rebinding: a page you visit can make its own domain
 re-resolve to `127.0.0.1`, after which the browser treats Kōbō's responses as
@@ -524,12 +526,15 @@ same-origin and can read them — your settings, your workspaces — and can ope
 genuinely comes from loopback, so the token gate lets it through; only the
 `Host` and `Origin` headers tell it apart from your own tab.
 
-The `Origin` check also closes cross-site writes. A page on another site can
-reach `http://localhost:3000` with a legitimate `Host`, and while it cannot read
-the reply, the write would otherwise land — so a request whose `Origin` names
-another site is refused with **403 `forbidden origin`**. A request with no
-`Origin` at all is allowed: browsers always send one, so its absence means a
-command-line caller.
+The `Origin` check closes cross-site writes and the WebSocket terminal. A page
+on another site can reach `http://localhost:3000` with a legitimate `Host`, and
+while it cannot read the reply, the write would otherwise land. The rule is that
+the page must have been served by us: its origin has to match the `Host` of the
+same request, otherwise it gets **403 `forbidden origin`**. That holds however
+you reach Kōbō, including through a remapped port such as `docker -p 3001:3000`
+or an `ssh -L` tunnel. A request carrying no `Origin` at all is allowed:
+browsers always send one on a write or a WebSocket handshake, so its absence
+means a command-line caller.
 
 Practical consequences:
 
@@ -545,21 +550,20 @@ Practical consequences:
 - **`/api/health` is exempt**, so a Docker or Compose healthcheck reaching it
   through the service name keeps working. `/api/health/logs` and
   `/api/health/report` are not exempt.
-- **A page is trusted only on a port Kōbō serves.** Being on loopback is not
-  enough: Kōbō starts a dev server per workspace, on a loopback port, serving
-  whatever code an agent just wrote, and such a page must not count as the real
-  interface. Only Kōbō's own port is trusted, plus the Quasar dev server
-  (`8080`, `9000`) when running `npm run dev`. Running the client dev server on
-  another port therefore needs that port added to `QUASAR_DEV_PORTS` in
-  `src/server/services/network-access-service.ts`.
+- **A page served from another loopback port is not trusted.** Being on
+  loopback is not enough: Kōbō starts a dev server per workspace, on a loopback
+  port, serving whatever code an agent just wrote, and such a page must not
+  count as the real interface. In development the Quasar dev server is the one
+  exception, since it proxies to the backend and so never matches the `Host`;
+  the `dev` npm script declares it through `KOBO_DEV_CLIENT_ORIGIN`.
 - **Behind-a-reverse-proxy mode accepts any host by default**, because only the
   operator knows the expected domain. Declare it with
-  `KOBO_NETWORK_ACCESS_PROXY_HOST` (see below) to close that. That mode also
-  disables the loopback exemption, so every `/api/*` request has to carry the
-  token — but the SPA itself is served outside `/api/*` and behind no token, so
-  without a declared hostname a rebinding page can be served the real interface
-  and ask the user to paste their token into it. Authenticate at the proxy, and
-  do not rely on Kōbō's token there.
+  `KOBO_NETWORK_ACCESS_PROXY_HOST` (see below) to close that; the bundled
+  `docker-compose.example.yml` and `docker-compose.local-traefik.yml` do. That
+  mode also disables the loopback exemption, so every `/api/*` request has to
+  carry the token — but the SPA itself is served outside `/api/*` and behind no
+  token, so without a declared hostname a rebinding page can be served the real
+  interface and ask the user to paste their token into it.
 
 #### `KOBO_NETWORK_ACCESS_PROXY_HOST`
 

@@ -123,6 +123,10 @@ export function handleConnection(ws: WebSocket): void {
           // inside the async wrapper funnels both into the same catch.
           void (async () => messageHandler?.(type, payload))().catch((err) => {
             console.error(`[ws] Message handler failed for '${type}':`, err)
+            // Every other branch of this switch answers on failure; a routed
+            // message that vanishes silently leaves the user waiting forever.
+            const message = err instanceof Error ? err.message : String(err)
+            ws.send(JSON.stringify({ type: 'error', payload: { message: `Failed to handle '${type}': ${message}` } }))
           })
         }
         break

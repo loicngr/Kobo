@@ -143,25 +143,13 @@ vi.mock('../server/services/sentry-service.js', () => ({
   assignSentryIssueToSelf: vi.fn().mockResolvedValue({ assigned: false, reason: 'mock' }),
 }))
 
-vi.mock('../server/utils/git-ops.js', () => ({
+vi.mock('../server/utils/git-ops.js', async (importOriginal) => ({
+  // Les helpers purs (validation, slug) viennent du vrai module : les recopier
+  // ici les faisait diverger en silence de la production.
+  isValidBranchName: (await importOriginal<typeof import('../server/utils/git-ops.js')>()).isValidBranchName,
+  slugifyBranchSegment: (await importOriginal<typeof import('../server/utils/git-ops.js')>()).slugifyBranchSegment,
   fetchSourceBranch: vi.fn(),
   localBranchExists: vi.fn(),
-  // Mirror the real branch-segment sanitizer so ticket-id branch composition works.
-  slugifyBranchSegment: (input: string, maxLen = 50) =>
-    input
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^A-Za-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '')
-      .slice(0, maxLen)
-      .replace(/-+$/g, ''),
-  // Mirror the real validator so rename-branch tests exercise real behavior.
-  isValidBranchName: (name: string) => {
-    if (!/^[A-Za-z0-9][A-Za-z0-9/_.-]*$/.test(name)) return false
-    if (name.includes('..') || name.includes('//')) return false
-    if (name.endsWith('/') || name.endsWith('.') || name.endsWith('.lock')) return false
-    return true
-  },
   deleteLocalBranch: vi.fn(),
   deleteRemoteBranch: vi.fn(),
   pushBranch: vi.fn(),

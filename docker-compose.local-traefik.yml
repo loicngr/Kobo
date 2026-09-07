@@ -48,6 +48,9 @@ services:
       - KOBO_HOME=/root/.config/kobo
       - KOBO_NETWORK_ACCESS_ENABLED=true
       - KOBO_NETWORK_ACCESS_BEHIND_PROXY=true
+      # Must match the Host() rule below — behind a proxy Kōbō cannot guess the
+      # domain you serve it under, and without this it accepts any Host.
+      - KOBO_NETWORK_ACCESS_PROXY_HOST=kobo.localhost
     volumes:
       - kobo-test-data:/root/.config/kobo
       - ${KOBO_PROJECTS_DIR:-./kobo-projects}:/projects

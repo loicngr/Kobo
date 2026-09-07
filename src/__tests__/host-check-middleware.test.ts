@@ -8,11 +8,6 @@ vi.mock('../server/services/network-access-service.js', async (importOriginal) =
 vi.mock('../server/services/settings-service.js', () => ({
   getGlobalSettings: vi.fn(),
 }))
-// The middleware only needs the bound port; mocking it keeps the whole agent
-// stack out of this test.
-vi.mock('../server/services/agent/orchestrator.js', () => ({
-  getBackendPort: vi.fn(() => 3000),
-}))
 
 import { hostCheckMiddleware } from '../server/middleware/host-check-middleware.js'
 import { getLanHostnames } from '../server/services/network-access-service.js'
@@ -124,6 +119,30 @@ describe('hostCheckMiddleware — cross-site writes', () => {
     })
     expect(res.status).toBe(403)
     expect(await res.json()).toEqual({ error: 'forbidden origin' })
+  })
+
+  it('serves a write through a remapped port, the docker -p 3001:3000 case', async () => {
+    // The browser sees 3001 while the server binds 3000, so a fixed port list
+    // would 403 every write and every WebSocket while the SPA still loads.
+    setup()
+    const res = await app.request('http://localhost:3001/api/write', {
+      method: 'POST',
+      headers: { origin: 'http://localhost:3001' },
+    })
+    expect(res.status).toBe(200)
+  })
+
+  it('refuses everything remote when the settings cannot be read', async () => {
+    vi.mocked(getLanHostnames).mockReturnValue([])
+    vi.mocked(getGlobalSettings).mockImplementation(() => {
+      throw new Error('EACCES: permission denied')
+    })
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+    const res = await app.request('http://192.168.1.20:3000/api/ping')
+
+    expect(res.status).toBe(403)
+    errorSpy.mockRestore()
   })
 
   it('refuses a cross-site read too, so a rebinding page gains nothing', async () => {

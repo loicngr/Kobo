@@ -1,12 +1,11 @@
 import type { MiddlewareHandler } from 'hono'
-import { getBackendPort } from '../services/agent/orchestrator.js'
 import {
   getLanHostnames,
   isAllowedOrigin,
   isAllowedRequestHost,
   isLocalRequestHost,
+  resolveDevClientOrigin,
   resolveProxyHostname,
-  trustedLocalOriginPorts,
 } from '../services/network-access-service.js'
 import { getGlobalSettings } from '../services/settings-service.js'
 
@@ -47,10 +46,10 @@ export const hostCheckMiddleware: MiddlewareHandler = async (c, next) => {
   // allowed whatever the settings say, so settle it here.
   if (origin === undefined && isLocalRequestHost(host)) return next()
 
-  const allowedPorts = trustedLocalOriginPorts(getBackendPort())
+  const devOrigin = resolveDevClientOrigin()
 
-  // A page served by Kōbō itself, talking to Kōbō: still no settings needed.
-  if (isLocalRequestHost(host) && isAllowedOrigin({ origin, enabled: false, lanHostnames: [], allowedPorts })) {
+  // A page we served ourselves, talking to us: still no settings needed.
+  if (isLocalRequestHost(host) && isAllowedOrigin({ origin, requestHost: host, devOrigin })) {
     return next()
   }
 
@@ -84,13 +83,13 @@ export const hostCheckMiddleware: MiddlewareHandler = async (c, next) => {
   if (
     !isAllowedOrigin({
       origin,
-      enabled: global.networkAccessEnabled,
-      lanHostnames,
+      requestHost: host,
       behindProxy: global.networkAccessBehindProxy,
-      allowedPorts,
+      proxyHostname: resolveProxyHostname(),
+      devOrigin,
     })
   ) {
-    console.warn(`[host-check] 403 (forbidden origin '${origin}') ${c.req.method} ${c.req.path}`)
+    console.warn(`[origin-check] 403 (forbidden origin '${origin}') ${c.req.method} ${c.req.path}`)
     return c.json({ error: 'forbidden origin' }, 403)
   }
 

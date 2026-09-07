@@ -1,6 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { MASKED_SECRET, SECRET_GLOBAL_KEYS, WORKTREES_PATH } from '../../shared/consts.js'
+import { MASK_CHARACTER, MASKED_SECRET, SECRET_GLOBAL_KEYS, WORKTREES_PATH } from '../../shared/consts.js'
 import { isValidProjectColor, type ProjectColor } from '../../shared/project-colors.js'
 import { isValidSkillSuite, type SkillSuite } from '../../shared/skill-suite-prompts.js'
 import { DEFAULT_WHIP_SHORTCUT, isValidWhipShortcut } from '../../shared/whip-shortcut.js'
@@ -1463,8 +1463,6 @@ export function getSettings(): Settings {
   return readSettings()
 }
 
-export { SECRET_GLOBAL_KEYS }
-
 /**
  * Copy of the global settings safe to hand to a client: every stored credential
  * becomes `MASKED_SECRET`, an unset one stays empty so the UI can tell "not
@@ -1476,6 +1474,11 @@ export { SECRET_GLOBAL_KEYS }
  * screenshot. `updateGlobalSettings` reads the mask back as "keep the stored
  * value", so a round-trip through the form is lossless.
  */
+/** True for a value made of nothing but mask characters (never a real token). */
+function isMaskOnly(value: unknown): boolean {
+  return typeof value === 'string' && value.length > 0 && [...value].every((c) => c === MASK_CHARACTER)
+}
+
 export function redactGlobalSecrets(global: GlobalSettings): GlobalSettings {
   const redacted: GlobalSettings = { ...global }
   for (const key of SECRET_GLOBAL_KEYS) {
@@ -1635,8 +1638,13 @@ export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSett
   // hands the mask back on every save. Dropping the key preserves the stored
   // value (same "drop it and keep the previous one" pattern as below), while a
   // real value still overwrites and an empty one still clears.
+  //
+  // Any run of mask characters counts, not just the exact sentinel: a stray
+  // Backspace in the field leaves a shorter run, and writing that as the new
+  // credential would break the integration silently, long after the fact. No
+  // real token is made of nothing but bullets.
   for (const key of SECRET_GLOBAL_KEYS) {
-    if (data[key] === MASKED_SECRET) delete data[key]
+    if (isMaskOnly(data[key])) delete data[key]
   }
   // Validate skillSuite before merging: drop invalid values so the previous
   // value is preserved (same pattern as `upsertProject`'s color validation).

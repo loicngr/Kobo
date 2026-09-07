@@ -7,7 +7,7 @@ import * as settingsService from '../server/services/settings-service.js'
 import { slugifyProjectName } from '../server/utils/project-slug.js'
 import { resolveExistingPathInside } from '../server/utils/safe-path.js'
 import { resolveWorkspaceWorktreePath } from '../server/utils/worktree-paths.js'
-import { SECRET_GLOBAL_KEYS } from '../shared/consts.js'
+import { MASKED_SECRET, SECRET_GLOBAL_KEYS } from '../shared/consts.js'
 
 /** Allowed task status values. */
 export const VALID_TASK_STATUSES = ['pending', 'in_progress', 'done'] as const
@@ -273,7 +273,9 @@ export function getDevServerStatusHandler(db: Database.Database, workspaceId: st
 function sanitizeGlobalSecrets(global: Record<string, unknown>): Record<string, unknown> {
   const sanitized = { ...global }
   for (const key of SECRET_GLOBAL_KEYS) {
-    if (key in sanitized) sanitized[key] = ''
+    // Same mask as the HTTP API rather than an empty string: blanking it would
+    // read as "not configured" and send the agent off offering to set it up.
+    if (sanitized[key]) sanitized[key] = MASKED_SECRET
   }
   return sanitized
 }

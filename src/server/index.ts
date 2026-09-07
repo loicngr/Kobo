@@ -51,9 +51,11 @@ import {
   getLanHostnames,
   getLanUrls,
   isAllowedOrigin,
+  isAllowedRequestHost,
   resolveBindHost,
+  resolveDevClientOrigin,
   resolveNetworkAccessEnvOverrides,
-  trustedLocalOriginPorts,
+  resolveProxyHostname,
 } from './services/network-access-service.js'
 import { startPrWatcher, stopPrWatcher } from './services/pr-watcher-service.js'
 import * as quotaBackoffService from './services/quota-backoff-service.js'
@@ -536,17 +538,34 @@ server.on('upgrade', (request, socket, head) => {
   const wsGlobal = getGlobalSettings()
 
   // WebSockets are exempt from the same-origin policy and send no preflight,
-  // so without this any page the user visits could open /ws/terminal/<id> and
-  // drive a real shell here. Checked before the token gate: on loopback the
+  // so without these two any page the user visits could open /ws/terminal/<id>
+  // and drive a real shell here. Checked before the token gate: on loopback the
   // token gate lets everything through, which is exactly the case a malicious
-  // page exploits.
+  // page exploits. The HTTP side gets the same pair from hostCheckMiddleware,
+  // which does not see upgrade requests.
+  const wsHost = request.headers.host
   if (
-    !isAllowedOrigin({
-      origin: request.headers.origin,
+    !isAllowedRequestHost({
+      host: wsHost,
       enabled: wsGlobal.networkAccessEnabled,
       lanHostnames: getLanHostnames(),
       behindProxy: wsGlobal.networkAccessBehindProxy,
-      allowedPorts: trustedLocalOriginPorts(PORT),
+      proxyHostname: resolveProxyHostname(),
+    })
+  ) {
+    console.warn(`[host-check] WS 403 (forbidden host '${wsHost ?? 'unknown'}') ${pathname}`)
+    socket.write('HTTP/1.1 403 Forbidden\r\n\r\n')
+    socket.destroy()
+    return
+  }
+
+  if (
+    !isAllowedOrigin({
+      origin: request.headers.origin,
+      requestHost: wsHost,
+      behindProxy: wsGlobal.networkAccessBehindProxy,
+      proxyHostname: resolveProxyHostname(),
+      devOrigin: resolveDevClientOrigin(),
     })
   ) {
     console.warn(`[origin-check] WS 403 (forbidden origin '${request.headers.origin ?? 'unknown'}') ${pathname}`)
