@@ -3,6 +3,7 @@
     <div class="row items-center q-mb-sm">
       <div class="text-subtitle2">{{ $t('comparison.title') }}</div>
       <q-space />
+      <q-btn flat dense round size="sm" icon="download" :title="$t('comparison.exportCsv')" @click="exportCsv" />
       <q-btn flat dense round size="sm" icon="refresh" :loading="loading" @click="load" />
     </div>
     <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('comparison.hint') }}</div>
@@ -12,9 +13,17 @@
         <tr>
           <th class="text-left">{{ $t('comparison.engine') }}</th>
           <th class="text-left">{{ $t('comparison.status') }}</th>
+          <th class="text-right">{{ $t('comparison.tasks') }}</th>
           <th class="text-right">{{ $t('comparison.commits') }}</th>
           <th class="text-right">{{ $t('comparison.files') }}</th>
           <th class="text-right">{{ $t('comparison.diff') }}</th>
+          <th class="text-right">{{ $t('comparison.messages') }}</th>
+          <th class="text-right">{{ $t('comparison.questions') }}</th>
+          <th class="text-right">{{ $t('comparison.tools') }}</th>
+          <th class="text-right">{{ $t('comparison.errors') }}</th>
+          <th class="text-right">{{ $t('comparison.tokens') }}</th>
+          <th class="text-right">{{ $t('comparison.sessions') }}</th>
+          <th class="text-right">{{ $t('comparison.duration') }}</th>
           <th />
         </tr>
       </thead>
@@ -30,6 +39,7 @@
               · {{ $t('comparison.archived') }}
             </span>
           </td>
+          <td class="text-right comparison-mono">{{ member.tasks.done }}/{{ member.tasks.total }}</td>
           <td class="text-right">{{ member.gitStats?.commitCount ?? '-' }}</td>
           <td class="text-right">{{ member.gitStats?.filesChanged ?? '-' }}</td>
           <td class="text-right">
@@ -39,6 +49,23 @@
             </span>
             <span v-else class="text-kobo-3">-</span>
           </td>
+          <td class="text-right comparison-mono">
+            <span :title="$t('comparison.messagesTitle')">
+              {{ member.activity.agentMessages }} / {{ member.activity.userMessages }}
+            </span>
+          </td>
+          <td class="text-right">{{ member.activity.questions }}</td>
+          <td class="text-right">{{ member.activity.toolCalls }}</td>
+          <td class="text-right" :class="member.activity.errors > 0 ? 'text-kobo-danger' : ''">
+            {{ member.activity.errors }}
+          </td>
+          <td class="text-right comparison-mono">
+            <span :title="$t('comparison.tokensTitle')">
+              {{ compact(member.activity.inputTokens) }} / {{ compact(member.activity.outputTokens) }}
+            </span>
+          </td>
+          <td class="text-right">{{ member.activity.sessions }}</td>
+          <td class="text-right comparison-mono">{{ formatDuration(member.activity.durationMs) }}</td>
           <td class="text-right">
             <q-btn
               v-if="!isCurrent(member)"
@@ -63,6 +90,7 @@
 
 <script setup lang="ts">
 import { useWorkspaceStore, type Workspace } from 'src/stores/workspace'
+import { buildComparisonCsv } from 'src/utils/comparison-csv'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
@@ -76,9 +104,41 @@ interface GitStats {
   deletions: number
 }
 
+interface ActivityStats {
+  sessions: number
+  durationMs: number
+  userMessages: number
+  injectedPrompts: number
+  agentMessages: number
+  questions: number
+  toolCalls: number
+  errors: number
+  inputTokens: number
+  outputTokens: number
+}
+
 interface ComparisonMember {
   workspace: Workspace
   gitStats: GitStats | null
+  /** Every task, acceptance criteria included — the auto-loop badge's count. */
+  tasks: { done: number; total: number }
+  activity: ActivityStats
+}
+
+/** 12 345 → "12.3k": a column of token counts needs to stay a column. */
+function compact(n: number): string {
+  if (n < 1000) return String(n)
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`
+  return `${(n / 1_000_000).toFixed(1)}M`
+}
+
+function formatDuration(ms: number): string {
+  if (ms <= 0) return '-'
+  const seconds = Math.round(ms / 1000)
+  if (seconds < 60) return t('reliability.durationSeconds', { s: seconds })
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return t('reliability.durationMinutes', { m: minutes, s: seconds % 60 })
+  return t('reliability.durationHours', { h: Math.floor(minutes / 60), m: minutes % 60 })
 }
 
 const router = useRouter()
@@ -134,6 +194,18 @@ function isCurrent(member: ComparisonMember): boolean {
 function open(id: string): void {
   store.selectWorkspace(id)
   void router.push({ name: 'workspace', params: { id } })
+}
+
+function exportCsv(): void {
+  const csv = buildComparisonCsv(members.value)
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  const comparisonId = members.value[0]?.workspace.comparisonId ?? 'comparison'
+  a.download = `kobo-comparison-${comparisonId}.csv`
+  a.click()
+  URL.revokeObjectURL(url)
 }
 
 async function load(): Promise<void> {

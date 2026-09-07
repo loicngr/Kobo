@@ -16,6 +16,7 @@ import * as autoLoopService from '../services/auto-loop-service.js'
 import { changeSourceBranch } from '../services/change-source-branch-service.js'
 import { listChatHistory, pushChatHistory } from '../services/chat-history-service.js'
 import { type CiFixCheck, renderCiFixTemplate } from '../services/ci-fix-template-service.js'
+import { computeWorkspaceActivityStats } from '../services/comparison-stats-service.js'
 import * as cronService from '../services/cron-service.js'
 import * as devServerService from '../services/dev-server-service.js'
 import { buildEngineHandoff } from '../services/engine-handoff-service.js'
@@ -1641,12 +1642,21 @@ app.get('/:id/comparison', (c) => {
     if (!workspace.comparisonId) return c.json({ comparisonId: null, members: [] })
 
     const stats = getAllGitStats()
-    const members = workspaceService.listComparisonMembers(workspace.comparisonId).map((member) => ({
-      workspace: member,
-      // Null, not zeros: "not measured yet" and "changed nothing" are
-      // different answers, and only one of them is true here.
-      gitStats: stats[member.id] ?? null,
-    }))
+    const members = workspaceService.listComparisonMembers(workspace.comparisonId).map((member) => {
+      // Same count as the auto-loop badge: every task, acceptance criteria
+      // included. How finely each engine planned the task is visible before
+      // a single line of code is, and it colours every later number.
+      const tasks = workspaceService.listTasks(member.id)
+      return {
+        workspace: member,
+        // Null, not zeros: "not measured yet" and "changed nothing" are
+        // different answers, and only one of them is true here.
+        gitStats: stats[member.id] ?? null,
+        tasks: { done: tasks.filter((t) => t.status === 'done').length, total: tasks.length },
+        // What it took: messages, questions, tools, tokens, over every session.
+        activity: computeWorkspaceActivityStats(getDb(), member.id),
+      }
+    })
     return c.json({ comparisonId: workspace.comparisonId, members })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

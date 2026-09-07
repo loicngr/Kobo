@@ -469,7 +469,11 @@ are told so explicitly — the first workspace exists and is usable on its own.
 ### Reading the result
 
 Both workspaces show an **Engine comparison** table at the top of their Git tab:
-engine, model, status, commits, files changed and diff size for each side, with
+engine, model, status, tasks done over tasks planned, commits, files changed,
+diff size, then what it took — agent messages over your messages, questions the
+agent stopped to ask, tool calls, errors, input over output tokens, sessions and
+total time — for each side, with a download button that exports the whole
+table as CSV (one row per engine) and
 a button to jump to the other one. The numbers come from the same git-stats
 cache the rest of the UI uses; the table reads it when it opens and on its
 refresh button, so a dash means "not measured yet", which is not the same claim

@@ -250,6 +250,21 @@ vi.mock('../server/services/cron-service.js', () => ({
   cancelAllForWorkspace: vi.fn(),
 }))
 
+vi.mock('../server/services/comparison-stats-service.js', () => ({
+  computeWorkspaceActivityStats: vi.fn((_db: unknown, id: string) => ({
+    sessions: id === 'w1' ? 2 : 1,
+    durationMs: 0,
+    userMessages: 3,
+    injectedPrompts: 0,
+    agentMessages: 7,
+    questions: 1,
+    toolCalls: 12,
+    errors: 0,
+    inputTokens: 1000,
+    outputTokens: 100,
+  })),
+}))
+
 vi.mock('../server/services/pr-watcher-service.js', () => ({
   getAllPrSnapshots: vi.fn(),
   getAllGitStats: vi.fn(() => ({})),
@@ -7738,24 +7753,43 @@ describe('GET /api/workspaces/:id/comparison', () => {
   const memberA = { id: 'w1', name: 'task (claude-code)', engine: 'claude-code', comparisonId: 'cmp_1' }
   const memberB = { id: 'w2', name: 'task (codex)', engine: 'codex', comparisonId: 'cmp_1' }
 
-  it('returns every member of the comparison with its git stats', async () => {
+  it('returns every member of the comparison with its git stats and task progress', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(memberA as never)
     vi.mocked(workspaceService.listComparisonMembers).mockReturnValue([memberA, memberB] as never)
     vi.mocked(prWatcher.getAllGitStats).mockReturnValue({
       w1: { insertions: 10, deletions: 2 },
       w2: { insertions: 40, deletions: 30 },
     } as never)
+    // How finely each engine planned the same task is the first thing the
+    // comparison shows, before any code exists: 16 tasks against 5.
+    vi.mocked(workspaceService.listTasks).mockImplementation(
+      (id: string) =>
+        (id === 'w1'
+          ? [{ status: 'done' }, { status: 'done' }, { status: 'pending' }]
+          : [{ status: 'in_progress' }]) as never,
+    )
 
     const res = await app.request('/api/workspaces/w1/comparison')
 
     expect(res.status).toBe(200)
     const body = (await res.json()) as {
       comparisonId: string
-      members: Array<{ workspace: { id: string }; gitStats: { insertions: number } | null }>
+      members: Array<{
+        workspace: { id: string }
+        gitStats: { insertions: number } | null
+        tasks: { done: number; total: number }
+      }>
     }
     expect(body.comparisonId).toBe('cmp_1')
     expect(body.members.map((m) => m.workspace.id)).toEqual(['w1', 'w2'])
     expect(body.members[1].gitStats?.insertions).toBe(40)
+    expect(body.members.map((m) => m.tasks)).toEqual([
+      { done: 2, total: 3 },
+      { done: 0, total: 1 },
+    ])
+    const withActivity = body.members as Array<{ activity: { sessions: number; questions: number } }>
+    expect(withActivity.map((m) => m.activity.sessions)).toEqual([2, 1])
+    expect(withActivity[0].activity.questions).toBe(1)
   })
 
   it('reports a null stat rather than inventing zeros when nothing was measured yet', async () => {
