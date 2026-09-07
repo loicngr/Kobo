@@ -772,69 +772,29 @@ function startFileListResize(event: MouseEvent) {
 }
 
 /**
- * Every boolean provider flag of the four worker-backed language services.
- * `dataProviders` (html) is deliberately absent: it is not a boolean.
- * Unspecified fields become undefined — falsy — so a single object safely
- * covers services whose ModeConfiguration shapes differ.
- */
-const NO_LANGUAGE_PROVIDERS = {
-  codeActions: false,
-  colors: false,
-  completionItems: false,
-  definitions: false,
-  diagnostics: false,
-  documentFormattingEdits: false,
-  documentHighlights: false,
-  documentRangeFormattingEdits: false,
-  documentSymbols: false,
-  foldingRanges: false,
-  hovers: false,
-  inlayHints: false,
-  links: false,
-  onTypeFormattingEdits: false,
-  references: false,
-  rename: false,
-  selectionRanges: false,
-  signatureHelp: false,
-  tokens: false,
-} as const
-
-/**
- * `import('monaco-editor')` resolves to esm/vs/index.js, which registers four
- * worker-backed language services (typescript, css, html, json). Each hooks
- * `languages.onLanguage(<id>)` and, when a model of that language is created,
- * registers providers that ask MonacoEnvironment.getWorker for their OWN
- * worker. We ship only the base worker — 274 kB instead of ~12 MB — so every
- * provider must be off, otherwise the base worker would be handed a protocol
- * it does not implement.
+ * Load only what a diff viewer needs.
  *
- * A diff viewer needs none of them: it renders a diff and allows a plain edit
- * saved through POST /save-file. Syntax colouring comes from
- * languages/definitions/* (Monarch, main thread) and is unaffected.
+ * The barrel (`import('monaco-editor')`) pulls in four worker-backed language
+ * services — typescript, css, html, json — and Vite emits their workers even
+ * though we never instantiate them: 8.8 MB of dead weight in the published
+ * package, on top of the editor itself. `editor.api` is the same editor without
+ * them.
  *
- * Note the accessors: in the ESM build these services are TOP-LEVEL exports
- * (`monaco.typescript`, `monaco.css`, …), not `monaco.languages.*` as in the
- * global build's monaco.d.ts.
+ * Syntax colouring is separate: it comes from the Monarch grammars under
+ * `basic-languages`, which run on the main thread. We register exactly the ones
+ * `monacoLanguageForPath` can return, so nothing colours worse than before.
  */
-function disableWorkerBackedLanguageServices(m: typeof import('monaco-editor')): void {
-  const noDiagnostics = {
-    noSemanticValidation: true,
-    noSyntaxValidation: true,
-    noSuggestionDiagnostics: true,
-  }
-  m.typescript.typescriptDefaults.setDiagnosticsOptions(noDiagnostics)
-  m.typescript.javascriptDefaults.setDiagnosticsOptions(noDiagnostics)
-  m.typescript.typescriptDefaults.setEagerModelSync(false)
-  m.typescript.javascriptDefaults.setEagerModelSync(false)
-  m.typescript.typescriptDefaults.setModeConfiguration(NO_LANGUAGE_PROVIDERS)
-  m.typescript.javascriptDefaults.setModeConfiguration(NO_LANGUAGE_PROVIDERS)
-  m.css.cssDefaults.setModeConfiguration(NO_LANGUAGE_PROVIDERS)
-  m.css.scssDefaults.setModeConfiguration(NO_LANGUAGE_PROVIDERS)
-  m.css.lessDefaults.setModeConfiguration(NO_LANGUAGE_PROVIDERS)
-  m.json.jsonDefaults.setModeConfiguration(NO_LANGUAGE_PROVIDERS)
-  m.html.htmlDefaults.setModeConfiguration(NO_LANGUAGE_PROVIDERS)
-  m.html.handlebarDefaults.setModeConfiguration(NO_LANGUAGE_PROVIDERS)
-  m.html.razorDefaults.setModeConfiguration(NO_LANGUAGE_PROVIDERS)
+async function loadMonaco(): Promise<typeof import('monaco-editor')> {
+  const [api] = await Promise.all([
+    import('monaco-editor/editor/editor.api.js'),
+    // Monarch grammars only, main thread, ~12 kB of entry points. This is the
+    // half of the barrel we actually want; the other half is `vs/language/*`.
+    import('monaco-editor/basic-languages/monaco.contribution.js'),
+    // Find widget, context menu, folding, diff navigation… — the editor
+    // contributions the barrel used to register. See the module's header.
+    import('src/monaco-contributions'),
+  ])
+  return api as unknown as typeof import('monaco-editor')
 }
 
 // Monaco instances (lazy loaded)
@@ -1248,8 +1208,7 @@ async function loadFileDiff(filePath: string) {
       // IntelliSense that this read-mostly view never surfaced, yet Vite
       // emitted their bundles unconditionally.
       self.MonacoEnvironment = { getWorker: () => new EditorWorker() }
-      monaco = await import('monaco-editor')
-      disableWorkerBackedLanguageServices(monaco)
+      monaco = await loadMonaco()
       // Monaco's theme service parses each colour with `Color.fromHex` and
       // rejects `var(--...)` references, so the design tokens are resolved to
       // their literal hex value here at runtime instead of hardcoding hex in

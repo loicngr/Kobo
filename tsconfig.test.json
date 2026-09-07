@@ -1,0 +1,15 @@
+// The main tsconfig deliberately excludes `src/__tests__` — it drives the
+// production build, and test files must never land in `dist/`. The side effect
+// was that ~44 000 lines of test code were never type-checked at all: Vitest
+// transpiles through esbuild, which strips types without checking them. A mock
+// whose shape had drifted from the real module compiled and ran happily.
+//
+// This config type-checks them without emitting anything.
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "src/client"]
+}

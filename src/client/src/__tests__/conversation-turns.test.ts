@@ -31,6 +31,14 @@ describe('groupIntoTurns', () => {
     expect(groupIntoTurns([user('log', 'setup')])[0].speaker).toBe('script')
   })
 
+  it('routes lifecycle-hook output to a `script` turn, one per hook event', () => {
+    const turns = groupIntoTurns([user('npm test', 'hook:session-ended'), user('deploy ok', 'hook:pr-merged')])
+    expect(turns.map((t) => t.speaker)).toEqual(['script', 'script'])
+    // Two hooks are two runs; one card labelled with the first event's name
+    // would hide the second one entirely.
+    expect(turns).toHaveLength(2)
+  })
+
   it('never merges script items into the user turn (regression: flat-feed mixing)', () => {
     const turns = groupIntoTurns([
       user('tu es en quel mode ?'),

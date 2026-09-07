@@ -77,6 +77,13 @@ function toMcpServersMap(specs: StartOptions['mcpServers']): Options['mcpServers
 
 interface PendingResolver {
   resolve: (result: PermissionResult) => void
+  /**
+   * Detaches the abort listener. The signal lives as long as the session, so
+   * without this every resolved permission leaves a listener behind — memory
+   * that grows with the number of tool calls, plus Node's
+   * MaxListenersExceededWarning masking real leaks.
+   */
+  cleanup?: () => void
   /** The original input the SDK passed to canUseTool — used to echo back questions on resolve. */
   input: Record<string, unknown>
   requestKind: 'question' | 'permission'
@@ -195,6 +202,7 @@ export function createClaudeCodeEngine(): AgentEngine {
             return
           }
           ctx.signal.addEventListener('abort', onAbort, { once: true })
+          resolver.cleanup = () => ctx.signal.removeEventListener('abort', onAbort)
 
           onEvent({
             kind: 'session:user-input-requested',
@@ -597,6 +605,7 @@ export function createClaudeCodeEngine(): AgentEngine {
           // covers natural iterator completion.
           for (const resolver of pendingResolvers.values()) {
             try {
+              resolver.cleanup?.()
               resolver.resolve({ behavior: 'deny', message: 'session ended', interrupt: false })
             } catch {
               // best-effort
@@ -669,6 +678,7 @@ export function createClaudeCodeEngine(): AgentEngine {
           const resolver = pendingResolvers.get(toolCallId)
           if (!resolver) return false
           pendingResolvers.delete(toolCallId)
+          resolver.cleanup?.()
           // Re-evaluate rather than unconditionally resuming: a sibling
           // request, a still-active subagent, or an in-progress compaction
           // may each still have their own legitimate reason to keep the

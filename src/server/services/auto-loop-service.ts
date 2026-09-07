@@ -5,6 +5,7 @@ import { slugifyProjectName } from '../utils/project-slug.js'
 import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 import * as orchestrator from './agent/orchestrator.js'
 import * as cleanupScriptService from './cleanup-script-service.js'
+import * as lifecycleHookService from './lifecycle-hook-service.js'
 import * as settingsService from './settings-service.js'
 import { getSuitePrompts } from './skill-suite-prompts.js'
 import { emit, emitEphemeral } from './websocket-service.js'
@@ -126,6 +127,14 @@ export function disable(workspaceId: string, reason: DisableReason): void {
       ` pending=${diagnostic.tasksPending} streak=${diagnostic.noProgressStreak} status=${diagnostic.status}`,
   )
   emitEphemeral(workspaceId, 'autoloop:disabled', diagnostic)
+
+  // The user's own hook, if they wrote one. Deliberately fired for EVERY
+  // reason, not only 'completed' like the cleanup script below: a loop that
+  // stalled is precisely the case worth being told about.
+  void lifecycleHookService.onAutoLoopDisabled(workspaceId, {
+    reason,
+    tasksPending: diagnostic.tasksPending,
+  })
 
   // The loop finished every task — run the project's cleanup script. Other
   // disable reasons (stall / error / user-action) leave tasks unfinished, so
@@ -311,6 +320,50 @@ function computeIterationNumber(workspaceId: string): number {
  * Worktree-missing edge: if the worktree directory has been deleted on disk,
  * `orchestrator.startAgent` throws during engine.start — caught below.
  */
+/**
+ * Whether another unattended session may start right now. `0` — the default —
+ * means no limit. Only the auto-loop consults this: a session the user starts
+ * by hand always goes through.
+ */
+function hasFreeAgentSlot(): boolean {
+  const limit = settingsService.getGlobalSettings().maxConcurrentAgents
+  if (!limit || limit <= 0) return true
+  return orchestrator.runningAgentCount() < limit
+}
+
+/**
+ * Give every auto-loop workspace parked on "waiting for a free agent slot"
+ * another chance. Called by the orchestrator after ANY session ends: a parked
+ * workspace has no session of its own to end, so nothing else would ever ask
+ * spawnNextIteration on its behalf again.
+ *
+ * Stops as soon as the slots are full again, so with three parked and one
+ * free, exactly one starts and the other two keep waiting rather than each
+ * re-announcing that they wait.
+ */
+export function resumeWaitingWorkspaces(): void {
+  const db = getDb()
+  const rows = db
+    .prepare(
+      `SELECT id, status FROM workspaces
+        WHERE auto_loop = 1 AND auto_loop_ready = 1 AND archived_at IS NULL
+        ORDER BY updated_at ASC`,
+    )
+    .all() as Array<{ id: string; status: string }>
+  for (const row of rows) {
+    if (!hasFreeAgentSlot()) return
+    if (orchestrator.hasController(row.id)) continue
+    // Same guards as spawnNextIteration's own callers: a quota backoff or a
+    // pending question owns the next start of that workspace.
+    if (row.status === 'awaiting-user' || row.status === 'quota') continue
+    try {
+      spawnNextIteration(row.id)
+    } catch (err) {
+      console.error(`[auto-loop] resume after slot freed failed for workspace '${row.id}':`, err)
+    }
+  }
+}
+
 function spawnNextIteration(workspaceId: string, opts: { throwOnStartAgentError?: boolean } = {}): void {
   const row = getRow(workspaceId)
   if (!row) return
@@ -319,6 +372,19 @@ function spawnNextIteration(workspaceId: string, opts: { throwOnStartAgentError?
   const task = pickNextTask(workspaceId)
   if (!task) {
     disable(workspaceId, 'completed')
+    return
+  }
+
+  // Hold off rather than pile on. Ten auto-loop workspaces waking together
+  // hammer the same rate limit and each land in their own backoff, so nobody
+  // gets through. The loop stays enabled: the next session to end anywhere
+  // calls back in here, and by then a slot has freed.
+  if (!hasFreeAgentSlot()) {
+    console.log(`[auto-loop] workspace '${workspaceId}' is waiting for a free agent slot`)
+    emitEphemeral(workspaceId, 'autoloop:waiting-for-slot', {
+      running: orchestrator.runningAgentCount(),
+      limit: settingsService.getGlobalSettings().maxConcurrentAgents,
+    })
     return
   }
 

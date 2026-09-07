@@ -1758,3 +1758,80 @@ describe('recomputeSessionMetrics()', () => {
     })
   })
 })
+
+describe('engine comparison grouping', () => {
+  async function createPair() {
+    const { createWorkspace } = await import('../server/services/workspace-service.js')
+    const a = createWorkspace({
+      name: 'task (claude-code)',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'feature/task-claude-code',
+      engine: 'claude-code',
+      comparisonId: 'cmp_1',
+    })
+    const b = createWorkspace({
+      name: 'task (codex)',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'feature/task-codex',
+      engine: 'codex',
+      comparisonId: 'cmp_1',
+    })
+    return { a, b }
+  }
+
+  it('persists the comparison id and exposes it on the workspace', async () => {
+    const { a } = await createPair()
+
+    expect(a.comparisonId).toBe('cmp_1')
+  })
+
+  it('leaves a workspace created on its own outside any comparison', async () => {
+    const { createWorkspace } = await import('../server/services/workspace-service.js')
+
+    const solo = createWorkspace({
+      name: 'solo',
+      projectPath: '/tmp/p',
+      sourceBranch: 'main',
+      workingBranch: 'feature/solo',
+    })
+
+    expect(solo.comparisonId).toBeNull()
+  })
+
+  it('finds the siblings of a workspace, itself included, oldest first', async () => {
+    const { listComparisonMembers } = await import('../server/services/workspace-service.js')
+    const { a, b } = await createPair()
+
+    const members = listComparisonMembers('cmp_1')
+
+    expect(members.map((m) => m.id)).toEqual([a.id, b.id])
+    expect(members.map((m) => m.engine)).toEqual(['claude-code', 'codex'])
+  })
+
+  it('returns nothing for an unknown comparison rather than every workspace', async () => {
+    const { listComparisonMembers } = await import('../server/services/workspace-service.js')
+    await createPair()
+
+    expect(listComparisonMembers('cmp_unknown')).toEqual([])
+  })
+
+  it('never groups workspaces by a null comparison id', async () => {
+    const { createWorkspace, listComparisonMembers } = await import('../server/services/workspace-service.js')
+    createWorkspace({ name: 's1', projectPath: '/tmp/p', sourceBranch: 'main', workingBranch: 'b1' })
+    createWorkspace({ name: 's2', projectPath: '/tmp/p', sourceBranch: 'main', workingBranch: 'b2' })
+
+    // An empty string is not a group either — it is the absence of one.
+    expect(listComparisonMembers('')).toEqual([])
+  })
+
+  it('keeps the surviving member of a deleted pair intact', async () => {
+    const { deleteWorkspace, listComparisonMembers } = await import('../server/services/workspace-service.js')
+    const { a, b } = await createPair()
+
+    deleteWorkspace(a.id)
+
+    expect(listComparisonMembers('cmp_1').map((m) => m.id)).toEqual([b.id])
+  })
+})

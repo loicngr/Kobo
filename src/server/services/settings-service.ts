@@ -176,6 +176,13 @@ export interface ProjectSettings {
    * Seeded by settings migration v33.
    */
   changeSourceBranchScript: string
+  /**
+   * Per-project overrides of the lifecycle hooks. Empty string inherits the
+   * global value, exactly like every other script above. Seeded by v55.
+   */
+  sessionEndedScript: string
+  prMergedScript: string
+  autoLoopDisabledScript: string
   devServer: DevServerConfig
   e2e: E2eSettings
   finalization: FinalizationSettings
@@ -244,6 +251,25 @@ export interface GlobalSettings {
    * Seeded by settings migration v33.
    */
   changeSourceBranchScript: string
+  /**
+   * Shell script run when an agent session ends, whatever the reason. Reads
+   * `KOBO_SESSION_END_REASON` (completed / error / killed / watchdog) and
+   * `KOBO_SESSION_ID` to tell a clean finish from a forced one. Empty =
+   * disabled. Projects may override; see `ProjectSettings.sessionEndedScript`.
+   */
+  sessionEndedScript: string
+  /**
+   * Shell script run when the pr-watcher sees a PR go to MERGED. Runs before
+   * the workspace is archived or purged, so the worktree is still on disk.
+   * Reads `KOBO_PR_NUMBER` and `KOBO_PR_URL`. Empty = disabled.
+   */
+  prMergedScript: string
+  /**
+   * Shell script run when auto-loop turns itself off. Reads
+   * `KOBO_AUTOLOOP_REASON` (completed / stall / error / …) and
+   * `KOBO_TASKS_PENDING`. Empty = disabled.
+   */
+  autoLoopDisabledScript: string
   editorCommand: string
   /**
    * Optional shell command spawned with the worktree path as the first
@@ -261,6 +287,23 @@ export interface GlobalSettings {
   terminalCommand: string
   autoPurgeOnPrMerged: boolean
   autoLoopMaxRetries: number
+  /**
+   * Minutes a workspace may sit in `awaiting-user` before Kōbō reminds you,
+   * then again at every further interval. `0` disables the reminder entirely
+   * — the default, since it is the user's attention being spent.
+   */
+  awaitingUserReminderMinutes: number
+  /**
+   * How many agent sessions may run at once. `0` — the default — means no
+   * limit, which is what every install did before this setting existed.
+   *
+   * Only unattended spawns respect it: the auto-loop, which is the one thing
+   * that starts sessions on its own and can have ten workspaces wake up
+   * together, hammer the same rate limit and each hit their own backoff. A
+   * session the user starts by hand always goes through, because they are
+   * standing right there and asked for it.
+   */
+  maxConcurrentAgents: number
   /**
    * Delete agent events (`ws_events`) older than this many days, once at server
    * start-up. `0` — the default — disables retention entirely: nothing is ever
@@ -1125,6 +1168,36 @@ const settingsMigrations: SettingsMigration[] = [
       }
     },
   },
+  {
+    version: 55,
+    name: 'add-lifecycle-hook-scripts',
+    migrate: ({ global, projects }) => {
+      // Seeded empty everywhere: a hook runs arbitrary shell on the user's
+      // machine, so it only ever exists because the user wrote it.
+      for (const key of ['sessionEndedScript', 'prMergedScript', 'autoLoopDisabledScript']) {
+        if (typeof global[key] !== 'string') global[key] = ''
+        for (const p of projects) {
+          if (typeof p[key] !== 'string') p[key] = ''
+        }
+      }
+    },
+  },
+  {
+    version: 56,
+    name: 'add-awaiting-user-reminder',
+    migrate: ({ global }) => {
+      // Seeded off. Same reasoning as the retention window: a feature that
+      // spends the user's attention without being asked is not a default.
+      if (
+        typeof global.awaitingUserReminderMinutes !== 'number' ||
+        !Number.isInteger(global.awaitingUserReminderMinutes) ||
+        global.awaitingUserReminderMinutes < 0 ||
+        global.awaitingUserReminderMinutes > 1440
+      ) {
+        global.awaitingUserReminderMinutes = 0
+      }
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -1149,6 +1222,9 @@ export interface EffectiveSettings {
   cleanupScriptOnlyOnChanges: boolean
   archiveScript: string
   changeSourceBranchScript: string
+  sessionEndedScript: string
+  prMergedScript: string
+  autoLoopDisabledScript: string
   notionStatusProperty: string
   notionInProgressStatus: string
 }
@@ -1176,6 +1252,8 @@ function ensureSettingsPathInitialized(): void {
 /** Override the settings file path (used by tests). */
 export function _setSettingsPath(p: string): void {
   settingsFilePath = p
+  // Pointing at a different file must not serve the previous one's contents.
+  invalidateSettingsCache()
 }
 
 function defaultSettings(): Settings {
@@ -1197,11 +1275,16 @@ function defaultSettings(): Settings {
       cleanupScriptOnlyOnChanges: false,
       archiveScript: '',
       changeSourceBranchScript: DEFAULT_CHANGE_SOURCE_BRANCH_SCRIPT,
+      sessionEndedScript: '',
+      prMergedScript: '',
+      autoLoopDisabledScript: '',
       editorCommand: '',
       fileManagerCommand: '',
       terminalCommand: '',
       autoPurgeOnPrMerged: false,
       autoLoopMaxRetries: 5,
+      awaitingUserReminderMinutes: 0,
+      maxConcurrentAgents: 0,
       wsEventsRetentionDays: 0,
       wsEventsKeepPerWorkspace: 0,
       networkAccessEnabled: false,
@@ -1301,6 +1384,9 @@ function defaultProjectSettings(projectPath: string): ProjectSettings {
     cleanupScriptMode: '',
     archiveScript: '',
     changeSourceBranchScript: '',
+    sessionEndedScript: '',
+    prMergedScript: '',
+    autoLoopDisabledScript: '',
     devServer: {
       startCommand: '',
       stopCommand: '',
@@ -1357,7 +1443,50 @@ export function runSettingsMigrations(raw: Record<string, unknown>): Settings {
   return current as unknown as Settings
 }
 
+/**
+ * Parsed settings, kept between calls. `getGlobalSettings` runs on every HTTP
+ * request through the auth middleware and 50-odd other call sites, while
+ * `readSettings` below does existsSync + readFileSync + JSON.parse + the whole
+ * migration chain — all synchronous, on the event loop that also drives the
+ * WebSocket streams.
+ *
+ * The file stays hand-editable (CONFIGURATION.md says so), so the cache is
+ * keyed on the file's mtime and size rather than held blindly: an external edit
+ * is picked up on the very next call, and the check costs one stat instead of a
+ * full parse and migration pass.
+ */
+let settingsCache: { value: Settings; mtimeMs: number; size: number } | null = null
+
+/** Drop the cached settings, so the next read goes back to disk. */
+function invalidateSettingsCache(): void {
+  settingsCache = null
+}
+
+/** Identity of the settings file on disk, or null when it is unreadable. */
+function settingsFileStamp(): { mtimeMs: number; size: number } | null {
+  try {
+    const stat = fs.statSync(settingsFilePath)
+    return { mtimeMs: stat.mtimeMs, size: stat.size }
+  } catch {
+    return null
+  }
+}
+
 function readSettings(): Settings {
+  ensureSettingsPathInitialized()
+  const stamp = settingsFileStamp()
+  if (stamp && settingsCache && settingsCache.mtimeMs === stamp.mtimeMs && settingsCache.size === stamp.size) {
+    return settingsCache.value
+  }
+  const settings = readSettingsFromDisk()
+  // Re-stat: readSettingsFromDisk writes the file when it was missing or
+  // corrupt, so the stamp taken above would be stale.
+  const after = settingsFileStamp()
+  settingsCache = after ? { value: settings, ...after } : null
+  return settings
+}
+
+function readSettingsFromDisk(): Settings {
   ensureSettingsPathInitialized()
   if (!fs.existsSync(settingsFilePath)) {
     const defaults = defaultSettings()
@@ -1445,6 +1574,8 @@ function createSettingsBackupIfPresent(): void {
 }
 
 function writeSettings(settings: Settings, options?: { backup?: boolean }): void {
+  // Our own writes must be visible at once, whatever the TTL says.
+  invalidateSettingsCache()
   ensureSettingsPathInitialized()
   const tmpPath = `${settingsFilePath}.tmp`
   const dir = path.dirname(settingsFilePath)
@@ -1463,6 +1594,11 @@ export function getSettings(): Settings {
   return readSettings()
 }
 
+/** True for a value made of nothing but mask characters (never a real token). */
+function isMaskOnly(value: unknown): boolean {
+  return typeof value === 'string' && value.length > 0 && [...value].every((c) => c === MASK_CHARACTER)
+}
+
 /**
  * Copy of the global settings safe to hand to a client: every stored credential
  * becomes `MASKED_SECRET`, an unset one stays empty so the UI can tell "not
@@ -1474,11 +1610,6 @@ export function getSettings(): Settings {
  * screenshot. `updateGlobalSettings` reads the mask back as "keep the stored
  * value", so a round-trip through the form is lossless.
  */
-/** True for a value made of nothing but mask characters (never a real token). */
-function isMaskOnly(value: unknown): boolean {
-  return typeof value === 'string' && value.length > 0 && [...value].every((c) => c === MASK_CHARACTER)
-}
-
 export function redactGlobalSecrets(global: GlobalSettings): GlobalSettings {
   const redacted: GlobalSettings = { ...global }
   for (const key of SECRET_GLOBAL_KEYS) {
@@ -1595,6 +1726,9 @@ export function getEffectiveSettings(projectPath: string): EffectiveSettings {
       cleanupScriptOnlyOnChanges: settings.global.cleanupScriptOnlyOnChanges,
       archiveScript: settings.global.archiveScript,
       changeSourceBranchScript: settings.global.changeSourceBranchScript,
+      sessionEndedScript: settings.global.sessionEndedScript,
+      prMergedScript: settings.global.prMergedScript,
+      autoLoopDisabledScript: settings.global.autoLoopDisabledScript,
       notionStatusProperty: settings.global.notionStatusProperty,
       notionInProgressStatus: settings.global.notionInProgressStatus,
     }
@@ -1623,6 +1757,9 @@ export function getEffectiveSettings(projectPath: string): EffectiveSettings {
     cleanupScriptOnlyOnChanges: settings.global.cleanupScriptOnlyOnChanges,
     archiveScript: project.archiveScript || settings.global.archiveScript,
     changeSourceBranchScript: project.changeSourceBranchScript || settings.global.changeSourceBranchScript,
+    sessionEndedScript: project.sessionEndedScript || settings.global.sessionEndedScript,
+    prMergedScript: project.prMergedScript || settings.global.prMergedScript,
+    autoLoopDisabledScript: project.autoLoopDisabledScript || settings.global.autoLoopDisabledScript,
     notionStatusProperty: settings.global.notionStatusProperty,
     notionInProgressStatus: settings.global.notionInProgressStatus,
   }
@@ -1672,6 +1809,16 @@ export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSett
       delete (data as Record<string, unknown>).autoLoopMaxRetries
     }
   }
+  // 0 is a legitimate value here — it means "never remind me" — so the floor is
+  // 0, not 1. The ceiling of a day keeps a typo from arming a reminder that
+  // never fires and looks like a broken feature.
+  if ('awaitingUserReminderMinutes' in data) {
+    const value = data.awaitingUserReminderMinutes
+    if (typeof value !== 'number' || !Number.isInteger(value) || value < 0 || value > 1440) {
+      console.warn(`[settings] Invalid awaitingUserReminderMinutes value rejected: ${value}`)
+      delete (data as Record<string, unknown>).awaitingUserReminderMinutes
+    }
+  }
   // Same shape as the autoLoopMaxRetries guard above: an invalid value is
   // dropped so the stored one survives. Retention deletes history — a bad write
   // here would delete more than the user ever asked for. `0` is NOT invalid:
@@ -1702,11 +1849,16 @@ export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSett
     'cleanupScriptOnlyOnChanges',
     'archiveScript',
     'changeSourceBranchScript',
+    'sessionEndedScript',
+    'prMergedScript',
+    'autoLoopDisabledScript',
     'editorCommand',
     'fileManagerCommand',
     'terminalCommand',
     'autoPurgeOnPrMerged',
     'autoLoopMaxRetries',
+    'awaitingUserReminderMinutes',
+    'maxConcurrentAgents',
     'wsEventsRetentionDays',
     'wsEventsKeepPerWorkspace',
     'browserNotifications',
@@ -1927,6 +2079,9 @@ export function upsertProject(projectPath: string, data: Partial<Omit<ProjectSet
     'cleanupScriptMode',
     'archiveScript',
     'changeSourceBranchScript',
+    'sessionEndedScript',
+    'prMergedScript',
+    'autoLoopDisabledScript',
     'devServer',
     'e2e',
     'finalization',

@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { describe, expect, it, vi } from 'vitest'
+import type { ContentMigrationStatus } from '../server/services/content-migration-service.js'
 
 vi.mock('../server/services/content-migration-service.js', () => ({
   getContentMigrationStatus: vi.fn(() => ({ state: 'idle', total: 0, processed: 0 })),
@@ -17,7 +18,12 @@ describe('migrationGuard', () => {
 
   it('returns 503 when migration is running', async () => {
     const mod = await import('../server/services/content-migration-service.js')
-    vi.mocked(mod.getContentMigrationStatus).mockReturnValue({ state: 'running', total: 10, processed: 5 })
+    vi.mocked(mod.getContentMigrationStatus).mockReturnValue({
+      state: 'running',
+      total: 10,
+      processed: 5,
+      startedAt: '2026-01-01T00:00:00.000Z',
+    })
     const { migrationGuard } = await import('../server/middleware/migration-guard.js')
     const app = new Hono()
     app.use('*', migrationGuard)
@@ -30,8 +36,12 @@ describe('migrationGuard', () => {
 
   it('returns 503 when state is backing-up or error', async () => {
     const mod = await import('../server/services/content-migration-service.js')
-    for (const state of ['backing-up', 'error'] as const) {
-      vi.mocked(mod.getContentMigrationStatus).mockReturnValue({ state, total: 0, processed: 0 })
+    const statuses: ContentMigrationStatus[] = [
+      { state: 'backing-up', startedAt: '2026-01-01T00:00:00.000Z' },
+      { state: 'error', errorMessage: 'boom' },
+    ]
+    for (const status of statuses) {
+      vi.mocked(mod.getContentMigrationStatus).mockReturnValue(status)
       const { migrationGuard } = await import('../server/middleware/migration-guard.js')
       const app = new Hono()
       app.use('*', migrationGuard)

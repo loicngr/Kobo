@@ -53,6 +53,7 @@
 
 <script setup lang="ts">
 import { itemKey, type Turn } from 'src/services/conversation-turns'
+import { isHookSender } from 'src/utils/hook-events'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AgentErrorItem from './items/AgentErrorItem.vue'
@@ -113,8 +114,9 @@ const header = computed<HeaderMeta>(() => {
       // archive / setup) comes from the first item's activity-feed sender.
       const first = props.turn.items[0]
       const sender = first?.type === 'user' ? first.sender : ''
-      const label =
-        sender === 'archive'
+      const label = isHookSender(sender)
+        ? t('chat.hookScript', { event: sender.slice('hook:'.length) })
+        : sender === 'archive'
           ? t('chat.archiveScript')
           : sender === 'setup'
             ? t('chat.setupScript')

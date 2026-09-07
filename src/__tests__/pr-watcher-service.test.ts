@@ -19,6 +19,16 @@ vi.mock('../server/services/workspace-service.js', () => ({
   updateWorkspaceSourceBranch: vi.fn(),
 }))
 vi.mock('../server/services/git-stats-service.js', () => ({ computeGitStats: vi.fn() }))
+vi.mock('../server/services/lifecycle-hook-service.js', () => ({ onPrMerged: vi.fn(async () => {}) }))
+vi.mock('../server/services/worktree-purge-service.js', () => ({
+  purgeWorktree: vi.fn(async () => ({ outcome: 'purged', warnings: [] })),
+}))
+vi.mock('../server/services/settings-service.js', () => ({
+  getGlobalSettings: vi.fn(() => ({ autoPurgeOnPrMerged: false })),
+}))
+// The watcher asks whether a session is still live before archiving; default to
+// "no controller" so the existing status-driven tests keep their meaning.
+vi.mock('../server/services/agent/orchestrator.js', () => ({ hasController: vi.fn(() => false) }))
 const gitTrace: string[] = []
 vi.mock('../server/utils/git-ops.js', () => ({
   fetchSourceBranchAsync: vi.fn(async () => {
@@ -33,6 +43,7 @@ vi.mock('node:fs', async () => {
   return { ...actual, existsSync: vi.fn(() => true), default: { ...actual, existsSync: vi.fn(() => true) } }
 })
 
+import * as orchestrator from '../server/services/agent/orchestrator.js'
 import { computeGitStats } from '../server/services/git-stats-service.js'
 import {
   _resetForTest,
@@ -245,6 +256,9 @@ describe('getAllPrSnapshots', () => {
 describe('checkPrStatuses — active-agent guard', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // clearAllMocks keeps implementations, so restate the default: no live
+    // controller, which is what the status-driven cases below assume.
+    vi.mocked(orchestrator.hasController).mockReturnValue(false)
     _resetForTest()
   })
 
@@ -272,6 +286,70 @@ describe('checkPrStatuses — active-agent guard', () => {
     getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ state: 'MERGED', base: 'main' }))
     await checkPrStatuses()
     expect(wsService.archiveWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('does NOT auto-archive while an agent controller is still alive', async () => {
+    // `awaiting-user` is not in the status guard, yet the controller is very
+    // much alive: it is parked on a tool approval. Archiving there orphans the
+    // pending question and leaves the agent writing to the worktree.
+    const ws = makeWorkspace({ status: 'awaiting-user', sourceBranch: 'main' })
+    vi.mocked(wsService.listWorkspaces).mockReturnValue([ws as never])
+    vi.mocked(orchestrator.hasController).mockReturnValue(true)
+
+    getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ state: 'OPEN', base: 'main' }))
+    await checkPrStatuses()
+    getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ state: 'MERGED', base: 'main' }))
+    await checkPrStatuses()
+
+    expect(wsService.archiveWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('runs the pr-merged hook and waits for it before auto-purging the worktree', async () => {
+    const hooks = await import('../server/services/lifecycle-hook-service.js')
+    const purge = await import('../server/services/worktree-purge-service.js')
+    const settings = await import('../server/services/settings-service.js')
+    vi.mocked(settings.getGlobalSettings).mockReturnValue({ autoPurgeOnPrMerged: true } as never)
+    const ws = makeWorkspace({ status: 'idle', sourceBranch: 'main' })
+    vi.mocked(wsService.listWorkspaces).mockReturnValue([ws as never])
+
+    // A hook that takes a while — the purge must not start before it ends,
+    // or a deploy script loses its worktree mid-run.
+    let releaseHook: () => void = () => {}
+    const trace: string[] = []
+    vi.mocked(hooks.onPrMerged).mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          trace.push('hook:start')
+          releaseHook = () => {
+            trace.push('hook:end')
+            resolve()
+          }
+        }),
+    )
+    vi.mocked(purge.purgeWorktree).mockImplementation(async () => {
+      trace.push('purge')
+      return { outcome: 'purged', warnings: [] } as never
+    })
+
+    try {
+      getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ state: 'OPEN', base: 'main' }))
+      await checkPrStatuses()
+      getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ state: 'MERGED', base: 'main', number: 42 }))
+      const tick = checkPrStatuses()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+
+      expect(hooks.onPrMerged).toHaveBeenCalledWith('ws-1', expect.objectContaining({ prNumber: 42 }))
+      expect(trace).toEqual(['hook:start'])
+      releaseHook()
+      await tick
+      expect(trace).toEqual(['hook:start', 'hook:end', 'purge'])
+    } finally {
+      // `clearAllMocks` in beforeEach keeps implementations: a pending hook
+      // left behind would hang the next test's tick.
+      vi.mocked(hooks.onPrMerged).mockImplementation(async () => {})
+      vi.mocked(purge.purgeWorktree).mockImplementation(async () => ({ outcome: 'purged', warnings: [] }) as never)
+      vi.mocked(settings.getGlobalSettings).mockReturnValue({ autoPurgeOnPrMerged: false } as never)
+    }
   })
 
   it('DOES auto-archive an idle workspace on OPEN → MERGED (regression)', async () => {

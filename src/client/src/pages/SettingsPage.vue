@@ -1569,6 +1569,54 @@ where ffmpeg</pre>
               />
             </div>
 
+            <!-- Lifecycle hook: sessionEnded -->
+            <div v-if="activeTab === 'scripts'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.hook.sessionEndedTitle') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.hook.sessionEndedHint') }}</div>
+              <q-input
+                v-model="globalSessionEndedScript"
+                type="textarea"
+                dark
+                outlined
+                autogrow
+                :input-style="{ minHeight: '100px' }"
+                :placeholder="$t('settings.hook.sessionEndedPlaceholder')"
+                class="settings-input mono-textarea"
+              />
+            </div>
+
+            <!-- Lifecycle hook: prMerged -->
+            <div v-if="activeTab === 'scripts'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.hook.prMergedTitle') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.hook.prMergedHint') }}</div>
+              <q-input
+                v-model="globalPrMergedScript"
+                type="textarea"
+                dark
+                outlined
+                autogrow
+                :input-style="{ minHeight: '100px' }"
+                :placeholder="$t('settings.hook.prMergedPlaceholder')"
+                class="settings-input mono-textarea"
+              />
+            </div>
+
+            <!-- Lifecycle hook: autoLoopDisabled -->
+            <div v-if="activeTab === 'scripts'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
+              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.hook.autoLoopDisabledTitle') }}</div>
+              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.hook.autoLoopDisabledHint') }}</div>
+              <q-input
+                v-model="globalAutoLoopDisabledScript"
+                type="textarea"
+                dark
+                outlined
+                autogrow
+                :input-style="{ minHeight: '100px' }"
+                :placeholder="$t('settings.hook.autoLoopDisabledPlaceholder')"
+                class="settings-input mono-textarea"
+              />
+            </div>
+
             <!-- Change-source-branch script -->
             <div v-if="activeTab === 'scripts'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="row items-center justify-between q-mb-sm">
@@ -1647,6 +1695,19 @@ where ffmpeg</pre>
                 type="number"
                 min="1"
                 max="20"
+                dense
+                dark
+                outlined
+                class="settings-input q-mt-md"
+              />
+
+              <q-input
+                v-model.number="globalAwaitingUserReminderMinutes"
+                :label="$t('settings.awaitingUserReminder')"
+                :hint="$t('settings.awaitingUserReminderHint')"
+                type="number"
+                min="0"
+                max="1440"
                 dense
                 dark
                 outlined
@@ -2235,6 +2296,48 @@ where ffmpeg</pre>
                     </div>
 
                     <div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.hook.sessionEndedTitle') }}</div>
+                      <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <q-input
+                        v-model="projectForm.sessionEndedScript"
+                        type="textarea"
+                        outlined
+                        autogrow
+                        :input-style="{ minHeight: '100px' }"
+                        :placeholder="$t('settings.hook.sessionEndedPlaceholder')"
+                        class="settings-input mono-textarea"
+                      />
+                    </div>
+
+                    <div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.hook.prMergedTitle') }}</div>
+                      <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <q-input
+                        v-model="projectForm.prMergedScript"
+                        type="textarea"
+                        outlined
+                        autogrow
+                        :input-style="{ minHeight: '100px' }"
+                        :placeholder="$t('settings.hook.prMergedPlaceholder')"
+                        class="settings-input mono-textarea"
+                      />
+                    </div>
+
+                    <div>
+                      <div class="field-label text-body2 text-weight-medium q-mb-xs text-kobo-3">{{ $t('settings.hook.autoLoopDisabledTitle') }}</div>
+                      <div class="text-caption text-kobo-3 q-mb-xs">{{ t('settings.initialPrompt.inheritHint') }}</div>
+                      <q-input
+                        v-model="projectForm.autoLoopDisabledScript"
+                        type="textarea"
+                        outlined
+                        autogrow
+                        :input-style="{ minHeight: '100px' }"
+                        :placeholder="$t('settings.hook.autoLoopDisabledPlaceholder')"
+                        class="settings-input mono-textarea"
+                      />
+                    </div>
+
+                    <div>
                       <div class="row items-center justify-between q-mb-xs">
                         <div class="field-label text-body2 text-weight-medium text-kobo-3">{{ $t('settings.changeSourceBranchScript') }}</div>
                         <q-btn
@@ -2564,7 +2667,6 @@ where ffmpeg</pre>
 </template>
 
 <script setup lang="ts">
-import QRCode from 'qrcode'
 import { type QInput, useQuasar } from 'quasar'
 import DrawerToggleButton from 'src/components/DrawerToggleButton.vue'
 import FolderPickerDialog from 'src/components/FolderPickerDialog.vue'
@@ -2575,7 +2677,7 @@ import { useIsMobile } from 'src/composables/use-is-mobile'
 import { useOnboarding } from 'src/composables/use-onboarding'
 import { CODEX_MODEL_OPTION_DEFS, MODEL_OPTION_DEFS } from 'src/constants/models'
 import { type AgentPermissionMode, PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
-import { applyDocumentLocale } from 'src/i18n'
+import { type SupportedLocale, setLocale } from 'src/i18n'
 import { useLayoutStore } from 'src/stores/layout'
 import type { ProjectSettings } from 'src/stores/settings'
 import { useSettingsStore } from 'src/stores/settings'
@@ -2680,6 +2782,7 @@ const globalFileManagerCommand = ref('')
 const globalTerminalCommand = ref('')
 const globalAutoPurgeOnPrMerged = ref(false)
 const globalAutoLoopMaxRetries = ref(5)
+const globalAwaitingUserReminderMinutes = ref(0)
 const globalWsEventsRetentionDays = ref(0)
 const globalWsEventsKeepPerWorkspace = ref(0)
 
@@ -2729,6 +2832,9 @@ async function refreshQr() {
   }
   const url = `${base}/?token=${encodeURIComponent(network.value.token)}`
   try {
+    // Loaded on demand: it is only needed by the LAN pairing QR, and a static
+    // import puts the whole encoder in the settings chunk for everyone else.
+    const { default: QRCode } = await import('qrcode')
     networkQrDataUrl.value = await QRCode.toDataURL(url, { margin: 1, width: 200 })
   } catch {
     networkQrDataUrl.value = ''
@@ -2933,6 +3039,9 @@ const globalCleanupScript = ref('')
 const globalCleanupScriptMode = ref<'idle' | 'no-tasks'>('no-tasks')
 const globalCleanupScriptOnlyOnChanges = ref(false)
 const globalArchiveScript = ref('')
+const globalSessionEndedScript = ref('')
+const globalPrMergedScript = ref('')
+const globalAutoLoopDisabledScript = ref('')
 const globalChangeSourceBranchScript = ref('')
 // Hydrated at mount from GET /api/settings/defaults.
 const defaultChangeSourceBranchScript = ref('')
@@ -3152,6 +3261,10 @@ const projectForm = ref({
   archiveScript: '',
   // Empty = inherit `global.changeSourceBranchScript`.
   changeSourceBranchScript: '',
+  // Empty = inherit the matching global lifecycle hook.
+  sessionEndedScript: '',
+  prMergedScript: '',
+  autoLoopDisabledScript: '',
   devServer: { startCommand: '', stopCommand: '' },
   e2e: { framework: '' as 'cypress' | 'playwright' | 'jest' | 'vitest' | 'other' | '', skill: '', prompt: '' },
   finalization: { prompt: '' },
@@ -3175,6 +3288,9 @@ const COPYABLE_FIELDS = [
   'cleanupScriptMode',
   'archiveScript',
   'changeSourceBranchScript',
+  'sessionEndedScript',
+  'prMergedScript',
+  'autoLoopDisabledScript',
   'devServer',
   'e2e',
   'finalization',
@@ -3237,6 +3353,9 @@ function isFormPristine(): boolean {
     cleanupScriptMode: '',
     archiveScript: '',
     changeSourceBranchScript: '',
+    sessionEndedScript: '',
+    prMergedScript: '',
+    autoLoopDisabledScript: '',
     devServer: { startCommand: '', stopCommand: '' },
     e2e: { framework: '', skill: '', prompt: '' },
     finalization: { prompt: '' },
@@ -3474,8 +3593,12 @@ const languageOptions = [
 ]
 
 function onLanguageChange(val: string) {
-  locale.value = val
-  applyDocumentLocale(val)
+  // setLocale fetches the messages first: assigning the locale before they are
+  // registered would flash every key as its own name.
+  setLocale(val as SupportedLocale).catch((err: unknown) => {
+    console.error('[i18n] locale load failed:', err)
+    $q.notify({ type: 'negative', message: t('settings.localeLoadFailed'), position: 'top' })
+  })
   localStorage.setItem('kobo:locale', val)
 }
 
@@ -3636,6 +3759,7 @@ function readGlobalForm(): Record<string, unknown> {
     terminalCommand: globalTerminalCommand.value,
     autoPurgeOnPrMerged: globalAutoPurgeOnPrMerged.value,
     autoLoopMaxRetries: globalAutoLoopMaxRetries.value,
+    awaitingUserReminderMinutes: globalAwaitingUserReminderMinutes.value,
     wsEventsRetentionDays: globalWsEventsRetentionDays.value,
     wsEventsKeepPerWorkspace: globalWsEventsKeepPerWorkspace.value,
     browserNotifications: globalBrowserNotifications.value,
@@ -3679,6 +3803,9 @@ function readGlobalForm(): Record<string, unknown> {
     cleanupScriptOnlyOnChanges: globalCleanupScriptOnlyOnChanges.value,
     archiveScript: globalArchiveScript.value,
     changeSourceBranchScript: globalChangeSourceBranchScript.value,
+    sessionEndedScript: globalSessionEndedScript.value,
+    prMergedScript: globalPrMergedScript.value,
+    autoLoopDisabledScript: globalAutoLoopDisabledScript.value,
     worktreesPath: globalWorktreesPath.value,
     worktreesPrefixByProject: globalWorktreesPrefixByProject.value,
     flattenWorkspaceList: globalFlattenWorkspaceList.value,
@@ -3763,6 +3890,7 @@ function syncGlobalForm() {
   globalTerminalCommand.value = store.global.terminalCommand ?? ''
   globalAutoPurgeOnPrMerged.value = store.global.autoPurgeOnPrMerged ?? false
   globalAutoLoopMaxRetries.value = store.global.autoLoopMaxRetries ?? 5
+  globalAwaitingUserReminderMinutes.value = store.global.awaitingUserReminderMinutes ?? 0
   globalWsEventsRetentionDays.value = store.global.wsEventsRetentionDays ?? 0
   globalWsEventsKeepPerWorkspace.value = store.global.wsEventsKeepPerWorkspace ?? 0
   globalBrowserNotifications.value = store.global.browserNotifications ?? true
@@ -3835,6 +3963,9 @@ function syncGlobalForm() {
   globalCleanupScriptMode.value = store.global.cleanupScriptMode === 'idle' ? 'idle' : 'no-tasks'
   globalCleanupScriptOnlyOnChanges.value = store.global.cleanupScriptOnlyOnChanges ?? false
   globalArchiveScript.value = store.global.archiveScript ?? ''
+  globalSessionEndedScript.value = store.global.sessionEndedScript ?? ''
+  globalPrMergedScript.value = store.global.prMergedScript ?? ''
+  globalAutoLoopDisabledScript.value = store.global.autoLoopDisabledScript ?? ''
   globalChangeSourceBranchScript.value = store.global.changeSourceBranchScript ?? ''
   globalWorktreesPath.value = store.global.worktreesPath ?? WORKTREES_PATH
   globalWorktreesPrefixByProject.value = store.global.worktreesPrefixByProject ?? false
@@ -3890,6 +4021,9 @@ function syncProjectForm(project: ProjectSettings | null) {
       cleanupScriptMode: '',
       archiveScript: '',
       changeSourceBranchScript: '',
+      sessionEndedScript: '',
+      prMergedScript: '',
+      autoLoopDisabledScript: '',
       devServer: { startCommand: '', stopCommand: '' },
       e2e: { framework: '', skill: '', prompt: '' },
       finalization: { prompt: '' },
@@ -3917,6 +4051,9 @@ function syncProjectForm(project: ProjectSettings | null) {
     cleanupScriptMode: project.cleanupScriptMode ?? '',
     archiveScript: project.archiveScript ?? '',
     changeSourceBranchScript: project.changeSourceBranchScript ?? '',
+    sessionEndedScript: project.sessionEndedScript ?? '',
+    prMergedScript: project.prMergedScript ?? '',
+    autoLoopDisabledScript: project.autoLoopDisabledScript ?? '',
     devServer: {
       startCommand: project.devServer?.startCommand ?? '',
       stopCommand: project.devServer?.stopCommand ?? '',
@@ -4124,6 +4261,7 @@ async function saveGlobal() {
       terminalCommand: globalTerminalCommand.value,
       autoPurgeOnPrMerged: globalAutoPurgeOnPrMerged.value,
       autoLoopMaxRetries: globalAutoLoopMaxRetries.value,
+      awaitingUserReminderMinutes: globalAwaitingUserReminderMinutes.value,
       wsEventsRetentionDays: globalWsEventsRetentionDays.value,
       wsEventsKeepPerWorkspace: globalWsEventsKeepPerWorkspace.value,
       browserNotifications: globalBrowserNotifications.value,
@@ -4168,6 +4306,9 @@ async function saveGlobal() {
       cleanupScriptOnlyOnChanges: globalCleanupScriptOnlyOnChanges.value,
       archiveScript: globalArchiveScript.value,
       changeSourceBranchScript: globalChangeSourceBranchScript.value,
+      sessionEndedScript: globalSessionEndedScript.value,
+      prMergedScript: globalPrMergedScript.value,
+      autoLoopDisabledScript: globalAutoLoopDisabledScript.value,
       worktreesPath: globalWorktreesPath.value,
       worktreesPrefixByProject: globalWorktreesPrefixByProject.value,
       flattenWorkspaceList: globalFlattenWorkspaceList.value,
@@ -4300,6 +4441,9 @@ async function saveProject() {
       cleanupScriptMode: projectForm.value.cleanupScriptMode,
       archiveScript: projectForm.value.archiveScript,
       changeSourceBranchScript: projectForm.value.changeSourceBranchScript,
+      sessionEndedScript: projectForm.value.sessionEndedScript,
+      prMergedScript: projectForm.value.prMergedScript,
+      autoLoopDisabledScript: projectForm.value.autoLoopDisabledScript,
       devServer: projectForm.value.devServer,
       e2e: projectForm.value.e2e,
       finalization: projectForm.value.finalization,

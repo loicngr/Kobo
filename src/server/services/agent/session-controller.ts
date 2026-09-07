@@ -1,9 +1,24 @@
 import type { AgentEngine, AgentEvent, EngineProcess, StartOptions } from './engines/types.js'
 
+/** Why a controller was asked to stop; read by the session-ended hook. */
+export type StopCause = 'user' | 'delete' | 'purge'
+
 export class SessionController {
+  /**
+   * Set by the orchestrator when it stops this controller on purpose. A
+   * delete or purge is about to remove the worktree, and a hook spawned in it
+   * would run in a directory being deleted — the hook path checks this.
+   */
+  stopCause?: StopCause
   private _engineProcess?: EngineProcess
   private _startPromise?: Promise<void>
   private _status: 'running' | 'stopping' = 'running'
+  /**
+   * Set by `stop()`. Distinct from `_status` so the check in `startEngine` is
+   * not narrowed away by the compiler: `stop()` can flip it while that method
+   * is awaiting the engine.
+   */
+  private _stopRequested = false
 
   /**
    * Wall-clock creation time. The watchdog needs it: `engineProcess` stays
@@ -42,6 +57,22 @@ export class SessionController {
   }
 
   private async startEngine(options: StartOptions): Promise<void> {
+    // Already stopped before we got here. The orchestrator chains `start`
+    // behind a zombie eviction that can take up to STOP_AGENT_TIMEOUT_MS, and a
+    // stop landing in that window resolves immediately and reports "stopped" —
+    // so the caller (delete, purge-worktree) is already removing the worktree.
+    // Spawning into it and stopping afterwards, as the check below does, is too
+    // late; the process must never exist.
+    //
+    // Still report an end: the orchestrator already created the session row,
+    // and only session:ended closes it. Without this the row stayed `running`
+    // until the next boot — blocking deleteSession and tagging the next
+    // messages onto a ghost session.
+    if (this._stopRequested) {
+      this.handle({ kind: 'session:ended', reason: 'killed', exitCode: null })
+      return
+    }
+
     const process = await this.engine.start(options, (ev) => this.handle(ev))
     this._engineProcess = process
     if (this._status === 'stopping') {
@@ -66,6 +97,7 @@ export class SessionController {
   }
 
   async stop(): Promise<void> {
+    this._stopRequested = true
     this._status = 'stopping'
     // `startEngine` may still be in flight: `_engineProcess` stays undefined
     // until `engine.start` resolves, so without this wait `stop()` would

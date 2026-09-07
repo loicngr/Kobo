@@ -585,7 +585,7 @@ describe('createCodexEngine — child process errors', () => {
       if (event.kind === 'session:ended') resolveEnded()
     })
     const queuedMessage = proc.sendMessage('message queued before startup')
-    void queuedMessage.catch(() => {})
+    void Promise.resolve(queuedMessage).catch(() => {})
 
     await flush(10)
     const childError = Object.assign(new Error('spawn codex ENOENT'), { code: 'ENOENT' })
@@ -617,7 +617,7 @@ describe('createCodexEngine — child process errors', () => {
       if (event.kind === 'session:ended') resolveEnded()
     })
     const queuedMessage = proc.sendMessage('message queued before startup')
-    void queuedMessage.catch(() => {})
+    void Promise.resolve(queuedMessage).catch(() => {})
 
     await flush(10)
     _child.emit('exit', 1, null)
@@ -681,7 +681,7 @@ describe('createCodexEngine — stop()', () => {
     expect(sessionEnded).toBeDefined()
     expect(sessionEnded.reason).toBe('killed')
     expect(_child.kill).toHaveBeenCalled()
-    expect(proc.isAlive()).toBe(false)
+    expect(proc.isAlive?.()).toBe(false)
   })
 
   it('is safe to call after the session has already ended', async () => {
@@ -755,7 +755,7 @@ describe('createCodexEngine — sendMessage after session ended', () => {
     await flush(10)
 
     expect(events.filter((e) => e.kind === 'session:ended')).toHaveLength(1)
-    expect(proc.isAlive()).toBe(false)
+    expect(proc.isAlive?.()).toBe(false)
     expect(_child.kill).toHaveBeenCalled()
 
     const writesBefore = _child._written.length

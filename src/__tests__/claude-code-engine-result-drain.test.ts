@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest'
+import { describe, expect, it, type Mock, vi } from 'vitest'
 
 let abortSignal: AbortSignal | undefined
 let emitSubagentStarted = false
@@ -8,12 +8,12 @@ let emitActivityAfterSubagentCompletion = false
 let completeSubagent: (() => void) | undefined
 let extraTurnGate: (() => void) | undefined
 let releaseStream: (() => void) | undefined
-let stopTaskMock: ReturnType<typeof vi.fn>
+let stopTaskMock: Mock<(taskId: string) => Promise<void>>
 
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
   query: vi.fn((args: { options: { abortController?: AbortController } }) => {
     abortSignal = args.options.abortController?.signal
-    stopTaskMock = vi.fn(async () => {})
+    stopTaskMock = vi.fn(async (_taskId: string) => {})
     return {
       async *[Symbol.asyncIterator]() {
         yield { type: 'system', subtype: 'init', session_id: 'sess-drain', model: 'm', slash_commands: [] }
@@ -63,7 +63,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
         }
         await new Promise<void>((resolve) => {
           releaseStream = resolve
-          abortSignal?.addEventListener('abort', resolve, { once: true })
+          abortSignal?.addEventListener('abort', () => resolve(), { once: true })
         })
       },
       stopTask: (taskId: string) => stopTaskMock(taskId),

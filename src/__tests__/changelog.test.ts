@@ -1,6 +1,6 @@
 import { Hono } from 'hono'
-import { describe, expect, it } from 'vitest'
-import changelogRouter, { parseChangelog } from '../server/routes/changelog.js'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import changelogRouter, { _clearLatestVersionCache, parseChangelog } from '../server/routes/changelog.js'
 
 describe('parseChangelog', () => {
   it('splits the markdown into ordered version sections', () => {
@@ -61,6 +61,12 @@ describe('parseChangelog', () => {
 })
 
 describe('GET /api/changelog', () => {
+  beforeEach(() => {
+    _clearLatestVersionCache()
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new Error('no network in tests')))
+  })
+  afterEach(() => vi.unstubAllGlobals())
+
   it('returns the current version and parsed changelog entries', async () => {
     const app = new Hono()
     app.route('/api/changelog', changelogRouter)
@@ -73,5 +79,55 @@ describe('GET /api/changelog', () => {
     }
     expect(typeof body.currentVersion).toBe('string')
     expect(Array.isArray(body.versions)).toBe(true)
+  })
+})
+
+describe('GET /api/changelog — latest version lookup', () => {
+  const app = new Hono().route('/api/changelog', changelogRouter)
+
+  beforeEach(() => {
+    _clearLatestVersionCache()
+    // Never let a test reach registry.npmjs.org: offline it would block for
+    // the 5 s timeout, online it would depend on what npm answers today.
+    vi.stubGlobal('fetch', vi.fn())
+  })
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('reports the registry version and caches it for later requests', async () => {
+    vi.mocked(fetch).mockResolvedValue({ ok: true, json: async () => ({ version: '99.0.0' }) } as Response)
+
+    const first = (await (await app.request('/api/changelog')).json()) as { latestVersion: string | null }
+    const second = (await (await app.request('/api/changelog')).json()) as { latestVersion: string | null }
+
+    expect(first.latestVersion).toBe('99.0.0')
+    expect(second.latestVersion).toBe('99.0.0')
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('answers null when the registry is unreachable, and does not retry on the next load', async () => {
+    vi.mocked(fetch).mockRejectedValue(new Error('offline'))
+
+    const first = (await (await app.request('/api/changelog')).json()) as { latestVersion: string | null }
+    const second = (await (await app.request('/api/changelog')).json()) as { latestVersion: string | null }
+
+    expect(first.latestVersion).toBeNull()
+    expect(second.latestVersion).toBeNull()
+    expect(fetch).toHaveBeenCalledTimes(1)
+  })
+
+  it('shares one in-flight lookup between concurrent requests', async () => {
+    let resolveFetch: (r: Response) => void = () => {}
+    vi.mocked(fetch).mockReturnValue(
+      new Promise<Response>((resolve) => {
+        resolveFetch = resolve
+      }),
+    )
+
+    const a = app.request('/api/changelog')
+    const b = app.request('/api/changelog')
+    resolveFetch({ ok: true, json: async () => ({ version: '1.2.3' }) } as Response)
+    await Promise.all([a, b])
+
+    expect(fetch).toHaveBeenCalledTimes(1)
   })
 })

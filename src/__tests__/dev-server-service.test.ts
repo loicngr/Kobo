@@ -40,6 +40,7 @@ import {
 import { getProjectSettings } from '../server/services/settings-service.js'
 import { emitEphemeral } from '../server/services/websocket-service.js'
 import { getWorkspace, listWorkspaces } from '../server/services/workspace-service.js'
+import { makeProjectSettings, makeWorkspace } from './helpers/fixtures.js'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -283,27 +284,31 @@ describe('getStatus', () => {
 
     // 1) Simulate a running Docker build: spawn() returns a mock proc that never
     //    fires 'exit'. startDevServer registers it in trackedProcesses.
-    vi.mocked(getWorkspace).mockReturnValue({
-      id: 'ws-build',
-      name: 'Test',
-      projectPath: tmpDir,
-      sourceBranch: 'main',
-      workingBranch: 'feature/test',
-      status: 'idle',
-      notionUrl: null,
-      notionPageId: null,
-      model: 'auto',
-      createdAt: '',
-      updatedAt: '',
-    })
-    vi.mocked(getProjectSettings).mockReturnValue({
-      path: tmpDir,
-      displayName: 'Test',
-      defaultSourceBranch: 'main',
-      defaultModel: 'auto',
-      prPromptTemplate: '',
-      devServer: { startCommand: 'docker compose up -d', stopCommand: '' },
-    })
+    vi.mocked(getWorkspace).mockReturnValue(
+      makeWorkspace({
+        id: 'ws-build',
+        name: 'Test',
+        projectPath: tmpDir,
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        status: 'idle',
+        notionUrl: null,
+        notionPageId: null,
+        model: 'auto',
+        createdAt: '',
+        updatedAt: '',
+      }),
+    )
+    vi.mocked(getProjectSettings).mockReturnValue(
+      makeProjectSettings({
+        path: tmpDir,
+        displayName: 'Test',
+        defaultSourceBranch: 'main',
+        defaultModel: 'auto',
+        prPromptTemplate: '',
+        devServer: { startCommand: 'docker compose up -d', stopCommand: '' },
+      }),
+    )
     const mockProc = { on: vi.fn(), kill: vi.fn(), stdout: null, stderr: null, pid: 1234 }
     vi.mocked(spawn).mockReturnValue(mockProc as unknown as ReturnType<typeof spawn>)
     startDevServer('ws-build')
@@ -336,27 +341,31 @@ describe('getStatus', () => {
       'INSTANCE_NAME=feature-test\nPROJECT_NAME=myapp\nHTTP_PORT=3000',
     )
 
-    vi.mocked(getWorkspace).mockReturnValue({
-      id: 'ws-running',
-      name: 'Test',
-      projectPath: tmpDir,
-      sourceBranch: 'main',
-      workingBranch: 'feature/test',
-      status: 'idle',
-      notionUrl: null,
-      notionPageId: null,
-      model: 'auto',
-      createdAt: '',
-      updatedAt: '',
-    })
-    vi.mocked(getProjectSettings).mockReturnValue({
-      path: tmpDir,
-      displayName: 'Test',
-      defaultSourceBranch: 'main',
-      defaultModel: 'auto',
-      prPromptTemplate: '',
-      devServer: { startCommand: 'docker compose up -d', stopCommand: '' },
-    })
+    vi.mocked(getWorkspace).mockReturnValue(
+      makeWorkspace({
+        id: 'ws-running',
+        name: 'Test',
+        projectPath: tmpDir,
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        status: 'idle',
+        notionUrl: null,
+        notionPageId: null,
+        model: 'auto',
+        createdAt: '',
+        updatedAt: '',
+      }),
+    )
+    vi.mocked(getProjectSettings).mockReturnValue(
+      makeProjectSettings({
+        path: tmpDir,
+        displayName: 'Test',
+        defaultSourceBranch: 'main',
+        defaultModel: 'auto',
+        prPromptTemplate: '',
+        devServer: { startCommand: 'docker compose up -d', stopCommand: '' },
+      }),
+    )
     const mockProc = { on: vi.fn(), kill: vi.fn(), stdout: null, stderr: null, pid: 1234 }
     vi.mocked(spawn).mockReturnValue(mockProc as unknown as ReturnType<typeof spawn>)
     startDevServer('ws-running')
@@ -377,46 +386,52 @@ describe('startDevServer', () => {
   })
 
   it('throws when no start command configured', () => {
-    vi.mocked(getWorkspace).mockReturnValue({
-      id: 'ws-1',
-      name: 'Test',
-      projectPath: '/project',
-      sourceBranch: 'main',
-      workingBranch: 'feature/test',
-      status: 'executing',
-      notionUrl: null,
-      notionPageId: null,
-      model: 'auto',
-      createdAt: '',
-      updatedAt: '',
-    })
+    vi.mocked(getWorkspace).mockReturnValue(
+      makeWorkspace({
+        id: 'ws-1',
+        name: 'Test',
+        projectPath: '/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        status: 'executing',
+        notionUrl: null,
+        notionPageId: null,
+        model: 'auto',
+        createdAt: '',
+        updatedAt: '',
+      }),
+    )
     vi.mocked(getProjectSettings).mockReturnValue(null)
 
     expect(() => startDevServer('ws-1')).toThrow('No dev-server start command configured')
   })
 
   it('spawns process and returns starting status', () => {
-    vi.mocked(getWorkspace).mockReturnValue({
-      id: 'ws-1',
-      name: 'Test',
-      projectPath: '/project',
-      sourceBranch: 'main',
-      workingBranch: 'feature/test',
-      status: 'executing',
-      notionUrl: null,
-      notionPageId: null,
-      model: 'auto',
-      createdAt: '',
-      updatedAt: '',
-    })
-    vi.mocked(getProjectSettings).mockReturnValue({
-      path: '/project',
-      displayName: 'Test',
-      defaultSourceBranch: 'main',
-      defaultModel: 'auto',
-      prPromptTemplate: '',
-      devServer: { startCommand: 'make dev-server', stopCommand: '' },
-    })
+    vi.mocked(getWorkspace).mockReturnValue(
+      makeWorkspace({
+        id: 'ws-1',
+        name: 'Test',
+        projectPath: '/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        status: 'executing',
+        notionUrl: null,
+        notionPageId: null,
+        model: 'auto',
+        createdAt: '',
+        updatedAt: '',
+      }),
+    )
+    vi.mocked(getProjectSettings).mockReturnValue(
+      makeProjectSettings({
+        path: '/project',
+        displayName: 'Test',
+        defaultSourceBranch: 'main',
+        defaultModel: 'auto',
+        prPromptTemplate: '',
+        devServer: { startCommand: 'make dev-server', stopCommand: '' },
+      }),
+    )
 
     const mockProc = {
       on: vi.fn(),
@@ -452,27 +467,31 @@ describe('startDevServer', () => {
   })
 
   it('throws instead of silently orphaning the first process on a double start', () => {
-    vi.mocked(getWorkspace).mockReturnValue({
-      id: 'ws_double',
-      name: 'Test',
-      projectPath: '/project',
-      sourceBranch: 'main',
-      workingBranch: 'feature/test',
-      status: 'executing',
-      notionUrl: null,
-      notionPageId: null,
-      model: 'auto',
-      createdAt: '',
-      updatedAt: '',
-    })
-    vi.mocked(getProjectSettings).mockReturnValue({
-      path: '/project',
-      displayName: 'Test',
-      defaultSourceBranch: 'main',
-      defaultModel: 'auto',
-      prPromptTemplate: '',
-      devServer: { startCommand: 'make dev-server', stopCommand: '' },
-    })
+    vi.mocked(getWorkspace).mockReturnValue(
+      makeWorkspace({
+        id: 'ws_double',
+        name: 'Test',
+        projectPath: '/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        status: 'executing',
+        notionUrl: null,
+        notionPageId: null,
+        model: 'auto',
+        createdAt: '',
+        updatedAt: '',
+      }),
+    )
+    vi.mocked(getProjectSettings).mockReturnValue(
+      makeProjectSettings({
+        path: '/project',
+        displayName: 'Test',
+        defaultSourceBranch: 'main',
+        defaultModel: 'auto',
+        prPromptTemplate: '',
+        devServer: { startCommand: 'make dev-server', stopCommand: '' },
+      }),
+    )
 
     const mockProc = {
       on: vi.fn(),
@@ -499,19 +518,21 @@ describe('stopDevServer', () => {
   })
 
   it('emits stopped status', async () => {
-    vi.mocked(getWorkspace).mockReturnValue({
-      id: 'ws-1',
-      name: 'Test',
-      projectPath: '/tmp/nonexistent-project-path',
-      sourceBranch: 'main',
-      workingBranch: 'feature/test',
-      status: 'executing',
-      notionUrl: null,
-      notionPageId: null,
-      model: 'auto',
-      createdAt: '',
-      updatedAt: '',
-    })
+    vi.mocked(getWorkspace).mockReturnValue(
+      makeWorkspace({
+        id: 'ws-1',
+        name: 'Test',
+        projectPath: '/tmp/nonexistent-project-path',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        status: 'executing',
+        notionUrl: null,
+        notionPageId: null,
+        model: 'auto',
+        createdAt: '',
+        updatedAt: '',
+      }),
+    )
     vi.mocked(getProjectSettings).mockReturnValue(null)
 
     const status = await stopDevServer('ws-1')
@@ -560,19 +581,21 @@ describe('getDevServerLogs', () => {
   })
 
   it('returns message when no instance config', async () => {
-    vi.mocked(getWorkspace).mockReturnValue({
-      id: 'ws-1',
-      name: 'Test',
-      projectPath: '/tmp/nonexistent-project-path',
-      sourceBranch: 'main',
-      workingBranch: 'feature/test',
-      status: 'executing',
-      notionUrl: null,
-      notionPageId: null,
-      model: 'auto',
-      createdAt: '',
-      updatedAt: '',
-    })
+    vi.mocked(getWorkspace).mockReturnValue(
+      makeWorkspace({
+        id: 'ws-1',
+        name: 'Test',
+        projectPath: '/tmp/nonexistent-project-path',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        status: 'executing',
+        notionUrl: null,
+        notionPageId: null,
+        model: 'auto',
+        createdAt: '',
+        updatedAt: '',
+      }),
+    )
     const logs = await getDevServerLogs('ws-1')
     expect(logs).toBe('No dev-server instance found')
   })

@@ -41,7 +41,25 @@ export function resolvePathInside(rootPath: string, relativePath: string): strin
   try {
     return resolveExistingPathInside(root, resolved)
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return resolved
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err
+    // The leaf does not exist. That is legitimate — this is how a new file gets
+    // created — unless the leaf is itself a symlink whose target is missing:
+    // realpath gives up with ENOENT on those too, and returning the unresolved
+    // path lets `writeFileSync` follow the link on O_CREAT and write outside the
+    // root. A repository that ships `notes.md -> ~/.bashrc.d/x.sh` would get a
+    // write there the next time the user saves.
+    assertLeafIsNotSymlink(resolved)
+    return resolved
+  }
+}
+
+/** Reject a leaf that is a symlink, dangling or not. */
+function assertLeafIsNotSymlink(candidate: string): void {
+  try {
+    if (fs.lstatSync(candidate).isSymbolicLink()) throw new Error('Path escapes allowed root')
+  } catch (err) {
+    // Genuinely absent: nothing to follow, nothing to reject.
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return
     throw err
   }
 }

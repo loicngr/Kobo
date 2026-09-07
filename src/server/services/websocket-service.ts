@@ -1,3 +1,4 @@
+import type { Statement } from 'better-sqlite3'
 import { nanoid } from 'nanoid'
 import type WebSocket from 'ws'
 import { getDb } from '../db/index.js'
@@ -179,6 +180,31 @@ export function handleConnection(ws: WebSocket): void {
  * Persists the event to the ws_events table.
  * Returns the event id.
  */
+/**
+ * The insert is on the busiest write path in the process: one row per agent
+ * event, hundreds per turn once token deltas are batched. Compiling the
+ * statement once and reusing it is better-sqlite3's documented fast path.
+ * Keyed on the database handle so a `resetDb()` between tests cannot hand back
+ * a statement bound to a closed connection.
+ */
+let cachedInsert: {
+  db: ReturnType<typeof getDb>
+  statement: Statement<[string, string, string, string, string | null, string]>
+} | null = null
+
+function insertEventStatement(): Statement<[string, string, string, string, string | null, string]> {
+  const db = getDb()
+  if (!cachedInsert || cachedInsert.db !== db) {
+    cachedInsert = {
+      db,
+      statement: db.prepare(
+        'INSERT INTO ws_events (id, workspace_id, type, payload, session_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+      ),
+    }
+  }
+  return cachedInsert.statement
+}
+
 export function emit(workspaceId: string, type: string, payload: unknown, sessionId?: string): string {
   const id = nanoid()
   const createdAt = new Date().toISOString()
@@ -186,10 +212,7 @@ export function emit(workspaceId: string, type: string, payload: unknown, sessio
 
   // Best-effort persist — don't let FK violation (deleted workspace) break the broadcast
   try {
-    const db = getDb()
-    db.prepare(
-      'INSERT INTO ws_events (id, workspace_id, type, payload, session_id, created_at) VALUES (?, ?, ?, ?, ?, ?)',
-    ).run(id, workspaceId, type, JSON.stringify(payload), sessionId ?? null, createdAt)
+    insertEventStatement().run(id, workspaceId, type, JSON.stringify(payload), sessionId ?? null, createdAt)
     replayable = true
   } catch (err) {
     console.error(`[websocket-service] Failed to persist event (workspace=${workspaceId}, type=${type}):`, err)

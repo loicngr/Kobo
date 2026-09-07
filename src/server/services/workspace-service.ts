@@ -92,6 +92,9 @@ export interface Workspace {
    *  forge, merge commit sha, original paths). Reserved for a future
    *  unpurge feature — read but never modified by V1. */
   worktreePurgeRestoreData: string | null
+  /** Groups the workspaces created to run one task on two engines. Null for
+   *  a workspace created on its own, which is nearly all of them. */
+  comparisonId: string | null
   engine: string
   autoLoop: boolean
   autoLoopReady: boolean
@@ -137,6 +140,9 @@ export interface CreateWorkspaceInput {
   worktreePath?: string
   worktreeOwned?: boolean
   worktreesPath?: string
+  /** Set only by the engine-comparison flow, which creates one workspace per
+   *  engine and needs them to find each other afterwards. */
+  comparisonId?: string
 }
 
 /** Input payload for creating a new task. */
@@ -208,6 +214,7 @@ interface WorkspaceRow {
   pr_ci_failure_dismissed_at: string | null
   worktree_purged_at: string | null
   worktree_purge_restore_data: string | null
+  comparison_id: string | null
   created_at: string
   updated_at: string
 }
@@ -269,6 +276,7 @@ function mapWorkspace(row: WorkspaceRow): Workspace {
     prCiFailureDismissedAt: row.pr_ci_failure_dismissed_at,
     worktreePurgedAt: row.worktree_purged_at,
     worktreePurgeRestoreData: row.worktree_purge_restore_data,
+    comparisonId: row.comparison_id ?? null,
     engine: row.engine ?? 'claude-code',
     autoLoop: row.auto_loop === 1,
     autoLoopReady: row.auto_loop_ready === 1,
@@ -325,8 +333,8 @@ export function createWorkspace(data: CreateWorkspaceInput): Workspace {
     INSERT INTO workspaces (
       id, name, project_path, source_branch, working_branch, status,
       notion_url, notion_page_id, sentry_url, pr_url, worktree_path, worktree_owned,
-      model, brainstorm_model, reasoning_effort, permission_mode, permission_profile, agent_permission_mode, engine, created_at, updated_at
-    ) VALUES (?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      model, brainstorm_model, reasoning_effort, permission_mode, permission_profile, agent_permission_mode, engine, comparison_id, created_at, updated_at
+    ) VALUES (?, ?, ?, ?, ?, 'created', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     data.name,
@@ -346,6 +354,9 @@ export function createWorkspace(data: CreateWorkspaceInput): Workspace {
     legacyProfile,
     unifiedMode,
     data.engine ?? 'claude-code',
+    // Empty string is not a group: it would silently gather every workspace
+    // created with a blank id into one comparison.
+    data.comparisonId?.trim() ? data.comparisonId : null,
     now,
     now,
   )
@@ -358,6 +369,21 @@ export function getWorkspace(id: string): Workspace | null {
   const db = getDb()
   const row = db.prepare('SELECT * FROM workspaces WHERE id = ?').get(id) as WorkspaceRow | undefined
   return row ? mapWorkspace(row) : null
+}
+
+/**
+ * Every workspace sharing a comparison id, oldest first — the order they were
+ * created in, which is the order the engines were picked.
+ *
+ * An empty or missing id matches nothing: `comparison_id` is NULL for the vast
+ * majority of workspaces, and returning them all here would be a footgun.
+ */
+export function listComparisonMembers(comparisonId: string): Workspace[] {
+  if (!comparisonId.trim()) return []
+  const rows = getDb()
+    .prepare('SELECT * FROM workspaces WHERE comparison_id = ? ORDER BY created_at, id')
+    .all(comparisonId) as WorkspaceRow[]
+  return rows.map(mapWorkspace)
 }
 
 /** List all workspaces, optionally including archived ones. Ordered by most recently updated. */

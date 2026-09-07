@@ -45,6 +45,8 @@ describe('Orchestrator — startAgent', () => {
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
+        supportsSubagents: false,
+        supportsQuotaStatus: false,
       },
       async start(_opts, _onEvent) {
         return {
@@ -53,6 +55,7 @@ describe('Orchestrator — startAgent', () => {
           sendMessage() {},
           interrupt() {},
           async stop() {},
+          resolvePendingUserInput: () => false,
         }
       },
     })
@@ -125,6 +128,8 @@ describe('Orchestrator — stop / interrupt / sendMessage', () => {
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
+        supportsSubagents: false,
+        supportsQuotaStatus: false,
       },
       async start(_opts, _onEvent) {
         return {
@@ -133,6 +138,7 @@ describe('Orchestrator — stop / interrupt / sendMessage', () => {
           sendMessage() {},
           interrupt() {},
           async stop() {},
+          resolvePendingUserInput: () => false,
         }
       },
     })
@@ -219,6 +225,8 @@ describe('Orchestrator — lifecycle-safe fallback delivery', () => {
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
+        supportsSubagents: false,
+        supportsQuotaStatus: false,
       },
       async start() {
         return {
@@ -227,6 +235,7 @@ describe('Orchestrator — lifecycle-safe fallback delivery', () => {
           sendMessage() {},
           interrupt() {},
           async stop() {},
+          resolvePendingUserInput: () => false,
         }
       },
     })
@@ -254,6 +263,8 @@ describe('Orchestrator — lifecycle-safe fallback delivery', () => {
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
+        supportsSubagents: false,
+        supportsQuotaStatus: false,
       },
       async start() {
         return {
@@ -262,6 +273,7 @@ describe('Orchestrator — lifecycle-safe fallback delivery', () => {
           sendMessage,
           interrupt() {},
           async stop() {},
+          resolvePendingUserInput: () => false,
         }
       },
     })
@@ -294,6 +306,8 @@ describe('Orchestrator — lifecycle-safe fallback delivery', () => {
           supportsResume: true,
           supportsMcp: true,
           supportsSkills: true,
+          supportsSubagents: false,
+          supportsQuotaStatus: false,
         },
         async start(_options, onEvent) {
           emitEvent = onEvent
@@ -305,6 +319,7 @@ describe('Orchestrator — lifecycle-safe fallback delivery', () => {
             },
             interrupt() {},
             async stop() {},
+            resolvePendingUserInput: () => false,
           }
         },
       })
@@ -358,6 +373,8 @@ describe('Orchestrator — lifecycle-safe fallback delivery', () => {
           supportsResume: true,
           supportsMcp: true,
           supportsSkills: true,
+          supportsSubagents: false,
+          supportsQuotaStatus: false,
         },
         async start(_options, onEvent) {
           starts += 1
@@ -368,6 +385,7 @@ describe('Orchestrator — lifecycle-safe fallback delivery', () => {
             sendMessage: starts === 1 ? firstSend : replacementSend,
             interrupt() {},
             async stop() {},
+            resolvePendingUserInput: () => false,
           }
         },
       })
@@ -411,6 +429,8 @@ describe('Orchestrator — lifecycle-safe fallback delivery', () => {
           supportsResume: true,
           supportsMcp: true,
           supportsSkills: true,
+          supportsSubagents: false,
+          supportsQuotaStatus: false,
         },
         async start() {
           return {
@@ -419,6 +439,7 @@ describe('Orchestrator — lifecycle-safe fallback delivery', () => {
             sendMessage: send,
             interrupt() {},
             async stop() {},
+            resolvePendingUserInput: () => false,
           }
         },
       })
@@ -467,6 +488,8 @@ describe('Orchestrator — lifecycle-safe fallback delivery', () => {
           supportsResume: true,
           supportsMcp: true,
           supportsSkills: true,
+          supportsSubagents: false,
+          supportsQuotaStatus: false,
         },
         async start(_options, onEvent) {
           starts += 1
@@ -477,6 +500,7 @@ describe('Orchestrator — lifecycle-safe fallback delivery', () => {
             sendMessage: starts === 1 ? firstSend : replacementSend,
             interrupt() {},
             async stop() {},
+            resolvePendingUserInput: () => false,
           }
         },
       })
@@ -517,6 +541,8 @@ describe('Orchestrator — lifecycle-safe fallback delivery', () => {
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
+        supportsSubagents: false,
+        supportsQuotaStatus: false,
       },
       async start(_options, onEvent) {
         starts += 1
@@ -527,6 +553,7 @@ describe('Orchestrator — lifecycle-safe fallback delivery', () => {
           sendMessage() {},
           interrupt() {},
           async stop() {},
+          resolvePendingUserInput: () => false,
         }
       },
     })
@@ -571,10 +598,19 @@ describe('Orchestrator — event dispatch', () => {
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
+        supportsSubagents: false,
+        supportsQuotaStatus: false,
       },
       async start(_opts, onEvent) {
         emitEv = onEvent
-        return { pid: 1, engineSessionId: 'sid', sendMessage() {}, interrupt() {}, async stop() {} }
+        return {
+          pid: 1,
+          engineSessionId: 'sid',
+          sendMessage() {},
+          interrupt() {},
+          async stop() {},
+          resolvePendingUserInput: () => false,
+        }
       },
     })
     const { startAgent, _getRetryCounts } = await import('../../server/services/agent/orchestrator.js')
@@ -613,10 +649,19 @@ describe('Orchestrator — event dispatch', () => {
           supportsResume: true,
           supportsMcp: true,
           supportsSkills: true,
+          supportsSubagents: false,
+          supportsQuotaStatus: false,
         },
         async start(_opts, onEvent) {
           emitEv = onEvent
-          return { pid: 1, engineSessionId: 'sid', sendMessage() {}, interrupt() {}, async stop() {} }
+          return {
+            pid: 1,
+            engineSessionId: 'sid',
+            sendMessage() {},
+            interrupt() {},
+            async stop() {},
+            resolvePendingUserInput: () => false,
+          }
         },
       })
       const { startAgent, _getRetryCounts } = await import('../../server/services/agent/orchestrator.js')
@@ -661,10 +706,19 @@ describe('Orchestrator — event dispatch', () => {
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
+        supportsSubagents: false,
+        supportsQuotaStatus: false,
       },
       async start(_opts, onEvent) {
         emitEv = onEvent
-        return { pid: 1, engineSessionId: 'sid', sendMessage() {}, interrupt() {}, async stop() {} }
+        return {
+          pid: 1,
+          engineSessionId: 'sid',
+          sendMessage() {},
+          interrupt() {},
+          async stop() {},
+          resolvePendingUserInput: () => false,
+        }
       },
     })
     const { startAgent } = await import('../../server/services/agent/orchestrator.js')
@@ -692,10 +746,19 @@ describe('Orchestrator — event dispatch', () => {
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
+        supportsSubagents: false,
+        supportsQuotaStatus: false,
       },
       async start(_opts, onEvent) {
         emitEv = onEvent
-        return { pid: 1, engineSessionId: 'sid', sendMessage() {}, interrupt() {}, async stop() {} }
+        return {
+          pid: 1,
+          engineSessionId: 'sid',
+          sendMessage() {},
+          interrupt() {},
+          async stop() {},
+          resolvePendingUserInput: () => false,
+        }
       },
     })
     const { startAgent, _getControllers, _getRetryCounts } = await import('../../server/services/agent/orchestrator.js')
@@ -725,10 +788,19 @@ describe('Orchestrator — event dispatch', () => {
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
+        supportsSubagents: false,
+        supportsQuotaStatus: false,
       },
       async start(_opts, onEvent) {
         emitEv = onEvent
-        return { pid: 1, engineSessionId: 'sid', sendMessage() {}, interrupt() {}, async stop() {} }
+        return {
+          pid: 1,
+          engineSessionId: 'sid',
+          sendMessage() {},
+          interrupt() {},
+          async stop() {},
+          resolvePendingUserInput: () => false,
+        }
       },
     })
     const { startAgent, _getControllers } = await import('../../server/services/agent/orchestrator.js')
@@ -754,9 +826,18 @@ describe('Orchestrator — resume behaviour', () => {
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
+        supportsSubagents: false,
+        supportsQuotaStatus: false,
       },
       async start(_opts, _onEvent) {
-        return { pid: 7777, engineSessionId: 'sid-resume', sendMessage() {}, interrupt() {}, async stop() {} }
+        return {
+          pid: 7777,
+          engineSessionId: 'sid-resume',
+          sendMessage() {},
+          interrupt() {},
+          async stop() {},
+          resolvePendingUserInput: () => false,
+        }
       },
     })
   })
@@ -772,7 +853,7 @@ describe('Orchestrator — resume behaviour', () => {
     ).run(existingId, ws.id, null, 'completed', 'engine-sid-1', new Date().toISOString())
 
     const { startAgent } = await import('../../server/services/agent/orchestrator.js')
-    const { agentSessionId } = startAgent(ws.id, '/tmp', 'resume me', undefined, true, 'auto-accept', existingId)
+    const { agentSessionId } = startAgent(ws.id, '/tmp', 'resume me', undefined, true, 'bypass', existingId)
 
     expect(agentSessionId).toBe(existingId)
     const count = db.prepare('SELECT COUNT(*) AS c FROM agent_sessions WHERE workspace_id = ?').get(ws.id) as {
@@ -787,7 +868,7 @@ describe('Orchestrator — resume behaviour', () => {
     const { createWorkspace } = await import('../../server/services/workspace-service.js')
     const ws = createWorkspace({ name: 'W', projectPath: '/tmp', sourceBranch: 'd', workingBranch: 'b' })
     const { startAgent } = await import('../../server/services/agent/orchestrator.js')
-    expect(() => startAgent(ws.id, '/tmp', 'ghost', undefined, true, 'auto-accept', 'does-not-exist')).toThrow(
+    expect(() => startAgent(ws.id, '/tmp', 'ghost', undefined, true, 'bypass', 'does-not-exist')).toThrow(
       /Cannot resume session/,
     )
   })
@@ -807,6 +888,8 @@ describe('Orchestrator — watchdog', () => {
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
+        supportsSubagents: false,
+        supportsQuotaStatus: false,
       },
       async start(_opts, _onEvent) {
         // D1 — the pid is never a liveness criterion; an explicit `isAlive`
@@ -817,6 +900,7 @@ describe('Orchestrator — watchdog', () => {
           sendMessage() {},
           interrupt() {},
           async stop() {},
+          resolvePendingUserInput: () => false,
           isAlive: () => false,
         }
       },
@@ -956,6 +1040,8 @@ describe('Orchestrator — interruptAgent', () => {
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
+        supportsSubagents: false,
+        supportsQuotaStatus: false,
       },
       async start(_opts, _onEvent) {
         return {
@@ -966,6 +1052,7 @@ describe('Orchestrator — interruptAgent', () => {
             interruptCalls++
           },
           async stop() {},
+          resolvePendingUserInput: () => false,
         }
       },
     })
@@ -1014,6 +1101,8 @@ describe('Orchestrator — interruptAgent', () => {
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
+        supportsSubagents: false,
+        supportsQuotaStatus: false,
       },
       async start(_opts, _onEvent) {
         return {
@@ -1024,6 +1113,7 @@ describe('Orchestrator — interruptAgent', () => {
             throw new Error('interrupt failed')
           },
           async stop() {},
+          resolvePendingUserInput: () => false,
         }
       },
     })

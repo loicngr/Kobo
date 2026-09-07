@@ -7,6 +7,7 @@ import { type GlobalSettings, useSettingsStore } from 'src/stores/settings'
 import type { AgentEvent } from 'src/types/agent-event'
 import type { ProviderId, UsageSnapshot } from 'src/types/usage'
 import { appendTokenToWsUrl, getToken } from 'src/utils/auth-token'
+import { hookSender, parseHookEventType } from 'src/utils/hook-events'
 import { openNetworkLogin } from 'src/utils/network-login-bus'
 import { resolveNotificationSoundOverride } from 'src/utils/notification-sounds'
 import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
@@ -720,6 +721,32 @@ export const useWebSocketStore = defineStore('websocket', {
 
       const wid = msg.workspaceId ?? (payload.workspaceId as string | undefined) ?? ''
 
+      // Lifecycle hooks stream like the setup / cleanup / archive scripts, but
+      // under one namespace per event, so they are matched by shape rather
+      // than by a case per event.
+      const hook = parseHookEventType(msg.type)
+      if (hook) {
+        const sender = hookSender(hook.event)
+        const timestamp = msg.createdAt ?? new Date().toISOString()
+        const phase = t('chat.hookScript', { event: hook.event })
+        const content =
+          hook.kind === 'output'
+            ? ((msg.payload?.text as string) ?? '')
+            : hook.kind === 'complete'
+              ? msg.payload?.hadOutput === false
+                ? t('chat.scriptDone')
+                : t('chat.scriptComplete', { phase })
+              : t('chat.scriptError', { phase, message: msg.payload?.message ?? t('chat.unknownError') })
+        workspaceStore.addActivityItem(wid, {
+          id: msg.id ?? `${sender}-${hook.kind}-${Date.now()}`,
+          type: 'text',
+          content,
+          timestamp,
+          meta: { sender },
+        })
+        return
+      }
+
       switch (msg.type) {
         case 'chat:accepted': {
           const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : undefined
@@ -1134,6 +1161,49 @@ export const useWebSocketStore = defineStore('websocket', {
           break
         }
 
+        case 'workspace:awaiting-reminder': {
+          // Broadcast, not workspace-scoped: the point is to reach the user who
+          // is looking at another workspace, or at another tab entirely.
+          const p = payload as { workspaceId?: string; workspaceName?: string; waitingMinutes?: number }
+          if (!p.workspaceId) break
+          const settings = useSettingsStore().global
+          const message = t('notification.awaitingReminder', {
+            name: p.workspaceName ?? '',
+            minutes: p.waitingMinutes ?? 0,
+          })
+          // Reuses the question sound: this IS an unanswered question, and a
+          // second sound for it would only be one more thing to configure.
+          notify(
+            message,
+            undefined,
+            p.workspaceId,
+            settings.audioQuestionSound,
+            settings.audioQuestionVolume,
+            settings.audioQuestionNotifications,
+          )
+          // `notify` only posts a browser notification when the tab is NOT
+          // focused. The user looking at another workspace in this very tab
+          // is the case the reminder exists for, so tell them in-app too.
+          if (document.hasFocus()) {
+            const targetId = p.workspaceId
+            Notify.create({
+              type: 'info',
+              position: 'top',
+              timeout: 10000,
+              message,
+              actions: [
+                {
+                  label: t('common.open'),
+                  color: 'white',
+                  handler: () => {
+                    window.location.hash = `#/workspace/${targetId}`
+                  },
+                },
+              ],
+            })
+          }
+          break
+        }
         case 'workspace:pr-attention-dismissed': {
           if (wid) {
             const kind = payload.kind as 'changes-requested' | 'ci-failed' | undefined
@@ -1411,6 +1481,22 @@ export const useWebSocketStore = defineStore('websocket', {
             const wsName = workspaceStore.workspaces.find((w) => w.id === wid)?.name ?? ''
             notify(t('notification.autoLoopPermissionOverridden', { name: wsName }), undefined, wid)
           }
+          break
+        }
+        case 'autoloop:waiting-for-slot': {
+          if (!wid) break
+          const p = payload as { running?: number; limit?: number }
+          const wsName = workspaceStore.workspaces.find((w) => w.id === wid)?.name ?? ''
+          Notify.create({
+            type: 'info',
+            position: 'top',
+            timeout: 6000,
+            message: t('notification.autoLoopWaitingForSlot', {
+              name: wsName,
+              running: p.running ?? 0,
+              limit: p.limit ?? 0,
+            }),
+          })
           break
         }
         case 'autoloop:disabled': {

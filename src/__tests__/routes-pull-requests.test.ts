@@ -2,13 +2,16 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../server/services/forge/resolve.js', () => ({ resolveForge: vi.fn() }))
 vi.mock('../server/services/forge/registry.js', () => ({ getForgeProvider: vi.fn() }))
+const { MockStaleDiagnosisError } = vi.hoisted(() => ({
+  MockStaleDiagnosisError: class extends Error {
+    report = { stub: true }
+  },
+}))
 vi.mock('../server/services/pr-checkout-service.js', () => ({
   diagnoseLocalState: vi.fn(),
   computeFingerprint: vi.fn(() => 'FP'),
   resolvePrCheckout: vi.fn(),
-  StaleDiagnosisError: class extends Error {
-    report = { stub: true }
-  },
+  StaleDiagnosisError: MockStaleDiagnosisError,
 }))
 vi.mock('../server/services/workspace-service.js', () => ({ listWorkspaces: vi.fn(() => []) }))
 
@@ -120,7 +123,7 @@ describe('POST /diagnose', () => {
 
 describe('POST /resolve', () => {
   it('maps a stale diagnosis to 409', async () => {
-    vi.mocked(prCheckout.resolvePrCheckout).mockRejectedValue(new (prCheckout.StaleDiagnosisError as never)('stale'))
+    vi.mocked(prCheckout.resolvePrCheckout).mockRejectedValue(new MockStaleDiagnosisError('stale'))
     const res = await app.request('/resolve', {
       method: 'POST',
       body: JSON.stringify({ projectPath: '/repo', prNumber: 1, decisions: {}, fingerprint: 'OLD' }),

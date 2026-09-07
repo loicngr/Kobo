@@ -32,7 +32,7 @@ export async function purgeWorktree(workspaceId: string): Promise<PurgeResult> {
   // `removeWorktree` runs later in this same function — the agent must be dead
   // by then, not merely asked to stop.
   try {
-    await agentManager.stopAgentAndWait(workspaceId)
+    await agentManager.stopAgentAndWait(workspaceId, undefined, 'purge')
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     logError('purge', `stopAgent failed for '${workspace.name}'`, { workspaceId: workspace.id, error: msg })

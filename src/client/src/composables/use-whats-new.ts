@@ -2,6 +2,7 @@ import { compareVersions } from 'src/utils/compare-versions'
 import { ref } from 'vue'
 
 const LAST_SEEN_KEY = 'kobo:last-seen-version'
+const DISMISSED_UPDATE_KEY = 'kobo:dismissed-update-version'
 
 export interface ChangelogEntry {
   version: string
@@ -16,14 +17,30 @@ export interface ChangelogEntry {
 export function useWhatsNew() {
   const showDialog = ref(false)
   const newVersions = ref<ChangelogEntry[]>([])
+  /**
+   * A newer version exists on npm. Null when we are current, when the registry
+   * could not be reached, or when the user dismissed this particular version.
+   * "What's new" tells you what changed after you upgraded; this is the half
+   * that tells you an upgrade exists at all.
+   */
+  const availableVersion = ref<string | null>(null)
 
   async function checkForUpdate(): Promise<void> {
     try {
       const res = await fetch('/api/changelog')
       if (!res.ok) return
-      const body = (await res.json()) as { currentVersion?: string; versions?: ChangelogEntry[] }
+      const body = (await res.json()) as {
+        currentVersion?: string
+        latestVersion?: string | null
+        versions?: ChangelogEntry[]
+      }
       const current = body.currentVersion
       if (!current) return
+
+      const latest = body.latestVersion
+      if (latest && compareVersions(latest, current) > 0 && localStorage.getItem(DISMISSED_UPDATE_KEY) !== latest) {
+        availableVersion.value = latest
+      }
 
       const lastSeen = localStorage.getItem(LAST_SEEN_KEY)
       // First launch — just record the version. No dialog: the onboarding tour
@@ -50,5 +67,11 @@ export function useWhatsNew() {
     }
   }
 
-  return { showDialog, newVersions, checkForUpdate }
+  /** Hide the banner for this version only; a later release surfaces again. */
+  function dismissUpdate(): void {
+    if (availableVersion.value) localStorage.setItem(DISMISSED_UPDATE_KEY, availableVersion.value)
+    availableVersion.value = null
+  }
+
+  return { showDialog, newVersions, checkForUpdate, availableVersion, dismissUpdate }
 }

@@ -10,6 +10,11 @@ const routes: RouteRecordRaw[] = [
         redirect: { name: 'workspace' },
       },
       {
+        path: 'dashboard',
+        name: 'dashboard',
+        component: () => import('../pages/DashboardPage.vue'),
+      },
+      {
         path: 'workspace/:id?',
         name: 'workspace',
         component: () => import('../pages/WorkspacePage.vue'),

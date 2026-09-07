@@ -119,7 +119,11 @@ app.get('/network/ping', (c) => c.json({ ok: true }))
 // POST /api/settings/network — toggle enabled / regenerate token
 app.post('/network', async (c) => {
   try {
-    const body = await c.req.json<{ enabled?: boolean; regenerate?: boolean; behindProxy?: boolean }>()
+    const body = await c.req
+      .json<{ enabled?: boolean; regenerate?: boolean; behindProxy?: boolean }>()
+      .catch(() => null)
+    // `{}` is a valid request here, so a parse failure must not become one.
+    if (!body) return c.json({ error: 'Invalid JSON body' }, 400)
     const current = settingsService.getGlobalSettings()
     const patch: { networkAccessEnabled?: boolean; networkAccessToken?: string; networkAccessBehindProxy?: boolean } =
       {}
@@ -167,7 +171,10 @@ app.get('/mcp-servers', (c) => {
 // PUT /api/settings/global — update global settings
 app.put('/global', async (c) => {
   try {
-    const body = await c.req.json<Partial<GlobalSettings>>()
+    const body = await c.req.json<Partial<GlobalSettings>>().catch(() => null)
+    // `{}` merges nothing but still rewrites settings.json; a parse failure
+    // must answer 400 rather than do that.
+    if (!body) return c.json({ error: 'Invalid JSON body' }, 400)
     const updated = settingsService.updateGlobalSettings(body)
     // The client assigns this response straight into its store, so echoing the
     // real credentials back would undo the masking on GET the first time
@@ -214,7 +221,9 @@ app.put('/projects/:encodedPath', async (c) => {
   try {
     const encodedPath = c.req.param('encodedPath')
     const projectPath = Buffer.from(encodedPath, 'base64url').toString()
-    const body = await c.req.json<Partial<Omit<ProjectSettings, 'path'>>>()
+    const body = await c.req.json<Partial<Omit<ProjectSettings, 'path'>>>().catch(() => null)
+    // `{}` CREATES a project entry with defaults; a malformed body must not.
+    if (!body) return c.json({ error: 'Invalid JSON body' }, 400)
     const project = settingsService.upsertProject(projectPath, body)
     return c.json(project)
   } catch (err) {

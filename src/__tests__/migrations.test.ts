@@ -42,8 +42,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 38', () => {
-    expect(SCHEMA_VERSION).toBe(38)
+  it('exporte SCHEMA_VERSION = 40', () => {
+    expect(SCHEMA_VERSION).toBe(40)
   })
 
   it('migration v33 records and backfills the engine on agent sessions', () => {
@@ -1815,7 +1815,7 @@ describe('migration v23 — add-pending-crons-one-shot', () => {
     const dupes = db
       .prepare('PRAGMA table_info(pending_crons)')
       .all()
-      .filter((c: { name: string }) => c.name === 'one_shot')
+      .filter((c) => (c as { name: string }).name === 'one_shot')
     expect(dupes).toHaveLength(1)
     db.close()
   })
@@ -2196,5 +2196,137 @@ describe('migration v30: add-pr-watch-disabled', () => {
     const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
     expect(cols.filter((c) => c.name === 'pr_watch_disabled_at')).toHaveLength(1)
     db.close()
+  })
+})
+
+describe('v39 — agent_sessions.end_reason', () => {
+  it('adds the column to a database that predates it, without losing rows', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    // Rewind to v38: drop the column and forget the migration ever ran.
+    db.exec('ALTER TABLE agent_sessions DROP COLUMN end_reason')
+    db.prepare('DELETE FROM schema_migrations WHERE version = 39').run()
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+       VALUES ('w1', 'legacy', '/tmp/p', 'main', 'feat', '2026-01-01', '2026-01-01')`,
+    ).run()
+    db.prepare(
+      "INSERT INTO agent_sessions (id, workspace_id, status, started_at) VALUES ('s1', 'w1', 'completed', '2026-01-01')",
+    ).run()
+
+    runMigrations(db)
+
+    const row = db.prepare('SELECT status, end_reason FROM agent_sessions WHERE id = ?').get('s1') as {
+      status: string
+      end_reason: string | null
+    }
+    expect(row.status).toBe('completed')
+    // Left NULL on purpose: we do not know why the old rows ended.
+    expect(row.end_reason).toBeNull()
+    expect(db.prepare('SELECT version FROM schema_migrations WHERE version = 39').get()).toEqual({ version: 39 })
+    db.close()
+  })
+})
+
+describe('v40 — workspaces.comparison_id', () => {
+  it('adds the column to a database that predates it, without losing rows', () => {
+    const db = new Database(':memory:')
+    runMigrations(db)
+    // Rewind to v39: drop the column and forget the migration ever ran.
+    db.exec('ALTER TABLE workspaces DROP COLUMN comparison_id')
+    db.prepare('DELETE FROM schema_migrations WHERE version = 40').run()
+    db.prepare(
+      `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+       VALUES ('w1', 'legacy', '/tmp/p', 'main', 'feat', '2026-01-01', '2026-01-01')`,
+    ).run()
+
+    runMigrations(db)
+
+    const row = db.prepare('SELECT name, comparison_id FROM workspaces WHERE id = ?').get('w1') as {
+      name: string
+      comparison_id: string | null
+    }
+    expect(row.name).toBe('legacy')
+    // An existing workspace belongs to no comparison — that is a fact, not a gap.
+    expect(row.comparison_id).toBeNull()
+    db.close()
+  })
+})
+
+describe('schema convergence', () => {
+  /** Column shape, order-independent: ALTER TABLE appends, initSchema declares in place. */
+  function describeTable(db: Database.Database, table: string) {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{
+      name: string
+      type: string
+      notnull: number
+      dflt_value: string | null
+      pk: number
+    }>
+    return cols
+      .map((c) => ({ name: c.name, type: c.type.toUpperCase(), notnull: c.notnull, dflt: c.dflt_value, pk: c.pk }))
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }
+
+  function describeSchema(db: Database.Database) {
+    const tables = (
+      db
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('schema_migrations', 'schema_version') ORDER BY name",
+        )
+        .all() as Array<{ name: string }>
+    ).map((t) => t.name)
+    const indexes = (
+      db
+        .prepare(
+          "SELECT name, tbl_name FROM sqlite_master WHERE type = 'index' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+        )
+        .all() as Array<{ name: string; tbl_name: string }>
+    ).map((i) => `${i.tbl_name}.${i.name}`)
+    return { tables, indexes, columns: Object.fromEntries(tables.map((t) => [t, describeTable(db, t)])) }
+  }
+
+  it('a v1 database migrated all the way up matches a fresh install', () => {
+    // AGENTS.md requires both paths to converge. A previous version of this
+    // test ran `runMigrations` on an EMPTY database, which takes the
+    // fresh-install branch and calls initSchema — it compared initSchema to
+    // itself and could never fail. Starting from the v1 fixture below forces
+    // every migration block to actually run.
+    const fresh = new Database(':memory:')
+    initSchema(fresh)
+
+    const migrated = new Database(':memory:')
+    migrated.exec(
+      [
+        'CREATE TABLE schema_version (version INTEGER NOT NULL)',
+        'INSERT INTO schema_version (version) VALUES (1)',
+        "CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, project_path TEXT NOT NULL, source_branch TEXT NOT NULL, working_branch TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'created', notion_url TEXT, notion_page_id TEXT, model TEXT NOT NULL DEFAULT 'claude-opus-4-6', dev_server_status TEXT NOT NULL DEFAULT 'stopped', archived_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+        "CREATE TABLE tasks (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, title TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', is_acceptance_criterion INTEGER NOT NULL DEFAULT 0, sort_order INTEGER NOT NULL DEFAULT 0, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)",
+        "CREATE TABLE agent_sessions (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, pid INTEGER, claude_session_id TEXT, status TEXT NOT NULL DEFAULT 'running', started_at TEXT NOT NULL, ended_at TEXT)",
+        'CREATE TABLE ws_events (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE, type TEXT NOT NULL, payload TEXT NOT NULL, session_id TEXT, created_at TEXT NOT NULL)',
+      ].join('; '),
+    )
+    // Columns the v1 fixture already had: a migration cannot change their
+    // NOT NULL or default without rebuilding the table, so for those only the
+    // name and type are compared. Everything a migration ADDED is compared in
+    // full — that is the part initSchema and migrations.ts must agree on.
+    const v1Columns = new Map<string, Set<string>>()
+    for (const table of ['workspaces', 'tasks', 'agent_sessions', 'ws_events']) {
+      v1Columns.set(table, new Set(describeTable(migrated, table).map((c) => c.name)))
+    }
+    runMigrations(migrated)
+
+    const a = describeSchema(fresh)
+    const b = describeSchema(migrated)
+    expect(b.tables).toEqual(a.tables)
+    expect(b.indexes).toEqual(a.indexes)
+    for (const table of a.tables) {
+      const legacy = v1Columns.get(table) ?? new Set<string>()
+      const shape = (cols: ReturnType<typeof describeTable>) =>
+        cols.map((c) => (legacy.has(c.name) ? { name: c.name, type: c.type } : c))
+      expect(shape(b.columns[table]), `table ${table}`).toEqual(shape(a.columns[table]))
+    }
+    fresh.close()
+    migrated.close()
   })
 })

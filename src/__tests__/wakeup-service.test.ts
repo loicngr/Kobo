@@ -183,6 +183,31 @@ describe('wakeup-service', () => {
       expect(callArgs[6]).toBe('sess-original')
     })
 
+    it('gives up instead of retrying forever when starting the agent keeps failing', async () => {
+      // startAgent throws permanently for an archived or purged workspace, and
+      // for a session id that no longer resolves. Deferring on every failure
+      // meant a 15 s loop writing to SQLite for the life of the process.
+      const wakeupService = await import('../server/services/wakeup-service.js')
+      const orch = await import('../server/services/agent/orchestrator.js')
+      const ws = await import('../server/services/websocket-service.js')
+      ;(orch.hasController as ReturnType<typeof vi.fn>).mockReturnValue(false)
+      ;(orch.startAgent as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        throw new Error('Workspace is archived')
+      })
+
+      wakeupService.schedule(wsId, 60, 'do stuff', undefined)
+      await vi.advanceTimersByTimeAsync(60_000)
+      // Well past any sane number of retries.
+      await vi.advanceTimersByTimeAsync(15_000 * 40)
+
+      expect(wakeupService.getPending(wsId)).toBeNull()
+      expect(ws.emitEphemeral).toHaveBeenCalledWith(wsId, 'wakeup:skipped', expect.anything())
+
+      // clearAllMocks keeps implementations, so a throwing startAgent would
+      // leak into the next test.
+      ;(orch.startAgent as ReturnType<typeof vi.fn>).mockImplementation(() => undefined)
+    })
+
     it('defers fire when a controller is already active and retries after 15 seconds', async () => {
       const wakeupService = await import('../server/services/wakeup-service.js')
       const orch = await import('../server/services/agent/orchestrator.js')

@@ -48,6 +48,7 @@ const makeWorkspace = (over: Partial<Workspace> = {}): Workspace => ({
   prCiFailureDismissedAt: null,
   worktreePurgedAt: null,
   worktreePurgeRestoreData: null,
+  comparisonId: null,
   autoLoop: false,
   autoLoopReady: false,
   noProgressStreak: 0,

@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { runScript } from '../server/utils/script-runner.js'
 
 vi.mock('node:child_process', () => ({
@@ -63,5 +63,97 @@ describe('runScript — process group on timeout', () => {
     fakeProc.emit('close', null)
     await promise
     vi.useRealTimers()
+  })
+})
+
+describe('runScript — extra environment', () => {
+  // `restoreAllMocks` restores spies but keeps a module mock's call history, so
+  // without this the assertions below read the previous describe's spawn call.
+  beforeEach(() => vi.mocked(spawn).mockClear())
+  afterEach(() => vi.restoreAllMocks())
+
+  it('exposes extraEnv to the script alongside the standard variables', async () => {
+    const { EventEmitter } = await import('node:events')
+    const fakeProc = Object.assign(new EventEmitter(), {
+      pid: 99,
+      stdout: Object.assign(new EventEmitter(), { destroy: vi.fn() }),
+      stderr: Object.assign(new EventEmitter(), { destroy: vi.fn() }),
+      kill: vi.fn(),
+    })
+    vi.mocked(spawn).mockReturnValue(fakeProc as never)
+
+    const promise = runScript({
+      workspaceId: 'ws_1',
+      worktreePath: '/tmp/wt',
+      script: 'true',
+      eventPrefix: 'hook',
+      tmpFileName: '.hook.tmp',
+      env: {
+        workspaceName: 'demo',
+        branchName: 'feature/x',
+        sourceBranch: 'develop',
+        projectPath: '/tmp/project',
+      },
+      extraEnv: { KOBO_SESSION_END_REASON: 'watchdog' },
+    })
+    fakeProc.emit('close', 0)
+    await promise
+
+    const spawnEnv = vi.mocked(spawn).mock.calls[0]?.[2]?.env as Record<string, string>
+    expect(spawnEnv.KOBO_SESSION_END_REASON).toBe('watchdog')
+    // The standard variables must survive the merge, not be replaced by it.
+    expect(spawnEnv.WORKSPACE_NAME).toBe('demo')
+    expect(spawnEnv.BRANCH_NAME).toBe('feature/x')
+  })
+
+  it('only merges KOBO_-prefixed keys from extraEnv, so PATH or HOME cannot be replaced', async () => {
+    const { EventEmitter } = await import('node:events')
+    const fakeProc = Object.assign(new EventEmitter(), {
+      pid: 101,
+      stdout: Object.assign(new EventEmitter(), { destroy: vi.fn() }),
+      stderr: Object.assign(new EventEmitter(), { destroy: vi.fn() }),
+      kill: vi.fn(),
+    })
+    vi.mocked(spawn).mockReturnValue(fakeProc as never)
+
+    const promise = runScript({
+      workspaceId: 'ws_1',
+      worktreePath: '/tmp/wt',
+      script: 'true',
+      eventPrefix: 'hook',
+      tmpFileName: '.hook.tmp',
+      extraEnv: { PATH: '/evil', KOBO_PR_NUMBER: '7' },
+    })
+    fakeProc.emit('close', 0)
+    await promise
+
+    const spawnEnv = vi.mocked(spawn).mock.calls[0]?.[2]?.env as Record<string, string>
+    expect(spawnEnv.PATH).toBe(process.env.PATH)
+    expect(spawnEnv.KOBO_PR_NUMBER).toBe('7')
+  })
+
+  it('never lets extraEnv overwrite the identity variables Kōbō controls', async () => {
+    const { EventEmitter } = await import('node:events')
+    const fakeProc = Object.assign(new EventEmitter(), {
+      pid: 100,
+      stdout: Object.assign(new EventEmitter(), { destroy: vi.fn() }),
+      stderr: Object.assign(new EventEmitter(), { destroy: vi.fn() }),
+      kill: vi.fn(),
+    })
+    vi.mocked(spawn).mockReturnValue(fakeProc as never)
+
+    const promise = runScript({
+      workspaceId: 'ws_real',
+      worktreePath: '/tmp/wt',
+      script: 'true',
+      eventPrefix: 'hook',
+      tmpFileName: '.hook.tmp',
+      extraEnv: { WORKSPACE_ID: 'ws_spoofed' },
+    })
+    fakeProc.emit('close', 0)
+    await promise
+
+    const spawnEnv = vi.mocked(spawn).mock.calls[0]?.[2]?.env as Record<string, string>
+    expect(spawnEnv.WORKSPACE_ID).toBe('ws_real')
   })
 })

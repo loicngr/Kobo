@@ -1,3 +1,4 @@
+import { isHookSender } from 'src/utils/hook-events'
 import type { ConversationItem } from './agent-event-view'
 
 /**
@@ -26,7 +27,7 @@ function speakerOf(item: ConversationItem): TurnSpeaker {
   switch (item.type) {
     case 'user':
       if (item.sender === 'system-prompt') return 'system-prompt'
-      if (SCRIPT_SENDERS.has(item.sender)) return 'script'
+      if (SCRIPT_SENDERS.has(item.sender) || isHookSender(item.sender)) return 'script'
       return 'user'
     case 'session':
       return 'session'

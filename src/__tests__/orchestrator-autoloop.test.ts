@@ -17,11 +17,16 @@ vi.mock('../server/services/agent/event-router.js', () => ({
 
 vi.mock('../server/services/auto-loop-service.js', () => ({
   onSessionEnded: vi.fn(),
+  resumeWaitingWorkspaces: vi.fn(),
   disable: vi.fn(),
   forgetAutoLoopState: vi.fn(),
   rehydrate: vi.fn(),
   onQuotaBackoffExpired: vi.fn(),
   getStatus: vi.fn(() => ({ auto_loop: false, auto_loop_ready: false, no_progress_streak: 0 })),
+}))
+
+vi.mock('../server/services/lifecycle-hook-service.js', () => ({
+  onSessionEnded: vi.fn(async () => {}),
 }))
 
 vi.mock('../server/services/cleanup-script-service.js', () => ({
@@ -322,6 +327,8 @@ describe('orchestrator auto-loop integration', () => {
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
+        supportsSubagents: false,
+        supportsQuotaStatus: false,
       },
       async start(_options, onEvent) {
         emitters.push(onEvent)
@@ -331,6 +338,7 @@ describe('orchestrator auto-loop integration', () => {
           sendMessage() {},
           interrupt() {},
           async stop() {},
+          resolvePendingUserInput: () => false,
         }
       },
     })
@@ -409,6 +417,8 @@ describe('orchestrator auto-loop integration', () => {
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
+        supportsSubagents: false,
+        supportsQuotaStatus: false,
       },
       async start(_options, onEvent) {
         emitters.push(onEvent)
@@ -418,6 +428,7 @@ describe('orchestrator auto-loop integration', () => {
           sendMessage() {},
           interrupt() {},
           async stop() {},
+          resolvePendingUserInput: () => false,
         }
       },
     })
@@ -481,6 +492,8 @@ describe('orchestrator auto-loop integration', () => {
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
+        supportsSubagents: false,
+        supportsQuotaStatus: false,
       },
       async start(_options, onEvent) {
         emitters.push(onEvent)
@@ -490,6 +503,7 @@ describe('orchestrator auto-loop integration', () => {
           sendMessage() {},
           interrupt() {},
           async stop() {},
+          resolvePendingUserInput: () => false,
         }
       },
     })
@@ -542,6 +556,8 @@ describe('orchestrator auto-loop integration', () => {
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
+        supportsSubagents: false,
+        supportsQuotaStatus: false,
       },
       async start(_options, onEvent) {
         emitters.push(onEvent)
@@ -551,6 +567,7 @@ describe('orchestrator auto-loop integration', () => {
           sendMessage() {},
           interrupt() {},
           async stop() {},
+          resolvePendingUserInput: () => false,
         }
       },
     })
@@ -597,6 +614,8 @@ describe('orchestrator auto-loop integration', () => {
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
+        supportsSubagents: false,
+        supportsQuotaStatus: false,
       },
       async start(_options, onEvent) {
         emitEvent = onEvent
@@ -606,6 +625,7 @@ describe('orchestrator auto-loop integration', () => {
           sendMessage() {},
           interrupt() {},
           async stop() {},
+          resolvePendingUserInput: () => false,
         }
       },
     })
@@ -645,6 +665,56 @@ describe('orchestrator auto-loop integration', () => {
       .get(session.agentSessionId) as { status: string; ended_at: string | null }
     expect(row.status).toBe('error')
     expect(row.ended_at).not.toBeNull()
+  })
+
+  it('runs the session-ended hook once when the watchdog finds the engine dead, not again on its late end', async () => {
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const hooks = await import('../server/services/lifecycle-hook-service.js')
+    const { _registerEngineForTest } = await import('../server/services/agent/engines/registry.js')
+    await setWorkspaceExecuting(wsId)
+    let alive = true
+    let emitter: ((ev: AgentEvent) => void) | undefined
+    _registerEngineForTest({
+      id: 'claude-code',
+      displayName: 'Claude Code',
+      capabilities: {
+        models: [{ id: 'auto', label: 'Auto' }],
+        permissionModes: ['bypass'],
+        supportsResume: true,
+        supportsMcp: true,
+        supportsSkills: true,
+        supportsSubagents: false,
+        supportsQuotaStatus: false,
+      },
+      async start(_opts, onEvent) {
+        emitter = onEvent
+        return {
+          pid: undefined,
+          engineSessionId: undefined,
+          isAlive: () => alive,
+          sendMessage() {},
+          interrupt() {},
+          async stop() {},
+          resolvePendingUserInput: () => false,
+        }
+      },
+    })
+    orch.startAgent(wsId, '/tmp/p', 'first')
+    await flushControllerStart()
+    vi.mocked(hooks.onSessionEnded).mockClear()
+
+    // The engine dies without ever reporting its end. This is the case a
+    // notification hook exists for, and it used to be the one it missed.
+    alive = false
+    orch._runWatchdogForTest()
+
+    expect(hooks.onSessionEnded).toHaveBeenCalledTimes(1)
+    expect(hooks.onSessionEnded).toHaveBeenCalledWith(wsId, expect.objectContaining({ reason: 'killed' }))
+
+    // Its drain watchdog eventually reports a late end anyway: same session,
+    // so no second hook.
+    emitter?.({ kind: 'session:ended', reason: 'watchdog', exitCode: null })
+    expect(hooks.onSessionEnded).toHaveBeenCalledTimes(1)
   })
 
   it('ignores a late watchdog end from a controller evicted without stop() instead of quota-ing the live one', async () => {

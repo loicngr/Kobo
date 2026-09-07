@@ -24,6 +24,7 @@ function fakeEngine(
     async stop() {
       stopCount++
     },
+    resolvePendingUserInput: () => false,
   }
   const engine: AgentEngine = {
     id: 'claude-code',
@@ -34,6 +35,8 @@ function fakeEngine(
       supportsResume: true,
       supportsMcp: true,
       supportsSkills: true,
+      supportsSubagents: false,
+      supportsQuotaStatus: false,
     },
     async start(_opts: StartOptions, onEvent) {
       emitFn = onEvent
@@ -122,6 +125,9 @@ describe('SessionController', () => {
     })
     const sentMessages: string[] = []
     const process: EngineProcess = {
+      pid: undefined,
+      engineSessionId: undefined,
+      resolvePendingUserInput: () => false,
       sendMessage(text) {
         sentMessages.push(text)
       },
@@ -137,6 +143,8 @@ describe('SessionController', () => {
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
+        supportsSubagents: false,
+        supportsQuotaStatus: false,
       },
       async start() {
         await startGate
@@ -158,6 +166,9 @@ describe('SessionController', () => {
     const { SessionController } = await import('../../server/services/agent/session-controller.js')
     const sendMessage = vi.fn(async () => undefined)
     const process: EngineProcess = {
+      pid: undefined,
+      engineSessionId: undefined,
+      resolvePendingUserInput: () => false,
       sendMessage,
       interrupt() {},
       async stop() {},
@@ -171,6 +182,8 @@ describe('SessionController', () => {
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
+        supportsSubagents: false,
+        supportsQuotaStatus: false,
       },
       async start() {
         return process
@@ -194,6 +207,8 @@ describe('SessionController', () => {
     })
     let stopCount = 0
     const process: EngineProcess = {
+      engineSessionId: undefined,
+      resolvePendingUserInput: () => false,
       pid: 12345,
       sendMessage() {},
       interrupt() {},
@@ -210,6 +225,8 @@ describe('SessionController', () => {
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
+        supportsSubagents: false,
+        supportsQuotaStatus: false,
       },
       async start() {
         return startGate
@@ -242,6 +259,9 @@ describe('SessionController', () => {
     })
     let stopCount = 0
     const process: EngineProcess = {
+      pid: undefined,
+      engineSessionId: undefined,
+      resolvePendingUserInput: () => false,
       sendMessage() {},
       interrupt() {},
       async stop() {
@@ -258,6 +278,8 @@ describe('SessionController', () => {
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
+        supportsSubagents: false,
+        supportsQuotaStatus: false,
       },
       async start() {
         return startGate
@@ -309,6 +331,8 @@ describe('SessionController', () => {
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
+        supportsSubagents: false,
+        supportsQuotaStatus: false,
       },
       async start() {
         return startGate
@@ -339,6 +363,39 @@ describe('SessionController', () => {
     expect(stopResolved).toBe(true)
     expect(stopCount).toBe(1)
     expect(ctrl.engineProcess).toBeUndefined()
+  })
+
+  it('never touches the engine when stop() came first', async () => {
+    // startAgent chains `controller.start` behind a zombie eviction that can
+    // take up to 15 s. A stop landing in that window resolves immediately and
+    // reports "stopped", so the caller (delete, purge) starts removing the
+    // worktree. The engine must not spawn into it afterwards.
+    const { SessionController } = await import('../../server/services/agent/session-controller.js')
+    const { engine } = fakeEngine()
+    const engineStart = vi.spyOn(engine, 'start')
+    const ctrl = new SessionController('w1', 'sess-1', engine, () => {})
+
+    await ctrl.stop()
+    await ctrl.start(BASE_OPTS)
+
+    expect(engineStart).not.toHaveBeenCalled()
+    expect(ctrl.engineProcess).toBeUndefined()
+  })
+
+  it('still reports session:ended when stop() came first, so the session row can close', async () => {
+    // No engine ever ran, but a DB row for this session already exists. The
+    // orchestrator closes it on session:ended; without this event it stayed
+    // `running` until the next boot, blocking deleteSession and tagging the
+    // next messages onto a ghost.
+    const { SessionController } = await import('../../server/services/agent/session-controller.js')
+    const { engine } = fakeEngine()
+    const events: AgentEvent[] = []
+    const ctrl = new SessionController('w1', 'sess-1', engine, (ev) => events.push(ev))
+
+    await ctrl.stop()
+    await ctrl.start(BASE_OPTS)
+
+    expect(events).toEqual([{ kind: 'session:ended', reason: 'killed', exitCode: null }])
   })
 
   it('throws on a second start() call (re-entrancy guard)', async () => {

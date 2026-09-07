@@ -38,6 +38,20 @@ function rowToPending(row: PendingWakeupRow | undefined): PendingWakeup | null {
   return { targetAt: row.target_at, reason: row.reason ?? undefined }
 }
 
+/**
+ * How many times a wakeup may be re-armed after `startAgent` failed before we
+ * conclude the failure is permanent. `startAgent` throws for good on an
+ * archived or purged workspace, and on a session id that no longer resolves;
+ * without a bound that is a 15 s loop writing to SQLite forever. Deferring
+ * because a session is *running* is a different case and stays unbounded — the
+ * wakeup is meant to land once that session ends, however long it takes.
+ */
+const MAX_FAILED_RETRIES = 5
+
+/** Consecutive `startAgent` failures per workspace. In memory on purpose: a
+ *  restart is a legitimate fresh attempt. */
+const failedRetries = new Map<string, number>()
+
 /** Keep a claimed wakeup durable while the session is still unavailable. */
 function defer(workspaceId: string, row: PendingWakeupRow): void {
   const targetAt = new Date(Date.now() + ACTIVE_SESSION_RETRY_MS).toISOString()
@@ -93,6 +107,7 @@ export function cancel(
       clearTimeout(existing)
       timers.delete(workspaceId)
     }
+    failedRetries.delete(workspaceId)
 
     const db = getDb()
     const result = db.prepare('DELETE FROM pending_wakeups WHERE workspace_id = ?').run(workspaceId)
@@ -227,11 +242,23 @@ function fire(workspaceId: string): void {
         row.agent_session_id ?? undefined,
         wsRow.reasoning_effort,
       )
+      failedRetries.delete(workspaceId)
       db.prepare('DELETE FROM pending_wakeups WHERE workspace_id = ?').run(workspaceId)
       emitEphemeral(workspaceId, 'wakeup:fired', {})
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       console.error(`[wakeup-service] startAgent at fire time failed for '${workspaceId}':`, message)
+      const attempts = (failedRetries.get(workspaceId) ?? 0) + 1
+      if (attempts > MAX_FAILED_RETRIES) {
+        failedRetries.delete(workspaceId)
+        db.prepare('DELETE FROM pending_wakeups WHERE workspace_id = ?').run(workspaceId)
+        console.error(
+          `[wakeup-service] giving up on the wakeup for '${workspaceId}' after ${MAX_FAILED_RETRIES} failed attempts`,
+        )
+        emitEphemeral(workspaceId, 'wakeup:skipped', { reason: message })
+        return
+      }
+      failedRetries.set(workspaceId, attempts)
       defer(workspaceId, row)
     }
   } catch (err) {

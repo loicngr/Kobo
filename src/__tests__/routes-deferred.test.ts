@@ -145,6 +145,7 @@ vi.mock('../server/services/auto-loop-service.js', () => ({
   enable: vi.fn(),
   disable: vi.fn(),
   onSessionEnded: vi.fn(),
+  resumeWaitingWorkspaces: vi.fn(),
   getStatus: vi.fn(() => ({ enabled: false })),
 }))
 

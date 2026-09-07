@@ -717,6 +717,42 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 39,
+    name: 'add-agent-session-end-reason',
+    migrate: (db) => {
+      const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_sessions'").get()
+      if (!table) return
+      const columns = (db.prepare('PRAGMA table_info(agent_sessions)').all() as Array<{ name: string }>).map(
+        (column) => column.name,
+      )
+      if (!columns.includes('end_reason')) {
+        // `status` collapses every ending into completed/error by exit code, so
+        // "the watchdog force-ended it", "the user stopped it" and "it finished"
+        // were indistinguishable after the fact. Existing rows keep NULL: we
+        // genuinely do not know why they ended, and guessing would be worse
+        // than saying so.
+        db.exec('ALTER TABLE agent_sessions ADD COLUMN end_reason TEXT')
+      }
+    },
+  },
+  {
+    version: 40,
+    name: 'add-workspace-comparison-id',
+    migrate: (db) => {
+      const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'workspaces'").get()
+      if (!table) return
+      const columns = (db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>).map(
+        (column) => column.name,
+      )
+      if (!columns.includes('comparison_id')) {
+        // Shared by the workspaces created to run one task on two engines, so
+        // each can find its sibling. NULL for every workspace created on its
+        // own, which is nearly all of them.
+        db.exec('ALTER TABLE workspaces ADD COLUMN comparison_id TEXT')
+      }
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

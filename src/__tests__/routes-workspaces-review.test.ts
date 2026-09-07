@@ -188,6 +188,7 @@ import * as wakeupService from '../server/services/wakeup-service.js'
 import * as wsService from '../server/services/websocket-service.js'
 import * as workspaceService from '../server/services/workspace-service.js'
 import * as gitOps from '../server/utils/git-ops.js'
+import { makeEffectiveSettings, makeWorkspace } from './helpers/fixtures.js'
 
 // ── App setup ────────────────────────────────────────────────────────────────
 
@@ -196,7 +197,7 @@ app.route('/api/workspaces', router)
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
-const fakeWorkspace = {
+const fakeWorkspace = makeWorkspace({
   id: 'ws-1',
   name: 'Test Workspace',
   projectPath: '/tmp/project',
@@ -215,7 +216,7 @@ const fakeWorkspace = {
   archivedAt: null,
   createdAt: '2026-01-01T00:00:00.000Z',
   updatedAt: '2026-01-01T00:00:00.000Z',
-}
+})
 
 const fakeSession = {
   id: 'sess-1',
@@ -251,18 +252,20 @@ beforeEach(() => {
   vi.mocked(gitOps.getDiffStatsBetween).mockReturnValue(' 2 files changed, 10 insertions(+), 3 deletions(-)')
   vi.mocked(gitOps.getWorkingTreeDiffStats).mockReturnValue('')
 
-  vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-    model: 'auto',
-    dangerouslySkipPermissions: true,
-    prPromptTemplate: '',
-    reviewPromptTemplate: DEFAULT_REVIEW_PROMPT_TEMPLATE,
-    gitConventions: '',
-    sourceBranch: 'main',
-    devServer: null,
-    setupScript: '',
-    notionStatusProperty: '',
-    notionInProgressStatus: '',
-  })
+  vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+    makeEffectiveSettings({
+      model: 'auto',
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      reviewPromptTemplate: DEFAULT_REVIEW_PROMPT_TEMPLATE,
+      gitConventions: '',
+      sourceBranch: 'main',
+      devServer: null,
+      setupScript: '',
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
+    }),
+  )
   vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
     defaultModelByEngine: { 'claude-code': 'auto', codex: 'auto' },
     dangerouslySkipPermissions: true,
@@ -508,18 +511,20 @@ describe('POST /api/workspaces/:id/start-review', () => {
   })
 
   it('falls back to DEFAULT_REVIEW_PROMPT_TEMPLATE when effective template is empty', async () => {
-    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-      model: 'auto',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      reviewPromptTemplate: '',
-      gitConventions: '',
-      sourceBranch: 'main',
-      devServer: null,
-      setupScript: '',
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-    })
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        reviewPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
     vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({
       status: 'sent',
       sessionId: 'delivered-session-id',

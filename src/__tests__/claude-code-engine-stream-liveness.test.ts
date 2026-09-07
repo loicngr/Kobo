@@ -60,7 +60,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
         }
         await new Promise<void>((resolve) => {
           releaseStream = resolve
-          abortSignal?.addEventListener('abort', resolve, { once: true })
+          abortSignal?.addEventListener('abort', () => resolve(), { once: true })
         })
       },
       stopTask: async () => {},

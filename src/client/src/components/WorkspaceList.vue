@@ -35,6 +35,19 @@
             flat
             round
             dense
+            icon="dashboard"
+            class="q-ml-xs"
+            size="sm"
+            color="kobo-2"
+            :aria-label="$t('dashboard.tooltip')"
+            @click="goToDashboard"
+        >
+          <q-tooltip>{{ $t('dashboard.tooltip') }}</q-tooltip>
+        </q-btn>
+        <q-btn
+            flat
+            round
+            dense
             icon="monitor_heart"
             class="q-ml-xs"
             size="sm"
@@ -554,6 +567,20 @@
         <div v-if="deleteRemoteBranch" class="text-caption q-mt-sm text-red-5">
           {{ $t('workspaceList.deleteDialog.warning') }}
         </div>
+
+        <!-- Deleting removes the worktree and the whole history. Typing the
+             name back is what separates it from the reversible actions next
+             to it — in this dialog, not a second one stacked on top. -->
+        <q-input
+          v-model="deleteConfirmName"
+          dark
+          dense
+          outlined
+          autofocus
+          class="q-mt-md"
+          :label="$t('workspace.deleteTypeName', { name: deleteTarget?.name ?? '' })"
+          @keyup.enter="deleteConfirmMatches && confirmDelete()"
+        />
       </q-card-section>
 
       <q-card-actions align="right">
@@ -563,6 +590,7 @@
           :label="$t('common.delete')"
           color="red-5"
           :loading="deleting"
+          :disable="!deleteConfirmMatches"
           @click="confirmDelete"
         />
       </q-card-actions>
@@ -600,6 +628,19 @@
         <div v-if="bulkDeleteRemoteBranch" class="text-caption q-mt-sm text-red-5">
           {{ $t('workspaceList.deleteDialog.warning') }}
         </div>
+
+        <!-- N worktrees and N histories in one click is strictly more
+             destructive than one: same typed guard as the single delete. -->
+        <q-input
+          v-model="bulkDeleteConfirmCount"
+          dark
+          dense
+          outlined
+          autofocus
+          class="q-mt-md"
+          :label="$t('workspaceList.deleteArchivedDialog.typeCount', { count: store.archived.length })"
+          @keyup.enter="bulkDeleteConfirmMatches && confirmBulkDeleteArchived()"
+        />
       </q-card-section>
 
       <q-card-actions align="right">
@@ -615,6 +656,7 @@
           :label="$t('common.delete')"
           color="red-5"
           :loading="bulkDeleting"
+          :disable="!bulkDeleteConfirmMatches"
           @click="confirmBulkDeleteArchived"
         />
       </q-card-actions>
@@ -797,6 +839,13 @@ async function toggleArchived() {
 
 // Delete dialog state
 const deleteDialog = ref(false)
+/** What the user typed back; the Delete button unlocks only on an exact match. */
+const deleteConfirmName = ref('')
+const deleteConfirmMatches = computed(
+  () => !!deleteTarget.value && deleteConfirmName.value.trim() === deleteTarget.value.name,
+)
+const bulkDeleteConfirmCount = ref('')
+const bulkDeleteConfirmMatches = computed(() => bulkDeleteConfirmCount.value.trim() === String(store.archived.length))
 const deleteTarget = ref<Workspace | null>(null)
 const deleteLocalBranch = ref(false)
 const deleteRemoteBranch = ref(false)
@@ -812,11 +861,22 @@ function openDeleteDialog(ws: Workspace, event: Event) {
   deleteTarget.value = ws
   deleteLocalBranch.value = true
   deleteRemoteBranch.value = false
+  deleteConfirmName.value = ''
   deleteDialog.value = true
 }
 
+/**
+ * Surface a failed action. These paths used to `console.error` and stop there,
+ * so a refused delete looked exactly like a successful one: the dialog closed
+ * and the workspace was still in the list.
+ */
+function notifyActionError(err: unknown, fallbackKey: string): void {
+  const message = err instanceof Error && err.message ? err.message : t(fallbackKey)
+  $q.notify({ type: 'negative', message, position: 'top', timeout: DEFAULT_TOAST_TIMEOUT_MS })
+}
+
 async function confirmDelete() {
-  if (!deleteTarget.value) return
+  if (!deleteTarget.value || !deleteConfirmMatches.value) return
   const deletedId = deleteTarget.value.id
   deleting.value = true
   try {
@@ -858,6 +918,7 @@ async function confirmDelete() {
     }
   } catch (err) {
     console.error('Delete failed:', err)
+    notifyActionError(err, 'workspace.deleteFailed')
   } finally {
     deleting.value = false
   }
@@ -868,10 +929,12 @@ function openBulkDeleteArchivedDialog() {
   // archived list is already loaded here — no extra fetch needed.
   bulkDeleteLocalBranch.value = false
   bulkDeleteRemoteBranch.value = false
+  bulkDeleteConfirmCount.value = ''
   bulkDeleteArchivedDialog.value = true
 }
 
 async function confirmBulkDeleteArchived() {
+  if (!bulkDeleteConfirmMatches.value) return
   bulkDeleting.value = true
   try {
     const { warnings, ids } = await store.deleteAllArchived({
@@ -910,6 +973,7 @@ async function confirmBulkDeleteArchived() {
     }
   } catch (err) {
     console.error('Bulk delete archived failed:', err)
+    notifyActionError(err, 'workspace.deleteFailed')
   } finally {
     bulkDeleting.value = false
   }
@@ -952,6 +1016,7 @@ async function onArchiveClick(ws: Workspace, event: Event) {
     })
   } catch (err) {
     console.error('Archive failed:', err)
+    notifyActionError(err, 'workspace.archiveFailed')
   }
 }
 
@@ -1174,6 +1239,10 @@ function goToSettings() {
 
 function goToSearch() {
   router.push({ name: 'search' })
+}
+
+function goToDashboard() {
+  router.push({ name: 'dashboard' })
 }
 
 function goToHealth() {

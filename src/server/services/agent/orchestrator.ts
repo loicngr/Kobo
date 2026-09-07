@@ -14,6 +14,7 @@ import * as autoLoopService from '../auto-loop-service.js'
 import * as cleanupScriptService from '../cleanup-script-service.js'
 import * as cronService from '../cron-service.js'
 import { resolveForge } from '../forge/resolve.js'
+import * as lifecycleHookService from '../lifecycle-hook-service.js'
 import * as quotaBackoffService from '../quota-backoff-service.js'
 import { getEffectiveSettings, getGlobalSettings } from '../settings-service.js'
 import { refreshNow } from '../usage/poller.js'
@@ -35,7 +36,7 @@ import {
   type StartOptions,
 } from './engines/types.js'
 import { routeEvent } from './event-router.js'
-import { SessionController } from './session-controller.js'
+import { SessionController, type StopCause } from './session-controller.js'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -355,6 +356,10 @@ function runWatchdog(): void {
     if (controllers.get(workspaceId) === ctrl) controllers.delete(workspaceId)
     retryCounts.delete(workspaceId)
 
+    // This end never goes through handleEvent → onSessionEnded, so the user's
+    // hook would otherwise miss precisely the case it is most useful for.
+    fireSessionEndedHook(workspaceId, ctrl.agentSessionId, 'killed', null, ctrl)
+
     try {
       const db = getDb()
       db.prepare('UPDATE agent_sessions SET status = ?, ended_at = ? WHERE id = ?').run(
@@ -510,6 +515,9 @@ function readEffectiveSettingsSafe(projectPath: string): ReturnType<typeof getEf
       cleanupScriptOnlyOnChanges: false,
       archiveScript: '',
       changeSourceBranchScript: '',
+      sessionEndedScript: '',
+      prMergedScript: '',
+      autoLoopDisabledScript: '',
       notionStatusProperty: '',
       notionInProgressStatus: '',
     }
@@ -1055,6 +1063,9 @@ function handleEvent(
     // a mid-loop session (never cleans) or a standalone one.
     const wasAutoLoop = autoLoopService.getStatus(workspaceId).auto_loop
     autoLoopService.onSessionEnded(workspaceId, effectiveReason, progressDelta)
+    // A slot just freed. Any auto-loop workspace parked on the concurrency
+    // limit has no session of its own to bring it back; this one does it.
+    autoLoopService.resumeWaitingWorkspaces()
     cleanupScriptService.onSessionEnded(workspaceId, effectiveReason, { wasAutoLoop })
   }
 
@@ -1116,6 +1127,39 @@ function handleEvent(
   }
 }
 
+/**
+ * Sessions whose session-ended hook already ran. Two paths can report the
+ * same end — the watchdog's dead-engine sweep, then the engine's own late
+ * `session:ended` — and the user's script must run once per session, not
+ * once per report. Bounded: cleared past a size no single process reaches.
+ */
+const sessionEndedHookFired = new Set<string>()
+
+function fireSessionEndedHook(
+  workspaceId: string,
+  agentSessionId: string,
+  reason: 'completed' | 'error' | 'killed' | 'watchdog',
+  exitCode: number | null,
+  controller: SessionController | undefined,
+): void {
+  if (sessionEndedHookFired.has(agentSessionId)) return
+  if (sessionEndedHookFired.size > 10_000) sessionEndedHookFired.clear()
+  sessionEndedHookFired.add(agentSessionId)
+  // The worktree is about to be removed by the very operation that stopped
+  // this session; a script spawned in it would lose its cwd mid-run.
+  const cause = controller?.stopCause
+  if (cause === 'delete' || cause === 'purge') return
+  void lifecycleHookService.onSessionEnded(workspaceId, {
+    sessionId: agentSessionId,
+    reason,
+    exitCode,
+    stopCause: controller?.status === 'stopping' ? (cause ?? 'user') : '',
+    // Read BEFORE auto-loop reacts to this end (which may disable it): the
+    // hook wants to know whether the next iteration is about to start.
+    autoLoopActive: getWs(workspaceId)?.autoLoop === true,
+  })
+}
+
 function onSessionEnded(
   workspaceId: string,
   agentSessionId: string,
@@ -1127,9 +1171,14 @@ function onSessionEnded(
   // Update the agent_sessions row
   try {
     const db = getDb()
-    db.prepare('UPDATE agent_sessions SET status = ?, ended_at = ? WHERE id = ?').run(
+    // `status` only distinguishes completed from error, by exit code. Keep the
+    // reason too: "the watchdog force-ended it", "the user stopped it" and "it
+    // finished on its own" all landed on the same two values, so after the fact
+    // nothing could say why a session stopped.
+    db.prepare('UPDATE agent_sessions SET status = ?, ended_at = ?, end_reason = ? WHERE id = ?').run(
       exitCode === 0 ? 'completed' : 'error',
       new Date().toISOString(),
+      reason,
       agentSessionId,
     )
   } catch (err) {
@@ -1140,6 +1189,11 @@ function onSessionEnded(
   const isSuperseded =
     sourceController !== undefined && registeredController !== undefined && registeredController !== sourceController
   if (isSuperseded) return false
+
+  // A superseded end (above) is a session that was replaced, not one that
+  // ended; everything past this point is a real end the user may want to act
+  // on, whatever the reason — the script reads KOBO_SESSION_END_REASON.
+  fireSessionEndedHook(workspaceId, agentSessionId, reason, exitCode, sourceController)
 
   const currentWorkspace = getWs(workspaceId)
   const preserveQuotaBackoff = currentWorkspace?.status === 'quota'
@@ -1420,7 +1474,8 @@ export const STOP_AGENT_TIMEOUT_MS = 15_000
 
 export type StopAgentOutcome = 'stopped' | 'not-running' | 'timeout'
 
-async function stopController(workspaceId: string, ctrl: SessionController): Promise<void> {
+async function stopController(workspaceId: string, ctrl: SessionController, cause: StopCause = 'user'): Promise<void> {
+  ctrl.stopCause = cause
   wakeupService.cancel(workspaceId, 'stopped')
 
   // Normalize the state synchronously so callers (archive, delete, manual
@@ -1514,12 +1569,14 @@ async function stopWithTimeout(ctrl: SessionController, timeoutMs: number): Prom
 export async function stopAgentAndWait(
   workspaceId: string,
   timeoutMs: number = STOP_AGENT_TIMEOUT_MS,
+  /** Why. `delete` and `purge` tell the session-ended hook to stand down. */
+  cause: StopCause = 'user',
 ): Promise<StopAgentOutcome> {
   const ctrl = controllers.get(workspaceId)
   if (!ctrl) return 'not-running'
 
   const finished = await raceWithTimeout(
-    stopController(workspaceId, ctrl).then(
+    stopController(workspaceId, ctrl, cause).then(
       () => true,
       (err) => {
         console.error(`[orchestrator] controller.stop failed for '${workspaceId}':`, err)
@@ -1962,6 +2019,11 @@ export function getAgentStatus(workspaceId: string): 'running' | 'stopping' | nu
 /** True when an agent controller is currently running for the workspace. */
 export function hasController(workspaceId: string): boolean {
   return controllers.has(workspaceId)
+}
+
+/** How many agent sessions are live right now, across every workspace. */
+export function runningAgentCount(): number {
+  return controllers.size
 }
 
 /** The agent_session_id of the active controller for the workspace, if any. */

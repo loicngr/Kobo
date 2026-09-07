@@ -67,6 +67,10 @@
           <div class="col" style="overflow: auto;">
             <q-tab-panels v-model="rightTab" animated keep-alive>
               <q-tab-panel name="git" class="q-pa-none">
+                <ComparisonPanel
+                  v-if="store.selectedWorkspace?.comparisonId && store.selectedWorkspaceId"
+                  :workspace-id="store.selectedWorkspaceId"
+                />
                 <GitPanel :workspace="store.selectedWorkspace" />
               </q-tab-panel>
               <q-tab-panel name="timeline" class="q-pa-none">
@@ -134,6 +138,19 @@
 
     <q-page-container class="bg-dark">
       <PwaStatusBanner />
+      <q-banner v-if="availableVersion" dense class="kobo-update-banner">
+        <template #avatar>
+          <q-icon name="system_update_alt" size="20px" />
+        </template>
+        {{ $t('update.available', { version: availableVersion }) }}
+        <template #action>
+          <q-btn flat dense no-caps :label="$t('update.how')" @click="showUpdateHelp = !showUpdateHelp" />
+          <q-btn flat dense no-caps :label="$t('common.dismiss')" @click="dismissUpdate" />
+        </template>
+      </q-banner>
+      <div v-if="availableVersion && showUpdateHelp" class="kobo-update-help">
+        <code>npx @loicngr/kobo@latest</code>
+      </div>
       <router-view />
     </q-page-container>
 
@@ -169,12 +186,16 @@ import { useRoute } from 'vue-router'
 // stylesheet, DocumentsPanel drags marked + dompurify.
 const DocumentsPanel = defineAsyncComponent(() => import('src/components/DocumentsPanel.vue'))
 const GitPanel = defineAsyncComponent(() => import('src/components/GitPanel.vue'))
+// Async like its neighbours: the vast majority of workspaces belong to no
+// comparison and never render this.
+const ComparisonPanel = defineAsyncComponent(() => import('src/components/ComparisonPanel.vue'))
 const SchedulePanel = defineAsyncComponent(() => import('src/components/SchedulePanel.vue'))
 const TerminalPanel = defineAsyncComponent(() => import('src/components/TerminalPanel.vue'))
 
 // First-run onboarding tour, and the post-update "What's new" dialog.
 const { maybeStartOnFirstVisit } = useOnboarding()
-const { showDialog: showWhatsNew, newVersions, checkForUpdate } = useWhatsNew()
+const { showDialog: showWhatsNew, newVersions, checkForUpdate, availableVersion, dismissUpdate } = useWhatsNew()
+const showUpdateHelp = ref(false)
 onMounted(() => {
   maybeStartOnFirstVisit()
   void checkForUpdate()
@@ -377,6 +398,20 @@ function startVerticalResize(event: MouseEvent) {
 </script>
 
 <style lang="scss" scoped>
+.kobo-update-banner {
+  background: var(--kobo-surface-2);
+  color: var(--kobo-text);
+  border-bottom: 1px solid var(--kobo-border);
+}
+
+.kobo-update-help {
+  padding: var(--kobo-space-sm) var(--kobo-space-md);
+  background: var(--kobo-surface-2);
+  border-bottom: 1px solid var(--kobo-border);
+  font-family: var(--kobo-font-mono);
+  color: var(--kobo-text-2);
+}
+
 .bg-dark {
   background-color: var(--kobo-bg-deep) !important;
   border-color: var(--kobo-border-subtle) !important;

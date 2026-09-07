@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { renderCiFixTemplate } from '../server/services/ci-fix-template-service.js'
-import type { Workspace } from '../server/services/workspace-service.js'
+import { makeWorkspace } from './helpers/fixtures.js'
 
-const baseWorkspace: Workspace = {
+const baseWorkspace = makeWorkspace({
   id: 'ws-1',
   name: 'Add auth flow',
   projectPath: '/home/user/projects/orion',
@@ -15,7 +15,7 @@ const baseWorkspace: Workspace = {
   devServerStatus: 'stopped',
   createdAt: '2026-04-05T10:00:00.000Z',
   updatedAt: '2026-04-05T10:00:00.000Z',
-}
+})
 
 describe('renderCiFixTemplate', () => {
   it('substitutes pr metadata and branch fields', () => {

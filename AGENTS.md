@@ -68,6 +68,8 @@ src/
 │   │   ├── change-source-branch-service.ts # re-target a workspace onto a new source branch (built-in cherry-pick or custom bash)
 │   │   ├── git-stats-service.ts    # pure compute of commit/ahead-behind/diff stats + forge availability for a workspace
 │   │   ├── settings-defaults.ts    # DEFAULT_* constants for opt-in settings (e.g. change-source-branch script)
+│   │   ├── lifecycle-hook-service.ts # user shell hooks on session-ended / pr-merged / autoloop-disabled
+│   │   ├── awaiting-user-reminder-service.ts # reminds about workspaces stuck in `awaiting-user`
 │   │   ├── content-migration-service.ts # runtime legacy ws_events → normalised AgentEvent migration
 │   │   ├── templates-service.ts    # prompt templates CRUD (JSON file persistence, seeding)
 │   │   ├── dev-server-service.ts   # per-workspace dev server lifecycle (docker or npm process)
@@ -101,7 +103,7 @@ src/
 
 | Table | Purpose |
 |---|---|
-| `workspaces` | the unit of work: id, name, project_path, source_branch, working_branch, status, notion_url, model, `brainstorm_model`, dev_server_status, `archived_at`, `worktree_purged_at`, `worktree_purge_restore_data` (JSON), `auto_loop`, `auto_loop_ready`, `auto_loop_session_mode`, `no_progress_streak`, timestamps |
+| `workspaces` | the unit of work: id, name, project_path, source_branch, working_branch, status, notion_url, model, `brainstorm_model`, dev_server_status, `archived_at`, `worktree_purged_at`, `worktree_purge_restore_data` (JSON), `auto_loop`, `auto_loop_ready`, `auto_loop_session_mode`, `no_progress_streak`, timestamps, `comparison_id` |
 | `tasks` | workspace sub-items: title, status, `is_acceptance_criterion`, sort_order; CASCADE DELETE on workspace |
 | `agent_sessions` | agent-engine sessions: pid where applicable, engine session id, status, timestamps, model, and name |
 | `ws_events` | persisted WebSocket events for replay on reconnect: type, payload, session_id, created_at |
@@ -225,6 +227,22 @@ Background: the engine was migrated from `@openai/codex-sdk` (one-shot `codex ex
 - **Built-in cherry-pick**: `fetchAllBranches` → `listProperCommits` → `stashPush` (if dirty + aligned) → backup branch (`kobo-backup/<branch>-<unix-ts>`) → `reset --hard origin/<new>` → cherry-pick replay → optional force-push prompt → forge PR-base update via `provider.changePrBase`. Conflicts leave the worktree in a cherry-pick state for the user/agent to resolve via `POST /:id/git/resolve-with-agent`. `GitConflictError` carries an `operation: 'rebase' | 'merge' | 'cherry-pick'` discriminator.
 - **Custom bash override**: if `effective.changeSourceBranchScript` is non-empty (per-project override or global default), the script **replaces** the built-in flow. Spawned with `bash -c`, cwd = worktree, 5 min timeout, stderr captured (last 8 KB). Exit 0 → Kōbō updates the source-branch metadata; any non-zero exit → the stderr tail is propagated as a clean error. The user-facing menu item only shows when the resolved script is non-empty; empty means the feature is disabled (opt-in).
 - **Custom-script env vars**: `KOBO_NEW_BASE`, `KOBO_OLD_BASE`, `KOBO_WORKING_BRANCH`, `KOBO_WORKTREE_PATH`, `KOBO_PROJECT_PATH`, `KOBO_PROJECT_NAME`, `KOBO_WORKSPACE_ID`, `KOBO_WORKSPACE_NAME`, `KOBO_FORGE`, `KOBO_PR_NUMBER` (empty when no PR/MR is open). The default script lives in `settings-defaults.ts` and is seeded into `global.changeSourceBranchScript` by settings migration v33; the client reads it through `GET /api/settings/defaults` for the "Reset to Kōbō default" button. See [CONFIGURATION.md → Custom change-source-branch script](CONFIGURATION.md#custom-change-source-branch-script).
+
+### Lifecycle hooks
+
+`src/server/services/lifecycle-hook-service.ts` runs a user-provided bash script on three moments that previously had none: `session-ended` (from `orchestrator.onSessionEnded`, once a session is known not to be superseded), `pr-merged` (from the pr-watcher, at the `pr:merged` emit, before archive/purge) and `autoloop-disabled` (from `auto-loop-service.disable`, for **every** reason including `user-action`, unlike the cleanup script which only fires on `completed`). The session-ended hook goes through `fireSessionEndedHook`, which also covers the watchdog's dead-engine sweep (that path never reaches `onSessionEnded`), dedupes by session id so a late `session:ended` from the same engine does not fire it twice, and stands down when the stop cause is `delete` or `purge` (`stopAgentAndWait`'s third argument) because the worktree is being removed.
+
+Each event maps to one effective-settings key (`sessionEndedScript` / `prMergedScript` / `autoLoopDisabledScript`, settings migration v55), cascading project-over-global with empty meaning inherit. Execution reuses `runScript` with `eventPrefix: 'hook:<event>'`; `runScript` gained an `extraEnv` option, merged **under** the identity variables so a hook payload can never claim a different `WORKSPACE_ID`. `runLifecycleHook` never rejects and returns `null` when there is nothing to run (no script, unknown workspace, worktree gone). The pr-watcher awaits the `pr-merged` hook before auto-purge so a deploy script does not lose its worktree mid-run. See [CONFIGURATION.md → Lifecycle hooks](CONFIGURATION.md#lifecycle-hooks).
+
+### Engine comparison
+
+One task, two engines, two sibling worktrees. `POST /api/workspaces` accepts a `comparisonId`; the client posts twice with the same one (sequentially — parallel creations contend on the git index lock), suffixing the name with the engine's display name and the branch with the engine id and giving the non-configured engine the model picked for it on the form and its own effort / permission defaults. `workspaces.comparison_id` (migration v40) groups them; `listComparisonMembers` reads them back, treating an empty id as no group rather than as a match against the NULL majority. `GET /api/workspaces/:id/comparison` returns each member with its cached git stats (`null`, never zeros, when nothing has been measured). `ComparisonPanel.vue` renders the table at the top of the Git tab, only for workspaces that belong to a comparison. See [CONFIGURATION.md → Comparing two engines on one task](CONFIGURATION.md#comparing-two-engines-on-one-task).
+
+### Unanswered question reminder
+
+`src/server/services/awaiting-user-reminder-service.ts` polls every 60 s for non-archived workspaces in `awaiting-user` and, past `global.awaitingUserReminderMinutes` (settings migration v56, `0` = off, the default), broadcasts `workspace:awaiting-reminder` via `broadcastAll` — deliberately not `emitEphemeral`, since the user is by definition not watching that workspace. The client (`stores/websocket.ts`) turns it into the same browser notification + question sound pair used when the question is first asked.
+
+`computeDueReminders` holds the interval arithmetic as a near-pure function over an injected `Map<id, {firstSeenAt, remindersSent}>`, so it is unit-tested without a timer or a DB. Two rules it encodes: a workspace that leaves `awaiting-user` is dropped from the map (answering resets the clock), and a tick that finds itself several intervals behind sends **one** reminder, not one per missed interval. State is in-memory only, like the pr-watcher's caches: a restart restarts the clock.
 
 ### Worktree purge
 

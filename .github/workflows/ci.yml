@@ -2,6 +2,10 @@ name: CI
 
 on:
   pull_request:
+    # `main` included: the develop -> main release PR is the one that ships,
+    # and it was the only PR in the repo running no checks at all.
+    branches: [develop, main]
+  push:
     branches: [develop]
 
 jobs:
@@ -16,7 +20,9 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v5
         with:
-          node-version: 24.19.0
+          # Single source of truth, instead of a version repeated here, in
+          # release.yml and in .nvmrc, free to drift apart.
+          node-version-file: .nvmrc
           cache: npm
           cache-dependency-path: |
             package-lock.json
@@ -51,9 +57,18 @@ jobs:
       - name: Type check (server)
         run: npx tsc --noEmit
 
+      - name: Type check (tests)
+        run: npm run typecheck:tests
+
       - name: Type check (client)
         working-directory: src/client
         run: npm run type-check
+
+      - name: Build
+        # `quasar build -m pwa` exercises the whole Vite/PWA path, which neither
+        # vue-tsc nor Vitest touches. Without this a broken production build
+        # only surfaced during the release, after merging to main.
+        run: npm run build
 
       - name: Run backend tests
         run: npm test

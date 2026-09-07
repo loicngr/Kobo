@@ -24,6 +24,12 @@ export interface RunScriptOptions {
   /** Temp file name written under `<worktree>/.ai/`, e.g. `.setup-script.tmp`. */
   tmpFileName: string
   env?: ScriptEnv
+  /**
+   * Event-specific variables. Only `KOBO_`-prefixed keys are honoured, and
+   * they are merged UNDER the identity variables below: a payload can neither
+   * replace PATH or HOME nor tell a script it runs for another workspace.
+   */
+  extraEnv?: Record<string, string>
   timeoutMs?: number
 }
 
@@ -33,7 +39,7 @@ export interface RunScriptOptions {
  * Shared mechanism behind the setup and cleanup script services.
  */
 export function runScript(opts: RunScriptOptions): Promise<{ exitCode: number }> {
-  const { workspaceId, worktreePath, script, eventPrefix, tmpFileName, env } = opts
+  const { workspaceId, worktreePath, script, eventPrefix, tmpFileName, env, extraEnv } = opts
   const timeoutMs = opts.timeoutMs ?? SCRIPT_TIMEOUT_MS
 
   return new Promise((resolve) => {
@@ -45,6 +51,7 @@ export function runScript(opts: RunScriptOptions): Promise<{ exitCode: number }>
       cwd: worktreePath,
       env: {
         ...process.env,
+        ...Object.fromEntries(Object.entries(extraEnv ?? {}).filter(([key]) => key.startsWith('KOBO_'))),
         WORKSPACE_ID: workspaceId,
         WORKSPACE_NAME: env?.workspaceName ?? '',
         BRANCH_NAME: env?.branchName ?? '',

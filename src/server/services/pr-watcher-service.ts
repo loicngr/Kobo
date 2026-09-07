@@ -1,11 +1,13 @@
 import fs from 'node:fs'
 import { fetchSourceBranchAsync, isGitWorktree } from '../utils/git-ops.js'
 import { withGitRepoLock } from '../utils/git-repo-lock.js'
+import { hasController } from './agent/orchestrator.js'
 import { stopDevServer } from './dev-server-service.js'
 import { getForgeProvider } from './forge/registry.js'
 import { resolveForge } from './forge/resolve.js'
 import type { PrSnapshot } from './forge/types.js'
 import { computeGitStats, type GitStatsResult } from './git-stats-service.js'
+import * as lifecycleHookService from './lifecycle-hook-service.js'
 import { getGlobalSettings } from './settings-service.js'
 import { destroyTerminal } from './terminal-service.js'
 import { emitEphemeral } from './websocket-service.js'
@@ -33,6 +35,8 @@ const POLL_INTERVAL_MS = 30 * 1000 // 30 seconds
 const WORKSPACE_CHECK_CONCURRENCY = 4
 
 let timer: ReturnType<typeof setTimeout> | null = null
+/** Latched by `stopPrWatcher` so a tick already in flight does not re-arm. */
+let stopped = false
 let checking = false
 
 async function runBounded<T>(
@@ -214,16 +218,28 @@ export async function checkPrStatuses(): Promise<void> {
       // Archive on a transition FROM OPEN to CLOSED/MERGED. Skips the
       // base-change detection below — archiving wins.
       if (prev?.state === 'OPEN' && (pr.state === 'MERGED' || pr.state === 'CLOSED')) {
+        // Started here, awaited just before the purge below: the worktree is
+        // still on disk at this point, and a hook that deploys or tags from it
+        // must not have the ground removed under it by auto-purge.
+        let prMergedHook: Promise<void> = Promise.resolve()
         if (pr.state === 'MERGED') {
           emitEphemeral(ws.id, 'pr:merged', {
             prNumber: pr.number,
             prUrl: pr.url,
           })
+          prMergedHook = lifecycleHookService.onPrMerged(ws.id, { prNumber: pr.number, prUrl: pr.url })
         }
-        if (['extracting', 'brainstorming', 'executing'].includes(ws.status)) {
+        if (['extracting', 'brainstorming', 'executing'].includes(ws.status) || hasController(ws.id)) {
           // Agent is working — update the cache but skip auto-archive.
           // (The defensive base preservation from the no-base branch doesn't apply here
           // because we ARE in the OPEN→MERGED/CLOSED branch which always has a base.)
+          //
+          // The status list alone is not enough: `awaiting-user` is a live
+          // session parked on a tool approval, and a controller can still be
+          // draining while the status already reads idle or error. Unlike the
+          // manual archive route and purge-worktree, this path never stops the
+          // agent, so archiving under one orphans its pending question and
+          // leaves it writing into a workspace the UI now shows as archived.
           lastKnownPr.set(ws.id, pr)
           return
         }
@@ -255,6 +271,9 @@ export async function checkPrStatuses(): Promise<void> {
           try {
             const { autoPurgeOnPrMerged } = getGlobalSettings()
             if (autoPurgeOnPrMerged) {
+              // `onPrMerged` never rejects and is capped by the script-runner's
+              // own timeout, so this cannot hang the watcher indefinitely.
+              await prMergedHook
               void purgeWorktree(ws.id)
                 .then((result) => {
                   // Auto-purge runs with nobody watching: without this trace an
@@ -405,6 +424,10 @@ async function runOneCheck(): Promise<void> {
 function scheduleNext(): void {
   timer = setTimeout(async () => {
     await runOneCheck()
+    // A stop can land while the tick above is awaiting a `gh` call, which takes
+    // seconds. Without this the loop re-arms itself after shutdown was asked
+    // for, and `startPrWatcher`'s `if (timer) return` then sees a live timer.
+    if (stopped) return
     scheduleNext()
   }, POLL_INTERVAL_MS)
   timer.unref?.()
@@ -413,6 +436,7 @@ function scheduleNext(): void {
 /** Start polling GitHub for merged/closed PRs to auto-archive workspaces. */
 export function startPrWatcher(): void {
   if (timer) return
+  stopped = false
   // Kick off an immediate check so the front-end has fresh PR data on boot
   // without waiting for the first 30s tick. Fire-and-forget; the recurring
   // loop is scheduled independently and the `checking` guard prevents overlap.
@@ -422,6 +446,7 @@ export function startPrWatcher(): void {
 
 /** Stop the PR watcher polling loop. */
 export function stopPrWatcher(): void {
+  stopped = true
   if (timer) {
     clearTimeout(timer)
     timer = null

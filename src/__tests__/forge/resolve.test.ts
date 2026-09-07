@@ -11,10 +11,32 @@ vi.mock('node:child_process', () => ({
   execFileSync: (...args: unknown[]) => execFileSyncMock(...args),
 }))
 
-import { forgeFromRemoteUrl, resolveForge } from '../../server/services/forge/resolve.js'
+import { _clearForgeCache, forgeFromRemoteUrl, resolveForge } from '../../server/services/forge/resolve.js'
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // Auto-detection is cached per project path, and every case below uses the
+  // same one.
+  _clearForgeCache()
+})
+
+describe('resolveForge — remote read failures', () => {
+  beforeEach(() => {
+    _clearForgeCache()
+    execFileSyncMock.mockReset()
+  })
+
+  it('does not cache a failed remote read, so the next tick can succeed', async () => {
+    getProjectSettingsMock.mockReturnValue({ forge: 'auto' })
+    execFileSyncMock.mockImplementationOnce(() => {
+      throw new Error('git timed out')
+    })
+    expect(resolveForge('/p')).toBe('none')
+
+    execFileSyncMock.mockReturnValueOnce('git@github.com:acme/app.git\n')
+    expect(resolveForge('/p')).toBe('github')
+    expect(execFileSyncMock).toHaveBeenCalledTimes(2)
+  })
 })
 
 describe('forgeFromRemoteUrl', () => {

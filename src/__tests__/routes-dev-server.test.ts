@@ -24,6 +24,7 @@ import router from '../server/routes/dev-server.js'
 import * as devServerService from '../server/services/dev-server-service.js'
 import { getProjectSettings } from '../server/services/settings-service.js'
 import { getWorkspace } from '../server/services/workspace-service.js'
+import { makeWorkspace } from './helpers/fixtures.js'
 
 // ── App setup ────────────────────────────────────────────────────────────────
 
@@ -32,7 +33,7 @@ app.route('/api/dev-server', router)
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
-const fakeWorkspace = {
+const fakeWorkspace = makeWorkspace({
   id: 'ws-1',
   name: 'Test Workspace',
   projectPath: '/tmp/project',
@@ -45,7 +46,7 @@ const fakeWorkspace = {
   devServerStatus: 'stopped',
   createdAt: '2026-01-01T00:00:00.000Z',
   updatedAt: '2026-01-01T00:00:00.000Z',
-}
+})
 
 const fakeStatus = {
   status: 'running' as const,

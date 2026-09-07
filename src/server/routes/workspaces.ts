@@ -57,6 +57,7 @@ import * as gitOps from '../utils/git-ops.js'
 import { logError } from '../utils/logger.js'
 import { slugifyProjectName } from '../utils/project-slug.js'
 import * as safePath from '../utils/safe-path.js'
+import { resolveExtractedName } from '../utils/workspace-name.js'
 import { resolveSiblingWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 
 /** Hono sub-router for workspace CRUD, tasks, agent lifecycle, git operations, and PR creation. */
@@ -275,27 +276,6 @@ function parsePrNumberFromUrl(prUrl: string): number {
   return number
 }
 
-// Mirrors the private `WORKSPACE_NAME_MAX_LENGTH` in workspace-service.ts —
-// duplicated rather than exported to avoid coupling this route to that
-// module's internals (and the many `vi.mock(workspace-service.js, factory)`
-// test files that would otherwise need updating for an export nothing else
-// consumes).
-const WORKSPACE_NAME_MAX_LENGTH = 200
-
-/**
- * Cap an auto-derived title (Notion page title, Sentry issue title, PR/MR
- * title) before handing it to `updateWorkspaceName`. That function throws on
- * anything longer — the right behaviour for a name the user typed
- * themselves, but titles pulled from an external source (a long exception
- * message, a verbose PR title) are not user input: truncating them is the
- * sane default, matching the existing `slugifyBranchSegment` precedent for
- * auto-derived branch names.
- */
-function truncateWorkspaceName(name: string): string {
-  if (name.length <= WORKSPACE_NAME_MAX_LENGTH) return name
-  return `${name.slice(0, WORKSPACE_NAME_MAX_LENGTH - 1)}…`
-}
-
 app.get('/', (c) => {
   try {
     const workspaces = workspaceService.listWorkspaces()
@@ -310,7 +290,7 @@ app.get('/', (c) => {
 app.post('/:id/engine-handoff-preview', migrationGuard, async (c) => {
   try {
     const id = c.req.param('id')
-    const body = await c.req.json<{ engine?: string }>()
+    const body = await c.req.json<{ engine?: string }>().catch(() => ({}) as { engine?: string })
     const workspace = workspaceService.getWorkspaceWithTasks(id)
     if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
     const engine = listEngines().find((item) => item.id === body.engine)
@@ -325,13 +305,24 @@ app.post('/:id/engine-handoff-preview', migrationGuard, async (c) => {
 app.post('/:id/switch-engine', migrationGuard, async (c) => {
   try {
     const id = c.req.param('id')
-    const body = await c.req.json<{
-      engine?: string
-      model?: string
-      reasoningEffort?: string
-      agentPermissionMode?: AgentPermissionMode
-      handoff?: string
-    }>()
+    const body = await c.req
+      .json<{
+        engine?: string
+        model?: string
+        reasoningEffort?: string
+        agentPermissionMode?: AgentPermissionMode
+        handoff?: string
+      }>()
+      .catch(
+        () =>
+          ({}) as {
+            engine?: string
+            model?: string
+            reasoningEffort?: string
+            agentPermissionMode?: AgentPermissionMode
+            handoff?: string
+          },
+      )
     const workspace = workspaceService.getWorkspaceWithTasks(id)
     if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
     if (!body.engine || body.engine === workspace.engine) return c.json({ error: 'Choose a different engine' }, 400)
@@ -409,30 +400,60 @@ app.post('/', migrationGuard, async (c) => {
   // can read it to decide whether the setup-script caveat applies.
   let setupScriptConfigured = false
   try {
-    const body = await c.req.json<{
-      name: string
-      projectPath: string
-      sourceBranch: string
-      workingBranch: string
-      notionUrl?: string
-      notionPageId?: string
-      sentryUrl?: string
-      prUrl?: string
-      model?: string
-      brainstormModel?: string
-      brainstormReasoningEffort?: string
-      reasoningEffort?: string
-      tasks?: string[]
-      acceptanceCriteria?: string[]
-      skipSetupScript?: boolean
-      description?: string
-      agentPermissionMode?: 'plan' | 'bypass' | 'strict' | 'interactive'
-      engine?: string
-      autoLoop?: boolean
-      autoLoopSessionMode?: 'per_task' | 'continuous'
-      worktreePath?: string
-      creationId?: string
-    }>()
+    const body = await c.req
+      .json<{
+        name: string
+        projectPath: string
+        sourceBranch: string
+        workingBranch: string
+        notionUrl?: string
+        notionPageId?: string
+        sentryUrl?: string
+        prUrl?: string
+        model?: string
+        brainstormModel?: string
+        brainstormReasoningEffort?: string
+        reasoningEffort?: string
+        tasks?: string[]
+        acceptanceCriteria?: string[]
+        skipSetupScript?: boolean
+        description?: string
+        agentPermissionMode?: 'plan' | 'bypass' | 'strict' | 'interactive'
+        engine?: string
+        autoLoop?: boolean
+        autoLoopSessionMode?: 'per_task' | 'continuous'
+        worktreePath?: string
+        creationId?: string
+        comparisonId?: string
+      }>()
+      .catch(
+        () =>
+          ({}) as {
+            name: string
+            projectPath: string
+            sourceBranch: string
+            workingBranch: string
+            notionUrl?: string
+            notionPageId?: string
+            sentryUrl?: string
+            prUrl?: string
+            model?: string
+            brainstormModel?: string
+            brainstormReasoningEffort?: string
+            reasoningEffort?: string
+            tasks?: string[]
+            acceptanceCriteria?: string[]
+            skipSetupScript?: boolean
+            description?: string
+            agentPermissionMode?: 'plan' | 'bypass' | 'strict' | 'interactive'
+            engine?: string
+            autoLoop?: boolean
+            autoLoopSessionMode?: 'per_task' | 'continuous'
+            worktreePath?: string
+            creationId?: string
+            comparisonId?: string
+          },
+      )
 
     // workingBranch is derived from git when worktreePath is provided, so
     // it's not required in that flow. The other 3 fields stay mandatory.
@@ -454,6 +475,9 @@ app.post('/', migrationGuard, async (c) => {
     // reaches `git fetch <remote> <sourceBranch>` as a bare argument.
     if (!gitOps.isValidBranchName(body.sourceBranch)) {
       return c.json({ error: `Invalid source branch name: ${body.sourceBranch}` }, 400)
+    }
+    if (body.comparisonId !== undefined && typeof body.comparisonId !== 'string') {
+      return c.json({ error: 'comparisonId must be a string' }, 400)
     }
 
     creationId = typeof body.creationId === 'string' && body.creationId.length > 0 ? body.creationId : undefined
@@ -498,7 +522,7 @@ app.post('/', migrationGuard, async (c) => {
     let baseRef = `origin/${body.sourceBranch}`
     let usedLocalFallback = false
     try {
-      gitOps.fetchSourceBranch(body.projectPath, body.sourceBranch)
+      await gitOps.fetchSourceBranchOrThrowAsync(body.projectPath, body.sourceBranch)
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       if (isReuseRequest) {
@@ -709,7 +733,13 @@ app.post('/', migrationGuard, async (c) => {
           .replace(/^-|-$/g, '')
           .substring(0, 50)
         const safeSlug = titleSlug || 'task'
-        workingBranch = ticketPrefix ? `${typePrefix}${ticketPrefix}--${safeSlug}` : `${typePrefix}${safeSlug}`
+        // An engine comparison posts here once per engine with the same
+        // ticket: without the suffix both halves collapse onto one branch and
+        // the second gets a random hash instead of its engine.
+        const engineSuffix = body.comparisonId && body.engine ? `-${body.engine}` : ''
+        workingBranch = ticketPrefix
+          ? `${typePrefix}${ticketPrefix}--${safeSlug}${engineSuffix}`
+          : `${typePrefix}${safeSlug}${engineSuffix}`
       }
     }
 
@@ -773,6 +803,9 @@ app.post('/', migrationGuard, async (c) => {
         body.engine ?? 'claude-code',
       ),
       engine: body.engine,
+      // Set by the engine-comparison flow, which posts here once per engine
+      // with the same id so the resulting workspaces can find each other.
+      comparisonId: body.comparisonId,
       ...(useReusedWorktree ? {} : { worktreesPath: globalSettings.worktreesPath }),
     })
     createdWorkspace = workspace
@@ -820,12 +853,10 @@ app.post('/', migrationGuard, async (c) => {
     // a custom name and Notion hasn't already filled it. Prefix with the Sentry
     // short-id (e.g. "SEKUR-IOS-9 | TypeError: …") so the workspace stays
     // identifiable in the sidebar without opening the panel.
-    if (sentryContent?.title && !notionContent?.title && workspace.name === 'workspace') {
+    if (sentryContent?.title && !notionContent?.title) {
       const prefix = sentryContent.issueId ? `${sentryContent.issueId} | ` : ''
-      workspace = workspaceService.updateWorkspaceName(
-        workspace.id,
-        truncateWorkspaceName(`${prefix}${sentryContent.title}`),
-      )
+      const renamed = resolveExtractedName(workspace.name, `${prefix}${sentryContent.title}`)
+      if (renamed) workspace = workspaceService.updateWorkspaceName(workspace.id, renamed)
     }
 
     currentStep = 'create-tasks'
@@ -853,8 +884,9 @@ app.post('/', migrationGuard, async (c) => {
       // Update workspace name with Notion page title only if user didn't
       // provide a custom name. Prefix with the Notion unique-id (e.g.
       // Use the Notion page title when the user left the generic placeholder.
-      if (notionContent.title && workspace.name === 'workspace') {
-        workspace = workspaceService.updateWorkspaceName(workspace.id, truncateWorkspaceName(notionContent.title))
+      if (notionContent.title) {
+        const renamed = resolveExtractedName(workspace.name, notionContent.title)
+        if (renamed) workspace = workspaceService.updateWorkspaceName(workspace.id, renamed)
       }
     }
 
@@ -862,8 +894,9 @@ app.post('/', migrationGuard, async (c) => {
     // a custom name and neither Notion nor Sentry already claimed it. This
     // makes the PR a THIRD context source, lowest priority of the three
     // (Notion > Sentry > PR), consistent with the checks above.
-    if (prContent && !notionContent?.title && !sentryContent?.title && workspace.name === 'workspace') {
-      workspace = workspaceService.updateWorkspaceName(workspace.id, truncateWorkspaceName(prContent.title))
+    if (prContent && !notionContent?.title && !sentryContent?.title) {
+      const renamed = resolveExtractedName(workspace.name, prContent.title)
+      if (renamed) workspace = workspaceService.updateWorkspaceName(workspace.id, renamed)
     }
 
     // Create manual tasks/criteria if no Notion content was extracted
@@ -948,6 +981,11 @@ app.post('/', migrationGuard, async (c) => {
         ['.ai/thoughts/', 'thoughts/'],
         ['.ai/images/', 'images/'],
         ['.ai/.setup-script.tmp', '.setup-script.tmp'],
+        ['.ai/.cleanup-script.tmp', '.cleanup-script.tmp'],
+        ['.ai/.archive-script.tmp', '.archive-script.tmp'],
+        // A crash mid-hook leaves the temp script behind; the next agent
+        // would otherwise happily commit it.
+        ['.ai/.hook-*.tmp', '.hook-*.tmp'],
         ['.mcp.json', ''],
       ]
 
@@ -1592,6 +1630,30 @@ app.get('/info', (c) => {
   }
 })
 
+// GET /api/workspaces/:id/comparison — the workspaces running the same task on
+// another engine, with the diff each one produced. Reads the git-stats cache the
+// pr-watcher already maintains rather than shelling out to git twice per request.
+app.get('/:id/comparison', (c) => {
+  const id = c.req.param('id')
+  try {
+    const workspace = workspaceService.getWorkspace(id)
+    if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    if (!workspace.comparisonId) return c.json({ comparisonId: null, members: [] })
+
+    const stats = getAllGitStats()
+    const members = workspaceService.listComparisonMembers(workspace.comparisonId).map((member) => ({
+      workspace: member,
+      // Null, not zeros: "not measured yet" and "changed nothing" are
+      // different answers, and only one of them is true here.
+      gitStats: stats[member.id] ?? null,
+    }))
+    return c.json({ comparisonId: workspace.comparisonId, members })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
 // POST /api/workspaces/pr-snapshot/refresh/:id — on-demand refresh of a single
 // workspace's PR snapshot, driven by the Git tab refresh button. Static prefix
 // keeps it ahead of `/:id` in the Hono matcher.
@@ -1668,7 +1730,12 @@ app.get('/auto-loop-states', (c) => {
 // GET /api/workspaces/:id/auto-loop — current auto-loop status for one workspace.
 app.get('/:id/auto-loop', (c) => {
   try {
-    return c.json(autoLoopService.getStatus(c.req.param('id')))
+    const id = c.req.param('id')
+    // getStatus returns a default row for an unknown id, so without this the
+    // caller gets a cheerful `auto_loop: false` for a workspace that does not
+    // exist — the neighbouring handlers all 404.
+    if (!workspaceService.getWorkspace(id)) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    return c.json(autoLoopService.getStatus(id))
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
@@ -2076,7 +2143,9 @@ app.post('/:id/tasks', async (c) => {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
     }
 
-    const body = await c.req.json<{ title?: string; isAcceptanceCriterion?: boolean }>()
+    const body = await c.req
+      .json<{ title?: string; isAcceptanceCriterion?: boolean }>()
+      .catch(() => ({}) as { title?: string; isAcceptanceCriterion?: boolean })
     if (!body.title?.trim()) {
       return c.json({ error: 'Title is required' }, 400)
     }
@@ -2111,7 +2180,9 @@ app.patch('/:id/tasks/:taskId', async (c) => {
       return c.json({ error: `Task '${taskId}' not found in workspace '${id}'` }, 404)
     }
 
-    const body = await c.req.json<{ status?: string; title?: string }>()
+    const body = await c.req
+      .json<{ status?: string; title?: string }>()
+      .catch(() => ({}) as { status?: string; title?: string })
 
     if (body.status === undefined && body.title === undefined) {
       return c.json({ error: 'At least one of status or title is required' }, 400)
@@ -2317,6 +2388,76 @@ function readableHistorySearchResult(
   }
 }
 
+/**
+ * GET /api/workspaces/:id/sessions/:sessionId/summary — why a session ended.
+ *
+ * A session can stop for many reasons (quota, transient failure, drain
+ * watchdog, auto-loop stall, failed resume, manual stop, natural end) and none
+ * of them were legible after the fact: you had to read the event feed to work
+ * out what happened overnight. Everything here is already collected —
+ * `agent_sessions` and `session_event_metrics` — it was just never put in one
+ * place. Note that `end_reason` itself only records four values (completed /
+ * error / killed / watchdog); quota, stall and failed resume are visible
+ * through the workspace status and the auto-loop events, not through it.
+ */
+app.get('/:id/sessions/:sessionId/summary', (c) => {
+  try {
+    const id = c.req.param('id')
+    const sessionId = c.req.param('sessionId')
+    if (!workspaceService.getWorkspace(id)) return c.json({ error: `Workspace '${id}' not found` }, 404)
+
+    const db = getDb()
+    const session = db
+      .prepare(
+        `SELECT id, engine, model, status, end_reason, started_at, ended_at
+           FROM agent_sessions WHERE id = ? AND workspace_id = ?`,
+      )
+      .get(sessionId, id) as
+      | {
+          id: string
+          engine: string | null
+          model: string | null
+          status: string
+          end_reason: string | null
+          started_at: string
+          ended_at: string | null
+        }
+      | undefined
+    if (!session) return c.json({ error: `Session '${sessionId}' not found` }, 404)
+
+    const metrics = db
+      .prepare(
+        `SELECT tool_calls, errors, input_tokens, output_tokens
+           FROM session_event_metrics WHERE workspace_id = ? AND session_id = ?`,
+      )
+      .get(id, sessionId) as
+      | { tool_calls: number; errors: number; input_tokens: number; output_tokens: number }
+      | undefined
+
+    const startedAt = Date.parse(session.started_at)
+    const endedAt = session.ended_at ? Date.parse(session.ended_at) : null
+    return c.json({
+      sessionId: session.id,
+      engine: session.engine,
+      model: session.model,
+      status: session.status,
+      // Null for sessions that ended before this was recorded, and for one
+      // still running. The client says "unknown" rather than inventing a cause.
+      endReason: session.end_reason,
+      startedAt: session.started_at,
+      endedAt: session.ended_at,
+      durationMs: endedAt !== null && !Number.isNaN(startedAt) ? endedAt - startedAt : null,
+      toolCalls: metrics?.tool_calls ?? 0,
+      errors: metrics?.errors ?? 0,
+      inputTokens: metrics?.input_tokens ?? 0,
+      outputTokens: metrics?.output_tokens ?? 0,
+    })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
 // GET /api/workspaces/:id/session-metrics — compact observability data for the timeline.
 app.get('/:id/session-metrics', (c) => {
   try {
@@ -2376,9 +2517,17 @@ app.get('/:id/diagnostic.json', (c) => {
         'SELECT id, engine_session_id, status, started_at, ended_at, model, name FROM agent_sessions WHERE workspace_id = ? ORDER BY started_at ASC',
       )
       .all(id)
+    // Bounded on purpose: better-sqlite3 is synchronous, so an unbounded read
+    // materialises every event the workspace ever produced and blocks the
+    // event loop while `c.json` serialises them. A diagnostic bundle wants a
+    // representative trace, not the entire history.
+    const DIAGNOSTIC_EVENT_LIMIT = 50_000
     const events = db
-      .prepare('SELECT id, session_id, type, created_at FROM ws_events WHERE workspace_id = ? ORDER BY rowid ASC')
-      .all(id)
+      .prepare(
+        'SELECT id, session_id, type, created_at FROM ws_events WHERE workspace_id = ? ORDER BY rowid ASC LIMIT ?',
+      )
+      .all(id, DIAGNOSTIC_EVENT_LIMIT)
+    const eventsTruncated = events.length === DIAGNOSTIC_EVENT_LIMIT
     c.header(
       'Content-Disposition',
       `attachment; filename="${workspace.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase() || id}-diagnostic.json"`,
@@ -2388,6 +2537,7 @@ app.get('/:id/diagnostic.json', (c) => {
       workspace: { id, name: workspace.name, engine: workspace.engine },
       sessions,
       events,
+      eventsTruncated,
     })
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
@@ -2500,23 +2650,28 @@ app.get('/:id/events', (c) => {
           const older = session
             ? (db
                 .prepare(
-                  'SELECT COUNT(*) as c FROM ws_events WHERE workspace_id = ? AND (session_id = ? OR session_id IS NULL) AND rowid < ?',
+                  'SELECT 1 as c FROM ws_events WHERE workspace_id = ? AND (session_id = ? OR session_id IS NULL) AND rowid < ? LIMIT 1',
                 )
-                .get(id, session, firstRow.rowid) as { c: number })
+                .get(id, session, firstRow.rowid) as { c: number } | undefined)
             : (db
-                .prepare('SELECT COUNT(*) as c FROM ws_events WHERE workspace_id = ? AND rowid < ?')
-                .get(id, firstRow.rowid) as { c: number })
-          hasMore = older.c > 0
+                .prepare('SELECT 1 as c FROM ws_events WHERE workspace_id = ? AND rowid < ? LIMIT 1')
+                .get(id, firstRow.rowid) as { c: number } | undefined)
+          hasMore = older !== undefined
         }
       } else {
-        const total = session
+        // `LIMIT 1 OFFSET <page size>` answers "is there anything past this
+        // page?" by reading one row, where COUNT(*) walked every event the
+        // workspace ever produced — on each page, synchronously.
+        const beyond = session
           ? (db
               .prepare(
-                'SELECT COUNT(*) as c FROM ws_events WHERE workspace_id = ? AND (session_id = ? OR session_id IS NULL)',
+                'SELECT 1 as c FROM ws_events WHERE workspace_id = ? AND (session_id = ? OR session_id IS NULL) LIMIT 1 OFFSET ?',
               )
-              .get(id, session) as { c: number })
-          : (db.prepare('SELECT COUNT(*) as c FROM ws_events WHERE workspace_id = ?').get(id) as { c: number })
-        hasMore = total.c > rows.length
+              .get(id, session, rows.length) as { c: number } | undefined)
+          : (db.prepare('SELECT 1 as c FROM ws_events WHERE workspace_id = ? LIMIT 1 OFFSET ?').get(id, rows.length) as
+              | { c: number }
+              | undefined)
+        hasMore = beyond !== undefined
       }
     }
 
@@ -2720,7 +2875,7 @@ app.delete('/:id/pr-watch-disabled', async (c) => {
 app.put('/:id/tags', async (c) => {
   const { id } = c.req.param()
   try {
-    const body = await c.req.json<{ tags?: unknown }>()
+    const body = await c.req.json<{ tags?: unknown }>().catch(() => ({}) as { tags?: unknown })
     if (!Array.isArray(body.tags)) {
       return c.json({ error: 'tags must be an array of strings' }, 400)
     }
@@ -2983,29 +3138,34 @@ app.post('/:id/run-setup-script', async (c) => {
     if (setupScriptRunning.has(id)) {
       return c.json({ error: 'Setup script is already running for this workspace' }, 409)
     }
-
-    // Stop the running agent before re-running the setup script — the script
-    // rewrites the worktree the agent may still be writing to.
-    try {
-      if (agentManager.getAgentStatus(id)) {
-        await agentManager.stopAgentAndWait(id)
-      }
-    } catch (err) {
-      console.error(`[workspaces] stopAgentAndWait before setup script failed for '${id}':`, err)
-    }
-
-    const effectiveSettings = settingsService.getEffectiveSettings(workspace.projectPath)
-    if (!effectiveSettings.setupScript) {
-      return c.json({ error: 'No setup script configured' }, 400)
-    }
-
-    const worktreePath = workspace.worktreePath
-    if (!fs.existsSync(worktreePath)) {
-      return c.json({ error: `Worktree path does not exist: ${worktreePath}` }, 400)
-    }
-
+    // Claim before the first await. Checking here and claiming after the agent
+    // stop below let two concurrent calls both pass the check and then run the
+    // user's script twice, concurrently, in the same worktree.
     setupScriptRunning.add(id)
+
+    // Everything below releases the claim, including the validation failures:
+    // a workspace left marked as running would refuse every later attempt.
     try {
+      // Stop the running agent before re-running the setup script — the script
+      // rewrites the worktree the agent may still be writing to.
+      try {
+        if (agentManager.getAgentStatus(id)) {
+          await agentManager.stopAgentAndWait(id)
+        }
+      } catch (err) {
+        console.error(`[workspaces] stopAgentAndWait before setup script failed for '${id}':`, err)
+      }
+
+      const effectiveSettings = settingsService.getEffectiveSettings(workspace.projectPath)
+      if (!effectiveSettings.setupScript) {
+        return c.json({ error: 'No setup script configured' }, 400)
+      }
+
+      const worktreePath = workspace.worktreePath
+      if (!fs.existsSync(worktreePath)) {
+        return c.json({ error: `Worktree path does not exist: ${worktreePath}` }, 400)
+      }
+
       const result = await runSetupScript(workspace.id, worktreePath, effectiveSettings.setupScript, {
         workspaceName: workspace.name,
         branchName: workspace.workingBranch,
@@ -3139,7 +3299,7 @@ async function deleteWorkspaceWithSideEffects(
   // a few lines below: firing and forgetting here pulled the directory from
   // under an agent still writing to it, destroying uncommitted work.
   try {
-    await agentManager.stopAgentAndWait(workspace.id)
+    await agentManager.stopAgentAndWait(workspace.id, undefined, 'delete')
   } catch (err) {
     console.error(`[workspaces] stopAgentAndWait during delete failed for '${workspace.name}':`, err)
   }
@@ -3577,7 +3737,7 @@ app.post('/:id/rollback-file', async (c) => {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
     }
 
-    const body = await c.req.json<{ path?: unknown }>()
+    const body = await c.req.json<{ path?: unknown }>().catch(() => ({}) as { path?: unknown })
     const filePath = typeof body?.path === 'string' ? body.path.trim() : ''
     if (!filePath) {
       return c.json({ error: 'Missing or invalid `path` field' }, 400)
@@ -3847,9 +4007,9 @@ app.post('/:id/push', async (c) => {
       // no-options call shape identical to before for callers/tests that
       // assert on argument count.
       if (force) {
-        gitOps.pushBranch(worktreePath, workspace.workingBranch, { force: true })
+        await gitOps.pushBranchAsync(worktreePath, workspace.workingBranch, { force: true })
       } else {
-        gitOps.pushBranch(worktreePath, workspace.workingBranch)
+        await gitOps.pushBranchAsync(worktreePath, workspace.workingBranch)
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
@@ -3874,14 +4034,14 @@ app.post('/:id/push', async (c) => {
 
 // POST /api/workspaces/:id/fetch — git fetch the workspace repo (all branches of origin).
 // Read-only: updates remote-tracking refs, never touches the working tree.
-app.post('/:id/fetch', (c) => {
+app.post('/:id/fetch', async (c) => {
   try {
     const id = c.req.param('id')
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) {
       return c.json({ error: `Workspace '${id}' not found` }, 404)
     }
-    gitOps.fetchAllBranches(workspace.worktreePath)
+    await gitOps.fetchAllBranchesAsync(workspace.worktreePath)
     return c.json({ ok: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
@@ -3890,7 +4050,7 @@ app.post('/:id/fetch', (c) => {
 })
 
 // POST /api/workspaces/:id/pull — pull working branch from origin (fast-forward only)
-app.post('/:id/pull', (c) => {
+app.post('/:id/pull', async (c) => {
   try {
     const id = c.req.param('id')
     const workspace = workspaceService.getWorkspace(id)
@@ -3902,7 +4062,7 @@ app.post('/:id/pull', (c) => {
     const autostash = c.req.query('autostash') === '1'
 
     try {
-      gitOps.pullBranch(worktreePath, workspace.workingBranch, 'origin', { autostash })
+      await gitOps.pullBranchAsync(worktreePath, workspace.workingBranch, 'origin', { autostash })
     } catch (err) {
       if (err instanceof gitOps.DirtyWorktreeError) {
         return c.json({ error: err.message, code: 'dirty_worktree', operation: err.operation, status: err.status }, 409)
@@ -3928,7 +4088,7 @@ app.post('/:id/pull', (c) => {
 })
 
 /** Rebase the workspace branch onto its source branch. */
-app.post('/:id/rebase', (c) => {
+app.post('/:id/rebase', async (c) => {
   try {
     const id = c.req.param('id')
     const workspace = workspaceService.getWorkspace(id)
@@ -3936,7 +4096,7 @@ app.post('/:id/rebase', (c) => {
 
     const autostash = c.req.query('autostash') === '1'
     const worktreePath = workspace.worktreePath
-    gitOps.rebaseBranch(worktreePath, workspace.sourceBranch, { autostash })
+    await gitOps.rebaseBranchAsync(worktreePath, workspace.sourceBranch, { autostash })
 
     return c.json({ success: true })
   } catch (err) {
@@ -3952,7 +4112,7 @@ app.post('/:id/rebase', (c) => {
 })
 
 /** Merge the source branch into the workspace branch (non-fast-forward). */
-app.post('/:id/merge', (c) => {
+app.post('/:id/merge', async (c) => {
   try {
     const id = c.req.param('id')
     const workspace = workspaceService.getWorkspace(id)
@@ -3960,7 +4120,7 @@ app.post('/:id/merge', (c) => {
 
     const autostash = c.req.query('autostash') === '1'
     const worktreePath = workspace.worktreePath
-    gitOps.mergeBranch(worktreePath, workspace.sourceBranch, { autostash })
+    await gitOps.mergeBranchAsync(worktreePath, workspace.sourceBranch, { autostash })
 
     return c.json({ success: true })
   } catch (err) {
@@ -4165,7 +4325,7 @@ Start now.`
 app.post('/:id/change-pr-base', async (c) => {
   try {
     const id = c.req.param('id')
-    const body = await c.req.json<{ base: string }>()
+    const body = await c.req.json<{ base: string }>().catch(() => ({}) as { base: string })
     if (!body.base) return c.json({ error: 'Missing base parameter' }, 400)
     // Forwarded to `gh pr edit --base <base>` / the GitLab equivalent, so a
     // name starting with `-` would read as a CLI option rather than a branch.
@@ -4274,7 +4434,7 @@ app.post('/:id/change-source-branch', async (c) => {
   const id = c.req.param('id')
   const workspace = workspaceService.getWorkspace(id)
   try {
-    const body = await c.req.json<{ newBase: string }>()
+    const body = await c.req.json<{ newBase: string }>().catch(() => ({}) as { newBase: string })
     if (!body.newBase) return c.json({ error: 'Missing newBase parameter' }, 400)
     // Reaches git (fetch/reset/cherry-pick) and the forge CLI as a bare
     // argument, and is exported to the custom script as KOBO_NEW_BASE.
@@ -4318,7 +4478,7 @@ app.post('/:id/change-source-branch', async (c) => {
 app.post('/:id/cancel-source-change', async (c) => {
   try {
     const id = c.req.param('id')
-    const body = await c.req.json<{ previousBase: string }>()
+    const body = await c.req.json<{ previousBase: string }>().catch(() => ({}) as { previousBase: string })
     if (!body.previousBase) return c.json({ error: 'Missing previousBase parameter' }, 400)
     // Persisted as the workspace source branch, and from there it reaches
     // `git fetch origin <sourceBranch>` as a bare argument — including from a
@@ -4353,12 +4513,12 @@ app.post('/:id/cancel-source-change', async (c) => {
 })
 
 /** Force-push the working branch with --force-with-lease (after a history rewrite). */
-app.post('/:id/force-push', (c) => {
+app.post('/:id/force-push', async (c) => {
   try {
     const id = c.req.param('id')
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
-    gitOps.pushBranch(workspace.worktreePath, workspace.workingBranch, { force: true })
+    await gitOps.pushBranchAsync(workspace.worktreePath, workspace.workingBranch, { force: true })
     return c.json({ success: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

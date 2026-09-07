@@ -41,6 +41,7 @@ import {
   stopWatchdog,
 } from './services/agent/orchestrator.js'
 import * as autoLoopService from './services/auto-loop-service.js'
+import { startAwaitingUserReminder, stopAwaitingUserReminder } from './services/awaiting-user-reminder-service.js'
 import { runContentMigrationIfNeeded } from './services/content-migration-service.js'
 import * as cronService from './services/cron-service.js'
 import { createDailyDbBackupIfNeeded, createPreMigrationBackup } from './services/db-backup-service.js'
@@ -67,7 +68,7 @@ import * as wakeupService from './services/wakeup-service.js'
 import { emit, emitEphemeral, handleConnection, setMessageHandler } from './services/websocket-service.js'
 import { getActiveSession, getWorkspace, updateWorkspaceStatus } from './services/workspace-service.js'
 import { pruneWsEvents, resolveRetentionConfig } from './services/ws-events-retention-service.js'
-import { getClientSpaPath, getDbPath, getKoboHome, getPackageVersion } from './utils/paths.js'
+import { getClientSpaPath, getDbPath, getKoboHome, getPackageVersion, resolveSpaFile } from './utils/paths.js'
 
 console.log(`[kobo] Kōbō home: ${getKoboHome()}`)
 
@@ -93,28 +94,39 @@ try {
 runMigrations(db)
 
 // Event retention. OPT-IN: disabled by default, so this is a no-op until the
-// user sets a window in Settings → Worktrees. When enabled it runs at boot
-// only: no session is alive yet, so the batched write lock disturbs nobody, and
-// the daily backup that follows snapshots an already-compacted file.
+// user sets a window in Settings → Worktrees. Deliberately not enabled by
+// default — turning it on for an existing install would delete months of
+// conversation on the next upgrade, which is precisely why the UI shows a
+// count and asks first.
 // Best-effort — a failure must never block boot.
-try {
-  const retentionConfig = resolveRetentionConfig(getGlobalSettings())
-  if (retentionConfig.retentionDays > 0) {
+function runRetentionPass(context: string): void {
+  try {
+    const retentionConfig = resolveRetentionConfig(getGlobalSettings())
+    if (retentionConfig.retentionDays <= 0) return
     const retentionStartedAt = Date.now()
     const retention = pruneWsEvents(db, retentionConfig)
     if (retention.deleted > 0 || retention.vacuumed) {
       console.log(
-        `[kobo] Event retention (${retentionConfig.retentionDays} d, keeping ${retentionConfig.keepPerWorkspace}/workspace): ` +
+        `[kobo] Event retention ${context} (${retentionConfig.retentionDays} d, keeping ${retentionConfig.keepPerWorkspace}/workspace): ` +
           `${retention.deleted} agent event(s) permanently deleted, ` +
           `${retention.sessionsRecomputed} session metric(s) recomputed, ` +
           `${retention.vacuumed ? `VACUUM reclaimed ${retention.freePagesBefore - retention.freePagesAfter} page(s), ` : ''}` +
           `${Date.now() - retentionStartedAt} ms`,
       )
     }
+  } catch (err) {
+    console.error('[kobo] Event retention failed (continuing):', err)
   }
-} catch (err) {
-  console.error('[kobo] Event retention failed (continuing):', err)
 }
+
+runRetentionPass('at boot')
+
+// Kōbō is a daemon people leave running for weeks, and `emit` writes a row per
+// agent event. Running the pass only at boot meant a window the user enabled
+// was not applied again until the next restart.
+const RETENTION_INTERVAL_MS = 24 * 60 * 60 * 1000
+const retentionTimer = setInterval(() => runRetentionPass('daily'), RETENTION_INTERVAL_MS)
+retentionTimer.unref?.()
 
 // Daily DB backup (best-effort, fire-and-forget — never blocks boot).
 // Creates a WAL-safe snapshot alongside kobo.db if no backup exists in the
@@ -158,6 +170,7 @@ try {
 }
 startPrWatcher()
 startUsagePoller()
+startAwaitingUserReminder()
 
 // Create Hono app
 const app = new Hono()
@@ -209,18 +222,10 @@ const clientDistPath = getClientSpaPath()
 if (clientDistPath) {
   app.get('*', async (c) => {
     const url = new URL(c.req.url)
-    let filePath = path.join(clientDistPath, url.pathname)
-    // Prevent path traversal
-    if (!path.resolve(filePath).startsWith(clientDistPath)) {
-      return c.notFound()
-    }
-
-    // Serve index.html for non-asset routes (SPA fallback)
-    if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
-      filePath = path.join(clientDistPath, 'index.html')
-    }
-
-    if (!fs.existsSync(filePath)) {
+    // Traversal guard + SPA fallback live in one tested function: the inline
+    // version once rejected `/` itself and shipped a 404 on the home page.
+    const filePath = resolveSpaFile(clientDistPath, url.pathname)
+    if (!filePath) {
       return c.notFound()
     }
 
@@ -654,6 +659,14 @@ async function gracefulShutdown(signal: string, exitCode = 0): Promise<void> {
   } catch {
     // Best-effort
   }
+
+  try {
+    stopAwaitingUserReminder()
+  } catch {
+    // Best-effort
+  }
+
+  clearInterval(retentionTimer)
 
   // Stop managed agents and both direct/Docker dev servers before closing DB.
   try {

@@ -36,6 +36,8 @@ import { spawnAppServer } from './spawn.js'
 /** Long enough for normal tool work, short enough to recover a lost turn event. */
 export const CODEX_TURN_IDLE_TIMEOUT_MS = 120_000
 export const CODEX_GRACEFUL_INTERRUPT_TIMEOUT_MS = 3_000
+/** Grace given to a SIGTERM before the child is killed outright. */
+const CODEX_FORCE_KILL_TIMEOUT_MS = 3_000
 // Safety net while `turnLiveness` is paused for background subagents: that
 // pause is deliberately unbounded (a legitimate subagent can run long), but
 // if a thread never reports a terminal status (dropped notification, or the
@@ -557,6 +559,22 @@ export function createCodexEngine(): AgentEngine {
             child.stdin?.end()
           } catch {
             // swallow
+          }
+          // Escalate. The SIGTERM in the `finally` below is a request, not a
+          // guarantee: a wedged `codex app-server` that ignores it outlives the
+          // stop, the archive, the delete and Kōbō's own shutdown, holding the
+          // worktree and its share of the model quota, with nothing left in
+          // this process tracking it.
+          if (child.exitCode === null && child.signalCode === null) {
+            child.kill('SIGTERM')
+            const exited = await Promise.race([
+              new Promise<boolean>((resolve) => child.once('exit', () => resolve(true))),
+              wait(CODEX_FORCE_KILL_TIMEOUT_MS).then(() => false),
+            ])
+            if (!exited) {
+              console.warn('[codex] app-server ignored SIGTERM — sending SIGKILL')
+              child.kill('SIGKILL')
+            }
           }
         },
         resolvePendingUserInput(callId: string, response): boolean {

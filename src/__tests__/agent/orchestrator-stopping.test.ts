@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { AgentEngine } from '../../server/services/agent/engines/types.js'
+import type { AgentEngine, AgentEvent } from '../../server/services/agent/engines/types.js'
 import { resetDb } from '../helpers/reset-db.js'
 
 vi.mock('../../server/services/websocket-service.js', () => ({

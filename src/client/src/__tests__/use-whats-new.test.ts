@@ -3,6 +3,7 @@ import { useWhatsNew } from '../composables/use-whats-new'
 
 interface ChangelogPayload {
   currentVersion: string
+  latestVersion?: string | null
   versions: { version: string; notes: string }[]
 }
 
@@ -25,6 +26,39 @@ describe('useWhatsNew', () => {
   })
   afterEach(() => {
     vi.restoreAllMocks()
+  })
+
+  it('announces a newer version published on npm', async () => {
+    localStorage.setItem('kobo:last-seen-version', '1.7.14')
+    mockChangelog({ currentVersion: '1.7.14', latestVersion: '1.8.0', versions: ALL_VERSIONS })
+    const { availableVersion, checkForUpdate } = useWhatsNew()
+    await checkForUpdate()
+    expect(availableVersion.value).toBe('1.8.0')
+  })
+
+  it('stays quiet when the registry version is not newer, or unknown', async () => {
+    localStorage.setItem('kobo:last-seen-version', '1.7.14')
+    for (const latestVersion of ['1.7.14', '1.7.0', null]) {
+      mockChangelog({ currentVersion: '1.7.14', latestVersion, versions: ALL_VERSIONS })
+      const { availableVersion, checkForUpdate } = useWhatsNew()
+      await checkForUpdate()
+      expect(availableVersion.value).toBeNull()
+    }
+  })
+
+  it('respects a dismissal for that exact version, and only that one', async () => {
+    localStorage.setItem('kobo:last-seen-version', '1.7.14')
+    localStorage.setItem('kobo:dismissed-update-version', '1.8.0')
+    mockChangelog({ currentVersion: '1.7.14', latestVersion: '1.8.0', versions: ALL_VERSIONS })
+    let hook = useWhatsNew()
+    await hook.checkForUpdate()
+    expect(hook.availableVersion.value).toBeNull()
+
+    // A later release is news again.
+    mockChangelog({ currentVersion: '1.7.14', latestVersion: '1.8.1', versions: ALL_VERSIONS })
+    hook = useWhatsNew()
+    await hook.checkForUpdate()
+    expect(hook.availableVersion.value).toBe('1.8.1')
   })
 
   it('records the version silently on first launch', async () => {

@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { GlobalSettings, ProjectSettings, Settings } from '../server/services/settings-service.js'
 import {
   _setSettingsPath,
@@ -25,6 +25,7 @@ import {
   upsertProject,
 } from '../server/services/settings-service.js'
 import { MASKED_SECRET } from '../shared/consts.js'
+import { makeGlobalSettings } from './helpers/fixtures.js'
 
 let tmpDir: string
 let settingsPath: string
@@ -56,7 +57,7 @@ describe('getSettings()', () => {
   })
 
   it('reads existing settings file correctly', () => {
-    const existing: Settings = {
+    const existing = {
       global: {
         defaultModelByEngine: { 'claude-code': 'claude-sonnet-4-6', codex: 'auto' },
         prPromptTemplate: 'my template',
@@ -143,6 +144,31 @@ describe('getGlobalSettings()', () => {
   it('exposes terminalCommand defaulting to empty string', () => {
     const settings = getGlobalSettings()
     expect(settings.terminalCommand).toBe('')
+  })
+})
+
+describe('settings caching', () => {
+  it('ne relit pas le fichier a chaque appel', async () => {
+    // getGlobalSettings est appele par le middleware sur chaque requete HTTP,
+    // et readSettings fait existsSync + readFileSync + parse + migrations, le
+    // tout de facon synchrone sur la boucle d'evenements.
+    getSettings()
+    const spy = vi.spyOn(fs, 'readFileSync')
+
+    getGlobalSettings()
+    getGlobalSettings()
+    getGlobalSettings()
+
+    const settingsReads = spy.mock.calls.filter((c) => String(c[0]).endsWith('settings.json'))
+    expect(settingsReads.length).toBeLessThanOrEqual(1)
+    spy.mockRestore()
+  })
+
+  it('rend une ecriture visible immediatement', () => {
+    updateGlobalSettings({ showThinkingBlocks: false })
+    expect(getGlobalSettings().showThinkingBlocks).toBe(false)
+    updateGlobalSettings({ showThinkingBlocks: true })
+    expect(getGlobalSettings().showThinkingBlocks).toBe(true)
   })
 })
 
@@ -584,7 +610,7 @@ describe('automatic settings backups', () => {
     getSettings()
     const before = fs.readFileSync(settingsPath, 'utf-8')
 
-    updateGlobalSettings({ defaultModel: 'claude-sonnet-4-6' })
+    updateGlobalSettings({ defaultModelByEngine: { 'claude-code': 'claude-sonnet-4-6' } })
 
     const backups = fs
       .readdirSync(tmpDir)
@@ -738,7 +764,7 @@ describe('runSettingsMigrations()', () => {
   })
 
   it('is a no-op when the file is already at the latest version', () => {
-    const current: Settings = {
+    const current = {
       schemaVersion: SETTINGS_SCHEMA_VERSION,
       global: {
         defaultModelByEngine: { 'claude-code': 'claude-opus-4-6', codex: 'auto' },
@@ -1283,8 +1309,7 @@ describe('importConfigBundle()', () => {
     updateGlobalSettings({ notionMcpKey: 'local-notion', sentryMcpKey: 'local-sentry' })
     const incoming: Settings = {
       schemaVersion: SETTINGS_SCHEMA_VERSION,
-      global: {
-        defaultModel: 'claude-opus-4-7',
+      global: makeGlobalSettings({
         dangerouslySkipPermissions: true,
         prPromptTemplate: 'imported',
         gitConventions: 'imported',
@@ -1293,12 +1318,11 @@ describe('importConfigBundle()', () => {
         audioNotifications: true,
         notionStatusProperty: '',
         notionInProgressStatus: '',
-        defaultPermissionMode: 'plan',
         notionMcpKey: '', // stripped on export
         sentryMcpKey: '', // stripped on export
         tags: ['imported-tag'],
         worktreesPath: '$HOME/kobo/worktress',
-      },
+      }),
       projects: [],
     }
     importConfigBundle({ bundleVersion: 1, exportedAt: '', settings: incoming, templates: [] })
@@ -1317,8 +1341,7 @@ describe('importConfigBundle()', () => {
     fs.writeFileSync(settingsPath, JSON.stringify(localSettings, null, 2), 'utf-8')
     const incoming: Settings = {
       schemaVersion: SETTINGS_SCHEMA_VERSION,
-      global: {
-        defaultModel: 'claude-opus-4-7',
+      global: makeGlobalSettings({
         dangerouslySkipPermissions: false,
         prPromptTemplate: 'imported',
         gitConventions: '',
@@ -1327,13 +1350,12 @@ describe('importConfigBundle()', () => {
         audioNotifications: false,
         notionStatusProperty: '',
         notionInProgressStatus: '',
-        defaultPermissionMode: 'plan',
         notionMcpKey: '',
         sentryMcpKey: '',
         networkAccessToken: '', // stripped on export
         tags: [],
         worktreesPath: '$HOME/kobo/worktrees',
-      },
+      }),
       projects: [],
     }
     importConfigBundle({ bundleVersion: 1, exportedAt: '', settings: incoming, templates: [] })
@@ -1995,12 +2017,12 @@ describe('changeSourceBranchScript setting', () => {
       projects: [{ path: '/p1' }, { path: '/p2', changeSourceBranchScript: 'echo custom' }],
     })
     // Match a stable marker rather than the full bash body.
-    const seededGlobal = (migrated.global as Record<string, unknown>).changeSourceBranchScript as string
+    const seededGlobal = (migrated.global as unknown as Record<string, unknown>).changeSourceBranchScript as string
     expect(typeof seededGlobal).toBe('string')
     expect(seededGlobal.length).toBeGreaterThan(0)
     expect(seededGlobal).toContain('Kōbō default change-source-branch script')
-    expect((migrated.projects[0] as Record<string, unknown>).changeSourceBranchScript).toBe('')
-    expect((migrated.projects[1] as Record<string, unknown>).changeSourceBranchScript).toBe('echo custom')
+    expect((migrated.projects[0] as unknown as Record<string, unknown>).changeSourceBranchScript).toBe('')
+    expect((migrated.projects[1] as unknown as Record<string, unknown>).changeSourceBranchScript).toBe('echo custom')
   })
 
   it('getEffectiveSettings cascades project override over global default', () => {
@@ -2025,13 +2047,13 @@ describe('changeSourceBranchScript setting', () => {
       global: {},
       projects: [{ path: '/p1' }, { path: '/p2', ciFixPromptTemplate: 'custom fix prompt' }],
     })
-    const seededGlobal = (migrated.global as Record<string, unknown>).ciFixPromptTemplate as string
+    const seededGlobal = (migrated.global as unknown as Record<string, unknown>).ciFixPromptTemplate as string
     expect(typeof seededGlobal).toBe('string')
     expect(seededGlobal.length).toBeGreaterThan(0)
     expect(seededGlobal).toContain('{{pr_url}}')
     expect(seededGlobal).toContain('{{failed_jobs}}')
-    expect((migrated.projects[0] as Record<string, unknown>).ciFixPromptTemplate).toBe('')
-    expect((migrated.projects[1] as Record<string, unknown>).ciFixPromptTemplate).toBe('custom fix prompt')
+    expect((migrated.projects[0] as unknown as Record<string, unknown>).ciFixPromptTemplate).toBe('')
+    expect((migrated.projects[1] as unknown as Record<string, unknown>).ciFixPromptTemplate).toBe('custom fix prompt')
   })
 
   it('getEffectiveSettings cascades project ciFixPromptTemplate over global default', () => {
@@ -2057,7 +2079,7 @@ describe('terminalCommand setting (migration v37)', () => {
       projects: [],
     })
     expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
-    expect((migrated.global as Record<string, unknown>).terminalCommand).toBe('')
+    expect((migrated.global as unknown as Record<string, unknown>).terminalCommand).toBe('')
   })
 
   it('migration v37 preserves an existing terminalCommand value', () => {
@@ -2066,7 +2088,7 @@ describe('terminalCommand setting (migration v37)', () => {
       global: { terminalCommand: 'xterm' },
       projects: [],
     })
-    expect((migrated.global as Record<string, unknown>).terminalCommand).toBe('xterm')
+    expect((migrated.global as unknown as Record<string, unknown>).terminalCommand).toBe('xterm')
   })
 })
 
@@ -2256,7 +2278,7 @@ describe('PR notification sounds (v45)', () => {
       audioQuestionSound: 'hey.mp3',
       networkAccessToken: 'keep-me',
     })
-    expect(SETTINGS_SCHEMA_VERSION).toBe(54)
+    expect(SETTINGS_SCHEMA_VERSION).toBe(56)
   })
 
   it('adds the auto-loop retry limit while preserving existing settings', () => {
@@ -2374,7 +2396,7 @@ describe('whip feature toggle (v51)', () => {
       projects: [],
     })
 
-    expect(migrated.schemaVersion).toBe(54)
+    expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
     expect(migrated.global.whipEnabled).toBe(false)
     expect(migrated.global.audioNotifications).toBe(true)
   })
@@ -2422,7 +2444,7 @@ describe('whip feature toggle (v51)', () => {
       projects: [],
     })
 
-    expect(migrated.schemaVersion).toBe(54)
+    expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
     expect(migrated.global.whipShortcut).toBe('mod+shift+x')
     expect(migrated.global.editorCommand).toBe('zed')
   })
@@ -2484,7 +2506,7 @@ describe('whip feature toggle (v51)', () => {
       projects: [],
     })
 
-    expect(migrated.schemaVersion).toBe(54)
+    expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
     expect(migrated.global.whipVolume).toBe(1)
     expect(migrated.global.whipShortcut).toBe('alt+k')
     expect(migrated.global.editorCommand).toBe('zed')
@@ -2597,5 +2619,126 @@ describe('updateNetworkAccessSettings()', () => {
   it('updateGlobalSettings cannot inject a networkAccessToken', () => {
     updateGlobalSettings({ networkAccessToken: 'injected' } as Partial<GlobalSettings>)
     expect(getGlobalSettings().networkAccessToken).toBe('')
+  })
+})
+
+describe('lifecycle hook scripts (v55)', () => {
+  it('seeds every hook disabled on a fresh install', () => {
+    expect(getGlobalSettings()).toMatchObject({
+      sessionEndedScript: '',
+      prMergedScript: '',
+      autoLoopDisabledScript: '',
+    })
+  })
+
+  it('adds the hooks to a v54 file without touching what is already there', () => {
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        schemaVersion: 54,
+        global: { archiveScript: 'echo archived', networkAccessToken: 'keep-me' },
+        projects: [{ path: '/p', archiveScript: 'echo project' }],
+      }),
+    )
+
+    const settings = getSettings()
+
+    expect(settings.global).toMatchObject({
+      archiveScript: 'echo archived',
+      networkAccessToken: 'keep-me',
+      sessionEndedScript: '',
+      prMergedScript: '',
+      autoLoopDisabledScript: '',
+    })
+    expect(settings.projects[0]).toMatchObject({
+      archiveScript: 'echo project',
+      sessionEndedScript: '',
+      prMergedScript: '',
+      autoLoopDisabledScript: '',
+    })
+  })
+
+  it('keeps a hook the user had already written', () => {
+    const migrated = runSettingsMigrations({
+      schemaVersion: 54,
+      global: { sessionEndedScript: 'npm test' },
+      projects: [],
+    })
+
+    expect(migrated.global.sessionEndedScript).toBe('npm test')
+  })
+
+  it('cascades a project hook over the global one, empty inheriting', () => {
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        schemaVersion: 54,
+        global: { sessionEndedScript: 'global-hook', prMergedScript: 'global-merged' },
+        projects: [{ path: '/p', sessionEndedScript: 'project-hook' }],
+      }),
+    )
+
+    const effective = getEffectiveSettings('/p')
+
+    expect(effective.sessionEndedScript).toBe('project-hook')
+    // Empty on the project side means inherit, exactly like every other script.
+    expect(effective.prMergedScript).toBe('global-merged')
+  })
+
+  it('falls back to the global hooks for a path with no project entry', () => {
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        schemaVersion: 54,
+        global: { autoLoopDisabledScript: 'notify.sh' },
+        projects: [],
+      }),
+    )
+
+    expect(getEffectiveSettings('/unknown').autoLoopDisabledScript).toBe('notify.sh')
+  })
+})
+
+describe('awaiting-user reminder (v56)', () => {
+  it('is off by default — a reminder that nobody asked for is a notification nobody wants', () => {
+    expect(getGlobalSettings().awaitingUserReminderMinutes).toBe(0)
+  })
+
+  it('adds the key to a v55 file without disturbing it', () => {
+    fs.writeFileSync(
+      settingsPath,
+      JSON.stringify({ schemaVersion: 55, global: { networkAccessToken: 'keep-me' }, projects: [] }),
+    )
+
+    expect(getGlobalSettings()).toMatchObject({
+      networkAccessToken: 'keep-me',
+      awaitingUserReminderMinutes: 0,
+    })
+  })
+
+  it('keeps a delay the user had already set', () => {
+    const migrated = runSettingsMigrations({
+      schemaVersion: 55,
+      global: { awaitingUserReminderMinutes: 15 },
+      projects: [],
+    })
+
+    expect(migrated.global.awaitingUserReminderMinutes).toBe(15)
+  })
+
+  it.each([-1, 0.5, 1441, 'ten', null])('rejects the invalid delay %j and keeps the stored one', (value) => {
+    updateGlobalSettings({ awaitingUserReminderMinutes: 20 })
+
+    const updated = updateGlobalSettings({
+      awaitingUserReminderMinutes: value,
+    } as unknown as Partial<GlobalSettings>)
+
+    expect(updated.awaitingUserReminderMinutes).toBe(20)
+  })
+
+  it('accepts 0 as an explicit "off", not as an invalid value', () => {
+    updateGlobalSettings({ awaitingUserReminderMinutes: 20 })
+
+    expect(updateGlobalSettings({ awaitingUserReminderMinutes: 0 }).awaitingUserReminderMinutes).toBe(0)
   })
 })

@@ -237,6 +237,6 @@ describe('transcribeAudio()', () => {
 
     await expect(
       transcribeAudio({ audioBuffer: Buffer.from([1, 2, 3]), modelName: 'base', language: 'fr' }),
-    ).rejects.toMatchObject<Partial<VoiceError>>({ code: 'TRANSCRIPTION_FAILED' })
+    ).rejects.toMatchObject({ code: 'TRANSCRIPTION_FAILED' } satisfies Partial<VoiceError>)
   })
 })

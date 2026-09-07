@@ -136,7 +136,7 @@ async function runBuiltInStrategy(
   // the branchExists check below is the authoritative gate for the new base
   // (it throws a clean error, mapped to a 400, rather than a raw fetch error).
   try {
-    gitOps.fetchAllBranches(worktreePath)
+    await gitOps.fetchAllBranchesAsync(worktreePath)
   } catch {
     // offline / no remote — proceed with local refs
   }

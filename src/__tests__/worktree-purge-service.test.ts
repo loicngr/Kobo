@@ -3,7 +3,7 @@
 // flips a flag driving the "restore" UX and the PR watcher's auto-restore probe.
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-const existsSyncMock = vi.fn(() => true)
+const existsSyncMock = vi.fn((_path: string) => true)
 vi.mock('node:fs', async () => {
   const actual = await vi.importActual<typeof import('node:fs')>('node:fs')
   return {
@@ -16,11 +16,11 @@ vi.mock('node:fs', async () => {
 // The real service calls `agentManager.stopAgentAndWait` (not `stopAgent`) so
 // that `removeWorktree`, which runs later in the same function, never races a
 // still-dying agent process.
-const stopAgentAndWaitMock = vi.fn(async () => {})
+const stopAgentAndWaitMock = vi.fn(async (_workspaceId: string) => {})
 vi.mock('../server/services/agent/orchestrator.js', () => ({
   stopAgentAndWait: (id: string) => stopAgentAndWaitMock(id),
 }))
-const stopDevServerMock = vi.fn(async () => {})
+const stopDevServerMock = vi.fn(async (_workspaceId: string) => {})
 vi.mock('../server/services/dev-server-service.js', () => ({ stopDevServer: (id: string) => stopDevServerMock(id) }))
 const destroyTerminalMock = vi.fn()
 vi.mock('../server/services/terminal-service.js', () => ({ destroyTerminal: (id: string) => destroyTerminalMock(id) }))

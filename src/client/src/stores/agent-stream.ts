@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { ref } from 'vue'
+import { ref, shallowRef } from 'vue'
 import type { AgentEvent } from '../types/agent-event'
 
 export const MAX_LIVE_EVENTS_PER_WORKSPACE = 5000
@@ -17,22 +17,28 @@ export const MAX_LIVE_EVENTS_PER_WORKSPACE = 5000
  * by ActivityFeed to load older history on-demand when the user scrolls up.
  */
 export const useAgentStreamStore = defineStore('agent-stream', () => {
-  const events = ref<Map<string, AgentEvent[]>>(new Map())
-  const timestamps = ref<Map<string, string[]>>(new Map())
-  const sessionIds = ref<Map<string, Array<string | null>>>(new Map())
-  const eventIds = ref<Map<string, Array<string | null>>>(new Map())
-  const oldestIds = ref<Map<string, string>>(new Map())
-  const hasMoreOlder = ref<Map<string, boolean>>(new Map())
+  // shallowRef throughout: `ref(new Map())` is DEEP reactive, so `.get(id)`
+  // hands back a reactive array and every AgentEvent — payload, nested input
+  // and all — gets wrapped in a Proxy on first read. With a 5 000-event buffer
+  // per workspace and the client subscribed to all of them, that proxying is
+  // the dominant memory and CPU cost, and it quietly defeats the design below:
+  // `versions` is meant to be the single reactive dependency.
+  const events = shallowRef<Map<string, AgentEvent[]>>(new Map())
+  const timestamps = shallowRef<Map<string, string[]>>(new Map())
+  const sessionIds = shallowRef<Map<string, Array<string | null>>>(new Map())
+  const eventIds = shallowRef<Map<string, Array<string | null>>>(new Map())
+  const oldestIds = shallowRef<Map<string, string>>(new Map())
+  const hasMoreOlder = shallowRef<Map<string, boolean>>(new Map())
   // Transient "engine is compacting context right now" flag per workspace. Not
   // part of the persisted event stream — driven by ephemeral session:compacting
   // events and cleared when compaction ends. Reactive via `version`.
-  const compacting = ref<Map<string, boolean>>(new Map())
+  const compacting = shallowRef<Map<string, boolean>>(new Map())
   // Per-workspace index of persisted ws_events ids. `append` used to scan the
   // whole id array (`idList.includes`) on EVERY event: with Codex emitting 50
   // to 200 deltas per message on a 5 000-entry buffer, that is up to a million
   // comparisons per message. A Set makes it O(1). `merge` already built one —
   // it just threw it away on every call.
-  const eventIdIndex = ref<Map<string, Set<string>>>(new Map())
+  const eventIdIndex = shallowRef<Map<string, Set<string>>>(new Map())
 
   // Per-workspace reactive counter. A single global counter meant a burst on a
   // background workspace invalidated every computed value of the workspace on

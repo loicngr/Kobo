@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   _setDevModeProtection,
   ensureKoboHome,
@@ -12,6 +12,7 @@ import {
   getPackageAssetPath,
   getSettingsPath,
   getSkillsPath,
+  resolveSpaFile,
 } from '../server/utils/paths.js'
 
 describe('paths — package root resolution', () => {
@@ -170,5 +171,45 @@ describe('paths — dev-mode protection', () => {
     const home = getKoboHome()
     expect(home).not.toBe(path.join(os.homedir(), '.config', 'kobo'))
     expect(home).toBe(getPackageAssetPath('data'))
+  })
+})
+
+describe('resolveSpaFile', () => {
+  let dist: string
+
+  beforeEach(() => {
+    dist = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'kobo-spa-')))
+    fs.writeFileSync(path.join(dist, 'index.html'), '<html></html>')
+    fs.mkdirSync(path.join(dist, 'assets'))
+    fs.writeFileSync(path.join(dist, 'assets', 'app.js'), '//')
+  })
+
+  afterEach(() => fs.rmSync(dist, { recursive: true, force: true }))
+
+  it('serves index.html for the root URL — the one every install opens first', () => {
+    expect(resolveSpaFile(dist, '/')).toBe(path.join(dist, 'index.html'))
+  })
+
+  it('serves an existing asset as itself', () => {
+    expect(resolveSpaFile(dist, '/assets/app.js')).toBe(path.join(dist, 'assets', 'app.js'))
+  })
+
+  it('falls back to index.html for a client-side route and for a directory', () => {
+    expect(resolveSpaFile(dist, '/workspace/abc')).toBe(path.join(dist, 'index.html'))
+    expect(resolveSpaFile(dist, '/assets')).toBe(path.join(dist, 'index.html'))
+  })
+
+  it('refuses traversal and lookalike siblings', () => {
+    expect(resolveSpaFile(dist, '/../etc/passwd')).toBeNull()
+    expect(resolveSpaFile(dist, '/..')).toBeNull()
+    fs.mkdirSync(`${dist}-evil`)
+    fs.writeFileSync(path.join(`${dist}-evil`, 'x.js'), '//')
+    expect(resolveSpaFile(dist, `/../${path.basename(dist)}-evil/x.js`)).toBeNull()
+    fs.rmSync(`${dist}-evil`, { recursive: true, force: true })
+  })
+
+  it('returns null when index.html itself is missing', () => {
+    fs.unlinkSync(path.join(dist, 'index.html'))
+    expect(resolveSpaFile(dist, '/')).toBeNull()
   })
 })

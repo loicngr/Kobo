@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { isPathInside } from './safe-path.js'
 
 // Package root resolved from this file's location via pure path arithmetic
 // (no filesystem calls, so this stays robust when tests mock `node:fs`).
@@ -156,4 +157,24 @@ export function getChangelogPath(): string {
 export function getClientSpaPath(): string | null {
   const pwa = getPackageAssetPath('src', 'client', 'dist', 'pwa')
   return fs.existsSync(pwa) ? pwa : null
+}
+
+/**
+ * The file to serve for a SPA request, or null for "404".
+ *
+ * Kept pure (dist path in, file path out) because the traversal guard that
+ * used to live inline in index.ts once rejected `/` itself: the root resolves
+ * to the dist directory exactly, which a `startsWith(dist + sep)` check does
+ * not accept. `isPathInside` treats the root as inside, and this function has
+ * a test for the one URL every install opens first.
+ */
+export function resolveSpaFile(clientDistPath: string, pathname: string): string | null {
+  const root = path.resolve(clientDistPath)
+  const candidate = path.resolve(root, `.${pathname}`)
+  if (!isPathInside(root, candidate)) return null
+
+  // Client-side routes and directories fall back to the shell.
+  const file =
+    fs.existsSync(candidate) && !fs.statSync(candidate).isDirectory() ? candidate : path.join(root, 'index.html')
+  return fs.existsSync(file) ? file : null
 }

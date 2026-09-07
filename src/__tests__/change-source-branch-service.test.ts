@@ -11,7 +11,7 @@ vi.mock('../server/services/workspace-service.js', () => ({
   getWorkspace: (id: string) => getWorkspaceMock(id),
   updateWorkspaceSourceBranch: (id: string, b: string) => updateSourceMock(id, b),
 }))
-const agentStatusMock = vi.fn(() => null)
+const agentStatusMock = vi.fn((_workspaceId: string): string | null => null)
 vi.mock('../server/services/agent/orchestrator.js', () => ({
   getAgentStatus: (id: string) => agentStatusMock(id),
 }))
@@ -27,7 +27,7 @@ vi.mock('../server/services/forge/registry.js', () => ({
   }),
 }))
 
-const getEffectiveSettingsMock = vi.fn(() => ({ changeSourceBranchScript: '' }))
+const getEffectiveSettingsMock = vi.fn((_projectPath: string) => ({ changeSourceBranchScript: '' }))
 vi.mock('../server/services/settings-service.js', () => ({
   getEffectiveSettings: (p: string) => getEffectiveSettingsMock(p),
 }))

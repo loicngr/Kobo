@@ -34,7 +34,7 @@ app.post('/extract', async (c) => {
     if (!getGlobalSettings().notionEnabled) {
       return c.json({ error: 'Notion integration is disabled in Settings' }, 403)
     }
-    const body = await c.req.json<{ url: string }>()
+    const body = await c.req.json<{ url: string }>().catch(() => ({}) as { url: string })
 
     if (!body.url) {
       return c.json({ error: 'Missing required field: url' }, 400)

@@ -43,6 +43,7 @@ vi.mock('../server/services/ws-events-retention-service.js', () => ({
 import router from '../server/routes/settings.js'
 import * as settingsService from '../server/services/settings-service.js'
 import { MASKED_SECRET } from '../shared/consts.js'
+import { makeGlobalSettings, makeProjectSettings } from './helpers/fixtures.js'
 
 // ── App setup ────────────────────────────────────────────────────────────────
 
@@ -51,12 +52,9 @@ app.route('/api/settings', router)
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
-const fakeGlobalSettings = {
-  defaultModel: 'auto',
-  prPromptTemplate: '',
-}
+const fakeGlobalSettings = makeGlobalSettings({ prPromptTemplate: '' })
 
-const fakeProject = {
+const fakeProject = makeProjectSettings({
   path: '/home/user/project',
   displayName: 'My Project',
   defaultSourceBranch: 'main',
@@ -66,9 +64,10 @@ const fakeProject = {
     startCommand: '',
     stopCommand: '',
   },
-}
+})
 
 const fakeSettings = {
+  schemaVersion: 1,
   global: fakeGlobalSettings,
   projects: [fakeProject],
 }
@@ -197,9 +196,34 @@ describe('GET /api/settings/mcp-servers', () => {
   })
 })
 
+describe('malformed JSON bodies', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  // `{}` is a valid request for every one of these routes, so a parse failure
+  // silently turned into `{}` used to write defaults to disk and answer 200.
+  it.each([
+    ['PUT', '/api/settings/global', () => settingsService.updateGlobalSettings],
+    [
+      'PUT',
+      `/api/settings/projects/${Buffer.from('/home/user/project').toString('base64url')}`,
+      () => settingsService.upsertProject,
+    ],
+    ['POST', '/api/settings/network', () => settingsService.updateNetworkAccessSettings],
+  ] as const)('%s %s answers 400 and writes nothing', async (method, url, writer) => {
+    const res = await app.request(url, {
+      method,
+      headers: { 'Content-Type': 'application/json' },
+      body: '{ not json',
+    })
+
+    expect(res.status).toBe(400)
+    expect(writer()).not.toHaveBeenCalled()
+  })
+})
+
 describe('PUT /api/settings/global', () => {
   it('updates global settings', async () => {
-    const updated = { defaultModel: 'claude-sonnet-4-20250514', prPromptTemplate: 'New template' }
+    const updated = makeGlobalSettings({ prPromptTemplate: 'New template' })
     vi.mocked(settingsService.updateGlobalSettings).mockReturnValue(updated)
 
     const res = await app.request('/api/settings/global', {

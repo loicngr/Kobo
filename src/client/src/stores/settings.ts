@@ -50,6 +50,10 @@ interface ProjectSettings {
   archiveScript: string
   /** Per-project override of the global change-source-branch script. Empty = inherit global. */
   changeSourceBranchScript: string
+  /** Per-project overrides of the lifecycle hooks. Empty = inherit global. */
+  sessionEndedScript: string
+  prMergedScript: string
+  autoLoopDisabledScript: string
   devServer: DevServerConfig
   e2e: E2eSettings
   finalization: FinalizationSettings
@@ -87,6 +91,12 @@ interface GlobalSettings {
   archiveScript: string
   /** Shell script run in place of the built-in cherry-pick when the source branch changes (empty = disabled). */
   changeSourceBranchScript: string
+  /** Shell script run when an agent session ends, whatever the reason (empty = disabled). */
+  sessionEndedScript: string
+  /** Shell script run when a PR is merged, before archive/purge (empty = disabled). */
+  prMergedScript: string
+  /** Shell script run when auto-loop turns itself off (empty = disabled). */
+  autoLoopDisabledScript: string
   editorCommand: string
   /**
    * Shell command spawned with the worktree path as first arg to open it in
@@ -98,6 +108,8 @@ interface GlobalSettings {
   /** Opt-in: pr-watcher auto-purges the worktree on PR-merged transition. */
   autoPurgeOnPrMerged: boolean
   autoLoopMaxRetries: number
+  /** Minutes before Kōbō reminds you about an unanswered question. 0 = off. */
+  awaitingUserReminderMinutes: number
   wsEventsRetentionDays: number
   wsEventsKeepPerWorkspace: number
   browserNotifications: boolean
@@ -235,6 +247,7 @@ export const useSettingsStore = defineStore('settings', {
       terminalCommand: '',
       autoPurgeOnPrMerged: false,
       autoLoopMaxRetries: 5,
+      awaitingUserReminderMinutes: 0,
       wsEventsRetentionDays: 0,
       wsEventsKeepPerWorkspace: 0,
       browserNotifications: true,
@@ -274,6 +287,9 @@ export const useSettingsStore = defineStore('settings', {
       cleanupScriptOnlyOnChanges: false,
       archiveScript: '',
       changeSourceBranchScript: '',
+      sessionEndedScript: '',
+      prMergedScript: '',
+      autoLoopDisabledScript: '',
       worktreesPath: WORKTREES_PATH,
       worktreesPrefixByProject: false,
       voiceEnabled: false,

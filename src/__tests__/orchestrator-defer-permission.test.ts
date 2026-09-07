@@ -44,6 +44,8 @@ describe('Orchestrator — pending permission queue (canUseTool)', () => {
         supportsResume: true,
         supportsMcp: true,
         supportsSkills: true,
+        supportsSubagents: false,
+        supportsQuotaStatus: false,
       },
       async start(opts, onEvent) {
         const resolvePendingUserInput = vi.fn().mockReturnValue(true)

@@ -43,11 +43,20 @@ app.get('/', async (c) => {
 
 app.post('/diagnose', async (c) => {
   try {
-    const { projectPath, prNumber, worktreesPath } = await c.req.json<{
-      projectPath: string
-      prNumber: number
-      worktreesPath?: string | null
-    }>()
+    const { projectPath, prNumber, worktreesPath } = await c.req
+      .json<{
+        projectPath: string
+        prNumber: number
+        worktreesPath?: string | null
+      }>()
+      .catch(
+        () =>
+          ({}) as {
+            projectPath: string
+            prNumber: number
+            worktreesPath?: string | null
+          },
+      )
     if (!projectPath || !prNumber) {
       return c.json({ error: 'Missing required fields: projectPath, prNumber' }, 400)
     }
@@ -104,15 +113,28 @@ app.post('/diagnose', async (c) => {
 
 app.post('/resolve', async (c) => {
   try {
-    const body = await c.req.json<{
-      projectPath: string
-      prNumber: number
-      headBranch: string
-      baseBranch: string
-      worktreesPath?: string | null
-      decisions: prCheckout.PrCheckoutDecisions
-      fingerprint: string
-    }>()
+    const body = await c.req
+      .json<{
+        projectPath: string
+        prNumber: number
+        headBranch: string
+        baseBranch: string
+        worktreesPath?: string | null
+        decisions: prCheckout.PrCheckoutDecisions
+        fingerprint: string
+      }>()
+      .catch(
+        () =>
+          ({}) as {
+            projectPath: string
+            prNumber: number
+            headBranch: string
+            baseBranch: string
+            worktreesPath?: string | null
+            decisions: prCheckout.PrCheckoutDecisions
+            fingerprint: string
+          },
+      )
     if (!body.projectPath || !body.fingerprint) {
       return c.json({ error: 'Missing required fields: projectPath, fingerprint' }, 400)
     }

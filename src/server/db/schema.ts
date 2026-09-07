@@ -40,6 +40,7 @@ export function initSchema(db: Database.Database): void {
       pr_ci_failure_dismissed_at TEXT,
       worktree_purged_at TEXT,
       worktree_purge_restore_data TEXT,
+      comparison_id TEXT,
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
@@ -66,7 +67,8 @@ export function initSchema(db: Database.Database): void {
       started_at TEXT NOT NULL,
       ended_at TEXT,
       name TEXT,
-      task_progress_baseline TEXT
+      task_progress_baseline TEXT,
+      end_reason TEXT
     );
 
     CREATE TABLE IF NOT EXISTS ws_events (

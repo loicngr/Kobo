@@ -75,6 +75,29 @@ async function gitAsync(repoPath: string, args: string[], timeout = READ_ONLY_GI
   return stdout.trimEnd()
 }
 
+/**
+ * Async counterpart of `git()` for the operations that talk to a remote.
+ *
+ * Same 60 s budget and, crucially, the same non-interactive environment: a
+ * credential or passphrase prompt on a background process would hang for the
+ * whole timeout with nobody to answer it. `gitAsync` above omits that env
+ * because it was written for local read-only commands.
+ *
+ * These run on HTTP handlers, and `execFileSync` there blocks the single
+ * thread that also serves the WebSocket streams and the agent events: one push
+ * over a slow link froze the entire app for up to a minute, heartbeat included.
+ */
+async function gitNetworkAsync(repoPath: string, args: string[]): Promise<string> {
+  const { stdout } = await execFileAsync('git', args, {
+    cwd: repoPath,
+    encoding: 'utf-8',
+    timeout: SYNC_GIT_TIMEOUT_MS,
+    maxBuffer: GIT_MAX_BUFFER_BYTES,
+    env: NON_INTERACTIVE_GIT_ENV,
+  })
+  return stdout.trimEnd()
+}
+
 /** Raised when a stale `index.lock` blocks every write on a worktree. */
 export class GitIndexLockError extends Error {
   readonly lockPath: string
@@ -400,6 +423,124 @@ export function mergeBranch(repoPath: string, baseBranch: string, opts?: { autos
     if (opts?.autostash) args.push('--autostash')
     args.push(`origin/${baseBranch}`)
     git(repoPath, args)
+  } catch (err) {
+    const conflicted = getConflictedFiles(repoPath)
+    if (conflicted.length > 0 || getOngoingGitOperation(repoPath) === 'merge') {
+      throw new GitConflictError('merge', conflicted)
+    }
+    const status = getWorkingTreeStatus(repoPath)
+    if (status.staged > 0 || status.modified > 0) {
+      throw new DirtyWorktreeError('merge', status)
+    }
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`Merge of 'origin/${baseBranch}' failed: ${message}`)
+  }
+}
+
+/**
+ * Async variants of the network operations, for the HTTP handlers.
+ *
+ * They mirror their synchronous twins one for one — same arguments, same
+ * errors, same conflict and dirty-tree detection — so a caller only swaps the
+ * name and adds `await`. Only the remote round-trip is async: the error paths
+ * below read local state (conflicted files, ongoing operation, working tree),
+ * which is fast and stays synchronous.
+ */
+export async function pushBranchAsync(
+  repoPath: string,
+  branchName: string,
+  options: { remote?: string; force?: boolean } = {},
+): Promise<void> {
+  const remote = options.remote ?? 'origin'
+  const args = ['push', '-u']
+  if (options.force) args.push('--force-with-lease')
+  args.push(remote, branchName)
+  try {
+    await gitNetworkAsync(repoPath, args)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`Failed to push branch '${branchName}' to '${remote}': ${message}`)
+  }
+}
+
+export async function fetchAllBranchesAsync(repoPath: string, remote = 'origin'): Promise<void> {
+  try {
+    await gitNetworkAsync(repoPath, ['fetch', remote])
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`Failed to fetch from '${remote}': ${message}`)
+  }
+}
+
+export async function pullBranchAsync(
+  repoPath: string,
+  branchName: string,
+  remote = 'origin',
+  opts?: { autostash?: boolean },
+): Promise<void> {
+  if (!opts?.autostash) {
+    const status = getWorkingTreeStatus(repoPath)
+    if (status.staged > 0 || status.modified > 0) {
+      throw new DirtyWorktreeError('pull', status)
+    }
+  }
+  try {
+    const args = ['pull', '--ff-only']
+    if (opts?.autostash) args.push('--autostash')
+    args.push(remote, branchName)
+    await gitNetworkAsync(repoPath, args)
+  } catch (err) {
+    if (err instanceof DirtyWorktreeError) throw err
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`Failed to pull branch '${branchName}' from '${remote}': ${message}`)
+  }
+}
+
+export async function rebaseBranchAsync(
+  repoPath: string,
+  baseBranch: string,
+  opts?: { autostash?: boolean },
+): Promise<void> {
+  try {
+    await gitNetworkAsync(repoPath, ['fetch', 'origin', baseBranch])
+  } catch {
+    // fetch may fail if offline — continue with local ref
+  }
+  try {
+    const args = ['rebase']
+    if (opts?.autostash) args.push('--autostash')
+    args.push(`origin/${baseBranch}`)
+    await gitNetworkAsync(repoPath, args)
+  } catch (err) {
+    const conflicted = getConflictedFiles(repoPath)
+    if (conflicted.length > 0 || getOngoingGitOperation(repoPath) === 'rebase') {
+      // Leave the rebase in progress so the caller can abort or request agent-assisted resolution.
+      throw new GitConflictError('rebase', conflicted)
+    }
+    const status = getWorkingTreeStatus(repoPath)
+    if (status.staged > 0 || status.modified > 0) {
+      throw new DirtyWorktreeError('rebase', status)
+    }
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`Rebase onto '${baseBranch}' failed: ${message}`)
+  }
+}
+
+export async function mergeBranchAsync(
+  repoPath: string,
+  baseBranch: string,
+  opts?: { autostash?: boolean },
+): Promise<void> {
+  try {
+    await gitNetworkAsync(repoPath, ['fetch', 'origin', baseBranch])
+  } catch {
+    // offline — continue with local ref
+  }
+  try {
+    const args = ['merge', '--no-ff', '--no-edit']
+    if (opts?.autostash) args.push('--autostash')
+    args.push(`origin/${baseBranch}`)
+    await gitNetworkAsync(repoPath, args)
   } catch (err) {
     const conflicted = getConflictedFiles(repoPath)
     if (conflicted.length > 0 || getOngoingGitOperation(repoPath) === 'merge') {
@@ -1385,9 +1526,37 @@ export async function getUnpushedCountAsync(repoPath: string, workingBranch: str
  * Mirrors the sync `fetchSourceBranch` sibling, including the optional `remote`
  * parameter (defaults to `'origin'`).
  */
+/**
+ * Async twin of `fetchSourceBranch`: it PROPAGATES the failure.
+ *
+ * Distinct from `fetchSourceBranchAsync` right below, which swallows it — that
+ * one is the pr-watcher's best-effort refresh, where a missing remote is not
+ * worth interrupting a background sweep. Workspace creation needs the opposite:
+ * a source branch that cannot be fetched is a 422, not a workspace built on a
+ * stale ref.
+ */
+export async function fetchSourceBranchOrThrowAsync(
+  repoPath: string,
+  sourceBranch: string,
+  remote = 'origin',
+): Promise<void> {
+  try {
+    await gitNetworkAsync(repoPath, ['fetch', remote, sourceBranch])
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    throw new Error(`Failed to fetch '${sourceBranch}' from '${remote}': ${message}`)
+  }
+}
+
 export async function fetchSourceBranchAsync(repoPath: string, branch: string, remote = 'origin'): Promise<void> {
   try {
-    await execFileAsync('git', ['fetch', remote, branch], { cwd: repoPath, timeout: 30_000 })
+    // Non-interactive env like every other network call: without it a
+    // credential or passphrase prompt hangs this fetch for its whole timeout.
+    await execFileAsync('git', ['fetch', remote, branch], {
+      cwd: repoPath,
+      timeout: 30_000,
+      env: NON_INTERACTIVE_GIT_ENV,
+    })
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     console.warn(`[git-ops] fetchSourceBranchAsync(${remote}/${branch}) failed: ${msg}`)

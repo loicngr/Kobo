@@ -73,3 +73,49 @@ describe('design system tokens', () => {
     ])
   })
 })
+
+describe('design system token references', () => {
+  const tokenSheet = readFileSync(join(CLIENT_ROOT, 'src/css/design-tokens.scss'), 'utf-8')
+  const globalSheet = readFileSync(join(CLIENT_ROOT, 'src/css/app.scss'), 'utf-8')
+  const definedTokens = new Set([...tokenSheet.matchAll(/--(kobo-[a-z0-9-]+)\s*:/g)].map((m) => m[1]))
+  const colourClasses = new Set([...globalSheet.matchAll(/'(kobo-[a-z0-9-]+)':/g)].map((m) => m[1]))
+
+  // A `var(--kobo-surface-1)` that does not exist is not an error anywhere:
+  // the browser drops the declaration and the element silently keeps whatever
+  // it inherited. Only a test can see it.
+  it('references only CSS variables that design-tokens.scss defines', () => {
+    const missing: string[] = []
+    for (const file of [...collectVueFiles(), join(CLIENT_ROOT, 'src/css/app.scss')]) {
+      const source = readFileSync(file, 'utf-8')
+      for (const m of source.matchAll(/var\(--(kobo-[a-z0-9-]+)/g)) {
+        if (!definedTokens.has(m[1]!)) missing.push(`${relative(CLIENT_ROOT, file)} → --${m[1]}`)
+      }
+    }
+    expect(missing).toEqual([])
+  })
+
+  it('uses only colour classes that the $kobo-colors map generates', () => {
+    const missing: string[] = []
+    for (const file of collectVueFiles()) {
+      const source = readFileSync(file, 'utf-8')
+      const used = [
+        ...source.matchAll(/\b(?:text|bg)-(kobo-[a-z0-9-]+)/g),
+        ...source.matchAll(/color="(kobo-[a-z0-9-]+)"/g),
+        ...source.matchAll(/`(?:text|bg)-\$\{[^}]*\}`/g),
+      ]
+      for (const m of used) {
+        const name = m[1]
+        if (name && !colourClasses.has(name)) missing.push(`${relative(CLIENT_ROOT, file)} → ${name}`)
+      }
+      // A file that builds `text-${x}` / `bg-${x}` at runtime feeds it string
+      // literals; those must be colour classes too. Elsewhere a 'kobo-…'
+      // literal is something else (a Monaco theme name, say).
+      if (/`(?:text|bg)-\$\{/.test(source)) {
+        for (const m of source.matchAll(/'(kobo-[a-z0-9-]+)'/g)) {
+          if (!colourClasses.has(m[1]!)) missing.push(`${relative(CLIENT_ROOT, file)} → '${m[1]}'`)
+        }
+      }
+    }
+    expect(missing).toEqual([])
+  })
+})

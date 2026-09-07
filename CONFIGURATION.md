@@ -9,6 +9,9 @@ Complete reference for every Kōbō setting, environment variable, and external 
 - [Settings UI](#settings-ui)
 - [Progressive Web App](#progressive-web-app)
 - [Custom change-source-branch script](#custom-change-source-branch-script)
+- [Lifecycle hooks](#lifecycle-hooks)
+- [Unanswered question reminder](#unanswered-question-reminder)
+- [Comparing two engines on one task](#comparing-two-engines-on-one-task)
 - [Auto-purge worktree on PR merged](#auto-purge-worktree-on-pr-merged)
 - [Network access](#network-access)
   - [Reachable addresses](#reachable-addresses)
@@ -320,6 +323,162 @@ The script can do anything: `git reset --hard`, force-push, delete files. The
 trust model is identical to `setupScript` / `cleanupScript` / `archiveScript`.
 Kōbō is a local single-user dev tool and the script is your own code.
 
+## Lifecycle hooks
+
+Three moments in a workspace's life can trigger a shell script of your own:
+a session ending, a PR being merged, auto-loop turning itself off. They join
+the scripts Kōbō already ran on setup, cleanup, archive and
+change-source-branch, and work exactly the same way.
+
+Each hook is **empty by default, which means disabled** — a hook runs arbitrary
+shell on your machine, so it only ever exists because you wrote it. Configure
+them in **Settings → Scripts**, globally or per project; an empty per-project
+value inherits the global one, like every other script.
+
+| Hook | Fires when | Settings key |
+|---|---|---|
+| Session ended | An agent session ends, for any reason: clean finish, error, a session that failed to start, the watchdog finding the engine dead, or you stopping it | `sessionEndedScript` |
+| PR merged | The PR watcher sees a PR go to MERGED | `prMergedScript` |
+| Auto-loop stopped | Auto-loop is disabled, by Kōbō **or by you** | `autoLoopDisabledScript` |
+
+Two ends never run the `Session ended` hook: a session replaced by a newer one
+on the same workspace (it did not end, it was superseded), and a session
+stopped by a **delete** or a **purge**, since the worktree the script would run
+in is being removed at that very moment.
+
+### Hook contract
+
+Each hook is spawned with `bash`, cwd = the workspace worktree, a **5 minute**
+timeout, and its output streamed live into the workspace feed under
+`hook:<event>:*`. The exit code is recorded but **never blocks the lifecycle
+transition** that triggered it: a failing hook is reported, not fatal. If the
+worktree is no longer on disk (purged, deleted by hand), the hook is skipped
+silently.
+
+### Hook environment variables
+
+Every hook gets the standard set: `WORKSPACE_ID`, `WORKSPACE_NAME`,
+`BRANCH_NAME`, `SOURCE_BRANCH`, `PROJECT_PATH`, plus `KOBO_HOOK_EVENT` naming
+the event. On top of that:
+
+| Hook | Extra variables |
+|---|---|
+| Session ended | `KOBO_SESSION_ID`, `KOBO_SESSION_END_REASON` (`completed` / `error` / `killed` / `watchdog`), `KOBO_SESSION_EXIT_CODE` (empty when the engine reports none), `KOBO_SESSION_STOP_CAUSE` (`user` when you stopped it, empty when it ended on its own), `KOBO_AUTOLOOP_ACTIVE` (`1` when auto-loop is about to start the next iteration, so a test run may overlap with the next agent's edits) |
+| PR merged | `KOBO_PR_NUMBER`, `KOBO_PR_URL` |
+| Auto-loop stopped | `KOBO_AUTOLOOP_REASON` (`completed` / `stall` / `error` / `user-action` / `awaiting-clarification`), `KOBO_TASKS_PENDING` |
+
+Only `KOBO_`-prefixed variables are passed through from the event; a hook
+payload can never replace `PATH`, `HOME` or the identity variables above.
+
+### Hook examples
+
+```bash
+# Session ended — run the suite, but only after a clean finish, and not
+# while auto-loop is already starting the next iteration in this worktree.
+[ "$KOBO_SESSION_END_REASON" = "completed" ] || exit 0
+[ "$KOBO_AUTOLOOP_ACTIVE" = "1" ] && exit 0
+npm test
+```
+
+```bash
+# PR merged — notify a chat channel.
+curl -fsS -X POST "$MY_WEBHOOK" \
+  -d "text=PR #${KOBO_PR_NUMBER} merged on ${WORKSPACE_NAME}: ${KOBO_PR_URL}"
+```
+
+```bash
+# Auto-loop stopped — only shout when it stalled, not when it finished.
+[ "$KOBO_AUTOLOOP_REASON" = "stall" ] || exit 0
+notify-send "Kobo" "$WORKSPACE_NAME stalled with $KOBO_TASKS_PENDING task(s) left"
+```
+
+### Ordering with archive and auto-purge
+
+The `PR merged` hook **starts while the worktree is still on disk**, before the
+workspace is archived. Archiving does not wait for it (archiving keeps the
+worktree, so there is nothing to protect); [auto-purge](#auto-purge-worktree-on-pr-merged)
+does wait, so a hook that deploys or tags from the worktree will not have the
+ground removed under it — at the cost of delaying the purge by however long the
+hook takes (capped by the 5 minute timeout), and of holding one of the PR
+watcher's four concurrent slots for that long.
+
+The hook also runs when an agent is still active in that workspace (the PR
+merged while it was working). A hook that deploys from the worktree may then
+pick up the agent's uncommitted changes; check `git status` first if that
+matters to you.
+
+### Hook trust model
+
+Identical to the other scripts: the hook can do anything your user can. Kōbō is
+a local single-user dev tool and the script is your own code.
+
+## Unanswered question reminder
+
+A workspace that asks you something sits in `awaiting-user` until you answer.
+The badge in the drawer says so, but only if you are looking at Kōbō. This
+reminds you.
+
+**Settings → Worktrees → Unanswered question reminder**, in minutes.
+**`0` is the default and means off** — it is your attention being spent.
+
+With a value of `10`, a workspace that has been waiting ten minutes triggers a
+reminder, then another ten minutes after each reminder until you answer.
+Changing the value applies from the next reminder. Answering (or the workspace
+leaving `awaiting-user` for any other reason) resets the clock. The loop looks
+once a minute, so a reminder lands within a minute of being due.
+
+The reminder is a browser notification plus the question sound, the same pair
+used when the question is first asked, and it is **broadcast to every open
+Kōbō client** rather than only the tab showing that workspace — the point is to
+reach you while you are looking at something else. As with any browser
+notification, it needs the tab to be open (though not focused) and the
+permission granted.
+
+Two consequences worth knowing:
+
+- The waiting clock lives in server memory, so restarting the server restarts
+  it. You get a later reminder, never a lost one.
+- However far behind the loop falls (a laptop waking from sleep, say), it sends
+  **one** reminder per pass, not one per missed interval.
+
+## Comparing two engines on one task
+
+Kōbō drives two agent runtimes. Which one does better on *your* code is an
+empirical question, and this answers it.
+
+On the create page, turn on **Compare two engines** and pick the engine to
+compare against. Creating then produces **two workspaces instead of one**, from
+the same task description, source branch and Notion/Sentry context:
+
+- names are suffixed with the engine (`Fix the parser (Claude Code)` and
+  `Fix the parser (Codex)`), both halves, so neither reads as the default one;
+- branches are suffixed with the engine id (`feature/fix-the-parser-claude-code`,
+  `feature/fix-the-parser-codex`), so each gets its own worktree;
+- each engine runs with the model, reasoning effort and permission mode set in
+  its own block (engine B's are pre-filled with that engine's defaults), since
+  a Codex model id means nothing to Claude Code and vice versa;
+- with auto-loop on, the brainstorm model and effort pickers are disabled: each
+  engine brainstorms on the model and effort of its own block, so both halves
+  start from the same footing.
+
+The two workspaces are created **one after the other**, not in parallel: each
+one fetches, branches and builds a worktree in the same repository, and two of
+those at once contend on the git index lock. If the second creation fails you
+are told so explicitly — the first workspace exists and is usable on its own.
+
+### Reading the result
+
+Both workspaces show an **Engine comparison** table at the top of their Git tab:
+engine, model, status, commits, files changed and diff size for each side, with
+a button to jump to the other one. The numbers come from the same git-stats
+cache the rest of the UI uses; the table reads it when it opens and on its
+refresh button, so a dash means "not measured yet", which is not the same claim
+as zero. When one half was never created (or was deleted), the table says so
+instead of showing a single row as if that were the whole comparison.
+
+From there, each side's actual diff is one click away in the Git tab it sits
+above.
+
 ## Auto-purge worktree on PR merged
 
 Purging a worktree frees its disk space (often hundreds of MB or GB worth of
@@ -417,6 +576,26 @@ first, and the dialog states how many of your recorded events the new window
 would delete. Note that the first run is the largest one: switching a year-old
 database to a 30-day window deletes eleven months in one go. Deleted events
 cannot be recovered, and the server logs how many each prune removed.
+
+## Concurrent agents
+
+`maxConcurrentAgents` (global, default `0` = no limit) caps how many agent
+sessions may run at once.
+
+Only unattended spawns respect it: the auto-loop is the one thing that starts
+sessions on its own, and ten workspaces waking together hammer the same rate
+limit, so each lands in its own backoff and nobody gets through. A session you
+start by hand always goes through, because you are standing right there.
+
+An auto-loop workspace that finds no free slot stays enabled and waits: the next
+session to end anywhere picks it up. It emits `autoloop:waiting-for-slot` so the
+interface can say so rather than looking stalled.
+
+The setting lives in `settings.json` under `global` and has no UI control yet:
+
+```json
+{ "global": { "maxConcurrentAgents": 3 } }
+```
 
 ## Network access
 

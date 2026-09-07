@@ -127,6 +127,7 @@
 </template>
 
 <script setup lang="ts">
+import { useQuasar } from 'quasar'
 import { useWebSocketStore } from 'src/stores/websocket'
 import type { Task, Workspace } from 'src/stores/workspace'
 import { useWorkspaceStore } from 'src/stores/workspace'
@@ -140,6 +141,7 @@ const props = defineProps<{
 }>()
 
 const { t } = useI18n()
+const $q = useQuasar()
 const store = useWorkspaceStore()
 const wsStore = useWebSocketStore()
 
@@ -260,6 +262,14 @@ async function toggleTask(task: Task) {
     store.fetchWorkspaceDetails(workspaceIdAtStart)
   } catch (err) {
     console.error('Failed to toggle task:', err)
+    // There is no optimistic update, so the checkbox never moved; without
+    // this the click simply did nothing, with no explanation at all.
+    $q.notify({
+      type: 'negative',
+      message: t('tasks.updateFailed'),
+      caption: err instanceof Error && err.message ? err.message : undefined,
+      position: 'top',
+    })
   }
 }
 

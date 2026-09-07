@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { renderPrTemplate } from '../server/services/pr-template-service.js'
-import type { Task, Workspace } from '../server/services/workspace-service.js'
+import type { Task } from '../server/services/workspace-service.js'
+import { makeWorkspace } from './helpers/fixtures.js'
 
-const baseWorkspace: Workspace = {
+const baseWorkspace = makeWorkspace({
   id: 'ws-1',
   name: 'Add auth flow',
   projectPath: '/home/user/projects/orion',
@@ -15,7 +16,7 @@ const baseWorkspace: Workspace = {
   devServerStatus: 'stopped',
   createdAt: '2026-04-05T10:00:00.000Z',
   updatedAt: '2026-04-05T10:00:00.000Z',
-}
+})
 
 function makeTask(overrides: Partial<Task> = {}): Task {
   return {

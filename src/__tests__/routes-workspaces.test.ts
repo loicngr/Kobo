@@ -56,6 +56,7 @@ vi.mock('../server/services/workspace-service.js', () => ({
   setInitialPrompt: vi.fn(),
   clearInitialPrompt: vi.fn(),
   recomputeSessionMetrics: vi.fn(),
+  listComparisonMembers: vi.fn(() => []),
 }))
 
 vi.mock('../server/services/worktree-service.js', () => ({
@@ -149,6 +150,7 @@ vi.mock('../server/utils/git-ops.js', async (importOriginal) => ({
   isValidBranchName: (await importOriginal<typeof import('../server/utils/git-ops.js')>()).isValidBranchName,
   slugifyBranchSegment: (await importOriginal<typeof import('../server/utils/git-ops.js')>()).slugifyBranchSegment,
   fetchSourceBranch: vi.fn(),
+  fetchSourceBranchOrThrowAsync: vi.fn(),
   localBranchExists: vi.fn(),
   deleteLocalBranch: vi.fn(),
   deleteRemoteBranch: vi.fn(),
@@ -157,6 +159,13 @@ vi.mock('../server/utils/git-ops.js', async (importOriginal) => ({
   fetchAllBranches: vi.fn(),
   rebaseBranch: vi.fn(),
   mergeBranch: vi.fn(),
+  // The HTTP handlers moved to the async variants: execFileSync on a request
+  // path blocked the event loop for up to the 60 s git timeout.
+  pushBranchAsync: vi.fn(),
+  pullBranchAsync: vi.fn(),
+  fetchAllBranchesAsync: vi.fn(),
+  rebaseBranchAsync: vi.fn(),
+  mergeBranchAsync: vi.fn(),
   continueOngoingGitOperation: vi.fn(),
   getConflictedFiles: vi.fn(),
   commitAllChanges: vi.fn(),
@@ -345,6 +354,8 @@ import * as devServerService from '../server/services/dev-server-service.js'
 import * as fileEditorService from '../server/services/file-editor-service.js'
 import { getForgeProvider } from '../server/services/forge/registry.js'
 import * as notionService from '../server/services/notion-service.js'
+import * as prWatcher from '../server/services/pr-watcher-service.js'
+import type { EffectiveSettings } from '../server/services/settings-service.js'
 import * as settingsService from '../server/services/settings-service.js'
 import * as setupScriptService from '../server/services/setup-script-service.js'
 import * as wakeupService from '../server/services/wakeup-service.js'
@@ -352,6 +363,13 @@ import * as wsService from '../server/services/websocket-service.js'
 import * as workspaceService from '../server/services/workspace-service.js'
 import * as worktreeService from '../server/services/worktree-service.js'
 import * as gitOps from '../server/utils/git-ops.js'
+import {
+  makeEffectiveSettings,
+  makeGlobalSettings,
+  makeProjectSettings,
+  makeWorkspace,
+  makeWorkspaceWithTasks,
+} from './helpers/fixtures.js'
 
 // ── App setup ────────────────────────────────────────────────────────────────
 
@@ -360,43 +378,9 @@ app.route('/api/workspaces', router)
 
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
-const fakeWorkspace = {
-  id: 'ws-1',
-  name: 'Test Workspace',
-  projectPath: '/tmp/project',
-  sourceBranch: 'main',
-  workingBranch: 'feature/test',
-  worktreePath: '/tmp/project/.worktrees/feature/test',
-  worktreeOwned: true,
-  status: 'idle' as const,
-  notionUrl: null,
-  notionPageId: null,
-  model: 'claude-opus-4-6',
-  brainstormModel: null,
-  reasoningEffort: 'auto',
-  agentPermissionMode: 'bypass' as const,
-  devServerStatus: 'stopped',
-  hasUnread: false,
-  archivedAt: null,
-  createdAt: '2026-01-01T00:00:00.000Z',
-  updatedAt: '2026-01-01T00:00:00.000Z',
-}
+const fakeWorkspace = makeWorkspace()
 
-const fakeWorkspaceWithTasks = {
-  ...fakeWorkspace,
-  tasks: [
-    {
-      id: 'task-1',
-      workspaceId: 'ws-1',
-      title: 'Task 1',
-      status: 'pending' as const,
-      isAcceptanceCriterion: false,
-      sortOrder: 0,
-      createdAt: '2026-01-01T00:00:00.000Z',
-      updatedAt: '2026-01-01T00:00:00.000Z',
-    },
-  ],
-}
+const fakeWorkspaceWithTasks = makeWorkspaceWithTasks({ ...fakeWorkspace })
 
 const fakeSession = {
   id: 'sess-1',
@@ -412,41 +396,43 @@ const fakeSession = {
 beforeEach(() => {
   vi.clearAllMocks()
   // fetchSourceBranch succeeds by default; individual tests can override.
-  vi.mocked(gitOps.fetchSourceBranch).mockReturnValue(undefined)
+  vi.mocked(gitOps.fetchSourceBranchOrThrowAsync).mockResolvedValue(undefined)
   // Reset the async-fetch default (clearAllMocks wipes call history but some
   // tests below override with mockResolvedValueOnce — re-pin the baseline so
   // every test sees a resolved promise unless it explicitly opts in).
   vi.mocked(gitOps.fetchSourceBranchAsync).mockResolvedValue(undefined)
-  vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-    model: 'auto',
-    dangerouslySkipPermissions: true,
-    prPromptTemplate: '',
-    gitConventions: '',
-    sourceBranch: 'main',
-    devServer: null,
-    setupScript: '',
-    notionStatusProperty: '',
-    notionInProgressStatus: '',
-  })
-  vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
-    defaultModel: 'auto',
-    dangerouslySkipPermissions: true,
-    prPromptTemplate: '',
-    gitConventions: '',
-    editorCommand: '',
-    browserNotifications: true,
-    audioNotifications: true,
-    notionStatusProperty: '',
-    notionInProgressStatus: '',
-    defaultPermissionMode: 'plan',
-    notionMcpKey: '',
-    sentryMcpKey: '',
-    notionEnabled: true,
-    sentryEnabled: true,
-    tags: [],
-    worktreesPath: '.worktrees',
-    worktreesPrefixByProject: false,
-  })
+  vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+    makeEffectiveSettings({
+      model: 'auto',
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      gitConventions: '',
+      sourceBranch: 'main',
+      devServer: null,
+      setupScript: '',
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
+    }),
+  )
+  vi.mocked(settingsService.getGlobalSettings).mockReturnValue(
+    makeGlobalSettings({
+      dangerouslySkipPermissions: true,
+      prPromptTemplate: '',
+      gitConventions: '',
+      editorCommand: '',
+      browserNotifications: true,
+      audioNotifications: true,
+      notionStatusProperty: '',
+      notionInProgressStatus: '',
+      notionMcpKey: '',
+      sentryMcpKey: '',
+      notionEnabled: true,
+      sentryEnabled: true,
+      tags: [],
+      worktreesPath: '.worktrees',
+      worktreesPrefixByProject: false,
+    }),
+  )
   vi.mocked(workspaceService.updateWorkspaceFields).mockImplementation((_id, fields) => ({
     ...fakeWorkspace,
     ...fields,
@@ -767,17 +753,19 @@ describe('POST /api/workspaces', () => {
       branchCreated: true,
     })
     vi.mocked(workspaceService.listTasks).mockReturnValue([])
-    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-      model: 'auto',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      gitConventions: '',
-      sourceBranch: 'main',
-      devServer: null,
-      setupScript: '#!/bin/bash\necho setting up',
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-    })
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '#!/bin/bash\necho setting up',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
     vi.mocked(setupScriptService.runSetupScript).mockResolvedValue({ exitCode: 0 })
     vi.mocked(agentManager.startAgent).mockImplementationOnce(() => {
       throw new Error('engine handshake timed out')
@@ -848,9 +836,7 @@ describe('POST /api/workspaces', () => {
     // module-wide default of `false` for their own `resolveUniqueBranchAndPath`
     // disk checks (see branch-resolver.ts).
     vi.mocked(fs.existsSync).mockReturnValueOnce(true)
-    vi.mocked(execFileSync)
-      .mockReturnValueOnce('/tmp/project/.git' as unknown as Buffer)
-      .mockReturnValueOnce('feature/reused' as unknown as Buffer)
+    vi.mocked(execFileSync).mockReturnValueOnce('/tmp/project/.git').mockReturnValueOnce('feature/reused')
     vi.mocked(agentManager.startAgent).mockImplementationOnce(() => {
       throw new Error('claude: command not found')
     })
@@ -902,27 +888,28 @@ describe('POST /api/workspaces', () => {
   })
 
   it('creates new workspaces under the configured global worktrees path', async () => {
-    vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
-      defaultModel: 'auto',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      gitConventions: '',
-      editorCommand: '',
-      browserNotifications: true,
-      audioNotifications: true,
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-      defaultPermissionMode: 'plan',
-      notionMcpKey: '',
-      sentryMcpKey: '',
-      tags: [],
-      worktreesPath: '$HOME/kobo/worktress',
-      worktreesPrefixByProject: false,
-    })
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue(
+      makeGlobalSettings({
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        editorCommand: '',
+        browserNotifications: true,
+        audioNotifications: true,
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+        notionMcpKey: '',
+        sentryMcpKey: '',
+        tags: [],
+        worktreesPath: '$HOME/kobo/worktress',
+        worktreesPrefixByProject: false,
+      }),
+    )
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
     vi.mocked(worktreeService.createWorktree).mockReturnValue({
       worktreePath: '/home/test/kobo/worktress/feature/test',
       base: 'origin',
+      branchCreated: true,
     })
     vi.mocked(workspaceService.listTasks).mockReturnValue([])
     vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
@@ -1022,7 +1009,7 @@ describe('POST /api/workspaces', () => {
     vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
 
     const callOrder: string[] = []
-    vi.mocked(gitOps.fetchSourceBranch).mockImplementation(() => {
+    vi.mocked(gitOps.fetchSourceBranchOrThrowAsync).mockImplementation(async () => {
       callOrder.push('fetchSourceBranch')
     })
     vi.mocked(workspaceService.createWorkspace).mockImplementation(() => {
@@ -1043,11 +1030,11 @@ describe('POST /api/workspaces', () => {
 
     expect(res.status).toBe(201)
     expect(callOrder).toEqual(['fetchSourceBranch', 'createWorkspace'])
-    expect(gitOps.fetchSourceBranch).toHaveBeenCalledWith('/tmp/project', 'main')
+    expect(gitOps.fetchSourceBranchOrThrowAsync).toHaveBeenCalledWith('/tmp/project', 'main')
   })
 
   it('returns 422 when fetchSourceBranch fails, without creating any workspace record', async () => {
-    vi.mocked(gitOps.fetchSourceBranch).mockImplementation(() => {
+    vi.mocked(gitOps.fetchSourceBranchOrThrowAsync).mockImplementation(async () => {
       throw new Error("Failed to fetch 'main' from 'origin': fatal: no remote")
     })
 
@@ -1070,7 +1057,7 @@ describe('POST /api/workspaces', () => {
 
   it('bases the worktree on origin and sets no fallback header when fetch succeeds', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(gitOps.fetchSourceBranch).mockImplementation(() => {})
+    vi.mocked(gitOps.fetchSourceBranchOrThrowAsync).mockImplementation(async () => {})
     vi.mocked(worktreeService.createWorktree).mockReturnValue({
       worktreePath: '/tmp/wt',
       base: 'origin',
@@ -1103,7 +1090,7 @@ describe('POST /api/workspaces', () => {
 
   it('falls back to the local branch and sets the header when origin fetch fails but the local branch exists', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(gitOps.fetchSourceBranch).mockImplementation(() => {
+    vi.mocked(gitOps.fetchSourceBranchOrThrowAsync).mockImplementation(async () => {
       throw new Error('no origin')
     })
     vi.mocked(gitOps.localBranchExists).mockReturnValue(true)
@@ -1138,7 +1125,7 @@ describe('POST /api/workspaces', () => {
   })
 
   it('returns 422 when origin fetch fails and no local branch exists', async () => {
-    vi.mocked(gitOps.fetchSourceBranch).mockImplementation(() => {
+    vi.mocked(gitOps.fetchSourceBranchOrThrowAsync).mockImplementation(async () => {
       throw new Error('no origin')
     })
     vi.mocked(gitOps.localBranchExists).mockReturnValue(false)
@@ -1161,7 +1148,7 @@ describe('POST /api/workspaces', () => {
   })
 
   it('does not block reuse of an existing worktree when origin fetch fails', async () => {
-    vi.mocked(gitOps.fetchSourceBranch).mockImplementation(() => {
+    vi.mocked(gitOps.fetchSourceBranchOrThrowAsync).mockImplementation(async () => {
       throw new Error('no origin')
     })
     vi.mocked(gitOps.localBranchExists).mockReturnValue(false)
@@ -1291,17 +1278,19 @@ describe('POST /api/workspaces', () => {
     })
     vi.mocked(workspaceService.listTasks).mockReturnValue([])
     vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
-    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-      model: 'claude-opus-4-6',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      gitConventions: '',
-      sourceBranch: 'main',
-      devServer: null,
-      setupScript: '#!/bin/bash\necho "ok"',
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-    })
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'claude-opus-4-6',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '#!/bin/bash\necho "ok"',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
     vi.mocked(setupScriptService.runSetupScript).mockResolvedValue({ exitCode: 0 })
 
     const res = await app.request('/api/workspaces', {
@@ -1328,17 +1317,19 @@ describe('POST /api/workspaces', () => {
     })
     vi.mocked(workspaceService.listTasks).mockReturnValue([])
     vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
-    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-      model: 'claude-opus-4-6',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      gitConventions: '',
-      sourceBranch: 'main',
-      devServer: null,
-      setupScript: '#!/bin/bash\nexit 1',
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-    })
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'claude-opus-4-6',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '#!/bin/bash\nexit 1',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
     vi.mocked(setupScriptService.runSetupScript).mockResolvedValue({ exitCode: 1 })
 
     const res = await app.request('/api/workspaces', {
@@ -1367,17 +1358,19 @@ describe('POST /api/workspaces', () => {
     })
     vi.mocked(workspaceService.listTasks).mockReturnValue([])
     vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
-    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-      model: 'claude-opus-4-6',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      gitConventions: '',
-      sourceBranch: 'main',
-      devServer: null,
-      setupScript: '#!/bin/bash\nexit 1',
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-    })
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'claude-opus-4-6',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '#!/bin/bash\nexit 1',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
     vi.mocked(setupScriptService.runSetupScript).mockResolvedValue({ exitCode: 1 })
 
     const res = await app.request('/api/workspaces', {
@@ -1587,9 +1580,10 @@ describe('POST /api/workspaces', () => {
       body: 'not json at all',
     })
 
-    expect(res.status).toBe(500)
+    // A malformed body is the caller's mistake, not ours: 400, not a 500
+    // leaking the JSON parser's own message.
+    expect(res.status).toBe(400)
     const data = await res.json()
-    expect(data.step).toBe('validate')
     // Nothing existed yet: the response must not claim an undo that never
     // happened, and no demolition may run.
     expect(data.rollback).toBeUndefined()
@@ -1605,17 +1599,19 @@ describe('POST /api/workspaces', () => {
     })
     vi.mocked(workspaceService.listTasks).mockReturnValue([])
     vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
-    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-      model: 'claude-opus-4-6',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      gitConventions: '',
-      sourceBranch: 'main',
-      devServer: null,
-      setupScript: '',
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-    })
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'claude-opus-4-6',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
 
     const res = await app.request('/api/workspaces', {
       method: 'POST',
@@ -1866,22 +1862,24 @@ describe('POST /api/workspaces — Notion/Sentry initial prompt injection', () =
   const DEFAULT_NOTION =
     'For the Notion ticket {ticket_id}, systematically explore the linked sub-pages (sub-tickets, references, linked blocks) and enrich the local file {notion_file_path} with all relevant information you find before starting the work.'
 
-  function mockEffectiveSettings(overrides: Record<string, unknown>) {
-    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-      model: 'auto',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      reviewPromptTemplate: '',
-      gitConventions: '',
-      sourceBranch: 'main',
-      devServer: null,
-      setupScript: '',
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-      notionInitialPromptTemplate: '',
-      sentryInitialPromptTemplate: '',
-      ...overrides,
-    } as never)
+  function mockEffectiveSettings(overrides: Partial<EffectiveSettings>) {
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        reviewPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+        notionInitialPromptTemplate: '',
+        sentryInitialPromptTemplate: '',
+        ...overrides,
+      }),
+    )
   }
 
   function mockNotionExtraction(opts: { ticketId: string }) {
@@ -1995,6 +1993,78 @@ describe('POST /api/workspaces — Notion/Sentry initial prompt injection', () =
     expect(prompt).toContain('filter by tag\n\nCUSTOM_SENTRY ACME-API-3\n')
     // Notion absent → no notion render either.
     expect(prompt).not.toContain('Notion ticket:')
+  })
+
+  it('keeps the engine suffix when a comparison workspace takes the Sentry title', async () => {
+    commonHappyPathMocks()
+    // The shared mock answers `workspace`; this row was created with the
+    // comparison placeholder, suffix included.
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue({ ...fakeWorkspace, name: 'workspace (OpenAI Codex)' })
+    await mockSentryExtraction({ issueId: 'ACME-API-3' })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace (OpenAI Codex)',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/task-1-codex',
+        engine: 'codex',
+        comparisonId: 'cmp_1',
+        sentryUrl: 'https://my-org.sentry.io/issues/42/',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    expect(workspaceService.updateWorkspaceName).toHaveBeenCalledWith(
+      expect.anything(),
+      'ACME-API-3 | crash (OpenAI Codex)',
+    )
+  })
+
+  it('keeps the engine suffix on the branch when the Sentry rewrite renames it', async () => {
+    commonHappyPathMocks()
+    await mockSentryExtraction({ issueId: 'ACME-API-3' })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'workspace (OpenAI Codex)',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/task-1-codex',
+        engine: 'codex',
+        comparisonId: 'cmp_1',
+        sentryUrl: 'https://my-org.sentry.io/issues/42/',
+      }),
+    })
+
+    expect(res.status).toBe(201)
+    // Without the suffix both halves of the comparison collapse onto the same
+    // branch and the second one gets a random `-HASH` instead of its engine.
+    const created = vi.mocked(workspaceService.createWorkspace).mock.calls[0]?.[0]
+    expect(created?.workingBranch).toBe('feature/ACME-API-3--crash-codex')
+  })
+
+  it('rejects a comparison id that is not a string', async () => {
+    commonHappyPathMocks()
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'x',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/x',
+        comparisonId: { nope: true },
+      }),
+    })
+
+    expect(res.status).toBe(400)
+    expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
   })
 
   it('truncates an overlong Sentry issue title instead of failing workspace creation', async () => {
@@ -3029,7 +3099,7 @@ describe('DELETE /api/workspaces/:id', () => {
     })
 
     expect(res.status).toBe(204)
-    expect(agentManager.stopAgentAndWait).toHaveBeenCalledWith('ws-1')
+    expect(agentManager.stopAgentAndWait).toHaveBeenCalledWith('ws-1', undefined, 'delete')
     expect(worktreeService.removeWorktree).toHaveBeenCalledWith('/tmp/project', '/tmp/project/.worktrees/feature/test')
     expect(gitOps.deleteLocalBranch).toHaveBeenCalledWith('/tmp/project', 'feature/test')
     expect(gitOps.deleteRemoteBranch).toHaveBeenCalledWith('/tmp/project', 'feature/test')
@@ -3051,7 +3121,7 @@ describe('DELETE /api/workspaces/:id', () => {
       callOrder.push('stopAgentAndWait:done')
       return 'stopped'
     })
-    vi.mocked(worktreeService.removeWorktree).mockImplementation(() => {
+    vi.mocked(worktreeService.removeWorktree).mockImplementation(async () => {
       callOrder.push('removeWorktree')
     })
 
@@ -3102,7 +3172,7 @@ describe('DELETE /api/workspaces/:id', () => {
     // DB row gone, but the user needs to know the directory wasn't cleaned
     // up and how to fix it manually.
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(worktreeService.removeWorktree).mockImplementation(() => {
+    vi.mocked(worktreeService.removeWorktree).mockImplementation(async () => {
       throw new Error("Failed to remove worktree '/tmp/project/.worktrees/feature/test': EACCES: permission denied")
     })
 
@@ -3228,17 +3298,19 @@ describe('git conventions file creation on workspace create', () => {
   })
 
   it('writes .ai/.git-conventions.md when gitConventions is non-empty', async () => {
-    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-      model: 'auto',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      gitConventions: '# My conventions\n- Rule 1',
-      sourceBranch: 'main',
-      devServer: null,
-      setupScript: '',
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-    })
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '# My conventions\n- Rule 1',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
 
     await app.request('/api/workspaces', {
       method: 'POST',
@@ -3259,17 +3331,19 @@ describe('git conventions file creation on workspace create', () => {
   })
 
   it('does NOT write the file when gitConventions is empty', async () => {
-    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-      model: 'auto',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      gitConventions: '',
-      sourceBranch: 'main',
-      devServer: null,
-      setupScript: '',
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-    })
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
 
     await app.request('/api/workspaces', {
       method: 'POST',
@@ -3289,17 +3363,19 @@ describe('git conventions file creation on workspace create', () => {
   })
 
   it('includes the git conventions section in the agent prompt when non-empty', async () => {
-    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-      model: 'auto',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      gitConventions: '# conventions',
-      sourceBranch: 'main',
-      devServer: null,
-      setupScript: '',
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-    })
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '# conventions',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
 
     await app.request('/api/workspaces', {
       method: 'POST',
@@ -3320,17 +3396,19 @@ describe('git conventions file creation on workspace create', () => {
   })
 
   it('does NOT include the git conventions section when empty', async () => {
-    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-      model: 'auto',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      gitConventions: '',
-      sourceBranch: 'main',
-      devServer: null,
-      setupScript: '',
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-    })
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
 
     await app.request('/api/workspaces', {
       method: 'POST',
@@ -3353,7 +3431,7 @@ describe('POST /api/workspaces/:id/push', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     // Reset pushBranch implementation so a previous test's throw doesn't leak
-    vi.mocked(gitOps.pushBranch).mockReset()
+    vi.mocked(gitOps.pushBranchAsync).mockReset()
   })
 
   it('pushes the branch and returns 200', async () => {
@@ -3369,7 +3447,10 @@ describe('POST /api/workspaces/:id/push', () => {
     const data = await res.json()
     expect(data.ok).toBe(true)
     expect(data.branch).toBe('feature/test')
-    expect(vi.mocked(gitOps.pushBranch)).toHaveBeenCalledWith(expect.stringContaining('.worktrees'), 'feature/test')
+    expect(vi.mocked(gitOps.pushBranchAsync)).toHaveBeenCalledWith(
+      expect.stringContaining('.worktrees'),
+      'feature/test',
+    )
   })
 
   it('returns 404 when workspace not found', async () => {
@@ -3386,7 +3467,7 @@ describe('POST /api/workspaces/:id/push', () => {
       workingBranch: 'feature/test',
       projectPath: '/tmp/project',
     } as never)
-    vi.mocked(gitOps.pushBranch).mockImplementation(() => {
+    vi.mocked(gitOps.pushBranchAsync).mockImplementation(() => {
       throw new Error('remote rejected: non-fast-forward')
     })
 
@@ -3423,7 +3504,7 @@ describe('POST /api/workspaces/:id/push', () => {
 describe('POST /api/workspaces/:id/fetch', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.mocked(gitOps.fetchAllBranches).mockReset()
+    vi.mocked(gitOps.fetchAllBranchesAsync).mockReset()
   })
 
   it('fetches the workspace repo and returns 200', async () => {
@@ -3431,19 +3512,19 @@ describe('POST /api/workspaces/:id/fetch', () => {
     const res = await app.request('/api/workspaces/ws-1/fetch', { method: 'POST' })
     expect(res.status).toBe(200)
     expect((await res.json()).ok).toBe(true)
-    expect(vi.mocked(gitOps.fetchAllBranches)).toHaveBeenCalledWith(expect.stringContaining('.worktrees'))
+    expect(vi.mocked(gitOps.fetchAllBranchesAsync)).toHaveBeenCalledWith(expect.stringContaining('.worktrees'))
   })
 
   it('returns 404 when workspace not found', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(null as never)
     const res = await app.request('/api/workspaces/unknown/fetch', { method: 'POST' })
     expect(res.status).toBe(404)
-    expect(vi.mocked(gitOps.fetchAllBranches)).not.toHaveBeenCalled()
+    expect(vi.mocked(gitOps.fetchAllBranchesAsync)).not.toHaveBeenCalled()
   })
 
   it('returns 500 when the fetch fails', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...fakeWorkspace } as never)
-    vi.mocked(gitOps.fetchAllBranches).mockImplementation(() => {
+    vi.mocked(gitOps.fetchAllBranchesAsync).mockImplementation(() => {
       throw new Error('no remote configured')
     })
     const res = await app.request('/api/workspaces/ws-1/fetch', { method: 'POST' })
@@ -3454,7 +3535,7 @@ describe('POST /api/workspaces/:id/fetch', () => {
 describe('POST /api/workspaces/:id/pull', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.mocked(gitOps.pullBranch).mockReset()
+    vi.mocked(gitOps.pullBranchAsync).mockReset()
   })
 
   it('pulls the branch and returns 200', async () => {
@@ -3470,7 +3551,7 @@ describe('POST /api/workspaces/:id/pull', () => {
     const data = await res.json()
     expect(data.ok).toBe(true)
     expect(data.branch).toBe('feature/test')
-    expect(vi.mocked(gitOps.pullBranch)).toHaveBeenCalledWith(
+    expect(vi.mocked(gitOps.pullBranchAsync)).toHaveBeenCalledWith(
       expect.stringContaining('.worktrees'),
       'feature/test',
       'origin',
@@ -3490,7 +3571,7 @@ describe('POST /api/workspaces/:id/pull', () => {
       workingBranch: 'feature/test',
       projectPath: '/tmp/project',
     } as never)
-    vi.mocked(gitOps.pullBranch).mockImplementation(() => {
+    vi.mocked(gitOps.pullBranchAsync).mockImplementation(() => {
       throw new gitOps.DirtyWorktreeError('pull', { staged: 0, modified: 2, untracked: 0 })
     })
 
@@ -3509,12 +3590,12 @@ describe('POST /api/workspaces/:id/pull', () => {
       workingBranch: 'feature/test',
       projectPath: '/tmp/project',
     } as never)
-    vi.mocked(gitOps.pullBranch).mockReturnValue(undefined)
+    vi.mocked(gitOps.pullBranchAsync).mockResolvedValue(undefined)
 
     const res = await app.request('/api/workspaces/ws-1/pull?autostash=1', { method: 'POST' })
 
     expect(res.status).toBe(200)
-    expect(vi.mocked(gitOps.pullBranch)).toHaveBeenCalledWith(
+    expect(vi.mocked(gitOps.pullBranchAsync)).toHaveBeenCalledWith(
       expect.stringContaining('.worktrees'),
       'feature/test',
       'origin',
@@ -3530,7 +3611,7 @@ describe('POST /api/workspaces/:id/pull', () => {
       workingBranch: 'feature/test',
       projectPath: '/tmp/project',
     } as never)
-    vi.mocked(gitOps.pullBranch).mockImplementation(() => {
+    vi.mocked(gitOps.pullBranchAsync).mockImplementation(() => {
       throw new Error('Not possible to fast-forward, aborting.')
     })
 
@@ -3678,17 +3759,19 @@ describe('POST /api/workspaces/:id/open-pr', () => {
   })
 
   it('creates PR, renders template, sends message on happy path', async () => {
-    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-      model: 'auto',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: 'template body',
-      gitConventions: '',
-      sourceBranch: 'main',
-      devServer: null,
-      setupScript: '',
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-    })
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: 'template body',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
 
     createPrMock.mockResolvedValueOnce({ url: 'https://github.com/org/repo/pull/42', number: 42 })
 
@@ -3717,17 +3800,19 @@ describe('POST /api/workspaces/:id/open-pr', () => {
   })
 
   it('returns messageSent: false when template is empty (PR still created)', async () => {
-    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-      model: 'auto',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      gitConventions: '',
-      sourceBranch: 'main',
-      devServer: null,
-      setupScript: '',
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-    })
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
 
     createPrMock.mockResolvedValueOnce({ url: 'https://github.com/org/repo/pull/42', number: 42 })
 
@@ -3741,17 +3826,19 @@ describe('POST /api/workspaces/:id/open-pr', () => {
   })
 
   it('returns 500 when createPr fails', async () => {
-    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-      model: 'auto',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      gitConventions: '',
-      sourceBranch: 'main',
-      devServer: null,
-      setupScript: '',
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-    })
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
 
     createPrMock.mockRejectedValueOnce(new Error('auth required'))
 
@@ -3779,17 +3866,19 @@ describe('POST /api/workspaces/:id/open-pr', () => {
   })
 
   it('resumes agent when lifecycle-safe delivery reports stopped (PR already created)', async () => {
-    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-      model: 'auto',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: 'template',
-      gitConventions: '',
-      sourceBranch: 'main',
-      devServer: null,
-      setupScript: '',
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-    })
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: 'template',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
 
     createPrMock.mockResolvedValueOnce({ url: 'https://github.com/org/repo/pull/42', number: 42 })
 
@@ -3814,17 +3903,19 @@ describe('POST /api/workspaces/:id/open-pr', () => {
   })
 
   it('keeps the created PR response without a ghost prompt when lifecycle-safe delivery rejects', async () => {
-    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-      model: 'auto',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: 'template',
-      gitConventions: '',
-      sourceBranch: 'main',
-      devServer: null,
-      setupScript: '',
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-    })
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: 'template',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
     createPrMock.mockResolvedValueOnce({ url: 'https://github.com/org/repo/pull/42', number: 42 })
     vi.mocked(agentManager.sendMessageForFallback).mockRejectedValueOnce(new Error('replacement rejected'))
 
@@ -4086,7 +4177,7 @@ describe('GET /:id/git-stats — extended', () => {
     const responsePromise = app.request('/api/workspaces/ws-1/git-stats?freshFetch=1')
     await new Promise((r) => setImmediate(r))
     const settled = await Promise.race([
-      responsePromise.then(() => 'response'),
+      Promise.resolve(responsePromise).then(() => 'response'),
       new Promise((r) => setTimeout(() => r('timeout'), 50)),
     ])
     expect(settled).toBe('timeout')
@@ -4158,15 +4249,17 @@ describe('POST /api/workspaces/:id/run-setup-script', () => {
 
   it('runs setup script and returns success when exit code is 0', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-      model: 'auto',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      gitConventions: '',
-      sourceBranch: 'main',
-      devServer: null,
-      setupScript: 'echo "hello"',
-    })
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: 'echo "hello"',
+      }),
+    )
     vi.mocked(fs.existsSync).mockReturnValue(true)
     vi.mocked(setupScriptService.runSetupScript).mockResolvedValue({ exitCode: 0 })
 
@@ -4190,15 +4283,17 @@ describe('POST /api/workspaces/:id/run-setup-script', () => {
 
   it('returns 500 when setup script fails with non-zero exit code', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-      model: 'auto',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      gitConventions: '',
-      sourceBranch: 'main',
-      devServer: null,
-      setupScript: 'exit 1',
-    })
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: 'exit 1',
+      }),
+    )
     vi.mocked(fs.existsSync).mockReturnValue(true)
     vi.mocked(setupScriptService.runSetupScript).mockResolvedValue({ exitCode: 1 })
 
@@ -4211,17 +4306,19 @@ describe('POST /api/workspaces/:id/run-setup-script', () => {
 
   it('returns 400 when no setup script is configured', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-      model: 'auto',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      gitConventions: '',
-      sourceBranch: 'main',
-      devServer: null,
-      setupScript: '',
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-    })
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
 
     const res = await app.request('/api/workspaces/ws-1/run-setup-script', { method: 'POST' })
 
@@ -4240,15 +4337,17 @@ describe('POST /api/workspaces/:id/run-setup-script', () => {
 
   it('returns 400 when worktree path does not exist', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-      model: 'auto',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      gitConventions: '',
-      sourceBranch: 'main',
-      devServer: null,
-      setupScript: 'echo "hello"',
-    })
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: 'echo "hello"',
+      }),
+    )
     vi.mocked(fs.existsSync).mockReturnValue(false)
 
     const res = await app.request('/api/workspaces/ws-1/run-setup-script', { method: 'POST' })
@@ -5324,34 +5423,36 @@ describe('POST /api/workspaces — pre-flight URL validation', () => {
       extraContext: '',
       assignee: '',
     })
-    vi.mocked(wsService.createWorkspace).mockReturnValue({
-      id: 'ws-new',
-      name: 'doomed',
-      projectPath: '/tmp/proj',
-      sourceBranch: 'main',
-      workingBranch: 'feat/x',
-      status: 'created',
-      notionUrl: 'https://www.notion.so/x',
-      notionPageId: null,
-      sentryUrl: 'https://my-org.sentry.io/issues/42/',
-      model: 'claude-opus-4-7',
-      reasoningEffort: 'auto',
-      agentPermissionMode: 'bypass',
-      devServerStatus: 'stopped',
-      hasUnread: false,
-      archivedAt: null,
-      favoritedAt: null,
-      tags: [],
-      engine: 'claude-code',
-      autoLoop: false,
-      autoLoopReady: false,
-      noProgressStreak: 0,
-      // legacy field removed
-      worktreePath: '/tmp/proj/.worktrees/feat/x',
-      worktreeOwned: true,
-      createdAt: '2026-01-01',
-      updatedAt: '2026-01-01',
-    })
+    vi.mocked(wsService.createWorkspace).mockReturnValue(
+      makeWorkspace({
+        id: 'ws-new',
+        name: 'doomed',
+        projectPath: '/tmp/proj',
+        sourceBranch: 'main',
+        workingBranch: 'feat/x',
+        status: 'created',
+        notionUrl: 'https://www.notion.so/x',
+        notionPageId: null,
+        sentryUrl: 'https://my-org.sentry.io/issues/42/',
+        model: 'claude-opus-4-7',
+        reasoningEffort: 'auto',
+        agentPermissionMode: 'bypass',
+        devServerStatus: 'stopped',
+        hasUnread: false,
+        archivedAt: null,
+        favoritedAt: null,
+        tags: [],
+        engine: 'claude-code',
+        autoLoop: false,
+        autoLoopReady: false,
+        noProgressStreak: 0,
+        // legacy field removed
+        worktreePath: '/tmp/proj/.worktrees/feat/x',
+        worktreeOwned: true,
+        createdAt: '2026-01-01',
+        updatedAt: '2026-01-01',
+      }),
+    )
 
     await app.request('/api/workspaces', {
       method: 'POST',
@@ -5437,34 +5538,36 @@ describe('POST /api/workspaces — pre-flight URL validation', () => {
 describe('POST /api/workspaces — reuse existing worktree', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.mocked(gitOps.fetchSourceBranch).mockReturnValue(undefined)
-    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-      model: 'auto',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      gitConventions: '',
-      sourceBranch: 'main',
-      devServer: null,
-      setupScript: '',
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-    })
-    vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
-      defaultModel: 'auto',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      gitConventions: '',
-      editorCommand: '',
-      browserNotifications: true,
-      audioNotifications: true,
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-      defaultPermissionMode: 'plan',
-      notionMcpKey: '',
-      sentryMcpKey: '',
-      tags: [],
-      worktreesPath: '.worktrees',
-    })
+    vi.mocked(gitOps.fetchSourceBranchOrThrowAsync).mockResolvedValue(undefined)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue(
+      makeGlobalSettings({
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        editorCommand: '',
+        browserNotifications: true,
+        audioNotifications: true,
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+        notionMcpKey: '',
+        sentryMcpKey: '',
+        tags: [],
+        worktreesPath: '.worktrees',
+      }),
+    )
   })
 
   it('returns 422 when worktreePath does not exist on disk', async () => {
@@ -5586,17 +5689,19 @@ describe('POST /api/workspaces — reuse existing worktree', () => {
     vi.mocked(workspaceService.listTasks).mockReturnValue([])
     vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
     // setup script configured — must still be skipped because of useReusedWorktree
-    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-      model: 'claude-opus-4-6',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      gitConventions: '',
-      sourceBranch: 'main',
-      devServer: null,
-      setupScript: '#!/bin/bash\necho "ok"',
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-    })
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'claude-opus-4-6',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '#!/bin/bash\necho "ok"',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
 
     const res = await app.request('/api/workspaces', {
       method: 'POST',
@@ -5626,37 +5731,39 @@ describe('POST /api/workspaces — reuse existing worktree', () => {
 describe('POST /api/workspaces — PR context extraction', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    vi.mocked(gitOps.fetchSourceBranch).mockReturnValue(undefined)
-    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-      model: 'auto',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      gitConventions: '',
-      sourceBranch: 'main',
-      devServer: null,
-      setupScript: '',
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-    })
-    vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
-      defaultModel: 'auto',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      gitConventions: '',
-      editorCommand: '',
-      browserNotifications: true,
-      audioNotifications: true,
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-      defaultPermissionMode: 'plan',
-      notionMcpKey: '',
-      sentryMcpKey: '',
-      notionEnabled: true,
-      sentryEnabled: true,
-      tags: [],
-      worktreesPath: '.worktrees',
-      worktreesPrefixByProject: false,
-    })
+    vi.mocked(gitOps.fetchSourceBranchOrThrowAsync).mockResolvedValue(undefined)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue(
+      makeGlobalSettings({
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        editorCommand: '',
+        browserNotifications: true,
+        audioNotifications: true,
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+        notionMcpKey: '',
+        sentryMcpKey: '',
+        notionEnabled: true,
+        sentryEnabled: true,
+        tags: [],
+        worktreesPath: '.worktrees',
+        worktreesPrefixByProject: false,
+      }),
+    )
     vi.mocked(workspaceService.updateWorkspaceFields).mockImplementation((_id, fields) => ({
       ...fakeWorkspace,
       ...fields,
@@ -5962,18 +6069,20 @@ describe('GET /api/workspaces/:id/prep-autoloop-prompt', () => {
 
   it('returns a prompt without the E2E review step when E2E is not configured', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(settingsService.getProjectSettings).mockReturnValue({
-      path: '/tmp/proj',
-      displayName: 'P',
-      defaultSourceBranch: 'main',
-      defaultModel: '',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      gitConventions: '',
-      setupScript: '',
-      devServer: { startCommand: '', stopCommand: '' },
-      e2e: { framework: '', skill: '', prompt: '' },
-    })
+    vi.mocked(settingsService.getProjectSettings).mockReturnValue(
+      makeProjectSettings({
+        path: '/tmp/proj',
+        displayName: 'P',
+        defaultSourceBranch: 'main',
+        defaultModel: '',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        setupScript: '',
+        devServer: { startCommand: '', stopCommand: '' },
+        e2e: { framework: '', skill: '', prompt: '' },
+      }),
+    )
     const res = await app.request('/api/workspaces/ws-1/prep-autoloop-prompt')
     expect(res.status).toBe(200)
     const data = (await res.json()) as { prompt: string }
@@ -5983,18 +6092,20 @@ describe('GET /api/workspaces/:id/prep-autoloop-prompt', () => {
 
   it('includes the E2E review step when configured', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(settingsService.getProjectSettings).mockReturnValue({
-      path: '/tmp/proj',
-      displayName: 'P',
-      defaultSourceBranch: 'main',
-      defaultModel: '',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      gitConventions: '',
-      setupScript: '',
-      devServer: { startCommand: '', stopCommand: '' },
-      e2e: { framework: 'cypress', skill: 'cy', prompt: 'pop' },
-    })
+    vi.mocked(settingsService.getProjectSettings).mockReturnValue(
+      makeProjectSettings({
+        path: '/tmp/proj',
+        displayName: 'P',
+        defaultSourceBranch: 'main',
+        defaultModel: '',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        setupScript: '',
+        devServer: { startCommand: '', stopCommand: '' },
+        e2e: { framework: 'cypress', skill: 'cy', prompt: 'pop' },
+      }),
+    )
     const res = await app.request('/api/workspaces/ws-1/prep-autoloop-prompt')
     expect(res.status).toBe(200)
     const data = (await res.json()) as { prompt: string }
@@ -6021,6 +6132,7 @@ describe('POST /api/workspaces — worktree path collision', () => {
     vi.mocked(worktreeService.createWorktree).mockImplementation((_p, branch) => ({
       worktreePath: `/tmp/project/.worktrees/${branch}`,
       base: 'origin',
+      branchCreated: true,
     }))
     vi.mocked(workspaceService.listTasks).mockReturnValue([])
     vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
@@ -6070,31 +6182,34 @@ describe('POST /api/workspaces — worktree path collision', () => {
 
   it('passes slug-prefixed worktreePath to createWorkspace when worktreesPrefixByProject is true', async () => {
     // Arrange: enable prefix-by-project and set a displayName that produces slug "sekur"
-    vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
-      defaultModel: 'auto',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      gitConventions: '',
-      editorCommand: '',
-      browserNotifications: true,
-      audioNotifications: true,
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-      defaultPermissionMode: 'plan',
-      notionMcpKey: '',
-      sentryMcpKey: '',
-      tags: [],
-      worktreesPath: '.worktrees',
-      worktreesPrefixByProject: true,
-    })
-    vi.mocked(settingsService.getProjectSettings).mockReturnValue({
-      displayName: 'Sekur',
-    } as never)
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue(
+      makeGlobalSettings({
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        editorCommand: '',
+        browserNotifications: true,
+        audioNotifications: true,
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+        notionMcpKey: '',
+        sentryMcpKey: '',
+        tags: [],
+        worktreesPath: '.worktrees',
+        worktreesPrefixByProject: true,
+      }),
+    )
+    vi.mocked(settingsService.getProjectSettings).mockReturnValue(
+      makeProjectSettings({
+        displayName: 'Sekur',
+      }),
+    )
     vi.mocked(fs.existsSync).mockReturnValue(false)
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
     vi.mocked(worktreeService.createWorktree).mockReturnValue({
       worktreePath: '/tmp/project/.worktrees/sekur/feature/test',
       base: 'origin',
+      branchCreated: true,
     })
     vi.mocked(workspaceService.listTasks).mockReturnValue([])
     vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
@@ -6165,6 +6280,7 @@ describe('GET /api/workspaces/:id/crons', () => {
         agentSessionId: null,
         nextFireAt: '2026-05-07T11:00:00Z',
         lastFiredAt: null,
+        oneShot: false,
         createdAt: '2026-05-07T10:00:00Z',
       },
     ])
@@ -6195,6 +6311,7 @@ describe('POST /api/workspaces/:id/crons', () => {
       agentSessionId: null,
       nextFireAt: '2026-05-07T11:00:00Z',
       lastFiredAt: null,
+      oneShot: false,
       createdAt: '2026-05-07T10:00:00Z',
     }
     vi.mocked(cronService.arm).mockReturnValue(cron)
@@ -6712,7 +6829,7 @@ describe('POST /api/workspaces/:id/force-push', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body).toMatchObject({ success: true })
-    expect(gitOps.pushBranch).toHaveBeenCalledWith(fakeWorkspace.worktreePath, fakeWorkspace.workingBranch, {
+    expect(gitOps.pushBranchAsync).toHaveBeenCalledWith(fakeWorkspace.worktreePath, fakeWorkspace.workingBranch, {
       force: true,
     })
   })
@@ -6724,7 +6841,7 @@ describe('POST /api/workspaces/:id/force-push', () => {
   })
 
   it('returns 500 when pushBranch throws', async () => {
-    vi.mocked(gitOps.pushBranch).mockImplementation(() => {
+    vi.mocked(gitOps.pushBranchAsync).mockImplementation(() => {
       throw new Error('remote rejected')
     })
     const res = await app.request('/api/workspaces/ws-1/force-push', { method: 'POST' })
@@ -6992,18 +7109,20 @@ describe('POST /api/workspaces/:id/start-ci-fix', () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
     const prWatcher = await import('../server/services/pr-watcher-service.js')
     vi.mocked(prWatcher.refreshPrSnapshot).mockResolvedValueOnce(mockFailingCiSnapshot() as never)
-    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-      model: 'auto',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      ciFixPromptTemplate: '',
-      gitConventions: '',
-      sourceBranch: 'main',
-      devServer: null,
-      setupScript: '',
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-    } as never)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        ciFixPromptTemplate: '',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
 
     const res = await app.request('/api/workspaces/ws-1/start-ci-fix', { method: 'POST' })
     expect(res.status).toBe(400)
@@ -7024,18 +7143,20 @@ describe('POST /api/workspaces/:id/start-ci-fix', () => {
     } as never)
     const prWatcher = await import('../server/services/pr-watcher-service.js')
     vi.mocked(prWatcher.refreshPrSnapshot).mockResolvedValueOnce(mockFailingCiSnapshot() as never)
-    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-      model: 'auto',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      ciFixPromptTemplate: 'Fix CI on PR {{pr_url}}\n{{failed_jobs}}',
-      gitConventions: '',
-      sourceBranch: 'main',
-      devServer: null,
-      setupScript: '',
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-    } as never)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        ciFixPromptTemplate: 'Fix CI on PR {{pr_url}}\n{{failed_jobs}}',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
 
     const res = await app.request('/api/workspaces/ws-1/start-ci-fix', { method: 'POST' })
     expect(res.status).toBe(200)
@@ -7064,18 +7185,20 @@ describe('POST /api/workspaces/:id/start-ci-fix', () => {
     vi.mocked(agentManager.sendMessageForFallback).mockResolvedValueOnce({ status: 'stopped' })
     const prWatcher = await import('../server/services/pr-watcher-service.js')
     vi.mocked(prWatcher.refreshPrSnapshot).mockResolvedValueOnce(mockFailingCiSnapshot() as never)
-    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-      model: 'auto',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      ciFixPromptTemplate: 'fix it',
-      gitConventions: '',
-      sourceBranch: 'main',
-      devServer: null,
-      setupScript: '',
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-    } as never)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        ciFixPromptTemplate: 'fix it',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
 
     const res = await app.request('/api/workspaces/ws-1/start-ci-fix', { method: 'POST' })
     expect(res.status).toBe(200)
@@ -7096,18 +7219,20 @@ describe('POST /api/workspaces/:id/start-ci-fix', () => {
     vi.mocked(agentManager.sendMessageForFallback).mockRejectedValueOnce(new Error('replacement rejected'))
     const prWatcher = await import('../server/services/pr-watcher-service.js')
     vi.mocked(prWatcher.refreshPrSnapshot).mockResolvedValueOnce(mockFailingCiSnapshot() as never)
-    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue({
-      model: 'auto',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      ciFixPromptTemplate: 'fix it',
-      gitConventions: '',
-      sourceBranch: 'main',
-      devServer: null,
-      setupScript: '',
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-    } as never)
+    vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
+      makeEffectiveSettings({
+        model: 'auto',
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        ciFixPromptTemplate: 'fix it',
+        gitConventions: '',
+        sourceBranch: 'main',
+        devServer: null,
+        setupScript: '',
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+      }),
+    )
 
     const res = await app.request('/api/workspaces/ws-1/start-ci-fix', { method: 'POST' })
 
@@ -7251,7 +7376,7 @@ describe('POST /:id/rebase & /:id/merge dirty-worktree handling', () => {
   })
 
   it('maps DirtyWorktreeError to 409 with code dirty_worktree on rebase', async () => {
-    vi.mocked(gitOps.rebaseBranch).mockImplementation(() => {
+    vi.mocked(gitOps.rebaseBranchAsync).mockImplementation(() => {
       throw new gitOps.DirtyWorktreeError('rebase', { staged: 0, modified: 1, untracked: 0 })
     })
     const res = await app.request('/api/workspaces/ws-1/rebase', { method: 'POST' })
@@ -7263,7 +7388,7 @@ describe('POST /:id/rebase & /:id/merge dirty-worktree handling', () => {
   })
 
   it('maps DirtyWorktreeError to 409 with code dirty_worktree on merge', async () => {
-    vi.mocked(gitOps.mergeBranch).mockImplementation(() => {
+    vi.mocked(gitOps.mergeBranchAsync).mockImplementation(() => {
       throw new gitOps.DirtyWorktreeError('merge', { staged: 1, modified: 0, untracked: 0 })
     })
     const res = await app.request('/api/workspaces/ws-1/merge', { method: 'POST' })
@@ -7275,37 +7400,37 @@ describe('POST /:id/rebase & /:id/merge dirty-worktree handling', () => {
   })
 
   it('passes autostash:true to rebaseBranch when ?autostash=1', async () => {
-    vi.mocked(gitOps.rebaseBranch).mockReturnValue(undefined)
+    vi.mocked(gitOps.rebaseBranchAsync).mockResolvedValue(undefined)
     const res = await app.request('/api/workspaces/ws-1/rebase?autostash=1', { method: 'POST' })
     expect(res.status).toBe(200)
-    expect(gitOps.rebaseBranch).toHaveBeenCalledWith(fakeWorkspace.worktreePath, fakeWorkspace.sourceBranch, {
+    expect(gitOps.rebaseBranchAsync).toHaveBeenCalledWith(fakeWorkspace.worktreePath, fakeWorkspace.sourceBranch, {
       autostash: true,
     })
   })
 
   it('passes autostash:false to rebaseBranch when no query param', async () => {
-    vi.mocked(gitOps.rebaseBranch).mockReturnValue(undefined)
+    vi.mocked(gitOps.rebaseBranchAsync).mockResolvedValue(undefined)
     const res = await app.request('/api/workspaces/ws-1/rebase', { method: 'POST' })
     expect(res.status).toBe(200)
-    expect(gitOps.rebaseBranch).toHaveBeenCalledWith(fakeWorkspace.worktreePath, fakeWorkspace.sourceBranch, {
+    expect(gitOps.rebaseBranchAsync).toHaveBeenCalledWith(fakeWorkspace.worktreePath, fakeWorkspace.sourceBranch, {
       autostash: false,
     })
   })
 
   it('passes autostash:true to mergeBranch when ?autostash=1', async () => {
-    vi.mocked(gitOps.mergeBranch).mockReturnValue(undefined)
+    vi.mocked(gitOps.mergeBranchAsync).mockResolvedValue(undefined)
     const res = await app.request('/api/workspaces/ws-1/merge?autostash=1', { method: 'POST' })
     expect(res.status).toBe(200)
-    expect(gitOps.mergeBranch).toHaveBeenCalledWith(fakeWorkspace.worktreePath, fakeWorkspace.sourceBranch, {
+    expect(gitOps.mergeBranchAsync).toHaveBeenCalledWith(fakeWorkspace.worktreePath, fakeWorkspace.sourceBranch, {
       autostash: true,
     })
   })
 
   it('passes autostash:false to mergeBranch when no query param', async () => {
-    vi.mocked(gitOps.mergeBranch).mockReturnValue(undefined)
+    vi.mocked(gitOps.mergeBranchAsync).mockResolvedValue(undefined)
     const res = await app.request('/api/workspaces/ws-1/merge', { method: 'POST' })
     expect(res.status).toBe(200)
-    expect(gitOps.mergeBranch).toHaveBeenCalledWith(fakeWorkspace.worktreePath, fakeWorkspace.sourceBranch, {
+    expect(gitOps.mergeBranchAsync).toHaveBeenCalledWith(fakeWorkspace.worktreePath, fakeWorkspace.sourceBranch, {
       autostash: false,
     })
   })
@@ -7353,7 +7478,7 @@ describe('POST /:id/git/commit-all', () => {
   })
 
   it('returns 404 when the workspace does not exist', async () => {
-    vi.mocked(workspaceService.getWorkspace).mockReturnValue(undefined)
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
     const res = await app.request('/api/workspaces/nope/git/commit-all', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -7377,7 +7502,7 @@ describe('POST /:id/git/discard', () => {
   })
 
   it('returns 404 when the workspace does not exist', async () => {
-    vi.mocked(workspaceService.getWorkspace).mockReturnValue(undefined)
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
     const res = await app.request('/api/workspaces/nope/git/discard', { method: 'POST' })
     expect(res.status).toBe(404)
   })
@@ -7506,47 +7631,47 @@ describe('POST /api/workspaces/:id/open-terminal', () => {
   })
 
   it('returns 400 when terminalCommand is empty or whitespace-only', async () => {
-    vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
-      defaultModel: 'auto',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      gitConventions: '',
-      editorCommand: '',
-      browserNotifications: true,
-      audioNotifications: true,
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-      defaultPermissionMode: 'plan',
-      notionMcpKey: '',
-      sentryMcpKey: '',
-      tags: [],
-      worktreesPath: '.worktrees',
-      worktreesPrefixByProject: false,
-      terminalCommand: '   ', // whitespace-only must be treated as unconfigured (400, not 500)
-    } as never)
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue(
+      makeGlobalSettings({
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        editorCommand: '',
+        browserNotifications: true,
+        audioNotifications: true,
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+        notionMcpKey: '',
+        sentryMcpKey: '',
+        tags: [],
+        worktreesPath: '.worktrees',
+        worktreesPrefixByProject: false,
+        terminalCommand: '   ', // whitespace-only must be treated as unconfigured (400, not 500)
+      }),
+    )
     const res = await app.request('/api/workspaces/ws-1/open-terminal', { method: 'POST' })
     expect(res.status).toBe(400)
   })
 
   it('spawns the terminal with cwd = worktree and substitutes {path}', async () => {
-    vi.mocked(settingsService.getGlobalSettings).mockReturnValue({
-      defaultModel: 'auto',
-      dangerouslySkipPermissions: true,
-      prPromptTemplate: '',
-      gitConventions: '',
-      editorCommand: '',
-      browserNotifications: true,
-      audioNotifications: true,
-      notionStatusProperty: '',
-      notionInProgressStatus: '',
-      defaultPermissionMode: 'plan',
-      notionMcpKey: '',
-      sentryMcpKey: '',
-      tags: [],
-      worktreesPath: '.worktrees',
-      worktreesPrefixByProject: false,
-      terminalCommand: 'gnome-terminal --working-directory={path}',
-    } as never)
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue(
+      makeGlobalSettings({
+        dangerouslySkipPermissions: true,
+        prPromptTemplate: '',
+        gitConventions: '',
+        editorCommand: '',
+        browserNotifications: true,
+        audioNotifications: true,
+        notionStatusProperty: '',
+        notionInProgressStatus: '',
+        notionMcpKey: '',
+        sentryMcpKey: '',
+        tags: [],
+        worktreesPath: '.worktrees',
+        worktreesPrefixByProject: false,
+        terminalCommand: 'gnome-terminal --working-directory={path}',
+      }),
+    )
     vi.mocked(fs.existsSync).mockReturnValue(true)
     const res = await app.request('/api/workspaces/ws-1/open-terminal', { method: 'POST' })
     expect(res.status).toBe(200)
@@ -7555,5 +7680,111 @@ describe('POST /api/workspaces/:id/open-terminal', () => {
       [`--working-directory=${fakeWorkspace.worktreePath}`],
       expect.objectContaining({ cwd: fakeWorkspace.worktreePath, detached: true, stdio: 'ignore' }),
     )
+  })
+})
+
+describe('GET /api/workspaces/:id/sessions/:sessionId/summary', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
+  })
+
+  it('reports why the session ended, with its counters', async () => {
+    const getDbMock = vi.mocked((await import('../server/db/index.js')).getDb)
+    getDbMock.mockReturnValue({
+      prepare: vi
+        .fn()
+        .mockReturnValueOnce({
+          get: () => ({
+            id: 'sess-1',
+            engine: 'claude-code',
+            model: 'opus',
+            status: 'error',
+            end_reason: 'watchdog',
+            started_at: '2026-01-01T10:00:00.000Z',
+            ended_at: '2026-01-01T10:05:00.000Z',
+          }),
+        })
+        .mockReturnValueOnce({
+          get: () => ({ tool_calls: 12, errors: 2, input_tokens: 900, output_tokens: 300 }),
+        }),
+    } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/sessions/sess-1/summary')
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({
+      sessionId: 'sess-1',
+      endReason: 'watchdog',
+      durationMs: 5 * 60_000,
+      toolCalls: 12,
+      errors: 2,
+    })
+  })
+
+  it('404s on an unknown session', async () => {
+    const getDbMock = vi.mocked((await import('../server/db/index.js')).getDb)
+    getDbMock.mockReturnValue({ prepare: vi.fn().mockReturnValue({ get: () => undefined }) } as never)
+
+    const res = await app.request('/api/workspaces/ws-1/sessions/nope/summary')
+
+    expect(res.status).toBe(404)
+  })
+})
+
+describe('GET /api/workspaces/:id/comparison', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  const memberA = { id: 'w1', name: 'task (claude-code)', engine: 'claude-code', comparisonId: 'cmp_1' }
+  const memberB = { id: 'w2', name: 'task (codex)', engine: 'codex', comparisonId: 'cmp_1' }
+
+  it('returns every member of the comparison with its git stats', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(memberA as never)
+    vi.mocked(workspaceService.listComparisonMembers).mockReturnValue([memberA, memberB] as never)
+    vi.mocked(prWatcher.getAllGitStats).mockReturnValue({
+      w1: { insertions: 10, deletions: 2 },
+      w2: { insertions: 40, deletions: 30 },
+    } as never)
+
+    const res = await app.request('/api/workspaces/w1/comparison')
+
+    expect(res.status).toBe(200)
+    const body = (await res.json()) as {
+      comparisonId: string
+      members: Array<{ workspace: { id: string }; gitStats: { insertions: number } | null }>
+    }
+    expect(body.comparisonId).toBe('cmp_1')
+    expect(body.members.map((m) => m.workspace.id)).toEqual(['w1', 'w2'])
+    expect(body.members[1].gitStats?.insertions).toBe(40)
+  })
+
+  it('reports a null stat rather than inventing zeros when nothing was measured yet', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(memberA as never)
+    vi.mocked(workspaceService.listComparisonMembers).mockReturnValue([memberA] as never)
+    vi.mocked(prWatcher.getAllGitStats).mockReturnValue({} as never)
+
+    const res = await app.request('/api/workspaces/w1/comparison')
+
+    const body = (await res.json()) as { members: Array<{ gitStats: unknown }> }
+    // Zeros would read as "this engine changed nothing", which is a different claim.
+    expect(body.members[0].gitStats).toBeNull()
+  })
+
+  it('answers with an empty comparison for a workspace that belongs to none', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'w9', comparisonId: null } as never)
+
+    const res = await app.request('/api/workspaces/w9/comparison')
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ comparisonId: null, members: [] })
+    expect(workspaceService.listComparisonMembers).not.toHaveBeenCalled()
+  })
+
+  it('404s on an unknown workspace', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
+
+    const res = await app.request('/api/workspaces/missing/comparison')
+
+    expect(res.status).toBe(404)
   })
 })

@@ -46,6 +46,8 @@ export interface Workspace {
   worktreePurgedAt: string | null
   /** JSON blob (string) with restore metadata captured at purge time. */
   worktreePurgeRestoreData: string | null
+  /** Shared by the workspaces running one task on two engines. Null otherwise. */
+  comparisonId: string | null
   autoLoop: boolean
   autoLoopReady: boolean
   noProgressStreak: number
@@ -120,6 +122,8 @@ export interface CreateWorkspaceInput {
   // `workspace:create-progress` / `workspace:create-failed` beats for a
   // workspace that doesn't have an id yet.
   creationId?: string
+  /** Groups the two workspaces of an engine comparison. */
+  comparisonId?: string
 }
 
 export class WorkspaceActionError extends Error {

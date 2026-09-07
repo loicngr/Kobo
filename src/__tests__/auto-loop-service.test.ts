@@ -13,6 +13,11 @@ vi.mock('../server/services/websocket-service.js', () => ({
 vi.mock('../server/services/agent/orchestrator.js', () => ({
   startAgent: vi.fn(() => ({ agentSessionId: 'mock-agent-session-id' })),
   hasController: vi.fn(() => false),
+  runningAgentCount: vi.fn(() => 0),
+}))
+
+vi.mock('../server/services/lifecycle-hook-service.js', () => ({
+  onAutoLoopDisabled: vi.fn(async () => {}),
 }))
 
 vi.mock('../server/services/settings-service.js', () => ({
@@ -193,6 +198,113 @@ describe('auto-loop-service', () => {
     expect(() => svc.forgetAutoLoopState(wsId)).not.toThrow()
   })
 
+  describe('concurrency limit', () => {
+    it('resumes a workspace that was waiting for a slot once one frees', async () => {
+      // The waiting workspace has no session of its own to end, so nothing
+      // would ever call spawnNextIteration for it again. The orchestrator
+      // calls this after ANY session ends, on its behalf.
+      const svc = await import('../server/services/auto-loop-service.js')
+      const orch = await import('../server/services/agent/orchestrator.js')
+      const settings = await import('../server/services/settings-service.js')
+      const { createTask, createWorkspace } = await import('../server/services/workspace-service.js')
+      fs.mkdirSync(path.join(tmpDir, '.worktrees', 'feature', 'y'), { recursive: true })
+      const waiting = createWorkspace({
+        name: 'y',
+        projectPath: tmpDir,
+        sourceBranch: 'main',
+        workingBranch: 'feature/y',
+      })
+      createTask(waiting.id, { title: 't1', isAcceptanceCriterion: false, sortOrder: 0 })
+      svc._test_setAutoLoopReady(waiting.id, true)
+      vi.mocked(settings.getGlobalSettings).mockReturnValue({
+        worktreesPath: '',
+        worktreesPrefixByProject: false,
+        maxConcurrentAgents: 1,
+      } as never)
+      vi.mocked(orch.runningAgentCount).mockReturnValue(1)
+      svc.enable(waiting.id)
+      expect(orch.startAgent).not.toHaveBeenCalled()
+
+      // A slot frees somewhere else.
+      vi.mocked(orch.runningAgentCount).mockReturnValue(0)
+      svc.resumeWaitingWorkspaces()
+
+      expect(orch.startAgent).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(orch.startAgent).mock.calls[0]?.[0]).toBe(waiting.id)
+    })
+
+    it('resumes nothing while every slot is still taken', async () => {
+      const svc = await import('../server/services/auto-loop-service.js')
+      const orch = await import('../server/services/agent/orchestrator.js')
+      const settings = await import('../server/services/settings-service.js')
+      const { createTask } = await import('../server/services/workspace-service.js')
+      createTask(wsId, { title: 't1', isAcceptanceCriterion: false, sortOrder: 0 })
+      svc._test_setAutoLoopReady(wsId, true)
+      vi.mocked(settings.getGlobalSettings).mockReturnValue({
+        worktreesPath: '',
+        worktreesPrefixByProject: false,
+        maxConcurrentAgents: 1,
+      } as never)
+      vi.mocked(orch.runningAgentCount).mockReturnValue(1)
+      svc.enable(wsId)
+      vi.mocked(orch.startAgent).mockClear()
+
+      svc.resumeWaitingWorkspaces()
+
+      expect(orch.startAgent).not.toHaveBeenCalled()
+    })
+
+    it('waits for a slot instead of spawning past the limit', async () => {
+      // Ten auto-loop workspaces waking together hammer the same rate limit and
+      // each land in their own backoff. The loop must stay enabled and pick up
+      // once a slot frees.
+      const svc = await import('../server/services/auto-loop-service.js')
+      const orch = await import('../server/services/agent/orchestrator.js')
+      const settings = await import('../server/services/settings-service.js')
+      const { createTask } = await import('../server/services/workspace-service.js')
+      createTask(wsId, { title: 't1', isAcceptanceCriterion: false, sortOrder: 0 })
+      createTask(wsId, { title: 't2', isAcceptanceCriterion: false, sortOrder: 1 })
+      svc._test_setAutoLoopReady(wsId, true)
+      svc.enable(wsId)
+      vi.mocked(orch.startAgent).mockClear()
+
+      vi.mocked(settings.getGlobalSettings).mockReturnValue({
+        worktreesPath: '',
+        worktreesPrefixByProject: false,
+        maxConcurrentAgents: 2,
+      } as never)
+      vi.mocked(orch.runningAgentCount).mockReturnValue(2)
+
+      svc.onSessionEnded(wsId, 'completed', 1)
+
+      expect(orch.startAgent).not.toHaveBeenCalled()
+      expect(svc.getStatus(wsId).auto_loop).toBe(true)
+    })
+
+    it('spawns normally when a slot is free', async () => {
+      const svc = await import('../server/services/auto-loop-service.js')
+      const orch = await import('../server/services/agent/orchestrator.js')
+      const settings = await import('../server/services/settings-service.js')
+      const { createTask } = await import('../server/services/workspace-service.js')
+      createTask(wsId, { title: 't1', isAcceptanceCriterion: false, sortOrder: 0 })
+      createTask(wsId, { title: 't2', isAcceptanceCriterion: false, sortOrder: 1 })
+      svc._test_setAutoLoopReady(wsId, true)
+      svc.enable(wsId)
+      vi.mocked(orch.startAgent).mockClear()
+
+      vi.mocked(settings.getGlobalSettings).mockReturnValue({
+        worktreesPath: '',
+        worktreesPrefixByProject: false,
+        maxConcurrentAgents: 2,
+      } as never)
+      vi.mocked(orch.runningAgentCount).mockReturnValue(1)
+
+      svc.onSessionEnded(wsId, 'completed', 1)
+
+      expect(orch.startAgent).toHaveBeenCalled()
+    })
+  })
+
   describe('onSessionEnded', () => {
     it('no-ops when workspace is in awaiting-user', async () => {
       const svc = await import('../server/services/auto-loop-service.js')
@@ -273,6 +385,22 @@ describe('auto-loop-service', () => {
 
       svc.onSessionEnded(wsId, 'completed', 1)
       expect(svc.getStatus(wsId).no_progress_streak).toBe(0)
+    })
+
+    it('runs the autoloop-disabled hook for every disable reason, the user-driven ones included', async () => {
+      // Unlike the cleanup script (completed only), the hook is the user's
+      // own notification channel: stopping the loop by hand is an event too.
+      const svc = await import('../server/services/auto-loop-service.js')
+      const hooks = await import('../server/services/lifecycle-hook-service.js')
+      const { createTask } = await import('../server/services/workspace-service.js')
+      createTask(wsId, { title: 't1', isAcceptanceCriterion: false, sortOrder: 0 })
+      svc._test_setAutoLoopReady(wsId, true)
+      svc.enable(wsId)
+
+      svc.disable(wsId, 'user-action')
+
+      expect(hooks.onAutoLoopDisabled).toHaveBeenCalledTimes(1)
+      expect(hooks.onAutoLoopDisabled).toHaveBeenCalledWith(wsId, { reason: 'user-action', tasksPending: 1 })
     })
 
     it('increments streak until 3 then disables with reason=stall', async () => {
