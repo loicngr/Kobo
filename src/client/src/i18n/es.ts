@@ -817,7 +817,8 @@ export default {
   'tours.next': 'Siguiente',
   'tours.prev': 'Atrás',
   'tours.done': 'Terminar',
-  'tours.exitConfirm': '¿Salir del recorrido guiado? Puedes repetirlo en cualquier momento desde el menú Ayuda.',
+  'tours.exitConfirm':
+    '¿Salir de la visita guiada? No volverá a iniciarse sola; puedes repetirla cuando quieras desde el menú Ayuda.',
   'tours.home.title': 'Orientarse',
   'tours.home.list.title': 'Workspaces',
   'tours.home.list.description':

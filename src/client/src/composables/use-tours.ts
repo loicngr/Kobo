@@ -258,7 +258,12 @@ export function useTours() {
         // Replaced by another tour: neither done nor abandoned, another tour owns the screen.
         if (replacing) return
         if (!finished.value && opts.state.activeIndex !== steps.length - 1) {
-          // Abandoned (the user declined a tour): do not pile the queued auto-runs on top.
+          // Abandoned (the user declined a tour): it never auto-runs again, only a replay
+          // from the Help menu shows it, and the queued auto-runs are not piled on top.
+          markSeen(
+            tour.id,
+            tour.steps.map((s) => s.id),
+          )
           pendingAutoRuns.clear()
           return
         }

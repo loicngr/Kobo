@@ -812,7 +812,8 @@ export default {
   'tours.next': 'Next',
   'tours.prev': 'Back',
   'tours.done': 'Done',
-  'tours.exitConfirm': 'Exit the guided tour? You can replay it anytime from the Help menu.',
+  'tours.exitConfirm':
+    'Quit the guided tour? It will not start again on its own; you can replay it anytime from the Help menu.',
   'tours.home.title': 'Getting around',
   'tours.home.list.title': 'Workspaces',
   'tours.home.list.description':

@@ -820,7 +820,8 @@ export default {
   'tours.next': 'Weiter',
   'tours.prev': 'Zurück',
   'tours.done': 'Fertig',
-  'tours.exitConfirm': 'Geführte Tour beenden? Du kannst sie jederzeit über das Hilfe-Menü erneut starten.',
+  'tours.exitConfirm':
+    'Geführte Tour beenden? Sie startet nicht mehr von selbst; du kannst sie jederzeit über das Hilfemenü wiederholen.',
   'tours.home.title': 'Orientierung',
   'tours.home.list.title': 'Workspaces',
   'tours.home.list.description':

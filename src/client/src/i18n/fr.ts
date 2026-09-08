@@ -821,7 +821,8 @@ export default {
   'tours.next': 'Suivant',
   'tours.prev': 'Précédent',
   'tours.done': 'Terminé',
-  'tours.exitConfirm': 'Quitter la visite guidée ? Vous pourrez la relancer à tout moment depuis le menu Aide.',
+  'tours.exitConfirm':
+    'Quitter la visite guidée ? Elle ne se relancera plus automatiquement ; vous pourrez la rejouer à tout moment depuis le menu Aide.',
   'tours.home.title': "S'orienter",
   'tours.home.list.title': 'Workspaces',
   'tours.home.list.description':

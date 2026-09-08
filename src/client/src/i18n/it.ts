@@ -819,7 +819,8 @@ export default {
   'tours.next': 'Avanti',
   'tours.prev': 'Indietro',
   'tours.done': 'Fine',
-  'tours.exitConfirm': 'Uscire dal tour guidato? Puoi rivederlo in qualsiasi momento dal menu Aiuto.',
+  'tours.exitConfirm':
+    'Uscire dal tour guidato? Non ripartirà da solo; puoi ripeterlo in qualsiasi momento dal menu Aiuto.',
   'tours.home.title': 'Orientarsi',
   'tours.home.list.title': 'Workspace',
   'tours.home.list.description':

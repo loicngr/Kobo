@@ -481,6 +481,40 @@ describe('runTour hooks', () => {
     expect(push).toHaveBeenCalledWith({ name: 'create' })
   })
 
+  it('marks every step seen when the tour is abandoned, so it never auto-runs again', async () => {
+    const tours = useTours()
+    await tours.runTour('home')
+    destroyAt(0)
+    expect(tours.status('home')).toBe('seen')
+    expect(JSON.parse(localStorage.getItem(SEEN_STORAGE_KEY) ?? '{}')).toEqual({ home: ['a', 'b', 'c'] })
+    driverFactory.mockClear()
+    await tours.autoRun('home')
+    expect(driverFactory).not.toHaveBeenCalled()
+  })
+
+  it('marks only the shown steps seen on completion', async () => {
+    const tours = useTours()
+    await tours.runTour('home')
+    lastConfig().onHighlighted?.(document.body, noStep, hookOpts({ activeIndex: 0 }))
+    destroyAt(1)
+    expect(JSON.parse(localStorage.getItem(SEEN_STORAGE_KEY) ?? '{}')).toEqual({ home: ['a'] })
+    expect(tours.status('home')).toBe('partial')
+  })
+
+  it('does not mark a replaced tour seen', async () => {
+    const tours = useTours()
+    await tours.runTour('home')
+    const homeConfig = lastConfig()
+    driverInstance.destroy.mockImplementationOnce(() => {
+      homeConfig.onDestroyed?.(undefined, noStep, hookOpts({ activeIndex: 0 }))
+    })
+    push.mockImplementationOnce(async () => {
+      currentRoute.value = { name: 'settings', path: '/settings' }
+    })
+    await tours.runTour('settings')
+    expect(tours.status('home')).toBe('unseen')
+  })
+
   it('does not run the replaced tour onDone when another tour takes over', async () => {
     const tours = useTours()
     await tours.runTour('home')
