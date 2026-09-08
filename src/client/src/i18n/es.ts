@@ -104,6 +104,8 @@ export default {
   'model.sonnetClassicDescription': 'Equilibrado',
   'model.sonnet1mDescription': 'Equilibrado, contexto 1M',
   'model.haikuDescription': 'El más rápido',
+  'model.gpt6astra': 'GPT-6 Astra',
+  'model.gpt6astraDescription': 'El modelo frontera más capaz, contexto 1M (requiere autenticación ChatGPT)',
   'model.gpt56sol': 'GPT-5.6 Sol',
   'model.gpt56solDescription': 'El modelo de codificación agéntica más avanzado (requiere autenticación ChatGPT)',
   'model.gpt56terra': 'GPT-5.6 Terra',

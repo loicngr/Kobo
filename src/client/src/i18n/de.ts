@@ -104,6 +104,8 @@ export default {
   'model.sonnetClassicDescription': 'Ausgewogen',
   'model.sonnet1mDescription': 'Ausgewogen, 1M Kontext',
   'model.haikuDescription': 'Am schnellsten',
+  'model.gpt6astra': 'GPT-6 Astra',
+  'model.gpt6astraDescription': 'Leistungsfähigstes Spitzenmodell, 1M Kontext (erfordert ChatGPT-Anmeldung)',
   'model.gpt56sol': 'GPT-5.6 Sol',
   'model.gpt56solDescription': 'Neuestes Spitzenmodell für agentisches Coding (erfordert ChatGPT-Anmeldung)',
   'model.gpt56terra': 'GPT-5.6 Terra',

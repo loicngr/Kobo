@@ -7,9 +7,9 @@ import type { AgentModel } from './models.js'
  * editing the workspace `model` field directly. This list reflects the
  * recommended set surfaced in the create-workspace selector.
  *
- * Auth caveat: the `gpt-5.6-*` family and `gpt-5.5` are currently only
- * reachable when authenticated via ChatGPT (Plus/Pro/Team/Enterprise).
- * API-key auth is limited to `gpt-5.4` and below.
+ * Auth caveat: `gpt-6-astra`, the `gpt-5.6-*` family and `gpt-5.5` are
+ * currently only reachable when authenticated via ChatGPT
+ * (Plus/Pro/Team/Enterprise). API-key auth is limited to `gpt-5.4` and below.
  */
 export const CODEX_MODELS: readonly AgentModel[] = [
   {
@@ -17,6 +17,12 @@ export const CODEX_MODELS: readonly AgentModel[] = [
     label: 'Auto',
     i18nLabelKey: 'model.auto',
     i18nDescriptionKey: 'model.autoDescription',
+  },
+  {
+    id: 'gpt-6-astra',
+    label: 'GPT-6 Astra',
+    i18nLabelKey: 'model.gpt6astra',
+    i18nDescriptionKey: 'model.gpt6astraDescription',
   },
   {
     id: 'gpt-5.6-sol',
