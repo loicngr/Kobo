@@ -12,7 +12,7 @@ import type {
   PrSnapshot,
   PullRequestSummary,
 } from '../types.js'
-import { deriveReadyToMerge } from '../types.js'
+import { deriveReadyToMerge, truncatePrBody } from '../types.js'
 
 const execFileAsync = promisify(execFile)
 const CLI_TIMEOUT_MS = 30_000
@@ -182,6 +182,7 @@ export function mapGitlabPage(raw: unknown, opts: ListPullRequestsOptions): List
       isFork: mr.source_project_id !== mr.target_project_id,
       isDraft: mr.draft === true || mr.work_in_progress === true,
       updatedAt: typeof mr.updated_at === 'string' ? mr.updated_at : '',
+      body: truncatePrBody(mr.description),
       // `glab mr list` carries no pipeline status; the picker shows no CI pill
       // for GitLab rather than paying one `glab ci get` per row.
       ci: null,

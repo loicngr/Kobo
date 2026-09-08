@@ -100,6 +100,8 @@ export interface PullRequestSummary {
   number: number
   title: string
   url: string
+  /** PR description in markdown; empty when the author left it blank. */
+  body: string
   author: string
   headBranch: string
   baseBranch: string

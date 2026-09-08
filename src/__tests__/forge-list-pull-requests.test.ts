@@ -51,6 +51,7 @@ describe('mapGithubSearchPage', () => {
             url: 'https://github.com/acme/app/pull/42',
             isDraft: false,
             updatedAt: '2026-08-30T10:00:00Z',
+            body: 'Fixes the login redirect loop.',
             author: { login: 'alice' },
             headRefName: 'fix/login',
             baseRefName: 'develop',
@@ -76,9 +77,22 @@ describe('mapGithubSearchPage', () => {
       isFork: false,
       isDraft: false,
       updatedAt: '2026-08-30T10:00:00Z',
+      body: 'Fixes the login redirect loop.',
       ci: 'SUCCESS',
       reviewDecision: 'APPROVED',
     })
+  })
+
+  it('maps a missing body to an empty string', () => {
+    const noBody = structuredClone(raw) as { data: { search: { nodes: Array<{ body?: string }> } } }
+    delete noBody.data.search.nodes[0].body
+    expect(mapGithubSearchPage(noBody).items[0].body).toBe('')
+  })
+
+  it('truncates the body to 4000 characters', () => {
+    const long = structuredClone(raw)
+    long.data.search.nodes[0].body = 'x'.repeat(5000)
+    expect(mapGithubSearchPage(long).items[0].body).toHaveLength(4000)
   })
 
   it('returns a null cursor on the last page', () => {
@@ -148,6 +162,7 @@ describe('mapGitlabPage', () => {
       web_url: 'https://gitlab.com/acme/app/-/merge_requests/7',
       draft: false,
       updated_at: '2026-08-29T09:00:00Z',
+      description: 'Cache the hot path.',
       author: { username: 'bob' },
       source_branch: 'feat/cache',
       target_branch: 'main',
@@ -166,8 +181,18 @@ describe('mapGitlabPage', () => {
       baseBranch: 'main',
       isFork: false,
       isDraft: false,
+      body: 'Cache the hot path.',
     })
     expect(page.nextCursor).toBe('2')
+  })
+
+  it('truncates the description to 4000 characters and maps a missing one to an empty string', () => {
+    const long = structuredClone(raw)
+    long[0].description = 'y'.repeat(5000)
+    expect(mapGitlabPage(long, { filter: 'all', perPage: 25 }).items[0].body).toHaveLength(4000)
+    const none = structuredClone(raw) as Array<{ description?: string }>
+    delete none[0].description
+    expect(mapGitlabPage(none, { filter: 'all', perPage: 25 }).items[0].body).toBe('')
   })
 
   it('stops when the page is not full', () => {
@@ -193,6 +218,7 @@ describe('mapBitbucketPage', () => {
           source: { branch: { name: 'chore/logs' }, repository: { uuid: 'A' } },
           destination: { branch: { name: 'main' }, repository: { uuid: 'A' } },
           updated_on: '2026-08-28T08:00:00Z',
+          description: 'Drop noisy debug logs.',
         },
       ],
       next: 'https://api.bitbucket.org/2.0/…?page=2',
@@ -204,6 +230,7 @@ describe('mapBitbucketPage', () => {
       headBranch: 'chore/logs',
       baseBranch: 'main',
       isFork: false,
+      body: 'Drop noisy debug logs.',
     })
     expect(page.nextCursor).toBe('2')
   })
@@ -223,6 +250,7 @@ describe('mapBitbucketPage', () => {
       isLastPage: true,
     })
     expect(page.items[0].headBranch).toBe('feat/dc')
+    expect(page.items[0].body).toBe('')
     expect(page.nextCursor).toBeNull()
   })
 

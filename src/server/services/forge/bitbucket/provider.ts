@@ -13,7 +13,7 @@ import type {
   PrSnapshot,
   PullRequestSummary,
 } from '../types.js'
-import { deriveReadyToMerge } from '../types.js'
+import { deriveReadyToMerge, truncatePrBody } from '../types.js'
 
 const execFileAsync = promisify(execFile)
 
@@ -162,6 +162,7 @@ export function mapBitbucketPage(raw: unknown): ListPullRequestsResult {
       isDraft: pr.draft === true,
       updatedAt:
         typeof updated === 'string' ? updated : typeof updated === 'number' ? new Date(updated).toISOString() : '',
+      body: truncatePrBody(pr.description),
       // `bkt pr list` doesn't expose CI/review status in list output; avoiding a per-row lookup call here.
       ci: null,
       reviewDecision: null,

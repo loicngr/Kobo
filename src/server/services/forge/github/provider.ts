@@ -13,7 +13,7 @@ import type {
   PrSnapshot,
   PullRequestSummary,
 } from '../types.js'
-import { deriveReadyToMerge } from '../types.js'
+import { deriveReadyToMerge, truncatePrBody } from '../types.js'
 
 const execFileAsync = promisify(execFile)
 const CLI_TIMEOUT_MS = 30_000
@@ -124,7 +124,7 @@ query($q:String!,$first:Int!,$after:String){
     pageInfo{ hasNextPage endCursor }
     nodes{
       ... on PullRequest {
-        number title url isDraft updatedAt
+        number title url isDraft updatedAt body
         author{ login }
         headRefName baseRefName isCrossRepository reviewDecision
         commits(last:1){ nodes{ commit{ statusCheckRollup{ state } } } }
@@ -165,6 +165,7 @@ export function mapGithubSearchPage(raw: unknown): ListPullRequestsResult {
       isFork: pr.isCrossRepository === true,
       isDraft: pr.isDraft === true,
       updatedAt: typeof pr.updatedAt === 'string' ? pr.updatedAt : '',
+      body: truncatePrBody(pr.body),
       ci: typeof rollup === 'string' ? (rollup as PrSnapshot['ci']['rollup']) : null,
       reviewDecision: typeof decision === 'string' ? (decision as PrSnapshot['reviewDecision']) : null,
     }

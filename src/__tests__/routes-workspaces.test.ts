@@ -167,6 +167,7 @@ vi.mock('../server/utils/git-ops.js', async (importOriginal) => ({
   rebaseBranchAsync: vi.fn(),
   mergeBranchAsync: vi.fn(),
   continueOngoingGitOperation: vi.fn(),
+  getOngoingGitOperation: vi.fn().mockReturnValue(null),
   getConflictedFiles: vi.fn(),
   commitAllChanges: vi.fn(),
   discardWorkingTreeChanges: vi.fn(),
@@ -420,6 +421,8 @@ beforeEach(() => {
   // tests below override with mockResolvedValueOnce — re-pin the baseline so
   // every test sees a resolved promise unless it explicitly opts in).
   vi.mocked(gitOps.fetchSourceBranchAsync).mockResolvedValue(undefined)
+  // No git operation in flight by default; a describe that pins 'rebase' must not leak.
+  vi.mocked(gitOps.getOngoingGitOperation).mockReturnValue(null)
   vi.mocked(settingsService.getEffectiveSettings).mockReturnValue(
     makeEffectiveSettings({
       model: 'auto',
@@ -3451,6 +3454,49 @@ describe('POST /api/workspaces/:id/push', () => {
     vi.clearAllMocks()
     // Reset pushBranch implementation so a previous test's throw doesn't leak
     vi.mocked(gitOps.pushBranchAsync).mockReset()
+    vi.mocked(gitOps.pushBranchAsync).mockResolvedValue({ upToDate: false })
+    vi.mocked(gitOps.getOngoingGitOperation).mockReturnValue(null)
+  })
+
+  it('returns 409 operation_in_progress and does not push during a rebase', async () => {
+    // During a rebase the local branch ref has not moved, so git would report
+    // "Everything up-to-date" and the user would see nothing happen.
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      workingBranch: 'feature/test',
+      projectPath: '/tmp/project',
+    } as never)
+    vi.mocked(gitOps.getOngoingGitOperation).mockReturnValue('rebase')
+
+    const res = await app.request('/api/workspaces/ws-1/push', { method: 'POST' })
+
+    expect(res.status).toBe(409)
+    const data = await res.json()
+    expect(data).toEqual({ error: expect.any(String), code: 'operation_in_progress', operation: 'rebase' })
+    expect(vi.mocked(gitOps.pushBranchAsync)).not.toHaveBeenCalled()
+  })
+
+  it('returns upToDate=true and a "nothing to push" trace when the remote already had everything', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({
+      ...fakeWorkspace,
+      workingBranch: 'feature/test',
+      projectPath: '/tmp/project',
+    } as never)
+    vi.mocked(gitOps.pushBranchAsync).mockResolvedValue({ upToDate: true })
+
+    const res = await app.request('/api/workspaces/ws-1/push', { method: 'POST' })
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ ok: true, branch: 'feature/test', upToDate: true })
+    const { emit } = await import('../server/services/websocket-service.js')
+    expect(vi.mocked(emit)).toHaveBeenCalledWith(
+      'ws-1',
+      'user:message',
+      expect.objectContaining({
+        content: 'Nothing to push: branch feature/test is already up to date on origin',
+      }),
+      undefined,
+    )
   })
 
   it('pushes the branch and returns 200', async () => {
@@ -3466,6 +3512,7 @@ describe('POST /api/workspaces/:id/push', () => {
     const data = await res.json()
     expect(data.ok).toBe(true)
     expect(data.branch).toBe('feature/test')
+    expect(data.upToDate).toBe(false)
     expect(vi.mocked(gitOps.pushBranchAsync)).toHaveBeenCalledWith(
       expect.stringContaining('.worktrees'),
       'feature/test',
@@ -6841,13 +6888,45 @@ describe('POST /api/workspaces/:id/force-push', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
+    vi.mocked(gitOps.pushBranchAsync).mockReset()
+    vi.mocked(gitOps.pushBranchAsync).mockResolvedValue({ upToDate: false })
+    vi.mocked(gitOps.getOngoingGitOperation).mockReturnValue(null)
+  })
+
+  it('returns 409 operation_in_progress and does not push during a rebase', async () => {
+    vi.mocked(gitOps.getOngoingGitOperation).mockReturnValue('rebase')
+    const res = await app.request('/api/workspaces/ws-1/force-push', { method: 'POST' })
+    expect(res.status).toBe(409)
+    expect(await res.json()).toEqual({
+      error: expect.any(String),
+      code: 'operation_in_progress',
+      operation: 'rebase',
+    })
+    expect(gitOps.pushBranchAsync).not.toHaveBeenCalled()
+  })
+
+  it('returns upToDate=true and a "nothing to push" trace when the remote already had everything', async () => {
+    vi.mocked(gitOps.pushBranchAsync).mockResolvedValue({ upToDate: true })
+    vi.mocked(workspaceService.getActiveSession).mockReturnValue({ id: 's-1' } as never)
+    const res = await app.request('/api/workspaces/ws-1/force-push', { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ success: true, upToDate: true })
+    const { emit } = await import('../server/services/websocket-service.js')
+    expect(vi.mocked(emit)).toHaveBeenCalledWith(
+      'ws-1',
+      'user:message',
+      expect.objectContaining({
+        content: `Nothing to push: branch ${fakeWorkspace.workingBranch} is already up to date on origin`,
+      }),
+      's-1',
+    )
   })
 
   it('calls pushBranch with force:true and returns success', async () => {
     const res = await app.request('/api/workspaces/ws-1/force-push', { method: 'POST' })
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body).toMatchObject({ success: true })
+    expect(body).toMatchObject({ success: true, upToDate: false })
     expect(gitOps.pushBranchAsync).toHaveBeenCalledWith(fakeWorkspace.worktreePath, fakeWorkspace.workingBranch, {
       force: true,
     })

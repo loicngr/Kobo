@@ -1012,6 +1012,7 @@ import { resolveCreateOverrides } from 'src/utils/create-overrides'
 import { loadCreatePagePrefs, saveCreatePagePrefs } from 'src/utils/create-page-prefs'
 import { buildTemplateVars, expandTemplate } from 'src/utils/expand-template'
 import { playNotificationSound } from 'src/utils/notifications'
+import { prefillFromPr } from 'src/utils/pr-prefill'
 import { projectNameForPath } from 'src/utils/project-color'
 import { registerUnsavedScope, unregisterUnsavedScope } from 'src/utils/unsaved-guard'
 import { applyPreset, capturePreset, type PresetFormState, type WorkspacePreset } from 'src/utils/workspace-preset'
@@ -1842,6 +1843,9 @@ const canImportFromPr = ref(false)
 const showPrPicker = ref(false)
 const showPrCheckoutStepper = ref(false)
 const selectedPr = ref<PullRequestSummary | null>(null)
+// What the last PR import wrote into name / description, so importing another
+// PR after unlocking replaces those values but never an edit the user made.
+const lastPrefill = ref<{ name: string; description: string } | null>(null)
 const prCheckoutLocked = ref(false)
 const lockedPrNumber = ref<number | null>(null)
 // Captured separately from `selectedPr` because that ref is cleared whenever
@@ -1891,6 +1895,17 @@ function onPrResolved(result: {
   prCheckoutLocked.value = true
   lockedPrNumber.value = selectedPr.value?.number ?? null
   lockedPrUrl.value = selectedPr.value?.url ?? null
+  if (selectedPr.value) {
+    const filled = prefillFromPr(
+      selectedPr.value,
+      { name: workspaceName.value, description: description.value },
+      t,
+      lastPrefill.value ?? undefined,
+    )
+    workspaceName.value = filled.name
+    description.value = filled.description
+    lastPrefill.value = filled
+  }
   $q.notify({
     type: 'positive',
     message: t('createPage.prReadyToCreate', { number: lockedPrNumber.value ?? '' }),
@@ -1923,6 +1938,7 @@ function unlockPrCheckout() {
   selectedWorktreePath.value = null
   branch.value = null
   selectedPr.value = null
+  lastPrefill.value = null
   lockedPrNumber.value = null
   lockedPrUrl.value = null
 }

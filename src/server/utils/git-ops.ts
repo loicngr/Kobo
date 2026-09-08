@@ -31,6 +31,10 @@ export function buildNonInteractiveGitEnv(): NodeJS.ProcessEnv {
     ...process.env,
     GIT_TERMINAL_PROMPT: '0',
     GIT_ASKPASS: 'echo',
+    // Several callers parse git's human-readable output ("Everything
+    // up-to-date", "already exists", "N files changed"). Pin the C locale so a
+    // translated git never silently defeats those checks.
+    LC_ALL: 'C',
     // `GIT_ASKPASS` only covers HTTP(S) credential prompts. A passphrase-
     // protected SSH key with no running agent still blocks `ssh` on
     // `/dev/tty`; `BatchMode=yes` makes that interactive auth fail in ~1s
@@ -88,14 +92,24 @@ async function gitAsync(repoPath: string, args: string[], timeout = READ_ONLY_GI
  * over a slow link froze the entire app for up to a minute, heartbeat included.
  */
 async function gitNetworkAsync(repoPath: string, args: string[]): Promise<string> {
-  const { stdout } = await execFileAsync('git', args, {
+  const { stdout } = await gitNetworkAsyncFull(repoPath, args)
+  return stdout
+}
+
+/**
+ * Same as `gitNetworkAsync` but also hands back stderr: git prints push
+ * progress and the "Everything up-to-date" notice there, not on stdout, and a
+ * caller that wants to distinguish a no-op push from a real one needs it.
+ */
+async function gitNetworkAsyncFull(repoPath: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+  const { stdout, stderr } = await execFileAsync('git', args, {
     cwd: repoPath,
     encoding: 'utf-8',
     timeout: SYNC_GIT_TIMEOUT_MS,
     maxBuffer: GIT_MAX_BUFFER_BYTES,
     env: NON_INTERACTIVE_GIT_ENV,
   })
-  return stdout.trimEnd()
+  return { stdout: stdout.trimEnd(), stderr: stderr.trimEnd() }
 }
 
 /** Raised when a stale `index.lock` blocks every write on a worktree. */
@@ -438,6 +452,22 @@ export function mergeBranch(repoPath: string, baseBranch: string, opts?: { autos
 }
 
 /**
+ * Read `git push --porcelain` stdout. Each ref line is `<flag>\t<from>:<to>\t<summary>`
+ * where the flag is `=` (up to date), ` ` (fast-forward), `+` (forced), `*`
+ * (new ref), `-` (deleted) or `!` (rejected). Returns `true` when every ref is
+ * up to date, `false` when at least one moved, `null` when there is no ref
+ * line at all so the caller can fall back to another signal. Exported for tests.
+ */
+export function parsePushPorcelain(stdout: string): boolean | null {
+  const flags = stdout
+    .split('\n')
+    .filter((line) => /^[=+*\-! ]\t/.test(line))
+    .map((line) => line[0])
+  if (flags.length === 0) return null
+  return flags.every((flag) => flag === '=')
+}
+
+/**
  * Async variants of the network operations, for the HTTP handlers.
  *
  * They mirror their synchronous twins one for one — same arguments, same
@@ -450,13 +480,18 @@ export async function pushBranchAsync(
   repoPath: string,
   branchName: string,
   options: { remote?: string; force?: boolean } = {},
-): Promise<void> {
+): Promise<{ upToDate: boolean }> {
   const remote = options.remote ?? 'origin'
-  const args = ['push', '-u']
+  const args = ['push', '-u', '--porcelain']
   if (options.force) args.push('--force-with-lease')
   args.push(remote, branchName)
   try {
-    await gitNetworkAsync(repoPath, args)
+    const { stdout, stderr } = await gitNetworkAsyncFull(repoPath, args)
+    // `git push` exits 0 either way. `--porcelain` gives a locale-independent
+    // per-ref status line on stdout; the stderr notice is only a fallback for
+    // a git old enough to print nothing parseable.
+    const upToDate = parsePushPorcelain(stdout) ?? stderr.includes('Everything up-to-date')
+    return { upToDate }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     throw new Error(`Failed to push branch '${branchName}' to '${remote}': ${message}`)

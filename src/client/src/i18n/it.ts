@@ -468,6 +468,7 @@ export default {
   'createPage.importPrNotSupported': "Il forge di questo progetto non supporta l'elenco delle pull request",
   'createPage.lockedToPr': 'Bloccato sulla PR #{number}',
   'createPage.prReadyToCreate': 'PR #{number} importata — il workspace può essere creato.',
+  'createPage.prResumeIntro': 'Ripresa del lavoro sulla pull request esistente #{number} "{title}" ({url}).',
   'createPage.unlockPrCheckout': 'Sblocca',
   'createPage.workspaceName': 'Nome del workspace (predefinito: titolo della pagina Notion)',
   'createPage.workspaceNamePlaceholder': 'Nome del workspace...',
@@ -1104,6 +1105,8 @@ export default {
   'git.push': 'Push',
   'git.forcePush': 'Force push',
   'git.forcePushToggle': 'Force push (--force-with-lease)',
+  'git.pushBlockedByOperation': "Prima completa o annulla l'operazione {operation} in corso",
+  'git.pushUpToDate': 'Niente da inviare: il branch è già aggiornato su origin',
   'git.forcePushHint':
     'Più sicuro di --force: il push viene rifiutato se il remoto ha commit che non hai visto. Da usare dopo un rebase o amend di commit già pushati.',
   'git.branchForcePushed': 'Branch force-pushed',

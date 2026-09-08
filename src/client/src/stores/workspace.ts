@@ -126,12 +126,28 @@ export interface CreateWorkspaceInput {
   comparisonId?: string
 }
 
+export interface PushResult {
+  ok: true
+  branch: string
+  /** True when origin already had every commit: nothing was sent. */
+  upToDate: boolean
+}
+
+// Older servers answered push routes with an empty body; treat that as a real push.
+async function parsePushResult(res: Response): Promise<PushResult> {
+  const data = (await res.json().catch(() => ({}))) as Partial<PushResult>
+  return { ok: true, branch: data.branch ?? '', upToDate: data.upToDate === true }
+}
+
 export class WorkspaceActionError extends Error {
   code?: string
-  constructor(message: string, code?: string) {
+  /** Git operation named by an `operation_in_progress` 409 (merge / rebase / cherry-pick). */
+  operation?: string
+  constructor(message: string, code?: string, operation?: string) {
     super(message)
     this.name = 'WorkspaceActionError'
     this.code = code
+    this.operation = operation
   }
 }
 
@@ -219,6 +235,12 @@ export interface GitStats {
   deletions: number
   prUrl: string | null
   prState: 'OPEN' | 'CLOSED' | 'MERGED' | null
+  /**
+   * Git operation the worktree is paused in (conflicted merge / rebase /
+   * cherry-pick), refreshed by the 15 s poll. Optional until every server
+   * reports it; absent means unknown, not "none".
+   */
+  ongoingOperation?: 'merge' | 'rebase' | 'cherry-pick' | null
   unpushedCount: number // -1 = no upstream
   workingTree: { staged: number; modified: number; untracked: number }
   forge?: ForgeInfo
@@ -1130,7 +1152,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
-    async pushBranch(id: string, options: { force?: boolean } = {}): Promise<void> {
+    async pushBranch(id: string, options: { force?: boolean } = {}): Promise<PushResult> {
       const res = await fetch(`/api/workspaces/${id}/push`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1138,8 +1160,19 @@ export const useWorkspaceStore = defineStore('workspace', {
       })
       if (!res.ok) {
         const err = await res.json().catch(() => ({ error: 'Push failed' }))
-        throw new WorkspaceActionError(err.error ?? 'Push failed', err.code)
+        throw new WorkspaceActionError(err.error ?? 'Push failed', err.code, err.operation)
       }
+      return parsePushResult(res)
+    },
+
+    /** `POST /force-push`: the `--force-with-lease` path offered after a source-branch change. */
+    async forcePushBranch(id: string): Promise<PushResult> {
+      const res = await fetch(`/api/workspaces/${id}/force-push`, { method: 'POST' })
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Push failed' }))
+        throw new WorkspaceActionError(err.error ?? 'Push failed', err.code, err.operation)
+      }
+      return parsePushResult(res)
     },
 
     async fetchGitStats(id: string, opts: { freshFetch?: boolean; signal?: AbortSignal } = {}): Promise<GitStats> {

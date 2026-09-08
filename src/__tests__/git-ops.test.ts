@@ -41,8 +41,10 @@ import {
   listRemoteBranches,
   localBranchExists,
   mergeBranch,
+  parsePushPorcelain,
   pullBranch,
   pushBranch,
+  pushBranchAsync,
   rebaseBranch,
   rollbackFile,
   slugifyBranchSegment,
@@ -186,6 +188,52 @@ describe('deleteLocalBranch(repoPath, branchName)', () => {
 describe('deleteRemoteBranch(repoPath, branchName)', () => {
   it('lève une erreur si pas de remote configuré', () => {
     expect(() => deleteRemoteBranch(repoDir, 'feature/no-remote')).toThrow()
+  })
+})
+
+describe('parsePushPorcelain', () => {
+  it('reports up to date when every ref line starts with "="', () => {
+    expect(parsePushPorcelain('To /tmp/bare\n=\trefs/heads/main:refs/heads/main\t[up to date]\nDone')).toBe(true)
+  })
+
+  it('reports a moved ref for "*", "+" and fast-forward (space) lines', () => {
+    expect(parsePushPorcelain('To x\n*\trefs/heads/main:refs/heads/main\t[new branch]\nDone')).toBe(false)
+    expect(parsePushPorcelain('To x\n+\trefs/heads/main:refs/heads/main\tabc...def (forced update)\nDone')).toBe(false)
+    expect(parsePushPorcelain('To x\n \trefs/heads/main:refs/heads/main\tabc..def\nDone')).toBe(false)
+  })
+
+  it('returns null when no ref line is present so the caller can fall back to stderr', () => {
+    expect(parsePushPorcelain('')).toBeNull()
+    expect(parsePushPorcelain('Done')).toBeNull()
+  })
+})
+
+describe('pushBranchAsync', () => {
+  it('reports upToDate=false on a push that moves the remote, then true when nothing changed', async () => {
+    const repo = mkdtempSync(path.join(tmpdir(), 'at-git-push-async-'))
+    const bare = mkdtempSync(path.join(tmpdir(), 'at-remote-async-'))
+    try {
+      execFileSync('git', ['init', '-b', 'main'], { cwd: repo })
+      execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: repo })
+      execFileSync('git', ['config', 'user.name', 'test'], { cwd: repo })
+      writeFileSync(path.join(repo, 'f.txt'), 'hello')
+      execFileSync('git', ['add', '.'], { cwd: repo })
+      execFileSync('git', ['commit', '-m', 'init'], { cwd: repo })
+      execFileSync('git', ['init', '--bare'], { cwd: bare })
+      execFileSync('git', ['remote', 'add', 'origin', bare], { cwd: repo })
+
+      await expect(pushBranchAsync(repo, 'main')).resolves.toEqual({ upToDate: false })
+      // Second push with no new commit: the porcelain ref line starts with "=".
+      await expect(pushBranchAsync(repo, 'main')).resolves.toEqual({ upToDate: true })
+      // A new commit moves the ref again.
+      writeFileSync(path.join(repo, 'g.txt'), 'more')
+      execFileSync('git', ['add', '.'], { cwd: repo })
+      execFileSync('git', ['commit', '-m', 'second'], { cwd: repo })
+      await expect(pushBranchAsync(repo, 'main')).resolves.toEqual({ upToDate: false })
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+      rmSync(bare, { recursive: true, force: true })
+    }
   })
 })
 
@@ -1517,6 +1565,10 @@ describe('buildNonInteractiveGitEnv — SSH prompt suppression', () => {
   it('defaults GIT_SSH_COMMAND to a batch-mode ssh when the user set none', () => {
     delete process.env.GIT_SSH_COMMAND
     expect(buildNonInteractiveGitEnv().GIT_SSH_COMMAND).toBe('ssh -o BatchMode=yes')
+  })
+
+  it('forces the C locale so stderr / stdout parsers never see translated git output', () => {
+    expect(buildNonInteractiveGitEnv().LC_ALL).toBe('C')
   })
 
   it('preserves a user-provided GIT_SSH_COMMAND and only appends BatchMode', () => {

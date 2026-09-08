@@ -333,10 +333,10 @@
               :label="$t('git.push')"
               class="full-width git-btn"
               :loading="pushing"
-              :disable="!workspace || openingPr || pulling || rebasing || isArchived"
+              :disable="!workspace || openingPr || pulling || rebasing || isArchived || operationInProgress"
               @click="handlePush"
             >
-              <q-tooltip anchor="bottom middle" self="top middle" :delay="400">{{ $t('git.push') }}</q-tooltip>
+              <q-tooltip anchor="bottom middle" self="top middle" :delay="400">{{ pushBlockedTooltip ?? $t('git.push') }}</q-tooltip>
             </q-btn>
           </div>
 
@@ -399,9 +399,10 @@
                   <q-item
                     clickable
                     v-close-popup
-                    :disable="!workspace || pushing || isArchived"
+                    :disable="!workspace || pushing || isArchived || operationInProgress"
                     @click="handleForcePush"
                   >
+                    <q-tooltip v-if="pushBlockedTooltip">{{ pushBlockedTooltip }}</q-tooltip>
                     <q-item-section avatar style="min-width: 28px;">
                       <q-icon name="upload" size="16px" color="orange-6" />
                     </q-item-section>
@@ -747,7 +748,7 @@ import PrPanel from 'src/components/PrPanel.vue'
 import { useTours } from 'src/composables/use-tours'
 import { useSettingsStore } from 'src/stores/settings'
 import type { BranchCommit, ForgeInfo, GitStats, Workspace } from 'src/stores/workspace'
-import { useWorkspaceStore, WorkspaceActionError } from 'src/stores/workspace'
+import { type PushResult, useWorkspaceStore, WorkspaceActionError } from 'src/stores/workspace'
 import { copyToClipboard } from 'src/utils/clipboard'
 import { needsScrollableOutput } from 'src/utils/git-output'
 import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
@@ -920,6 +921,22 @@ function formatCommitDate(iso: string): string {
 const conflictDialog = ref(false)
 const conflictOperation = ref<'merge' | 'rebase' | 'cherry-pick' | null>(null)
 const conflictFiles = ref<string[]>([])
+// A paused merge / rebase / cherry-pick leaves the worktree mid-operation:
+// pushing would publish a half-applied branch, so the server refuses with a
+// 409 and the buttons stay disabled until the operation is finished or
+// aborted. While a conflict / source-change dialogue is open it owns the
+// lock: the stats may predate the operation and still say `null`. Otherwise
+// the git-stats poll is the source of truth, since it also sees an operation
+// the agent started or finished on its own.
+const ongoingOperation = computed(() =>
+  conflictDialog.value || sourceChangeErrorDialog.value
+    ? conflictOperation.value
+    : (gitStats.value?.ongoingOperation ?? null),
+)
+const operationInProgress = computed(() => ongoingOperation.value !== null)
+const pushBlockedTooltip = computed(() =>
+  ongoingOperation.value ? t('git.pushBlockedByOperation', { operation: ongoingOperation.value }) : null,
+)
 const conflictAborting = ref(false)
 const conflictResolving = ref(false)
 const conflictContinuing = ref(false)
@@ -943,7 +960,10 @@ const sourceChangeAborting = ref(false)
 function openSourceChangeErrorDialog(msg: string, op: 'cherry-pick' | 'merge' | 'rebase') {
   sourceChangeErrorMessage.value = msg
   sourceChangeErrorOperation.value = op
+  // The worktree is paused in `op`: lock the push buttons like a conflict does.
+  conflictOperation.value = op
   sourceChangeErrorDialog.value = true
+  loadGitStats()
 }
 
 async function abortSourceChange() {
@@ -957,6 +977,7 @@ async function abortSourceChange() {
     }
     $q.notify({ type: 'positive', message: t('git.conflictAborted'), position: 'top' })
     sourceChangeErrorDialog.value = false
+    conflictOperation.value = null
     loadGitStats()
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Abort failed'
@@ -1390,6 +1411,8 @@ function openConflictDialog(op: 'merge' | 'rebase' | 'cherry-pick', files: strin
   conflictOperation.value = op
   conflictFiles.value = files
   conflictDialog.value = true
+  // Refresh so the stats carry the operation as soon as it starts.
+  loadGitStats()
 }
 
 function openDirtyDialog(
@@ -1533,17 +1556,32 @@ function abortGitOperation() {
   }).onOk(() => void runAbortGitOperation())
 }
 
+// Shared by abort / continue when the server answers 409: the operation no
+// longer exists, so the dialogue and the local lock are stale.
+function settleFinishedOperation() {
+  conflictDialog.value = false
+  conflictOperation.value = null
+  loadGitStats()
+}
+
 async function runAbortGitOperation() {
   if (!props.workspace) return
   conflictAborting.value = true
   try {
     const res = await fetch(`/api/workspaces/${props.workspace.id}/git/abort`, { method: 'POST' })
+    if (res.status === 409) {
+      // The operation is already over (the agent finished it meanwhile):
+      // nothing to abort, so drop the stale dialogue instead of blocking.
+      settleFinishedOperation()
+      return
+    }
     if (!res.ok) {
       const data = await res.json()
       throw new Error(data.error ?? 'Abort failed')
     }
     $q.notify({ type: 'positive', message: t('git.conflictAborted'), position: 'top' })
     conflictDialog.value = false
+    conflictOperation.value = null
     loadGitStats()
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Abort failed'
@@ -1558,12 +1596,17 @@ async function continueGitOperation() {
   conflictContinuing.value = true
   try {
     const res = await fetch(`/api/workspaces/${props.workspace.id}/git/continue`, { method: 'POST' })
+    if (res.status === 409) {
+      settleFinishedOperation()
+      return
+    }
     if (!res.ok) {
       const data = await res.json()
       throw new Error(data.error ?? 'Continue failed')
     }
     $q.notify({ type: 'positive', message: t('git.conflictContinued'), position: 'top' })
     conflictDialog.value = false
+    conflictOperation.value = null
     loadGitStats()
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Continue failed'
@@ -1588,6 +1631,9 @@ async function resolveWithAgent() {
     }
     $q.notify({ type: 'positive', message: t('git.conflictHandoffSuccess'), position: 'top' })
     conflictDialog.value = false
+    // The agent now owns the resolution and this panel cannot tell when it
+    // lands; release the local lock and let the server's 409 cover the gap.
+    conflictOperation.value = null
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Handoff failed'
     $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
@@ -1603,20 +1649,43 @@ async function resolveWithAgent() {
  * d'envoi forcé — lequel a désormais sa propre entrée, avec sa propre
  * confirmation.
  */
+/**
+ * `/push` and `/force-push` share one response contract: 409
+ * `operation_in_progress` while a merge / rebase / cherry-pick is paused,
+ * `upToDate` on success when origin already had everything. Both callers
+ * report it the same way.
+ */
+function notifyPushOutcome(result: PushResult, successMessage: string) {
+  if (result.upToDate) {
+    $q.notify({ type: 'warning', message: t('git.pushUpToDate'), position: 'top' })
+  } else {
+    $q.notify({ type: 'positive', message: successMessage, position: 'top' })
+  }
+  loadGitStats()
+}
+
+function notifyPushFailure(e: unknown) {
+  if (e instanceof WorkspaceActionError && e.code === 'operation_in_progress') {
+    $q.notify({
+      type: 'warning',
+      message: t('git.pushBlockedByOperation', { operation: e.operation ?? conflictOperation.value ?? 'rebase' }),
+      position: 'top',
+      timeout: 6000,
+    })
+    return
+  }
+  const msg = e instanceof Error ? e.message : 'Push failed'
+  $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+}
+
 async function runPush(force: boolean) {
   if (!props.workspace) return
   pushing.value = true
   try {
-    await store.pushBranch(props.workspace.id, { force })
-    $q.notify({
-      type: 'positive',
-      message: force ? t('git.branchForcePushed') : t('git.branchPushed'),
-      position: 'top',
-    })
-    loadGitStats()
+    const result = await store.pushBranch(props.workspace.id, { force })
+    notifyPushOutcome(result, force ? t('git.branchForcePushed') : t('git.branchPushed'))
   } catch (e) {
-    const msg = e instanceof Error ? e.message : 'Push failed'
-    $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+    notifyPushFailure(e)
   } finally {
     pushing.value = false
   }
@@ -1832,16 +1901,10 @@ function promptForcePush() {
     if (!props.workspace) return
     pushing.value = true
     try {
-      const res = await fetch(`/api/workspaces/${props.workspace.id}/force-push`, { method: 'POST' })
-      if (!res.ok) {
-        const data = await res.json()
-        throw new Error(data.error ?? 'Failed')
-      }
-      $q.notify({ type: 'positive', message: t('git.changeSourceForcePushDone'), position: 'top' })
-      loadGitStats()
+      const result = await store.forcePushBranch(props.workspace.id)
+      notifyPushOutcome(result, t('git.changeSourceForcePushDone'))
     } catch (e) {
-      const msg = e instanceof Error ? e.message : 'Failed'
-      $q.notify({ type: 'negative', message: msg, position: 'top', timeout: 6000 })
+      notifyPushFailure(e)
     } finally {
       pushing.value = false
     }

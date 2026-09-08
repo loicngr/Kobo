@@ -6,6 +6,7 @@ vi.mock('../server/utils/git-ops.js', () => ({
   getStructuredDiffStatsBetweenAsync: vi.fn(() => Promise.resolve({ filesChanged: 5, insertions: 40, deletions: 12 })),
   getUnpushedCountAsync: vi.fn(() => Promise.resolve(2)),
   getWorkingTreeStatusAsync: vi.fn(() => Promise.resolve({ staged: 1, modified: 2, untracked: 0 })),
+  getOngoingGitOperation: vi.fn(() => null),
 }))
 vi.mock('../server/services/forge/resolve.js', () => ({ resolveForge: vi.fn(() => 'github') }))
 vi.mock('../server/services/forge/registry.js', () => ({
@@ -17,6 +18,7 @@ vi.mock('../server/services/forge/registry.js', () => ({
 }))
 
 import { computeGitStats } from '../server/services/git-stats-service.js'
+import * as gitOps from '../server/utils/git-ops.js'
 
 const ws = { worktreePath: '/wt', sourceBranch: 'main', workingBranch: 'feat/x', projectPath: '/proj' }
 
@@ -33,6 +35,7 @@ describe('computeGitStats', () => {
       prState: 'OPEN',
       unpushedCount: 2,
       workingTree: { staged: 1, modified: 2, untracked: 0 },
+      ongoingOperation: null,
       forge: {
         id: 'github',
         capabilities: { canCreatePr: true, canChangePrBase: true, requestTermShort: 'PR' },
@@ -46,5 +49,12 @@ describe('computeGitStats', () => {
     const result = await computeGitStats(ws, null)
     expect(result.prUrl).toBeNull()
     expect(result.prState).toBeNull()
+  })
+
+  it('surfaces an in-flight rebase as ongoingOperation', async () => {
+    vi.mocked(gitOps.getOngoingGitOperation).mockReturnValueOnce('rebase')
+    const result = await computeGitStats(ws, null)
+    expect(result.ongoingOperation).toBe('rebase')
+    expect(gitOps.getOngoingGitOperation).toHaveBeenCalledWith('/wt')
   })
 })

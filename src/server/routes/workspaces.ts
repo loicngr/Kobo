@@ -4027,15 +4027,30 @@ app.post('/:id/push', async (c) => {
 
     const worktreePath = workspace.worktreePath
 
+    // While a rebase / merge / cherry-pick is in flight the local branch ref
+    // has not moved yet, so `git push` would exit 0 with "Everything
+    // up-to-date" and the user would see nothing happen. Refuse instead.
+    const ongoing = gitOps.getOngoingGitOperation(worktreePath)
+    if (ongoing) {
+      return c.json(
+        {
+          error: `Cannot push while a ${ongoing} is in progress on branch '${workspace.workingBranch}'. Finish or abort it first.`,
+          code: 'operation_in_progress',
+          operation: ongoing,
+        },
+        409,
+      )
+    }
+
+    let upToDate: boolean
     try {
       // Only pass an options arg when force is requested — keeps the
       // no-options call shape identical to before for callers/tests that
       // assert on argument count.
-      if (force) {
-        await gitOps.pushBranchAsync(worktreePath, workspace.workingBranch, { force: true })
-      } else {
-        await gitOps.pushBranchAsync(worktreePath, workspace.workingBranch)
-      }
+      const result = force
+        ? await gitOps.pushBranchAsync(worktreePath, workspace.workingBranch, { force: true })
+        : await gitOps.pushBranchAsync(worktreePath, workspace.workingBranch)
+      upToDate = result.upToDate
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       return c.json({ error: message }, 500)
@@ -4046,11 +4061,16 @@ app.post('/:id/push', async (c) => {
     wsService.emit(
       id,
       'user:message',
-      { content: `Pushed branch ${workspace.workingBranch} to origin`, sender: 'system-prompt' },
+      {
+        content: upToDate
+          ? `Nothing to push: branch ${workspace.workingBranch} is already up to date on origin`
+          : `Pushed branch ${workspace.workingBranch} to origin`,
+        sender: 'system-prompt',
+      },
       session?.id ?? undefined,
     )
 
-    return c.json({ ok: true, branch: workspace.workingBranch })
+    return c.json({ ok: true, branch: workspace.workingBranch, upToDate })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
@@ -4543,8 +4563,37 @@ app.post('/:id/force-push', async (c) => {
     const id = c.req.param('id')
     const workspace = workspaceService.getWorkspace(id)
     if (!workspace) return c.json({ error: `Workspace '${id}' not found` }, 404)
-    await gitOps.pushBranchAsync(workspace.worktreePath, workspace.workingBranch, { force: true })
-    return c.json({ success: true })
+    // Same guard as /push: mid-rebase the branch ref has not moved, so the
+    // force push would be a silent "Everything up-to-date" no-op.
+    const ongoing = gitOps.getOngoingGitOperation(workspace.worktreePath)
+    if (ongoing) {
+      return c.json(
+        {
+          error: `Cannot force push while a ${ongoing} is in progress on branch '${workspace.workingBranch}'. Finish or abort it first.`,
+          code: 'operation_in_progress',
+          operation: ongoing,
+        },
+        409,
+      )
+    }
+    const { upToDate } = await gitOps.pushBranchAsync(workspace.worktreePath, workspace.workingBranch, {
+      force: true,
+    })
+    if (upToDate) {
+      // This route never traced its pushes; only the surprising no-op case is
+      // worth a line in the chat, so the user knows why nothing changed.
+      const session = workspaceService.getActiveSession(id)
+      wsService.emit(
+        id,
+        'user:message',
+        {
+          content: `Nothing to push: branch ${workspace.workingBranch} is already up to date on origin`,
+          sender: 'system-prompt',
+        },
+        session?.id ?? undefined,
+      )
+    }
+    return c.json({ success: true, upToDate })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)

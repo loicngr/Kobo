@@ -102,8 +102,22 @@ export interface PullRequestSummary {
   isFork: boolean
   isDraft: boolean
   updatedAt: string
+  /** PR/MR description, empty when absent, capped at `PR_BODY_MAX_CHARS`. */
+  body: string
   ci: PrSnapshot['ci']['rollup']
   reviewDecision: PrSnapshot['reviewDecision']
+}
+
+/**
+ * Cap on `PullRequestSummary.body`. The picker lists up to a page of PRs at a
+ * time and the create form only needs enough to prefill a description, so a
+ * multi-megabyte body would be pure transfer cost.
+ */
+export const PR_BODY_MAX_CHARS = 4000
+
+/** Normalise a raw CLI body into `PullRequestSummary.body`. */
+export function truncatePrBody(value: unknown): string {
+  return typeof value === 'string' ? value.slice(0, PR_BODY_MAX_CHARS) : ''
 }
 
 /** One page. `nextCursor === null` means the listing is exhausted. */

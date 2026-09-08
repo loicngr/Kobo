@@ -464,6 +464,7 @@ export default {
   'createPage.importPrNotSupported': 'El forge de este proyecto no admite listar pull requests',
   'createPage.lockedToPr': 'Bloqueado a la PR #{number}',
   'createPage.prReadyToCreate': 'PR #{number} importada — el workspace puede crearse.',
+  'createPage.prResumeIntro': 'Continuación del trabajo en la pull request existente #{number} "{title}" ({url}).',
   'createPage.unlockPrCheckout': 'Desbloquear',
   'createPage.workspaceName': 'Nombre del workspace (por defecto el título de la página Notion)',
   'createPage.workspaceNamePlaceholder': 'Nombre del workspace...',
@@ -1107,6 +1108,8 @@ export default {
   'git.push': 'Push',
   'git.forcePush': 'Force push',
   'git.forcePushToggle': 'Force push (--force-with-lease)',
+  'git.pushBlockedByOperation': 'Primero termina o aborta la operación {operation} en curso',
+  'git.pushUpToDate': 'Nada que enviar: la rama ya está actualizada en origin',
   'git.forcePushHint':
     'Más seguro que --force: el push se rechaza si el remoto tiene commits que no has visto. Úsalo tras un rebase o amend de commits ya pusheados.',
   'git.branchForcePushed': 'Rama force-pushed',

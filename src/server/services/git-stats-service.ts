@@ -16,6 +16,9 @@ export interface GitStatsResult {
   prState: 'OPEN' | 'CLOSED' | 'MERGED' | null
   unpushedCount: number
   workingTree: { staged: number; modified: number; untracked: number }
+  /** Git operation left in flight on the worktree (conflict or paused
+   *  rebase). Lets the client disable push while the branch ref cannot move. */
+  ongoingOperation: 'merge' | 'rebase' | 'cherry-pick' | null
   forge: { id: ForgeId; capabilities: ForgeCapabilities; availability: ForgeAvailability }
   /** Epoch ms when these stats were computed (server clock). Lets the client
    *  merge git-stats monotonically and never replace fresher on-demand stats
@@ -61,6 +64,8 @@ export async function computeGitStats(
     prState: prSnapshot?.state ?? null,
     unpushedCount,
     workingTree,
+    // Sync and local (a few stat calls); not worth a slot in the Promise.all.
+    ongoingOperation: gitOps.getOngoingGitOperation(worktreePath),
     forge: { id: forgeProvider.id, capabilities: forgeProvider.capabilities, availability },
     computedAt: Date.now(),
   }
