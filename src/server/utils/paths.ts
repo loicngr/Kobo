@@ -108,6 +108,11 @@ export function getTemplatesPath(): string {
   return path.join(getKoboHome(), 'templates.json')
 }
 
+/** Saved create-form presets. Same directory as templates.json and settings.json. */
+export function getWorkspaceTemplatesPath(): string {
+  return path.join(getKoboHome(), 'workspace-templates.json')
+}
+
 /**
  * Absolute path to the compiled MCP server entry (shipped in the published
  * package as dist/mcp-server/kobo-tasks-server.js). Returns null if not

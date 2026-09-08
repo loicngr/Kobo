@@ -27,6 +27,7 @@
       @run-setup="emit('runSetup', $event)"
       @toggle-favorite="emit('toggleFavorite', $event)"
       @manage-tags="emit('manageTags', $event)"
+      @duplicate="emit('duplicate', $event)"
       @archive="(ws, ev) => emit('archive', ws, ev)"
       @unarchive="(ws, ev) => emit('unarchive', ws, ev)"
       @purge-worktree="(ws, ev) => emit('purgeWorktree', ws, ev)"
@@ -121,6 +122,7 @@ const emit = defineEmits<{
   runSetup: [ws: Workspace]
   toggleFavorite: [ws: Workspace]
   manageTags: [ws: Workspace]
+  duplicate: [ws: Workspace]
   archive: [ws: Workspace, event: Event]
   unarchive: [ws: Workspace, event: Event]
   purgeWorktree: [ws: Workspace, event: Event]

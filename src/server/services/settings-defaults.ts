@@ -81,3 +81,14 @@ export function getSettingsDefaults(): SettingsDefaults {
     changeSourceBranchScript: DEFAULT_CHANGE_SOURCE_BRANCH_SCRIPT,
   }
 }
+
+/**
+ * Model each engine starts on when nothing else is configured. `auto` used to
+ * be the seed (let the CLI pick), but a workspace created without thinking
+ * about it should land on a known, current model, not on whatever the CLI's own
+ * default happens to be that week.
+ */
+export const DEFAULT_MODEL_BY_ENGINE: Readonly<Record<string, string>> = {
+  'claude-code': 'claude-sonnet-5',
+  codex: 'gpt-5.6-terra',
+}

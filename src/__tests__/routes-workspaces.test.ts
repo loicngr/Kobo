@@ -335,6 +335,10 @@ vi.mock('../server/services/chat-history-service.js', () => ({
   pushChatHistory: vi.fn(),
 }))
 
+vi.mock('../server/services/workspace-template-service.js', () => ({
+  presetFromWorkspace: vi.fn(),
+}))
+
 vi.mock('../server/services/file-editor-service.js', () => ({
   saveWorkspaceFile: vi.fn(),
   shaOf: vi.fn((s: string) => `sha-${s.length}`),
@@ -7778,6 +7782,7 @@ describe('GET /api/workspaces/:id/comparison', () => {
         workspace: { id: string }
         gitStats: { insertions: number } | null
         tasks: { done: number; total: number }
+        activity: { sessions: number; questions: number }
       }>
     }
     expect(body.comparisonId).toBe('cmp_1')
@@ -7787,9 +7792,8 @@ describe('GET /api/workspaces/:id/comparison', () => {
       { done: 2, total: 3 },
       { done: 0, total: 1 },
     ])
-    const withActivity = body.members as Array<{ activity: { sessions: number; questions: number } }>
-    expect(withActivity.map((m) => m.activity.sessions)).toEqual([2, 1])
-    expect(withActivity[0].activity.questions).toBe(1)
+    expect(body.members.map((m) => m.activity.sessions)).toEqual([2, 1])
+    expect(body.members[0].activity.questions).toBe(1)
   })
 
   it('reports a null stat rather than inventing zeros when nothing was measured yet', async () => {
@@ -7818,6 +7822,30 @@ describe('GET /api/workspaces/:id/comparison', () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(null)
 
     const res = await app.request('/api/workspaces/missing/comparison')
+
+    expect(res.status).toBe(404)
+  })
+})
+
+describe('GET /api/workspaces/:id/preset', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('returns the preset derived from the workspace', async () => {
+    const templateService = await import('../server/services/workspace-template-service.js')
+    vi.mocked(templateService.presetFromWorkspace).mockReturnValue({ engine: 'codex', tasks: ['a'] })
+
+    const res = await app.request('/api/workspaces/ws-1/preset')
+
+    expect(res.status).toBe(200)
+    expect(await res.json()).toEqual({ preset: { engine: 'codex', tasks: ['a'] } })
+    expect(templateService.presetFromWorkspace).toHaveBeenCalledWith('ws-1')
+  })
+
+  it('404s on an unknown workspace', async () => {
+    const templateService = await import('../server/services/workspace-template-service.js')
+    vi.mocked(templateService.presetFromWorkspace).mockReturnValue(null)
+
+    const res = await app.request('/api/workspaces/missing/preset')
 
     expect(res.status).toBe(404)
   })

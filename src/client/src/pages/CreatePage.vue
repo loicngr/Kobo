@@ -7,6 +7,76 @@
         <div class="text-body1 text-kobo-2 q-mt-xs">{{ $t('createPage.subtitle') }}</div>
       </header>
 
+      <!-- Templates: pick one to prefill, or save the current form as one. -->
+      <div class="row items-center q-col-gutter-sm q-mb-md">
+        <div class="col-12 col-sm-8">
+          <q-select
+            :model-value="selectedTemplateId"
+            :options="templateOptions"
+            dark
+            dense
+            outlined
+            stack-label
+            emit-value
+            map-options
+            option-value="value"
+            option-label="label"
+            :label="$t('createPage.fromTemplate')"
+            :loading="workspaceTemplatesStore.loading"
+            :disable="templateOptions.length <= 1"
+            @update:model-value="onTemplateSelected"
+          />
+        </div>
+        <div class="col-12 col-sm-4">
+          <q-btn
+            flat
+            no-caps
+            dense
+            icon="bookmark_add"
+            color="kobo-2"
+            :label="$t('createPage.saveAsTemplate')"
+            @click="saveTemplateDialog = true"
+          />
+        </div>
+      </div>
+
+      <q-banner v-if="duplicatedFrom" dense dark class="bg-kobo-surface q-mb-md">
+        {{ $t('createPage.duplicatedFrom', { name: duplicatedFrom }) }}
+        <template #action>
+          <q-btn flat dense icon="close" color="kobo-2" @click="duplicatedFrom = null" />
+        </template>
+      </q-banner>
+
+      <q-dialog v-model="saveTemplateDialog">
+        <q-card dark style="min-width: 360px; background: var(--kobo-surface);">
+          <q-card-section>
+            <div class="text-h6">{{ $t('createPage.saveTemplateTitle') }}</div>
+          </q-card-section>
+          <q-card-section class="q-pt-none">
+            <q-input
+              v-model="saveTemplateName"
+              dark
+              dense
+              outlined
+              autofocus
+              :label="$t('createPage.saveTemplateName')"
+              @keyup.enter="!savingTemplate && saveAsTemplate()"
+            />
+          </q-card-section>
+          <q-card-actions align="right">
+            <q-btn flat :label="$t('common.cancel')" color="kobo-2" @click="saveTemplateDialog = false" />
+            <q-btn
+              flat
+              :label="$t('common.save')"
+              color="primary"
+              :loading="savingTemplate"
+              :disable="!saveTemplateName.trim()"
+              @click="saveAsTemplate"
+            />
+          </q-card-actions>
+        </q-card>
+      </q-dialog>
+
       <!--
         Both silent overrides (forced skip-setup-script, plan->bypass under
         auto-loop) are surfaced here, at the top of the form, rather than only
@@ -929,15 +999,18 @@ import { useSettingsStore } from 'src/stores/settings'
 import { useTemplatesStore } from 'src/stores/templates'
 import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { useWorkspaceTemplatesStore } from 'src/stores/workspace-templates'
+import { ApiError } from 'src/utils/api'
 import { resolveCreateOverrides } from 'src/utils/create-overrides'
 import { loadCreatePagePrefs, saveCreatePagePrefs } from 'src/utils/create-page-prefs'
 import { buildTemplateVars, expandTemplate } from 'src/utils/expand-template'
 import { playNotificationSound } from 'src/utils/notifications'
 import { projectNameForPath } from 'src/utils/project-color'
 import { registerUnsavedScope, unregisterUnsavedScope } from 'src/utils/unsaved-guard'
+import { applyPreset, capturePreset, type PresetFormState, type WorkspacePreset } from 'src/utils/workspace-preset'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 
 /**
  * QSelect `:option-disable` predicate. Kept in the script (not inline in the
@@ -1384,11 +1457,19 @@ watch(
   { immediate: true },
 )
 
-watch(selectedEngineId, () => {
+/**
+ * Clamp model / brainstorm model / permission mode / effort to the selected
+ * engine's catalogue. On an engine switch (`preferGlobalDefault`) the model
+ * jumps to the engine's global default when one is configured; when applying
+ * a preset, a model that is still in the catalogue is kept and only an
+ * unknown one (e.g. an id that has since left the catalogue) falls back.
+ */
+function normaliseForEngine(preferGlobalDefault = false): void {
   const validIds = modelOptions.value.map((m) => m.value)
   if (validIds.length > 0) {
     const globalDefault = settingsStore.global.defaultModelByEngine?.[selectedEngineId.value]
-    if (typeof globalDefault === 'string' && validIds.includes(globalDefault)) {
+    const globalDefaultValid = typeof globalDefault === 'string' && validIds.includes(globalDefault)
+    if (globalDefaultValid && (preferGlobalDefault || !validIds.includes(model.value))) {
       model.value = globalDefault
     } else if (!validIds.includes(model.value)) {
       model.value = validIds.includes('auto') ? 'auto' : (validIds[0] ?? 'auto')
@@ -1407,7 +1488,9 @@ watch(selectedEngineId, () => {
   if (supportedEfforts.length > 0 && !supportedEfforts.includes(reasoningEffort.value)) {
     reasoningEffort.value = supportedEfforts.includes('auto') ? 'auto' : (supportedEfforts[0] ?? 'auto')
   }
-})
+}
+
+watch(selectedEngineId, () => normaliseForEngine(true))
 
 function formatReasoningLabel(label: string): string {
   const separatorIndex = label.indexOf(':')
@@ -1517,6 +1600,201 @@ const autoLoopSessionMode = ref<'per_task' | 'continuous'>('per_task')
 // (see below) now derives the effective, send-to-server mode from the raw
 // preference + autoLoop on every read — for both the request payload and
 // everywhere the mode is displayed — without ever touching the ref itself.
+
+const route = useRoute()
+const workspaceTemplatesStore = useWorkspaceTemplatesStore()
+
+/** The slice of the form a preset describes, read from the refs in one place. */
+function presetFormState(): PresetFormState {
+  return {
+    projectPath: projectPath.value,
+    sourceBranch: branch.value ?? '',
+    branchType: branchType.value,
+    engine: selectedEngineId.value,
+    model: model.value,
+    reasoningEffort: reasoningEffort.value,
+    agentPermissionMode: agentPermissionMode.value,
+    autoLoop: autoLoop.value,
+    autoLoopSessionMode: autoLoopSessionMode.value,
+    brainstormModel: brainstormModel.value,
+    brainstormReasoningEffort: brainstormReasoningEffort.value,
+    skipSetupScript: skipSetupScript.value,
+    description: description.value,
+    tasks: manualTasks.value,
+    acceptanceCriteria: manualCriteria.value,
+  }
+}
+
+/**
+ * Write a preset into the refs. Engine first: the watchers on
+ * `selectedEngineId` normalise model / effort / permission mode against the
+ * new engine's catalogue, and `nextTick` lets them run before the preset's own
+ * values land — otherwise a watcher would overwrite what the preset just set.
+ */
+async function applyPresetToForm(preset: WorkspacePreset): Promise<void> {
+  const next = applyPreset(presetFormState(), preset)
+  // The project-path watcher defers its work by 500 ms; a pending timer would
+  // fire after this function and erase the branch / model / permission mode
+  // the preset just set. Run that work now, synchronously, and only then write
+  // the preset's own values on top of it.
+  const pathPending = pathDebounce !== null
+  if (pathDebounce) {
+    clearTimeout(pathDebounce)
+    pathDebounce = null
+  }
+  const pathChanged = Boolean(next.projectPath) && next.projectPath !== projectPath.value
+  if (next.projectPath && settingsStore.projectPaths.includes(next.projectPath)) {
+    projectPath.value = next.projectPath
+  } else if (next.projectPath && next.projectPath !== projectPath.value) {
+    $q.notify({ type: 'warning', message: t('createPage.presetProjectUnknown'), position: 'top' })
+  }
+  if (pathChanged || pathPending) {
+    await nextTick() // let the watcher arm its timer so we can cancel it below
+    if (pathDebounce) {
+      clearTimeout(pathDebounce)
+      pathDebounce = null
+    }
+    await commitProjectPath()
+  }
+  selectedEngineId.value = next.engine
+  await nextTick()
+  branch.value = next.sourceBranch || null
+  branchType.value = next.branchType
+  // `watch(model)` restores the effort memorised for the new model; let it run
+  // first so the preset's effort is what ends up (and gets memorised).
+  model.value = next.model
+  brainstormModel.value = next.brainstormModel
+  await nextTick()
+  reasoningEffort.value = next.reasoningEffort
+  brainstormReasoningEffort.value = next.brainstormReasoningEffort
+  agentPermissionMode.value = next.agentPermissionMode
+  autoLoop.value = next.autoLoop
+  autoLoopSessionMode.value = next.autoLoopSessionMode
+  skipSetupScript.value = next.skipSetupScript
+  description.value = next.description
+  manualTasks.value = next.tasks
+  manualCriteria.value = next.acceptanceCriteria
+  // The engine watcher ran at the nextTick above, BEFORE these writes: clamp
+  // a stale model id or an unsupported permission mode / effort now.
+  normaliseForEngine()
+}
+
+// ── Templates ────────────────────────────────────────────────────────────────
+const selectedTemplateId = ref<string | null>(null)
+/** Templates with no project, plus those pinned to the selected one. */
+const templateOptions = computed(() => [
+  { value: null, label: t('createPage.fromTemplateNone') },
+  ...workspaceTemplatesStore.templates
+    .filter((tpl) => !tpl.preset.projectPath || tpl.preset.projectPath === projectPath.value)
+    .map((tpl) => ({ value: tpl.id, label: tpl.name })),
+])
+
+async function onTemplateSelected(id: string | null): Promise<void> {
+  selectedTemplateId.value = id
+  if (!id) return
+  const template = workspaceTemplatesStore.templates.find((tpl) => tpl.id === id)
+  if (!template) return
+  await applyPresetToForm(template.preset)
+  // Reset so re-picking the same template re-applies it and no stale selection
+  // lingers once the project (and thus the option list) changes.
+  selectedTemplateId.value = null
+  $q.notify({ type: 'info', message: t('createPage.templateApplied', { name: template.name }), position: 'top' })
+}
+
+const saveTemplateDialog = ref(false)
+const saveTemplateName = ref('')
+const savingTemplate = ref(false)
+
+function confirmTemplateOverwrite(existingName: string): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    $q.dialog({
+      title: t('createPage.saveTemplateTitle'),
+      message: t('createPage.saveTemplateOverwrite', { name: existingName }),
+      cancel: true,
+      persistent: true,
+      dark: true,
+    })
+      .onOk(() => resolve(true))
+      .onCancel(() => resolve(false))
+      .onDismiss(() => resolve(false))
+  })
+}
+
+async function saveAsTemplate(): Promise<void> {
+  const name = saveTemplateName.value.trim()
+  if (!name || savingTemplate.value) return
+  savingTemplate.value = true
+  const preset = capturePreset(presetFormState())
+  /** Prompt, then overwrite. Resolves to the saved name, or null when declined. */
+  const overwrite = async (existing: { id: string; name: string }): Promise<string | null> => {
+    if (!(await confirmTemplateOverwrite(existing.name))) return null
+    await workspaceTemplatesStore.updateTemplate(existing.id, { preset })
+    return existing.name
+  }
+  try {
+    let savedName: string | null
+    const existing = workspaceTemplatesStore.findByName(name)
+    if (existing) {
+      savedName = await overwrite(existing)
+    } else {
+      try {
+        await workspaceTemplatesStore.createTemplate({ name, preset })
+        savedName = name
+      } catch (err) {
+        // The local list can be stale (another tab, Settings): on a name
+        // conflict the server knows about, refresh and offer the overwrite.
+        if (!(err instanceof ApiError && err.status === 409)) throw err
+        await workspaceTemplatesStore.fetchTemplates()
+        const remote = workspaceTemplatesStore.findByName(name)
+        if (!remote) throw err
+        savedName = await overwrite(remote)
+      }
+    }
+    if (savedName === null) return
+    saveTemplateDialog.value = false
+    saveTemplateName.value = ''
+    $q.notify({ type: 'positive', message: t('createPage.templateSaved', { name: savedName }), position: 'top' })
+  } catch (err) {
+    const message = err instanceof ApiError ? err.message : t('createPage.templateSaveFailed')
+    $q.notify({ type: 'negative', message, position: 'top' })
+  } finally {
+    savingTemplate.value = false
+  }
+}
+
+// ── Duplication ───────────────────────────────────────────────────────────────
+/** Name of the workspace this form was prefilled from, for the banner. */
+const duplicatedFrom = ref<string | null>(null)
+
+/** Last `?from=` id applied, so the same query is not replayed twice in a row. */
+const lastDuplicateFrom = ref<string | null>(null)
+
+/** `/create?from=<workspaceId>`: prefill the form from an existing workspace. */
+async function applyDuplicateFromQuery(): Promise<void> {
+  const from = route.query.from
+  if (typeof from !== 'string' || !from || from === lastDuplicateFrom.value) return
+  lastDuplicateFrom.value = from
+  if (store.workspaces.length === 0) await store.fetchWorkspaces()
+  if (!store.archivedLoaded && !store.workspaces.some((w) => w.id === from)) await store.fetchArchivedWorkspaces()
+  await loadDuplicateSource(from)
+}
+
+async function loadDuplicateSource(workspaceId: string): Promise<void> {
+  try {
+    const res = await fetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/preset`)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const { preset } = (await res.json()) as { preset: WorkspacePreset }
+    await applyPresetToForm(preset)
+    const source =
+      store.workspaces.find((w) => w.id === workspaceId) ?? store.archived.find((w) => w.id === workspaceId)
+    const sourceName = source?.name ?? workspaceId
+    duplicatedFrom.value = sourceName
+    workspaceName.value = `${sourceName} ${t('createPage.copySuffix')}`.slice(0, 80)
+  } catch (err) {
+    console.error('[create] duplicate source failed to load:', err)
+    $q.notify({ type: 'negative', message: t('createPage.duplicateLoadFailed'), position: 'top' })
+  }
+}
 
 function toggleAutoLoop() {
   autoLoop.value = !autoLoop.value
@@ -1767,13 +2045,27 @@ function applyProjectDefaults(path: string) {
 
 // Debounce for project path input
 let pathDebounce: ReturnType<typeof setTimeout> | null = null
-watch(projectPath, (val) => {
+
+/**
+ * Everything a project change entails: branch reset, branch list, project
+ * defaults and the PR-import capability check. Called on the debounced watcher
+ * and, synchronously, by `applyPresetToForm` so a preset's fields can be
+ * written after — never before — this pass has rewritten them.
+ */
+async function commitProjectPath(): Promise<void> {
+  const val = projectPath.value
+  branch.value = null
+  const branchesLoaded = fetchBranches(val)
+  applyProjectDefaults(val)
+  void checkPrImportCapability(val)
+  await branchesLoaded
+}
+
+watch(projectPath, () => {
   if (pathDebounce) clearTimeout(pathDebounce)
   pathDebounce = setTimeout(() => {
-    branch.value = null
-    void fetchBranches(val)
-    applyProjectDefaults(val)
-    void checkPrImportCapability(val)
+    pathDebounce = null
+    void commitProjectPath()
   }, 500)
 })
 
@@ -1876,7 +2168,21 @@ onMounted(async () => {
       !submitting.value &&
       (description.value.trim().length > 0 || manualTasks.value.length > 0 || manualCriteria.value.length > 0),
   )
+
+  void workspaceTemplatesStore.fetchTemplates()
+  // Loaded after the prefs so the duplicate source wins over the remembered
+  // defaults.
+  await applyDuplicateFromQuery()
 })
+
+// The drawer stays visible on /create, so "Duplicate" from a card while already
+// here only changes the route query — react to it, not just to mount.
+watch(
+  () => route.query.from,
+  () => {
+    void applyDuplicateFromQuery()
+  },
+)
 
 // Cleanup debounce timer on unmount
 onUnmounted(() => {

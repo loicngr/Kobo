@@ -12,6 +12,7 @@ Complete reference for every Kōbō setting, environment variable, and external 
 - [Lifecycle hooks](#lifecycle-hooks)
 - [Unanswered question reminder](#unanswered-question-reminder)
 - [Comparing two engines on one task](#comparing-two-engines-on-one-task)
+- [Workspace templates and duplication](#workspace-templates-and-duplication)
 - [Auto-purge worktree on PR merged](#auto-purge-worktree-on-pr-merged)
 - [Network access](#network-access)
   - [Reachable addresses](#reachable-addresses)
@@ -110,7 +111,7 @@ Settings are managed live from the **Settings** page in the UI and persisted to 
 | Key | Type | Purpose |
 |---|---|---|
 | `defaultModel` | `string` | Fallback model when no engine-specific default is set. |
-| `defaultModelByEngine` | `Record<engine, string>` | Per-engine default model (`claude-code` / `codex`). |
+| `defaultModelByEngine` | `Record<engine, string>` | Per-engine default model (`claude-code` / `codex`). Seeded to `claude-sonnet-5` / `gpt-5.6-terra` (settings migration v57 moves an entry still on `auto` there; an explicit choice is kept). `auto` means "let the CLI pick". |
 | `defaultPermissionModeByEngine` | `Record<engine, mode>` | Default permission mode per engine. See [Permission modes](#permission-modes). |
 | `dangerouslySkipPermissions` | `boolean` | Disable all approval prompts. **Use with care.** |
 | `prPromptTemplate` | `string` | Template rendered by the `/open-pr` endpoint. Supports `{{pr_number}}`, `{{pr_url}}`, `{{branch_name}}`, `{{diff_stats}}`, `{{commits}}`, etc. |
@@ -482,6 +483,37 @@ instead of showing a single row as if that were the whole comparison.
 
 From there, each side's actual diff is one click away in the Git tab it sits
 above.
+
+## Workspace templates and duplication
+
+A template is a named preset of the create-workspace form: project (optional),
+source branch, branch type, engine, model, reasoning effort, permission mode,
+auto-loop settings, description, tasks and acceptance criteria. The workspace
+name and working branch are never part of it - they are derived at each
+creation - and neither are Notion / Sentry / PR URLs, which are one-off
+context.
+
+On the create page, **From a template** prefills the form with a saved preset:
+only the fields the template carries change, the rest keeps its value. Once
+applied, the select returns to **None**, so picking the same template again
+re-applies it. A template that pins a project is listed only when that project
+is selected.
+**Save as template** captures the current form under a name; saving under an
+existing name asks before overwriting. Templates are managed (rename, delete,
+inspect) in **Settings → Workspace templates**; to edit one, load it on the
+create page, adjust, and save it again under the same name.
+
+**Duplicate**, in a workspace's context menu, opens the create page prefilled
+from that workspace - its settings, description, tasks and criteria (all reset
+to "to do") - with the name suffixed "(copy)". Nothing is created until you
+press Create, so the branch and name can still be adjusted. Duplication carries
+the workspace's settings, description, tasks and criteria, but not the
+brainstorm effort nor "skip setup script", which are creation-time choices.
+Archived workspaces can be duplicated too.
+
+Templates live in `<KOBO_HOME>/workspace-templates.json` (100 at most). A
+corrupt file is read as empty and reported in the server log, and is only
+rewritten by the next save.
 
 ## Auto-purge worktree on PR merged
 

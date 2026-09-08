@@ -51,6 +51,7 @@ import * as wsService from '../services/websocket-service.js'
 import * as permissionPolicyService from '../services/workspace-permission-policy-service.js'
 import type { AgentPermissionMode, Workspace, WorkspaceStatus } from '../services/workspace-service.js'
 import * as workspaceService from '../services/workspace-service.js'
+import { presetFromWorkspace } from '../services/workspace-template-service.js'
 import * as purgeWorktreeService from '../services/worktree-purge-service.js'
 import * as worktreeService from '../services/worktree-service.js'
 import { resolveUniqueBranchAndPath } from '../utils/branch-resolver.js'
@@ -1658,6 +1659,20 @@ app.get('/:id/comparison', (c) => {
       }
     })
     return c.json({ comparisonId: workspace.comparisonId, members })
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return c.json({ error: message }, 500)
+  }
+})
+
+// GET /api/workspaces/:id/preset — the create-form preset this workspace would
+// have been created from. Read-only: "Duplicate" prefills the form with it.
+app.get('/:id/preset', (c) => {
+  const id = c.req.param('id')
+  try {
+    const preset = presetFromWorkspace(id)
+    if (!preset) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    return c.json({ preset })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)

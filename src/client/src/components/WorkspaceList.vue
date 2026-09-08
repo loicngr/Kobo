@@ -211,6 +211,7 @@
                 @run-setup="runSetupScript"
                 @toggle-favorite="onToggleFavorite"
                 @manage-tags="onManageTags"
+                @duplicate="onDuplicate"
                 @archive="onArchiveClick"
                 @unarchive="onUnarchiveClick"
                 @purge-worktree="onPurgeWorktreeClick"
@@ -236,6 +237,7 @@
               @run-setup="runSetupScript"
               @toggle-favorite="onToggleFavorite"
               @manage-tags="onManageTags"
+              @duplicate="onDuplicate"
               @archive="onArchiveClick"
               @unarchive="onUnarchiveClick"
               @purge-worktree="onPurgeWorktreeClick"
@@ -301,6 +303,7 @@
                 @run-setup="runSetupScript"
                 @toggle-favorite="onToggleFavorite"
                 @manage-tags="onManageTags"
+                @duplicate="onDuplicate"
                 @archive="onArchiveClick"
                 @unarchive="onUnarchiveClick"
                 @purge-worktree="onPurgeWorktreeClick"
@@ -326,6 +329,7 @@
               @run-setup="runSetupScript"
               @toggle-favorite="onToggleFavorite"
               @manage-tags="onManageTags"
+              @duplicate="onDuplicate"
               @archive="onArchiveClick"
               @unarchive="onUnarchiveClick"
               @purge-worktree="onPurgeWorktreeClick"
@@ -391,6 +395,7 @@
                 @run-setup="runSetupScript"
                 @toggle-favorite="onToggleFavorite"
                 @manage-tags="onManageTags"
+                @duplicate="onDuplicate"
                 @archive="onArchiveClick"
                 @unarchive="onUnarchiveClick"
                 @purge-worktree="onPurgeWorktreeClick"
@@ -416,6 +421,7 @@
               @run-setup="runSetupScript"
               @toggle-favorite="onToggleFavorite"
               @manage-tags="onManageTags"
+              @duplicate="onDuplicate"
               @archive="onArchiveClick"
               @unarchive="onUnarchiveClick"
               @purge-worktree="onPurgeWorktreeClick"
@@ -488,6 +494,7 @@
             @run-setup="runSetupScript"
             @toggle-favorite="onToggleFavorite"
             @manage-tags="onManageTags"
+            @duplicate="onDuplicate"
             @archive="onArchiveClick"
             @unarchive="onUnarchiveClick"
             @purge-worktree="onPurgeWorktreeClick"
@@ -737,6 +744,11 @@ const tagsDialogWorkspace = ref<Workspace | null>(null)
 function onManageTags(ws: Workspace) {
   tagsDialogWorkspace.value = ws
   tagsDialogOpen.value = true
+}
+
+/** Duplicate = the create form prefilled from this workspace; nothing is created here. */
+function onDuplicate(ws: Workspace): void {
+  void router.push({ name: 'create', query: { from: ws.id } })
 }
 
 interface ProjectGroup {

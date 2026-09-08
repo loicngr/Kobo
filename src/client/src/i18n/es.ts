@@ -5,6 +5,7 @@ export default {
   'thinking.noDetails': 'El agente está razonando…',
   // Common
   'common.save': 'Guardar',
+  'common.duplicate': 'Duplicar',
   'common.confirm': 'Confirmar',
   'common.cancel': 'Cancelar',
   'common.open': 'Abrir',
@@ -373,6 +374,20 @@ export default {
 
   // Create Page
   'createPage.title': 'Crear un workspace',
+  'createPage.fromTemplate': 'Desde una plantilla',
+  'createPage.fromTemplateNone': 'Ninguna',
+  'createPage.saveAsTemplate': 'Guardar como plantilla',
+  'createPage.saveTemplateTitle': 'Guardar este formulario como plantilla',
+  'createPage.saveTemplateName': 'Nombre de la plantilla',
+  'createPage.saveTemplateOverwrite': 'Ya existe una plantilla llamada «{name}». ¿Sobrescribirla?',
+  'createPage.templateSaved': 'Plantilla «{name}» guardada',
+  'createPage.templateApplied': 'Plantilla «{name}» aplicada',
+  'createPage.duplicatedFrom': 'Duplicado desde «{name}»',
+  'createPage.duplicateLoadFailed': 'No se pudo cargar el workspace a duplicar.',
+  'createPage.templateSaveFailed': 'No se pudo guardar la plantilla.',
+  'createPage.presetProjectUnknown':
+    'Esta plantilla apunta a un proyecto que ya no está configurado; se mantuvo el proyecto actual.',
+  'createPage.copySuffix': '(copia)',
   'createPage.subtitle': 'Describe la misión, elige un proyecto y configura el agente.',
   'createPage.sectionMission': 'Misión',
   'createPage.sectionMissionHint': 'Proporciona al agente un objetivo claro y el contexto necesario.',
@@ -913,6 +928,17 @@ export default {
   'settings.nav.skills': 'Skills',
   'settings.nav.prompts': 'Prompts',
   'settings.nav.scripts': 'Scripts',
+  'settings.nav.workspaceTemplates': 'Plantillas de workspace',
+  'workspaceTemplates.title': 'Plantillas de workspace',
+  'workspaceTemplates.hint':
+    'Preajustes guardados del formulario de creación. Elige uno en la página de creación; para modificarlo, cárgalo allí, ajústalo y guárdalo de nuevo con el mismo nombre.',
+  'workspaceTemplates.empty':
+    'Todavía no hay plantillas. Rellena el formulario de creación y usa «Guardar como plantilla».',
+  'workspaceTemplates.anyProject': 'Cualquier proyecto',
+  'workspaceTemplates.rename': 'Renombrar',
+  'workspaceTemplates.renameTitle': 'Renombrar la plantilla',
+  'workspaceTemplates.deleteConfirm': '¿Eliminar la plantilla «{name}»?',
+  'workspaceTemplates.deleted': 'Plantilla «{name}» eliminada',
   'settings.nav.notion': 'Notion',
   'settings.nav.forge': 'Forge',
   'settings.bitbucketCommunity': 'Bitbucket Community',

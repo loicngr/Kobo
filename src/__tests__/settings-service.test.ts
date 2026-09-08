@@ -47,8 +47,8 @@ describe('getSettings()', () => {
     expect(fs.existsSync(settingsPath)).toBe(false)
     const settings = getSettings()
     expect(fs.existsSync(settingsPath)).toBe(true)
-    expect(settings.global.defaultModelByEngine['claude-code']).toBe('auto')
-    expect(settings.global.defaultModelByEngine.codex).toBe('auto')
+    expect(settings.global.defaultModelByEngine['claude-code']).toBe('claude-sonnet-5')
+    expect(settings.global.defaultModelByEngine.codex).toBe('gpt-5.6-terra')
     expect(settings.global.worktreesPath).toBe('.worktrees')
     expect(settings.global.notionEnabled).toBe(true)
     expect(settings.global.sentryEnabled).toBe(true)
@@ -93,7 +93,7 @@ describe('getSettings()', () => {
     expect(backups.length).toBe(1)
     // The new settings.json should contain valid defaults
     const written = JSON.parse(fs.readFileSync(settingsPath, 'utf-8'))
-    expect(written.global.defaultModelByEngine?.['claude-code']).toBe('auto')
+    expect(written.global.defaultModelByEngine?.['claude-code']).toBe('claude-sonnet-5')
   })
 
   it('restores missing global fields to defaults when schemaVersion is current', () => {
@@ -121,7 +121,7 @@ describe('getSettings()', () => {
     const settings = getSettings()
 
     // Missing fields must be restored to their defaults
-    expect(settings.global.defaultModelByEngine['claude-code']).toBe('auto')
+    expect(settings.global.defaultModelByEngine['claude-code']).toBe('claude-sonnet-5')
     expect(typeof settings.global.prPromptTemplate).toBe('string')
     expect(settings.global.prPromptTemplate.length).toBeGreaterThan(0)
     // Existing custom values must be preserved
@@ -253,7 +253,7 @@ describe('updateGlobalSettings()', () => {
     updateGlobalSettings({ prPromptTemplate: 'new template' })
 
     const global = getGlobalSettings()
-    expect(global.defaultModelByEngine['claude-code']).toBe('auto') // unchanged
+    expect(global.defaultModelByEngine['claude-code']).toBe('claude-sonnet-5') // unchanged
     expect(global.prPromptTemplate).toBe('new template') // updated
   })
 
@@ -761,6 +761,24 @@ describe('runSettingsMigrations()', () => {
     expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
     expect(migrated.global.gitConventions).toBe('')
     expect(migrated.projects[0]?.gitConventions).toBe('')
+  })
+
+  it('v57 moves an engine still on the seeded auto onto the shipped default model', () => {
+    const migrated = runSettingsMigrations({
+      schemaVersion: 56,
+      global: { defaultModelByEngine: { 'claude-code': 'auto', codex: 'auto' } },
+      projects: [],
+    })
+    expect(migrated.global.defaultModelByEngine).toEqual({ 'claude-code': 'claude-sonnet-5', codex: 'gpt-5.6-terra' })
+  })
+
+  it('v57 keeps a model the user picked explicitly', () => {
+    const migrated = runSettingsMigrations({
+      schemaVersion: 56,
+      global: { defaultModelByEngine: { 'claude-code': 'claude-opus-4-7', codex: 'auto' } },
+      projects: [],
+    })
+    expect(migrated.global.defaultModelByEngine).toEqual({ 'claude-code': 'claude-opus-4-7', codex: 'gpt-5.6-terra' })
   })
 
   it('is a no-op when the file is already at the latest version', () => {
@@ -1790,20 +1808,21 @@ describe('settings migration v19 — split defaultModel by engine', () => {
     }
     fs.writeFileSync(settingsPath, JSON.stringify(legacy), 'utf-8')
     const settings = getSettings()
+    // v19 seeds codex with `auto`; v57 then moves that seed onto the shipped default.
     expect(settings.global.defaultModelByEngine).toEqual({
       'claude-code': 'claude-sonnet-4-6',
-      codex: 'auto',
+      codex: 'gpt-5.6-terra',
     })
     // Legacy field must be deleted
     expect((settings.global as unknown as { defaultModel?: string }).defaultModel).toBeUndefined()
   })
 
-  it('seeds defaults to auto when legacy field is empty', () => {
+  it('lands on the shipped default models when legacy field is empty', () => {
     const legacy = { schemaVersion: 18, global: { defaultModel: '' }, projects: [] }
     fs.writeFileSync(settingsPath, JSON.stringify(legacy), 'utf-8')
     const settings = getSettings()
-    expect(settings.global.defaultModelByEngine['claude-code']).toBe('auto')
-    expect(settings.global.defaultModelByEngine.codex).toBe('auto')
+    expect(settings.global.defaultModelByEngine['claude-code']).toBe('claude-sonnet-5')
+    expect(settings.global.defaultModelByEngine.codex).toBe('gpt-5.6-terra')
   })
 
   it('preserves an existing defaultModelByEngine and backfills missing keys', () => {
@@ -1815,7 +1834,7 @@ describe('settings migration v19 — split defaultModel by engine', () => {
     fs.writeFileSync(settingsPath, JSON.stringify(existing), 'utf-8')
     const settings = getSettings()
     expect(settings.global.defaultModelByEngine['claude-code']).toBe('claude-opus-4-7')
-    expect(settings.global.defaultModelByEngine.codex).toBe('auto')
+    expect(settings.global.defaultModelByEngine.codex).toBe('gpt-5.6-terra')
   })
 })
 
@@ -2278,7 +2297,7 @@ describe('PR notification sounds (v45)', () => {
       audioQuestionSound: 'hey.mp3',
       networkAccessToken: 'keep-me',
     })
-    expect(SETTINGS_SCHEMA_VERSION).toBe(56)
+    expect(SETTINGS_SCHEMA_VERSION).toBe(57)
   })
 
   it('adds the auto-loop retry limit while preserving existing settings', () => {

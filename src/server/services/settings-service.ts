@@ -14,7 +14,7 @@ import {
 } from '../utils/worktree-paths.js'
 import { DEFAULT_NOTION_INITIAL_PROMPT, DEFAULT_SENTRY_INITIAL_PROMPT } from './initial-prompt-template-service.js'
 import { DEFAULT_REVIEW_PROMPT_TEMPLATE } from './review-template-service.js'
-import { DEFAULT_CHANGE_SOURCE_BRANCH_SCRIPT } from './settings-defaults.js'
+import { DEFAULT_CHANGE_SOURCE_BRANCH_SCRIPT, DEFAULT_MODEL_BY_ENGINE } from './settings-defaults.js'
 import { AGNOSTIC_PROMPTS } from './skill-suite-prompts.js'
 
 export const DEFAULT_GIT_CONVENTIONS = `# Git conventions
@@ -1198,6 +1198,24 @@ const settingsMigrations: SettingsMigration[] = [
       }
     },
   },
+  {
+    version: 57,
+    name: 'seed-default-model-per-engine',
+    migrate: ({ global }) => {
+      // Only an engine still on the seeded `auto` (or with no entry) moves to
+      // the shipped default; a model the user picked is theirs to keep.
+      const existing = global.defaultModelByEngine
+      const map: Record<string, unknown> =
+        typeof existing === 'object' && existing !== null && !Array.isArray(existing)
+          ? (existing as Record<string, unknown>)
+          : {}
+      for (const [engine, model] of Object.entries(DEFAULT_MODEL_BY_ENGINE)) {
+        const current = map[engine]
+        if (typeof current !== 'string' || current.length === 0 || current === 'auto') map[engine] = model
+      }
+      global.defaultModelByEngine = map
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -1260,7 +1278,7 @@ function defaultSettings(): Settings {
   return {
     schemaVersion: SETTINGS_SCHEMA_VERSION,
     global: {
-      defaultModelByEngine: { 'claude-code': 'auto', codex: 'auto' },
+      defaultModelByEngine: { ...DEFAULT_MODEL_BY_ENGINE },
       dangerouslySkipPermissions: true,
       prPromptTemplate: DEFAULT_PR_PROMPT_TEMPLATE,
       reviewPromptTemplate: DEFAULT_REVIEW_PROMPT_TEMPLATE,

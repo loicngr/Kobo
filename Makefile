@@ -29,12 +29,12 @@ help:
 	@echo "Kōbō — local CI/release runner"
 	@echo ""
 	@echo "Targets:"
-	@echo "  make ci         Run the full PR pipeline (install + audit + lint + tsc + tests)"
+	@echo "  make ci         Run the full PR pipeline, step for step (install + audit + lint + type checks + build + tests)"
 	@echo "  make release    Run CI + build + verify version is not already published"
 	@echo "  make install    npm ci on all three trees"
 	@echo "  make audit      npm audit --audit-level=high on all three trees"
 	@echo "  make lint       biome check"
-	@echo "  make typecheck  tsc --noEmit (backend)"
+	@echo "  make typecheck  tsc --noEmit (backend), tests, vue-tsc (client)"
 	@echo "  make test       backend + client vitest suites"
 	@echo "  make test-back  backend tests only"
 	@echo "  make test-front client tests only"
@@ -71,14 +71,19 @@ audit-pwa:
 
 # ── Lint / typecheck ───────────────────────────────────────────────────────────
 
-.PHONY: lint typecheck typecheck-back typecheck-front
+.PHONY: lint typecheck typecheck-back typecheck-tests typecheck-front
 lint:
 	npm run lint
 
-typecheck: typecheck-back typecheck-front
+typecheck: typecheck-back typecheck-tests typecheck-front
 
 typecheck-back:
 	npx tsc --noEmit
+
+# Mirrors the "Type check (tests)" step of ci.yml: test fixtures drift from the
+# real types silently unless something type-checks them.
+typecheck-tests:
+	npm run typecheck:tests
 
 typecheck-front:
 	cd $(CLIENT_DIR) && npm run type-check
@@ -89,10 +94,10 @@ typecheck-front:
 test: test-back test-front
 
 test-back:
-	npm test -- --silent >/dev/null 2>&1
+	npm test
 
 test-front:
-	cd $(CLIENT_DIR) && npm test -- --silent >/dev/null 2>&1
+	cd $(CLIENT_DIR) && npm test
 
 # ── Build ──────────────────────────────────────────────────────────────────────
 
@@ -106,9 +111,12 @@ clean:
 
 # ── Pipelines ──────────────────────────────────────────────────────────────────
 
-# Mirrors `.github/workflows/ci.yml` step-for-step.
+# Mirrors `.github/workflows/ci.yml` step-for-step, in the same order: install,
+# audit, lint, the three type checks, build, then the two test suites. Anything
+# added to the workflow must be added here too, or a red CI is found after the
+# push instead of before.
 .PHONY: ci
-ci: install audit lint typecheck test
+ci: install audit lint typecheck build test
 	@echo ""
 	@echo "✓ CI pipeline passed locally."
 
@@ -117,7 +125,7 @@ ci: install audit lint typecheck test
 # the GitHub Actions runner — running them from a developer machine would mint
 # tags and publish packages without provenance.
 .PHONY: release release-version-check
-release: ci build release-version-check
+release: ci release-version-check
 	@echo ""
 	@echo "✓ Release pipeline passed locally (publish steps skipped — push main to trigger CI)."
 

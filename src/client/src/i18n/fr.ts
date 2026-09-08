@@ -5,6 +5,7 @@ export default {
   'thinking.noDetails': 'L’agent réfléchit…',
   // Common
   'common.save': 'Enregistrer',
+  'common.duplicate': 'Dupliquer',
   'common.confirm': 'Confirmer',
   'common.cancel': 'Annuler',
   'common.open': 'Ouvrir',
@@ -377,6 +378,20 @@ export default {
 
   // Create Page
   'createPage.title': 'Créer un workspace',
+  'createPage.fromTemplate': 'Depuis un template',
+  'createPage.fromTemplateNone': 'Aucun',
+  'createPage.saveAsTemplate': 'Enregistrer comme template',
+  'createPage.saveTemplateTitle': 'Enregistrer ce formulaire comme template',
+  'createPage.saveTemplateName': 'Nom du template',
+  'createPage.saveTemplateOverwrite': "Un template nommé « {name} » existe. L'écraser ?",
+  'createPage.templateSaved': 'Template « {name} » enregistré',
+  'createPage.templateApplied': 'Template « {name} » appliqué',
+  'createPage.duplicatedFrom': 'Dupliqué depuis « {name} »',
+  'createPage.duplicateLoadFailed': 'Impossible de charger le workspace à dupliquer.',
+  'createPage.templateSaveFailed': "Impossible d'enregistrer le template.",
+  'createPage.presetProjectUnknown':
+    "Ce template vise un projet qui n'est plus configuré ; le projet actuel a été conservé.",
+  'createPage.copySuffix': '(copie)',
   'createPage.subtitle': 'Décrivez la mission, choisissez un projet, puis configurez l’agent.',
   'createPage.sectionMission': 'Mission',
   'createPage.sectionMissionHint': 'Donnez à l’agent un objectif clair et le contexte nécessaire pour le réaliser.',
@@ -916,6 +931,17 @@ export default {
   'settings.nav.skills': 'Skills',
   'settings.nav.prompts': 'Prompts',
   'settings.nav.scripts': 'Scripts',
+  'settings.nav.workspaceTemplates': 'Templates de workspace',
+  'workspaceTemplates.title': 'Templates de workspace',
+  'workspaceTemplates.hint':
+    'Préréglages enregistrés du formulaire de création. Choisissez-en un sur la page de création ; pour en modifier un, chargez-le là, ajustez, puis réenregistrez-le sous le même nom.',
+  'workspaceTemplates.empty':
+    "Aucun template pour l'instant. Remplissez le formulaire de création et utilisez « Enregistrer comme template ».",
+  'workspaceTemplates.anyProject': 'Tout projet',
+  'workspaceTemplates.rename': 'Renommer',
+  'workspaceTemplates.renameTitle': 'Renommer le template',
+  'workspaceTemplates.deleteConfirm': 'Supprimer le template « {name} » ?',
+  'workspaceTemplates.deleted': 'Template « {name} » supprimé',
   'settings.nav.notion': 'Notion',
   'settings.nav.forge': 'Forge',
   'settings.bitbucketCommunity': 'Bitbucket Community',

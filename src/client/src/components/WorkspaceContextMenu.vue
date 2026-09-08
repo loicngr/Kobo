@@ -102,6 +102,10 @@
         <q-item-section side><q-icon name="visibility" size="xs" color="green-5" /></q-item-section>
         <q-item-section>{{ $t('contextMenu.restoreCiFailure') }}</q-item-section>
       </q-item>
+      <q-item clickable v-close-popup @click="emit('duplicate', workspace)">
+        <q-item-section side><q-icon name="file_copy" size="xs" /></q-item-section>
+        <q-item-section>{{ $t('common.duplicate') }}</q-item-section>
+      </q-item>
       <q-separator dark />
       <q-item
         v-if="archived"
@@ -165,6 +169,7 @@ const emit = defineEmits<{
   runSetup: [ws: Workspace]
   toggleFavorite: [ws: Workspace]
   manageTags: [ws: Workspace]
+  duplicate: [ws: Workspace]
   archive: [ws: Workspace, event: Event]
   unarchive: [ws: Workspace, event: Event]
   purgeWorktree: [ws: Workspace, event: Event]

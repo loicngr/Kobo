@@ -70,6 +70,7 @@ src/
 │   │   ├── settings-defaults.ts    # DEFAULT_* constants for opt-in settings (e.g. change-source-branch script)
 │   │   ├── lifecycle-hook-service.ts # user shell hooks on session-ended / pr-merged / autoloop-disabled
 │   │   ├── awaiting-user-reminder-service.ts # reminds about workspaces stuck in `awaiting-user`
+│   │   ├── workspace-template-service.ts # create-form presets (workspace-templates.json) + presetFromWorkspace
 │   │   ├── content-migration-service.ts # runtime legacy ws_events → normalised AgentEvent migration
 │   │   ├── templates-service.ts    # prompt templates CRUD (JSON file persistence, seeding)
 │   │   ├── dev-server-service.ts   # per-workspace dev server lifecycle (docker or npm process)
@@ -81,6 +82,7 @@ src/
 │   ├── routes/                     # Hono handlers, thin layer over services
 │   │   ├── workspaces.ts           # /api/workspaces/* — the main surface
 │   │   ├── templates.ts            # /api/templates — prompt templates CRUD
+│   │   ├── workspace-templates.ts  # /api/workspace-templates - saved create-form presets
 │   │   ├── plans.ts                # /api/workspaces/:id/plans — plan file browser (read-only)
 │   │   ├── dev-server.ts, git.ts, notion.ts, settings.ts
 │   ├── utils/
@@ -243,6 +245,10 @@ One task, two engines, two sibling worktrees. `POST /api/workspaces` accepts a `
 `src/server/services/awaiting-user-reminder-service.ts` polls every 60 s for non-archived workspaces in `awaiting-user` and, past `global.awaitingUserReminderMinutes` (settings migration v56, `0` = off, the default), broadcasts `workspace:awaiting-reminder` via `broadcastAll` — deliberately not `emitEphemeral`, since the user is by definition not watching that workspace. The client (`stores/websocket.ts`) turns it into the same browser notification + question sound pair used when the question is first asked.
 
 `computeDueReminders` holds the interval arithmetic as a near-pure function over an injected `Map<id, {firstSeenAt, remindersSent}>`, so it is unit-tested without a timer or a DB. Two rules it encodes: a workspace that leaves `awaiting-user` is dropped from the map (answering resets the clock), and a tick that finds itself several intervals behind sends **one** reminder, not one per missed interval. State is in-memory only, like the pr-watcher's caches: a restart restarts the clock.
+
+### Workspace templates and duplication
+
+`workspace-template-service.ts` persists named presets of the create form in `<KOBO_HOME>/workspace-templates.json` (same JSON pattern as `templates.json`, no SQLite migration). `sanitizePreset` keeps known keys with the right type and drops the rest, so a hand-edited file degrades to unset fields rather than errors. `presetFromWorkspace(id)` derives the same shape from an existing workspace (tasks as titles, statuses dropped); `GET /api/workspaces/:id/preset` exposes it read-only and "Duplicate" opens `/create?from=<id>` with it. On the client, `utils/workspace-preset.ts` (`capturePreset` / `applyPreset`, pure, round-trip tested) is the single bridge between the form and a preset; the create page applies the engine first and waits a tick so its engine watchers normalise model / effort / permission mode before the preset's values land. See [CONFIGURATION.md → Workspace templates and duplication](CONFIGURATION.md#workspace-templates-and-duplication).
 
 ### Worktree purge
 

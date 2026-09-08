@@ -5,6 +5,7 @@ export default {
   'thinking.noDetails': 'Der Agent denkt nach…',
   // Common
   'common.save': 'Speichern',
+  'common.duplicate': 'Duplizieren',
   'common.confirm': 'Bestätigen',
   'common.cancel': 'Abbrechen',
   'common.open': 'Öffnen',
@@ -373,6 +374,20 @@ export default {
 
   // Create Page
   'createPage.title': 'Workspace erstellen',
+  'createPage.fromTemplate': 'Aus einer Vorlage',
+  'createPage.fromTemplateNone': 'Keine',
+  'createPage.saveAsTemplate': 'Als Vorlage speichern',
+  'createPage.saveTemplateTitle': 'Dieses Formular als Vorlage speichern',
+  'createPage.saveTemplateName': 'Name der Vorlage',
+  'createPage.saveTemplateOverwrite': 'Eine Vorlage namens „{name}“ existiert bereits. Überschreiben?',
+  'createPage.templateSaved': 'Vorlage „{name}“ gespeichert',
+  'createPage.templateApplied': 'Vorlage „{name}“ angewendet',
+  'createPage.duplicatedFrom': 'Dupliziert von „{name}“',
+  'createPage.duplicateLoadFailed': 'Der zu duplizierende Workspace konnte nicht geladen werden.',
+  'createPage.templateSaveFailed': 'Die Vorlage konnte nicht gespeichert werden.',
+  'createPage.presetProjectUnknown':
+    'Diese Vorlage zielt auf ein nicht mehr konfiguriertes Projekt; das aktuelle Projekt wurde beibehalten.',
+  'createPage.copySuffix': '(Kopie)',
   'createPage.subtitle': 'Beschreiben Sie die Aufgabe, wählen Sie ein Projekt und konfigurieren Sie den Agenten.',
   'createPage.sectionMission': 'Aufgabe',
   'createPage.sectionMissionHint': 'Geben Sie dem Agenten ein klares Ziel und den erforderlichen Kontext.',
@@ -914,6 +929,17 @@ export default {
   'settings.nav.skills': 'Skills',
   'settings.nav.prompts': 'Prompts',
   'settings.nav.scripts': 'Skripte',
+  'settings.nav.workspaceTemplates': 'Workspace-Vorlagen',
+  'workspaceTemplates.title': 'Workspace-Vorlagen',
+  'workspaceTemplates.hint':
+    'Gespeicherte Voreinstellungen des Erstellungsformulars. Wählen Sie eine auf der Erstellungsseite; zum Ändern dort laden, anpassen und unter demselben Namen erneut speichern.',
+  'workspaceTemplates.empty':
+    'Noch keine Vorlage. Füllen Sie das Erstellungsformular aus und nutzen Sie „Als Vorlage speichern“.',
+  'workspaceTemplates.anyProject': 'Jedes Projekt',
+  'workspaceTemplates.rename': 'Umbenennen',
+  'workspaceTemplates.renameTitle': 'Vorlage umbenennen',
+  'workspaceTemplates.deleteConfirm': 'Vorlage „{name}“ löschen?',
+  'workspaceTemplates.deleted': 'Vorlage „{name}“ gelöscht',
   'settings.nav.notion': 'Notion',
   'settings.nav.forge': 'Forge',
   'settings.bitbucketCommunity': 'Bitbucket Community',

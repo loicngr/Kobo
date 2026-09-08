@@ -26,6 +26,7 @@ import settingsRouter from './routes/settings.js'
 import templatesRouter from './routes/templates.js'
 import usageRoutes from './routes/usage.js'
 import voiceRouter from './routes/voice.js'
+import workspaceTemplatesRouter from './routes/workspace-templates.js'
 import workspacesRouter from './routes/workspaces.js'
 import {
   getAvailableSkills,
@@ -199,6 +200,7 @@ app.route('/api/changelog', changelogRouter)
 app.route('/api/settings', settingsRouter)
 app.route('/api/dev-server', devServerRouter)
 app.route('/api/templates', templatesRouter)
+app.route('/api/workspace-templates', workspaceTemplatesRouter)
 app.route('/api/usage', usageRoutes)
 app.route('/api/workspaces', documentsRouter)
 app.route('/api/workspaces', exportRouter)

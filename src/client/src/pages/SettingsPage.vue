@@ -2566,6 +2566,48 @@ where ffmpeg</pre>
             </div>
           </div>
         </div>
+        <!-- Workspace templates panel -->
+        <div v-if="activeTab === 'workspaceTemplates'" class="q-pa-none">
+          <div class="settings-card rounded-borders q-pa-lg">
+            <div class="text-subtitle1 text-weight-medium text-kobo-1 q-mb-xs">
+              {{ $t('workspaceTemplates.title') }}
+            </div>
+            <div class="text-caption text-kobo-3 q-mb-md">{{ $t('workspaceTemplates.hint') }}</div>
+
+            <div v-if="workspaceTemplatesStore.templates.length === 0" class="text-caption text-kobo-3">
+              {{ $t('workspaceTemplates.empty') }}
+            </div>
+
+            <q-list v-else dark separator>
+              <q-expansion-item
+                v-for="tpl in workspaceTemplatesStore.templates"
+                :key="tpl.id"
+                dense
+                header-class="text-kobo-1"
+              >
+                <template #header>
+                  <q-item-section>
+                    <q-item-label>{{ tpl.name }}</q-item-label>
+                    <q-item-label caption class="text-kobo-3">
+                      {{ tpl.preset.projectPath || $t('workspaceTemplates.anyProject') }}
+                      · {{ tpl.preset.engine ?? '-' }} · {{ tpl.preset.model ?? '-' }}
+                      · {{ formatTemplateDate(tpl.updatedAt) }}
+                    </q-item-label>
+                  </q-item-section>
+                  <q-item-section side>
+                    <div class="row no-wrap q-gutter-xs">
+                      <q-btn flat dense round size="sm" icon="edit" :title="$t('workspaceTemplates.rename')" @click.stop="renameWorkspaceTemplate(tpl.id, tpl.name)" />
+                      <q-btn flat dense round size="sm" icon="delete" color="kobo-danger" :title="$t('common.delete')" @click.stop="deleteWorkspaceTemplate(tpl.id, tpl.name)" />
+                    </div>
+                  </q-item-section>
+                </template>
+                <q-card dark flat class="settings-subcard q-pa-md">
+                  <pre class="mono-guide q-ma-none">{{ JSON.stringify(tpl.preset, null, 2) }}</pre>
+                </q-card>
+              </q-expansion-item>
+            </q-list>
+          </div>
+        </div>
         </div>
       </main>
 
@@ -2682,6 +2724,7 @@ import { useLayoutStore } from 'src/stores/layout'
 import type { ProjectSettings } from 'src/stores/settings'
 import { useSettingsStore } from 'src/stores/settings'
 import { type Template, useTemplatesStore } from 'src/stores/templates'
+import { useWorkspaceTemplatesStore } from 'src/stores/workspace-templates'
 import { formFieldsEqual } from 'src/utils/form-fields-equal'
 import { captureFormSnapshot } from 'src/utils/form-snapshot'
 import {
@@ -2715,6 +2758,7 @@ import {
 const $q = useQuasar()
 const store = useSettingsStore()
 const templatesStore = useTemplatesStore()
+const workspaceTemplatesStore = useWorkspaceTemplatesStore()
 const { t, locale } = useI18n()
 const { startTour } = useOnboarding()
 const { isMobile } = useIsMobile()
@@ -2748,6 +2792,7 @@ const navItems = computed(() => [
   { value: 'worktrees', icon: 'account_tree', label: t('settings.nav.worktrees') },
   { value: 'projects', icon: 'folder', label: t('settings.projects') },
   { value: 'templates', icon: 'description', label: t('templates.title') },
+  { value: 'workspaceTemplates', icon: 'bookmarks', label: t('settings.nav.workspaceTemplates') },
   { value: 'export', icon: 'import_export', label: t('settings.nav.export') },
 ])
 const activeNavLabel = computed(() => navItems.value.find((i) => i.value === activeTab.value)?.label ?? '')
@@ -3556,6 +3601,59 @@ async function confirmDeleteTemplate(template: Template) {
       $q.notify({
         type: 'negative',
         message: err instanceof Error ? err.message : t('templates.deleteFailed'),
+        position: 'top',
+      })
+    }
+  })
+}
+
+function formatTemplateDate(iso: string): string {
+  const d = new Date(iso)
+  return Number.isNaN(d.getTime()) ? '-' : d.toLocaleDateString()
+}
+
+function renameWorkspaceTemplate(id: string, currentName: string): void {
+  $q.dialog({
+    title: t('workspaceTemplates.renameTitle'),
+    dark: true,
+    prompt: {
+      model: currentName,
+      type: 'text',
+      outlined: true,
+      dense: true,
+      isValid: (v: string) => v.trim().length > 0,
+    },
+    cancel: true,
+    persistent: true,
+  }).onOk(async (name: string) => {
+    try {
+      await workspaceTemplatesStore.updateTemplate(id, { name })
+    } catch (err) {
+      $q.notify({
+        type: 'negative',
+        message: err instanceof Error ? err.message : t('settings.saveError'),
+        position: 'top',
+      })
+    }
+  })
+}
+
+function deleteWorkspaceTemplate(id: string, name: string): void {
+  // A plain confirm, no typed name: a template is cheap to recreate.
+  $q.dialog({
+    title: t('workspaceTemplates.title'),
+    message: t('workspaceTemplates.deleteConfirm', { name }),
+    dark: true,
+    cancel: true,
+    persistent: true,
+  }).onOk(async () => {
+    try {
+      await workspaceTemplatesStore.deleteTemplate(id)
+      $q.notify({ type: 'positive', message: t('workspaceTemplates.deleted', { name }), position: 'top' })
+    } catch (err) {
+      $q.notify({
+        type: 'negative',
+        message: err instanceof Error ? err.message : t('settings.saveError'),
         position: 'top',
       })
     }
@@ -4561,6 +4659,7 @@ onMounted(async () => {
   syncGlobalForm()
   if (store.global.notionEnabled) loadNotionUsers().catch(() => {})
   void fetchNetwork()
+  void workspaceTemplatesStore.fetchTemplates()
   registerUnsavedScope('settings:global', () => isGlobalDirty.value)
   // Mirrors savebarVisible's own gate: `isProjectDirty` alone is trivially true
   // from mount (captureProjectSnapshot() on the default form is never the
