@@ -4,6 +4,11 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.11.30
+
+- feat: workspace templates, duplication and per-engine default models
+- feat(codex): add GPT-6 Astra to the model catalogue
+
 ## 1.11.29
 
 - feat(comparison): task progress, activity stats and CSV export
