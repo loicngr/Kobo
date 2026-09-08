@@ -4,6 +4,11 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.11.32
+
+- chore(deps): npm update in the server and client trees
+- fix(git): refuse push during a rebase and prefill workspaces from a PR
+
 ## 1.11.31
 
 - feat(onboarding): per-zone guided tours with a help menu
