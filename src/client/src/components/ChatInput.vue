@@ -1,6 +1,7 @@
 <template>
   <div
     class="chat-input-container column q-pa-sm"
+    data-tour="ws-input"
     :class="{ 'chat-input-dragging': isDragging }"
     @dragover="onDragOver"
     @dragleave="onDragLeave"

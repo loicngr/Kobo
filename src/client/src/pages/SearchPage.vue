@@ -1,31 +1,37 @@
 <template>
   <q-page class="q-pa-md search-page">
     <div class="search-header">
-      <div class="row items-center">
+      <div class="row items-center q-mb-md">
         <DrawerToggleButton class="q-mr-sm" />
-        <h2 class="text-h5 q-mb-md">{{ $t('search.title') }}</h2>
+        <h2 class="text-h5">{{ $t('search.title') }}</h2>
+        <q-space />
+        <TourReplayButton tour-id="search" />
       </div>
 
-      <q-input
-        ref="inputEl"
-        v-model="store.query"
-        dense
-        dark
-        outlined
-        clearable
-        autofocus
-        :placeholder="$t('search.placeholder')"
-        @update:model-value="scheduleSearch"
-        @clear="store.clear()"
-      >
-        <template #prepend>
-          <q-icon name="search" />
-        </template>
-      </q-input>
+      <!-- QInput forwards attrs to the native input, so the anchor lives on this wrapper. -->
+      <div data-tour="search-input">
+        <q-input
+          ref="inputEl"
+          v-model="store.query"
+          dense
+          dark
+          outlined
+          clearable
+          autofocus
+          :placeholder="$t('search.placeholder')"
+          @update:model-value="scheduleSearch"
+          @clear="store.clear()"
+        >
+          <template #prepend>
+            <q-icon name="search" />
+          </template>
+        </q-input>
+      </div>
 
       <div class="row items-center q-mt-sm q-gutter-sm">
         <q-toggle
           v-model="store.includeArchived"
+          data-tour="search-archived"
           :label="$t('search.includeArchived')"
           dense
           dark
@@ -80,9 +86,11 @@
 
 <script setup lang="ts">
 import DrawerToggleButton from 'src/components/DrawerToggleButton.vue'
+import TourReplayButton from 'src/components/TourReplayButton.vue'
+import { useTours } from 'src/composables/use-tours'
 import { type SearchResult, useSearchStore } from 'src/stores/search'
 import { useTimeAgo } from 'src/utils/formatters'
-import { ref, watch } from 'vue'
+import { onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 
@@ -90,6 +98,11 @@ const store = useSearchStore()
 const router = useRouter()
 const { t } = useI18n()
 const { timeAgo } = useTimeAgo()
+const { scheduleAutoRun } = useTours()
+
+onMounted(() => {
+  scheduleAutoRun('search')
+})
 
 const inputEl = ref<HTMLInputElement | null>(null)
 let debounceTimer: ReturnType<typeof setTimeout> | null = null

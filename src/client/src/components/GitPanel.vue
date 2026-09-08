@@ -219,7 +219,7 @@
       </div>
 
       <!-- Actions sub-card — placed BEFORE Pull request per UX request. -->
-      <div v-if="workspace && gitStats" class="git-subcard">
+      <div v-if="workspace && gitStats" class="git-subcard" data-tour="git-actions">
         <div class="git-subcard-title">{{ $t('git.section.actions') }}</div>
 
         <!-- Primary action: View PR/MR (green) when PR open, else Create PR/MR (indigo).
@@ -416,7 +416,7 @@
       </div>
 
       <!-- Pull request sub-card — placed AFTER Actions per UX request. -->
-      <div v-if="prSnapshot && prSnapshot.state === 'OPEN'" class="git-subcard">
+      <div v-if="prSnapshot && prSnapshot.state === 'OPEN'" class="git-subcard" data-tour="git-pr-panel">
         <div class="git-subcard-title">{{ $t('git.section.pullRequest') }}</div>
         <PrPanel :snapshot="prSnapshot" />
       </div>
@@ -744,6 +744,7 @@ const DiffViewer = defineAsyncComponent(() => import('./DiffViewer.vue'))
 
 import BranchDivergenceDialog from 'src/components/BranchDivergenceDialog.vue'
 import PrPanel from 'src/components/PrPanel.vue'
+import { useTours } from 'src/composables/use-tours'
 import { useSettingsStore } from 'src/stores/settings'
 import type { BranchCommit, ForgeInfo, GitStats, Workspace } from 'src/stores/workspace'
 import { useWorkspaceStore, WorkspaceActionError } from 'src/stores/workspace'
@@ -751,7 +752,7 @@ import { copyToClipboard } from 'src/utils/clipboard'
 import { needsScrollableOutput } from 'src/utils/git-output'
 import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
 import { notifyRetryableError } from 'src/utils/notifications'
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onActivated, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import CompareCommitsDialog from './CompareCommitsDialog.vue'
 
 const props = defineProps<{
@@ -1027,6 +1028,17 @@ const prSnapshot = computed(() => {
   const id = props.workspace?.id
   if (!id) return undefined
   return store.prSnapshots[id]
+})
+
+const { scheduleAutoRun } = useTours()
+// The PR tour only makes sense once an open PR panel is on screen: re-armed when
+// the selection or the PR state changes, and when the keep-alive tab comes back
+// (onActivated also covers the first mount, hence no `immediate` here).
+watch([() => store.selectedWorkspaceId, () => prSnapshot.value?.state === 'OPEN'], ([, open]) => {
+  if (open) scheduleAutoRun('git-pr')
+})
+onActivated(() => {
+  if (prSnapshot.value?.state === 'OPEN') scheduleAutoRun('git-pr')
 })
 
 /** Fallback when the backend hasn't returned a forge block yet (old cached response). */

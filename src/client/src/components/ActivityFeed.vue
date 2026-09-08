@@ -5,7 +5,7 @@
   <div v-if="switching" class="activity-feed-switching">
     <q-spinner-dots size="40px" color="primary" />
   </div>
-  <div v-else class="activity-feed-wrap">
+  <div v-else class="activity-feed-wrap" data-tour="ws-chat">
     <!-- Off-screen live region. Deliberately NOT wrapped around the feed:
          announcing the container would read out every streaming fragment. -->
     <div

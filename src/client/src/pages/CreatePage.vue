@@ -3,12 +3,16 @@
     <DrawerToggleButton class="create-page__drawer-toggle" />
     <div class="create-inner q-mx-auto">
       <header class="q-mb-lg">
-        <div class="create-title text-weight-bold text-kobo-1">{{ $t('createPage.title') }}</div>
+        <div class="row items-center">
+          <div class="create-title text-weight-bold text-kobo-1">{{ $t('createPage.title') }}</div>
+          <q-space />
+          <TourReplayButton tour-id="create" />
+        </div>
         <div class="text-body1 text-kobo-2 q-mt-xs">{{ $t('createPage.subtitle') }}</div>
       </header>
 
       <!-- Templates: pick one to prefill, or save the current form as one. -->
-      <div class="row items-center q-col-gutter-sm q-mb-md">
+      <div class="row items-center q-col-gutter-sm q-mb-md" data-tour="create-template">
         <div class="col-12 col-sm-8">
           <q-select
             :model-value="selectedTemplateId"
@@ -98,7 +102,7 @@
       </div>
 
       <div class="create-sections column">
-        <q-card flat bordered class="create-section-card">
+        <q-card flat bordered class="create-section-card" data-tour="create-mission">
           <q-card-section class="row items-start no-wrap q-gutter-md">
             <q-avatar color="primary" text-color="white" icon="assignment" size="42px" />
             <div>
@@ -418,7 +422,7 @@
           </q-card-section>
         </q-card>
 
-        <q-card flat bordered class="create-section-card">
+        <q-card flat bordered class="create-section-card" data-tour="create-project">
           <q-card-section class="row items-start no-wrap q-gutter-md">
             <q-avatar color="blue-grey-9" text-color="blue-grey-2" icon="account_tree" size="42px" />
             <div>
@@ -616,7 +620,7 @@
           </q-card-section>
         </q-card>
 
-        <q-card flat bordered class="create-section-card">
+        <q-card flat bordered class="create-section-card" data-tour="create-engine">
           <q-card-section class="row items-start no-wrap q-gutter-md">
             <q-avatar color="primary" text-color="white" icon="smart_toy" size="42px" />
             <div class="col">
@@ -625,6 +629,7 @@
             </div>
             <q-toggle
               :model-value="autoLoop"
+              data-tour="create-autoloop"
               dense
               color="amber-6"
               icon="autorenew"
@@ -669,7 +674,7 @@
             </template>
 
             <q-card-section class="responsive-fields row q-col-gutter-x-md q-pt-md">
-              <div v-if="engineSelectOptions.length > 1" class="col-12 q-mb-sm">
+              <div v-if="engineSelectOptions.length > 1" class="col-12 q-mb-sm" data-tour="create-comparison">
                 <q-toggle
                   v-model="comparisonMode"
                   :label="$t('createPage.compareEngines')"
@@ -884,7 +889,7 @@
               <div v-if="comparisonMode" class="text-caption text-kobo-3 q-mt-sm">
                 {{ $t('createPage.compareBrainstormLocked') }}
               </div>
-              <div class="responsive-fields row q-col-gutter-x-md">
+              <div class="responsive-fields row q-col-gutter-x-md" data-tour="create-brainstorm">
                 <div class="col-12 col-sm-6">
                   <q-select
                     v-model="brainstormModel"
@@ -991,7 +996,9 @@ import DrawerToggleButton from 'src/components/DrawerToggleButton.vue'
 import PrCheckoutStepper from 'src/components/PrCheckoutStepper.vue'
 import PrPickerDialog, { type PullRequestSummary } from 'src/components/PrPickerDialog.vue'
 import SlashSuggestionsPopup from 'src/components/SlashSuggestionsPopup.vue'
+import TourReplayButton from 'src/components/TourReplayButton.vue'
 import { type SlashDropdownItem, useSlashAutocomplete } from 'src/composables/use-slash-autocomplete'
+import { useTours } from 'src/composables/use-tours'
 import { EFFORT_OPTION_DEFS_BY_ENGINE } from 'src/constants/efforts'
 import { MODEL_OPTION_DEFS, MODEL_OPTION_DEFS_BY_ENGINE } from 'src/constants/models'
 import { PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
@@ -1040,6 +1047,7 @@ const $q = useQuasar()
 const store = useWorkspaceStore()
 const settingsStore = useSettingsStore()
 const { t, te } = useI18n()
+const { scheduleAutoRun } = useTours()
 
 const pathFilterOptions = ref<string[]>([])
 
@@ -2173,6 +2181,8 @@ onMounted(async () => {
   // Loaded after the prefs so the duplicate source wins over the remembered
   // defaults.
   await applyDuplicateFromQuery()
+  // After the awaits: the anchor gates must see the form as it will be shown.
+  scheduleAutoRun('create')
 })
 
 // The drawer stays visible on /create, so "Duplicate" from a card while already

@@ -37,27 +37,28 @@
             narrow-indicator
             @update:model-value="setRightTab"
           >
-            <q-tab name="git" icon="commit" :aria-label="$t('git.title')">
+            <q-tab name="git" data-tour="ws-tabnav-git" icon="commit" :aria-label="$t('git.title')">
               <q-tooltip>{{ $t('git.title') }}</q-tooltip>
             </q-tab>
-            <q-tab name="timeline" icon="timeline" :aria-label="$t('timeline.title')">
+            <q-tab name="timeline" data-tour="ws-tabnav-timeline" icon="timeline" :aria-label="$t('timeline.title')">
               <q-tooltip>{{ $t('timeline.title') }}</q-tooltip>
             </q-tab>
-            <q-tab name="tasks" icon="checklist" :aria-label="$t('tasks.title')">
+            <q-tab name="tasks" data-tour="ws-tabnav-tasks" icon="checklist" :aria-label="$t('tasks.title')">
               <q-tooltip>{{ $t('tasks.title') }}</q-tooltip>
             </q-tab>
             <q-tab
               v-if="subagentsTabVisible"
               name="subagents"
+              data-tour="ws-tabnav-subagents"
               icon="smart_toy"
               :aria-label="$t('subagents.title')"
             >
               <q-tooltip>{{ $t('subagents.title') }}</q-tooltip>
             </q-tab>
-            <q-tab name="documents" icon="description" :aria-label="$t('documents.title')">
+            <q-tab name="documents" data-tour="ws-tabnav-documents" icon="description" :aria-label="$t('documents.title')">
               <q-tooltip>{{ $t('documents.title') }}</q-tooltip>
             </q-tab>
-            <q-tab name="schedule" icon="event" :aria-label="$t('schedule.tabLabel')">
+            <q-tab name="schedule" data-tour="ws-tabnav-schedule" icon="event" :aria-label="$t('schedule.tabLabel')">
               <q-tooltip>{{ $t('schedule.tabLabel') }}</q-tooltip>
             </q-tab>
           </q-tabs>
@@ -66,18 +67,18 @@
 
           <div class="col" style="overflow: auto;">
             <q-tab-panels v-model="rightTab" animated keep-alive>
-              <q-tab-panel name="git" class="q-pa-none">
+              <q-tab-panel name="git" data-tour="ws-tab-git" class="q-pa-none">
                 <ComparisonPanel
                   v-if="store.selectedWorkspace?.comparisonId && store.selectedWorkspaceId"
                   :workspace-id="store.selectedWorkspaceId"
                 />
                 <GitPanel :workspace="store.selectedWorkspace" />
               </q-tab-panel>
-              <q-tab-panel name="timeline" class="q-pa-none">
+              <q-tab-panel name="timeline" data-tour="ws-tab-timeline" class="q-pa-none">
                 <SessionTimelinePanel v-if="store.selectedWorkspaceId" :workspace-id="store.selectedWorkspaceId" />
               </q-tab-panel>
 
-              <q-tab-panel name="tasks" class="q-pa-none">
+              <q-tab-panel name="tasks" data-tour="ws-tab-tasks" class="q-pa-none">
                 <TasksPanel :workspace="store.selectedWorkspace" :tasks="store.tasks" />
                 <q-separator dark />
                 <AcceptancePanel :tasks="store.acceptanceCriteria" />
@@ -85,15 +86,15 @@
                 <AgentTodosPanel />
               </q-tab-panel>
 
-              <q-tab-panel v-if="subagentsTabVisible" name="subagents" class="q-pa-none">
+              <q-tab-panel v-if="subagentsTabVisible" name="subagents" data-tour="ws-tab-subagents" class="q-pa-none">
                 <SubagentsPanel />
               </q-tab-panel>
 
-              <q-tab-panel name="documents" class="q-pa-none">
+              <q-tab-panel name="documents" data-tour="ws-tab-documents" class="q-pa-none">
                 <DocumentsPanel :workspace="store.selectedWorkspace" />
               </q-tab-panel>
 
-              <q-tab-panel name="schedule" class="q-pa-none">
+              <q-tab-panel name="schedule" data-tour="ws-tab-schedule" class="q-pa-none">
                 <SchedulePanel v-if="store.selectedWorkspaceId" :workspace-id="store.selectedWorkspaceId" />
               </q-tab-panel>
             </q-tab-panels>
@@ -116,7 +117,7 @@
             <q-tab name="tools" icon="build" :aria-label="$t('tools.title')">
               <q-tooltip>{{ $t('tools.title') }}</q-tooltip>
             </q-tab>
-            <q-tab name="terminal" icon="terminal" :aria-label="$t('terminal.title')">
+            <q-tab name="terminal" data-tour="ws-tabnav-terminal" icon="terminal" :aria-label="$t('terminal.title')">
               <q-tooltip>{{ $t('terminal.title') }}</q-tooltip>
             </q-tab>
           </q-tabs>
@@ -128,7 +129,7 @@
               <ToolsPanel :workspace="store.selectedWorkspace" />
             </q-tab-panel>
 
-            <q-tab-panel name="terminal" class="q-pa-none" style="height: 100%;">
+            <q-tab-panel name="terminal" data-tour="ws-terminal" class="q-pa-none" style="height: 100%;">
               <TerminalPanel />
             </q-tab-panel>
           </q-tab-panels>
@@ -169,7 +170,7 @@ import TasksPanel from 'src/components/TasksPanel.vue'
 import ToolsPanel from 'src/components/ToolsPanel.vue'
 import WhatsNewDialog from 'src/components/WhatsNewDialog.vue'
 import WorkspaceList from 'src/components/WorkspaceList.vue'
-import { useOnboarding } from 'src/composables/use-onboarding'
+import { useTours } from 'src/composables/use-tours'
 import { useWhatsNew } from 'src/composables/use-whats-new'
 import { supportsSubagents } from 'src/constants/engineFeatures'
 import { useDocumentsStore } from 'src/stores/documents'
@@ -192,12 +193,12 @@ const ComparisonPanel = defineAsyncComponent(() => import('src/components/Compar
 const SchedulePanel = defineAsyncComponent(() => import('src/components/SchedulePanel.vue'))
 const TerminalPanel = defineAsyncComponent(() => import('src/components/TerminalPanel.vue'))
 
-// First-run onboarding tour, and the post-update "What's new" dialog.
-const { maybeStartOnFirstVisit } = useOnboarding()
+// First-run home tour, and the post-update "What's new" dialog.
+const { scheduleAutoRun, migrateLegacyFlag } = useTours()
 const { showDialog: showWhatsNew, newVersions, checkForUpdate, availableVersion, dismissUpdate } = useWhatsNew()
 const showUpdateHelp = ref(false)
 onMounted(() => {
-  maybeStartOnFirstVisit()
+  migrateLegacyFlag()
   void checkForUpdate()
 })
 
@@ -316,6 +317,16 @@ function startRightResize(event: MouseEvent) {
 
 const route = useRoute()
 const store = useWorkspaceStore()
+
+// The home tour belongs to the home route, whichever route the app opened on.
+// A slightly longer delay lets the sidebar render its anchors.
+watch(
+  () => route.name,
+  (name) => {
+    if (name === 'workspace') scheduleAutoRun('home', 500)
+  },
+  { immediate: true },
+)
 
 // The SUB-AGENTS tab is hidden when the selected workspace's engine cannot
 // surface sub-agent activity (e.g. Codex SDK — see `engineFeatures.ts`).

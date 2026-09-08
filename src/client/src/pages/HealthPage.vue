@@ -6,13 +6,14 @@
       <div class="text-h6 q-ml-sm">{{ $t('health.title') }}</div>
       <q-space />
       <q-btn flat dense icon="refresh" :loading="loading" :label="$t('common.refresh')" @click="refresh" />
+      <TourReplayButton tour-id="health" class="q-ml-xs" />
     </div>
 
     <div v-if="!report && loading" class="text-kobo-3 text-center q-pa-lg">{{ $t('common.loading') }}</div>
 
     <div v-else-if="report" class="column q-gutter-md">
       <!-- Kōbō home -->
-      <q-card dark flat bordered>
+      <q-card dark flat bordered data-tour="health-checks">
         <q-card-section>
           <div class="text-subtitle2 q-mb-sm">{{ $t('health.envTitle') }}</div>
           <div class="row q-col-gutter-md">
@@ -166,7 +167,7 @@
       </q-card>
 
       <!-- Active state — quota backoffs, wakeups, auto-loops, sessions, dev servers -->
-      <div class="text-subtitle1 q-mt-md q-mb-xs text-kobo-2">{{ $t('health.activeTitle') }}</div>
+      <div class="text-subtitle1 q-mt-md q-mb-xs text-kobo-2" data-tour="health-active">{{ $t('health.activeTitle') }}</div>
 
       <q-card dark flat bordered>
         <q-card-section>
@@ -348,11 +349,14 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
 import DrawerToggleButton from 'src/components/DrawerToggleButton.vue'
+import TourReplayButton from 'src/components/TourReplayButton.vue'
+import { useTours } from 'src/composables/use-tours'
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 
 const $q = useQuasar()
 const router = useRouter()
+const { scheduleAutoRun } = useTours()
 
 interface WorktreeCheck {
   workspaceId: string
@@ -438,7 +442,10 @@ async function refresh() {
   }
 }
 
-onMounted(refresh)
+onMounted(() => {
+  void refresh()
+  scheduleAutoRun('health')
+})
 
 const dbSizeHuman = computed(() => {
   const b = report.value?.db.sizeBytes

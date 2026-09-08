@@ -6,13 +6,14 @@
       <div class="text-caption text-kobo-3">
         {{ $t('dashboard.count', { n: rows.length }, rows.length) }}
       </div>
+      <TourReplayButton tour-id="dashboard" class="q-ml-xs" />
     </div>
 
-    <q-banner v-if="rows.length === 0" dense class="kobo-dashboard-empty">
+    <q-banner v-if="rows.length === 0" dense class="kobo-dashboard-empty" data-tour="dash-overview">
       {{ $t('dashboard.empty') }}
     </q-banner>
 
-    <q-markup-table v-else flat dense dark class="kobo-dashboard-table">
+    <q-markup-table v-else flat dense dark class="kobo-dashboard-table" data-tour="dash-overview">
       <thead>
         <tr>
           <th class="text-left">{{ $t('dashboard.workspace') }}</th>
@@ -76,7 +77,7 @@
       </tbody>
     </q-markup-table>
 
-    <q-card dark flat bordered class="q-mt-lg">
+    <q-card dark flat bordered class="q-mt-lg" data-tour="dash-reliability">
       <q-card-section>
         <div class="text-subtitle2">{{ $t('reliability.title') }}</div>
         <div class="text-caption text-kobo-3">{{ $t('reliability.subtitle') }}</div>
@@ -123,7 +124,9 @@
 
 <script setup lang="ts">
 import { storeToRefs } from 'pinia'
+import TourReplayButton from 'src/components/TourReplayButton.vue'
 import WorkspaceAttentionLabels from 'src/components/WorkspaceAttentionLabels.vue'
+import { useTours } from 'src/composables/use-tours'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { useTimeAgo } from 'src/utils/formatters'
 import { getAttentionReasons } from 'src/utils/workspace-attention'
@@ -136,6 +139,7 @@ const store = useWorkspaceStore()
 const { workspaces, prSnapshots, gitStatsCache } = storeToRefs(store)
 const { timeAgo } = useTimeAgo()
 const { t } = useI18n()
+const { scheduleAutoRun } = useTours()
 
 /** Reuses the labels the workspace cards already show, rather than a second wording. */
 const STATUS_LABEL_KEYS: Record<string, string> = {
@@ -248,6 +252,7 @@ onMounted(() => {
   // empty for up to a full interval after a cold load.
   void store.fetchWorkspacesInfo()
   void loadReliability()
+  scheduleAutoRun('dashboard')
 })
 </script>
 

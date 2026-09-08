@@ -6,6 +6,7 @@
       <div class="text-h6 q-ml-sm">{{ $t('changelog.title') }}</div>
       <q-space />
       <q-btn flat dense icon="refresh" :loading="loading" :label="$t('common.refresh')" @click="load" />
+      <TourReplayButton tour-id="changelog" class="q-ml-xs" />
     </div>
 
     <div v-if="loading && versions.length === 0" class="text-kobo-3 text-center q-pa-lg">
@@ -20,7 +21,7 @@
       {{ $t('changelog.empty') }}
     </div>
 
-    <div v-else class="column q-gutter-md">
+    <div v-else class="column q-gutter-md" data-tour="changelog-list">
       <div v-if="currentVersion" class="text-caption text-kobo-3">
         {{ $t('changelog.currentVersion', { version: currentVersion }) }}
       </div>
@@ -51,6 +52,8 @@
 
 <script setup lang="ts">
 import DrawerToggleButton from 'src/components/DrawerToggleButton.vue'
+import TourReplayButton from 'src/components/TourReplayButton.vue'
+import { useTours } from 'src/composables/use-tours'
 import { renderChatMarkdown } from 'src/utils/render-chat-markdown'
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
@@ -61,6 +64,7 @@ interface ChangelogEntry {
 }
 
 const router = useRouter()
+const { scheduleAutoRun } = useTours()
 const versions = ref<ChangelogEntry[]>([])
 const currentVersion = ref<string>('')
 const loading = ref<boolean>(false)
@@ -86,7 +90,10 @@ async function load(): Promise<void> {
   }
 }
 
-onMounted(load)
+onMounted(() => {
+  void load()
+  scheduleAutoRun('changelog')
+})
 </script>
 
 <style scoped>

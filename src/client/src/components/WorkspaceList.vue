@@ -5,7 +5,7 @@
       <span class="text-caption text-uppercase text-weight-bold text-kobo-3 col ellipsis">
         {{ $t('workspaceList.title') }}
       </span>
-      <div class="col items-center justify-end row">
+      <div class="col items-center justify-end row no-wrap">
         <q-badge
             v-if="wsStore.connected"
             rounded
@@ -40,6 +40,7 @@
             size="sm"
             color="kobo-2"
             :aria-label="$t('dashboard.tooltip')"
+            data-tour="dashboard"
             @click="goToDashboard"
         >
           <q-tooltip>{{ $t('dashboard.tooltip') }}</q-tooltip>
@@ -66,7 +67,6 @@
             class="q-ml-xs"
             size="sm"
             color="kobo-2"
-            data-tour="changelog"
             :aria-label="$t('changelog.tooltip')"
             @click="goToChangelog"
         >
@@ -86,6 +86,7 @@
         >
           <q-tooltip>{{ $t('settings.title') }}</q-tooltip>
         </q-btn>
+        <HelpMenu class="q-ml-xs" />
         <q-btn
             flat
             round
@@ -679,6 +680,7 @@
 
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
+import HelpMenu from 'src/components/HelpMenu.vue'
 import ManageTagsDialog from 'src/components/ManageTagsDialog.vue'
 import WorkspaceCard from 'src/components/WorkspaceCard.vue'
 import { useIsMobile } from 'src/composables/use-is-mobile'

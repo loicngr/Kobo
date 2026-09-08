@@ -58,7 +58,10 @@
             <q-tooltip>{{ $t('settings.openNav') }}</q-tooltip>
           </q-btn>
           <h2 class="settings-content__title">{{ activeNavLabel }}</h2>
+          <TourReplayButton tour-id="settings" class="q-ml-sm" />
         </header>
+
+        <div class="text-caption text-kobo-3 q-mb-md">{{ $t(`settings.help.${activeTab}`) }}</div>
 
         <div class="settings-panels">
         <div v-show="isGlobalSection" class="settings-global-wrap">
@@ -1504,20 +1507,6 @@ where ffmpeg</pre>
               />
             </div>
 
-            <!-- Onboarding tour -->
-            <div v-if="activeTab === 'general'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
-              <div class="text-subtitle2 q-mb-sm">{{ $t('settings.onboardingTitle') }}</div>
-              <div class="text-caption text-kobo-3 q-mb-sm">{{ $t('settings.onboardingHint') }}</div>
-              <q-btn
-                flat
-                no-caps
-                icon="play_circle"
-                color="primary"
-                :label="$t('settings.onboardingReplay')"
-                @click="startTour"
-              />
-            </div>
-
             <!-- Cleanup script -->
             <div v-if="activeTab === 'scripts'" class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md">
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.cleanupScript') }}</div>
@@ -2568,7 +2557,7 @@ where ffmpeg</pre>
         </div>
         <!-- Workspace templates panel -->
         <div v-if="activeTab === 'workspaceTemplates'" class="q-pa-none">
-          <div class="settings-card rounded-borders q-pa-lg">
+          <div data-tour="settings-card-workspaceTemplates" class="settings-card rounded-borders q-pa-lg">
             <div class="text-subtitle1 text-weight-medium text-kobo-1 q-mb-xs">
               {{ $t('workspaceTemplates.title') }}
             </div>
@@ -2714,9 +2703,10 @@ import DrawerToggleButton from 'src/components/DrawerToggleButton.vue'
 import FolderPickerDialog from 'src/components/FolderPickerDialog.vue'
 import PrNotificationSoundSettings from 'src/components/PrNotificationSoundSettings.vue'
 import SettingsNavList from 'src/components/SettingsNavList.vue'
+import TourReplayButton from 'src/components/TourReplayButton.vue'
 import WhipShortcutRecorder from 'src/components/WhipShortcutRecorder.vue'
 import { useIsMobile } from 'src/composables/use-is-mobile'
-import { useOnboarding } from 'src/composables/use-onboarding'
+import { useTours } from 'src/composables/use-tours'
 import { CODEX_MODEL_OPTION_DEFS, MODEL_OPTION_DEFS } from 'src/constants/models'
 import { type AgentPermissionMode, PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
 import { type SupportedLocale, setLocale } from 'src/i18n'
@@ -2760,7 +2750,7 @@ const store = useSettingsStore()
 const templatesStore = useTemplatesStore()
 const workspaceTemplatesStore = useWorkspaceTemplatesStore()
 const { t, locale } = useI18n()
-const { startTour } = useOnboarding()
+const { scheduleAutoRun } = useTours()
 const { isMobile } = useIsMobile()
 const layout = useLayoutStore()
 
@@ -4657,6 +4647,8 @@ onMounted(async () => {
   await store.fetchVoiceModels()
   await store.fetchVoiceRuntime()
   syncGlobalForm()
+  // Armed once the settings are loaded so the `settings-card-*` anchors exist.
+  scheduleAutoRun('settings')
   if (store.global.notionEnabled) loadNotionUsers().catch(() => {})
   void fetchNetwork()
   void workspaceTemplatesStore.fetchTemplates()

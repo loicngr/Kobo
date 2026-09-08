@@ -808,78 +808,132 @@ export default {
   'settings.copyFromConfirm': 'Cela écrasera les valeurs du formulaire avec les settings de « {project} ». Continuer ?',
   'settings.newProject': 'Nouveau projet',
   'settings.editProject': 'Modifier le projet',
-  'settings.onboardingTitle': 'Visite guidée',
-  'settings.onboardingHint': 'Revois la présentation des principaux éléments de l’interface.',
-  'settings.onboardingReplay': 'Revoir la visite guidée',
-  'onboarding.list.title': 'Espaces de travail',
-  'onboarding.list.description':
-    'Chaque mission vit dans son propre espace — un git worktree, une branche et une session d’agent dédiés. Ils s’affichent tous ici.',
-  'onboarding.create.title': 'Créer un espace de travail',
-  'onboarding.create.description':
-    'Clique sur + pour lancer une nouvelle mission — depuis un ticket Notion, une issue Sentry, ou de zéro.',
-  'onboarding.search.title': 'Recherche',
-  'onboarding.search.description':
-    'Filtre tes espaces de travail par nom, ou cherche dans l’historique des conversations d’agents.',
-  'onboarding.health.title': 'Santé',
-  'onboarding.health.description':
-    'Vérifie l’état de Kōbō : base de données, agents actifs, intégrations, sauvegardes.',
-  'onboarding.changelog.title': 'Nouveautés',
-  'onboarding.changelog.description':
-    "Consulte les dernières évolutions de Kōbō : nouvelles fonctionnalités, correctifs, changements de comportement. Une pastille apparaît lorsqu'une release n'a pas encore été lue.",
-  'onboarding.settings.title': 'Paramètres',
-  'onboarding.settings.description':
-    'Modèles, scripts de cycle de vie, intégrations, voix — toute la configuration de Kōbō est ici. Cliquez sur Suivant pour parcourir chaque section.',
-  'onboarding.settings-general.title': 'Général',
-  'onboarding.settings-general.description':
-    'Langue de l’interface, projet par défaut et comportement global appliqué à chaque nouveau workspace.',
-  'onboarding.settings-agents.title': 'Agents et modèles',
-  'onboarding.settings-agents.description':
-    'Choisissez le moteur par défaut — Claude Code ou Codex —, le modèle et le mode de permission des agents.',
-  'onboarding.settings-skills.title': 'Skills',
-  'onboarding.settings-skills.description':
-    'Choisissez la suite de skills chargée par les agents : le préréglage recommandé ou votre sélection personnalisée.',
-  'onboarding.settings-prompts.title': 'Prompts',
-  'onboarding.settings-prompts.description':
-    'Modèle de description de PR et autres textes de prompt réutilisables par les agents.',
-  'onboarding.settings-scripts.title': 'Scripts',
-  'onboarding.settings-scripts.description':
-    'Scripts de cycle de vie exécutés au cleanup, à l’archivage et au setup d’un workspace — globaux ou par projet.',
-  'onboarding.settings-notion.title': 'Notion',
-  'onboarding.settings-notion.description':
-    'Connectez votre token d’intégration Notion pour importer des tickets comme missions de workspace.',
-  'onboarding.settings-sentry.title': 'Sentry',
-  'onboarding.settings-sentry.description': 'Importer une issue Sentry comme source de vérité d’un workspace.',
-  'onboarding.settings-forge.title': 'Forge',
-  'onboarding.settings-forge.description':
-    'Choisis GitHub, GitLab ou aucune, par projet. Kōbō pilote ta propre CLI gh / glab — il n’embarque aucun identifiant.',
-  'onboarding.settings-voice.title': 'Voix',
-  'onboarding.settings-voice.description':
-    'Dictée vocale : activez-la, choisissez le modèle Whisper et gérez le runtime de reconnaissance vocale local.',
-  'onboarding.settings-notifications.title': 'Notifications',
-  'onboarding.settings-notifications.description':
-    'Notifications sonores et navigateur pour les événements et changements d’état des agents.',
-  'onboarding.settings-worktrees.title': 'Worktrees',
-  'onboarding.settings-worktrees.description':
-    'Préfixes de branche Git et dossier où sont créés les worktrees des workspaces.',
-  'onboarding.settings-worktrees-purge.title': "Libérer l'espace disque automatiquement",
-  'onboarding.settings-worktrees-purge.description':
-    "Active ce toggle pour que Kōbō supprime le dossier worktree (souvent plusieurs centaines de Mo de node_modules / vendor) dès qu'une PR est mergée. L'historique de chat et les métadonnées PR sont conservés. Tu peux recréer le worktree plus tard avec `gh pr checkout <pr>` — Kōbō détecte automatiquement la restauration dans les 30 secondes et réactive le workspace.",
-  'onboarding.settings-projects.title': 'Projets',
-  'onboarding.settings-projects.description':
-    'Enregistrez les dépôts sur lesquels vous travaillez. Cliquez sur « Ajouter un projet » pour pointer Kōbō vers un dépôt local — chaque workspace cible l’un de ces projets.',
-  'onboarding.settings-templates.title': 'Modèles',
-  'onboarding.settings-templates.description':
-    'Votre bibliothèque de modèles de prompt réutilisables — choisissez-en un pour pré-remplir le brief à la création d’un workspace.',
-  'onboarding.settings-export.title': 'Import / Export',
-  'onboarding.settings-export.description':
-    'Sauvegardez ou partagez la configuration de Kōbō, et exportez les données des workspaces dans un fichier.',
-  'onboarding.firstWorkspace.title': 'Crée ton premier workspace',
-  'onboarding.firstWorkspace.description':
-    'C’est tout l’objet de l’outil : une mission, un worktree, un agent. Ouvre la page de création pour démarrer.',
-  'onboarding.next': 'Suivant',
-  'onboarding.prev': 'Précédent',
-  'onboarding.done': 'Terminé',
-  'onboarding.exitConfirm': 'Quitter la visite guidée ? Vous pourrez la relancer à tout moment depuis les Paramètres.',
+  'help.title': 'Aide',
+  'help.tours': 'Visites guidées',
+  'help.steps': '{n} étape | {n} étapes',
+  'help.resetAll': 'Réinitialiser toutes les visites',
+  'help.resetAllHint': "Relance l'accueil ; chaque écran rejouera sa visite à la prochaine ouverture.",
+  'help.status.unseen': 'non vue',
+  'help.status.partial': 'en partie',
+  'help.status.seen': 'vue',
+  'help.replayThis': 'Rejouer la visite de cet écran',
+  'tours.next': 'Suivant',
+  'tours.prev': 'Précédent',
+  'tours.done': 'Terminé',
+  'tours.exitConfirm': 'Quitter la visite guidée ? Vous pourrez la relancer à tout moment depuis le menu Aide.',
+  'tours.home.title': "S'orienter",
+  'tours.home.list.title': 'Workspaces',
+  'tours.home.list.description':
+    'Chaque mission vit ici avec son statut. Les badges signalent une CI en échec, une review demandant des changements ou une PR prête à merger.',
+  'tours.home.create.title': 'Créer un workspace',
+  'tours.home.create.description':
+    "Un workspace, c'est un worktree Git, une branche et une session d'agent pour une tâche.",
+  'tours.home.search.title': 'Recherche',
+  'tours.home.search.description':
+    "Filtrez la liste par nom. L'icône de recherche en haut ouvre la recherche plein texte dans les conversations des agents.",
+  'tours.home.dashboard.title': 'Tableau de bord',
+  'tours.home.dashboard.description':
+    'Un tableau pour tous les workspaces actifs : statut, attention, PR, diff, activité, plus la fiabilité des moteurs.',
+  'tours.home.health.title': 'Santé et changelog',
+  'tours.home.health.description':
+    'Vérifiez la base de données, les runtimes et les agents actifs. Le bouton voisin liste ce qui a changé à chaque version.',
+  'tours.home.settings.title': 'Paramètres',
+  'tours.home.settings.description':
+    'Moteurs, intégrations, automatisation, worktrees et projets. Créez maintenant votre premier workspace.',
+  'tours.create.title': 'Créer un workspace',
+  'tours.create.project.title': 'Projet et branche',
+  'tours.create.project.description': 'Choisissez le projet et la branche de départ du worktree.',
+  'tours.create.mission.title': 'Mission',
+  'tours.create.mission.description': 'Décrivez la tâche, ou importez-la depuis une page Notion ou une issue Sentry.',
+  'tours.create.template.title': 'Templates',
+  'tours.create.template.description':
+    'Appliquez un preset enregistré, ou enregistrez ce formulaire comme preset. « Dupliquer » sur une carte de workspace ouvre ce formulaire prérempli.',
+  'tours.create.engine.title': 'Moteur et modèle',
+  'tours.create.engine.description':
+    "Claude Code ou Codex, le modèle, l'effort de raisonnement et ce que l'agent peut faire sans demander.",
+  'tours.create.brainstorm.title': 'Brainstorm sur un autre modèle',
+  'tours.create.brainstorm.description':
+    'Lancez la première session de brainstorming sur un autre modèle, puis revenez au modèle principal pour les itérations.',
+  'tours.create.autoloop.title': 'Auto-loop',
+  'tours.create.autoloop.description':
+    "Laissez l'agent enchaîner les sessions jusqu'à ce que toutes les tâches soient faites, ou qu'il stagne.",
+  'tours.create.comparison.title': 'Comparer deux moteurs',
+  'tours.create.comparison.description':
+    'Créez deux workspaces jumeaux sur la même tâche et comparez leurs commits, tâches et activité.',
+  'tours.workspace.title': 'Dans un workspace',
+  'tours.workspace.chat.title': 'Conversation',
+  'tours.workspace.chat.description':
+    "La sortie de l'agent, en direct : messages, appels d'outils, questions et erreurs.",
+  'tours.workspace.input.title': "Parler à l'agent",
+  'tours.workspace.input.description':
+    'Envoyez un message, utilisez les slash commands, dictez à la voix ou joignez des fichiers.',
+  'tours.workspace.selectors.title': 'Réglages de session',
+  'tours.workspace.selectors.description':
+    "Changez le modèle, l'effort, le mode de permission et l'auto-loop pour la prochaine session.",
+  'tours.workspace.status.title': 'Statut',
+  'tours.workspace.status.description': "L'état de la session en cours ; arrêtez-la ici si besoin.",
+  'tours.workspace.git.title': 'Git',
+  'tours.workspace.git.description': 'Commits, diff, push, rebase et la PR de cette branche.',
+  'tours.workspace.tasks.title': 'Tâches',
+  'tours.workspace.tasks.description': "Ce que l'agent prévoit de faire, et les critères d'acceptation à respecter.",
+  'tours.workspace.timeline.title': 'Chronologie',
+  'tours.workspace.timeline.description':
+    'Toutes les sessions de ce workspace ; ouvrez-en une plus ancienne pour la relire.',
+  'tours.workspace.subagents.title': 'Sous-agents',
+  'tours.workspace.subagents.description':
+    "Suivez les sous-agents lancés par l'agent, avec leur progression en direct.",
+  'tours.workspace.documents.title': 'Documents',
+  'tours.workspace.documents.description': "Plans et fichiers écrits par l'agent, consultables sans quitter le chat.",
+  'tours.workspace.schedule.title': 'Programmation',
+  'tours.workspace.schedule.description': "Réveils et crons qui relancent l'agent plus tard.",
+  'tours.workspace.terminal.title': 'Terminal',
+  'tours.workspace.terminal.description': 'Un shell dans le worktree, sans quitter Kōbō.',
+  'tours.gitPr.title': 'Pull request',
+  'tours.gitPr.panel.title': 'Statut de la PR',
+  'tours.gitPr.panel.description':
+    'Résultat de la CI, décision de review et reviewers, rafraîchis toutes les 30 secondes.',
+  'tours.gitPr.actions.title': 'Actions Git',
+  'tours.gitPr.actions.description':
+    "Push, pull, rebase ou changement de branche de base. Pendant un conflit, un bouton laisse l'agent le résoudre.",
+  'tours.gitPr.attention.title': "Badges d'attention",
+  'tours.gitPr.attention.description':
+    'La carte affiche une CI en échec, des changements demandés ou une PR prête à merger.',
+  'tours.settings.title': 'Paramètres',
+  'tours.settings.engines.title': 'Moteurs et modèles',
+  'tours.settings.engines.description': 'Modèle, effort et mode de permission par défaut pour chaque moteur.',
+  'tours.settings.integrations.title': 'Intégrations',
+  'tours.settings.integrations.description': 'Notion, Sentry et la forge (GitHub ou GitLab) qui fournit les PR.',
+  'tours.settings.automation.title': 'Automatisation',
+  'tours.settings.automation.description':
+    'Scripts de setup et de cleanup, hooks de cycle de vie, templates de prompts, templates de workspace et skills.',
+  'tours.settings.worktrees.title': 'Worktrees',
+  'tours.settings.worktrees.description':
+    'Où vivent les worktrees, combien de temps garder ceux qui sont mergés, et la purge automatique.',
+  'tours.settings.projects.title': 'Projets',
+  'tours.settings.projects.description': 'Les projets enregistrés et leurs surcharges par projet.',
+  'tours.settings.misc.title': 'Général, voix, notifications, export',
+  'tours.settings.misc.description':
+    'Langue, accès réseau, dictée, sons et notifications navigateur, et un export complet de vos réglages.',
+  'tours.dashboard.title': 'Tableau de bord',
+  'tours.dashboard.overview.title': "Vue d'ensemble",
+  'tours.dashboard.overview.description':
+    "Tous les workspaces actifs dans un tableau ; cliquez sur une ligne pour l'ouvrir.",
+  'tours.dashboard.reliability.title': 'Fiabilité des moteurs',
+  'tours.dashboard.reliability.description': 'Sessions, erreurs et durées par moteur et par modèle.',
+  'tours.health.title': 'Santé',
+  'tours.health.checks.title': 'Vérifications',
+  'tours.health.checks.description': 'Environnement, base de données, runtimes, workspaces et sessions.',
+  'tours.health.active.title': 'État actif',
+  'tours.health.active.description':
+    'Les back-offs de quota, les réveils en attente et les auto-loops en cours en ce moment.',
+  'tours.search.title': 'Recherche',
+  'tours.search.input.title': 'Requête',
+  'tours.search.input.description': 'Recherche dans les noms de workspaces et les conversations des agents.',
+  'tours.search.archived.title': 'Archivés',
+  'tours.search.archived.description': 'Inclure les workspaces archivés dans les résultats.',
+  'tours.changelog.title': 'Nouveautés',
+  'tours.changelog.list.title': 'Versions',
+  'tours.changelog.list.description': 'Ce qui a changé à chaque version, la plus récente en premier.',
   'settings.projectGroup.identity': 'Identité',
   'settings.projectGroup.defaults': 'Valeurs par défaut',
   'settings.projectGroup.prompts': 'Prompts',
@@ -953,6 +1007,22 @@ export default {
   'settings.nav.notifications': 'Notifications',
   'settings.nav.worktrees': 'Worktrees',
   'settings.nav.export': 'Export',
+  'settings.help.general': 'Langue, accès réseau et valeurs par défaut dont hérite chaque projet.',
+  'settings.help.agents': 'Modèle, effort et mode de permission par défaut pour chaque moteur.',
+  'settings.help.skills': "Les suites de skills que l'agent est invité à utiliser.",
+  'settings.help.prompts': 'Textes de prompt réutilisables : description de PR, review, correction CI, finalisation.',
+  'settings.help.scripts':
+    'Scripts de setup, de nettoyage et de changement de branche source, plus les hooks de cycle de vie.',
+  'settings.help.notion': "Importer une page Notion comme source de vérité d'un workspace.",
+  'settings.help.sentry': "Créer un workspace à partir d'une issue Sentry.",
+  'settings.help.forge': 'CLI GitHub ou GitLab utilisée pour les PR et merge requests.',
+  'settings.help.voice': 'Dictée et push-to-talk.',
+  'settings.help.notifications': 'Sons, notifications navigateur et rappel des questions sans réponse.',
+  'settings.help.worktrees': 'Où les worktrees sont créés, rétention et purge automatique.',
+  'settings.help.projects': 'Projets enregistrés et leurs surcharges par projet.',
+  'settings.help.templates': 'Templates de prompt développés dans la zone de saisie du chat.',
+  'settings.help.workspaceTemplates': 'Presets enregistrés du formulaire de création.',
+  'settings.help.export': 'Exporter et importer tous les paramètres en JSON.',
   'settings.openNav': 'Ouvrir la navigation',
   'settings.saveError': "Erreur lors de l'enregistrement des paramètres.",
   'settings.projectSaved': 'Projet enregistré.',

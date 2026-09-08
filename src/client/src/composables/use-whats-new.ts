@@ -43,7 +43,7 @@ export function useWhatsNew() {
       }
 
       const lastSeen = localStorage.getItem(LAST_SEEN_KEY)
-      // First launch — just record the version. No dialog: the onboarding tour
+      // First launch - just record the version. No dialog: the home tour
       // is what greets a brand-new user.
       if (!lastSeen) {
         localStorage.setItem(LAST_SEEN_KEY, current)

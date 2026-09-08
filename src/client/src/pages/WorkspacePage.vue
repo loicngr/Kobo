@@ -21,10 +21,15 @@
         <q-badge
           :label="workspaceStatusLabel(selectedWs.id, selectedWs.status)"
           :color="workspaceStatusColor(selectedWs.id, selectedWs.status)"
+          data-tour="ws-status"
           class="q-ml-sm"
           style="font-size: 10px;"
         />
         <template v-if="!isMobile">
+          <!-- Tour anchor: the selectors render as a fragment, so this wrapper
+               must grow and shrink exactly like the fragment did (flex: 1 1 auto,
+               no min-width: 0, so the workspace name keeps truncating first). -->
+          <div data-tour="ws-selectors" class="wp-selectors row items-center no-wrap">
           <WorkspaceToolbarSelectors
             layout="inline"
             :sessions="sessions"
@@ -44,6 +49,7 @@
             @copy-session-id="copyEngineSessionId"
             @delete-session="confirmDeleteSession"
           />
+          </div>
         </template>
         <q-space v-else />
         <WorkspaceWhipControl
@@ -69,6 +75,7 @@
         >
           <q-tooltip>{{ $t('workspacePage.commandPaletteHint') }}</q-tooltip>
         </q-btn>
+        <TourReplayButton v-if="!isMobile" tour-id="workspace" class="q-mr-xs" />
         <q-btn
           v-if="isBusyStatus(selectedWs.status) && !selectedWs.archivedAt"
           dense
@@ -112,6 +119,11 @@
                 @copy-session-id="copyEngineSessionId"
                 @delete-session="confirmDeleteSession"
               />
+              <q-separator />
+              <q-item v-close-popup clickable @click="replayWorkspaceTour">
+                <q-item-section avatar><q-icon name="help_outline" size="xs" /></q-item-section>
+                <q-item-section>{{ $t('help.replayThis') }}</q-item-section>
+              </q-item>
             </q-list>
           </q-menu>
         </q-btn>
@@ -326,6 +338,7 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
 import { useIsMobile } from 'src/composables/use-is-mobile'
+import { useTours } from 'src/composables/use-tours'
 import { EFFORT_OPTION_DEFS_BY_ENGINE } from 'src/constants/efforts'
 import { MODEL_OPTION_DEFS, MODEL_OPTION_DEFS_BY_ENGINE } from 'src/constants/models'
 import { PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
@@ -355,6 +368,7 @@ import LatestThinkingPanel from 'src/components/LatestThinkingPanel.vue'
 import PermissionRequestPanel from 'src/components/PermissionRequestPanel.vue'
 import QuotaBackoffBanner from 'src/components/QuotaBackoffBanner.vue'
 import StaleSessionBanner from 'src/components/StaleSessionBanner.vue'
+import TourReplayButton from 'src/components/TourReplayButton.vue'
 import WakeupBanner from 'src/components/WakeupBanner.vue'
 import WorkspaceHistorySearch from 'src/components/WorkspaceHistorySearch.vue'
 import WorkspaceToolbarSelectors from 'src/components/WorkspaceToolbarSelectors.vue'
@@ -366,6 +380,22 @@ const store = useWorkspaceStore()
 const layout = useLayoutStore()
 const { t } = useI18n()
 const { timeAgo } = useTimeAgo()
+const { runTour, scheduleAutoRun } = useTours()
+
+// Re-armed on every selection: the auto-run only shows unseen steps, so a
+// second workspace costs nothing and picks up steps the first one lacked.
+// The delay lets the chat and panels render their anchors.
+watch(
+  () => store.selectedWorkspaceId,
+  (id) => {
+    if (id) scheduleAutoRun('workspace', 600)
+  },
+  { immediate: true },
+)
+
+function replayWorkspaceTour(): void {
+  void runTour('workspace')
+}
 
 function statusLabel(status: string): string {
   const key = workspaceStatusKey(status)
@@ -907,6 +937,10 @@ watch(
 </script>
 
 <style lang="scss" scoped>
+.wp-selectors {
+  flex: 1 1 auto;
+}
+
 .wp-header {
   min-height: 48px;
   background-color: var(--kobo-bg-deep);
