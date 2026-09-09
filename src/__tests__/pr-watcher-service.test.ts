@@ -38,6 +38,7 @@ vi.mock('../server/utils/git-ops.js', () => ({
   }),
   isGitWorktree: vi.fn(() => false),
 }))
+vi.mock('../server/services/worktree-service.js', () => ({ isMatchingWorkspaceWorktree: vi.fn(() => false) }))
 vi.mock('node:fs', async () => {
   const actual = await vi.importActual<typeof import('node:fs')>('node:fs')
   return { ...actual, existsSync: vi.fn(() => true), default: { ...actual, existsSync: vi.fn(() => true) } }
@@ -50,10 +51,15 @@ import {
   checkPrStatuses,
   clearPrSnapshotCache,
   getAllGitStats,
+  getAllPrSnapshots,
+  invalidateWorkspacePrCaches,
+  refreshPrSnapshot,
 } from '../server/services/pr-watcher-service.js'
 import * as wsSvc from '../server/services/websocket-service.js'
 import * as wsService from '../server/services/workspace-service.js'
+import { isMatchingWorkspaceWorktree } from '../server/services/worktree-service.js'
 import * as gitOps from '../server/utils/git-ops.js'
+import { withWorkspaceLifecycleGuard } from '../server/utils/workspace-lifecycle-guard.js'
 
 function makeWorkspace(
   overrides: Partial<{
@@ -131,6 +137,17 @@ async function runPrTransition(
   getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ base: 'main', ...after }))
   await checkPrStatuses()
 }
+
+beforeEach(() => {
+  vi.mocked(wsService.getWorkspace).mockImplementation(
+    (id) => [...wsService.listWorkspaces(), ...wsService.listArchivedWorkspaces()].find((ws) => ws.id === id) ?? null,
+  )
+  vi.mocked(wsService.archiveWorkspace).mockImplementation((id) => {
+    const archived = { ...wsService.getWorkspace(id), archivedAt: '2026-09-09T01:00:00.000Z' }
+    vi.mocked(wsService.getWorkspace).mockReturnValue(archived as never)
+    return archived as never
+  })
+})
 
 describe('checkPrStatuses — base change detection', () => {
   beforeEach(() => {
@@ -343,6 +360,7 @@ describe('checkPrStatuses — active-agent guard', () => {
       releaseHook()
       await tick
       expect(trace).toEqual(['hook:start', 'hook:end', 'purge'])
+      expect(purge.purgeWorktree).toHaveBeenCalledWith('ws-1', '2026-09-09T01:00:00.000Z')
     } finally {
       // `clearAllMocks` in beforeEach keeps implementations: a pending hook
       // left behind would hang the next test's tick.
@@ -839,9 +857,10 @@ describe('checkPrStatuses — auto-restore guards against purge leftovers', () =
     }
   }
 
-  it('does NOT restore when the worktree path is a leftover (not a valid git worktree)', async () => {
+  it('does NOT restore an unrelated Git checkout at the recorded path', async () => {
     vi.mocked(wsService.listArchivedWorkspaces).mockReturnValue([makePurged() as never])
-    vi.mocked(gitOps.isGitWorktree).mockReturnValue(false) // existsSync is true but it is a residual dir
+    vi.mocked(isMatchingWorkspaceWorktree).mockReturnValue(false)
+    vi.mocked(gitOps.isGitWorktree).mockReturnValue(true) // A Git checkout alone is insufficient.
 
     await checkPrStatuses()
 
@@ -851,11 +870,146 @@ describe('checkPrStatuses — auto-restore guards against purge leftovers', () =
   it('DOES restore when the worktree path is a valid git worktree (manual recreation)', async () => {
     const purged = makePurged()
     vi.mocked(wsService.listArchivedWorkspaces).mockReturnValue([purged as never])
-    vi.mocked(gitOps.isGitWorktree).mockReturnValue(true)
+    vi.mocked(isMatchingWorkspaceWorktree).mockReturnValue(true)
     vi.mocked(wsService.restoreWorktreeFromDisk).mockReturnValue(purged as never)
 
     await checkPrStatuses()
 
     expect(wsService.restoreWorktreeFromDisk).toHaveBeenCalledWith('ws-purged')
+  })
+})
+
+describe('watcher restoration lifecycle races', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    _resetForTest()
+    vi.mocked(wsService.listArchivedWorkspaces).mockReturnValue([])
+    vi.mocked(wsService.listWorkspaces).mockReturnValue([makeWorkspace()] as never)
+    vi.mocked(wsService.getWorkspace).mockImplementation(
+      (id) => [...wsService.listWorkspaces(), ...wsService.listArchivedWorkspaces()].find((ws) => ws.id === id) ?? null,
+    )
+    vi.mocked(wsService.archiveWorkspace).mockImplementation(
+      (id) => ({ ...wsService.getWorkspace(id), archivedAt: '2026-09-09T01:00:00.000Z' }) as never,
+    )
+    vi.mocked(computeGitStats).mockResolvedValue({ commitCount: 3 } as never)
+    getPrStatusMock.mockResolvedValue(makePrSnapshot())
+  })
+
+  it('skips both polling and manual restoration while a lifecycle operation is busy', async () => {
+    vi.mocked(wsService.listArchivedWorkspaces).mockReturnValue([
+      { ...makeWorkspace(), worktreePurgedAt: 'purged' },
+    ] as never)
+    vi.mocked(isMatchingWorkspaceWorktree).mockReturnValue(true)
+    await withWorkspaceLifecycleGuard('ws-1', async () => {
+      await checkPrStatuses()
+      expect(wsService.restoreWorktreeFromDisk).not.toHaveBeenCalled()
+      expect(getPrStatusMock).not.toHaveBeenCalled()
+    })
+  })
+
+  it('does not recreate invalidated snapshots or archive after a restoration during the PR lookup', async () => {
+    await checkPrStatuses()
+    let finish!: (pr: ReturnType<typeof makePrSnapshot>) => void
+    getPrStatusMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    )
+    const pending = checkPrStatuses()
+    invalidateWorkspacePrCaches('ws-1')
+    finish(makePrSnapshot({ state: 'MERGED' }))
+    await pending
+    expect(getAllPrSnapshots()).toEqual({})
+    expect(getAllGitStats()).toEqual({})
+    expect(wsService.archiveWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('discards a manual refresh that completes after restoration', async () => {
+    let finish!: (pr: ReturnType<typeof makePrSnapshot>) => void
+    getPrStatusMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    )
+    const pending = refreshPrSnapshot('ws-1')
+    invalidateWorkspacePrCaches('ws-1')
+    finish(makePrSnapshot())
+    await pending
+    expect(getAllPrSnapshots()).toEqual({})
+    expect(wsService.updateWorkspaceSourceBranch).not.toHaveBeenCalled()
+  })
+
+  it('does not rearchive after restoration while stopping a dev server', async () => {
+    const dev = await import('../server/services/dev-server-service.js')
+    await checkPrStatuses()
+    let finish!: () => void
+    let started!: () => void
+    const stopping = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    vi.mocked(dev.stopDevServer).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = () =>
+            resolve({ status: 'stopped', instanceName: '', projectName: '', httpPort: '', url: '', containers: [] })
+          started()
+        }),
+    )
+    getPrStatusMock.mockResolvedValue(makePrSnapshot({ state: 'MERGED' }))
+    const pending = checkPrStatuses()
+    await stopping
+    invalidateWorkspacePrCaches('ws-1')
+    finish()
+    await pending
+    expect(wsService.archiveWorkspace).not.toHaveBeenCalled()
+  })
+
+  it('does not auto-purge a restored merged PR on later ticks or after cache reset', async () => {
+    const purge = await import('../server/services/worktree-purge-service.js')
+    const settings = await import('../server/services/settings-service.js')
+    vi.mocked(settings.getGlobalSettings).mockReturnValue({ autoPurgeOnPrMerged: true } as never)
+    await checkPrStatuses()
+    invalidateWorkspacePrCaches('ws-1')
+    getPrStatusMock.mockResolvedValue(makePrSnapshot({ state: 'MERGED' }))
+    await checkPrStatuses()
+    await checkPrStatuses()
+    _resetForTest()
+    await checkPrStatuses()
+    expect(wsService.archiveWorkspace).not.toHaveBeenCalled()
+    expect(purge.purgeWorktree).not.toHaveBeenCalled()
+    vi.mocked(settings.getGlobalSettings).mockReturnValue({ autoPurgeOnPrMerged: false } as never)
+  })
+
+  it('cancels delayed automatic purge when the archive timestamp changed during the merge hook', async () => {
+    const hooks = await import('../server/services/lifecycle-hook-service.js')
+    const settings = await import('../server/services/settings-service.js')
+    const purge = await import('../server/services/worktree-purge-service.js')
+    vi.mocked(settings.getGlobalSettings).mockReturnValue({ autoPurgeOnPrMerged: true } as never)
+    await checkPrStatuses()
+    let finish!: () => void
+    vi.mocked(hooks.onPrMerged).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    )
+    getPrStatusMock.mockResolvedValue(makePrSnapshot({ state: 'MERGED' }))
+    let archived!: () => void
+    const archiveReached = new Promise<void>((resolve) => {
+      archived = resolve
+    })
+    vi.mocked(wsService.archiveWorkspace).mockImplementationOnce((id) => {
+      archived()
+      return { ...wsService.getWorkspace(id), archivedAt: '2026-09-09T01:00:00.000Z' } as never
+    })
+    const pending = checkPrStatuses()
+    await archiveReached
+    // The current row is unarchived again while the hook still runs.
+    finish()
+    await pending
+    expect(purge.purgeWorktree).not.toHaveBeenCalled()
+    vi.mocked(settings.getGlobalSettings).mockReturnValue({ autoPurgeOnPrMerged: false } as never)
   })
 })

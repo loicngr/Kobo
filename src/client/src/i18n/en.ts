@@ -219,10 +219,32 @@ export default {
   'workspacePage.lastAgentEvent': 'Last event {when}',
   'workspacePage.agentStopping': 'Stopping…',
   'workspacePage.agentNotRunning': 'No agent process — status is stale',
+  'contextMenu.restoreWorktree': 'Restore worktree',
+  'workspacePage.restoringWorktree': 'Restoring…',
+  'workspacePage.worktreeRestoreSuccess': 'Worktree restored',
+  'workspacePage.worktreeRestoreLimitations':
+    'Recreates committed Git files. Dependencies and previously discarded local files are not restored.',
+  'workspacePage.restoreError.not-found': 'This workspace no longer exists. Refresh the workspace list.',
+  'workspacePage.restoreError.not-purged':
+    'This workspace is not marked as purged. Refresh it and check its working directory.',
+  'workspacePage.restoreError.workspace-busy':
+    'Another operation is running on this workspace. Wait for it to finish, then retry.',
+  'workspacePage.restoreError.worktree-not-owned':
+    'This worktree is not managed by Kōbō. Restore it manually in its original project.',
+  'workspacePage.restoreError.project-unavailable':
+    'The original project is unavailable. Reconnect its disk or restore the project at its original path, then retry.',
+  'workspacePage.restoreError.path-conflict':
+    'The worktree path is occupied by another folder or checkout. Move the conflicting folder or follow the manual recovery instructions in Details.',
+  'workspacePage.restoreError.branch-in-use':
+    'The working branch is already checked out elsewhere. Use that checkout or release the branch from it before retrying.',
+  'workspacePage.restoreError.recovery-source-unavailable':
+    'The working branch and saved commit could not be found. Check remote access or follow the manual recovery instructions in Details.',
+  'workspacePage.restoreError.git-failed':
+    'Restoration failed. Check Git access and disk permissions, then retry. Details opens the manual recovery guide.',
   'workspacePage.archivedBanner': 'Archived workspace — read-only',
-  'workspacePage.worktreePurgedBanner': 'Worktree deleted — history kept, no restore available in this version',
+  'workspacePage.worktreePurgedBanner': 'Worktree deleted — history kept',
   'workspacePage.worktreePurgedTooltip':
-    'The worktree folder was deleted from disk to reclaim space. Chat history, sessions and PR metadata remain queryable here, but the working directory no longer exists locally. A future Kōbō version will rebuild the worktree from the merged PR — for now you would need to recreate it manually via `gh pr checkout` or `git worktree add`.',
+    'Restore worktree recreates the working directory and unarchives this workspace. Chat history, tasks and sessions are preserved. No agent or dev server is started.',
   'workspacePage.pendingInitialPromptBanner':
     'An initial prompt is pending — the agent never received it (setup script crashed or the workspace was never started). Click Start to send it now.',
   'workspacePage.unarchived': 'Workspace unarchived',
@@ -1478,9 +1500,9 @@ export default {
   'contextMenu.openEditor': 'Open in editor',
   'contextMenu.openFileManager': 'Open in file manager',
   'contextMenu.unarchiveDisabledPurged':
-    'The worktree was removed from disk. Recreate it manually (`gh pr checkout` or `git worktree add`) — Kōbō auto-detects the restoration within 30s and reactivates the workspace.',
+    'Restore the worktree first using Restore worktree, or recreate it manually. Kōbō detects matching worktrees automatically.',
   'workspaceList.unarchiveBlockedPurged':
-    "Can't unarchive: the worktree no longer exists on disk. Recreate it manually (`gh pr checkout` or `git worktree add`) — Kōbō detects it within 30s and reactivates the workspace.",
+    'Restore the worktree first using Restore worktree, or recreate it manually. Kōbō detects matching worktrees automatically.',
   'contextMenu.purgeWorktree': 'Free disk space (delete worktree)',
   'contextMenu.purgeWorktreeTooltip':
     'Deletes the worktree from disk to reclaim space — chat / session history is preserved. Auto-archives the workspace.',

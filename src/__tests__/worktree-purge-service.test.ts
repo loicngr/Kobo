@@ -1,6 +1,10 @@
 // The two irreversible operations of the product had no test at all. This one
 // covers worktree purge: an operation that deletes a directory from disk and
 // flips a flag driving the "restore" UX and the PR watcher's auto-restore probe.
+import { execFileSync } from 'node:child_process'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const existsSyncMock = vi.fn((_path: string) => true)
@@ -52,6 +56,7 @@ vi.mock('../server/services/worktree-service.js', () => ({
 }))
 
 import { purgeWorktree } from '../server/services/worktree-purge-service.js'
+import { withWorkspaceLifecycleGuard } from '../server/utils/workspace-lifecycle-guard.js'
 
 function makeWorkspace(overrides: Record<string, unknown> = {}) {
   return {
@@ -120,6 +125,7 @@ describe('purgeWorktree()', () => {
       prUrl: 'https://example.test/pr/42',
       forge: 'github',
       mergeCommitSha: null,
+      headCommitSha: null,
       originalWorktreePath: '/tmp/project/.worktrees/ws-1',
       originalSourceBranch: 'develop',
       originalWorkingBranch: 'feature/x',
@@ -175,5 +181,69 @@ describe('purgeWorktree()', () => {
     await purgeWorktree('ws-1')
 
     expect(archiveWorkspaceMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('purge restore metadata and stale automatic requests', () => {
+  it('captures the actual HEAD before removal', async () => {
+    const repo = mkdtempSync(path.join(tmpdir(), 'kobo-purge-head-'))
+    try {
+      execFileSync('git', ['init', '-q', repo])
+      execFileSync(
+        'git',
+        ['-c', 'user.name=Test', '-c', 'user.email=test@example.test', 'commit', '--allow-empty', '-qm', 'saved work'],
+        { cwd: repo },
+      )
+      const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim()
+      getWorkspaceMock.mockReturnValue(makeWorkspace({ projectPath: repo, worktreePath: repo }))
+      removeWorktreeMock.mockImplementation(async () => {})
+      existsSyncMock.mockImplementation(() => removeWorktreeMock.mock.calls.length === 0)
+      await purgeWorktree('ws-1')
+      expect(markWorktreePurgedMock).toHaveBeenCalledWith(
+        'ws-1',
+        expect.objectContaining({ headCommitSha: head, mergeCommitSha: null }),
+      )
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+    }
+  })
+
+  it('cancels stale automatic purge before stopping processes', async () => {
+    getWorkspaceMock.mockReturnValue(makeWorkspace())
+    await expect(purgeWorktree('ws-1', '2026-09-09T00:00:00.000Z')).resolves.toEqual({
+      outcome: 'cancelled',
+      warnings: [],
+    })
+    expect(stopAgentAndWaitMock).not.toHaveBeenCalled()
+    expect(removeWorktreeMock).not.toHaveBeenCalled()
+  })
+})
+
+describe('purge lifecycle exclusion', () => {
+  it('rejects a purge while restoration owns the workspace', async () => {
+    getWorkspaceMock.mockReturnValue(makeWorkspace())
+    await withWorkspaceLifecycleGuard('ws-1', async () => {
+      await expect(purgeWorktree('ws-1')).rejects.toMatchObject({ code: 'workspace-busy' })
+      expect(stopAgentAndWaitMock).not.toHaveBeenCalled()
+      expect(removeWorktreeMock).not.toHaveBeenCalled()
+    })
+  })
+
+  it('holds the guard throughout stopping the agent and releases it after removal', async () => {
+    getWorkspaceMock.mockReturnValue(makeWorkspace())
+    existsSyncMock.mockImplementation(() => removeWorktreeMock.mock.calls.length === 0)
+    removeWorktreeMock.mockResolvedValue(undefined)
+    let release!: () => void
+    stopAgentAndWaitMock.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          release = resolve
+        }),
+    )
+    const pending = purgeWorktree('ws-1')
+    await expect(withWorkspaceLifecycleGuard('ws-1', async () => {})).rejects.toMatchObject({ code: 'workspace-busy' })
+    release()
+    await pending
+    await expect(withWorkspaceLifecycleGuard('ws-1', async () => 'free')).resolves.toBe('free')
   })
 })

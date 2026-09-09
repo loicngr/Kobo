@@ -1,6 +1,7 @@
 import fs from 'node:fs'
-import { fetchSourceBranchAsync, isGitWorktree } from '../utils/git-ops.js'
+import { fetchSourceBranchAsync } from '../utils/git-ops.js'
 import { withGitRepoLock } from '../utils/git-repo-lock.js'
+import { isWorkspaceLifecycleBusy } from '../utils/workspace-lifecycle-guard.js'
 import { hasController } from './agent/orchestrator.js'
 import { stopDevServer } from './dev-server-service.js'
 import { getForgeProvider } from './forge/registry.js'
@@ -21,6 +22,7 @@ import {
   updateWorkspaceSourceBranch,
 } from './workspace-service.js'
 import { purgeWorktree } from './worktree-purge-service.js'
+import { isMatchingWorkspaceWorktree } from './worktree-service.js'
 
 // ── PR Watcher ────────────────────────────────────────────────────────────────
 // Polls GitHub every POLL_INTERVAL_MS to detect merged/closed PRs and
@@ -60,6 +62,14 @@ const lastKnownPr = new Map<string, PrSnapshot>()
 
 /** Latest git-stats snapshot per workspace, refreshed each watcher tick. */
 const lastKnownGitStats = new Map<string, GitStatsResult>()
+const activeChecks = new Map<string, Set<{ invalidated: boolean }>>()
+
+/** Also cancels stale results from checks that started before restoration. */
+export function invalidateWorkspacePrCaches(workspaceId: string): void {
+  lastKnownPr.delete(workspaceId)
+  lastKnownGitStats.delete(workspaceId)
+  for (const check of activeChecks.get(workspaceId) ?? []) check.invalidated = true
+}
 
 /**
  * Read-only snapshot map, keyed by workspace id. Used by the drawer indicator
@@ -115,16 +125,12 @@ function markUnread(workspaceId: string): void {
 
 function autoRestoreManuallyRecreatedWorktrees(): void {
   for (const ws of listArchivedWorkspaces()) {
-    if (!ws.worktreePurgedAt) continue
+    if (!ws.worktreePurgedAt || !ws.worktreeOwned || isWorkspaceLifecycleBusy(ws.id)) continue
     if (!fs.existsSync(ws.worktreePath)) continue
-    // Only a genuinely recreated worktree (gh pr checkout / git worktree add)
-    // should trigger restore. A purge that failed to fully remove the folder
-    // (e.g. root-owned Docker files) leaves a residual non-git directory that
-    // satisfies existsSync but is NOT a valid worktree — restoring it would
-    // wrongly un-archive the workspace and flood git fetches with "(null)".
-    if (!isGitWorktree(ws.worktreePath)) continue
+    if (!isMatchingWorkspaceWorktree(ws)) continue
     try {
       const restored = restoreWorktreeFromDisk(ws.id)
+      invalidateWorkspacePrCaches(ws.id)
       emitEphemeral(ws.id, 'workspace:worktree-restored', { workspace: restored })
       console.log(`[pr-watcher] auto-restored worktree for workspace '${ws.name}' (manual restore detected)`)
     } catch (err) {
@@ -152,7 +158,21 @@ export async function checkPrStatuses(): Promise<void> {
   await runBounded(workspaces, WORKSPACE_CHECK_CONCURRENCY, async (ws) => {
     // Without this guard, every git/forge spawn below fails with ENOENT and
     // floods the logs when a worktree was deleted externally.
-    if (!fs.existsSync(ws.worktreePath)) return
+    if (isWorkspaceLifecycleBusy(ws.id) || !fs.existsSync(ws.worktreePath)) return
+    const check = { invalidated: false }
+    const checks = activeChecks.get(ws.id) ?? new Set<{ invalidated: boolean }>()
+    checks.add(check)
+    activeChecks.set(ws.id, checks)
+    const stale = () => {
+      const current = getWorkspace(ws.id)
+      return (
+        check.invalidated ||
+        isWorkspaceLifecycleBusy(ws.id) ||
+        !current ||
+        current.archivedAt !== ws.archivedAt ||
+        current.worktreePurgedAt !== ws.worktreePurgedAt
+      )
+    }
 
     try {
       // Opt-out: skip the forge call entirely for a workspace with PR-watch
@@ -163,6 +183,8 @@ export async function checkPrStatuses(): Promise<void> {
       const pr = ws.prWatchDisabledAt
         ? null
         : await getForgeProvider(resolveForge(ws.projectPath)).getPrStatus(ws.worktreePath, ws.workingBranch)
+
+      if (stale()) return
 
       // Detect a PR base change BEFORE computing git stats so the new base
       // is used in commitCount / behindCount / diffStats. Otherwise the
@@ -201,12 +223,15 @@ export async function checkPrStatuses(): Promise<void> {
         // concurrently across four worktrees made them fight over the same file
         // lock, with the error swallowed.
         await withGitRepoLock(ws.worktreePath, () => fetchSourceBranchAsync(ws.worktreePath, ws.sourceBranch))
-        lastKnownGitStats.set(ws.id, await computeGitStats(ws, pr))
+        if (stale()) return
+        const stats = await computeGitStats(ws, pr)
+        if (stale()) return
+        lastKnownGitStats.set(ws.id, stats)
       } catch (err) {
         console.error(`[pr-watcher] computeGitStats failed for '${ws.name}':`, err instanceof Error ? err.message : err)
       }
 
-      if (!pr) return
+      if (stale() || !pr) return
 
       const prev = lastKnownPr.get(ws.id)
       // We delay updating `lastKnownPr` until after the actions succeed.
@@ -252,13 +277,17 @@ export async function checkPrStatuses(): Promise<void> {
         } catch (err) {
           console.error(`[pr-watcher] stopDevServer failed for '${ws.name}':`, err instanceof Error ? err.message : err)
         }
+        if (stale()) return
+        const current = getWorkspace(ws.id)
+        if (!current || ['extracting', 'brainstorming', 'executing'].includes(current.status) || hasController(ws.id))
+          return
         try {
           destroyTerminal(ws.id)
         } catch {
           // Terminal may not exist — ignore
         }
 
-        archiveWorkspace(ws.id)
+        const archived = archiveWorkspace(ws.id)
         lastKnownPr.delete(ws.id)
         emitEphemeral(ws.id, 'workspace:archived', {
           reason: `PR ${pr.state.toLowerCase()}`,
@@ -274,7 +303,9 @@ export async function checkPrStatuses(): Promise<void> {
               // `onPrMerged` never rejects and is capped by the script-runner's
               // own timeout, so this cannot hang the watcher indefinitely.
               await prMergedHook
-              void purgeWorktree(ws.id)
+              const current = getWorkspace(ws.id)
+              if (check.invalidated || !archived.archivedAt || current?.archivedAt !== archived.archivedAt) return
+              void purgeWorktree(ws.id, archived.archivedAt)
                 .then((result) => {
                   // Auto-purge runs with nobody watching: without this trace an
                   // outcome of 'removal-failed' left no record anywhere.
@@ -359,6 +390,9 @@ export async function checkPrStatuses(): Promise<void> {
         `[pr-watcher] Failed to check PR for workspace '${ws.name}':`,
         err instanceof Error ? err.message : err,
       )
+    } finally {
+      checks.delete(check)
+      if (!checks.size) activeChecks.delete(ws.id)
     }
   })
 }
@@ -376,33 +410,52 @@ export async function refreshPrSnapshot(workspaceId: string): Promise<PrSnapshot
   const ws = getWorkspace(workspaceId)
   if (!ws) throw new Error(`Workspace '${workspaceId}' not found`)
 
-  const snap = await getForgeProvider(resolveForge(ws.projectPath)).getPrStatus(ws.worktreePath, ws.workingBranch)
-  if (snap === null) {
-    lastKnownPr.delete(workspaceId)
-    return null
-  }
-  // Mirror the watcher's base-change detection so a manual refresh fixes a
-  // stale `sourceBranch` (typical scenario: user ran `gh pr edit --base …`
-  // and clicks the GitPanel refresh button instead of waiting for the next
-  // 30s tick). Best-effort: a DB write failure here leaves the snapshot
-  // cached but the metadata stale — the watcher will retry on its own.
-  if (snap.state === 'OPEN' && snap.base && snap.base !== ws.sourceBranch) {
-    try {
-      updateWorkspaceSourceBranch(workspaceId, snap.base)
-      emitEphemeral(workspaceId, 'pr:base-changed', {
-        oldBase: ws.sourceBranch,
-        newBase: snap.base,
-        prUrl: snap.url,
-      })
-    } catch (err) {
-      console.error(
-        `[pr-watcher] updateWorkspaceSourceBranch (refresh) failed for '${ws.name}':`,
-        err instanceof Error ? err.message : err,
-      )
+  if (isWorkspaceLifecycleBusy(workspaceId)) return null
+  const check = { invalidated: false }
+  const checks = activeChecks.get(workspaceId) ?? new Set<{ invalidated: boolean }>()
+  checks.add(check)
+  activeChecks.set(workspaceId, checks)
+  try {
+    const snap = await getForgeProvider(resolveForge(ws.projectPath)).getPrStatus(ws.worktreePath, ws.workingBranch)
+    const current = getWorkspace(workspaceId)
+    if (
+      check.invalidated ||
+      isWorkspaceLifecycleBusy(workspaceId) ||
+      !current ||
+      current.archivedAt !== ws.archivedAt ||
+      current.worktreePurgedAt !== ws.worktreePurgedAt
+    )
+      return null
+    if (snap === null) {
+      lastKnownPr.delete(workspaceId)
+      return null
     }
+    // Mirror the watcher's base-change detection so a manual refresh fixes a
+    // stale `sourceBranch` (typical scenario: user ran `gh pr edit --base …`
+    // and clicks the GitPanel refresh button instead of waiting for the next
+    // 30s tick). Best-effort: a DB write failure here leaves the snapshot
+    // cached but the metadata stale — the watcher will retry on its own.
+    if (snap.state === 'OPEN' && snap.base && snap.base !== ws.sourceBranch) {
+      try {
+        updateWorkspaceSourceBranch(workspaceId, snap.base)
+        emitEphemeral(workspaceId, 'pr:base-changed', {
+          oldBase: ws.sourceBranch,
+          newBase: snap.base,
+          prUrl: snap.url,
+        })
+      } catch (err) {
+        console.error(
+          `[pr-watcher] updateWorkspaceSourceBranch (refresh) failed for '${ws.name}':`,
+          err instanceof Error ? err.message : err,
+        )
+      }
+    }
+    lastKnownPr.set(workspaceId, snap)
+    return snap
+  } finally {
+    checks.delete(check)
+    if (!checks.size) activeChecks.delete(workspaceId)
   }
-  lastKnownPr.set(workspaceId, snap)
-  return snap
 }
 
 /**

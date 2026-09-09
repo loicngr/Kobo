@@ -182,9 +182,19 @@
         {{ $t('workspacePage.worktreePurgedBanner') }}
       </span>
       <q-space />
+      <q-btn
+        v-if="selectedWs.worktreeOwned"
+        flat dense size="sm" no-caps color="kobo-2"
+        :loading="store.restoringWorktreeIds.includes(selectedWs.id)"
+        :label="$t('contextMenu.restoreWorktree')"
+        @click="restoreWorktree(selectedWs.id)"
+      >
+        <template #loading>{{ $t('workspacePage.restoringWorktree') }} <q-spinner class="q-ml-xs" size="14px" /></template>
+      </q-btn>
       <q-btn flat dense size="sm" no-caps color="kobo-2" icon="info_outline" :label="$t('common.details')">
         <q-tooltip max-width="320px" anchor="bottom right" self="top right">
           {{ $t('workspacePage.worktreePurgedTooltip') }}
+          {{ $t('workspacePage.worktreeRestoreLimitations') }}
         </q-tooltip>
       </q-btn>
     </div>
@@ -339,6 +349,7 @@
 import { useQuasar } from 'quasar'
 import { useIsMobile } from 'src/composables/use-is-mobile'
 import { useTours } from 'src/composables/use-tours'
+import { useWorktreeRestore } from 'src/composables/use-worktree-restore'
 import { EFFORT_OPTION_DEFS_BY_ENGINE } from 'src/constants/efforts'
 import { MODEL_OPTION_DEFS, MODEL_OPTION_DEFS_BY_ENGINE } from 'src/constants/models'
 import { PERMISSION_MODES_BY_ENGINE } from 'src/constants/permissionModes'
@@ -377,6 +388,7 @@ import WorkspaceWhipControl from 'src/components/WorkspaceWhipControl.vue'
 const $q = useQuasar()
 const { isMobile } = useIsMobile()
 const store = useWorkspaceStore()
+const { restoreWorktree } = useWorktreeRestore()
 const layout = useLayoutStore()
 const { t } = useI18n()
 const { timeAgo } = useTimeAgo()

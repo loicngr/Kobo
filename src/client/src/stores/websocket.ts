@@ -16,7 +16,7 @@ import type { DevServerStatus } from './dev-server'
 import { useDevServerStore } from './dev-server'
 import type { MigrationStatus } from './migration'
 import { useMigrationStore } from './migration'
-import type { PendingCron } from './workspace'
+import type { PendingCron, Workspace } from './workspace'
 import { useWorkspaceStore } from './workspace'
 
 const t = i18n.global.t
@@ -1288,6 +1288,12 @@ export const useWebSocketStore = defineStore('websocket', {
         case 'workspace:unarchived':
         case 'workspace:worktree-restored':
         case 'workspace:worktree-purged': {
+          const restored = (payload as { workspace?: Workspace }).workspace
+          if (msg.type === 'workspace:worktree-restored' && restored && restored.id === wid) {
+            workspaceStore.applyRestoredWorkspace(restored)
+          } else {
+            workspaceStore.invalidateWorkspaceLifecycleReads(wid)
+          }
           if ((msg.type === 'workspace:archived' || msg.type === 'workspace:worktree-purged') && wid) {
             disposeTerminalEntry(wid)
           }
@@ -1305,6 +1311,7 @@ export const useWebSocketStore = defineStore('websocket', {
         }
 
         case 'workspace:deleted': {
+          workspaceStore.invalidateWorkspaceLifecycleReads(wid)
           // Deletion is permanent — unlike archive/worktree-purge (both
           // reversible), so this is its own case rather than being folded
           // into the shared archived/purged block above.

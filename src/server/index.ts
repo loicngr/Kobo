@@ -69,9 +69,17 @@ import * as wakeupService from './services/wakeup-service.js'
 import { emit, emitEphemeral, handleConnection, setMessageHandler } from './services/websocket-service.js'
 import { getActiveSession, getWorkspace, updateWorkspaceStatus } from './services/workspace-service.js'
 import { pruneWsEvents, resolveRetentionConfig } from './services/ws-events-retention-service.js'
-import { getClientSpaPath, getDbPath, getKoboHome, getPackageVersion, resolveSpaFile } from './utils/paths.js'
+import {
+  getChangelogPath,
+  getClientSpaPath,
+  getDbPath,
+  getKoboHome,
+  getPackageVersion,
+  resolveSpaFile,
+} from './utils/paths.js'
+import { formatStartupBanner, readStartupNotes, startStartupSpinner, startupDebug } from './utils/startup-display.js'
 
-console.log(`[kobo] Kōbō home: ${getKoboHome()}`)
+startupDebug(`[kobo] Kōbō home: ${getKoboHome()}`)
 
 // Initialize DB + run migrations
 const db = getDb()
@@ -83,9 +91,9 @@ try {
   const pending = getPendingMigrations(db)
   if (pending.length > 0) {
     const result = await createPreMigrationBackup(db, getDbPath(), `v${pending[pending.length - 1]}`)
-    console.log(`[kobo] Pre-migration backup before applying ${pending.length} migration(s): ${result.created}`)
+    startupDebug(`[kobo] Pre-migration backup before applying ${pending.length} migration(s): ${result.created}`)
     if (result.deleted.length > 0) {
-      console.log(`[kobo] Rotated ${result.deleted.length} old pre-migration backup(s)`)
+      startupDebug(`[kobo] Rotated ${result.deleted.length} old pre-migration backup(s)`)
     }
   }
 } catch (err) {
@@ -135,9 +143,9 @@ retentionTimer.unref?.()
 void createDailyDbBackupIfNeeded(db, getDbPath())
   .then((r) => {
     if (r.created) {
-      console.log(`[kobo] Daily DB backup: ${r.created}`)
+      startupDebug(`[kobo] Daily DB backup: ${r.created}`)
       if (r.deleted.length > 0) {
-        console.log(`[kobo] Rotated ${r.deleted.length} old DB backup(s)`)
+        startupDebug(`[kobo] Rotated ${r.deleted.length} old DB backup(s)`)
       }
     }
   })
@@ -265,6 +273,7 @@ if (Object.keys(networkAccessEnvOverrides).length > 0) {
   updateNetworkAccessSettings(patch)
 }
 const bindHost = resolveBindHost(getGlobalSettings().networkAccessEnabled)
+const stopStartupSpinner = startStartupSpinner()
 const server = serve(
   {
     fetch: app.fetch,
@@ -273,13 +282,20 @@ const server = serve(
   },
   (info) => {
     setBackendPort(info.port)
-    if (getGlobalSettings().networkAccessEnabled) {
-      console.log(`Server running — network access ON (port ${info.port})`)
-      for (const url of getLanUrls(info.port)) console.log(`  LAN: ${url}`)
-      console.log(`  Token: ${getGlobalSettings().networkAccessToken}`)
-    } else {
-      console.log(`Server running at http://localhost:${info.port} (localhost only)`)
-    }
+    stopStartupSpinner()
+    const settings = getGlobalSettings()
+    console.log(
+      formatStartupBanner({
+        version: getPackageVersion(),
+        port: info.port,
+        devClientOrigin: resolveDevClientOrigin(),
+        networkEnabled: settings.networkAccessEnabled,
+        lanUrls: settings.networkAccessEnabled ? getLanUrls(info.port) : [],
+        token: settings.networkAccessToken,
+        changelog: readStartupNotes(getChangelogPath()),
+        color: Boolean(process.stdout.isTTY && process.env.TERM !== 'dumb' && !('NO_COLOR' in process.env)),
+      }),
+    )
     // Content migration runs AFTER the HTTP listener is up so the frontend
     // can observe progress via WS broadcasts + GET /api/migration/status.
     // Not awaited — the callback returns quickly, the migration runs in the
@@ -289,6 +305,16 @@ const server = serve(
     })
   },
 )
+
+server.on('error', (err: NodeJS.ErrnoException) => {
+  stopStartupSpinner()
+  if (err.code === 'EADDRINUSE') {
+    console.error(`[kobo] Port ${PORT} is already in use. Stop the other server or choose another SERVER_PORT.`)
+  } else {
+    console.error('[kobo] Unable to start the server:', err)
+  }
+  void gracefulShutdown('server error', 1)
+})
 
 // Create WebSocketServer attached to the HTTP server
 const wss = new WebSocketServer({ noServer: true })

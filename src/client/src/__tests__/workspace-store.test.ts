@@ -56,6 +56,261 @@ describe('workspace store', () => {
     setActivePinia(createPinia())
   })
 
+  describe('restoreWorktree', () => {
+    it.each(['workspace:archived', 'workspace:worktree-purged', 'workspace:deleted'] as const)(
+      'does not overwrite a newer %s event with a delayed restore response',
+      async (type) => {
+        const store = useWorkspaceStore()
+        const restored = makeWorkspace()
+        let active = [restored]
+        let archived: Workspace[] = []
+        let finish!: (response: Response) => void
+        store.archivedLoaded = true
+        vi.stubGlobal(
+          'fetch',
+          vi.fn((url: string) => {
+            if (url.endsWith('/restore-worktree'))
+              return new Promise<Response>((resolve) => {
+                finish = resolve
+              })
+            return Promise.resolve(Response.json(url.endsWith('/archived') ? archived : active))
+          }),
+        )
+        const pending = store.restoreWorktree('w1')
+        const socket = useWebSocketStore()
+        socket._routeMessage({
+          type: 'workspace:worktree-restored',
+          workspaceId: 'w1',
+          payload: { workspace: restored },
+        })
+        active = []
+        archived =
+          type === 'workspace:deleted'
+            ? []
+            : [
+                makeWorkspace({
+                  archivedAt: 'later',
+                  worktreePurgedAt: type === 'workspace:worktree-purged' ? 'later' : null,
+                }),
+              ]
+        socket._routeMessage({ type, workspaceId: 'w1', payload: {} })
+        await store.fetchWorkspaces()
+        await store.fetchArchivedWorkspaces()
+        finish(Response.json({ workspace: restored }))
+        await pending
+        expect(store.workspaces).toEqual([])
+        expect(store.archivedWorkspaces).toEqual(archived)
+        expect(store.restoringWorktreeIds).toEqual([])
+      },
+    )
+
+    it.each([
+      'workspace:worktree-restored',
+      'workspace:archived',
+      'workspace:worktree-purged',
+      'workspace:deleted',
+    ] as const)('keeps the first archived deep-link metadata when another workspace receives %s', async (type) => {
+      const store = useWorkspaceStore()
+      const target = makeWorkspace({ id: 'w2', archivedAt: 'before', worktreePurgedAt: 'before' })
+      store.selectedWorkspaceId = 'w2'
+      vi.spyOn(store, 'fetchWorkspaces').mockResolvedValue(undefined)
+      let finish!: (response: Response) => void
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(
+          () =>
+            new Promise<Response>((resolve) => {
+              finish = resolve
+            }),
+        ),
+      )
+      const details = store.fetchWorkspaceDetails('w2')
+      useWebSocketStore()._routeMessage({ type, workspaceId: 'w1', payload: { workspace: makeWorkspace() } })
+      finish(Response.json({ workspace: target, tasks: [] }))
+      await details
+      expect(store.selectedWorkspace).toEqual(target)
+      expect(store.archivedWorkspaces).toEqual([target])
+    })
+
+    it('restores without WebSocket delivery and preserves the selected conversation', async () => {
+      const store = useWorkspaceStore()
+      const restored = makeWorkspace()
+      store.archivedWorkspaces = [makeWorkspace({ archivedAt: 'before', worktreePurgedAt: 'before' })]
+      store.selectedWorkspaceId = 'w1'
+      store.selectedSessionId = 'session-1'
+      store.chatDraft = 'Keep this draft'
+      store.activityFeeds.w1 = []
+      const feed = store.activityFeeds.w1
+      vi.stubGlobal(
+        'fetch',
+        vi.fn().mockResolvedValue({
+          ok: true,
+          json: async () => ({ workspace: restored, outcome: 'restored', source: 'local-branch' }),
+        }),
+      )
+
+      expect(await store.restoreWorktree('w1')).toEqual(restored)
+      expect(store.workspaces).toEqual([restored])
+      expect(store.archivedWorkspaces).toEqual([])
+      expect(store.selectedWorkspaceId).toBe('w1')
+      expect(store.selectedSessionId).toBe('session-1')
+      expect(store.chatDraft).toBe('Keep this draft')
+      expect(store.activityFeeds.w1).toBe(feed)
+      expect(store.restoringWorktreeIds).toEqual([])
+    })
+
+    it.each(['active', 'archived', 'details', 'info'])(
+      'ignores an old %s read completed after restoration and accepts later reads',
+      async (kind) => {
+        const store = useWorkspaceStore()
+        const archived = makeWorkspace({ archivedAt: 'before', worktreePurgedAt: 'before' })
+        const restored = makeWorkspace()
+        store.archivedWorkspaces = [archived]
+        store.selectedWorkspaceId = 'w1'
+        let finish!: (response: Response) => void
+        const fetchMock = vi
+          .fn()
+          .mockImplementationOnce(
+            () =>
+              new Promise<Response>((resolve) => {
+                finish = resolve
+              }),
+          )
+          .mockResolvedValueOnce(Response.json({ workspace: restored, outcome: 'restored', source: 'local-branch' }))
+        vi.stubGlobal('fetch', fetchMock)
+        const read = () =>
+          kind === 'active'
+            ? store.fetchWorkspaces()
+            : kind === 'archived'
+              ? store.fetchArchivedWorkspaces()
+              : kind === 'info'
+                ? store.fetchWorkspacesInfo()
+                : store.fetchWorkspaceDetails('w1')
+        const stale = read()
+        await store.restoreWorktree('w1')
+        finish(
+          Response.json(
+            kind === 'active'
+              ? []
+              : kind === 'archived'
+                ? [archived]
+                : kind === 'info'
+                  ? { workspaces: [], prSnapshots: {}, gitStats: {} }
+                  : { workspace: archived },
+          ),
+        )
+        await stale
+        expect(store.workspaces).toEqual([restored])
+        expect(store.archivedWorkspaces).toEqual([])
+        expect(store.selectedWorkspaceId).toBe('w1')
+        // A later read still reflects a real subsequent change.
+        const renamed = makeWorkspace({
+          name: 'Renamed after restoration',
+          ...(kind === 'archived' ? { archivedAt: 'later' } : {}),
+        })
+        fetchMock.mockResolvedValueOnce(
+          Response.json(
+            kind === 'details'
+              ? { workspace: renamed }
+              : kind === 'info'
+                ? { workspaces: [renamed], prSnapshots: {}, gitStats: {} }
+                : [renamed],
+          ),
+        )
+        await read()
+        expect(kind === 'archived' ? store.archivedWorkspaces : store.workspaces).toEqual([renamed])
+      },
+    )
+
+    it.each(['other-workspace-archived', 'selected-workspace-restored'])(
+      'still loads initial tasks and liveness when %s during the details request',
+      async (change) => {
+        const store = useWorkspaceStore()
+        const archived = makeWorkspace({ archivedAt: 'before', worktreePurgedAt: 'before' })
+        store.archivedWorkspaces = [archived]
+        store.selectedWorkspaceId = 'w1'
+        const tasks = [
+          {
+            id: 'task-1',
+            workspaceId: 'w1',
+            title: 'Existing task',
+            status: 'pending',
+            isAcceptanceCriterion: true,
+            sortOrder: 0,
+            createdAt: 't0',
+            updatedAt: 't0',
+          },
+        ]
+        const liveness = { status: 'running', agentSessionId: 'session-1', startedAt: 't0', lastEventAt: 't1' }
+        let finish!: (response: Response) => void
+        vi.stubGlobal(
+          'fetch',
+          vi
+            .fn()
+            .mockImplementationOnce(
+              () =>
+                new Promise<Response>((resolve) => {
+                  finish = resolve
+                }),
+            )
+            .mockResolvedValueOnce(
+              Response.json({ workspace: makeWorkspace(), outcome: 'restored', source: 'local-branch' }),
+            ),
+        )
+        const details = store.fetchWorkspaceDetails('w1')
+        if (change === 'selected-workspace-restored') {
+          await store.restoreWorktree('w1')
+        } else {
+          vi.spyOn(store, 'fetchWorkspaces').mockResolvedValue(undefined)
+          useWebSocketStore()._routeMessage({ type: 'workspace:archived', workspaceId: 'w2', payload: {} })
+        }
+        finish(Response.json({ workspace: archived, tasks, agentLiveness: liveness }))
+        await details
+        expect(store.tasks).toEqual(tasks)
+        expect(store.agentLiveness.w1).toEqual(liveness)
+        expect(store.agentLivenessLoaded.w1).toBe(true)
+        expect(store.selectedWorkspaceId).toBe('w1')
+        if (change === 'selected-workspace-restored') {
+          expect(store.workspaces).toEqual([makeWorkspace()])
+          expect(store.archivedWorkspaces).toEqual([])
+        }
+      },
+    )
+
+    it('shares an in-flight restoration and clears progress on failure without changing archive state', async () => {
+      const store = useWorkspaceStore()
+      const archived = makeWorkspace({ archivedAt: 'before', worktreePurgedAt: 'before' })
+      store.archivedWorkspaces = [archived]
+      let finish!: (response: unknown) => void
+      const fetchMock = vi.fn(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve
+          }),
+      )
+      vi.stubGlobal('fetch', fetchMock)
+      const first = store.restoreWorktree('w1')
+      const second = store.restoreWorktree('w1')
+      expect(store.restoringWorktreeIds).toEqual(['w1'])
+      const rejected = Promise.allSettled([first, second])
+      finish({ ok: false, status: 409, json: async () => ({ code: 'path-conflict', error: 'Folder occupied' }) })
+      const results = await rejected
+      for (const result of results) {
+        expect(result.status).toBe('rejected')
+        if (result.status === 'rejected') {
+          expect(result.reason).toBeInstanceOf(WorkspaceActionError)
+          expect(result.reason.code).toBe('path-conflict')
+        }
+      }
+      expect(fetchMock).toHaveBeenCalledTimes(1)
+      expect(store.restoringWorktreeIds).toEqual([])
+      expect(store.archivedWorkspaces).toEqual([archived])
+      expect(store.workspaces).toEqual([])
+      fetchMock.mockResolvedValueOnce({ ok: true, json: async () => ({ workspace: makeWorkspace() }) })
+      await expect(store.restoreWorktree('w1')).resolves.toEqual(makeWorkspace())
+    })
+  })
+
   describe('createWorkspace', () => {
     it('preserves the server error message when Sentry extraction fails', async () => {
       vi.stubGlobal(

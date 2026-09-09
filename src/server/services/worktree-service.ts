@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process'
+import { execFile, execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { isGitBranchExistsError } from '../utils/git-ops.js'
@@ -74,11 +74,10 @@ function projectRelativeWorktreePath(projectPath: string, worktreePath: string):
   return relativePath
 }
 
-function addToExclude(projectPath: string, worktreePath: string): void {
+function addToExclude(projectPath: string, worktreePath: string, excludeFile = getExcludeFilePath(projectPath)): void {
   const relativePath = projectRelativeWorktreePath(projectPath, worktreePath)
   if (!relativePath) return
 
-  const excludeFile = getExcludeFilePath(projectPath)
   // Ensure the .git/info directory exists
   const infoDir = path.dirname(excludeFile)
   if (!fs.existsSync(infoDir)) {
@@ -326,4 +325,198 @@ export function listOrphanWorktrees(projectPath: string, attachedPaths: Set<stri
       head: wt.head,
       suggestedSourceBranch: detectSourceBranch(projectPath, wt.path, wt.branch),
     }))
+}
+
+export interface RestoreCheckoutInput {
+  projectPath: string
+  worktreePath: string
+  workingBranch: string
+  headCommitSha?: string | null
+}
+
+export type RestoreCheckoutSource = 'existing-worktree' | 'local-branch' | 'saved-commit' | 'remote-branch'
+export type WorktreeCheckoutErrorCode =
+  | 'path-conflict'
+  | 'branch-in-use'
+  | 'recovery-source-unavailable'
+  | 'project-unavailable'
+  | 'git-failed'
+
+export class WorktreeCheckoutError extends Error {
+  constructor(
+    public readonly code: WorktreeCheckoutErrorCode,
+    message: string,
+  ) {
+    super(message)
+    this.name = 'WorktreeCheckoutError'
+  }
+}
+
+const restoreGitEnv = () => ({ ...process.env, LC_ALL: 'C', LANG: 'C', GIT_TERMINAL_PROMPT: '0' })
+
+function restoreGit(cwd: string, args: string[]): string {
+  return execFileSync('git', ['-c', 'core.hooksPath=/dev/null', ...args], {
+    cwd,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+    timeout: 30_000,
+    env: restoreGitEnv(),
+  }).replace(/\n$/, '')
+}
+
+/** NUL delimiters preserve quoted, whitespace and newline-containing worktree paths. */
+function restoreRegistrations(projectPath: string): { path: string; branch: string }[] {
+  return restoreGit(projectPath, ['worktree', 'list', '--porcelain', '-z'])
+    .split('\0\0')
+    .filter(Boolean)
+    .map((block) => {
+      const fields = block.split('\0')
+      return {
+        path: fields.find((field) => field.startsWith('worktree '))?.slice(9) ?? '',
+        branch: fields.find((field) => field.startsWith('branch '))?.slice(7) ?? '',
+      }
+    })
+}
+
+function commonGitDirectory(cwd: string): string {
+  return fs.realpathSync(restoreGit(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir']))
+}
+
+/** Accept only the exact registered root in the same repository on the expected branch. */
+export function isMatchingWorkspaceWorktree(input: RestoreCheckoutInput): boolean {
+  try {
+    if (!fs.lstatSync(input.worktreePath).isDirectory()) return false
+    const target = fs.realpathSync(input.worktreePath)
+    if (fs.realpathSync(restoreGit(input.worktreePath, ['rev-parse', '--show-toplevel'])) !== target) return false
+    if (commonGitDirectory(input.projectPath) !== commonGitDirectory(input.worktreePath)) return false
+    const ref = `refs/heads/${input.workingBranch}`
+    if (restoreGit(input.worktreePath, ['symbolic-ref', 'HEAD']) !== ref) return false
+    return restoreRegistrations(input.projectPath).some(
+      (entry) => canonicalize(entry.path) === target && entry.branch === ref,
+    )
+  } catch {
+    return false
+  }
+}
+
+function restorePathExists(target: string): boolean {
+  try {
+    fs.lstatSync(target)
+    return true
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false
+    throw err
+  }
+}
+
+function resolveRestoreCommit(projectPath: string, ref: string): string | null {
+  try {
+    return restoreGit(projectPath, ['rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`])
+  } catch {
+    return null
+  }
+}
+
+/** Caller must already hold withGitRepoLock(projectPath). Never resets or replaces a checkout. */
+export async function restoreWorktreeCheckoutUnlocked(
+  input: RestoreCheckoutInput,
+): Promise<{ source: RestoreCheckoutSource; headCommitSha: string }> {
+  const { projectPath, workingBranch } = input
+  const worktreePath = path.resolve(input.worktreePath)
+  try {
+    commonGitDirectory(projectPath)
+  } catch {
+    throw new WorktreeCheckoutError(
+      'project-unavailable',
+      'The project Git repository is unavailable. Restore its location first.',
+    )
+  }
+  try {
+    if (workingBranch.startsWith('-')) throw new Error('Branch names cannot start with a dash')
+    restoreGit(projectPath, ['check-ref-format', `refs/heads/${workingBranch}`])
+    if (restorePathExists(worktreePath)) {
+      if (!isMatchingWorkspaceWorktree(input)) {
+        throw new WorktreeCheckoutError(
+          'path-conflict',
+          'The destination is occupied by a different checkout or directory. Move it before retrying.',
+        )
+      }
+      return { source: 'existing-worktree', headCommitSha: restoreGit(worktreePath, ['rev-parse', '--verify', 'HEAD']) }
+    }
+
+    const registrations = restoreRegistrations(projectPath)
+    // Do not globally prune: another missing checkout may still need its registration.
+    if (registrations.some((entry) => path.resolve(entry.path) === worktreePath)) {
+      throw new WorktreeCheckoutError(
+        'path-conflict',
+        'Git still registers the missing destination. Repair that worktree registration before retrying.',
+      )
+    }
+    if (registrations.some((entry) => entry.branch === `refs/heads/${workingBranch}`)) {
+      throw new WorktreeCheckoutError(
+        'branch-in-use',
+        'The working branch is already checked out elsewhere. Free that checkout before retrying.',
+      )
+    }
+
+    let source: RestoreCheckoutSource = 'local-branch'
+    const localCommit = resolveRestoreCommit(projectPath, `refs/heads/${workingBranch}`)
+    let commit = localCommit
+    if (!commit) {
+      source = 'saved-commit'
+      commit =
+        input.headCommitSha && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(input.headCommitSha)
+          ? resolveRestoreCommit(projectPath, input.headCommitSha)
+          : null
+      if (!commit) {
+        source = 'remote-branch'
+        try {
+          await new Promise<void>((resolve, reject) => {
+            execFile(
+              'git',
+              ['-c', 'core.hooksPath=/dev/null', 'fetch', '--no-tags', 'origin', `refs/heads/${workingBranch}`],
+              {
+                cwd: projectPath,
+                timeout: 60_000,
+                env: restoreGitEnv(),
+              },
+              (error) => (error ? reject(error) : resolve()),
+            )
+          })
+          commit = resolveRestoreCommit(projectPath, 'FETCH_HEAD')
+        } catch {
+          // Avoid exposing remote credentials embedded in Git error output.
+        }
+        if (!commit) {
+          throw new WorktreeCheckoutError(
+            'recovery-source-unavailable',
+            'No local branch, saved commit or reachable origin branch is available. Check origin access or recover the branch manually.',
+          )
+        }
+      }
+    }
+    // Recheck after the asynchronous fetch, including empty directories and dangling links.
+    if (restorePathExists(worktreePath)) {
+      throw new WorktreeCheckoutError(
+        'path-conflict',
+        'The destination appeared during recovery. Move the conflicting directory before retrying.',
+      )
+    }
+    if (localCommit) restoreGit(projectPath, ['worktree', 'add', '--', worktreePath, workingBranch])
+    else restoreGit(projectPath, ['worktree', 'add', '-b', workingBranch, '--', worktreePath, commit])
+    if (!isMatchingWorkspaceWorktree(input)) {
+      throw new WorktreeCheckoutError(
+        'git-failed',
+        'The restored checkout could not be verified. Inspect the checkout before retrying.',
+      )
+    }
+    addToExclude(projectPath, worktreePath, path.join(commonGitDirectory(projectPath), 'info', 'exclude'))
+    return { source, headCommitSha: restoreGit(worktreePath, ['rev-parse', '--verify', 'HEAD']) }
+  } catch (err) {
+    if (err instanceof WorktreeCheckoutError) throw err
+    throw new WorktreeCheckoutError(
+      'git-failed',
+      'Git could not restore the worktree. Check the branch name, repository permissions and worktree registrations.',
+    )
+  }
 }

@@ -222,11 +222,32 @@ export default {
   'workspacePage.lastAgentEvent': 'Ultimo evento {when}',
   'workspacePage.agentStopping': 'Arresto in corso…',
   'workspacePage.agentNotRunning': 'Nessun agente in esecuzione — lo stato è obsoleto',
+  'contextMenu.restoreWorktree': 'Ripristina worktree',
+  'workspacePage.restoringWorktree': 'Ripristino…',
+  'workspacePage.worktreeRestoreSuccess': 'Worktree ripristinato',
+  'workspacePage.worktreeRestoreLimitations':
+    'Ricrea i file Git salvati nei commit. Le dipendenze e i file locali eliminati in precedenza non vengono ripristinati.',
+  'workspacePage.restoreError.not-found': 'Questo workspace non esiste più. Aggiorna l’elenco dei workspace.',
+  'workspacePage.restoreError.not-purged':
+    'Questo workspace non è contrassegnato come ripulito. Aggiornalo e controlla la sua directory di lavoro.',
+  'workspacePage.restoreError.workspace-busy':
+    'È già in corso un’operazione su questo workspace. Attendi che termini e riprova.',
+  'workspacePage.restoreError.worktree-not-owned':
+    'Questo worktree non è gestito da Kōbō. Ripristinalo manualmente nel progetto originale.',
+  'workspacePage.restoreError.project-unavailable':
+    'Il progetto originale non è disponibile. Ricollega il disco o ripristina il progetto nel percorso originale, quindi riprova.',
+  'workspacePage.restoreError.path-conflict':
+    'Il percorso del worktree è occupato da un’altra cartella o checkout. Sposta la cartella in conflitto o segui le istruzioni di recupero manuale in Dettagli.',
+  'workspacePage.restoreError.branch-in-use':
+    'Il branch di lavoro è già in uso in un altro checkout. Utilizza quel checkout o libera il branch prima di riprovare.',
+  'workspacePage.restoreError.recovery-source-unavailable':
+    'Il branch di lavoro e il commit salvato non sono stati trovati. Verifica l’accesso remoto o consulta il recupero manuale in Dettagli.',
+  'workspacePage.restoreError.git-failed':
+    'Ripristino non riuscito. Verifica l’accesso a Git e i permessi del disco, quindi riprova. Dettagli apre la guida al recupero manuale.',
   'workspacePage.archivedBanner': 'Workspace archiviato — sola lettura',
-  'workspacePage.worktreePurgedBanner':
-    'Worktree eliminato — cronologia conservata, ripristino non disponibile in questa versione',
+  'workspacePage.worktreePurgedBanner': 'Worktree eliminato — cronologia conservata',
   'workspacePage.worktreePurgedTooltip':
-    'La cartella del worktree è stata eliminata dal disco per recuperare spazio. Cronologia di chat, sessioni e metadati della PR restano consultabili qui, ma la directory di lavoro non esiste più localmente. Una versione futura di Kōbō ricostruirà il worktree dalla PR mergiata — per ora ricrealo manualmente con `gh pr checkout` o `git worktree add`.',
+    'Ripristina worktree ricrea la directory di lavoro e rimuove questo workspace dall’archivio. Conversazione, attività e sessioni vengono conservate. Non viene avviato alcun agente o server di sviluppo.',
   'workspacePage.pendingInitialPromptBanner':
     "C'è un prompt iniziale in attesa — l'agente non l'ha mai ricevuto (lo script di setup è crashato o il workspace non è mai stato avviato). Clicca Avvia per inviarlo ora.",
   'workspacePage.unarchived': 'Workspace ripristinato',
@@ -1495,9 +1516,9 @@ export default {
   'contextMenu.openEditor': "Apri nell'editor",
   'contextMenu.openFileManager': 'Apri nel file manager',
   'contextMenu.unarchiveDisabledPurged':
-    'Il worktree è stato eliminato dal disco. Ricrealo manualmente (`gh pr checkout` o `git worktree add`) — Kōbō rileva il ripristino entro 30 s e riattiva automaticamente il workspace.',
+    'Ripristina prima il worktree con Ripristina worktree oppure ricrealo manualmente. Kōbō rileva automaticamente i worktree corrispondenti.',
   'workspaceList.unarchiveBlockedPurged':
-    'Impossibile ripristinare: il worktree non esiste più sul disco. Ricrealo manualmente (`gh pr checkout` o `git worktree add`) — Kōbō lo rileva entro 30 s e riattiva il workspace.',
+    'Ripristina prima il worktree con Ripristina worktree oppure ricrealo manualmente. Kōbō rileva automaticamente i worktree corrispondenti.',
   'contextMenu.purgeWorktree': 'Libera spazio su disco (elimina worktree)',
   'contextMenu.purgeWorktreeTooltip':
     'Elimina il worktree dal disco per recuperare spazio — la cronologia di chat e sessioni viene conservata. Archivia automaticamente il workspace.',

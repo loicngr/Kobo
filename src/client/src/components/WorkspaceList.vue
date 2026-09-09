@@ -216,6 +216,7 @@
                 @archive="onArchiveClick"
                 @unarchive="onUnarchiveClick"
                 @purge-worktree="onPurgeWorktreeClick"
+                @restore-worktree="(ws) => restoreWorktree(ws.id)"
                 @delete="openDeleteDialog"
               />
             </div>
@@ -242,6 +243,7 @@
               @archive="onArchiveClick"
               @unarchive="onUnarchiveClick"
               @purge-worktree="onPurgeWorktreeClick"
+              @restore-worktree="(ws) => restoreWorktree(ws.id)"
               @delete="openDeleteDialog"
             />
           </template>
@@ -308,6 +310,7 @@
                 @archive="onArchiveClick"
                 @unarchive="onUnarchiveClick"
                 @purge-worktree="onPurgeWorktreeClick"
+                @restore-worktree="(ws) => restoreWorktree(ws.id)"
                 @delete="openDeleteDialog"
               />
             </div>
@@ -334,6 +337,7 @@
               @archive="onArchiveClick"
               @unarchive="onUnarchiveClick"
               @purge-worktree="onPurgeWorktreeClick"
+              @restore-worktree="(ws) => restoreWorktree(ws.id)"
               @delete="openDeleteDialog"
             />
           </template>
@@ -400,6 +404,7 @@
                 @archive="onArchiveClick"
                 @unarchive="onUnarchiveClick"
                 @purge-worktree="onPurgeWorktreeClick"
+                @restore-worktree="(ws) => restoreWorktree(ws.id)"
                 @delete="openDeleteDialog"
               />
             </div>
@@ -426,6 +431,7 @@
               @archive="onArchiveClick"
               @unarchive="onUnarchiveClick"
               @purge-worktree="onPurgeWorktreeClick"
+              @restore-worktree="(ws) => restoreWorktree(ws.id)"
               @delete="openDeleteDialog"
             />
           </template>
@@ -499,6 +505,7 @@
             @archive="onArchiveClick"
             @unarchive="onUnarchiveClick"
             @purge-worktree="onPurgeWorktreeClick"
+            @restore-worktree="(ws) => restoreWorktree(ws.id)"
             @delete="openDeleteDialog"
           />
         </div>
@@ -684,6 +691,7 @@ import HelpMenu from 'src/components/HelpMenu.vue'
 import ManageTagsDialog from 'src/components/ManageTagsDialog.vue'
 import WorkspaceCard from 'src/components/WorkspaceCard.vue'
 import { useIsMobile } from 'src/composables/use-is-mobile'
+import { useWorktreeRestore } from 'src/composables/use-worktree-restore'
 import { useDevServerStore } from 'src/stores/dev-server'
 import { useLayoutStore } from 'src/stores/layout'
 import { useSettingsStore } from 'src/stores/settings'
@@ -703,6 +711,7 @@ import { useRouter } from 'vue-router'
 const { t } = useI18n()
 const $q = useQuasar()
 const store = useWorkspaceStore()
+const { restoreWorktree } = useWorktreeRestore()
 const wsStore = useWebSocketStore()
 const devServerStore = useDevServerStore()
 const settingsStore = useSettingsStore()

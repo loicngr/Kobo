@@ -53,12 +53,14 @@ import type { AgentPermissionMode, Workspace, WorkspaceStatus } from '../service
 import * as workspaceService from '../services/workspace-service.js'
 import { presetFromWorkspace } from '../services/workspace-template-service.js'
 import * as purgeWorktreeService from '../services/worktree-purge-service.js'
+import { restorePurgedWorktree, WorktreeRestoreError } from '../services/worktree-restore-service.js'
 import * as worktreeService from '../services/worktree-service.js'
 import { resolveUniqueBranchAndPath } from '../utils/branch-resolver.js'
 import * as gitOps from '../utils/git-ops.js'
 import { logError } from '../utils/logger.js'
 import { slugifyProjectName } from '../utils/project-slug.js'
 import * as safePath from '../utils/safe-path.js'
+import { WorkspaceLifecycleBusyError, withWorkspaceLifecycleGuard } from '../utils/workspace-lifecycle-guard.js'
 import { resolveExtractedName } from '../utils/workspace-name.js'
 import { resolveSiblingWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 
@@ -3277,8 +3279,29 @@ app.post('/:id/purge-worktree', migrationGuard, async (c) => {
     const workspace = workspaceService.getWorkspace(id)
     return c.json({ workspace, warnings: result.warnings, outcome: result.outcome })
   } catch (err) {
+    if (err instanceof WorkspaceLifecycleBusyError) return c.json({ code: err.code, error: err.message }, 409)
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
+  }
+})
+
+// Recreate the checkout before unarchiving; never starts agents or setup scripts.
+app.post('/:id/restore-worktree', migrationGuard, async (c) => {
+  try {
+    return c.json(await restorePurgedWorktree(c.req.param('id')))
+  } catch (err) {
+    if (err instanceof WorktreeRestoreError) {
+      const status =
+        err.code === 'not-found'
+          ? 404
+          : ['not-purged', 'workspace-busy', 'path-conflict', 'branch-in-use'].includes(err.code)
+            ? 409
+            : ['worktree-not-owned', 'project-unavailable', 'recovery-source-unavailable'].includes(err.code)
+              ? 422
+              : 500
+      return c.json({ code: err.code, error: err.message }, status)
+    }
+    return c.json({ code: 'git-failed', error: 'Unable to restore the worktree.' }, 500)
   }
 })
 
@@ -3317,6 +3340,21 @@ type WorkspaceRow = NonNullable<ReturnType<typeof workspaceService.getWorkspace>
 // rather than thrown, so a bulk delete never aborts mid-batch. Returns the
 // list of user-facing warning messages (empty when everything was clean).
 async function deleteWorkspaceWithSideEffects(
+  workspace: WorkspaceRow,
+  opts: { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean },
+): Promise<string[]> {
+  return withWorkspaceLifecycleGuard(workspace.id, async () => {
+    const current = workspaceService.getWorkspace(workspace.id)
+    if (!current) throw new Error(`Workspace '${workspace.id}' not found`)
+    // A bulk deletion may have captured the list before restoration completed.
+    if (workspace.archivedAt && !current.archivedAt) {
+      throw new Error('Workspace was unarchived while deletion was pending. Retry from its current state.')
+    }
+    return deleteWorkspaceWithSideEffectsUnlocked(current, opts)
+  })
+}
+
+async function deleteWorkspaceWithSideEffectsUnlocked(
   workspace: WorkspaceRow,
   opts: { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean },
 ): Promise<string[]> {
@@ -3478,6 +3516,7 @@ app.delete('/:id', migrationGuard, async (c) => {
     }
     return c.json({ ok: true, warnings }, 200)
   } catch (err) {
+    if (err instanceof WorkspaceLifecycleBusyError) return c.json({ code: err.code, error: err.message }, 409)
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
   }

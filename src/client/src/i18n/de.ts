@@ -219,11 +219,33 @@ export default {
   'workspacePage.lastAgentEvent': 'Letztes Ereignis {when}',
   'workspacePage.agentStopping': 'Wird gestoppt…',
   'workspacePage.agentNotRunning': 'Kein Agent-Prozess — der Status ist veraltet',
+  'contextMenu.restoreWorktree': 'Worktree wiederherstellen',
+  'workspacePage.restoringWorktree': 'Wiederherstellung…',
+  'workspacePage.worktreeRestoreSuccess': 'Worktree wiederhergestellt',
+  'workspacePage.worktreeRestoreLimitations':
+    'Stellt committete Git-Dateien wieder her. Abhängigkeiten und zuvor verworfene lokale Dateien werden nicht wiederhergestellt.',
+  'workspacePage.restoreError.not-found':
+    'Dieser Workspace existiert nicht mehr. Aktualisieren Sie die Workspace-Liste.',
+  'workspacePage.restoreError.not-purged':
+    'Dieser Workspace ist nicht als bereinigt markiert. Aktualisieren Sie ihn und prüfen Sie sein Arbeitsverzeichnis.',
+  'workspacePage.restoreError.workspace-busy':
+    'Für diesen Workspace läuft bereits ein Vorgang. Warten Sie auf dessen Abschluss und versuchen Sie es erneut.',
+  'workspacePage.restoreError.worktree-not-owned':
+    'Dieser Worktree wird nicht von Kōbō verwaltet. Stellen Sie ihn manuell im ursprünglichen Projekt wieder her.',
+  'workspacePage.restoreError.project-unavailable':
+    'Das ursprüngliche Projekt ist nicht verfügbar. Verbinden Sie das Laufwerk erneut oder stellen Sie das Projekt am ursprünglichen Pfad wieder her.',
+  'workspacePage.restoreError.path-conflict':
+    'Der Worktree-Pfad ist durch einen anderen Ordner oder Checkout belegt. Verschieben Sie den betreffenden Ordner oder folgen Sie der Anleitung zur manuellen Wiederherstellung unter Details.',
+  'workspacePage.restoreError.branch-in-use':
+    'Der Arbeitsbranch ist bereits an anderer Stelle ausgecheckt. Nutzen Sie diesen Checkout oder geben Sie dort den Branch frei und versuchen Sie es erneut.',
+  'workspacePage.restoreError.recovery-source-unavailable':
+    'Arbeitsbranch und gespeicherter Commit wurden nicht gefunden. Prüfen Sie den Remote-Zugriff oder öffnen Sie die manuelle Wiederherstellung unter Details.',
+  'workspacePage.restoreError.git-failed':
+    'Wiederherstellung fehlgeschlagen. Prüfen Sie Git-Zugriff und Dateisystemrechte und versuchen Sie es erneut. Details öffnet die Anleitung zur manuellen Wiederherstellung.',
   'workspacePage.archivedBanner': 'Archivierter Workspace — schreibgeschützt',
-  'workspacePage.worktreePurgedBanner':
-    'Worktree gelöscht — Verlauf erhalten, keine Wiederherstellung in dieser Version',
+  'workspacePage.worktreePurgedBanner': 'Worktree gelöscht — Verlauf erhalten',
   'workspacePage.worktreePurgedTooltip':
-    'Der Worktree-Ordner wurde von der Festplatte gelöscht, um Speicherplatz zurückzugewinnen. Chat-Verlauf, Sitzungen und PR-Metadaten bleiben hier abrufbar, aber das Arbeitsverzeichnis existiert lokal nicht mehr. Eine zukünftige Kōbō-Version wird den Worktree aus der gemergten PR wiederherstellen können — vorerst musst du ihn manuell über `gh pr checkout` oder `git worktree add` neu erstellen.',
+    'Worktree wiederherstellen erstellt das Arbeitsverzeichnis erneut und hebt die Archivierung auf. Chatverlauf, Aufgaben und Sitzungen bleiben erhalten. Kein Agent oder Entwicklungsserver wird gestartet.',
   'workspacePage.pendingInitialPromptBanner':
     'Ein anfänglicher Prompt ist ausstehend — der Agent hat ihn nie erhalten (Setup-Script abgestürzt oder Workspace nie gestartet). Klicke auf Start, um ihn jetzt zu senden.',
   'workspacePage.unarchived': 'Workspace dearchiviert',
@@ -1504,9 +1526,9 @@ export default {
   'contextMenu.openEditor': 'Im Editor öffnen',
   'contextMenu.openFileManager': 'Im Dateimanager öffnen',
   'contextMenu.unarchiveDisabledPurged':
-    'Der Worktree wurde von der Festplatte entfernt. Erstelle ihn manuell neu (`gh pr checkout` oder `git worktree add`) — Kōbō erkennt die Wiederherstellung innerhalb von 30 s und reaktiviert den Workspace automatisch.',
+    'Stellen Sie zuerst den Worktree über Worktree wiederherstellen oder manuell wieder her. Kōbō erkennt passende Worktrees automatisch.',
   'workspaceList.unarchiveBlockedPurged':
-    'Wiederherstellen nicht möglich: Der Worktree existiert nicht mehr auf der Festplatte. Erstelle ihn manuell neu (`gh pr checkout` oder `git worktree add`) — Kōbō erkennt ihn innerhalb von 30 s und reaktiviert den Workspace.',
+    'Stellen Sie zuerst den Worktree über Worktree wiederherstellen oder manuell wieder her. Kōbō erkennt passende Worktrees automatisch.',
   'contextMenu.purgeWorktree': 'Speicherplatz freigeben (Worktree löschen)',
   'contextMenu.purgeWorktreeTooltip':
     'Löscht den Worktree von der Festplatte zur Speicherplatz-Rückgewinnung — Chat- und Sitzungsverlauf bleiben erhalten. Archiviert den Workspace automatisch.',

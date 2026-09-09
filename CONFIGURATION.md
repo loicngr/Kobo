@@ -72,6 +72,8 @@ A production-installed Kōbō (`npx @loicngr/kobo`) and a dev server can run sid
 |---|---|---|
 | `PORT` | `3000` | HTTP / WebSocket server port. Overridden by `SERVER_PORT` when both are set. |
 | `SERVER_PORT` | — | Takes precedence over `PORT`. Useful for stacking Kōbō next to other tools that also honour `PORT`. |
+| `KOBO_VERBOSE` | — | Set to `1` to show the data directory and successful database backup/rotation details in the terminal. Errors always remain visible. |
+| `NO_COLOR` | — | When present, disables startup banner colors. Redirected output is always plain text. |
 | `KOBO_HOME` | `~/.config/kobo` | Override the storage directory. |
 | `KOBO_ENFORCE_LOCAL_HOME` | — | When set, refuses any `KOBO_HOME` that resolves outside the current directory. Used by `npm run dev` to guarantee dev data lives in `./data`. |
 | `KOBO_MCP_INIT_TIMEOUT_MS` | `30000` | Handshake timeout for the Notion and Sentry MCP servers. Bump it if cold `npx` fetches are slow on your network. |
@@ -532,28 +534,46 @@ default; opt in once you trust the restore flow on your machine.
 
 ### Restoring a purged workspace
 
-Kōbō captures restore metadata (`prNumber`, `prUrl`, `forge`, `mergeCommitSha`,
-`originalSourceBranch`, `originalWorkingBranch`) at purge time. Recreate the
-worktree manually with either:
+Click **Restore worktree** in the workspace context menu or in the purged-worktree
+banner. Kōbō recreates the checkout at its recorded path, then unarchives the same
+workspace. Its conversation, tasks, sessions and lifecycle status are retained.
+Restoration does not start an agent or dev server, run setup scripts, reinstall
+dependencies, or re-enable auto-loop or cancelled schedules.
+
+Recovery uses the first available source:
+
+1. The existing local working branch (including commits made since purge).
+2. The `headCommitSha` captured at purge time, if the branch was deleted and the
+   commit object is still available locally.
+3. The exact working branch fetched from `origin`.
+
+The local path works offline. Older purge records without a saved SHA remain
+supported. Kōbō never substitutes the latest source branch or a merge commit for
+missing work, resets an existing branch, or overwrites an occupied directory.
+If no recovery source remains, the workspace stays purged and the UI explains
+how to proceed. If Git still registers the missing worktree, repair that stale
+registration manually before retrying.
+
+**This is not a filesystem backup:** discarded uncommitted changes, ignored files,
+local secrets and installed dependencies are not recovered. Git objects are not
+pinned against garbage collection; restoration cannot recover deleted history
+that no longer exists locally or remotely. `mergeCommitSha` is historical metadata
+and is not currently populated; `headCommitSha` is optional and best-effort.
+
+Manual recovery remains available when the working branch was deleted remotely.
+For example, GitHub retains PR head refs:
 
 ```bash
-# GitHub (via gh CLI)
-gh pr checkout <pr-number> --recurse-submodules
-
-# Or directly via git — works on GitHub even after branch deletion
+# Run from the project's repository, substituting the saved values.
 git fetch origin pull/<pr-number>/head:<branch-name>
-git worktree add <path> <branch-name>
+git worktree add <original-worktree-path> <branch-name>
 ```
 
-The pr-watcher detects the worktree folder reappearing on its next 30 s tick
-and automatically:
-
-1. Clears `worktree_purged_at` + `worktree_purge_restore_data`
-2. Clears `archived_at` (workspace becomes active again)
-3. Emits `workspace:worktree-restored` (client refreshes both lists)
-
-No UI action needed. The reactivated workspace recovers its prior status, chat
-history, tasks, and cron schedules.
+Use the appropriate provider's recovery flow for a GitLab MR. Once the expected
+worktree is recreated, the PR watcher detects it on its next 30 s tick. It verifies
+the exact root, repository and working branch before clearing both purge fields
+and `archived_at`, and emits `workspace:worktree-restored` to refresh the client.
+Unrelated directories and checkouts are never automatically adopted.
 
 ### Permission errors during purge
 

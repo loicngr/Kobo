@@ -1,5 +1,8 @@
+import { execFile } from 'node:child_process'
 import fs from 'node:fs'
+import { promisify } from 'node:util'
 import { logError, logWarn } from '../utils/logger.js'
+import { withWorkspaceLifecycleGuard } from '../utils/workspace-lifecycle-guard.js'
 import * as agentManager from './agent/orchestrator.js'
 import * as devServerService from './dev-server-service.js'
 import { getForgeProvider } from './forge/registry.js'
@@ -14,16 +17,31 @@ import {
 } from './workspace-service.js'
 import { isPermissionError, removeWorktree } from './worktree-service.js'
 
-export type PurgeOutcome = 'purged' | 'already-purged' | 'worktree-not-owned' | 'not-found' | 'removal-failed'
+const execFileAsync = promisify(execFile)
+
+export type PurgeOutcome =
+  | 'cancelled'
+  | 'purged'
+  | 'already-purged'
+  | 'worktree-not-owned'
+  | 'not-found'
+  | 'removal-failed'
 
 export interface PurgeResult {
   outcome: PurgeOutcome
   warnings: string[]
 }
 
-export async function purgeWorktree(workspaceId: string): Promise<PurgeResult> {
+export async function purgeWorktree(workspaceId: string, expectedArchivedAt?: string): Promise<PurgeResult> {
+  return withWorkspaceLifecycleGuard(workspaceId, () => purgeWorktreeGuarded(workspaceId, expectedArchivedAt))
+}
+
+async function purgeWorktreeGuarded(workspaceId: string, expectedArchivedAt?: string): Promise<PurgeResult> {
   const workspace = getWorkspace(workspaceId)
   if (!workspace) return { outcome: 'not-found', warnings: [] }
+  if (expectedArchivedAt !== undefined && workspace.archivedAt !== expectedArchivedAt) {
+    return { outcome: 'cancelled', warnings: [] }
+  }
   if (workspace.worktreePurgedAt) return { outcome: 'already-purged', warnings: [] }
   if (!workspace.worktreeOwned) return { outcome: 'worktree-not-owned', warnings: [] }
 
@@ -118,6 +136,19 @@ async function captureRestoreData(
 ): Promise<WorktreePurgeRestoreData> {
   const forge = resolveForge(workspace.projectPath)
 
+  let headCommitSha: string | null = null
+  try {
+    const { stdout } = await execFileAsync('git', ['rev-parse', '--verify', 'HEAD'], {
+      cwd: workspace.worktreePath,
+      encoding: 'utf8',
+      timeout: 30_000,
+      env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
+    })
+    headCommitSha = stdout.trim() || null
+  } catch {
+    // A missing or broken checkout must not prevent a best-effort purge.
+  }
+
   let prNumber: number | null = null
   let prUrl: string | null = null
 
@@ -144,6 +175,7 @@ async function captureRestoreData(
     prUrl,
     forge: forge as 'github' | 'gitlab' | 'bitbucket-community' | 'none',
     mergeCommitSha: null,
+    headCommitSha,
     originalWorktreePath: workspace.worktreePath,
     originalSourceBranch: workspace.sourceBranch,
     originalWorkingBranch: workspace.workingBranch,

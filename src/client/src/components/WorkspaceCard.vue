@@ -31,6 +31,7 @@
       @archive="(ws, ev) => emit('archive', ws, ev)"
       @unarchive="(ws, ev) => emit('unarchive', ws, ev)"
       @purge-worktree="(ws, ev) => emit('purgeWorktree', ws, ev)"
+      @restore-worktree="(ws) => emit('restoreWorktree', ws)"
       @delete="(ws, ev) => emit('delete', ws, ev)"
     />
     <div class="col" style="min-width: 0;">
@@ -126,6 +127,7 @@ const emit = defineEmits<{
   archive: [ws: Workspace, event: Event]
   unarchive: [ws: Workspace, event: Event]
   purgeWorktree: [ws: Workspace, event: Event]
+  restoreWorktree: [ws: Workspace]
   delete: [ws: Workspace, event: Event]
 }>()
 

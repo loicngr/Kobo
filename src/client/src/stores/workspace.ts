@@ -370,6 +370,7 @@ const _workspaceEventVersions = new Map<string, number>()
 const _prSnapshotVersions = new Map<string, number>()
 const _sessionsRequestVersions = new Map<string, number>()
 const _workspaceDetailsRequestVersions = new Map<string, number>()
+const _worktreeRestorations = new WeakMap<object, Map<string, Promise<Workspace>>>()
 
 function markPrSnapshotChanged(workspaceId: string): void {
   _prSnapshotVersions.set(workspaceId, (_prSnapshotVersions.get(workspaceId) ?? 0) + 1)
@@ -419,6 +420,10 @@ export const useWorkspaceStore = defineStore('workspace', {
     selectedSessionId: null as string | null,
     archivedWorkspaces: [] as Workspace[],
     archivedLoaded: false,
+    restoringWorktreeIds: [] as string[],
+    // Reads started before a lifecycle change must not overwrite its result.
+    workspaceLifecycleVersion: 0,
+    workspaceLifecycleVersions: {} as Record<string, number>,
     loading: false,
     // Server message (or transport error) from the most recent failed
     // fetchWorkspaces/fetchArchivedWorkspaces/fetchWorkspacesInfo call. Null
@@ -684,9 +689,11 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async fetchWorkspaces() {
+      const lifecycleVersion = this.workspaceLifecycleVersion
       this.loading = true
       try {
         const data = await apiFetch<{ workspaces?: Workspace[] } | Workspace[]>('/api/workspaces')
+        if (lifecycleVersion !== this.workspaceLifecycleVersion) return
         this.workspaces = Array.isArray(data) ? data : (data.workspaces ?? [])
         this.listLoadError = null
         this.activeListLoadFailed = false
@@ -720,8 +727,11 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async fetchArchivedWorkspaces() {
+      const lifecycleVersion = this.workspaceLifecycleVersion
       try {
-        this.archivedWorkspaces = await apiFetch<Workspace[]>('/api/workspaces/archived')
+        const workspaces = await apiFetch<Workspace[]>('/api/workspaces/archived')
+        if (lifecycleVersion !== this.workspaceLifecycleVersion) return
+        this.archivedWorkspaces = workspaces
         this.archivedLoaded = true
         // This loader used to post the banner and never lift it, so a failure
         // survived the backend coming back. It clears its own failure — but
@@ -734,6 +744,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async fetchWorkspaceDetails(id: string) {
+      const lifecycleVersion = this.workspaceLifecycleVersions[id] ?? 0
       const requestVersion = (_workspaceDetailsRequestVersions.get(id) ?? 0) + 1
       _workspaceDetailsRequestVersions.set(id, requestVersion)
       const eventVersionAtStart = _workspaceEventVersions.get(id) ?? 0
@@ -746,29 +757,33 @@ export const useWorkspaceStore = defineStore('workspace', {
         // this request was in flight.
         if (this.selectedWorkspaceId !== id || _workspaceDetailsRequestVersions.get(id) !== requestVersion) return
 
-        // A WebSocket event can flip `status` (e.g. executing -> awaiting-user)
-        // while this read is in flight — same class of race `fetchWorkspacesInfo`
-        // already guards against via `_workspaceEventVersions`. Don't let a
-        // late response resurrect a stale status over a fresher one. This is
-        // scoped to `status` only: `agentLiveness` below is server-authoritative
-        // and is exactly what this read exists to deliver, so it always applies.
-        const statusChangedDuringRequest = (_workspaceEventVersions.get(id) ?? 0) !== eventVersionAtStart
-        const incomingRaw = data.workspace ?? data
-        const incoming = statusChangedDuringRequest ? { ...incomingRaw } : incomingRaw
-        if (statusChangedDuringRequest) {
-          delete incoming.status
-        }
+        // Lifecycle changes invalidate workspace metadata, not the first load
+        // of tasks and liveness (which may belong to an unrelated workspace).
+        if (lifecycleVersion === (this.workspaceLifecycleVersions[id] ?? 0)) {
+          // A WebSocket event can flip `status` (e.g. executing -> awaiting-user)
+          // while this read is in flight — same class of race `fetchWorkspacesInfo`
+          // already guards against via `_workspaceEventVersions`. Don't let a
+          // late response resurrect a stale status over a fresher one. This is
+          // scoped to `status` only: `agentLiveness` below is server-authoritative
+          // and is exactly what this read exists to deliver, so it always applies.
+          const statusChangedDuringRequest = (_workspaceEventVersions.get(id) ?? 0) !== eventVersionAtStart
+          const incomingRaw = data.workspace ?? data
+          const incoming = statusChangedDuringRequest ? { ...incomingRaw } : incomingRaw
+          if (statusChangedDuringRequest) {
+            delete incoming.status
+          }
 
-        // Update workspace in whichever list it lives in (active or archived).
-        const idx = this.workspaces.findIndex((w) => w.id === id)
-        if (idx >= 0) {
-          this.workspaces[idx] = { ...this.workspaces[idx], ...incoming }
-        } else {
-          const aIdx = this.archivedWorkspaces.findIndex((w) => w.id === id)
-          if (aIdx >= 0) {
-            this.archivedWorkspaces[aIdx] = { ...this.archivedWorkspaces[aIdx], ...incoming }
-          } else if (incoming?.archivedAt) {
-            this.archivedWorkspaces.unshift(incoming as Workspace)
+          // Update workspace in whichever list it lives in (active or archived).
+          const idx = this.workspaces.findIndex((w) => w.id === id)
+          if (idx >= 0) {
+            this.workspaces[idx] = { ...this.workspaces[idx], ...incoming }
+          } else {
+            const aIdx = this.archivedWorkspaces.findIndex((w) => w.id === id)
+            if (aIdx >= 0) {
+              this.archivedWorkspaces[aIdx] = { ...this.archivedWorkspaces[aIdx], ...incoming }
+            } else if (incoming?.archivedAt) {
+              this.archivedWorkspaces.unshift(incoming as Workspace)
+            }
           }
         }
 
@@ -1229,6 +1244,52 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
+    invalidateWorkspaceLifecycleReads(id?: string) {
+      this.workspaceLifecycleVersion += 1
+      if (id) this.workspaceLifecycleVersions[id] = (this.workspaceLifecycleVersions[id] ?? 0) + 1
+    },
+
+    applyRestoredWorkspace(workspace: Workspace) {
+      this.invalidateWorkspaceLifecycleReads(workspace.id)
+      const index = this.workspaces.findIndex((w) => w.id === workspace.id)
+      if (index === -1) this.workspaces.unshift(workspace)
+      else this.workspaces[index] = workspace
+      this.archivedWorkspaces = this.archivedWorkspaces.filter((w) => w.id !== workspace.id)
+    },
+
+    restoreWorktree(id: string): Promise<Workspace> {
+      let pending = _worktreeRestorations.get(this)
+      if (!pending) {
+        pending = new Map()
+        _worktreeRestorations.set(this, pending)
+      }
+      const existing = pending.get(id)
+      if (existing) return existing
+      const lifecycleVersion = this.workspaceLifecycleVersions[id] ?? 0
+      this.restoringWorktreeIds.push(id)
+      const request = (async () => {
+        try {
+          const res = await fetch(`/api/workspaces/${id}/restore-worktree`, { method: 'POST' })
+          if (!res.ok) {
+            const body = (await res.json().catch(() => ({}))) as { code?: string; error?: string }
+            throw new WorkspaceActionError(body.error ?? `HTTP ${res.status}`, body.code)
+          }
+          const { workspace } = (await res.json()) as { workspace: Workspace }
+          // The restored event may already have applied this response, followed
+          // by a newer archive/purge/delete. Never undo that later operation.
+          if (lifecycleVersion === (this.workspaceLifecycleVersions[id] ?? 0)) {
+            this.applyRestoredWorkspace(workspace)
+          }
+          return workspace
+        } finally {
+          this.restoringWorktreeIds = this.restoringWorktreeIds.filter((wid) => wid !== id)
+          pending.delete(id)
+        }
+      })()
+      pending.set(id, request)
+      return request
+    },
+
     async unarchiveWorkspace(id: string) {
       try {
         const res = await fetch(`/api/workspaces/${id}/unarchive`, { method: 'POST' })
@@ -1596,6 +1657,7 @@ export const useWorkspaceStore = defineStore('workspace', {
      * shot so every non-archived workspace stays ≤30s fresh.
      */
     async fetchWorkspacesInfo(): Promise<void> {
+      const lifecycleVersion = this.workspaceLifecycleVersion
       // Overlapping polls (a slow prior request still in flight when the
       // next 30s tick fires) can resolve out of order. Only the response
       // to the MOST RECENTLY issued request is allowed to write state —
@@ -1617,7 +1679,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         this.listPollFailureStreak = 0
         this.activeListLoadFailed = false
         this.listLoadError = null
-        if (requestToken !== _workspacesInfoRequestToken) return
+        if (requestToken !== _workspacesInfoRequestToken || lifecycleVersion !== this.workspaceLifecycleVersion) return
         // Full replacement, never a merge: an entry that disappeared means the
         // controller is gone, which is the single most important thing to show.
         this.agentLiveness = data.agentLiveness ?? {}

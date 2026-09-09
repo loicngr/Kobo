@@ -125,6 +125,23 @@
         <q-item-section>{{ $t('common.archive') }}</q-item-section>
       </q-item>
       <q-item
+        v-if="workspace.worktreePurgedAt && workspace.worktreeOwned"
+        clickable
+        :disable="restoringWorktree"
+        v-close-popup
+        @click="!restoringWorktree && emit('restoreWorktree', workspace)"
+      >
+        <q-item-section side>
+          <q-spinner v-if="restoringWorktree" size="16px" />
+          <svg v-else width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+            <path d="M3 3v5h5" />
+          </svg>
+        </q-item-section>
+        <q-item-section>{{ restoringWorktree ? $t('workspacePage.restoringWorktree') : $t('contextMenu.restoreWorktree') }}</q-item-section>
+        <q-tooltip>{{ $t('workspacePage.worktreeRestoreLimitations') }}</q-tooltip>
+      </q-item>
+      <q-item
         v-if="!workspace.worktreePurgedAt && workspace.worktreeOwned !== false"
         clickable
         v-close-popup
@@ -173,6 +190,7 @@ const emit = defineEmits<{
   archive: [ws: Workspace, event: Event]
   unarchive: [ws: Workspace, event: Event]
   purgeWorktree: [ws: Workspace, event: Event]
+  restoreWorktree: [ws: Workspace]
   delete: [ws: Workspace, event: Event]
 }>()
 
@@ -221,6 +239,7 @@ async function exportEvents() {
 
 const settingsStore = useSettingsStore()
 const workspaceStore = useWorkspaceStore()
+const restoringWorktree = computed(() => workspaceStore.restoringWorktreeIds.includes(props.workspace.id))
 
 // PR url comes from the cached git-stats (populated when the workspace is
 // selected — see workspace store `selectWorkspace`). Falls back to undefined

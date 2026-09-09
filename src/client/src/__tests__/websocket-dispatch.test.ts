@@ -1301,3 +1301,97 @@ describe('_routeMessage — subscribe-vs-drain self-heal', () => {
     ])
   })
 })
+
+describe('worktree restoration HTTP/WebSocket convergence', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  it('applies another tab restoration immediately and rejects earlier list responses', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const store = useWorkspaceStore()
+    const restored = workspaceFixture('idle')
+    const purged = { ...restored, archivedAt: 'before', worktreePurgedAt: 'before' }
+    store.archivedLoaded = true
+    store.archivedWorkspaces = [purged]
+    store.selectedWorkspaceId = 'w1'
+    let finish!: (response: Response) => void
+    const fetchMock = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<Response>((resolve) => {
+            finish = resolve
+          }),
+      )
+      .mockResolvedValueOnce(Response.json([restored]))
+      .mockResolvedValueOnce(Response.json([]))
+    vi.stubGlobal('fetch', fetchMock)
+    const stale = store.fetchWorkspaces()
+    useWebSocketStore()._routeMessage({
+      type: 'workspace:worktree-restored',
+      workspaceId: 'w1',
+      payload: { workspace: restored },
+    })
+    expect(store.workspaces).toEqual([restored])
+    expect(store.archivedWorkspaces).toEqual([])
+    await vi.waitFor(() => expect(store.loading).toBe(false))
+    finish(Response.json([]))
+    await stale
+    expect(store.workspaces).toEqual([restored])
+    expect(store.selectedWorkspaceId).toBe('w1')
+    // A later purge still refreshes both lists normally.
+    fetchMock.mockResolvedValueOnce(Response.json([])).mockResolvedValueOnce(Response.json([purged]))
+    useWebSocketStore()._routeMessage({ type: 'workspace:worktree-purged', workspaceId: 'w1', payload: {} })
+    await vi.waitFor(() => {
+      expect(store.workspaces).toEqual([])
+      expect(store.archivedWorkspaces).toEqual([purged])
+    })
+  })
+
+  it.each(['before', 'after'])(
+    'keeps one active row when the restored event arrives %s HTTP completion',
+    async (order) => {
+      const { useWorkspaceStore } = await import('../stores/workspace.js')
+      const { useWebSocketStore } = await import('../stores/websocket.js')
+      const store = useWorkspaceStore()
+      const restored = workspaceFixture('idle')
+      store.archivedLoaded = true
+      store.archivedWorkspaces = [{ ...restored, archivedAt: 'before', worktreePurgedAt: 'before' }]
+      store.selectedWorkspaceId = 'w1'
+      store.activityFeeds.w1 = []
+      const feed = store.activityFeeds.w1
+      let finish!: (response: unknown) => void
+      vi.stubGlobal(
+        'fetch',
+        vi.fn((url: string) => {
+          if (url.endsWith('/restore-worktree'))
+            return new Promise((resolve) => {
+              finish = resolve
+            })
+          return Promise.resolve(Response.json(url.endsWith('/archived') ? [] : [restored]))
+        }),
+      )
+      const pending = store.restoreWorktree('w1')
+      const dispatch = async () => {
+        useWebSocketStore()._routeMessage({
+          type: 'workspace:worktree-restored',
+          workspaceId: 'w1',
+          payload: { workspace: restored },
+        })
+        await vi.waitFor(() => {
+          expect(store.workspaces).toEqual([restored])
+          expect(store.archivedWorkspaces).toEqual([])
+          expect(store.loading).toBe(false)
+        })
+      }
+      if (order === 'before') await dispatch()
+      finish({ ok: true, json: async () => ({ workspace: restored, outcome: 'restored', source: 'local-branch' }) })
+      await pending
+      if (order === 'after') await dispatch()
+      expect(store.workspaces).toEqual([restored])
+      expect(store.archivedWorkspaces).toEqual([])
+      expect(store.selectedWorkspaceId).toBe('w1')
+      expect(store.activityFeeds.w1).toBe(feed)
+    },
+  )
+})

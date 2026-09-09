@@ -797,6 +797,7 @@ export interface WorktreePurgeRestoreData {
   prUrl: string | null
   forge: 'github' | 'gitlab' | 'bitbucket-community' | 'none' | null
   mergeCommitSha: string | null
+  headCommitSha?: string | null
   originalWorktreePath: string
   originalSourceBranch: string
   originalWorkingBranch: string

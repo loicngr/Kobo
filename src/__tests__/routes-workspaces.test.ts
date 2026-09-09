@@ -1,6 +1,21 @@
 import { Hono } from 'hono'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+vi.mock('../server/services/worktree-restore-service.js', () => ({
+  restorePurgedWorktree: vi.fn(),
+  WorktreeRestoreError: class extends Error {
+    constructor(
+      readonly code: string,
+      message: string,
+    ) {
+      super(message)
+    }
+  },
+}))
+
+import { restorePurgedWorktree, WorktreeRestoreError } from '../server/services/worktree-restore-service.js'
+import { withWorkspaceLifecycleGuard } from '../server/utils/workspace-lifecycle-guard.js'
+
 // ── Mocks ────────────────────────────────────────────────────────────────────
 
 const { MockInterruptAgentError } = vi.hoisted(() => ({
@@ -369,6 +384,7 @@ import { getDb } from '../server/db/index.js'
 import router from '../server/routes/workspaces.js'
 import * as agentManager from '../server/services/agent/orchestrator.js'
 import * as chatHistoryService from '../server/services/chat-history-service.js'
+import * as contentMigrationService from '../server/services/content-migration-service.js'
 import * as cronService from '../server/services/cron-service.js'
 import * as devServerService from '../server/services/dev-server-service.js'
 import * as fileEditorService from '../server/services/file-editor-service.js'
@@ -399,6 +415,66 @@ app.route('/api/workspaces', router)
 // ── Fixtures ─────────────────────────────────────────────────────────────────
 
 const fakeWorkspace = makeWorkspace()
+
+describe('POST /api/workspaces/:id/restore-worktree', () => {
+  it('blocks restoration during content migration', async () => {
+    const status = vi.spyOn(contentMigrationService, 'getContentMigrationStatus').mockReturnValueOnce({
+      state: 'running',
+      total: 1,
+      processed: 0,
+      startedAt: '2026-09-09',
+    })
+    try {
+      const res = await app.request(`/api/workspaces/${fakeWorkspace.id}/restore-worktree`, { method: 'POST' })
+      expect(res.status).toBe(503)
+      expect(restorePurgedWorktree).not.toHaveBeenCalled()
+    } finally {
+      status.mockRestore()
+    }
+  })
+  it('returns the restored workspace and recovery source', async () => {
+    vi.mocked(restorePurgedWorktree).mockResolvedValueOnce({
+      workspace: fakeWorkspace,
+      outcome: 'restored',
+      source: 'local-branch',
+    })
+    const res = await app.request(`/api/workspaces/${fakeWorkspace.id}/restore-worktree`, { method: 'POST' })
+    expect(res.status).toBe(200)
+    expect(await res.json()).toMatchObject({
+      workspace: { id: fakeWorkspace.id },
+      outcome: 'restored',
+      source: 'local-branch',
+    })
+  })
+
+  it.each([
+    ['not-found', 404],
+    ['not-purged', 409],
+    ['workspace-busy', 409],
+    ['path-conflict', 409],
+    ['branch-in-use', 409],
+    ['worktree-not-owned', 422],
+    ['project-unavailable', 422],
+    ['recovery-source-unavailable', 422],
+    ['git-failed', 500],
+  ] as const)('maps %s to HTTP %s', async (code, status) => {
+    vi.mocked(restorePurgedWorktree).mockRejectedValueOnce(new WorktreeRestoreError(code, 'Restore failed'))
+    const res = await app.request(`/api/workspaces/${fakeWorkspace.id}/restore-worktree`, { method: 'POST' })
+    expect(res.status).toBe(status)
+    expect(await res.json()).toMatchObject({ code, error: 'Restore failed' })
+  })
+
+  it('refuses deletion while a restore holds the lifecycle guard', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    await withWorkspaceLifecycleGuard(fakeWorkspace.id, async () => {
+      const res = await app.request(`/api/workspaces/${fakeWorkspace.id}`, { method: 'DELETE' })
+      expect(res.status).toBe(409)
+      expect(await res.json()).toMatchObject({ code: 'workspace-busy' })
+      expect(workspaceService.deleteWorkspace).not.toHaveBeenCalled()
+      expect(agentManager.stopAgentAndWait).not.toHaveBeenCalled()
+    })
+  })
+})
 
 const fakeWorkspaceWithTasks = makeWorkspaceWithTasks({ ...fakeWorkspace })
 
@@ -3218,6 +3294,9 @@ describe('DELETE /api/workspaces/archived', () => {
     // resets call history but not implementations, so restore the no-ops here.
     vi.mocked(worktreeService.removeWorktree).mockReset()
     vi.mocked(workspaceService.deleteWorkspace).mockReset()
+    vi.mocked(workspaceService.getWorkspace).mockImplementation(
+      (id) => [archivedA, archivedB].find((workspace) => workspace.id === id) ?? null,
+    )
   })
 
   const archivedA = {
@@ -3291,6 +3370,15 @@ describe('DELETE /api/workspaces/archived', () => {
     expect(body.deleted).toBe(1)
     expect(body.warnings.join('\n')).toContain('Archived A')
     expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-arch-2')
+  })
+
+  it('skips a workspace restored after the archived list was loaded', async () => {
+    vi.mocked(workspaceService.listArchivedWorkspaces).mockReturnValue([archivedA])
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ ...archivedA, archivedAt: null })
+    const res = await app.request('/api/workspaces/archived', { method: 'DELETE' })
+    expect(await res.json()).toMatchObject({ deleted: 0 })
+    expect(workspaceService.deleteWorkspace).not.toHaveBeenCalled()
+    expect(worktreeService.removeWorktree).not.toHaveBeenCalled()
   })
 
   it('is not matched by DELETE /:id (route order regression)', async () => {
