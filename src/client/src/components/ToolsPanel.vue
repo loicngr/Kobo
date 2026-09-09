@@ -19,8 +19,11 @@
       <template v-else>
       <AutoLoopPanel class="q-mb-md" />
 
-      <EngineSwitchButton :workspace="workspace" />
+      <ActionAvailability :reason="isArchived ? $t('blockers.archived') : null">
+        <EngineSwitchButton :workspace="workspace" />
+      </ActionAvailability>
 
+      <ActionAvailability data-tour="action-availability" :reason="setupBlocker ? $t(setupBlocker === 'configuration' ? 'blockers.setupConfiguration' : `blockers.${setupBlocker}`) : null" :settings="setupBlocker === 'configuration'" settings-tab="scripts">
       <q-btn
         no-caps
         dense
@@ -29,7 +32,7 @@
         icon="replay"
         :label="$t('tools.runSetupScript')"
         :loading="running"
-        :disable="!hasSetupScript || running || isAgentBusy || isArchived"
+        :disable="!!setupBlocker"
         class="full-width q-mb-xs"
         @click="runSetupScript"
       >
@@ -37,6 +40,7 @@
           {{ isAgentBusy ? $t('tools.runSetupScriptBusy') : $t('tools.runSetupScriptTooltip') }}
         </q-tooltip>
       </q-btn>
+      </ActionAvailability>
 
       <q-btn
         v-if="hasEditorCommand"
@@ -81,6 +85,7 @@
         <q-tooltip>{{ $t('tools.openTerminalTooltip') }}</q-tooltip>
       </q-btn>
 
+      <ActionAvailability :reason="reviewBlocker ? $t(`blockers.${reviewBlocker}`) : null">
       <q-btn
         no-caps
         dense
@@ -89,15 +94,16 @@
         icon="rate_review"
         :label="$t('tools.review')"
         :loading="startingReview"
-        :disable="!workspace || isAgentBusy || isArchived"
+        :disable="!!reviewBlocker"
         class="full-width q-mb-xs"
         @click="reviewDialogOpen = true"
       >
         <q-tooltip>{{ isAgentBusy ? $t('tools.reviewBusy') : $t('tools.reviewTooltip') }}</q-tooltip>
       </q-btn>
+      </ActionAvailability>
 
+      <ActionAvailability v-if="hasCiFailure" :reason="ciBlocker ? $t(`blockers.${ciBlocker}`) : null">
       <q-btn
-        v-if="hasCiFailure"
         no-caps
         dense
         unelevated
@@ -105,12 +111,13 @@
         icon="build_circle"
         :label="$t('tools.fixCi')"
         :loading="fixingCi"
-        :disable="!workspace || isArchived || fixingCi"
+        :disable="!!ciBlocker"
         class="full-width q-mb-xs"
         @click="startCiFix"
       >
         <q-tooltip>{{ $t('tools.fixCiTooltip') }}</q-tooltip>
       </q-btn>
+      </ActionAvailability>
 
       <q-btn
         v-if="workspace?.notionUrl"
@@ -135,10 +142,7 @@
         @click="openExternal(workspace.sentryUrl)"
       />
 
-        <div v-if="!hasSetupScript" class="text-caption text-kobo-3">
-          {{ $t('tools.noSetupScript') }}
-          <router-link to="/settings" style="color: var(--kobo-text-2);">{{ $t('devServer.goToSettings') }}</router-link>
-        </div>
+
 
       </template>
     </div>
@@ -153,12 +157,14 @@
 
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
+import ActionAvailability from 'src/components/ActionAvailability.vue'
 import AutoLoopPanel from 'src/components/AutoLoopPanel.vue'
 import DevServerPanel from 'src/components/DevServerPanel.vue'
 import EngineSwitchButton from 'src/components/EngineSwitchButton.vue'
 import StartReviewDialog from 'src/components/StartReviewDialog.vue'
 import { useSettingsStore } from 'src/stores/settings'
 import { useWorkspaceStore, type Workspace } from 'src/stores/workspace'
+import { getActionBlocker } from 'src/utils/action-blocker'
 import { isCiFailed } from 'src/utils/pr-status'
 import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, ref } from 'vue'
@@ -192,7 +198,7 @@ const workspaceId = computed(() => props.workspace?.id ?? '')
 const hasSetupScript = computed(() => {
   if (!props.workspace) return false
   const project = settingsStore.getProjectByPath(props.workspace.projectPath)
-  return !!project?.setupScript
+  return !!(project?.setupScript || settingsStore.global.setupScript)
 })
 
 const hasEditorCommand = computed(() => !!settingsStore.global.editorCommand)
@@ -202,8 +208,26 @@ const hasTerminalCommand = computed(() => !!settingsStore.global.terminalCommand
 const isAgentBusy = computed(() => isBusyStatus(props.workspace?.status))
 const isArchived = computed(() => Boolean(props.workspace?.archivedAt))
 
+const baseBlockerContext = computed(() => ({
+  missingWorkspace: !props.workspace,
+  purged: !!props.workspace?.worktreePurgedAt,
+  archived: isArchived.value,
+}))
+const setupBlocker = computed(() =>
+  getActionBlocker({
+    ...baseBlockerContext.value,
+    operation: running.value,
+    agentBusy: isAgentBusy.value,
+    missingConfiguration: !hasSetupScript.value,
+  }),
+)
+const reviewBlocker = computed(() =>
+  getActionBlocker({ ...baseBlockerContext.value, operation: startingReview.value, agentBusy: isAgentBusy.value }),
+)
+const ciBlocker = computed(() => getActionBlocker({ ...baseBlockerContext.value, operation: fixingCi.value }))
+
 function runSetupScript() {
-  if (!workspaceId.value) return
+  if (setupBlocker.value || !workspaceId.value) return
   $q.dialog({
     title: t('tools.runSetupScript'),
     message: t('tools.runSetupScriptConfirm'),
@@ -300,7 +324,7 @@ function openExternal(url: string) {
 }
 
 async function startCiFix() {
-  if (!workspaceId.value || fixingCi.value) return
+  if (!workspaceId.value || ciBlocker.value) return
   fixingCi.value = true
   try {
     const res = await fetch(`/api/workspaces/${workspaceId.value}/start-ci-fix`, { method: 'POST' })
@@ -324,7 +348,7 @@ async function startCiFix() {
 }
 
 async function startReview(payload: { additionalInstructions: string; newSession: boolean }) {
-  if (!workspaceId.value) return
+  if (reviewBlocker.value || !workspaceId.value) return
   startingReview.value = true
   try {
     const res = await fetch(`/api/workspaces/${workspaceId.value}/start-review`, {

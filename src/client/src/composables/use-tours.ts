@@ -1,4 +1,5 @@
 import { type Config, type Driver, type DriveStep, driver } from 'driver.js'
+import { isWorkspacePane } from 'src/utils/split-workspace'
 import 'driver.js/dist/driver.css'
 import { anchorSelector, waitForVisible } from 'src/tours/dom'
 import { findTour, TOURS } from 'src/tours/registry'
@@ -41,6 +42,8 @@ let starting = 0
 const pendingAutoRuns = new Set<TourId>()
 /** True while a previous driver is being destroyed on purpose, so that tour's `onDestroyed` stays inert. */
 let replacing = false
+/** Invalidates preparations and timers when all tours are acknowledged. */
+let runGeneration = 0
 
 /** Reload the in-memory state from storage and drop the driver. Test-only. */
 export function _resetToursStateForTests(): void {
@@ -48,6 +51,7 @@ export function _resetToursStateForTests(): void {
   Object.assign(seen, readSeen())
   discardDriver()
   starting = 0
+  runGeneration++
   pendingAutoRuns.clear()
   replacing = false
 }
@@ -158,20 +162,24 @@ export function useTours() {
    * visible anchors (the tour then ends as completed rather than abandoned).
    */
   function buildDriveSteps(steps: TourStep[], finished: { value: boolean }): DriveStep[] {
+    const generation = runGeneration
     let busy = false
     // Prepare the step at `from`, skipping in `direction` past invisible anchors; a second click while in flight is ignored.
     const moveTo = async (from: number, direction: 1 | -1, drv: Driver): Promise<void> => {
-      if (busy) return
+      if (busy || generation !== runGeneration) return
       busy = true
       try {
         for (let index = from; index >= 0 && index < steps.length; index += direction) {
+          if (generation !== runGeneration) return
           const step = steps[index]
           if (step && (await prepareStep(step))) {
+            if (generation !== runGeneration) return
             drv.moveTo(index)
             return
           }
         }
         // Nothing left forward: the tour is over. Nothing left backward: stay put.
+        if (generation !== runGeneration) return
         if (direction === 1) {
           finished.value = true
           drv.destroy()
@@ -195,6 +203,7 @@ export function useTours() {
   async function runTour(id: TourId, options: RunOptions = {}): Promise<void> {
     const tour = findTour(id)
     if (!tour) return
+    const generation = runGeneration
     starting++
     try {
       // Another tour owns the screen: drop it before leaving its page.
@@ -207,12 +216,17 @@ export function useTours() {
       // Let the page render and prepare its first step (its anchor may live in a closed drawer)
       // before reading the gates, so DOM gates see the rendered page.
       await nextTick()
+      if (generation !== runGeneration) return
       const first = tour.steps[0]
       const firstVisible = first ? await prepareStep(first) : false
+      if (generation !== runGeneration) return
       const steps = applicableSteps(tour, options.onlyUnseen ?? false)
       // Drop leading steps whose anchor never shows up; the first one was already prepared above.
-      while (steps[0] && !(steps[0] === first ? firstVisible : await prepareStep(steps[0]))) steps.shift()
-      if (steps.length === 0) return
+      while (steps[0] && !(steps[0] === first ? firstVisible : await prepareStep(steps[0]))) {
+        if (generation !== runGeneration) return
+        steps.shift()
+      }
+      if (generation !== runGeneration || steps.length === 0) return
       driverObj = driver(buildConfig(tour, steps))
       driverObj.drive()
     } catch (err) {
@@ -281,13 +295,21 @@ export function useTours() {
    * over a dialog (one retry after `DIALOG_RETRY_DELAY_MS`). Never rejects: failures are logged.
    */
   async function autoRun(id: TourId, retryOnDialog = true): Promise<void> {
+    if (isWorkspacePane) return
+    const definition = findTour(id)
+    if (definition?.steps.every((step) => seen[id]?.includes(step.id))) return
     if (starting > 0 || isRunning()) {
       pendingAutoRuns.add(id)
       return
     }
     if (document.querySelector('.q-dialog')) {
       console.debug(`[tours] auto-run deferred, dialog open: ${id}`)
-      if (retryOnDialog) setTimeout(() => void autoRun(id, false), DIALOG_RETRY_DELAY_MS)
+      if (retryOnDialog) {
+        const generation = runGeneration
+        setTimeout(() => {
+          if (generation === runGeneration) void autoRun(id, false)
+        }, DIALOG_RETRY_DELAY_MS)
+      }
       return
     }
     const tour = findTour(id)
@@ -308,7 +330,23 @@ export function useTours() {
   function scheduleAutoRun(id: TourId, delayMs = AUTO_RUN_DELAY_MS): void {
     if (instance?.isUnmounted) return
     clearTimeout(autoRunTimer)
-    autoRunTimer = setTimeout(() => void autoRun(id), delayMs)
+    const generation = runGeneration
+    autoRunTimer = setTimeout(() => {
+      if (generation === runGeneration) void autoRun(id)
+    }, delayMs)
+  }
+
+  function markAllSeen(): void {
+    runGeneration++
+    pendingAutoRuns.clear()
+    clearTimeout(autoRunTimer)
+    discardDriver()
+    // Store exact current IDs, including gated steps, so future additions remain unseen.
+    for (const tour of TOURS)
+      markSeen(
+        tour.id,
+        tour.steps.map((step) => step.id),
+      )
   }
 
   async function resetAll(): Promise<void> {
@@ -330,6 +368,7 @@ export function useTours() {
     autoRun,
     scheduleAutoRun,
     resetAll,
+    markAllSeen,
     isRunning,
     migrateLegacyFlag,
   }

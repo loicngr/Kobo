@@ -2735,6 +2735,7 @@ import { getWhipVolumeAvailability } from 'src/utils/whip-settings'
 import { DEFAULT_WHIP_SHORTCUT } from 'src/utils/whip-shortcut'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRoute } from 'vue-router'
 import { WORKTREES_PATH } from '../../../shared/consts'
 import {
   AGNOSTIC_AUTO_LOOP_GROOMING_INTRO,
@@ -2785,6 +2786,15 @@ const navItems = computed(() => [
   { value: 'workspaceTemplates', icon: 'bookmarks', label: t('settings.nav.workspaceTemplates') },
   { value: 'export', icon: 'import_export', label: t('settings.nav.export') },
 ])
+const settingsRoute = useRoute()
+watch(
+  () => settingsRoute.query.tab,
+  (tab) => {
+    if (typeof tab === 'string' && navItems.value.some((item) => item.value === tab)) selectTab(tab)
+  },
+  { immediate: true },
+)
+
 const activeNavLabel = computed(() => navItems.value.find((i) => i.value === activeTab.value)?.label ?? '')
 
 const isGlobalSection = computed(() =>

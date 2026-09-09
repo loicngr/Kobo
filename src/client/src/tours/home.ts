@@ -1,5 +1,6 @@
 import { useLayoutStore } from 'src/stores/layout'
 import { useSettingsStore } from 'src/stores/settings'
+import { anchorPresent } from './dom'
 import type { TourDefinition, TourStep } from './types'
 
 /** Every home step lives in the left drawer: open it first (it may be closed on small screens). */
@@ -25,6 +26,15 @@ export const homeTour: TourDefinition = {
     void router.push({ name: hasProject ? 'create' : 'settings' })
   },
   steps: [
+    {
+      id: 'home-activity',
+      anchor: 'activity-digest',
+      beforeShow: async () => useLayoutStore().setLeft(true),
+      i18nKey: 'tours.home.activity',
+      gate: 'dom',
+      when: () => anchorPresent('activity-digest'),
+    },
+    drawerStep('home-sort', 'workspace-sort', 'tours.home.sort'),
     drawerStep('home-list', 'workspace-list', 'tours.home.list'),
     drawerStep('home-create', 'create-workspace', 'tours.home.create'),
     drawerStep('home-search', 'search', 'tours.home.search'),

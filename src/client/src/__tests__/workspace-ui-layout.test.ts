@@ -7,7 +7,7 @@ const read = (path: string) => readFileSync(join(CLIENT_ROOT, path), 'utf-8')
 
 describe('workspace UI layout', () => {
   it('keeps the active-session model badge readable', () => {
-    const source = read('src/components/WorkspaceToolbarSelectors.vue')
+    const source = read('src/pages/WorkspacePage.vue')
 
     expect(source).toMatch(/color="primary"\s+text-color="white"/)
   })

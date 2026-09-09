@@ -32,8 +32,22 @@ export const workspaceTour: TourDefinition = {
       id: 'ws-selectors',
       anchor: 'ws-selectors',
       i18nKey: 'tours.workspace.selectors',
-      // The toolbar selectors are hidden on mobile.
+      // The configuration button is present whenever a workspace is selected.
       when: () => anchorPresent('ws-selectors'),
+      gate: 'dom',
+    },
+    {
+      id: 'ws-sessions',
+      anchor: 'ws-sessions',
+      i18nKey: 'tours.workspace.sessions',
+      when: () => anchorPresent('ws-sessions'),
+      gate: 'dom',
+    },
+    {
+      id: 'ws-actions',
+      anchor: 'ws-actions',
+      i18nKey: 'tours.workspace.actions',
+      when: () => anchorPresent('ws-actions'),
       gate: 'dom',
     },
     { id: 'ws-status', anchor: 'ws-status', i18nKey: 'tours.workspace.status' },

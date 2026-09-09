@@ -8,6 +8,7 @@ import { closeDb, getDb } from './db/index.js'
 import { getPendingMigrations, runMigrations } from './db/migrations.js'
 import { hostCheckMiddleware } from './middleware/host-check-middleware.js'
 import { networkAuthMiddleware } from './middleware/network-auth-middleware.js'
+import activityRouter from './routes/activity.js'
 import changelogRouter from './routes/changelog.js'
 import devServerRouter from './routes/dev-server.js'
 import documentsRouter from './routes/documents.js'
@@ -205,6 +206,7 @@ app.route('/api/sentry', sentryRouter)
 app.route('/api/git', gitRouter)
 app.route('/api/fs', fsRouter)
 app.route('/api/changelog', changelogRouter)
+app.route('/api/activity', activityRouter)
 app.route('/api/settings', settingsRouter)
 app.route('/api/dev-server', devServerRouter)
 app.route('/api/templates', templatesRouter)

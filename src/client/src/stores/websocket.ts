@@ -2,6 +2,7 @@ import { defineStore } from 'pinia'
 import { Notify } from 'quasar'
 import i18n from 'src/i18n'
 import { disposeTerminalEntry } from 'src/services/terminal-registry'
+import { getWorkspaceQueueHost } from 'src/services/workspace-queue-bridge'
 import { useAgentStreamStore } from 'src/stores/agent-stream'
 import { type GlobalSettings, useSettingsStore } from 'src/stores/settings'
 import type { AgentEvent } from 'src/types/agent-event'
@@ -406,7 +407,7 @@ export function dispatchAgentEvent(
         activeSessionId !== undefined &&
         sessionId !== activeSessionId)
     if (isSuperseded) {
-      workspaceStore.cancelQueuedMessage(workspaceId, sessionId)
+      if (!getWorkspaceQueueHost(workspaceStore)) workspaceStore.cancelQueuedMessage(workspaceId, sessionId)
       if (sessionId) {
         workspaceStore.clearActiveAgentSession(workspaceId, sessionId)
       }
@@ -428,7 +429,7 @@ export function dispatchAgentEvent(
             ? 'error'
             : 'idle'
     workspaceStore.updateWorkspaceFromEvent(workspaceId, { status: derivedStatus })
-    if (sessionId && event.reason === 'completed') {
+    if (sessionId && event.reason === 'completed' && !getWorkspaceQueueHost(workspaceStore)) {
       workspaceStore.flushQueuedMessage(workspaceId, sessionId)
     }
     // Subagents live inside the parent session: when it ends, any still in
@@ -951,7 +952,7 @@ export const useWebSocketStore = defineStore('websocket', {
                     const store = useWorkspaceStore()
                     if (evSessionId) {
                       store.clearPendingForSession(workspaceId, evSessionId)
-                      store.cancelQueuedMessage(workspaceId, evSessionId)
+                      if (!getWorkspaceQueueHost(store)) store.cancelQueuedMessage(workspaceId, evSessionId)
                       store.clearActiveAgentSession(workspaceId, evSessionId)
                     } else if (ev.superseded !== true) {
                       store.clearActiveAgentSessionOwner(workspaceId)

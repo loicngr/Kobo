@@ -1,5 +1,13 @@
 import { Dialog } from 'quasar'
 import i18n from 'src/i18n'
+import { getWorkspaceQueueHost } from 'src/services/workspace-queue-bridge'
+import { useWorkspaceStore } from 'src/stores/workspace'
+import {
+  hasPanePendingWork,
+  isPassiveSplitNavigation,
+  isWorkspacePane,
+  type WorkspacePaneWindow,
+} from 'src/utils/split-workspace'
 import { hasUnsavedWork } from 'src/utils/unsaved-guard'
 import { createRouter, createWebHashHistory } from 'vue-router'
 import { defineRouter } from '#q-app'
@@ -18,6 +26,7 @@ export default defineRouter(() => {
   // Returns instead of the `next()` callback (deprecated in Vue Router 4.4+):
   // the dialog's onOk/onCancel are wrapped in a promise the guard awaits.
   Router.beforeEach((to, from) => {
+    if (isPassiveSplitNavigation(to, from)) return true
     if (to.fullPath === from.fullPath || !hasUnsavedWork()) return true
     const t = i18n.global.t
     return new Promise<boolean>((resolve) => {
@@ -36,11 +45,26 @@ export default defineRouter(() => {
   // Tab close / reload: modern browsers ignore any custom message here and
   // show their own generic prompt, so we only ever set returnValue to signal
   // "something to lose" — unsaved.title/message are never rendered by this path.
+  const hasPendingPaneWork = () => {
+    const store = useWorkspaceStore()
+    // Mirrored queues outlive this pane; only their owner must guard their destruction.
+    return hasPanePendingWork(hasUnsavedWork(), getWorkspaceQueueHost(store) ? {} : store.queuedMessages)
+  }
   window.addEventListener('beforeunload', (event) => {
-    if (!hasUnsavedWork()) return
+    if (!hasPendingPaneWork()) return
     event.preventDefault()
     event.returnValue = ''
   })
+
+  if (isWorkspacePane) {
+    ;(window as WorkspacePaneWindow).koboPane = {
+      hasUnsavedWork: hasPendingPaneWork,
+      ready: () => Router.currentRoute.value.name != null,
+      navigate: (id) => Router.push({ name: 'workspace', params: { id } }),
+      workspaceId: () =>
+        typeof Router.currentRoute.value.params.id === 'string' ? Router.currentRoute.value.params.id : undefined,
+    }
+  }
 
   return Router
 })

@@ -118,6 +118,7 @@
           <q-icon name="search" size="xs" color="kobo-3" />
         </template>
       </q-input>
+      <WorkspaceSortMenu v-model="workspaceSort" />
       <q-btn
         :icon="favoritesOnly ? 'star' : 'star_outline'"
         :color="favoritesOnly ? 'amber-7' : 'kobo-3'"
@@ -541,6 +542,8 @@
 
     <q-separator dark />
 
+    <ActivityDigest v-if="!isWorkspacePane" />
+
     <!-- Footer counter -->
     <div class="q-px-md q-py-xs text-caption text-kobo-3">
       {{ $t('workspaceList.footer', { count: totalCount }, totalCount) }} &middot; {{ $t('workspaceList.footerRunning', { count: runningCount }) }}
@@ -687,9 +690,11 @@
 
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
+import ActivityDigest from 'src/components/ActivityDigest.vue'
 import HelpMenu from 'src/components/HelpMenu.vue'
 import ManageTagsDialog from 'src/components/ManageTagsDialog.vue'
 import WorkspaceCard from 'src/components/WorkspaceCard.vue'
+import WorkspaceSortMenu from 'src/components/WorkspaceSortMenu.vue'
 import { useIsMobile } from 'src/composables/use-is-mobile'
 import { useWorktreeRestore } from 'src/composables/use-worktree-restore'
 import { useDevServerStore } from 'src/stores/dev-server'
@@ -701,14 +706,15 @@ import { useWorkspaceStore } from 'src/stores/workspace'
 import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
 import type { ProjectColor } from 'src/utils/project-color'
 import { projectNameForPath } from 'src/utils/project-color'
+import { isWorkspacePane } from 'src/utils/split-workspace'
 import { getAttentionReasons } from 'src/utils/workspace-attention'
-import { filterWorkspaces } from 'src/utils/workspace-search'
+import { parseWorkspaceSort, sortWorkspaces, WORKSPACE_SORT_KEY } from 'src/utils/workspace-sort'
 import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 
-const { t } = useI18n()
+const { t, locale } = useI18n()
 const $q = useQuasar()
 const store = useWorkspaceStore()
 const { restoreWorktree } = useWorktreeRestore()
@@ -737,6 +743,29 @@ let workspaceInfoInterval: ReturnType<typeof setInterval> | null = null
 // Mémorisée comme les deux autres filtres de la même barre (`favoritesOnly`,
 // `searchArchived`) : rien ne justifiait qu'elle seule soit perdue au
 // rechargement.
+const workspaceSort = ref(parseWorkspaceSort(localStorage.getItem(WORKSPACE_SORT_KEY)))
+watch(workspaceSort, (value) => {
+  try {
+    localStorage.setItem(WORKSPACE_SORT_KEY, JSON.stringify(value))
+  } catch {
+    // Sorting remains available when browser storage is full or restricted.
+  }
+})
+function sorted(workspaces: Workspace[], query = searchQuery.value): Workspace[] {
+  return sortWorkspaces(workspaces, workspaceSort.value, {
+    liveness: store.agentLiveness,
+    snapshots: store.prSnapshots,
+    quotaBackoffReasons: Object.fromEntries(
+      Object.entries(store.pendingQuotaBackoffs).map(([id, backoff]) => [
+        id,
+        backoff.reason === 'transient' ? 'transient' : 'quota',
+      ]),
+    ),
+    locale: locale.value,
+    query,
+  })
+}
+
 const SEARCH_QUERY_KEY = 'kobo:workspace-search'
 const searchQuery = ref<string>(localStorage.getItem(SEARCH_QUERY_KEY) ?? '')
 watch(searchQuery, (v) => localStorage.setItem(SEARCH_QUERY_KEY, v))
@@ -786,21 +815,17 @@ function groupByProject(workspaces: Workspace[]): ProjectGroup[] {
 
 // Recherche approximative sur TOUS les champs que la carte affiche — nom,
 // branche, description, étiquettes, projet — et plus seulement sur le nom en
-// sous-chaîne exacte. `filterWorkspaces` classe aussi par pertinence quand la
-// requête est non vide, et rend la liste intacte quand elle est vide.
+// sous-chaîne exacte. Le tri choisi est appliqué après le filtrage, puis
+// conservé à l’intérieur de chaque groupe de projets.
 const filteredNeedsAttention = computed(() =>
-  filterWorkspaces(searchQuery.value, store.needsAttention).filter(
-    (w) => !favoritesOnly.value || w.favoritedAt !== null,
-  ),
+  sorted(store.needsAttention.filter((w) => !favoritesOnly.value || w.favoritedAt !== null)),
 )
 
 const filteredRunning = computed(() =>
-  filterWorkspaces(searchQuery.value, store.running).filter((w) => !favoritesOnly.value || w.favoritedAt !== null),
+  sorted(store.running.filter((w) => !favoritesOnly.value || w.favoritedAt !== null)),
 )
 
-const filteredIdle = computed(() =>
-  filterWorkspaces(searchQuery.value, store.idle).filter((w) => !favoritesOnly.value || w.favoritedAt !== null),
-)
+const filteredIdle = computed(() => sorted(store.idle.filter((w) => !favoritesOnly.value || w.favoritedAt !== null)))
 
 const groupedNeedsAttention = computed(() => groupByProject(filteredNeedsAttention.value))
 const groupedRunning = computed(() => groupByProject(filteredRunning.value))
@@ -808,7 +833,7 @@ const groupedIdle = computed(() => groupByProject(filteredIdle.value))
 
 const flatten = computed(() => settingsStore.global.flattenWorkspaceList ?? false)
 
-// Flat lists must keep the source order (`updated_at DESC` from the API), NOT
+// Flat lists must keep the selected sort order, NOT
 // the project-grouped order. Deriving these from `groupedX` would re-sort by
 // project — making "flat list" still look grouped, just without the headers.
 const flatNeedsAttention = computed(() => filteredNeedsAttention.value)
@@ -817,12 +842,15 @@ const flatIdle = computed(() => filteredIdle.value)
 
 // Archived list filtered by the search query when `searchArchived` is ON,
 // and by `favoritesOnly` whenever it's ON. With both toggles OFF and an
-// empty query, returns the full archived list (current default behaviour).
+// empty query, returns the full archived list in the selected order.
 const filteredArchived = computed(() => {
   // `searchArchived` OFF ⇒ la requête n'affecte pas cette section (comportement
   // d'origine). ON ⇒ même moteur approximatif que les sections actives.
-  const base = searchArchived.value ? filterWorkspaces(searchQuery.value, store.archived) : store.archived
-  return base.filter((w) => !favoritesOnly.value || w.favoritedAt !== null)
+  const base = store.archived
+  return sorted(
+    base.filter((w) => !favoritesOnly.value || w.favoritedAt !== null),
+    searchArchived.value ? searchQuery.value : '',
+  )
 })
 
 // Auto-expand the archived section when the user toggles `searchArchived`

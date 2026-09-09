@@ -20,6 +20,11 @@ const routes: RouteRecordRaw[] = [
         component: () => import('../pages/WorkspacePage.vue'),
       },
       {
+        path: 'split',
+        name: 'split',
+        component: () => import('../pages/SplitWorkspacePage.vue'),
+      },
+      {
         path: 'create',
         name: 'create',
         component: () => import('../pages/CreatePage.vue'),

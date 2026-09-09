@@ -42,8 +42,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 40', () => {
-    expect(SCHEMA_VERSION).toBe(40)
+  it('exporte SCHEMA_VERSION = 41', () => {
+    expect(SCHEMA_VERSION).toBe(41)
   })
 
   it('migration v33 records and backfills the engine on agent sessions', () => {

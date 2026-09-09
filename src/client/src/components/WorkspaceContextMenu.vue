@@ -1,6 +1,10 @@
 <template>
   <q-menu dark context-menu>
     <q-list dense style="min-width: 180px;">
+      <q-item v-if="!isWorkspacePane" clickable v-close-popup
+        @click="router.push({ name: 'split', query: splitWorkspaceQuery(workspaceStore.selectedWorkspaceId, workspace.id) })">
+        <q-item-section>{{ $t('split.openBeside') }}</q-item-section>
+      </q-item>
       <q-item clickable v-close-popup @click="emit('rename', workspace)">
         <q-item-section side><q-icon name="edit" size="xs" /></q-item-section>
         <q-item-section>{{ $t('contextMenu.rename') }}</q-item-section>
@@ -166,8 +170,12 @@ import { useSettingsStore } from 'src/stores/settings'
 import { useWorkspaceStore, type Workspace } from 'src/stores/workspace'
 import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
 import { isChangesRequestedBlocking, isCiFailed } from 'src/utils/pr-status'
+import { isWorkspacePane, splitWorkspaceQuery } from 'src/utils/split-workspace'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { useRouter } from 'vue-router'
+
+const router = useRouter()
 
 const props = withDefaults(
   defineProps<{

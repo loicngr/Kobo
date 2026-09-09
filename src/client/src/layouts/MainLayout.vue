@@ -1,7 +1,8 @@
 <template>
   <q-layout view="lHh LpR lFf">
     <q-drawer
-      v-model="layout.leftDrawerOpen"
+      :model-value="!isWorkspacePane && layout.leftDrawerOpen"
+      @update:model-value="layout.setLeft"
       :width="effectiveLeftWidth"
       :breakpoint="DRAWER_BREAKPOINT"
       bordered
@@ -177,6 +178,7 @@ import { useDocumentsStore } from 'src/stores/documents'
 import { useLayoutStore } from 'src/stores/layout'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { cappedDrawerWidth } from 'src/utils/drawer-width'
+import { isWorkspacePane } from 'src/utils/split-workspace'
 import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, provide, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
@@ -198,8 +200,10 @@ const { scheduleAutoRun, migrateLegacyFlag } = useTours()
 const { showDialog: showWhatsNew, newVersions, checkForUpdate, availableVersion, dismissUpdate } = useWhatsNew()
 const showUpdateHelp = ref(false)
 onMounted(() => {
-  migrateLegacyFlag()
-  void checkForUpdate()
+  if (!isWorkspacePane) {
+    migrateLegacyFlag()
+    void checkForUpdate()
+  }
 })
 
 const DRAWER_TAB_KEY = 'kobo:rightTab'
@@ -316,6 +320,16 @@ function startRightResize(event: MouseEvent) {
 }
 
 const route = useRoute()
+watch(
+  () => [route.params.id, route.query.panel],
+  ([, panel]) => {
+    if (panel === 'git') {
+      layout.setRight(true)
+      setRightTab('git')
+    }
+  },
+  { immediate: true },
+)
 const store = useWorkspaceStore()
 
 // The home tour belongs to the home route, whichever route the app opened on.

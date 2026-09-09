@@ -1,4 +1,22 @@
 export default {
+  'blockers.setupConfiguration':
+    'Kein Setup-Skript konfiguriert. Fügen Sie eines im Bereich Skripte der Einstellungen hinzu.',
+  'blockers.noWorkspace': 'Wählen Sie einen Workspace für diese Aktion.',
+  'blockers.purged': 'Stellen Sie zuerst den Worktree über das Workspace-Banner wieder her.',
+  'blockers.archived': 'Entarchivieren Sie den Workspace über sein Menü.',
+  'blockers.operation': 'Warten Sie, bis der laufende Vorgang beendet ist.',
+  'blockers.agentBusy': 'Warten Sie auf das Ende des Durchlaufs oder stoppen Sie den Agenten im Chat.',
+  'blockers.configuration': 'Konfigurieren Sie diese Funktion in den Projekteinstellungen.',
+  'blockers.settings': 'Einstellungen öffnen',
+  'workspaceSort.label': 'Workspaces sortieren',
+  'workspaceSort.activity': 'Letzte Aktivität',
+  'workspaceSort.created': 'Erstellungsdatum',
+  'workspaceSort.name': 'Name',
+  'workspaceSort.attention': 'Aufmerksamkeitspriorität',
+  'workspaceSort.asc': 'Aufsteigend',
+  'workspaceSort.desc': 'Absteigend',
+  'workspaceSort.hint':
+    'Sortierung innerhalb jeder Gruppe, einschließlich Archiv. Das Öffnen verändert die letzte Aktivität nicht.',
   'model.tooltip': 'Modell, das der Agent für diesen Workspace verwendet',
   'reasoning.tooltip': 'Denkaufwand des Agenten für diesen Workspace',
   'thinking.label': 'Überlegung',
@@ -183,6 +201,8 @@ export default {
   'workspaceList.deleteArchivedDialog.typeCount': 'Geben Sie {count} zur Bestätigung ein',
 
   // Workspace Page
+  'workspacePage.configure': 'Konfigurieren',
+  'workspacePage.permissions': 'Berechtigungen',
   'workspacePage.selectWorkspace': 'Arbeitsbereich auswählen, um zu beginnen',
   'workspacePage.commandPalettePlaceholder': 'Befehle suchen…',
   'workspacePage.commandPaletteEmpty': 'Kein passender Befehl',
@@ -833,6 +853,8 @@ export default {
   'help.title': 'Hilfe',
   'help.tours': 'Geführte Touren',
   'help.steps': '{n} Schritt | {n} Schritte',
+  'help.markAllSeen': 'Alle als gesehen markieren',
+  'help.markAllSeenHint': 'Markiert die aktuellen Touren als gesehen, ohne sie zu starten.',
   'help.resetAll': 'Alle Touren zurücksetzen',
   'help.resetAllHint': 'Startet jetzt die Start-Tour; jeder Bildschirm wiederholt seine beim nächsten Öffnen.',
   'help.status.unseen': 'nicht gesehen',
@@ -884,6 +906,12 @@ export default {
   'tours.create.comparison.title': 'Zwei Engines vergleichen',
   'tours.create.comparison.description':
     'Erstelle zwei Geschwister-Workspaces für dieselbe Aufgabe und vergleiche Commits, Aufgaben und Aktivität.',
+  'tours.workspace.sessions.title': 'Workspace-Sitzungen',
+  'tours.workspace.sessions.description':
+    'Klicke auf den Titel, um eine Sitzung auszuwählen, anzulegen, umzubenennen oder ihre Kennung zu kopieren.',
+  'tours.workspace.actions.title': 'Workspace-Aktionen',
+  'tours.workspace.actions.description':
+    'Das Menü ⋯ enthält die geteilte Ansicht, die Befehlspalette, das Seitenpanel und die Führung.',
   'tours.workspace.title': 'In einem Workspace',
   'tours.workspace.chat.title': 'Gespräch',
   'tours.workspace.chat.description': 'Die Ausgabe des Agenten, live: Nachrichten, Tool-Aufrufe, Fragen und Fehler.',
@@ -892,7 +920,7 @@ export default {
     'Sende eine Nachricht, nutze Slash-Befehle, diktiere per Stimme oder hänge Dateien an.',
   'tours.workspace.selectors.title': 'Session-Einstellungen',
   'tours.workspace.selectors.description':
-    'Ändere Modell, Aufwand, Berechtigungsmodus und Auto-Loop für die nächste Session.',
+    'Öffne Konfigurieren für Modell, Denkaufwand, Berechtigungen und Auto-Loop. Dort steht auch die aktuelle Engine.',
   'tours.workspace.status.title': 'Status',
   'tours.workspace.status.description': 'Der Zustand der aktuellen Session; hier kannst du sie bei Bedarf stoppen.',
   'tours.workspace.git.title': 'Git',
@@ -2008,4 +2036,45 @@ export default {
   'prCheckout.blocked.worktreeOtherBranch': '{path} ist eine Worktree auf einem anderen Branch ({branch}).',
   'prCheckout.blocked.noCommonAncestor':
     'Es existiert bereits ein lokaler Branch namens {branch} mit unabhängiger Historie.',
+  'split.title': 'Doppelte Workspace-Ansicht',
+  'split.open': 'Nebeneinander öffnen',
+  'split.openBeside': 'Daneben öffnen',
+  'split.close': 'Doppelansicht schließen',
+  'split.left': 'Linker Workspace',
+  'split.right': 'Rechter Workspace',
+  'split.choose': 'Workspace auswählen',
+  'split.recipient': 'Senden an: {name}',
+  'absence.title': 'Seit deinem letzten Besuch',
+  'absence.pending': 'Änderungen prüfen',
+  'absence.retention':
+    'Wichtige Aktivitäten der letzten 30 Tage, erfasst seit Installation dieser Funktion. Besuche werden nur in diesem Browser verfolgt.',
+  'absence.since': 'Seit {date}',
+  'absence.error': 'Aktivität konnte nicht geladen werden.',
+  'absence.retry': 'Erneut versuchen',
+  'absence.empty': 'Keine neue Aktivität.',
+  'absence.more': 'Mehr laden',
+  'absence.markRead': 'Angezeigte Ereignisse als gelesen markieren',
+  'absence.kind.question': 'Frage gestellt',
+  'absence.kind.permission': 'Genehmigung angefragt',
+  'absence.kind.completed': 'Sitzung beendet',
+  'absence.kind.error': 'Agent-Fehler',
+  'absence.kind.pr-merged': 'PR gemergt',
+  'absence.kind.pr-approved': 'PR genehmigt',
+  'absence.kind.pr-changes-requested': 'Änderungen angefordert',
+  'absence.kind.pr-ci-failed': 'CI fehlgeschlagen',
+  'absence.kind.pr-ci-recovered': 'CI wieder erfolgreich',
+  'absence.kind.pr-merge-conflict': 'Merge-Konflikt',
+  'absence.kind.pr-ready-to-merge': 'PR bereit zum Merge',
+  'absence.kind.archived': 'Workspace archiviert',
+  'absence.kind.purged': 'Worktree bereinigt',
+  'absence.kind.restored': 'Worktree wiederhergestellt',
+  'tours.split.controls.title': 'Zwei unabhängige Workspaces',
+  'tours.split.controls.description':
+    'Wähle einen Workspace pro Bereich. Verschiebe die Trennlinie; jede Unterhaltung behält ihren Empfänger und ihre Panels.',
+  'tours.home.sort.title': 'Workspaces sortieren',
+  'tours.home.sort.description':
+    'Wähle Reihenfolge und Richtung innerhalb jeder Gruppe. Deine Auswahl wird gespeichert.',
+  'tours.home.activity.title': 'Aktivität nach Abwesenheit prüfen',
+  'tours.home.activity.description':
+    'Unten in der linken Seitenleiste findest du Fragen, Sitzungsenden, Fehler und PR-Änderungen seit deinem letzten Besuch.',
 }

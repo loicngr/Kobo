@@ -3,6 +3,7 @@
     <!-- Header bar -->
     <div class="wp-header row items-center q-px-md q-py-sm no-wrap">
       <q-btn
+        v-if="!isWorkspacePane"
         flat
         dense
         round
@@ -14,118 +15,72 @@
         <q-tooltip>{{ $t('layout.toggleWorkspaces') }}</q-tooltip>
       </q-btn>
       <template v-if="selectedWs">
-        <span class="text-body1 text-weight-medium text-kobo-1 ellipsis" style="max-width: 480px;">
-          {{ selectedWs.name }}
+        <q-btn flat dense no-caps class="wp-title" data-tour="ws-sessions" :aria-label="`${selectedWs.name} — ${$t('reliability.sessions')}`">
+          <span class="ellipsis">{{ selectedWs.name }}</span>
+          <q-icon name="expand_more" size="16px" class="q-ml-xs" />
           <q-tooltip>{{ selectedWs.name }}</q-tooltip>
-        </span>
-        <q-badge
-          :label="workspaceStatusLabel(selectedWs.id, selectedWs.status)"
-          :color="workspaceStatusColor(selectedWs.id, selectedWs.status)"
-          data-tour="ws-status"
-          class="q-ml-sm"
-          style="font-size: 10px;"
-        />
-        <template v-if="!isMobile">
-          <!-- Tour anchor: the selectors render as a fragment, so this wrapper
-               must grow and shrink exactly like the fragment did (flex: 1 1 auto,
-               no min-width: 0, so the workspace name keeps truncating first). -->
-          <div data-tour="ws-selectors" class="wp-selectors row items-center no-wrap">
-          <WorkspaceToolbarSelectors
-            layout="inline"
-            :sessions="sessions"
-            :session-options="sessionOptions"
-            :permission-mode-options="permissionModeOptions"
-            :model-options="modelOptions"
-            :reasoning-options="reasoningOptions"
-            :pending-spawn-changes="pendingSpawnChanges"
-            :creating-session="creatingSession"
-            :can-delete-session="sessionCanBeDeleted"
-            :active-session-model-label="toolbarActiveSessionModelLabel"
-            v-model:selected-session-id="selectedSessionId"
-            v-model:permission-mode="currentPermissionMode"
-            v-model:model="currentModel"
-            v-model:reasoning-effort="currentReasoningEffort"
-            @rename="openRenameDialog"
-            @copy-session-id="copyEngineSessionId"
-            @delete-session="confirmDeleteSession"
-          />
-          </div>
-        </template>
-        <q-space v-else />
-        <WorkspaceWhipControl
-          v-if="selectedWs && !selectedWs.archivedAt"
-          :workspace-id="selectedWs.id"
-          :session-id="whipRunningSessionId"
-          :running="whipRunningSessionId !== null"
-        />
-        <q-btn
-          v-if="!isMobile"
-          flat
-          dense
-          no-caps
-          size="sm"
-          class="q-mr-xs palette-shortcut-hint"
-          label="⌘K"
-          @click="
-            () => {
-              commandPaletteQuery = ''
-              commandPaletteOpen = true
-            }
-          "
-        >
-          <q-tooltip>{{ $t('workspacePage.commandPaletteHint') }}</q-tooltip>
+          <q-menu><q-list class="wp-toolbar-menu">
+            <WorkspaceToolbarSelectors section="session" :sessions="sessions" :session-options="sessionOptions"
+              :permission-mode-options="permissionModeOptions" :model-options="modelOptions"
+              :reasoning-options="reasoningOptions" :pending-spawn-changes="pendingSpawnChanges"
+              :creating-session="creatingSession" :can-delete-session="sessionCanBeDeleted"
+              v-model:selected-session-id="selectedSessionId" v-model:permission-mode="currentPermissionMode"
+              v-model:model="currentModel" v-model:reasoning-effort="currentReasoningEffort"
+              @rename="openRenameDialog" @copy-session-id="copyEngineSessionId" @delete-session="confirmDeleteSession" />
+          </q-list></q-menu>
         </q-btn>
-        <TourReplayButton v-if="!isMobile" tour-id="workspace" class="q-mr-xs" />
-        <q-btn
-          v-if="isBusyStatus(selectedWs.status) && !selectedWs.archivedAt"
-          dense
-          no-caps
-          size="sm"
-          color="negative"
-          icon="stop"
-          :label="isMobile ? undefined : $t('common.stop')"
-          class="q-mr-xs"
-          :loading="stopping"
-          :disable="stopping"
-          @click="handleStop"
-        />
-        <q-btn
-          v-if="isMobile"
-          flat
-          dense
-          round
-          icon="more_vert"
-          :aria-label="$t('workspacePage.moreActions')"
-        >
+        <q-badge :label="workspaceStatusLabel(selectedWs.id, selectedWs.status)"
+          :color="workspaceStatusColor(selectedWs.id, selectedWs.status)"
+          data-tour="ws-status" class="wp-status q-ml-sm" />
+        <q-badge v-if="toolbarActiveSessionModelLabel !== null && !isMobile"
+          color="primary" text-color="white" class="wp-active-model q-ml-sm">
+          <span class="ellipsis">{{ $t('workspacePage.activeSessionModel', { model: toolbarActiveSessionModelLabel }) }}</span>
+          <q-tooltip>{{ $t('workspacePage.activeSessionModelTooltip') }}</q-tooltip>
+        </q-badge>
+        <q-btn flat dense no-caps class="wp-configure q-ml-sm" data-tour="ws-selectors"
+          :aria-label="$t('workspacePage.configure')">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4 21v-7m0-4V3m8 18v-9m0-4V3m8 18v-5m0-4V3M1 14h6m2-6h6m2 8h6" />
+          </svg>
+          <span v-if="!isMobile" class="q-ml-xs">{{ $t('workspacePage.configure') }}</span>
+          <q-icon v-if="pendingSpawnChanges.size" name="schedule" size="12px" color="orange-6" class="q-ml-xs" />
+          <q-tooltip>{{ $t('workspacePage.configure') }}</q-tooltip>
+          <q-menu><q-list class="wp-toolbar-menu">
+            <q-item><q-item-section>
+              <q-item-label caption>{{ $t('engine.select') }}</q-item-label>
+              <q-item-label>{{ currentEngineId === 'codex' ? $t('workspacePage.engineCodex') : currentEngineId === 'claude-code' ? $t('workspacePage.engineClaude') : currentEngineId }}</q-item-label>
+            </q-item-section></q-item>
+            <WorkspaceToolbarSelectors section="configuration" :sessions="sessions" :session-options="sessionOptions"
+              :permission-mode-options="permissionModeOptions" :model-options="modelOptions"
+              :reasoning-options="reasoningOptions" :pending-spawn-changes="pendingSpawnChanges"
+              :creating-session="creatingSession" :can-delete-session="sessionCanBeDeleted"
+              v-model:selected-session-id="selectedSessionId" v-model:permission-mode="currentPermissionMode"
+              v-model:model="currentModel" v-model:reasoning-effort="currentReasoningEffort"
+              @rename="openRenameDialog" @copy-session-id="copyEngineSessionId" @delete-session="confirmDeleteSession" />
+          </q-list></q-menu>
+        </q-btn>
+        <WorkspaceWhipControl v-if="!selectedWs.archivedAt" :workspace-id="selectedWs.id"
+          :session-id="whipRunningSessionId" :running="whipRunningSessionId !== null" />
+        <q-btn v-if="isBusyStatus(selectedWs.status) && !selectedWs.archivedAt"
+          dense no-caps size="sm" color="negative" icon="stop"
+          :label="isMobile ? undefined : $t('common.stop')" :aria-label="$t('common.stop')"
+          class="q-ml-xs" :loading="stopping" :disable="stopping" @click="handleStop" />
+        <q-btn flat dense round icon="more_vert" data-tour="ws-actions" :aria-label="$t('workspacePage.moreActions')">
           <q-tooltip>{{ $t('workspacePage.moreActions') }}</q-tooltip>
-          <q-menu>
-            <q-list style="min-width: 240px">
-              <WorkspaceToolbarSelectors
-                layout="menu"
-                :sessions="sessions"
-                :session-options="sessionOptions"
-                :permission-mode-options="permissionModeOptions"
-                :model-options="modelOptions"
-                :reasoning-options="reasoningOptions"
-                :pending-spawn-changes="pendingSpawnChanges"
-                :creating-session="creatingSession"
-                :can-delete-session="sessionCanBeDeleted"
-                :active-session-model-label="toolbarActiveSessionModelLabel"
-                v-model:selected-session-id="selectedSessionId"
-                v-model:permission-mode="currentPermissionMode"
-                v-model:model="currentModel"
-                v-model:reasoning-effort="currentReasoningEffort"
-                @rename="openRenameDialog"
-                @copy-session-id="copyEngineSessionId"
-                @delete-session="confirmDeleteSession"
-              />
-              <q-separator />
-              <q-item v-close-popup clickable @click="replayWorkspaceTour">
-                <q-item-section avatar><q-icon name="help_outline" size="xs" /></q-item-section>
-                <q-item-section>{{ $t('help.replayThis') }}</q-item-section>
-              </q-item>
-            </q-list>
-          </q-menu>
+          <q-menu><q-list class="wp-toolbar-menu">
+            <q-item v-if="!isWorkspacePane" v-close-popup clickable @click="router.push({ name: 'split', query: { left: selectedWs.id } })">
+              <q-item-section>{{ $t('split.open') }}</q-item-section>
+            </q-item>
+            <q-item v-close-popup clickable @click="commandPaletteQuery = ''; commandPaletteOpen = true">
+              <q-item-section>{{ $t('workspacePage.commandPaletteHint') }}</q-item-section>
+            </q-item>
+            <q-item v-close-popup clickable @click="layout.toggleRight()">
+              <q-item-section>{{ $t('layout.togglePanel') }}</q-item-section>
+            </q-item>
+            <q-item v-close-popup clickable @click="replayWorkspaceTour">
+              <q-item-section>{{ $t('help.replayThis') }}</q-item-section>
+            </q-item>
+          </q-list></q-menu>
         </q-btn>
       </template>
       <template v-else>
@@ -134,16 +89,7 @@
         </span>
         <q-space />
       </template>
-      <q-btn
-        flat
-        dense
-        round
-        size="sm"
-        icon="view_sidebar"
-        @click="layout.toggleRight()"
-      >
-        <q-tooltip>{{ $t('layout.togglePanel') }}</q-tooltip>
-      </q-btn>
+
     </div>
 
     <!-- Workspace description (own line under the header) -->
@@ -359,6 +305,7 @@ import { useWorkspaceStore } from 'src/stores/workspace'
 import { copyToClipboard } from 'src/utils/clipboard'
 import { isTypingTarget, type PaletteEntry, rankCommands } from 'src/utils/command-palette'
 import { useTimeAgo } from 'src/utils/formatters'
+import { isWorkspacePane } from 'src/utils/split-workspace'
 import { getWhipRunningSessionId } from 'src/utils/whip-session'
 import { workspacePageStyle } from 'src/utils/workspace-page-layout'
 import { isBusyStatus, workspaceStatusKey } from 'src/utils/workspace-status'
@@ -379,7 +326,6 @@ import LatestThinkingPanel from 'src/components/LatestThinkingPanel.vue'
 import PermissionRequestPanel from 'src/components/PermissionRequestPanel.vue'
 import QuotaBackoffBanner from 'src/components/QuotaBackoffBanner.vue'
 import StaleSessionBanner from 'src/components/StaleSessionBanner.vue'
-import TourReplayButton from 'src/components/TourReplayButton.vue'
 import WakeupBanner from 'src/components/WakeupBanner.vue'
 import WorkspaceHistorySearch from 'src/components/WorkspaceHistorySearch.vue'
 import WorkspaceToolbarSelectors from 'src/components/WorkspaceToolbarSelectors.vue'
@@ -795,7 +741,7 @@ const activeSessionModelLabel = computed(
     selectedSessionModel.value,
 )
 const toolbarActiveSessionModelLabel = computed(() =>
-  selectedSessionModel.value !== null && selectedSessionModel.value !== selectedWs.value?.model
+  selectedSession.value?.status === 'running' && selectedSessionModel.value !== null
     ? activeSessionModelLabel.value
     : null,
 )
@@ -934,6 +880,14 @@ watch(
   },
 )
 
+// Activity deep links can target another session without remounting this page.
+watch(
+  () => [route.params.id, route.query.session],
+  ([id, session]) => {
+    if (typeof id === 'string' && typeof session === 'string') void store.fetchSessions(id, session)
+  },
+)
+
 // Redirect to the home (workspace list) when the workspace we're viewing
 // disappears — happens on archive (manual click, PR-merge auto-archive,
 // archive from another tab) or delete. Both flows null `selectedWorkspaceId`
@@ -949,9 +903,18 @@ watch(
 </script>
 
 <style lang="scss" scoped>
-.wp-selectors {
-  flex: 1 1 auto;
+.wp-title {
+  flex: 1 1 0;
+  min-width: 0;
+  justify-content: flex-start;
+  :deep(.q-btn__content) { flex-wrap: nowrap; min-width: 0; justify-content: flex-start; }
 }
+.wp-status, .wp-configure { flex-shrink: 0; white-space: nowrap; }
+.wp-status, .wp-active-model { font-size: 10px; }
+.wp-active-model { max-width: 180px; min-width: 0; }
+.wp-toolbar-menu { width: 300px; max-width: calc(100vw - 24px); }
+.wp-header > .q-btn { flex-shrink: 0; }
+.wp-header > .wp-title { flex-shrink: 1; }
 
 .wp-header {
   min-height: 48px;

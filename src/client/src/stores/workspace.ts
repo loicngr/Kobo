@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia'
 import { disposeTerminalEntry } from 'src/services/terminal-registry'
+import { getWorkspaceQueueHost } from 'src/services/workspace-queue-bridge'
 import { apiFetch } from 'src/utils/api'
 import type { ProviderId, UsageSnapshot } from '../types/usage'
 import { hasPrAttention } from '../utils/pr-status'
@@ -2350,14 +2351,20 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     queueMessage(workspaceId: string, content: string, sessionId: string) {
+      const host = getWorkspaceQueueHost(this)
+      if (host) return host.queue(workspaceId, content, sessionId)
       this.queuedMessages[this.queuedMessageKey(workspaceId, sessionId)] = { content, sessionId }
     },
 
     cancelQueuedMessage(workspaceId: string, sessionId: string | null | undefined) {
+      const host = getWorkspaceQueueHost(this)
+      if (host) return host.cancel(workspaceId, sessionId)
       if (sessionId) delete this.queuedMessages[this.queuedMessageKey(workspaceId, sessionId)]
     },
 
     flushQueuedMessage(workspaceId: string, sessionId: string) {
+      const host = getWorkspaceQueueHost(this)
+      if (host) return host.flush(workspaceId, sessionId)
       const queued = this.getQueuedMessage(workspaceId, sessionId)
       if (!queued) return
       this.cancelQueuedMessage(workspaceId, sessionId)

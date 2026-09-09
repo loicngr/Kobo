@@ -2,6 +2,7 @@ import type { Statement } from 'better-sqlite3'
 import { nanoid } from 'nanoid'
 import type WebSocket from 'ws'
 import { getDb } from '../db/index.js'
+import { recordActivity } from './activity-service.js'
 import { getAllPersistedSnapshots } from './usage/db.js'
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -206,6 +207,7 @@ function insertEventStatement(): Statement<[string, string, string, string, stri
 }
 
 export function emit(workspaceId: string, type: string, payload: unknown, sessionId?: string): string {
+  recordActivity(workspaceId, type, payload, sessionId)
   const id = nanoid()
   const createdAt = new Date().toISOString()
   let replayable = false
@@ -253,6 +255,7 @@ export function emit(workspaceId: string, type: string, payload: unknown, sessio
  * Used for ephemeral status updates (e.g., dev-server status) that don't need replay.
  */
 export function emitEphemeral(workspaceId: string, type: string, payload: unknown): void {
+  recordActivity(workspaceId, type, payload)
   const id = nanoid()
   const createdAt = new Date().toISOString()
   const event: WsEvent = { id, workspaceId, type, payload, createdAt, replayable: false }

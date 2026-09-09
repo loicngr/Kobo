@@ -4,6 +4,7 @@ import { gitPrTour } from './git-pr'
 import { homeTour } from './home'
 import { settingsTour } from './settings'
 import { changelogTour, healthTour, searchTour } from './small'
+import { splitTour } from './split'
 import type { TourDefinition, TourId } from './types'
 import { workspaceTour } from './workspace'
 
@@ -12,6 +13,7 @@ export const TOURS: readonly TourDefinition[] = [
   homeTour,
   createTour,
   workspaceTour,
+  splitTour,
   gitPrTour,
   settingsTour,
   dashboardTour,

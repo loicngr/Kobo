@@ -43,6 +43,13 @@
             <q-item-label caption>{{ $t('help.resetAllHint') }}</q-item-label>
           </q-item-section>
         </q-item>
+        <q-item v-close-popup clickable role="menuitem" @click="markAllSeen">
+          <q-item-section avatar><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 7 17l-5-5M22 10l-7.5 7.5L13 16" /></svg></q-item-section>
+          <q-item-section>
+            <q-item-label>{{ $t('help.markAllSeen') }}</q-item-label>
+            <q-item-label caption>{{ $t('help.markAllSeenHint') }}</q-item-label>
+          </q-item-section>
+        </q-item>
       </q-list>
     </q-menu>
   </q-btn>
@@ -53,7 +60,7 @@ import { countRunnableSteps, useTours } from 'src/composables/use-tours'
 import type { TourId, TourStatus } from 'src/tours/types'
 import { ref } from 'vue'
 
-const { tours, status, runTour, resetAll } = useTours()
+const { tours, status, runTour, resetAll, markAllSeen } = useTours()
 const menuOpen = ref(false)
 
 function run(id: TourId): void {

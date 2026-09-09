@@ -21,28 +21,33 @@
 <script setup lang="ts">
 import { selectLastAgentError } from 'src/services/agent-event-view'
 import { useAgentStreamStore } from 'src/stores/agent-stream'
-import { computed, ref } from 'vue'
+import { errorDismissalKey, readDismissedAgentErrors, saveDismissedAgentError } from 'src/utils/dismissed-agent-errors'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{ workspaceId: string }>()
 const { t } = useI18n()
 const stream = useAgentStreamStore()
 
-// Acknowledged (dismissed) event ids — client-local, in-memory only.
-// Deliberately NOT persisted and NEVER sent to the server: the feed now
-// anchors this same event in the conversation timeline (task 9), so
-// destroying it on dismiss (the old behaviour) erased that anchor too, plus
-// any future diagnostic query over it. A reload legitimately brings a
-// dismissed-but-undeleted error back — that's the accepted trade-off for
-// this iteration, preferred over silent, permanent data loss.
+// Persist only event IDs: F5 can replay history without resurrecting dismissed banners.
 const dismissedEventIds = ref<Set<string>>(new Set())
-
+watch(
+  () => props.workspaceId,
+  (id) => {
+    dismissedEventIds.value = readDismissedAgentErrors(id)
+  },
+  { immediate: true },
+)
+function onStorage(event: StorageEvent) {
+  if (event.key === errorDismissalKey(props.workspaceId)) {
+    dismissedEventIds.value = new Set([...dismissedEventIds.value, ...readDismissedAgentErrors(props.workspaceId)])
+  }
+}
+onMounted(() => window.addEventListener('storage', onStorage))
+onUnmounted(() => window.removeEventListener('storage', onStorage))
 function dismiss(): void {
   const eventId = selected.value?.eventId
-  if (!eventId) return
-  const next = new Set(dismissedEventIds.value)
-  next.add(eventId)
-  dismissedEventIds.value = next
+  if (eventId) dismissedEventIds.value = saveDismissedAgentError(props.workspaceId, eventId, dismissedEventIds.value)
 }
 
 const selected = computed(() =>

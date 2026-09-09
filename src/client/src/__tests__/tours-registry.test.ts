@@ -49,7 +49,7 @@ describe('tours registry', () => {
   it('has unique step ids and no empty tour', () => {
     const ids = TOURS.flatMap((t) => t.steps.map((s) => s.id))
     expect(new Set(ids).size).toBe(ids.length)
-    expect(TOURS.length).toBe(9)
+    expect(TOURS.length).toBe(10)
     for (const tour of TOURS) expect(tour.steps.length, tour.id).toBeGreaterThan(0)
   })
 
@@ -66,7 +66,16 @@ describe('tours registry', () => {
   })
 
   it('gates the steps whose anchor is rendered conditionally, as DOM gates', () => {
-    const gated = ['create-brainstorm', 'create-comparison', 'ws-selectors', 'ws-tab-subagents', 'pr-actions']
+    const gated = [
+      'create-brainstorm',
+      'create-comparison',
+      'ws-selectors',
+      'ws-sessions',
+      'ws-actions',
+      'ws-tab-subagents',
+      'pr-actions',
+      'home-activity',
+    ]
     const byId = new Map(TOURS.flatMap((t) => t.steps.map((s) => [s.id, s] as const)))
     for (const id of gated) {
       expect(byId.get(id)?.when, id).toBeTypeOf('function')

@@ -265,6 +265,14 @@ Sequence: `captureRestoreData` (best-effort forge lookup for PR number / URL / m
 
 **Restore**: `POST /api/workspaces/:id/restore-worktree` calls `worktree-restore-service.ts` to recreate the exact checkout and only then clear purge/archive metadata via `restoreWorktreeFromDisk`. Source order: surviving local branch → optional `headCommitSha` in the existing restore JSON → exact branch fetched from `origin`. No SQL migration is needed for the optional JSON key; older records remain supported. No reset, overwrite, agent/dev-server start or setup script. `workspace-lifecycle-guard.ts` excludes overlapping restore/purge/delete operations, while the existing common-Git-directory lock serializes Git mutations. The watcher shares `isMatchingWorkspaceWorktree` validation and invalidates in-flight PR checks on restoration; delayed auto-purges carry their expected archive timestamp to avoid purging a workspace restored in the meantime. The context menu and purged banner expose the action; HTTP and the existing `workspace:worktree-restored` event reconcile client lists. Discarded uncommitted/ignored files and dependencies are not recoverable.
 
+### Workspace navigation and activity digest
+
+`utils/workspace-sort.ts` applies the browser-persisted sort within each drawer group; fuzzy search relevance remains primary. `ActionAvailability.vue` pairs disabled controls with visible, focusable explanations derived from `utils/action-blocker.ts`.
+
+`SplitWorkspacePage.vue` hosts two same-origin embedded clients (`?pane=1`), isolating routers, stores and terminal registries. `utils/split-workspace.ts` and the router bridge synchronize the host URL without treating that bookkeeping as a departure. Actual departures consult both panes for dirty edits, unsent drafts and all in-memory queued messages. Embedded clients suppress automatic tours and browser/audio notifications; the host owns these.
+
+`activity-service.ts` records significant metadata from `emit` and `emitEphemeral` in `workspace_activity` (migration v41, 30-day retention). It excludes streaming data and superseded session endings. `/api/activity` exposes a paginated monotonic cursor; `stores/activity.ts` keeps browser-local visit checkpoints and protects against late responses after visibility changes. `ActivityDigest.vue` links events to workspace/session or Git context. Never advance an unread checkpoint to the head of unloaded pages.
+
 ### Workspace attention indicators
 
 `src/client/src/utils/workspace-attention.ts` derives a small set of badges (CI failure, changes-requested) from the PR snapshot + git stats stored on each workspace. `WorkspaceAttentionLabels.vue` renders them inline on the workspace cards in the left drawer. The derivation is a pure function, easy to unit-test and free of IO. Drawer cards therefore stay reactive to whatever the pr-watcher / bulk-info refresh writes back into the store.

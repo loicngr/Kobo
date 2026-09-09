@@ -839,3 +839,76 @@ describe('resetAll', () => {
     expect(driverInstance.drive).toHaveBeenCalledTimes(1)
   })
 })
+
+describe('markAllSeen', () => {
+  it('persists every current step including gated steps without starting or navigating', () => {
+    const tours = useTours()
+    tours.markAllSeen()
+    for (const tour of TEST_TOURS) {
+      expect(tours.seen[tour.id]).toEqual(tour.steps.map((step) => step.id))
+      expect(tours.status(tour.id)).toBe('seen')
+    }
+    expect(driverFactory).not.toHaveBeenCalled()
+    expect(push).not.toHaveBeenCalled()
+    _resetToursStateForTests()
+    expect(useTours().seen.create).toContain('c2')
+  })
+  it('leaves future steps unseen and allows explicit replay and reset', async () => {
+    const tours = useTours()
+    tours.markAllSeen()
+    const home = TEST_TOURS[0]!
+    home.steps.push({ id: 'future', anchor: 'future', i18nKey: 'tours.home.future' })
+    try {
+      expect(tours.status('home')).toBe('partial')
+      await tours.autoRun('home')
+      expect(stepElements(lastConfig())).toEqual(['[data-tour="future"]'])
+    } finally {
+      home.steps.pop()
+    }
+    await tours.runTour('home')
+    expect(stepElements(lastConfig())).toContain('[data-tour="a"]')
+    await tours.resetAll()
+    expect(tours.seen.home).toBeUndefined()
+  })
+  it('cancels pending preparations even when their steps were already captured', async () => {
+    const tours = useTours()
+    const pending = deferred()
+    vi.mocked(waitForVisible)
+      .mockResolvedValueOnce(false)
+      .mockImplementationOnce(() => pending.promise.then(() => true))
+    const run = tours.runTour('home')
+    await vi.waitFor(() => expect(beforeShowB).toHaveBeenCalled())
+    tours.markAllSeen()
+    pending.resolve()
+    await run
+    expect(driverFactory).not.toHaveBeenCalled()
+  })
+  it('stops the current driver and clears queued automatic tours without completion navigation', async () => {
+    const tours = useTours()
+    await tours.runTour('home')
+    driverInstance.isActive.mockReturnValue(true)
+    await tours.autoRun('create')
+    driverInstance.destroy.mockImplementationOnce(() => destroyAt(1))
+    tours.markAllSeen()
+    expect(driverInstance.destroy).toHaveBeenCalled()
+    expect(push).not.toHaveBeenCalled()
+    expect(driverFactory).toHaveBeenCalledTimes(1)
+  })
+
+  it('invalidates scheduled auto-runs from other instances and dialog retries', async () => {
+    vi.useFakeTimers()
+    try {
+      const tours = useTours()
+      useTours().scheduleAutoRun('home')
+      document.body.innerHTML = '<div class="q-dialog"></div>'
+      await useTours().autoRun('create')
+      tours.markAllSeen()
+      document.body.innerHTML = ''
+      await vi.runAllTimersAsync()
+      expect(driverFactory).not.toHaveBeenCalled()
+      expect(beforeShowA).not.toHaveBeenCalled()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

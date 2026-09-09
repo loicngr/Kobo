@@ -114,7 +114,7 @@
     <div class="row items-center q-gutter-sm">
       <q-input
         ref="chatInputRef"
-        v-model="message"
+        v-model="inputMessage"
         dense
         dark
         borderless
@@ -269,6 +269,7 @@ import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import { buildTemplateVars, expandTemplate } from 'src/utils/expand-template'
 import { KOBO_COMMANDS } from 'src/utils/kobo-commands'
+import { registerUnsavedScope, unregisterUnsavedScope } from 'src/utils/unsaved-guard'
 import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -314,6 +315,13 @@ const isAgentBusy = computed(() => isBusyStatus(store.selectedWorkspace?.status)
 const queuedSessionId = computed(() => store.selectedSessionId)
 const queuedMessage = computed(() => store.getQueuedMessage(props.workspaceId, queuedSessionId.value))
 const isQueued = computed(() => !!queuedMessage.value)
+// A shared queue is displayed without overwriting a draft in another pane.
+const inputMessage = computed({
+  get: () => queuedMessage.value?.content ?? message.value,
+  set: (value: string | number | null) => {
+    message.value = String(value ?? '')
+  },
+})
 
 const canForceQueuedMessage = computed(() => {
   const workspace =
@@ -566,6 +574,7 @@ watch(
 let cancelledManually = false
 
 function cancelQueue() {
+  if (!message.value.trim() && queuedMessage.value) message.value = queuedMessage.value.content
   cancelledManually = true
   store.cancelQueuedMessage(props.workspaceId, queuedSessionId.value)
 }
@@ -580,9 +589,9 @@ function forceQueuedMessage() {
   }
 }
 
-watch(isQueued, (queued, wasQueued) => {
+watch(queuedMessage, (queued, previous) => {
   if (!queued) forcingQueue.value = false
-  if (wasQueued && !queued && !cancelledManually) {
+  if (previous && !queued && !cancelledManually && message.value.trim() === previous.content.trim()) {
     message.value = ''
     // The queued message (including its `[image: …]` tokens) has just been
     // dispatched to the agent. Drop the pending-image entries WITHOUT firing a
@@ -596,9 +605,8 @@ watch(isQueued, (queued, wasQueued) => {
   cancelledManually = false
 })
 
-watch([() => props.workspaceId, () => store.selectedSessionId], ([wid]) => {
-  const queued = store.getQueuedMessage(wid, store.selectedSessionId)
-  message.value = queued ? queued.content : ''
+watch([() => props.workspaceId, () => store.selectedSessionId], () => {
+  message.value = ''
   if (isRecording.value) void stopVoiceCapture()
 })
 
@@ -806,6 +814,15 @@ function resetHistoryNav() {
 localStorage.removeItem('kobo:chatHistory')
 
 onMounted(loadHistory)
+onMounted(() => {
+  registerUnsavedScope(
+    'chat:message',
+    () => !!message.value.trim() && message.value.trim() !== queuedMessage.value?.content.trim(),
+  )
+})
+onUnmounted(() => {
+  unregisterUnsavedScope('chat:message')
+})
 watch(() => props.workspaceId, loadHistory)
 
 async function sendMessage() {

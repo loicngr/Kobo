@@ -1587,3 +1587,51 @@ Pairing notes:
 
 - gbrain pairs especially well with the `gstack` skill suite (which calls `gbrain search` in several of its skills) and with auto-loop mode (the agent can query past work without re-reading the diff every iteration).
 - If you don't use gbrain, the agent falls back to `grep` / `Read` for code exploration; no setup is required.
+
+## Workspace sorting, split view and absence digest
+
+The workspace drawer's sort menu offers last activity, creation date, name and
+attention priority, in either direction. The preference is saved in the browser.
+Sorting applies within the existing status/project groups, including archives;
+search relevance remains primary while searching. Last activity uses workspace
+updates and agent liveness events, never the read marker from opening a workspace.
+
+**Split view:** choose “Open side by side” in the workspace header’s overflow menu, or “Open beside”
+in a workspace context menu. Each pane has its own workspace/session selection,
+conversation, Git/documents panels and terminal. Select workspaces with the two
+selectors and drag the divider (stacked vertically on small screens). The active
+pane is marked at the top and the recipient is named explicitly. The URL preserves
+both workspace choices on reload; the divider position is browser-local. Closing
+or navigating away checks unsaved files and unsent pane messages. Each pane runs
+an isolated same-origin client, so split mode uses two additional client instances
+and WebSocket connections. Browser/audio notifications stay with the host client.
+
+**Since your last visit:** the entry at the bottom of the workspace drawer lists questions, approval requests,
+session endings, agent errors and PR changes since the browser's previous visit.
+Click an entry to open its workspace and, where available, its session or Git panel.
+“Mark displayed events as read” acknowledges only the loaded entries; older pages
+can be loaded before acknowledging. No automatic agent or workspace action runs.
+
+Significant event metadata is retained server-side for 30 days, starting when this
+version is installed; conversation contents are not copied into the journal.
+Tracking the last visit is browser-local and only advances while the application
+is visible and no digest entries remain unread. A first visit establishes a
+checkpoint rather than presenting historical events. Deleted workspaces and
+expired activity do not appear. SQLite migration v41 creates the journal without
+changing existing workspace or conversation records.
+
+**Unavailable actions:** Tools, Git and development-server controls explain common
+blocking conditions (archived/purged workspace, running agent or operation, missing
+configuration). Explanations remain visible and keyboard-accessible even when the
+button is disabled; setup configuration links directly to the Scripts settings.
+
+The compact workspace header opens sessions from its title. **Configure** groups
+model, effort, permissions and auto-loop; the overflow menu holds split view,
+command palette, panel visibility and the guided tour. Stop remains visible while
+an agent runs. The active model badge describes a running session only.
+
+Dismissed agent error banners stay dismissed after a reload in the same browser;
+the conversation history is preserved and new errors still appear. The Help menu
+can mark all current tour steps as seen at once, without hiding future additions.
+Queued messages are shared with split panes through the host client, so they
+remain visible and cancellable across view changes. Unsent drafts are guarded.

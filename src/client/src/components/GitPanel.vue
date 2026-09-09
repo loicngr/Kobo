@@ -234,19 +234,20 @@
             class="full-width q-mb-xs"
             @click="viewPr"
           />
+          <ActionAvailability v-else :reason="openPrBlocker">
           <q-btn
-            v-else
             no-caps unelevated dense size="sm"
             color="primary"
             icon="open_in_new"
             :label="$t('git.createRequest', { request: forge.capabilities.requestTermShort })"
             class="full-width q-mb-xs"
             :loading="openingPr"
-            :disable="!workspace || pushing || !canOpenPr || isArchived"
+            :disable="!!openPrBlocker"
             @click="handleOpenPr"
           >
             <q-tooltip v-if="!canOpenPr && createPrDisabledReason">{{ createPrDisabledReason }}</q-tooltip>
           </q-btn>
+          </ActionAvailability>
         </template>
 
         <q-btn
@@ -278,24 +279,28 @@
           @click="showCommitDialog = true"
         />
 
+        <ActionAvailability :reason="lifecycleBlocker" />
+
         <!-- Secondary row: Sync dropdown + Push + Diff Review + overflow.
              Each action lives in its own `col` so the four share space evenly
              without overlap; the overflow icon stays at natural width via `col-auto`. -->
         <div class="row no-wrap items-stretch q-gutter-xs">
           <div v-if="gitStats" class="col">
+            <ActionAvailability :reason="syncBlocker">
             <q-btn-dropdown
               split dense no-caps size="sm" outline color="kobo-2"
               icon="sync"
               :label="syncLabel"
               class="full-width git-btn"
               :loading="pulling || rebasing || merging || fetching"
-              :disable="!workspace || pushing || isArchived"
+              :disable="!!syncBlocker"
               @click="handleSyncPrimary"
             >
               <q-list dark dense style="min-width: 140px;">
-                <q-item
+                <ActionAvailability :reason="pullBlocker">
+<q-item
                   clickable v-close-popup
-                  :disable="pulling || rebasing || merging || gitStats.unpushedCount === -1 || isArchived"
+                  :disable="!!pullBlocker"
                   @click="handlePull"
                 >
                   <q-item-section avatar style="min-width: 28px;">
@@ -304,40 +309,50 @@
                   <q-item-section>{{ $t('git.pull') }}</q-item-section>
                   <q-tooltip v-if="gitStats.unpushedCount === -1">{{ $t('git.pullNoUpstream') }}</q-tooltip>
                 </q-item>
-                <q-item clickable v-close-popup :disable="pulling || rebasing || merging || isArchived" @click="handleRebase">
+                </ActionAvailability>
+                <ActionAvailability :reason="syncBlocker">
+<q-item clickable v-close-popup :disable="!!syncBlocker" @click="handleRebase">
                   <q-item-section avatar style="min-width: 28px;">
                     <q-icon name="replay" size="16px" color="orange-4" />
                   </q-item-section>
                   <q-item-section>{{ $t('git.rebase') }}</q-item-section>
                 </q-item>
-                <q-item clickable v-close-popup :disable="pulling || rebasing || merging || isArchived" @click="handleMerge">
+                </ActionAvailability>
+                <ActionAvailability :reason="syncBlocker">
+<q-item clickable v-close-popup :disable="!!syncBlocker" @click="handleMerge">
                   <q-item-section avatar style="min-width: 28px;">
                     <q-icon name="merge" size="16px" color="primary" />
                   </q-item-section>
                   <q-item-section>{{ $t('git.merge') }}</q-item-section>
                 </q-item>
-                <q-item clickable v-close-popup :disable="pulling || rebasing || merging || fetching || isArchived" @click="handleFetchAll">
+                </ActionAvailability>
+                <ActionAvailability :reason="syncBlocker">
+<q-item clickable v-close-popup :disable="!!syncBlocker" @click="handleFetchAll">
                   <q-item-section avatar style="min-width: 28px;">
                     <q-icon name="cloud_download" size="16px" color="kobo-2" />
                   </q-item-section>
                   <q-item-section>{{ $t('git.fetch') }}</q-item-section>
                 </q-item>
+                </ActionAvailability>
               </q-list>
             </q-btn-dropdown>
+            </ActionAvailability>
           </div>
 
           <div v-if="gitStats?.unpushedCount !== 0" class="col">
+            <ActionAvailability :reason="pushBlocker">
             <q-btn
               dense no-caps size="sm" outline color="orange-5"
               icon="upload"
               :label="$t('git.push')"
               class="full-width git-btn"
               :loading="pushing"
-              :disable="!workspace || openingPr || pulling || rebasing || isArchived || operationInProgress"
+              :disable="!!pushBlocker"
               @click="handlePush"
             >
               <q-tooltip anchor="bottom middle" self="top middle" :delay="400">{{ pushBlockedTooltip ?? $t('git.push') }}</q-tooltip>
             </q-btn>
+            </ActionAvailability>
           </div>
 
           <div class="col">
@@ -738,6 +753,8 @@
 
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
+import ActionAvailability from 'src/components/ActionAvailability.vue'
+import { getActionBlocker } from 'src/utils/action-blocker'
 import { defineAsyncComponent } from 'vue'
 import { useI18n } from 'vue-i18n'
 
@@ -1143,6 +1160,37 @@ const createPrDisabledReason = computed(() => {
   }
   return ''
 })
+
+const lifecycleBlocker = computed(() => {
+  const reason = getActionBlocker({
+    missingWorkspace: !props.workspace,
+    purged: !!props.workspace?.worktreePurgedAt,
+    archived: isArchived.value,
+  })
+  return reason ? t(`blockers.${reason}`) : null
+})
+const syncBlocker = computed(
+  () =>
+    lifecycleBlocker.value ||
+    (pushing.value || pulling.value || rebasing.value || merging.value || fetching.value
+      ? t('blockers.operation')
+      : null),
+)
+const pullBlocker = computed(
+  () => syncBlocker.value || (gitStats.value?.unpushedCount === -1 ? t('git.pullNoUpstream') : null),
+)
+const openPrBlocker = computed(
+  () =>
+    lifecycleBlocker.value ||
+    (pushing.value || openingPr.value ? t('blockers.operation') : null) ||
+    (!canOpenPr.value ? createPrDisabledReason.value || t('blockers.configuration') : null),
+)
+const pushBlocker = computed(
+  () =>
+    lifecycleBlocker.value ||
+    pushBlockedTooltip.value ||
+    (openingPr.value || pulling.value || rebasing.value || pushing.value ? t('blockers.operation') : null),
+)
 
 // Overflow `⋯` surfaces rename + change-PR-base + change-source-branch;
 // Push is a first-class secondary button.

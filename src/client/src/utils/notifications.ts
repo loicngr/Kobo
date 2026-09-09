@@ -1,6 +1,7 @@
 import { Notify } from 'quasar'
 import { useSettingsStore } from 'src/stores/settings'
 import { DEFAULT_NOTIFICATION_SOUND, resolveSoundId, soundUrl } from 'src/utils/notification-sounds'
+import { isWorkspacePane } from './split-workspace'
 
 const audioCache = new Map<string, HTMLAudioElement>()
 
@@ -38,6 +39,7 @@ function playBackgroundNotificationSound(soundId: string, volume: number): void 
 
 /** Request browser notification permission if not already granted. */
 export function requestNotificationPermission(): void {
+  if (isWorkspacePane) return
   if ('Notification' in window && Notification.permission === 'default') {
     Notification.requestPermission()
   }
@@ -107,6 +109,7 @@ export function notify(
   volumeOverride?: number,
   audioEnabled?: boolean,
 ): void {
+  if (isWorkspacePane) return
   const settings = useSettingsStore()
 
   // Browser notification only when the tab is not focused

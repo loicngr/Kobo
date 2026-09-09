@@ -1,6 +1,7 @@
 import type { Router } from 'vue-router'
 
 export type TourId =
+  | 'split'
   | 'home'
   | 'create'
   | 'workspace'

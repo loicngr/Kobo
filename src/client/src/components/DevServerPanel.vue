@@ -18,15 +18,16 @@
     </template>
 
     <template v-else-if="status">
+      <ActionAvailability :reason="lifecycleBlocker ? $t(`blockers.${lifecycleBlocker}`) : null" />
       <!-- Status badge -->
       <div class="row items-center q-mb-xs">
         <q-badge :color="statusColor" :label="statusLabel" style="font-size: 10px;" />
         <q-space />
         <!-- Action buttons -->
-        <q-btn v-if="canStart" flat round dense icon="play_arrow" size="xs" color="green-5" @click="start" :loading="starting">
+        <q-btn v-if="canStart" :disable="!!lifecycleBlocker" :aria-label="$t('tooltip.startDevServer')" flat round dense icon="play_arrow" size="xs" color="green-5" @click="start" :loading="starting">
           <q-tooltip>{{ $t('tooltip.startDevServer') }}</q-tooltip>
         </q-btn>
-        <q-btn v-if="canStop" flat round dense icon="stop" size="xs" color="red-5" @click="stop" :loading="stopping">
+        <q-btn v-if="canStop" :disable="!!lifecycleBlocker" :aria-label="$t('tooltip.stopDevServer')" flat round dense icon="stop" size="xs" color="red-5" @click="stop" :loading="stopping">
           <q-tooltip>{{ $t('tooltip.stopDevServer') }}</q-tooltip>
         </q-btn>
         <q-btn flat round dense icon="article" size="xs" color="kobo-2" @click="showLogs = true">
@@ -56,14 +57,16 @@
 </template>
 
 <script setup lang="ts">
+import ActionAvailability from 'src/components/ActionAvailability.vue'
 import DevServerLogDialog from 'src/components/DevServerLogDialog.vue'
 import { useDevServerStore } from 'src/stores/dev-server'
 import { useSettingsStore } from 'src/stores/settings'
+import { getActionBlocker } from 'src/utils/action-blocker'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{
-  workspace: { id: string; projectPath: string; archivedAt?: string | null } | null
+  workspace: { id: string; projectPath: string; archivedAt?: string | null; worktreePurgedAt?: string | null } | null
 }>()
 
 const { t } = useI18n()
@@ -120,22 +123,26 @@ const statusLabel = computed(() => {
   }
 })
 
-const isArchived = computed(() => Boolean(props.workspace?.archivedAt))
+const lifecycleBlocker = computed(() =>
+  getActionBlocker({
+    missingWorkspace: !props.workspace,
+    purged: !!props.workspace?.worktreePurgedAt,
+    archived: !!props.workspace?.archivedAt,
+  }),
+)
 
 const canStart = computed(() => {
-  if (isArchived.value) return false
   const s = status.value?.status
   return !s || s === 'stopped' || s === 'unknown' || s === 'error'
 })
 
 const canStop = computed(() => {
-  if (isArchived.value) return false
   const s = status.value?.status
   return s === 'running' || s === 'starting'
 })
 
 async function start() {
-  if (!workspaceId.value) return
+  if (!workspaceId.value || lifecycleBlocker.value) return
   starting.value = true
   try {
     await devServerStore.startDevServer(workspaceId.value)
@@ -145,7 +152,7 @@ async function start() {
 }
 
 async function stop() {
-  if (!workspaceId.value) return
+  if (!workspaceId.value || lifecycleBlocker.value) return
   stopping.value = true
   try {
     await devServerStore.stopDevServer(workspaceId.value)

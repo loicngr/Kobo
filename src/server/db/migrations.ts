@@ -753,6 +753,20 @@ export const migrations: Migration[] = [
       }
     },
   },
+  {
+    version: 41,
+    name: 'add-workspace-activity',
+    migrate: (db) => {
+      db.exec(`CREATE TABLE IF NOT EXISTS workspace_activity (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      kind TEXT NOT NULL,
+      session_id TEXT,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_workspace_activity_created ON workspace_activity(created_at);`)
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */

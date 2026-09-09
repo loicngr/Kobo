@@ -33,10 +33,8 @@ export function isBenignAgentWarning(message: string): boolean {
  * Pick the error the banner should show: the most recent one that isn't
  * `quota` (own surface), isn't a benign CLI warning, and hasn't been
  * acknowledged (dismissed) yet. `dismissedEventIds` is client-local and
- * intentionally never persisted — see AgentErrorBanner.vue's `dismiss()` for
- * why acknowledging must not delete the underlying event anymore: the feed
- * now anchors the same event in the conversation timeline (task 9), so a
- * destructive dismiss would erase that anchor too.
+ * persisted separately from the events. Dismissing a banner must never delete
+ * its conversation/history anchor. A new occurrence has a new event ID.
  */
 export function selectLastAgentError(
   events: AgentEvent[],
