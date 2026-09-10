@@ -629,6 +629,69 @@ describe('Orchestrator — event dispatch', () => {
     _getRetryCounts().clear()
   })
 
+  it.each([false, true])(
+    'recovers on a new tool call, including before the quota lookup resolves (early=%s)',
+    async (early) => {
+      const { createWorkspace, getWorkspace, updateWorkspaceStatus } = await import(
+        '../../server/services/workspace-service.js'
+      )
+      const ws = createWorkspace({ name: 'W', projectPath: '/tmp', sourceBranch: 'd', workingBranch: 'b' })
+      // Need to be in 'executing' state for a valid transition to 'quota'
+      updateWorkspaceStatus(ws.id, 'brainstorming')
+      updateWorkspaceStatus(ws.id, 'executing')
+      let emitEv: (e: AgentEvent) => void = () => {}
+      const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+      _registerEngineForTest({
+        id: 'claude-code',
+        displayName: 'Claude Code',
+        capabilities: {
+          models: [],
+          permissionModes: ['bypass'],
+          supportsResume: true,
+          supportsMcp: true,
+          supportsSkills: true,
+          supportsSubagents: false,
+          supportsQuotaStatus: false,
+        },
+        async start(_opts, onEvent) {
+          emitEv = onEvent
+          return {
+            pid: 1,
+            engineSessionId: 'sid',
+            sendMessage() {},
+            interrupt() {},
+            async stop() {},
+            resolvePendingUserInput: () => false,
+          }
+        },
+      })
+      const { startAgent, _getRetryCounts } = await import('../../server/services/agent/orchestrator.js')
+      const quotaBackoffService = await import('../../server/services/quota-backoff-service.js')
+      startAgent(ws.id, '/tmp', 'hi')
+      await flushControllerStart()
+      emitEv({ kind: 'error', category: 'quota', message: 'rate limit' })
+      if (early)
+        emitEv({ kind: 'tool:call', messageId: 'resumed-message', toolCallId: 'early-tool', name: 'Read', input: {} })
+      // Let the pending usage lookup settle before checking for stale retries.
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+      if (!early) {
+        expect(getWorkspace(ws.id)?.status).toBe('quota')
+        expect(quotaBackoffService.getPending(ws.id)).not.toBeNull()
+        expect(_getRetryCounts().get(ws.id)).toBe(1)
+      }
+      emitEv({ kind: 'tool:call', messageId: 'resumed-message', toolCallId: 'resumed-tool', name: 'Read', input: {} })
+      expect(getWorkspace(ws.id)?.status).toBe('executing')
+      expect(quotaBackoffService.getPending(ws.id)).toBeNull()
+      expect(_getRetryCounts().has(ws.id)).toBe(false)
+      emitEv({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+      expect(getWorkspace(ws.id)?.status).not.toBe('quota')
+      quotaBackoffService.cancel(ws.id, 'user')
+      _getRetryCounts().clear()
+    },
+  )
+
   it('keeps quota status and the backoff timer when session:ended arrives after a quota error', async () => {
     vi.useFakeTimers()
     try {

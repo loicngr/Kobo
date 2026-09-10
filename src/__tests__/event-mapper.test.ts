@@ -739,6 +739,18 @@ describe('mapSdkMessage — quota detected in assistant text', () => {
     expect(second.filter((e) => e.kind === 'error')).toHaveLength(0)
   })
 
+  it.each([
+    'PR mise à jour. Le premier sous-agent était mort sur un rate limit ; la surveillance est relancée.',
+    'Fixed HTTP 429 handling in the API client.',
+    'The response contained "quota exceeded", but the retry succeeded.',
+    "You're out of extra usage is the message we now detect in our tests.",
+  ])('does not treat an explanation as a quota notice: %s', (text) => {
+    const state = createMapperState()
+    const events = mapSdkMessage(asMsg(assistantTextMsg(text)), state)
+    expect(events.some((event) => event.kind === 'error')).toBe(false)
+    expect(state.sawErrorResult).toBe(false)
+  })
+
   it('does not flag normal assistant text', () => {
     const state = createMapperState()
     const events = mapSdkMessage(asMsg(assistantTextMsg('Working on the file…')), state)

@@ -67,20 +67,22 @@ function normalizeRateLimitInfo(info: Record<string, unknown>): RateLimitInfo {
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
- * Canonical "out of quota" surfaces from the Claude SDK and CLI. Centralised
- * so the three call-sites stay in sync:
- *  - `result` events with an error subtype (`parsed.error` / `parsed.result`)
- *  - assistant `message:text` blocks (the SDK occasionally streams the user-
- *    visible quota notice as plain assistant text instead of a structured
- *    error result; see workspace `-GyiAYM7X4xTWyZbcHGiR` session #25 for the
- *    repro that motivated this path)
- *  - CLI stderr in `engine.ts`
+ * Quota keywords for error results and CLI stderr. Assistant prose uses
+ * the narrower ASSISTANT_QUOTA_NOTICE below, because summaries may mention
+ * a previous quota failure while the current run is working normally.
  *
  * Patterns are kept loose on purpose to absorb minor wording drift between
  * Anthropic's surfaces (`rate_limit_exceeded`, `Claude AI usage limit
  * reached`, `You're out of extra usage`, `quota exceeded`).
  */
 export const QUOTA_PATTERN = /\b429\b|out of extra usage|rate[_ ]limit|usage limit|quota exceeded/i
+
+/** Only canonical, standalone notices qualify on the assistant prose surface.
+ * Broad quota keywords remain appropriate for structured errors, not summaries
+ * of a previous attempt, a sub-agent failure, or application HTTP handling.
+ */
+const ASSISTANT_QUOTA_NOTICE =
+  /^(?:you(?:'|’)re out of extra usage|you(?:'|’)ve hit your (?:session|weekly|usage) limit|claude ai usage limit reached|usage limit reached|quota exceeded|rate limit exceeded)(?:[.!]?(?:[ \t]*[·—-]?[ \t]*resets?\b[^\r\n]*)?)?[.!]?$/i
 
 /** Mutable state carried across SDK messages within the same stream. */
 export interface MapperState {
@@ -320,8 +322,8 @@ export function mapSdkMessage(msg: SDKMessage, state: MapperState): AgentEvent[]
         // Last-resort fallback: some SDK runs surface the quota notice as
         // plain assistant text without setting `assistant.error` or a
         // `result.error`. The structured signals above cover modern SDK
-        // versions; this regex absorbs older or drifted wordings.
-        if (QUOTA_PATTERN.test(text)) {
+        // versions; only a standalone notice qualifies on this prose surface.
+        if (ASSISTANT_QUOTA_NOTICE.test(text.trim())) {
           tryEmitQuotaError(state, events, text)
         }
       }

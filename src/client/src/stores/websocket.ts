@@ -1459,6 +1459,14 @@ export const useWebSocketStore = defineStore('websocket', {
           break
         }
 
+        case 'agent:quota-recovered': {
+          if (wid) {
+            workspaceStore.clearPendingQuotaBackoff(wid)
+            workspaceStore.updateWorkspaceFromEvent(wid, { status: 'executing' })
+          }
+          break
+        }
+
         case 'agent:quota-backoff': {
           if (!wid) break
           const p = payload as { targetAt?: string; resetsAt?: string | null; source?: string; reason?: string }

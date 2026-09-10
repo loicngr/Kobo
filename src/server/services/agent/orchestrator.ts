@@ -869,6 +869,16 @@ function handleEvent(
     ev.kind === 'session:ended' && (hasReplacement || sourceIsSuperseded) ? { ...ev, superseded: true } : ev
   routeEvent(workspaceId, agentSessionId, routedEvent)
 
+  // A fresh tool invocation proves this controller resumed working (for
+  // example after an account change). Tool results can still drain after a
+  // rejection, so they must never count as recovery.
+  if (ev.kind === 'tool:call' && !sourceControllerIsStopping && getWs(workspaceId)?.status === 'quota') {
+    updateWorkspaceStatus(workspaceId, 'executing')
+    quotaBackoffService.cancel(workspaceId, 'completed')
+    retryCounts.delete(workspaceId)
+    emitEphemeral(workspaceId, 'agent:quota-recovered', {})
+  }
+
   if (ev.kind === 'rate_limit') {
     latestRateLimitInfo.set(workspaceId, ev.info)
   }
@@ -2231,6 +2241,8 @@ async function handleQuota(workspaceId: string, _agentSessionId?: string): Promi
       return
     }
     const { delayMs, resetsAt, source } = await computeQuotaBackoffMs(workspaceId, retryCount)
+    // Usage lookup can finish after the agent has already resumed.
+    if (getWs(workspaceId)?.status !== 'quota') return
     retryCounts.set(workspaceId, retryCount + 1)
 
     // The quotaBackoffService owns the timer + the persistent row + the

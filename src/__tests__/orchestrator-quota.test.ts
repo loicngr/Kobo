@@ -15,7 +15,8 @@ vi.mock('../server/services/settings-service.js', () => ({
 
 vi.mock('../server/services/workspace-service.js', () => ({
   updateWorkspaceStatus: vi.fn(),
-  getWorkspace: vi.fn(() => null),
+  // handleQuota persists this status before awaiting the usage lookup.
+  getWorkspace: vi.fn(() => ({ status: 'quota', autoLoop: false })),
   markWorkspaceUnread: vi.fn(),
 }))
 
