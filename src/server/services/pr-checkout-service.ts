@@ -5,7 +5,10 @@ import path from 'node:path'
 import * as gitOps from '../utils/git-ops.js'
 import { GitConflictError } from '../utils/git-ops.js'
 import { withGitRepoLock } from '../utils/git-repo-lock.js'
+import { fingerprintWorktree } from '../utils/git-worktree-fingerprint.js'
+import { withWorkspaceLifecycleGuard } from '../utils/workspace-lifecycle-guard.js'
 import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
+import { hasController } from './agent/orchestrator.js'
 import { createWorktree, listWorktrees, removeWorktreeUnlocked } from './worktree-service.js'
 
 /**
@@ -171,6 +174,7 @@ function diagnoseChanges(worktreePath: string): LocalChanges {
 
 /** The subset of a workspace row this service needs. Keeps the DB out. */
 export interface WorkspaceLike {
+  projectPath: string
   id: string
   name: string
   workingBranch: string
@@ -181,8 +185,17 @@ export interface WorkspaceLike {
 /** Classify the workspace, if any, that already tracks this branch.
  *  A purged worktree outranks the archived flag: purging always archives, and
  *  "recreate the worktree" is the useful offer, not "unarchive". */
-export function resolveWorkspaceState(workspaces: WorkspaceLike[], branch: string): WorkspaceState {
-  const match = workspaces.find((w) => w.workingBranch === branch)
+export function resolveWorkspaceState(
+  workspaces: WorkspaceLike[],
+  branch: string,
+  projectPath: string,
+): WorkspaceState {
+  const match = workspaces.find(
+    (w) =>
+      w.workingBranch === branch &&
+      typeof w.projectPath === 'string' &&
+      path.resolve(w.projectPath) === path.resolve(projectPath),
+  )
   if (!match) return { state: 'none' }
   if (match.worktreePurgedAt) return { state: 'purged', id: match.id, name: match.name }
   if (match.archivedAt) return { state: 'archived', id: match.id, name: match.name }
@@ -199,10 +212,14 @@ function safeRevParse(repoPath: string, ref: string): string | null {
 }
 
 /** Hash the observed state so `/resolve` can refuse a plan built on stale facts. */
-export function computeFingerprint(report: PrCheckoutReport): string {
+export async function computeFingerprint(report: PrCheckoutReport): Promise<string> {
   const localHead = safeRevParse(report.projectPath, report.headBranch)
   const remoteHead = safeRevParse(report.projectPath, `origin/${report.headBranch}`)
   const payload = JSON.stringify({
+    contents:
+      report.worktree.state === 'orphan' || report.worktree.state === 'attached'
+        ? await fingerprintWorktree(report.worktree.path)
+        : null,
     localHead,
     remoteHead,
     worktree: report.worktree,
@@ -257,7 +274,7 @@ export function diagnoseLocalState(
     headBranch,
     targetWorktreePath,
     blockers,
-    workspace: resolveWorkspaceState(workspaces, headBranch),
+    workspace: resolveWorkspaceState(workspaces, headBranch, projectPath),
     worktree,
     localChanges: inspectPath ? diagnoseChanges(inspectPath) : EMPTY_CHANGES,
     ongoingOperation: inspectPath ? gitOps.getOngoingGitOperation(inspectPath) : null,
@@ -401,7 +418,29 @@ export class StaleDiagnosisError extends Error {
  * or a source-branch change.
  */
 export function resolvePrCheckout(input: ResolvePrCheckoutInput): Promise<ResolvePrCheckoutResult> {
+  const initial = diagnoseLocalState(
+    input.projectPath,
+    input.headBranch,
+    input.worktreesPath,
+    input.attachedPaths,
+    input.workspaces,
+  )
+  const owner =
+    initial.worktree.state === 'attached'
+      ? initial.worktree.workspaceId
+      : initial.workspace.state !== 'none'
+        ? initial.workspace.id
+        : null
+  const resolve = () => resolvePrCheckoutLocked(input, owner)
+  return owner ? withWorkspaceLifecycleGuard(owner, resolve) : resolve()
+}
+
+function resolvePrCheckoutLocked(
+  input: ResolvePrCheckoutInput,
+  owner: string | null,
+): Promise<ResolvePrCheckoutResult> {
   return withGitRepoLock(input.projectPath, async () => {
+    if (owner && hasController(owner)) throw new Error('Stop the workspace agent before changing its checkout')
     const applied: AppliedAction[] = []
 
     // 1. Refresh, then refuse a plan built on facts that no longer hold.
@@ -415,7 +454,23 @@ export function resolvePrCheckout(input: ResolvePrCheckoutInput): Promise<Resolv
       input.attachedPaths ?? new Map(),
       input.workspaces ?? [],
     )
-    if (computeFingerprint(fresh) !== input.fingerprint) throw new StaleDiagnosisError(fresh)
+    if ((await computeFingerprint(fresh)) !== input.fingerprint) throw new StaleDiagnosisError(fresh)
+
+    if (
+      (fresh.worktree.state === 'orphan' || fresh.worktree.state === 'attached') &&
+      input.decisions.orphanWorktree === 'create-elsewhere'
+    ) {
+      throw new Error('Branch is already checked out. Attach its existing worktree instead.')
+    }
+    if (
+      fresh.localChanges.present &&
+      (input.decisions.localChanges ?? 'keep') === 'keep' &&
+      input.decisions.divergence === 'reset-hard'
+    ) {
+      throw new Error(
+        'Cannot preserve local changes during a hard reset. Stash or commit them first, or keep the branch.',
+      )
+    }
 
     // 2. Clear stale worktree metadata before anything needs the path.
     if (fresh.worktree.state === 'stale-metadata') {

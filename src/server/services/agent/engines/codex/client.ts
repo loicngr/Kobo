@@ -32,6 +32,7 @@ export interface AppServerClientOptions {
   onNotification?: (method: string, params: unknown) => void
   onServerRequest?: (id: number | string, method: string, params: unknown) => void
   onError?: (err: Error) => void
+  onDisconnect?: (err: Error) => void
 }
 
 export interface AppServerClient {
@@ -52,6 +53,7 @@ export function createAppServerClient(opts: AppServerClientOptions): AppServerCl
     onNotification: opts.onNotification ?? (() => {}),
     onServerRequest: opts.onServerRequest ?? (() => {}),
     onError: opts.onError,
+    onDisconnect: opts.onDisconnect,
   })
 
   return {

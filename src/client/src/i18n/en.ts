@@ -1977,6 +1977,7 @@ export default {
   'prCheckout.workspace.restore': 'Recreate its worktree',
   'prCheckout.worktree.orphanHint': 'A worktree already sits on this branch at {path}.',
   'prCheckout.worktree.attach': 'Attach it',
+  'prCheckout.worktree.branchInUse': 'This branch is already checked out. Attach its existing worktree.',
   'prCheckout.worktree.createElsewhere': 'Create another one elsewhere',
   'prCheckout.operation.hint': 'A {operation} is in progress in that worktree.',
   'prCheckout.operation.abort': 'Abort it',
@@ -1985,6 +1986,8 @@ export default {
   'prCheckout.changes.stash': 'Stash them',
   'prCheckout.changes.commit': 'Commit them',
   'prCheckout.changes.discard': 'Discard them (kept as a labelled stash)',
+  'prCheckout.changes.keepResetConflict':
+    'Keeping local changes is incompatible with a hard reset. Stash or commit them first, or keep the branch.',
   'prCheckout.changes.keep': 'Keep them as they are',
   'prCheckout.divergence.behindHint': 'Your branch is {behind} commit(s) behind origin.',
   'prCheckout.divergence.aheadHint': 'Your branch has {ahead} unpushed commit(s).',

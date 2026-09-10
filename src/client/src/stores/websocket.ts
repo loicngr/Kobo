@@ -475,6 +475,10 @@ export const useWebSocketStore = defineStore('websocket', {
     reconnecting: false,
     reconnectAttempt: 0,
     lastEventId: null as string | null,
+    // The server handles sync requests synchronously on one ordered WebSocket.
+    // Each terminal sync response therefore belongs to the oldest sent request,
+    // including empty responses which contain no workspace ids of their own.
+    pendingSyncRequests: [] as string[][],
     _replaying: false,
     // Set while a truncated-sync-response drain loop is catching up the
     // backlog (see the `sync:response` handler below). Used to self-heal a
@@ -497,6 +501,12 @@ export const useWebSocketStore = defineStore('websocket', {
         window.addEventListener('offline', () => {
           this.connected = false
           this.reconnecting = _shouldReconnect
+          this.pendingSyncRequests = []
+          // Abandon the corresponding connection too: its late responses
+          // cannot be paired with requests sent after we come back online.
+          const offlineSocket = _ws
+          _ws = null
+          offlineSocket?.close()
           if (_reconnectTimer) {
             clearTimeout(_reconnectTimer)
             _reconnectTimer = null
@@ -506,6 +516,7 @@ export const useWebSocketStore = defineStore('websocket', {
       if (!navigator.onLine) {
         this.connected = false
         this.reconnecting = true
+        this.pendingSyncRequests = []
         return
       }
 
@@ -516,6 +527,7 @@ export const useWebSocketStore = defineStore('websocket', {
       _ws = ws
 
       ws.addEventListener('open', () => {
+        if (_ws !== ws) return
         this.connected = true
         this.reconnecting = false
         _reconnectAttempt = 0
@@ -538,6 +550,7 @@ export const useWebSocketStore = defineStore('websocket', {
       })
 
       ws.addEventListener('message', (event) => {
+        if (_ws !== ws) return
         try {
           const msg = JSON.parse(event.data)
           this._routeMessage(msg)
@@ -547,7 +560,9 @@ export const useWebSocketStore = defineStore('websocket', {
       })
 
       ws.addEventListener('close', () => {
+        if (_ws !== ws) return
         this.connected = false
+        this.pendingSyncRequests = []
         _ws = null
         if (_shouldReconnect) this._scheduleReconnect()
       })
@@ -559,6 +574,7 @@ export const useWebSocketStore = defineStore('websocket', {
 
     disconnect() {
       _shouldReconnect = false
+      this.pendingSyncRequests = []
       if (_reconnectTimer) {
         clearTimeout(_reconnectTimer)
         _reconnectTimer = null
@@ -652,11 +668,23 @@ export const useWebSocketStore = defineStore('websocket', {
     },
 
     _send(data: Record<string, unknown>): boolean {
-      if (_ws && _ws.readyState === WebSocket.OPEN) {
-        _ws.send(JSON.stringify(data))
+      if (_ws && _ws.readyState === WebSocket.OPEN && navigator.onLine) {
+        try {
+          _ws.send(JSON.stringify(data))
+        } catch {
+          return false
+        }
+        if (data.type === 'sync:request') {
+          const payload = data.payload as { workspaceIds?: string[] } | undefined
+          this.pendingSyncRequests.push([...(payload?.workspaceIds ?? useWorkspaceStore().workspaces.map((w) => w.id))])
+        }
         return true
       }
       return false
+    },
+
+    isSyncPending(workspaceId: string): boolean {
+      return this.pendingSyncRequests.some((workspaceIds) => workspaceIds.includes(workspaceId))
     },
 
     // Public surface for callers that need to know whether their `_send`-based
@@ -837,7 +865,13 @@ export const useWebSocketStore = defineStore('websocket', {
           break
         }
 
+        case 'sync:empty':
+        case 'sync:error':
+          this.pendingSyncRequests.shift()
+          break
+
         case 'sync:response': {
+          const pendingRequest = this.pendingSyncRequests[0]
           // Replay persisted events — suppress notifications during replay.
           this._replaying = true
           _setReplayingForDispatch(true)
@@ -1025,6 +1059,12 @@ export const useWebSocketStore = defineStore('websocket', {
           } finally {
             this._replaying = false
             _setReplayingForDispatch(false)
+            // Replaying may send a drain/follow-up request. Remove only the
+            // response's original entry, never one just added by that replay.
+            if (pendingRequest) {
+              const index = this.pendingSyncRequests.indexOf(pendingRequest)
+              if (index !== -1) this.pendingSyncRequests.splice(index, 1)
+            }
           }
           break
         }

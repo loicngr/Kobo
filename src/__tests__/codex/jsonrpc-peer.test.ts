@@ -132,3 +132,19 @@ describe('createJsonRpcPeer', () => {
     }
   })
 })
+
+it('rejects outstanding and future requests immediately after a stream failure', async () => {
+  const { stdin, stdout } = makeStreams()
+  const peer = createJsonRpcPeer({
+    stdin,
+    stdout,
+    onNotification: () => {},
+    onServerRequest: () => {},
+    defaultRequestTimeoutMs: 30,
+  })
+  const result = peer.request('pending').catch((error: Error) => error.message)
+  stdout.emit('error', new Error('broken transport'))
+  expect(await result).toBe('broken transport')
+  await expect(peer.request('future')).rejects.toThrow(/broken transport|closed/)
+  peer.close()
+})

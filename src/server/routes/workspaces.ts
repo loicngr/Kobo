@@ -1,5 +1,7 @@
 import { execFile as execFileCb, execFileSync, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
+import { AgentStopError, assertAgentStopped } from '../utils/agent-stop-result.js'
+import { withGitRepoLock } from '../utils/git-repo-lock.js'
 
 const execFileAsync = promisify(execFileCb)
 
@@ -64,8 +66,25 @@ import { WorkspaceLifecycleBusyError, withWorkspaceLifecycleGuard } from '../uti
 import { resolveExtractedName } from '../utils/workspace-name.js'
 import { resolveSiblingWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 
-/** Hono sub-router for workspace CRUD, tasks, agent lifecycle, git operations, and PR creation. */
+/** Lifecycle conflicts can be retried once the current owner has stopped. */
+function workspaceErrorStatus(err: unknown): 409 | 500 {
+  return err instanceof AgentStopError || err instanceof WorkspaceLifecycleBusyError ? 409 : 500
+}
+
+/** Hono sub-router for workspace CRUD, tasks, agents, Git and PR creation. */
 const app = new Hono()
+
+// These handlers own teardown across awaits; purge/delete/restore own their guard in the service.
+for (const route of ['/:id/archive', '/:id/run-setup-script', '/:id/cancel-source-change']) {
+  app.use(route, async (c, next) => {
+    try {
+      await withWorkspaceLifecycleGuard(c.req.param('id')!, next)
+    } catch (err) {
+      if (err instanceof WorkspaceLifecycleBusyError) return c.json({ error: err.message, code: err.code }, 409)
+      throw err
+    }
+  })
+}
 
 /** Tracks workspaces currently running a setup script to prevent concurrent executions. */
 const setupScriptRunning = new Set<string>()
@@ -286,7 +305,7 @@ app.get('/', (c) => {
     return c.json(workspaces)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -351,7 +370,8 @@ app.post('/:id/switch-engine', migrationGuard, async (c) => {
 
     // A new engine is started three lines below: the previous one must be dead
     // first, or two agents share the worktree.
-    if (agentManager.hasController(id)) await agentManager.stopAgentAndWait(id)
+    if (agentManager.hasController(id))
+      assertAgentStopped(await agentManager.stopAgentAndWait(id, undefined, 'replacement'))
     const updated = workspaceService.updateWorkspaceEngineConfiguration(
       id,
       body.engine,
@@ -1582,7 +1602,7 @@ app.post('/:id/sessions', migrationGuard, (c) => {
     return c.json(session, 201)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -1596,7 +1616,7 @@ app.get('/:id/sessions', (c) => {
     return c.json(sessions)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -1610,7 +1630,7 @@ app.get('/pr-states', (c) => {
     return c.json(getAllPrSnapshots())
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -1630,7 +1650,7 @@ app.get('/info', (c) => {
     })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -1663,7 +1683,7 @@ app.get('/:id/comparison', (c) => {
     return c.json({ comparisonId: workspace.comparisonId, members })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -1677,7 +1697,7 @@ app.get('/:id/preset', (c) => {
     return c.json({ preset })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -1695,7 +1715,7 @@ app.post('/pr-snapshot/refresh/:id', async (c) => {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     if (/not found/i.test(message)) return c.json({ error: message }, 404)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -1750,7 +1770,7 @@ app.get('/auto-loop-states', (c) => {
     return c.json(out)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -1765,7 +1785,7 @@ app.get('/:id/auto-loop', (c) => {
     return c.json(autoLoopService.getStatus(id))
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -1787,7 +1807,7 @@ app.delete('/:id/auto-loop', (c) => {
     return c.json({ ok: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -1806,7 +1826,7 @@ app.post('/:id/auto-loop-ready', (c) => {
     return c.json({ ok: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -1819,7 +1839,7 @@ app.get('/:id/crons', (c) => {
     return c.json({ crons: cronService.listForWorkspace(id) })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -1865,7 +1885,7 @@ app.post('/:id/crons', async (c) => {
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -1881,7 +1901,7 @@ app.delete('/:id/crons/:cronId', (c) => {
     return new Response(null, { status: 204 })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -1893,7 +1913,7 @@ app.get('/:id/pending-wakeup', (c) => {
     return c.json(pending)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -1906,7 +1926,7 @@ app.delete('/:id/pending-wakeup', (c) => {
     return c.json({ ok: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -1921,7 +1941,7 @@ app.get('/:id/quota-backoff', (c) => {
     return c.json(pending)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -1935,7 +1955,7 @@ app.delete('/:id/quota-backoff', (c) => {
     return new Response(null, { status: 204 })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -1972,7 +1992,7 @@ app.post('/:id/pending-wakeup', async (c) => {
     return c.json({ ok: true, pending })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -2000,7 +2020,7 @@ app.patch('/:id/sessions/:sessionId', async (c) => {
     return c.json(updated)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -2157,7 +2177,7 @@ app.delete('/:id/events/:eventId', (c) => {
     return c.json({ ok: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'unknown'
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -2187,7 +2207,7 @@ app.post('/:id/tasks', async (c) => {
     return c.json(task, 201)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -2233,7 +2253,7 @@ app.patch('/:id/tasks/:taskId', async (c) => {
     return c.json({ ok: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -2256,7 +2276,7 @@ app.delete('/:id/tasks/:taskId', (c) => {
     return new Response(null, { status: 204 })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -2274,7 +2294,7 @@ app.post('/:id/tasks/notify-updated', (c) => {
     return new Response(null, { status: 204 })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -2296,7 +2316,7 @@ app.post('/:id/agent-description/notify-updated', (c) => {
     return new Response(null, { status: 204 })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -2311,7 +2331,7 @@ app.post('/:id/crons/notify-updated', (c) => {
     return new Response(null, { status: 204 })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -2328,7 +2348,7 @@ app.post('/:id/tasks/:taskId/notify-done', (c) => {
     return new Response(null, { status: 204 })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -2481,7 +2501,7 @@ app.get('/:id/sessions/:sessionId/summary', (c) => {
     })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -2705,7 +2725,7 @@ app.get('/:id/events', (c) => {
     return c.json({ events, hasMore })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -2715,7 +2735,7 @@ app.get('/archived', (c) => {
     return c.json(workspaceService.listArchivedWorkspaces())
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -2745,7 +2765,7 @@ ${AUTO_LOOP_HARD_RULES}`
     return c.json({ prompt })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -2760,7 +2780,7 @@ app.get('/:id/chat-history', (c) => {
     return c.json({ history: listChatHistory(id) })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -2782,7 +2802,7 @@ app.post('/:id/chat-history', async (c) => {
     return c.body(null, 204)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -2823,7 +2843,7 @@ app.post('/:id/save-file', async (c) => {
     return c.body(null, 204)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -2840,7 +2860,7 @@ app.get('/:id', (c) => {
     return c.json({ ...workspace, agentLiveness: agentManager.getAgentLiveness(id) })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -3014,7 +3034,7 @@ app.patch('/:id', migrationGuard, async (c) => {
     ) {
       return c.json({ error: message }, 400)
     }
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -3053,7 +3073,7 @@ app.post('/:id/open-editor', (c) => {
     return c.json({ success: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -3096,7 +3116,7 @@ app.post('/:id/open-terminal', async (c) => {
     return c.json({ success: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -3131,7 +3151,7 @@ app.post('/:id/open-file-manager', async (c) => {
     return c.json({ success: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -3177,10 +3197,11 @@ app.post('/:id/run-setup-script', async (c) => {
       // rewrites the worktree the agent may still be writing to.
       try {
         if (agentManager.getAgentStatus(id)) {
-          await agentManager.stopAgentAndWait(id)
+          assertAgentStopped(await agentManager.stopAgentAndWait(id, undefined, 'setup'))
         }
       } catch (err) {
         console.error(`[workspaces] stopAgentAndWait before setup script failed for '${id}':`, err)
+        throw err
       }
 
       const effectiveSettings = settingsService.getEffectiveSettings(workspace.projectPath)
@@ -3210,7 +3231,7 @@ app.post('/:id/run-setup-script', async (c) => {
     }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -3227,9 +3248,10 @@ app.post('/:id/archive', migrationGuard, async (c) => {
     }
 
     try {
-      await agentManager.stopAgentAndWait(id)
+      assertAgentStopped(await agentManager.stopAgentAndWait(id, undefined, 'archive'))
     } catch (err) {
       console.error(`[workspaces] stopAgentAndWait during archive failed for '${id}':`, err)
+      throw err
     }
 
     try {
@@ -3237,6 +3259,7 @@ app.post('/:id/archive', migrationGuard, async (c) => {
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       console.error(`[workspaces] stopDevServer during archive failed: ${message}`)
+      throw err
     }
 
     try {
@@ -3255,7 +3278,7 @@ app.post('/:id/archive', migrationGuard, async (c) => {
     return c.json(updated)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -3281,7 +3304,7 @@ app.post('/:id/purge-worktree', migrationGuard, async (c) => {
   } catch (err) {
     if (err instanceof WorkspaceLifecycleBusyError) return c.json({ code: err.code, error: err.message }, 409)
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -3327,7 +3350,7 @@ app.post('/:id/unarchive', migrationGuard, (c) => {
     return c.json(updated)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -3362,9 +3385,10 @@ async function deleteWorkspaceWithSideEffectsUnlocked(
   // a few lines below: firing and forgetting here pulled the directory from
   // under an agent still writing to it, destroying uncommitted work.
   try {
-    await agentManager.stopAgentAndWait(workspace.id, undefined, 'delete')
+    assertAgentStopped(await agentManager.stopAgentAndWait(workspace.id, undefined, 'delete'))
   } catch (err) {
     console.error(`[workspaces] stopAgentAndWait during delete failed for '${workspace.name}':`, err)
+    throw err
   }
 
   // Stop dev server if it was running. The processSpawn would otherwise
@@ -3373,6 +3397,7 @@ async function deleteWorkspaceWithSideEffectsUnlocked(
     await devServerService.stopDevServer(workspace.id)
   } catch (err) {
     console.error(`[workspaces] stopDevServer during delete failed for '${workspace.name}':`, err)
+    throw err
   }
 
   try {
@@ -3484,7 +3509,7 @@ app.delete('/archived', migrationGuard, async (c) => {
     return c.json({ ok: true, deleted, warnings }, 200)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -3518,7 +3543,7 @@ app.delete('/:id', migrationGuard, async (c) => {
   } catch (err) {
     if (err instanceof WorkspaceLifecycleBusyError) return c.json({ code: err.code, error: err.message }, 409)
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -3572,9 +3597,10 @@ app.post('/:id/start', migrationGuard, async (c) => {
 
     // Stop the existing agent and wait: a fresh one starts right below.
     try {
-      await agentManager.stopAgentAndWait(id)
+      assertAgentStopped(await agentManager.stopAgentAndWait(id, undefined, 'replacement'))
     } catch (err) {
       console.error(`[workspaces] stopAgentAndWait before start failed for '${id}':`, err)
+      throw err
     }
 
     const worktreePath = workspace.worktreePath
@@ -3620,7 +3646,7 @@ app.post('/:id/start', migrationGuard, async (c) => {
     return c.json({ status: 'started' })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -3647,7 +3673,7 @@ app.get('/:id/git-stats', async (c) => {
     return c.json(stats)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -3714,7 +3740,7 @@ app.get('/:id/diff', async (c) => {
     })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -3784,7 +3810,7 @@ app.get('/:id/diff-file', (c) => {
     })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -3825,7 +3851,7 @@ app.post('/:id/rollback-file', async (c) => {
     return c.json({ ok: true, path: filePath, target })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -3859,7 +3885,7 @@ app.get('/:id/branch-divergence', async (c) => {
     })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -3883,7 +3909,7 @@ app.get('/:id/commits', async (c) => {
     return c.json({ commits, sourceBranch: workspace.sourceBranch, workingBranch: workspace.workingBranch })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -3897,7 +3923,7 @@ app.get('/:id/working-tree-files', (c) => {
     return c.json({ files })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -3984,7 +4010,7 @@ app.post('/:id/rename-branch', async (c) => {
     return c.json(updated)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -4048,7 +4074,7 @@ app.post('/:id/resync-branch', (c) => {
     return c.json({ ok: true, changed: true, workingBranch: updated.workingBranch })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -4092,7 +4118,7 @@ app.post('/:id/push', async (c) => {
       upToDate = result.upToDate
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
-      return c.json({ error: message }, 500)
+      return c.json({ error: message }, workspaceErrorStatus(err))
     }
 
     // Emit a trace into the chat feed so the user sees the action
@@ -4112,7 +4138,7 @@ app.post('/:id/push', async (c) => {
     return c.json({ ok: true, branch: workspace.workingBranch, upToDate })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -4129,7 +4155,7 @@ app.post('/:id/fetch', async (c) => {
     return c.json({ ok: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -4152,7 +4178,7 @@ app.post('/:id/pull', async (c) => {
         return c.json({ error: err.message, code: 'dirty_worktree', operation: err.operation, status: err.status }, 409)
       }
       const message = err instanceof Error ? err.message : String(err)
-      return c.json({ error: message }, 500)
+      return c.json({ error: message }, workspaceErrorStatus(err))
     }
 
     // Emit a trace into the chat feed so the user sees the action
@@ -4167,7 +4193,7 @@ app.post('/:id/pull', async (c) => {
     return c.json({ ok: true, branch: workspace.workingBranch })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -4191,7 +4217,7 @@ app.post('/:id/rebase', async (c) => {
       return c.json({ error: err.message, code: 'dirty_worktree', operation: err.operation, status: err.status }, 409)
     }
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -4215,7 +4241,7 @@ app.post('/:id/merge', async (c) => {
       return c.json({ error: err.message, code: 'dirty_worktree', operation: err.operation, status: err.status }, 409)
     }
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -4231,7 +4257,7 @@ app.post('/:id/git/abort', (c) => {
     return c.json({ success: true, aborted })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -4247,7 +4273,7 @@ app.post('/:id/git/continue', (c) => {
     return c.json({ success: true, continued })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -4266,7 +4292,7 @@ app.post('/:id/git/commit-all', async (c) => {
     return c.json({ success: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -4321,7 +4347,7 @@ app.post('/:id/git/discard', (c) => {
     return c.json({ success: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -4401,7 +4427,7 @@ Start now.`
     return c.json({ ok: true, operation, files, messageSent })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -4445,7 +4471,7 @@ app.post('/:id/change-pr-base', async (c) => {
       return c.json({ error: err.message, code: 'forge_unavailable' }, 409)
     }
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -4487,7 +4513,7 @@ app.post('/:id/merge-pr', async (c) => {
       return c.json({ error: err.message, code: 'forge_unavailable' }, 409)
     }
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -4509,7 +4535,7 @@ app.post('/:id/delete-remote-branch', async (c) => {
     return c.json({ success: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -4587,12 +4613,15 @@ app.post('/:id/cancel-source-change', async (c) => {
     if (backups.length === 0) {
       return c.json({ error: 'No backup branch found — cannot auto-restore', code: 'no_backup' }, 409)
     }
-    gitOps.restoreBranchFromBackup(workspace.worktreePath, workspace.workingBranch, backups[0])
+    if (agentManager.hasController(id)) return c.json({ error: 'Stop the agent before restoring the branch' }, 409)
+    await withGitRepoLock(workspace.worktreePath, async () => {
+      gitOps.restoreBranchFromBackup(workspace.worktreePath, workspace.workingBranch, backups[0])
+    })
     workspaceService.updateWorkspaceSourceBranch(id, body.previousBase)
     return c.json({ success: true, restoredFrom: backups[0] })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -4635,7 +4664,7 @@ app.post('/:id/force-push', async (c) => {
     return c.json({ success: true, upToDate })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -4766,7 +4795,7 @@ app.post('/:id/open-pr', async (c) => {
     return c.json({ ok: true, prNumber, prUrl, messageSent })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -4838,10 +4867,11 @@ app.post('/:id/start-review', async (c) => {
     if (newSession) {
       // Stop current agent, wait for it, then start fresh.
       try {
-        await agentManager.stopAgentAndWait(workspace.id)
+        assertAgentStopped(await agentManager.stopAgentAndWait(workspace.id, undefined, 'replacement'))
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)
         console.error(`[start-review] stopAgentAndWait failed (continuing): ${msg}`)
+        throw err
       }
       try {
         const agent = agentManager.startAgent(
@@ -4881,7 +4911,7 @@ app.post('/:id/start-review', async (c) => {
     return c.json({ ok: true, messageSent, newSession })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -4954,7 +4984,7 @@ app.post('/:id/start-ci-fix', migrationGuard, async (c) => {
     return c.json({ ok: true, failedChecksCount: failedChecks.length })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -4984,7 +5014,7 @@ app.post('/:id/dismiss-pr-attention', async (c) => {
     return c.json({ success: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -5010,7 +5040,7 @@ app.post('/:id/restore-pr-attention', async (c) => {
     return c.json({ success: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -5029,7 +5059,7 @@ app.post('/:id/mark-read', (c) => {
     return c.json({ success: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -5045,10 +5075,11 @@ app.post('/:id/stop', migrationGuard, async (c) => {
 
     try {
       // The response says "stopped": make that true before returning.
-      await agentManager.stopAgentAndWait(id)
+      assertAgentStopped(await agentManager.stopAgentAndWait(id))
     } catch (err) {
       // Agent may not be tracked (e.g. server restarted) — just update status
       console.error(`[workspaces] stopAgentAndWait on manual stop failed for '${id}':`, err)
+      throw err
     }
 
     // Always transition to idle so the UI reflects the stopped state
@@ -5061,7 +5092,7 @@ app.post('/:id/stop', migrationGuard, async (c) => {
     return c.json({ status: 'stopped' })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 
@@ -5111,7 +5142,7 @@ app.post('/:id/interrupt', migrationGuard, async (c) => {
       const status = err.code === 'interrupt_failed' ? 500 : 409
       return c.json({ error: message, code: err.code }, status)
     }
-    return c.json({ error: message }, 500)
+    return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
 

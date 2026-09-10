@@ -3,6 +3,7 @@ import { migrationGuard } from '../middleware/migration-guard.js'
 import { getDevServerLogs, getStatus, startDevServer, stopDevServer } from '../services/dev-server-service.js'
 import { getProjectSettings } from '../services/settings-service.js'
 import { getWorkspace } from '../services/workspace-service.js'
+import { WorkspaceLifecycleBusyError } from '../utils/workspace-lifecycle-guard.js'
 
 /** Hono sub-router for per-workspace dev server lifecycle (start, stop, status, logs). */
 const app = new Hono()
@@ -57,7 +58,8 @@ app.post('/:workspaceId/start', migrationGuard, (c) => {
     return c.json(status)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    const status = message.includes('already starting') ? 409 : 500
+    const status =
+      err instanceof WorkspaceLifecycleBusyError || /already starting|is stopping/.test(message) ? 409 : 500
     return c.json({ error: message }, status)
   }
 })

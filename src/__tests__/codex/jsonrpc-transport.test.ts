@@ -53,3 +53,18 @@ describe('JsonRpcTransport', () => {
     expect(written).toEqual(['{"jsonrpc":"2.0","id":1,"method":"ping","params":{}}\n'])
   })
 })
+
+it('contains asynchronous stdin errors and refuses writes after failure', async () => {
+  const error = Object.assign(new Error('pipe closed'), { code: 'EPIPE' })
+  const stdin = new Writable({ write: (_chunk, _enc, cb) => cb(error) })
+  stdin.on('error', () => {}) // Keep a failing regression from crashing the test process.
+  const stdout = new Readable({ read() {} })
+  const onError = vi.fn()
+  const transport = createJsonRpcTransport({ stdin, stdout, onMessage: () => {}, onError })
+  transport.send({ jsonrpc: '2.0', method: 'hello' })
+  await new Promise((r) => setImmediate(r))
+  expect(onError).toHaveBeenCalledWith(error)
+  expect(() => transport.send({ jsonrpc: '2.0', method: 'late' })).toThrow(/closed|pipe/)
+  transport.close()
+  transport.close()
+})

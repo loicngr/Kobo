@@ -2,8 +2,12 @@ import fs, { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import os, { tmpdir } from 'node:os'
 import path, { join } from 'node:path'
 import Database from 'better-sqlite3'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { _resetBackupSequenceForTests, createDailyDbBackupIfNeeded } from '../server/services/db-backup-service.js'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import {
+  _resetBackupSequenceForTests,
+  createDailyDbBackupIfNeeded,
+  startDailyDbBackupScheduler,
+} from '../server/services/db-backup-service.js'
 
 const DAILY_MS = 24 * 60 * 60 * 1000
 
@@ -161,5 +165,63 @@ describe('createPreMigrationBackup', () => {
 
     expect(result.deleted).toEqual([])
     expect(fs.readdirSync(path.dirname(dbPath)).filter((f) => f.startsWith('kobo.db.backup-'))).toHaveLength(1)
+  })
+})
+
+describe('daily backup scheduler', () => {
+  it('rechecks without restarting and waits for an in-flight backup on shutdown', async () => {
+    vi.useFakeTimers()
+    let finish!: () => void
+    const backup = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finish = resolve
+          }),
+      )
+      .mockResolvedValue(undefined)
+    const scheduler = startDailyDbBackupScheduler(backup, 1000)
+    try {
+      expect(backup).toHaveBeenCalledTimes(1)
+      await vi.advanceTimersByTimeAsync(3000)
+      expect(backup).toHaveBeenCalledTimes(1)
+      finish()
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(backup).toHaveBeenCalledTimes(2)
+      let finishLast!: () => void
+      backup.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            finishLast = resolve
+          }),
+      )
+      await vi.advanceTimersByTimeAsync(1000)
+      let stopped = false
+      const stopping = scheduler.stop().then(() => {
+        stopped = true
+      })
+      await Promise.resolve()
+      expect(stopped).toBe(false)
+      finishLast()
+      await stopping
+      await vi.advanceTimersByTimeAsync(5000)
+      expect(backup).toHaveBeenCalledTimes(3)
+    } finally {
+      await scheduler.stop()
+      vi.useRealTimers()
+    }
+  })
+  it('retries after a failed attempt', async () => {
+    vi.useFakeTimers()
+    const backup = vi.fn().mockRejectedValueOnce(new Error('full disk')).mockResolvedValue(undefined)
+    const scheduler = startDailyDbBackupScheduler(backup, 1000)
+    try {
+      await vi.advanceTimersByTimeAsync(1000)
+      expect(backup).toHaveBeenCalledTimes(2)
+    } finally {
+      await scheduler.stop()
+      vi.useRealTimers()
+    }
   })
 })

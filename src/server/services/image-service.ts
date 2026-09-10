@@ -1,6 +1,8 @@
+import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { nanoid } from 'nanoid'
+import { ensureDirectoryInside } from '../utils/safe-path.js'
 
 /** Result of saving an image to a worktree. */
 export interface SavedImage {
@@ -23,24 +25,7 @@ const INDEX_FILE = 'index.json'
 const locks = new Map<string, Promise<void>>()
 
 function ensureRealImagesDirectory(worktreePath: string): string {
-  const realWorktree = fs.realpathSync(worktreePath)
-  let current = worktreePath
-  for (const segment of ['.ai', 'images']) {
-    current = path.join(current, segment)
-    if (fs.existsSync(current)) {
-      const stat = fs.lstatSync(current)
-      if (stat.isSymbolicLink()) throw new Error(`Symbolic links are not allowed in image storage: ${current}`)
-      if (!stat.isDirectory()) throw new Error(`Image storage path is not a directory: ${current}`)
-    } else {
-      fs.mkdirSync(current)
-    }
-    const realCurrent = fs.realpathSync(current)
-    const relative = path.relative(realWorktree, realCurrent)
-    if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-      throw new Error('Image storage path escapes the worktree')
-    }
-  }
-  return fs.realpathSync(current)
+  return ensureDirectoryInside(worktreePath, '.ai/images')
 }
 
 function withLock<T>(worktreePath: string, fn: () => T): Promise<T> {
@@ -75,9 +60,15 @@ function writeIndex(imagesDir: string, entries: ImageIndexEntry[]): void {
   if (fs.existsSync(indexPath) && fs.lstatSync(indexPath).isSymbolicLink()) {
     throw new Error('Symbolic links are not allowed for image index')
   }
-  const tempPath = path.join(imagesDir, `.index-${process.pid}.tmp`)
-  fs.writeFileSync(tempPath, JSON.stringify(entries, null, 2))
-  fs.renameSync(tempPath, indexPath)
+  const tempPath = path.join(imagesDir, `.index-${randomUUID()}.tmp`)
+  let created = false
+  try {
+    fs.writeFileSync(tempPath, JSON.stringify(entries, null, 2), { flag: 'wx', mode: 0o600 })
+    created = true
+    fs.renameSync(tempPath, indexPath)
+  } finally {
+    if (created && fs.existsSync(tempPath)) fs.unlinkSync(tempPath)
+  }
 }
 
 /** Save an image buffer to `.ai/images/` and update the index. Returns the UID and relative path. */
@@ -98,10 +89,16 @@ export async function saveImage(worktreePath: string, fileBuffer: Buffer, origin
   await withLock(worktreePath, () => {
     // Write the image file inside the lock so both the file write and index
     // update happen atomically — avoids orphan files on crash between the two.
-    fs.writeFileSync(path.join(imagesDir, filename), fileBuffer)
-    const entries = readIndex(imagesDir)
-    entries.push({ uid, originalName, createdAt: new Date().toISOString() })
-    writeIndex(imagesDir, entries)
+    const imagePath = path.join(imagesDir, filename)
+    fs.writeFileSync(imagePath, fileBuffer, { flag: 'wx', mode: 0o600 })
+    try {
+      const entries = readIndex(imagesDir)
+      entries.push({ uid, originalName, createdAt: new Date().toISOString() })
+      writeIndex(imagesDir, entries)
+    } catch (err) {
+      fs.unlinkSync(imagePath)
+      throw err
+    }
   })
 
   return { uid, relativePath: `${IMAGES_DIR}/${filename}` }

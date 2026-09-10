@@ -123,3 +123,35 @@ export async function createPreMigrationBackup(
     throw err
   }
 }
+
+/** Recheck daily-backup eligibility hourly, including on long-running servers. */
+export function startDailyDbBackupScheduler(
+  backup: () => Promise<unknown>,
+  intervalMs = 60 * 60 * 1000,
+): { stop: () => Promise<void> } {
+  let inFlight: Promise<void> | null = null
+  let stopped = false
+  const attempt = async (): Promise<void> => {
+    try {
+      await backup()
+    } catch (err) {
+      console.error('[kobo] Scheduled DB backup failed:', err)
+    }
+  }
+  const tick = (): void => {
+    if (stopped || inFlight) return
+    inFlight = attempt().finally(() => {
+      inFlight = null
+    })
+  }
+  const timer = setInterval(tick, intervalMs)
+  timer.unref?.()
+  tick()
+  return {
+    async stop() {
+      stopped = true
+      clearInterval(timer)
+      await inFlight
+    },
+  }
+}

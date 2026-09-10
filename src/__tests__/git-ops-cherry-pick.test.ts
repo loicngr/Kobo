@@ -1,6 +1,6 @@
 // src/__tests__/git-ops-cherry-pick.test.ts
 import { execFileSync } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
@@ -230,4 +230,31 @@ describe('reconstructBranchOnto', () => {
     expect((err as GitConflictError).operation).toBe('cherry-pick')
     expect(getOngoingGitOperation(repo)).toBe('cherry-pick')
   })
+})
+
+describe('checkout identity guard', () => {
+  it.each([false, true])('does not reconstruct another checkout (detached=%s)', (detached) => {
+    g(repo, ['branch', 'mission'])
+    g(repo, ['checkout', '-q', '-b', 'unrelated'])
+    writeFileSync(join(repo, 'f.txt'), 'unrelated\n')
+    g(repo, ['commit', '-q', '-am', 'unrelated'])
+    if (detached) g(repo, ['checkout', '--detach', '-q'])
+    const head = g(repo, ['rev-parse', 'HEAD'])
+    const refs = g(repo, ['show-ref'])
+    expect(() => reconstructBranchOnto(repo, 'mission', 'main', [])).toThrow(/Expected.*mission/)
+    expect(g(repo, ['rev-parse', 'HEAD'])).toBe(head)
+    expect(g(repo, ['show-ref'])).toBe(refs)
+  })
+})
+
+it.each(['unrelated', 'detached'])('refuses rollback from an unexpected %s checkout', (checkout) => {
+  g(repo, ['branch', 'mission'])
+  g(repo, ['branch', 'kobo-backup/mission-1000'])
+  if (checkout === 'detached') g(repo, ['checkout', '--detach'])
+  else g(repo, ['checkout', '-b', 'unrelated'])
+  writeFileSync(join(repo, 'keep.txt'), 'preserve me')
+  const refs = g(repo, ['show-ref'])
+  expect(() => restoreBranchFromBackup(repo, 'mission', 'kobo-backup/mission-1000')).toThrow(/Expected checkout/)
+  expect(g(repo, ['show-ref'])).toBe(refs)
+  expect(readFileSync(join(repo, 'keep.txt'), 'utf8')).toBe('preserve me')
 })

@@ -20,7 +20,7 @@ vi.mock('node:fs', async () => {
 // The real service calls `agentManager.stopAgentAndWait` (not `stopAgent`) so
 // that `removeWorktree`, which runs later in the same function, never races a
 // still-dying agent process.
-const stopAgentAndWaitMock = vi.fn(async (_workspaceId: string) => {})
+const stopAgentAndWaitMock = vi.fn(async (_workspaceId: string): Promise<string> => 'stopped')
 vi.mock('../server/services/agent/orchestrator.js', () => ({
   stopAgentAndWait: (id: string) => stopAgentAndWaitMock(id),
 }))
@@ -80,6 +80,15 @@ beforeEach(() => {
 })
 
 describe('purgeWorktree()', () => {
+  it.each(['timeout', 'failed'])('refuses removal when agent stop returns %s', async (outcome) => {
+    getWorkspaceMock.mockReturnValue(makeWorkspace())
+    stopAgentAndWaitMock.mockResolvedValueOnce(outcome)
+    await expect(purgeWorktree('ws-1')).rejects.toThrow(/stop/i)
+    expect(removeWorktreeMock).not.toHaveBeenCalled()
+    expect(markWorktreePurgedMock).not.toHaveBeenCalled()
+    expect(archiveWorkspaceMock).not.toHaveBeenCalled()
+  })
+
   it('reports not-found for an unknown workspace, touching nothing', async () => {
     getWorkspaceMock.mockReturnValue(undefined)
     await expect(purgeWorktree('nope')).resolves.toEqual({ outcome: 'not-found', warnings: [] })
@@ -237,7 +246,7 @@ describe('purge lifecycle exclusion', () => {
     stopAgentAndWaitMock.mockImplementationOnce(
       () =>
         new Promise((resolve) => {
-          release = resolve
+          release = () => resolve('stopped')
         }),
     )
     const pending = purgeWorktree('ws-1')

@@ -49,7 +49,10 @@ export const useDocumentsStore = defineStore('documents', () => {
   }
 
   async function openDocument(workspaceId: string, file: DocumentFile): Promise<void> {
-    const signal = latestOpen.begin()
+    await loadDocument(workspaceId, file, latestOpen.begin())
+  }
+
+  async function loadDocument(workspaceId: string, file: DocumentFile, signal: AbortSignal): Promise<boolean> {
     loadingContent.value = true
     try {
       const res = await fetch(`/api/workspaces/${workspaceId}/document?path=${encodeURIComponent(file.path)}`, {
@@ -57,10 +60,11 @@ export const useDocumentsStore = defineStore('documents', () => {
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const body = (await res.json()) as { content: string; path: string }
-      if (!latestOpen.isCurrent(signal)) return
+      if (!latestOpen.isCurrent(signal)) return false
       selected.value = { path: body.path, name: file.name, content: body.content }
+      return true
     } catch (err) {
-      if (isAbortError(err)) return
+      if (isAbortError(err) || !latestOpen.isCurrent(signal)) return false
       console.error('[documents-store] openDocument failed:', err)
       throw err
     } finally {
@@ -74,29 +78,34 @@ export const useDocumentsStore = defineStore('documents', () => {
    * the known list, the call refreshes the list and retries once.
    */
   async function openDocumentByPath(workspaceId: string, filePath: string): Promise<boolean> {
-    const findInList = () => (documentsByWorkspace.value[workspaceId] ?? []).find((d) => d.path === filePath) ?? null
-    let entry = findInList()
-    if (!entry) {
-      await fetchDocuments(workspaceId)
-      entry = findInList()
+    const signal = latestOpen.begin()
+    try {
+      const findInList = () => (documentsByWorkspace.value[workspaceId] ?? []).find((d) => d.path === filePath) ?? null
+      let entry = findInList()
+      if (!entry) {
+        await fetchDocuments(workspaceId)
+        entry = findInList()
+      }
+      if (!entry || !latestOpen.isCurrent(signal)) return false
+      if (!(await loadDocument(workspaceId, entry, signal)) || !latestOpen.isCurrent(signal)) return false
+      requestOpen.value++
+      return true
+    } finally {
+      // This request owns the loading flag even if it superseded a content
+      // load but never found a document to open itself.
+      if (latestOpen.isCurrent(signal)) loadingContent.value = false
     }
-    if (!entry) return false
-    await openDocument(workspaceId, entry)
-    requestOpen.value++
-    return true
   }
 
   function closeDocument(): void {
+    latestOpen.abort()
+    loadingContent.value = false
     selected.value = null
   }
 
   function clearForWorkspace(workspaceId: string): void {
     delete documentsByWorkspace.value[workspaceId]
-    selected.value = null
-    // Abort any in-flight openDocument so a slow response from this
-    // workspace can't land later and overwrite `selected` after the user
-    // has already switched away.
-    latestOpen.abort()
+    closeDocument()
   }
 
   return {

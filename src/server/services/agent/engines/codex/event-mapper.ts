@@ -386,13 +386,17 @@ export function handleItemCompleted(item: ThreadItem, state: MapperState): Agent
 
   if (item.type === 'plan') {
     // Codex's `plan` is a markdown blob, not a structured list — parse bullets.
+    const toolCallId = scopedId(state, item.id)
     events.push({
       kind: 'tool:call',
       messageId: '',
-      toolCallId: scopedId(state, item.id),
+      toolCallId,
       name: 'TodoWrite',
       input: { todos: parseCodexPlanText(item.text) },
     })
+    // The plan has already completed. Close the synthetic update so both the
+    // tool card and the engine's idle watchdog see no outstanding operation.
+    events.push({ kind: 'tool:result', toolCallId, output: null, isError: false })
     return events
   }
 

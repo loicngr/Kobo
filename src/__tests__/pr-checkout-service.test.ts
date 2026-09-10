@@ -111,24 +111,43 @@ describe('diagnoseLocalState', () => {
 })
 
 describe('resolveWorkspaceState', () => {
-  const base = { id: 'w1', name: 'Fix login', workingBranch: 'fix/login', archivedAt: null, worktreePurgedAt: null }
+  const base = {
+    projectPath: '/repo',
+    id: 'w1',
+    name: 'Fix login',
+    workingBranch: 'fix/login',
+    archivedAt: null,
+    worktreePurgedAt: null,
+  }
 
   it('reports none when no workspace tracks the branch', () => {
-    expect(resolveWorkspaceState([], 'fix/login')).toEqual({ state: 'none' })
+    expect(resolveWorkspaceState([], 'fix/login', '/repo')).toEqual({ state: 'none' })
   })
 
   it('reports an active workspace', () => {
-    expect(resolveWorkspaceState([base], 'fix/login')).toEqual({ state: 'active', id: 'w1', name: 'Fix login' })
+    expect(resolveWorkspaceState([base], 'fix/login', '/repo')).toEqual({
+      state: 'active',
+      id: 'w1',
+      name: 'Fix login',
+    })
   })
 
   it('reports an archived workspace', () => {
     const archived = { ...base, archivedAt: '2026-08-01T00:00:00Z' }
-    expect(resolveWorkspaceState([archived], 'fix/login')).toEqual({ state: 'archived', id: 'w1', name: 'Fix login' })
+    expect(resolveWorkspaceState([archived], 'fix/login', '/repo')).toEqual({
+      state: 'archived',
+      id: 'w1',
+      name: 'Fix login',
+    })
   })
 
   it('reports a purged worktree ahead of the archived flag', () => {
     const purged = { ...base, archivedAt: '2026-08-01T00:00:00Z', worktreePurgedAt: '2026-08-02T00:00:00Z' }
-    expect(resolveWorkspaceState([purged], 'fix/login')).toEqual({ state: 'purged', id: 'w1', name: 'Fix login' })
+    expect(resolveWorkspaceState([purged], 'fix/login', '/repo')).toEqual({
+      state: 'purged',
+      id: 'w1',
+      name: 'Fix login',
+    })
   })
 })
 
@@ -139,25 +158,46 @@ describe('computeFingerprint', () => {
   })
   afterEach(() => repo.cleanup())
 
-  it('is stable across two diagnoses of an unchanged repository', () => {
+  it('is stable across two diagnoses of an unchanged repository', async () => {
     const a = diagnoseLocalState(repo.path, 'feat/fp', null)
     const b = diagnoseLocalState(repo.path, 'feat/fp', null)
-    expect(computeFingerprint(a)).toBe(computeFingerprint(b))
+    expect(await computeFingerprint(a)).toBe(await computeFingerprint(b))
   })
 
-  it('changes when the branch advances', () => {
+  it('changes when the branch advances', async () => {
     repo.git(['checkout', '-b', 'feat/fp'])
     repo.commit('a.txt', 'a\n', 'feat: a')
-    const before = computeFingerprint(diagnoseLocalState(repo.path, 'feat/fp', null))
+    const before = await computeFingerprint(diagnoseLocalState(repo.path, 'feat/fp', null))
     repo.commit('b.txt', 'b\n', 'feat: b')
-    expect(computeFingerprint(diagnoseLocalState(repo.path, 'feat/fp', null))).not.toBe(before)
+    expect(await computeFingerprint(diagnoseLocalState(repo.path, 'feat/fp', null))).not.toBe(before)
   })
 
-  it('changes when the tracked workspace state changes', () => {
+  it('changes when the tracked workspace state changes', async () => {
     const withoutWorkspace = diagnoseLocalState(repo.path, 'feat/fp2', null)
-    const before = computeFingerprint(withoutWorkspace)
-    const active = { id: 'w1', name: 'Test', workingBranch: 'feat/fp2', archivedAt: null, worktreePurgedAt: null }
+    const before = await computeFingerprint(withoutWorkspace)
+    const active = {
+      projectPath: repo.path,
+      id: 'w1',
+      name: 'Test',
+      workingBranch: 'feat/fp2',
+      archivedAt: null,
+      worktreePurgedAt: null,
+    }
     const withWorkspace = diagnoseLocalState(repo.path, 'feat/fp2', null, new Map(), [active])
-    expect(computeFingerprint(withWorkspace)).not.toBe(before)
+    expect(await computeFingerprint(withWorkspace)).not.toBe(before)
   })
+})
+
+it('matches workspaces by project as well as branch', async () => {
+  const a = {
+    id: 'a',
+    name: 'A',
+    projectPath: '/project/a',
+    workingBranch: 'fix/login',
+    archivedAt: null,
+    worktreePurgedAt: null,
+  }
+  const b = { ...a, id: 'b', name: 'B', projectPath: '/project/b' }
+  expect(resolveWorkspaceState([a, b], 'fix/login', '/project/b/')).toEqual({ state: 'active', id: 'b', name: 'B' })
+  expect(resolveWorkspaceState([a], 'fix/login', '/project/b')).toEqual({ state: 'none' })
 })

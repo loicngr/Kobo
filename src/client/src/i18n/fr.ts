@@ -2012,6 +2012,7 @@ export default {
   'prCheckout.workspace.restore': 'Recréer sa worktree',
   'prCheckout.worktree.orphanHint': 'Une worktree existe déjà sur cette branche à {path}.',
   'prCheckout.worktree.attach': "L'attacher",
+  'prCheckout.worktree.branchInUse': 'Cette branche est déjà extraite. Rattachez son worktree existant.',
   'prCheckout.worktree.createElsewhere': 'En créer une autre ailleurs',
   'prCheckout.operation.hint': 'Un {operation} est en cours dans cette worktree.',
   'prCheckout.operation.abort': 'Abandonner',
@@ -2020,6 +2021,8 @@ export default {
   'prCheckout.changes.stash': 'Les stash',
   'prCheckout.changes.commit': 'Les commit',
   'prCheckout.changes.discard': 'Les abandonner (conservées dans un stash étiqueté)',
+  'prCheckout.changes.keepResetConflict':
+    'Conserver les modifications est incompatible avec un reset. Faites un stash ou un commit, ou conservez la branche.',
   'prCheckout.changes.keep': 'Les laisser telles quelles',
   'prCheckout.divergence.behindHint': 'Votre branche a {behind} commit(s) de retard sur origin.',
   'prCheckout.divergence.aheadHint': 'Votre branche a {ahead} commit(s) non pushé(s).',

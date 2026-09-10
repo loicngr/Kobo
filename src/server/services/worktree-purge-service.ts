@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process'
 import fs from 'node:fs'
 import { promisify } from 'node:util'
+import { assertAgentStopped } from '../utils/agent-stop-result.js'
 import { logError, logWarn } from '../utils/logger.js'
 import { withWorkspaceLifecycleGuard } from '../utils/workspace-lifecycle-guard.js'
 import * as agentManager from './agent/orchestrator.js'
@@ -49,17 +50,13 @@ async function purgeWorktreeGuarded(workspaceId: string, expectedArchivedAt?: st
 
   // `removeWorktree` runs later in this same function — the agent must be dead
   // by then, not merely asked to stop.
-  try {
-    await agentManager.stopAgentAndWait(workspaceId, undefined, 'purge')
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err)
-    logError('purge', `stopAgent failed for '${workspace.name}'`, { workspaceId: workspace.id, error: msg })
-  }
+  assertAgentStopped(await agentManager.stopAgentAndWait(workspaceId, undefined, 'purge'))
   try {
     await devServerService.stopDevServer(workspaceId)
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     logError('purge', `stopDevServer failed for '${workspace.name}'`, { workspaceId: workspace.id, error: msg })
+    throw err
   }
   try {
     destroyTerminal(workspaceId)

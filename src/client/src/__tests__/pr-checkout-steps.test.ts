@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { defaultDecisions, deriveSteps, type PrCheckoutReport } from '../utils/pr-checkout-steps'
+import { checkoutDecisionError, defaultDecisions, deriveSteps, type PrCheckoutReport } from '../utils/pr-checkout-steps'
 
 const clean: PrCheckoutReport = {
   projectPath: '/repo',
@@ -122,4 +122,25 @@ describe('defaultDecisions', () => {
   it('never pre-selects aborting an ongoing operation, since that can discard staged conflict resolution', () => {
     expect(defaultDecisions({ ...clean, ongoingOperation: 'rebase' }).ongoingOperation).toBe('cancel')
   })
+})
+
+describe('checkoutDecisionError', () => {
+  it('blocks keeping dirty edits during a hard reset, including the implicit keep default', () => {
+    const dirty = { ...clean, localChanges: { present: true, modified: 1, staged: 0, untracked: 0 } }
+    expect(checkoutDecisionError(dirty, { divergence: 'reset-hard' })).toBe('prCheckout.changes.keepResetConflict')
+    expect(checkoutDecisionError(dirty, { divergence: 'reset-hard', localChanges: 'keep' })).toBe(
+      'prCheckout.changes.keepResetConflict',
+    )
+    for (const localChanges of ['stash', 'discard', 'commit'] as const) {
+      expect(checkoutDecisionError(dirty, { divergence: 'reset-hard', localChanges })).toBeNull()
+    }
+    expect(checkoutDecisionError(clean, { divergence: 'reset-hard' })).toBeNull()
+    expect(checkoutDecisionError(dirty, { divergence: 'keep' })).toBeNull()
+  })
+})
+
+it('explains why an already checked-out branch cannot be created elsewhere', () => {
+  const report = { ...clean, worktree: { state: 'orphan' as const, path: '/existing' } }
+  expect(checkoutDecisionError(report, { orphanWorktree: 'create-elsewhere' })).toBe('prCheckout.worktree.branchInUse')
+  expect(checkoutDecisionError(report, { orphanWorktree: 'attach' })).toBeNull()
 })

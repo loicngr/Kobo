@@ -16,9 +16,12 @@ vi.mock('../server/services/websocket-service.js', () => ({
   emit: vi.fn(),
   emitEphemeral: vi.fn(),
 }))
+vi.mock('../server/utils/safe-path.js', () => ({ ensureDirectoryInside: (root: string) => `${root}/.ai` }))
 vi.mock('node:fs', () => ({
   default: {
     mkdirSync: vi.fn(),
+    mkdtempSync: vi.fn(() => '/tmp/wt/.ai/.script-test'),
+    rmdirSync: vi.fn(),
     writeFileSync: vi.fn(),
     unlinkSync: vi.fn(),
     existsSync: vi.fn(),

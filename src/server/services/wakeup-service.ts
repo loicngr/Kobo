@@ -1,5 +1,6 @@
 import { getDb } from '../db/index.js'
 import { slugifyProjectName } from '../utils/project-slug.js'
+import { isWorkspaceLifecycleBusy } from '../utils/workspace-lifecycle-guard.js'
 import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 import * as orchestrator from './agent/orchestrator.js'
 import * as settingsService from './settings-service.js'
@@ -28,6 +29,14 @@ const AUTONOMOUS_LOOP_FALLBACK_PROMPT = 'Continue where you left off.'
 
 /** In-memory timers — cleared on cancel/fire; rebuilt on boot via rehydrate. */
 const timers = new Map<string, NodeJS.Timeout>()
+let suspended = false
+
+/** Preserve persisted wakeups while preventing delivery during teardown. */
+export function suspendForShutdown(): void {
+  suspended = true
+  for (const timer of timers.values()) clearTimeout(timer)
+  timers.clear()
+}
 
 function clamp(n: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, n))
@@ -86,9 +95,12 @@ export function schedule(
        VALUES (?, ?, ?, ?, ?, ?)`,
     ).run(workspaceId, targetAtIso, effectivePrompt, reason ?? null, new Date().toISOString(), agentSessionId ?? null)
 
-    const timeout = setTimeout(() => fire(workspaceId), clampedSeconds * 1000)
-    timeout.unref?.()
-    timers.set(workspaceId, timeout)
+    timers.delete(workspaceId)
+    if (!suspended) {
+      const timeout = setTimeout(() => fire(workspaceId), clampedSeconds * 1000)
+      timeout.unref?.()
+      timers.set(workspaceId, timeout)
+    }
 
     emitEphemeral(workspaceId, 'wakeup:scheduled', { targetAt: targetAtIso, reason })
   } catch (err) {
@@ -146,6 +158,8 @@ export function isWakeupScheduled(workspaceId: string): boolean {
 
 /** Re-register timers for rows persisted across restart. Skips stale entries. */
 export function rehydrate(): void {
+  suspendForShutdown()
+  suspended = false
   try {
     const db = getDb()
     const rows = db.prepare('SELECT * FROM pending_wakeups').all() as PendingWakeupRow[]
@@ -181,6 +195,7 @@ export function rehydrate(): void {
 
 /** Internal — invoked by setTimeout. */
 function fire(workspaceId: string): void {
+  if (suspended) return
   try {
     const db = getDb()
 
@@ -191,6 +206,11 @@ function fire(workspaceId: string): void {
     timers.delete(workspaceId)
 
     if (!row) return
+
+    if (isWorkspaceLifecycleBusy(workspaceId)) {
+      defer(workspaceId, row)
+      return
+    }
 
     if (orchestrator.hasController(workspaceId)) {
       // Claude can keep the stream open after a result while a background

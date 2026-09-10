@@ -353,6 +353,10 @@ function focus(): void {
 
 defineExpose({ focus })
 
+// Route changes reuse this component; focus only after the new input state renders.
+onMounted(focus)
+watch(() => props.workspaceId, focus, { flush: 'post' })
+
 // Slash autocomplete — state + computed lists handled by the composable.
 // Selection logic (template expansion, kobo auto-send, …) stays here because
 // it needs the workspace context which the composable can't see.

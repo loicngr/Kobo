@@ -2,6 +2,7 @@ import { CronExpressionParser } from 'cron-parser'
 import { nanoid } from 'nanoid'
 import { getDb } from '../db/index.js'
 import { slugifyProjectName } from '../utils/project-slug.js'
+import { isWorkspaceLifecycleBusy } from '../utils/workspace-lifecycle-guard.js'
 import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 import * as orchestrator from './agent/orchestrator.js'
 import * as settingsService from './settings-service.js'
@@ -44,6 +45,14 @@ export const MIN_DELAY_BETWEEN_FIRES_SECONDS = 60
 const MAX_SETTIMEOUT_MS = 2_000_000_000 // ~23 days, with margin under 2^31-1
 
 const timers = new Map<string, NodeJS.Timeout>()
+let suspended = false
+
+/** Preserve cron intent and deadlines while the process is shutting down. */
+export function suspendForShutdown(): void {
+  suspended = true
+  for (const timer of timers.values()) clearTimeout(timer)
+  timers.clear()
+}
 
 /**
  * Arm a setTimeout that fires `fireOrSkip(id)` when `fireAt` is reached.
@@ -52,6 +61,7 @@ const timers = new Map<string, NodeJS.Timeout>()
  * days.
  */
 function scheduleAt(id: string, fireAt: Date): void {
+  if (suspended) return
   const previous = timers.get(id)
   if (previous) clearTimeout(previous)
   const deltaMs = Math.max(0, fireAt.getTime() - Date.now())
@@ -210,6 +220,7 @@ export function listAll(): PendingCron[] {
  * unexpected error is logged and the cron is preserved when possible.
  */
 function fireOrSkip(id: string): void {
+  if (suspended) return
   try {
     timers.delete(id)
     const db = getDb()
@@ -235,6 +246,11 @@ function fireOrSkip(id: string): void {
 
     if (!wsRow || wsRow.archived_at !== null) {
       cancel(id, wsRow ? 'archive' : 'deleted')
+      return
+    }
+
+    if (isWorkspaceLifecycleBusy(row.workspace_id)) {
+      scheduleAt(id, new Date(Date.now() + 15_000))
       return
     }
 
@@ -337,6 +353,8 @@ function fireOrSkip(id: string): void {
  * Rows pointing at deleted/archived workspaces are removed without firing.
  */
 export function restoreOnBoot(): void {
+  suspendForShutdown()
+  suspended = false
   try {
     // Boot semantics: clear any existing in-memory timers before rearming.
     for (const t of timers.values()) clearTimeout(t)

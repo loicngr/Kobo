@@ -418,6 +418,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     subagents: {} as Record<string, Record<string, Subagent>>,
     agentTodos: {} as Record<string, AgentTodo[]>,
     sessions: [] as AgentSession[],
+    loadingSessions: {} as Record<string, boolean>,
     selectedSessionId: null as string | null,
     archivedWorkspaces: [] as Workspace[],
     archivedLoaded: false,
@@ -425,6 +426,8 @@ export const useWorkspaceStore = defineStore('workspace', {
     // Reads started before a lifecycle change must not overwrite its result.
     workspaceLifecycleVersion: 0,
     workspaceLifecycleVersions: {} as Record<string, number>,
+    listRequestVersion: 0,
+    archivedListRequestVersion: 0,
     loading: false,
     // Server message (or transport error) from the most recent failed
     // fetchWorkspaces/fetchArchivedWorkspaces/fetchWorkspacesInfo call. Null
@@ -690,12 +693,19 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async fetchWorkspaces() {
+      const requestVersion = ++this.listRequestVersion
+      const eventsAtStart = new Map(_workspaceEventVersions)
       const lifecycleVersion = this.workspaceLifecycleVersion
       this.loading = true
       try {
         const data = await apiFetch<{ workspaces?: Workspace[] } | Workspace[]>('/api/workspaces')
-        if (lifecycleVersion !== this.workspaceLifecycleVersion) return
-        this.workspaces = Array.isArray(data) ? data : (data.workspaces ?? [])
+        if (requestVersion !== this.listRequestVersion || lifecycleVersion !== this.workspaceLifecycleVersion) return
+        const current = new Map(this.workspaces.map((workspace) => [workspace.id, workspace]))
+        this.workspaces = (Array.isArray(data) ? data : (data.workspaces ?? [])).map((workspace) =>
+          (_workspaceEventVersions.get(workspace.id) ?? 0) !== (eventsAtStart.get(workspace.id) ?? 0)
+            ? (current.get(workspace.id) ?? workspace)
+            : workspace,
+        )
         this.listLoadError = null
         this.activeListLoadFailed = false
         this.listPollFailureStreak = 0
@@ -709,6 +719,7 @@ export const useWorkspaceStore = defineStore('workspace', {
           }
         }
       } catch (err) {
+        if (requestVersion !== this.listRequestVersion || lifecycleVersion !== this.workspaceLifecycleVersion) return
         // A dead backend and an empty account used to render identically.
         // Recording the failure — without touching `this.workspaces` — is
         // what lets the sidebar say which one it is, without wiping out a
@@ -717,7 +728,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         this.activeListLoadFailed = true
         console.error('[workspace store] fetchWorkspaces failed:', err)
       } finally {
-        this.loading = false
+        if (requestVersion === this.listRequestVersion) this.loading = false
       }
     },
 
@@ -728,17 +739,27 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async fetchArchivedWorkspaces() {
+      const requestVersion = ++this.archivedListRequestVersion
+      const eventsAtStart = new Map(_workspaceEventVersions)
       const lifecycleVersion = this.workspaceLifecycleVersion
       try {
         const workspaces = await apiFetch<Workspace[]>('/api/workspaces/archived')
-        if (lifecycleVersion !== this.workspaceLifecycleVersion) return
-        this.archivedWorkspaces = workspaces
+        if (requestVersion !== this.archivedListRequestVersion || lifecycleVersion !== this.workspaceLifecycleVersion)
+          return
+        const current = new Map(this.archivedWorkspaces.map((workspace) => [workspace.id, workspace]))
+        this.archivedWorkspaces = workspaces.map((workspace) =>
+          (_workspaceEventVersions.get(workspace.id) ?? 0) !== (eventsAtStart.get(workspace.id) ?? 0)
+            ? (current.get(workspace.id) ?? workspace)
+            : workspace,
+        )
         this.archivedLoaded = true
         // This loader used to post the banner and never lift it, so a failure
         // survived the backend coming back. It clears its own failure — but
         // never one the active list raised, which it knows nothing about.
         if (!this.activeListLoadFailed) this.listLoadError = null
       } catch (err) {
+        if (requestVersion !== this.archivedListRequestVersion || lifecycleVersion !== this.workspaceLifecycleVersion)
+          return
         this.listLoadError = err instanceof Error ? err.message : String(err)
         console.error('[workspace store] fetchArchivedWorkspaces failed:', err)
       }
@@ -765,14 +786,10 @@ export const useWorkspaceStore = defineStore('workspace', {
           // while this read is in flight — same class of race `fetchWorkspacesInfo`
           // already guards against via `_workspaceEventVersions`. Don't let a
           // late response resurrect a stale status over a fresher one. This is
-          // scoped to `status` only: `agentLiveness` below is server-authoritative
-          // and is exactly what this read exists to deliver, so it always applies.
+          // scoped to metadata; liveness below uses the same event guard.
           const statusChangedDuringRequest = (_workspaceEventVersions.get(id) ?? 0) !== eventVersionAtStart
           const incomingRaw = data.workspace ?? data
-          const incoming = statusChangedDuringRequest ? { ...incomingRaw } : incomingRaw
-          if (statusChangedDuringRequest) {
-            delete incoming.status
-          }
+          const incoming = statusChangedDuringRequest ? {} : incomingRaw
 
           // Update workspace in whichever list it lives in (active or archived).
           const idx = this.workspaces.findIndex((w) => w.id === id)
@@ -797,7 +814,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         // consume it here so the AgentLivenessChip doesn't have to wait for
         // the next 30s `fetchWorkspacesInfo` poll to stop showing a false
         // "no process" warning right after a legitimate start/status flip.
-        if ('agentLiveness' in data) {
+        if ('agentLiveness' in data && (_workspaceEventVersions.get(id) ?? 0) === eventVersionAtStart) {
           this.applyAgentLiveness(id, data.agentLiveness as AgentLiveness | null)
         }
       } catch (err) {
@@ -853,6 +870,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         const sourceFallback = res.headers.get('X-Kobo-Source-Fallback') === 'local'
         const data = await res.json()
         const workspace = data.workspace ?? data
+        this.invalidateWorkspaceLifecycleReads(workspace.id)
         // Dedup against a concurrent fetchWorkspaces() that may have already
         // inserted this workspace: events emitted by the create flow (setup
         // output, autoloop:enabled, …) can race the POST response and trigger
@@ -1383,6 +1401,7 @@ export const useWorkspaceStore = defineStore('workspace', {
     async fetchSessions(workspaceId: string, forceSelectId?: string) {
       const requestVersion = (_sessionsRequestVersions.get(workspaceId) ?? 0) + 1
       _sessionsRequestVersions.set(workspaceId, requestVersion)
+      this.loadingSessions[workspaceId] = true
       try {
         const res = await fetch(`/api/workspaces/${workspaceId}/sessions`)
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
@@ -1410,6 +1429,8 @@ export const useWorkspaceStore = defineStore('workspace', {
         }
       } catch (err) {
         console.error('[workspace store] fetchSessions failed:', err)
+      } finally {
+        if (_sessionsRequestVersions.get(workspaceId) === requestVersion) delete this.loadingSessions[workspaceId]
       }
     },
 

@@ -3065,7 +3065,7 @@ describe('POST /api/workspaces/:id/stop', () => {
   it('returns stopped even when agent is not running', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
     vi.mocked(agentManager.stopAgentAndWait).mockImplementation(async () => {
-      throw new Error('Agent not tracked')
+      return 'not-running'
     })
 
     const res = await app.request('/api/workspaces/ws-1/stop', { method: 'POST' })
@@ -4092,7 +4092,7 @@ describe('POST /api/workspaces/:id/archive', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.archivedAt).toBe('2026-04-05T10:00:00.000Z')
-    expect(agentManager.stopAgentAndWait).toHaveBeenCalledWith('ws-1')
+    expect(agentManager.stopAgentAndWait).toHaveBeenCalledWith('ws-1', undefined, 'archive')
     expect(devServerService.stopDevServer).toHaveBeenCalledWith('ws-1')
     expect(workspaceService.archiveWorkspace).toHaveBeenCalledWith('ws-1')
     expect(wsService.emitEphemeral).toHaveBeenCalledWith('ws-1', 'workspace:archived', { workspace: archivedWs })
@@ -4113,7 +4113,7 @@ describe('POST /api/workspaces/:id/archive', () => {
     expect(res.status).toBe(400)
   })
 
-  it('succeeds even if stopDevServer throws (swallowed failure)', async () => {
+  it('does not archive when dev-server shutdown fails', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
     const archivedWs = { ...fakeWorkspace, archivedAt: '2026-04-05T10:00:00.000Z' }
     vi.mocked(workspaceService.archiveWorkspace).mockReturnValue(archivedWs)
@@ -4121,8 +4121,8 @@ describe('POST /api/workspaces/:id/archive', () => {
       throw new Error('docker daemon unreachable')
     })
     const res = await app.request('/api/workspaces/ws-1/archive', { method: 'POST' })
-    expect(res.status).toBe(200)
-    expect(workspaceService.archiveWorkspace).toHaveBeenCalledWith('ws-1')
+    expect(res.status).toBe(500)
+    expect(workspaceService.archiveWorkspace).not.toHaveBeenCalled()
   })
 })
 
@@ -6859,6 +6859,7 @@ describe('POST /api/workspaces/:id/change-source-branch', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     changeSourceBranchMock.mockReset()
+    vi.mocked(agentManager.hasController).mockReturnValue(false)
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace as never)
   })
 

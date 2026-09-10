@@ -1,3 +1,4 @@
+import path from 'node:path'
 import { Hono } from 'hono'
 import { getForgeProvider } from '../services/forge/registry.js'
 import { resolveForge } from '../services/forge/resolve.js'
@@ -79,7 +80,7 @@ app.post('/diagnose', async (c) => {
         ongoingOperation: null,
         branch: { state: 'absent' },
       }
-      return c.json({ report, pr: null, fingerprint: prCheckout.computeFingerprint(report) })
+      return c.json({ report, pr: null, fingerprint: await prCheckout.computeFingerprint(report) })
     }
 
     // Page through the full list — a PR the user explicitly diagnosed by
@@ -94,7 +95,9 @@ app.post('/diagnose', async (c) => {
     } while (!pr && cursor !== null)
     if (!pr) return c.json({ error: `Pull request #${prNumber} not found` }, 404)
 
-    const workspaces = listWorkspaces(true)
+    const workspaces = listWorkspaces(true).filter(
+      (workspace) => path.resolve(workspace.projectPath) === path.resolve(projectPath),
+    )
     const report = prCheckout.diagnoseLocalState(
       projectPath,
       pr.headBranch,
@@ -105,7 +108,7 @@ app.post('/diagnose', async (c) => {
 
     if (pr.isFork) report.blockers.push({ kind: 'fork-pr' })
 
-    return c.json({ report, pr, fingerprint: prCheckout.computeFingerprint(report) })
+    return c.json({ report, pr, fingerprint: await prCheckout.computeFingerprint(report) })
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
   }
@@ -139,7 +142,9 @@ app.post('/resolve', async (c) => {
       return c.json({ error: 'Missing required fields: projectPath, fingerprint' }, 400)
     }
 
-    const workspaces = listWorkspaces(true)
+    const workspaces = listWorkspaces(true).filter(
+      (workspace) => path.resolve(workspace.projectPath) === path.resolve(body.projectPath),
+    )
     const result = await prCheckout.resolvePrCheckout({
       projectPath: body.projectPath,
       headBranch: body.headBranch,

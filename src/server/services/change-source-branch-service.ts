@@ -1,3 +1,4 @@
+import { withWorkspaceLifecycleGuard } from '../utils/workspace-lifecycle-guard.js'
 // src/server/services/change-source-branch-service.ts
 
 import { spawn } from 'node:child_process'
@@ -59,6 +60,15 @@ const BACKUP_BRANCHES_KEPT = 3
  * running, unknown base). Returns a status discriminating the outcome.
  */
 export async function changeSourceBranch(workspaceId: string, newBase: string): Promise<ChangeSourceBranchResult> {
+  // Always acquire workspace ownership before the shared repository lock.
+  return withWorkspaceLifecycleGuard(workspaceId, () => {
+    const workspace = getWorkspace(workspaceId)
+    if (!workspace) throw new Error(`Workspace '${workspaceId}' not found`)
+    return withGitRepoLock(workspace.worktreePath, () => changeSourceBranchGuarded(workspaceId, newBase))
+  })
+}
+
+async function changeSourceBranchGuarded(workspaceId: string, newBase: string): Promise<ChangeSourceBranchResult> {
   const workspace = getWorkspace(workspaceId)
   if (!workspace) throw new Error(`Workspace '${workspaceId}' not found`)
 
@@ -100,19 +110,17 @@ export async function changeSourceBranch(workspaceId: string, newBase: string): 
     }
     // A stale index.lock makes every git write fail half-way through, and the
     // raw git message tells the user nothing. Typical origin: a setup/cleanup
-    // script SIGKILLed at its timeout during a commit. The custom-script path
-    // does not go through the repository lock, so the check is immediate here.
+    // script SIGKILLed at its timeout during a commit. Both paths hold the lock.
     gitOps.assertNoIndexLock(worktreePath)
+    gitOps.assertCurrentBranch(worktreePath, workingBranch)
     return runCustomScript(workspace, oldBase, trimmedNew, effective.changeSourceBranchScript)
   }
 
-  // The whole built-in strategy runs under the repository lock: it fetches,
+  // Both strategies run under the repository lock: it fetches,
   // resets and cherry-picks, all of which touch the COMMON git dir shared by
   // every worktree of the project. A concurrent fetch from the PR watcher
   // during the cherry-pick leaves it aborted mid-way.
-  return withGitRepoLock(worktreePath, () =>
-    runBuiltInStrategy(workspaceId, worktreePath, workingBranch, workspace.projectPath, oldBase, trimmedNew),
-  )
+  return runBuiltInStrategy(workspaceId, worktreePath, workingBranch, workspace.projectPath, oldBase, trimmedNew)
 }
 
 /** The built-in cherry-pick strategy. Always called under the repository lock. */
@@ -140,6 +148,10 @@ async function runBuiltInStrategy(
   } catch {
     // offline / no remote — proceed with local refs
   }
+  assertWorkspaceUnchanged(workspaceId, worktreePath, workingBranch, oldBase)
+  gitOps.assertCurrentBranch(worktreePath, workingBranch)
+  if (getAgentStatus(workspaceId) !== null)
+    throw new Error('Cannot change the source branch while the agent is running')
   if (!gitOps.branchExists(worktreePath, trimmedNew, 'origin')) {
     throw new Error(`Source branch 'origin/${trimmedNew}' does not exist`)
   }
@@ -270,6 +282,12 @@ async function runCustomScript(
   } catch (err) {
     console.warn('[change-source-branch] PR lookup failed, KOBO_PR_NUMBER will be empty:', err)
   }
+  assertWorkspaceUnchanged(workspace.id, workspace.worktreePath, workspace.workingBranch, oldBase)
+  gitOps.assertCurrentBranch(workspace.worktreePath, workspace.workingBranch)
+  if (gitOps.worktreeHasChangesStrict(workspace.worktreePath))
+    return { status: 'dirty', forcePushNeeded: false, commitCount: 0 }
+  if (getAgentStatus(workspace.id) !== null)
+    throw new Error('Cannot change the source branch while the agent is running')
   return new Promise((resolve, reject) => {
     const child = spawn('bash', ['-c', script], {
       cwd: workspace.worktreePath,
@@ -327,4 +345,19 @@ async function runCustomScript(
       reject(new Error(`Custom change-source-branch script failed: ${detail}`))
     })
   })
+}
+
+/** Async lookups must not authorize mutations using obsolete workspace metadata. */
+function assertWorkspaceUnchanged(id: string, worktreePath: string, branch: string, sourceBranch: string): void {
+  const current = getWorkspace(id)
+  if (
+    !current ||
+    current.archivedAt ||
+    current.worktreePurgedAt ||
+    current.worktreePath !== worktreePath ||
+    current.workingBranch !== branch ||
+    current.sourceBranch !== sourceBranch
+  ) {
+    throw new Error('Workspace changed during source-branch validation; retry the operation')
+  }
 }

@@ -1376,6 +1376,34 @@ describe('workspace store', () => {
   })
 
   describe('fetchSessions ordering', () => {
+    it('retains the latest session loader when an older request ends, and clears it on failure', async () => {
+      const store = useWorkspaceStore()
+      const resolve: Array<(response: Response) => void> = []
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(
+          () =>
+            new Promise<Response>((done) => {
+              resolve.push(done)
+            }),
+        ),
+      )
+      const log = vi.spyOn(console, 'error').mockImplementation(() => {})
+      try {
+        const first = store.fetchSessions('w1')
+        const second = store.fetchSessions('w1')
+        resolve[0]({ ok: true, json: async () => [] } as Response)
+        await first
+        expect(store.loadingSessions.w1).toBe(true)
+        resolve[1]({ ok: false, status: 500 } as Response)
+        await second
+        expect(store.loadingSessions.w1).toBeUndefined()
+      } finally {
+        log.mockRestore()
+        vi.unstubAllGlobals()
+      }
+    })
+
     it('ignores an older response for the same workspace when requests overlap', async () => {
       const store = useWorkspaceStore()
       store.selectedWorkspaceId = 'w1'
@@ -1401,8 +1429,10 @@ describe('workspace store', () => {
 
       const first = store.fetchSessions('w1')
       const second = store.fetchSessions('w1')
+      expect(store.loadingSessions.w1).toBe(true)
       resolveSecond({ ok: true, json: async () => [session('new')] } as Response)
       await second
+      expect(store.loadingSessions.w1).toBeUndefined()
       resolveFirst({ ok: true, json: async () => [session('old')] } as Response)
       await first
 
@@ -1494,7 +1524,7 @@ describe('workspace store', () => {
       vi.unstubAllGlobals()
     })
 
-    it('does not let a stale response overwrite a status that changed via WebSocket while the request was in flight, but still applies agentLiveness', async () => {
+    it('does not let a stale response overwrite a status that changed via WebSocket while the request was in flight, and ignores stale agentLiveness', async () => {
       const store = useWorkspaceStore()
       store.selectedWorkspaceId = 'w1'
       store.workspaces = [makeWorkspace({ id: 'w1', status: 'executing' })]
@@ -1532,15 +1562,7 @@ describe('workspace store', () => {
       // The stale `executing` from the in-flight request must not clobber
       // the fresher `awaiting-user` the WebSocket already applied.
       expect(store.workspaces[0]?.status).toBe('awaiting-user')
-      // Liveness is server-authoritative and independent of the status
-      // guard — it must still be applied even though the status write was
-      // suppressed.
-      expect(store.agentLiveness.w1).toEqual({
-        status: 'running',
-        agentSessionId: 's1',
-        startedAt: 't0',
-        lastEventAt: 't1',
-      })
+      expect(store.agentLiveness.w1).toBeUndefined()
       vi.unstubAllGlobals()
     })
   })
@@ -2519,4 +2541,74 @@ describe('workspace store', () => {
       expect(store.listLoadError).toBe('database is locked')
     })
   })
+})
+
+describe('workspace list request races', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+  it('preserves a WebSocket update received during a list request', async () => {
+    const store = useWorkspaceStore()
+    store.workspaces = [makeWorkspace()]
+    let finish!: (response: Response) => void
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            finish = resolve
+          }),
+      ),
+    )
+    const pending = store.fetchWorkspaces()
+    store.updateWorkspaceFromEvent('w1', { status: 'executing', name: 'new name' })
+    finish(Response.json([makeWorkspace()]))
+    await pending
+    expect(store.workspaces[0]?.status).toBe('executing')
+    expect(store.workspaces[0]?.name).toBe('new name')
+  })
+  it('ignores an older request and its error after a newer request succeeds', async () => {
+    const store = useWorkspaceStore()
+    let rejectOld!: (error: Error) => void
+    vi.stubGlobal(
+      'fetch',
+      vi
+        .fn()
+        .mockImplementationOnce(
+          () =>
+            new Promise<Response>((_resolve, reject) => {
+              rejectOld = reject
+            }),
+        )
+        .mockResolvedValue(Response.json([makeWorkspace({ name: 'latest' })])),
+    )
+    const old = store.fetchWorkspaces()
+    await store.fetchWorkspaces()
+    rejectOld(new Error('old failure'))
+    await old
+    expect(store.workspaces[0]?.name).toBe('latest')
+    expect(store.listLoadError).toBeNull()
+    expect(store.loading).toBe(false)
+  })
+})
+
+it('retains a workspace created while an older list was loading', async () => {
+  setActivePinia(createPinia())
+  const store = useWorkspaceStore()
+  let finish!: (response: Response) => void
+  vi.stubGlobal(
+    'fetch',
+    vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<Response>((resolve) => {
+            finish = resolve
+          }),
+      )
+      .mockResolvedValue(Response.json(makeWorkspace({ id: 'new' }))),
+  )
+  const pending = store.fetchWorkspaces()
+  await store.createWorkspace({ name: 'new', projectPath: '/', sourceBranch: 'main', workingBranch: 'b' })
+  finish(Response.json([]))
+  await pending
+  expect(store.workspaces.map((workspace) => workspace.id)).toEqual(['new'])
 })

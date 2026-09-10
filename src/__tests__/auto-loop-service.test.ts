@@ -14,6 +14,7 @@ vi.mock('../server/services/agent/orchestrator.js', () => ({
   startAgent: vi.fn(() => ({ agentSessionId: 'mock-agent-session-id' })),
   hasController: vi.fn(() => false),
   runningAgentCount: vi.fn(() => 0),
+  isShuttingDown: vi.fn(() => false),
 }))
 
 vi.mock('../server/services/lifecycle-hook-service.js', () => ({
@@ -490,7 +491,7 @@ describe('auto-loop-service', () => {
       vi.useFakeTimers()
       try {
         quota.setOnFireCallback(svc.onQuotaBackoffExpired)
-        quota.arm(wsId, 60_000, { resetsAt: null, source: 'fallback_ladder', reason: 'quota' })
+        quota.arm(wsId, 60_000, { resetsAt: null, source: 'fallback_ladder', reason: 'quota', retryCount: 1 })
         await vi.advanceTimersByTimeAsync(60_000)
         expect(quota.getPending(wsId)).toBeNull()
         expect(orch.startAgent).not.toHaveBeenCalled()

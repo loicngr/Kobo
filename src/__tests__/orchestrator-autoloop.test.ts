@@ -346,7 +346,7 @@ describe('orchestrator auto-loop integration', () => {
     const first = orch.startAgent(wsId, '/tmp/p', 'first')
     await flushControllerStart()
     emitters[0]?.({ kind: 'session:started', engineSessionId: 'engine-1' })
-    orch.stopAgent(wsId)
+    await orch.stopAgentAndWait(wsId)
 
     const replacement = orch.startAgent(wsId, '/tmp/p', 'replacement')
     await flushControllerStart()
@@ -361,7 +361,7 @@ describe('orchestrator auto-loop integration', () => {
     updateTaskStatus(secondTask.id, 'done')
 
     orch._getRetryCounts().set(wsId, 2)
-    quotaBackoff.arm(wsId, 60_000, { resetsAt: null, source: 'fallback_ladder', reason: 'quota' })
+    quotaBackoff.arm(wsId, 60_000, { resetsAt: null, source: 'fallback_ladder', reason: 'quota', retryCount: 1 })
     vi.clearAllMocks()
 
     emitters[0]?.({ kind: 'session:started', engineSessionId: 'late-engine-1' })
@@ -436,7 +436,7 @@ describe('orchestrator auto-loop integration', () => {
     const first = orch.startAgent(wsId, '/tmp/p', 'first')
     await flushControllerStart()
     emitters[0]?.({ kind: 'session:started', engineSessionId: 'engine-shared' })
-    orch.stopAgent(wsId)
+    await orch.stopAgentAndWait(wsId)
 
     const replacement = orch.startAgent(wsId, '/tmp/p', 'replacement', undefined, true, 'bypass', first.agentSessionId)
     await flushControllerStart()
@@ -511,7 +511,7 @@ describe('orchestrator auto-loop integration', () => {
     const first = orch.startAgent(wsId, '/tmp/p', 'first')
     await flushControllerStart()
     emitters[0]?.({ kind: 'session:started', engineSessionId: 'engine-shared' })
-    orch.stopAgent(wsId)
+    await orch.stopAgentAndWait(wsId)
 
     const replacement = orch.startAgent(wsId, '/tmp/p', 'replacement', undefined, true, 'bypass', first.agentSessionId)
     await flushControllerStart()
@@ -575,7 +575,7 @@ describe('orchestrator auto-loop integration', () => {
     const first = orch.startAgent(wsId, '/tmp/p', 'first')
     await flushControllerStart()
     emitters[0]?.({ kind: 'session:started', engineSessionId: 'engine-shared' })
-    orch.stopAgent(wsId)
+    await orch.stopAgentAndWait(wsId)
 
     const second = orch.startAgent(wsId, '/tmp/p', 'second', undefined, true, 'bypass', first.agentSessionId)
     await flushControllerStart()
@@ -634,7 +634,7 @@ describe('orchestrator auto-loop integration', () => {
     await flushControllerStart()
     emitEvent({ kind: 'session:started', engineSessionId: 'manual-stop-engine' })
     orch._getRetryCounts().set(wsId, 2)
-    orch.stopAgent(wsId)
+    const stopFinished = orch.stopAgentAndWait(wsId)
     vi.clearAllMocks()
 
     emitEvent({ kind: 'session:started', engineSessionId: 'late-manual-stop-engine' })
@@ -655,6 +655,8 @@ describe('orchestrator auto-loop integration', () => {
       reason: 'killed',
       exitCode: null,
     })
+    expect(orch._getControllers().has(wsId)).toBe(true)
+    await stopFinished
     expect(orch._getControllers().has(wsId)).toBe(false)
     expect(orch._getRetryCounts().has(wsId)).toBe(false)
     expect(autoLoop.onSessionEnded).not.toHaveBeenCalled()
@@ -834,7 +836,7 @@ describe('handleQuota auto-loop timer', () => {
     await orch.__test__.handleQuota(wsId)
     vi.advanceTimersByTime(15 * 60 * 1000 + 1000)
 
-    expect(autoLoop.onQuotaBackoffExpired).toHaveBeenCalledWith(wsId)
+    expect(autoLoop.onQuotaBackoffExpired).toHaveBeenCalledWith(wsId, expect.objectContaining({ retryCount: 1 }))
   })
 
   it('calls onQuotaBackoffExpired when the backoff timer fires (auto_loop disabled — service no-ops)', async () => {
@@ -853,7 +855,7 @@ describe('handleQuota auto-loop timer', () => {
     await orch.__test__.handleQuota(wsId)
     vi.advanceTimersByTime(15 * 60 * 1000 + 1000)
 
-    expect(autoLoop.onQuotaBackoffExpired).toHaveBeenCalledWith(wsId)
+    expect(autoLoop.onQuotaBackoffExpired).toHaveBeenCalledWith(wsId, expect.objectContaining({ retryCount: 1 }))
   })
 })
 

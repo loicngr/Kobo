@@ -342,6 +342,7 @@ describe('handleQuota → quotaBackoffService.arm', () => {
       resetsAt: null,
       source: 'fallback_ladder',
       reason: 'transient',
+      retryCount: 1,
     })
   })
 

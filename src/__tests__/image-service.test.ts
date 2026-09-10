@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { deleteImage, saveImage } from '../server/services/image-service.js'
 
 describe('image-service', () => {
@@ -16,6 +16,28 @@ describe('image-service', () => {
   })
 
   describe('saveImage', () => {
+    it('does not follow a pre-existing temporary index symlink', async () => {
+      const images = path.join(tmpDir, '.ai/images')
+      fs.mkdirSync(images, { recursive: true })
+      const outside = path.join(tmpDir, 'outside.txt')
+      fs.writeFileSync(outside, 'sentinel')
+      fs.symlinkSync(outside, path.join(images, `.index-${process.pid}.tmp`))
+      await saveImage(tmpDir, Buffer.from('image'), 'a.png')
+      expect(fs.readFileSync(outside, 'utf8')).toBe('sentinel')
+    })
+
+    it('removes the new image and temporary index when publishing the index fails', async () => {
+      const rename = vi.spyOn(fs, 'renameSync').mockImplementationOnce(() => {
+        throw new Error('rename denied')
+      })
+      try {
+        await expect(saveImage(tmpDir, Buffer.from('image'), 'a.png')).rejects.toThrow('rename denied')
+        expect(fs.readdirSync(path.join(tmpDir, '.ai/images'))).toEqual([])
+      } finally {
+        rename.mockRestore()
+      }
+    })
+
     it('saves a PNG file and returns uid + relativePath', async () => {
       const result = await saveImage(tmpDir, Buffer.from('fake-image-data'), 'photo.png')
 

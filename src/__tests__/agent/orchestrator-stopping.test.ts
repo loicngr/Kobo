@@ -9,6 +9,8 @@ vi.mock('../../server/services/websocket-service.js', () => ({
 
 vi.mock('../../server/services/settings-service.js', () => ({
   getGlobalSettings: () => ({ autoLoopMaxRetries: 5 }),
+  getProjectSettings: () => ({ forge: 'none' }),
+  getEffectiveFinalization: () => ({ prompt: '' }),
   getEffectiveSettings: () => ({
     model: 'claude-opus-4-7',
     dangerouslySkipPermissions: true,
@@ -19,6 +21,8 @@ vi.mock('../../server/services/settings-service.js', () => ({
     setupScript: '',
     notionStatusProperty: '',
     notionInProgressStatus: '',
+    sessionEndedScript: '',
+    autoLoopDisabledScript: '',
   }),
 }))
 
@@ -147,7 +151,7 @@ describe('Orchestrator — stopping window', () => {
     expect(gated.startCount()).toBe(2)
   })
 
-  it('evicts a controller that never honours its own stop, after the bounded timeout', async () => {
+  it('retains an unconfirmed controller after the bounded timeout', async () => {
     const { createWorkspace } = await import('../../server/services/workspace-service.js')
     const ws = createWorkspace({
       name: 'W',
@@ -164,7 +168,480 @@ describe('Orchestrator — stopping window', () => {
     const outcome = await orch.stopAgentAndWait(ws.id, 20)
 
     expect(outcome).toBe('timeout')
+    expect(orch.hasController(ws.id)).toBe(true)
+    expect(() => orch.startAgent(ws.id, '/tmp', 'replacement')).toThrow(/stopping/i)
+    gated.releaseStop()
+    await flush()
     expect(orch.hasController(ws.id)).toBe(false)
+  })
+
+  it('cancels a zombie replacement when the user stops before its engine starts', async () => {
+    const { createWorkspace } = await import('../../server/services/workspace-service.js')
+    const { getDb } = await import('../../server/db/index.js')
+    const orch = await import('../../server/services/agent/orchestrator.js')
+    const ws = createWorkspace({
+      name: 'W',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/cancel-replacement',
+    })
+    orch.startAgent(ws.id, '/tmp', 'first')
+    await flush()
+    getDb().prepare("UPDATE workspaces SET status = 'idle' WHERE id = ?").run(ws.id)
+    const replacement = orch.startAgent(ws.id, '/tmp', 'replacement')
+    await flush()
+
+    const stopped = orch.stopAgentAndWait(ws.id)
+    gated.releaseStop()
+    await expect(stopped).resolves.toBe('stopped')
+    await flush()
+
+    expect(gated.startCount()).toBe(1)
+    expect(orch.hasController(ws.id)).toBe(false)
+    const row = getDb()
+      .prepare('SELECT status, end_reason, ended_at FROM agent_sessions WHERE id = ?')
+      .get(replacement.agentSessionId)
+    expect(row).toEqual({ status: 'error', end_reason: 'killed', ended_at: expect.any(String) })
+    const { emit } = await import('../../server/services/websocket-service.js')
+    expect(
+      vi
+        .mocked(emit)
+        .mock.calls.some(
+          ([, , event]) =>
+            (event as AgentEvent).kind === 'error' && (event as { category?: string }).category === 'spawn_failed',
+        ),
+    ).toBe(false)
+  })
+
+  it('retains the controller on a failed stop and permits a later retry', async () => {
+    const { createWorkspace } = await import('../../server/services/workspace-service.js')
+    const ws = createWorkspace({
+      name: 'W',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/stop-failed',
+    })
+    const orch = await import('../../server/services/agent/orchestrator.js')
+    orch.startAgent(ws.id, '/tmp', 'hi')
+    await flush()
+    const ep = orch._getControllers().get(ws.id)!.engineProcess!
+    vi.spyOn(ep, 'stop').mockRejectedValueOnce(new Error('stop failed')).mockResolvedValueOnce()
+    await expect(orch.stopAgentAndWait(ws.id)).resolves.toBe('failed')
+    expect(orch.hasController(ws.id)).toBe(true)
+    await expect(orch.stopAgentAndWait(ws.id)).resolves.toBe('stopped')
+    expect(orch.hasController(ws.id)).toBe(false)
+  })
+
+  it('refuses a new agent while the workspace lifecycle guard is held', async () => {
+    const { createWorkspace } = await import('../../server/services/workspace-service.js')
+    const { withWorkspaceLifecycleGuard } = await import('../../server/utils/workspace-lifecycle-guard.js')
+    const ws = createWorkspace({
+      name: 'W',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/purging',
+    })
+    const orch = await import('../../server/services/agent/orchestrator.js')
+    await withWorkspaceLifecycleGuard(ws.id, async () => {
+      expect(() => orch.startAgent(ws.id, '/tmp', 'hi')).toThrow(/operation is in progress/)
+      expect(orch.hasController(ws.id)).toBe(false)
+    })
+    expect(gated.startCount()).toBe(0)
+  })
+
+  it('notifies capacity waiters only after a manual stop is confirmed', async () => {
+    const { createWorkspace } = await import('../../server/services/workspace-service.js')
+    const loops = await import('../../server/services/auto-loop-service.js')
+    const resume = vi.spyOn(loops, 'resumeWaitingWorkspaces').mockImplementation(() => {})
+    const ws = createWorkspace({
+      name: 'W',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/slot',
+    })
+    const orch = await import('../../server/services/agent/orchestrator.js')
+    orch.startAgent(ws.id, '/tmp', 'hi')
+    await flush()
+    const pending = orch.stopAgentAndWait(ws.id)
+    await flush()
+    expect(resume).not.toHaveBeenCalled()
+    gated.releaseStop()
+    await pending
+    await flush()
+    expect(resume).toHaveBeenCalledTimes(1)
+  })
+
+  it('does not restart a manually stopped loop when another workspace later stops', async () => {
+    const { createWorkspace, createTask } = await import('../../server/services/workspace-service.js')
+    const { getDb } = await import('../../server/db/index.js')
+    const orch = await import('../../server/services/agent/orchestrator.js')
+    const a = createWorkspace({
+      name: 'A',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/manual-a',
+    })
+    const b = createWorkspace({
+      name: 'B',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/manual-b',
+    })
+    createTask(a.id, { title: 'Pending work' })
+    getDb()
+      .prepare('UPDATE workspaces SET auto_loop = 1, auto_loop_ready = 1, worktree_path = ? WHERE id = ?')
+      .run(process.env.KOBO_HOME, a.id)
+    orch.startAgent(a.id, '/tmp', 'A')
+    orch.startAgent(b.id, '/tmp', 'B')
+    await flush()
+    const stopA = orch.stopAgentAndWait(a.id)
+    await flush()
+    gated.releaseStop()
+    await stopA
+    await flush()
+    expect(orch.hasController(a.id)).toBe(false)
+
+    const stopB = orch.stopAgentAndWait(b.id)
+    await flush()
+    gated.releaseStop()
+    await stopB
+    await flush()
+    expect(orch.hasController(a.id)).toBe(false)
+    const loops = await import('../../server/services/auto-loop-service.js')
+    expect(loops.getStatus(a.id).auto_loop).toBe(false)
+  })
+
+  it('disables a waiting auto-loop even when there is no controller to stop', async () => {
+    const { createWorkspace } = await import('../../server/services/workspace-service.js')
+    const { getDb } = await import('../../server/db/index.js')
+    const orch = await import('../../server/services/agent/orchestrator.js')
+    const loops = await import('../../server/services/auto-loop-service.js')
+    const ws = createWorkspace({
+      name: 'Waiting',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/stop-waiting',
+    })
+    getDb().prepare('UPDATE workspaces SET auto_loop = 1, auto_loop_ready = 1 WHERE id = ?').run(ws.id)
+
+    await expect(orch.stopAgentAndWait(ws.id)).resolves.toBe('not-running')
+    expect(loops.getStatus(ws.id).auto_loop).toBe(false)
+  })
+
+  it('preserves auto-loop during internal zombie replacement', async () => {
+    const { createWorkspace } = await import('../../server/services/workspace-service.js')
+    const { getDb } = await import('../../server/db/index.js')
+    const orch = await import('../../server/services/agent/orchestrator.js')
+    const loops = await import('../../server/services/auto-loop-service.js')
+    const ws = createWorkspace({
+      name: 'Loop',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/replace-loop',
+    })
+    orch.startAgent(ws.id, '/tmp', 'first')
+    await flush()
+    getDb().prepare("UPDATE workspaces SET auto_loop = 1, status = 'idle' WHERE id = ?").run(ws.id)
+    orch.startAgent(ws.id, '/tmp', 'replacement')
+    await flush()
+    expect(loops.getStatus(ws.id).auto_loop).toBe(true)
+    gated.releaseStop()
+    await flush()
+    expect(gated.startCount()).toBe(2)
+    expect(loops.getStatus(ws.id).auto_loop).toBe(true)
+  })
+
+  it.each(['resume', 'user-stop', 'capacity'] as const)(
+    'settles a residual quota controller before retrying: %s',
+    async (scenario) => {
+      const { createWorkspace, createTask } = await import('../../server/services/workspace-service.js')
+      const { getDb } = await import('../../server/db/index.js')
+      const orch = await import('../../server/services/agent/orchestrator.js')
+      const loops = await import('../../server/services/auto-loop-service.js')
+      const quota = await import('../../server/services/quota-backoff-service.js')
+      const ws = createWorkspace({ name: 'Quota', projectPath: '/tmp', sourceBranch: 'main', workingBranch: 'quota' })
+      createTask(ws.id, { title: 'Pending' })
+      orch.startAgent(ws.id, '/tmp', 'first')
+      await flush()
+      getDb()
+        .prepare(
+          "UPDATE workspaces SET auto_loop = 1, auto_loop_ready = 1, status = 'quota', worktree_path = ? WHERE id = ?",
+        )
+        .run(process.env.KOBO_HOME, ws.id)
+      quota.arm(ws.id, 0, { resetsAt: null, source: 'fallback_ladder', reason: 'quota', retryCount: 2 })
+      await flush()
+      expect(orch.getAgentStatus(ws.id)).toBe('stopping')
+      expect(gated.startCount()).toBe(1)
+      // Repeated callbacks cannot arrange a second replacement.
+      loops.onQuotaBackoffExpired(ws.id)
+      let manualStop: Promise<unknown> | undefined
+      let capacity: ReturnType<typeof vi.spyOn> | undefined
+      let settings: ReturnType<typeof vi.spyOn> | undefined
+      if (scenario === 'user-stop') manualStop = orch.stopAgentAndWait(ws.id)
+      if (scenario === 'capacity') {
+        const service = await import('../../server/services/settings-service.js')
+        settings = vi.spyOn(service, 'getGlobalSettings').mockReturnValue({ maxConcurrentAgents: 1 } as never)
+        capacity = vi.spyOn(orch, 'runningAgentCount').mockReturnValue(1)
+      }
+      try {
+        gated.releaseStop()
+        await manualStop
+        await flush()
+        expect(gated.startCount()).toBe(scenario === 'resume' ? 2 : 1)
+        if (scenario === 'capacity') {
+          capacity!.mockReturnValue(0)
+          loops.resumeWaitingWorkspaces()
+          loops.resumeWaitingWorkspaces()
+          await flush()
+          expect(gated.startCount()).toBe(2)
+        }
+        if (scenario === 'user-stop') expect(loops.getStatus(ws.id).auto_loop).toBe(false)
+      } finally {
+        capacity?.mockRestore()
+        settings?.mockRestore()
+      }
+    },
+  )
+
+  it.each([false, true])(
+    'keeps a durable retry after stop timeout, cancellable after late exit: %s',
+    async (cancel) => {
+      const { createWorkspace, createTask } = await import('../../server/services/workspace-service.js')
+      const { getDb } = await import('../../server/db/index.js')
+      const orch = await import('../../server/services/agent/orchestrator.js')
+      const quota = await import('../../server/services/quota-backoff-service.js')
+      const ws = createWorkspace({ name: 'Quota', projectPath: '/tmp', sourceBranch: 'main', workingBranch: 'quota' })
+      createTask(ws.id, { title: 'Pending' })
+      orch.startAgent(ws.id, '/tmp', 'first')
+      await flush()
+      getDb()
+        .prepare(
+          "UPDATE workspaces SET auto_loop = 1, auto_loop_ready = 1, status = 'quota', worktree_path = ? WHERE id = ?",
+        )
+        .run(process.env.KOBO_HOME, ws.id)
+      vi.useFakeTimers()
+      try {
+        quota.arm(ws.id, 0, { resetsAt: null, source: 'fallback_ladder', reason: 'quota', retryCount: 3 })
+        await vi.advanceTimersByTimeAsync(orch.STOP_AGENT_TIMEOUT_MS + 1)
+        expect(orch.getAgentStatus(ws.id)).toBe('stopping')
+        expect(gated.startCount()).toBe(1)
+        expect(quota.getPending(ws.id)?.retryCount).toBe(3)
+        gated.releaseStop()
+        await vi.advanceTimersByTimeAsync(0)
+        if (cancel) {
+          await expect(orch.stopAgentAndWait(ws.id)).resolves.toBe('not-running')
+          expect(quota.getPending(ws.id)).toBeNull()
+        }
+        await vi.advanceTimersByTimeAsync(20_000)
+        expect(gated.startCount()).toBe(cancel ? 1 : 2)
+      } finally {
+        quota.cancel(ws.id, 'user')
+        vi.useRealTimers()
+      }
+    },
+  )
+
+  it('preserves auto-loop when a deferred lifecycle callback is released during shutdown', async () => {
+    const { createWorkspace, createTask } = await import('../../server/services/workspace-service.js')
+    const { getDb } = await import('../../server/db/index.js')
+    const orch = await import('../../server/services/agent/orchestrator.js')
+    const loops = await import('../../server/services/auto-loop-service.js')
+    const { withWorkspaceLifecycleGuard } = await import('../../server/utils/workspace-lifecycle-guard.js')
+    const ws = createWorkspace({ name: 'Waiting', projectPath: '/tmp', sourceBranch: 'main', workingBranch: 'waiting' })
+    createTask(ws.id, { title: 'Pending' })
+    getDb()
+      .prepare(
+        "UPDATE workspaces SET auto_loop = 1, auto_loop_ready = 1, status = 'idle', worktree_path = ? WHERE id = ?",
+      )
+      .run(process.env.KOBO_HOME, ws.id)
+    let release!: () => void
+    const operation = withWorkspaceLifecycleGuard(
+      ws.id,
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve
+        }),
+    )
+    try {
+      loops.resumeWaitingWorkspaces()
+      expect(gated.startCount()).toBe(0)
+      await orch.stopAllAgents()
+    } finally {
+      release()
+      await operation
+    }
+    await flush()
+    expect(loops.getStatus(ws.id).auto_loop).toBe(true)
+    expect(gated.startCount()).toBe(0)
+    // A separate late ready notification reaches spawnNextIteration directly.
+    loops.onAutoLoopReadySet(ws.id)
+    expect(loops.getStatus(ws.id).auto_loop).toBe(true)
+    expect(gated.startCount()).toBe(0)
+  })
+
+  it('can recover on reboot when shutdown interrupts a residual quota stop', async () => {
+    const { createWorkspace, createTask } = await import('../../server/services/workspace-service.js')
+    const { getDb, closeDb } = await import('../../server/db/index.js')
+    const orch = await import('../../server/services/agent/orchestrator.js')
+    const quota = await import('../../server/services/quota-backoff-service.js')
+    const ws = createWorkspace({ name: 'Quota', projectPath: '/tmp', sourceBranch: 'main', workingBranch: 'quota' })
+    createTask(ws.id, { title: 'Pending' })
+    orch.startAgent(ws.id, '/tmp', 'first')
+    await flush()
+    getDb()
+      .prepare(
+        "UPDATE workspaces SET auto_loop = 1, auto_loop_ready = 1, status = 'quota', worktree_path = ? WHERE id = ?",
+      )
+      .run(process.env.KOBO_HOME, ws.id)
+    const dbPath = getDb().name
+    vi.useFakeTimers()
+    try {
+      quota.arm(ws.id, 0, { resetsAt: null, source: 'fallback_ladder', reason: 'quota', retryCount: 4 })
+      await vi.advanceTimersByTimeAsync(0)
+      const shutdown = orch.stopAllAgents()
+      await vi.advanceTimersByTimeAsync(3_000)
+      await shutdown
+      expect(orch.getAgentStatus(ws.id)).toBe('stopping')
+      expect(quota.getPending(ws.id)?.retryCount).toBe(4)
+      // Finish the test double before simulating a new process with freshly imported services.
+      gated.releaseStop()
+      await vi.advanceTimersByTimeAsync(0)
+      closeDb()
+      vi.resetModules()
+      const freshDb = await import('../../server/db/index.js')
+      freshDb.getDb(dbPath)
+      const registry = await import('../../server/services/agent/engines/registry.js')
+      registry._registerEngineForTest(gated.engine)
+      const freshOrch = await import('../../server/services/agent/orchestrator.js')
+      const freshQuota = await import('../../server/services/quota-backoff-service.js')
+      const freshLoops = await import('../../server/services/auto-loop-service.js')
+      freshOrch.restoreRetryCountsFromDb()
+      freshQuota.restoreOnBoot(freshLoops.onQuotaBackoffExpired)
+      await vi.advanceTimersByTimeAsync(20_000)
+      expect(gated.startCount()).toBe(2)
+      expect(freshOrch._getRetryCounts().get(ws.id)).toBe(4)
+      expect(freshLoops.getStatus(ws.id).auto_loop).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('preserves scheduled rows and auto-loop intent throughout shutdown, including late arms', async () => {
+    const { createWorkspace } = await import('../../server/services/workspace-service.js')
+    const { getDb } = await import('../../server/db/index.js')
+    const orch = await import('../../server/services/agent/orchestrator.js')
+    const quota = await import('../../server/services/quota-backoff-service.js')
+    const wakeup = await import('../../server/services/wakeup-service.js')
+    const cron = await import('../../server/services/cron-service.js')
+    const loops = await import('../../server/services/auto-loop-service.js')
+    const live = createWorkspace({ name: 'Live', projectPath: '/tmp', sourceBranch: 'main', workingBranch: 'live' })
+    const waiting = createWorkspace({
+      name: 'Waiting',
+      projectPath: '/tmp',
+      sourceBranch: 'main',
+      workingBranch: 'waiting',
+    })
+    orch.startAgent(live.id, '/tmp', 'first')
+    await flush()
+    getDb().prepare("UPDATE workspaces SET auto_loop = 1, auto_loop_ready = 1, status = 'quota'").run()
+    vi.useFakeTimers()
+    try {
+      for (const id of [live.id, waiting.id]) {
+        quota.arm(id, 10, { resetsAt: null, source: 'fallback_ladder', reason: 'quota', retryCount: 2 })
+        wakeup.schedule(id, 60, 'Wake later', undefined)
+        cron.arm(id, { expression: '* * * * *', prompt: 'Cron later', oneShot: true })
+      }
+      const before = getDb().prepare('SELECT * FROM pending_quota_backoffs ORDER BY workspace_id').all()
+      const shutdown = orch.stopAllAgents()
+      await vi.advanceTimersByTimeAsync(20)
+      expect(getDb().prepare('SELECT * FROM pending_quota_backoffs ORDER BY workspace_id').all()).toEqual(before)
+      gated.releaseStop()
+      await shutdown
+      // An already-running hook/request can persist a new schedule after suspension.
+      quota.arm(waiting.id, 10, { resetsAt: null, source: 'fallback_ladder', reason: 'quota', retryCount: 3 })
+      wakeup.schedule(waiting.id, 60, 'Late wake', undefined)
+      cron.arm(waiting.id, { expression: '* * * * *', prompt: 'Late cron', oneShot: true })
+      const wakes = getDb().prepare('SELECT * FROM pending_wakeups ORDER BY workspace_id').all()
+      const crons = getDb().prepare('SELECT * FROM pending_crons ORDER BY id').all()
+      await vi.advanceTimersByTimeAsync(120_000)
+      expect(quota.getPending(waiting.id)?.retryCount).toBe(3)
+      expect(getDb().prepare('SELECT * FROM pending_wakeups ORDER BY workspace_id').all()).toEqual(wakes)
+      expect(getDb().prepare('SELECT * FROM pending_crons ORDER BY id').all()).toEqual(crons)
+      expect(loops.getStatus(waiting.id).auto_loop).toBe(true)
+      expect(loops.getStatus(live.id).auto_loop).toBe(true)
+      expect(gated.startCount()).toBe(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('preserves auto-loop when the backend shuts down', async () => {
+    const { createWorkspace } = await import('../../server/services/workspace-service.js')
+    const { getDb } = await import('../../server/db/index.js')
+    const orch = await import('../../server/services/agent/orchestrator.js')
+    const loops = await import('../../server/services/auto-loop-service.js')
+    const ws = createWorkspace({
+      name: 'Loop',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/shutdown-loop',
+    })
+    getDb().prepare('UPDATE workspaces SET auto_loop = 1 WHERE id = ?').run(ws.id)
+    orch.startAgent(ws.id, '/tmp', 'first')
+    await flush()
+    const shutdown = orch.stopAllAgents()
+    await flush()
+    gated.releaseStop()
+    await shutdown
+    expect(loops.getStatus(ws.id).auto_loop).toBe(true)
+  })
+
+  it('cancels a pending replacement on shutdown after the predecessor leaves the controller map', async () => {
+    const { createWorkspace } = await import('../../server/services/workspace-service.js')
+    const { getDb } = await import('../../server/db/index.js')
+    const orch = await import('../../server/services/agent/orchestrator.js')
+    const ws = createWorkspace({
+      name: 'W',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/shutdown-replacement',
+    })
+    orch.startAgent(ws.id, '/tmp', 'first')
+    await flush()
+    getDb().prepare("UPDATE workspaces SET status = 'idle' WHERE id = ?").run(ws.id)
+    const replacement = orch.startAgent(ws.id, '/tmp', 'replacement')
+    await flush()
+    gated.releaseStop()
+    // Stop in the real microtask window between the predecessor's removal
+    // and the replacement's continuation, without editing either registry.
+    for (let turn = 0; orch.hasController(ws.id) && turn < 30; turn++) await Promise.resolve()
+    expect(orch.hasController(ws.id)).toBe(false)
+    expect(gated.startCount()).toBe(1)
+
+    await orch.stopAllAgents()
+    await flush()
+
+    expect(gated.startCount()).toBe(1)
+    expect(orch.hasController(ws.id)).toBe(false)
+    expect(
+      getDb().prepare('SELECT end_reason FROM agent_sessions WHERE id = ?').get(replacement.agentSessionId),
+    ).toEqual({ end_reason: 'killed' })
+  })
+
+  it('rejects new starts once shutdown has begun', async () => {
+    const { createWorkspace } = await import('../../server/services/workspace-service.js')
+    const orch = await import('../../server/services/agent/orchestrator.js')
+    const ws = createWorkspace({
+      name: 'W',
+      projectPath: '/tmp',
+      sourceBranch: 'develop',
+      workingBranch: 'feature/no-start-after-shutdown',
+    })
+    await orch.stopAllAgents()
+
+    expect(() => orch.startAgent(ws.id, '/tmp', 'late request')).toThrow(/shutting down/)
+    expect(orch.hasController(ws.id)).toBe(false)
+    expect(gated.startCount()).toBe(0)
   })
 
   it('reports not-running when no controller exists', async () => {

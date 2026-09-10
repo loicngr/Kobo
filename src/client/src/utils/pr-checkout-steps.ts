@@ -114,3 +114,20 @@ export function defaultDecisions(report: PrCheckoutReport): PrCheckoutDecisions 
 
   return decisions
 }
+
+/** Return an i18n key for choices that cannot preserve the requested work. */
+export function checkoutDecisionError(report: PrCheckoutReport, decisions: PrCheckoutDecisions): string | null {
+  if (
+    (report.worktree.state === 'orphan' || report.worktree.state === 'attached') &&
+    decisions.orphanWorktree === 'create-elsewhere'
+  )
+    return 'prCheckout.worktree.branchInUse'
+  if (
+    report.localChanges.present &&
+    (decisions.localChanges ?? 'keep') === 'keep' &&
+    decisions.divergence === 'reset-hard'
+  ) {
+    return 'prCheckout.changes.keepResetConflict'
+  }
+  return null
+}

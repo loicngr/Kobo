@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import * as wsService from '../services/websocket-service.js'
 import { getIndexLockPath } from './git-ops.js'
+import { ensureDirectoryInside } from './safe-path.js'
 
 /** Default wall-clock budget for a user script before it is force-killed. */
 export const SCRIPT_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes
@@ -42,10 +43,29 @@ export function runScript(opts: RunScriptOptions): Promise<{ exitCode: number }>
   const { workspaceId, worktreePath, script, eventPrefix, tmpFileName, env, extraEnv } = opts
   const timeoutMs = opts.timeoutMs ?? SCRIPT_TIMEOUT_MS
 
-  return new Promise((resolve) => {
-    const scriptPath = path.join(worktreePath, '.ai', tmpFileName)
-    fs.mkdirSync(path.dirname(scriptPath), { recursive: true })
-    fs.writeFileSync(scriptPath, script, { mode: 0o755 })
+  let scriptPath: string | undefined
+  let scriptDirectory: string | undefined
+  const cleanup = (): void => {
+    if (scriptPath) {
+      try {
+        fs.unlinkSync(scriptPath)
+      } catch {
+        /* best effort */
+      }
+    }
+    if (scriptDirectory) {
+      try {
+        fs.rmdirSync(scriptDirectory)
+      } catch {
+        /* best effort */
+      }
+    }
+  }
+  return new Promise<{ exitCode: number }>((resolve) => {
+    const storage = ensureDirectoryInside(worktreePath, '.ai')
+    scriptDirectory = fs.mkdtempSync(path.join(storage, '.script-'))
+    scriptPath = path.join(scriptDirectory, path.basename(tmpFileName))
+    fs.writeFileSync(scriptPath, script, { mode: 0o700, flag: 'wx' })
 
     const proc = spawn('bash', [scriptPath], {
       cwd: worktreePath,
@@ -127,11 +147,7 @@ export function runScript(opts: RunScriptOptions): Promise<{ exitCode: number }>
       if (settled) return
       settled = true
       clearTimeout(timeout)
-      try {
-        fs.unlinkSync(scriptPath)
-      } catch {
-        /* best-effort */
-      }
+      cleanup()
 
       if (exitCode === 0) {
         wsService.emitEphemeral(workspaceId, `${eventPrefix}:complete`, { hadOutput: outputEmitted })
@@ -154,5 +170,11 @@ export function runScript(opts: RunScriptOptions): Promise<{ exitCode: number }>
     proc.on('close', (code) => {
       finish(code ?? 1)
     })
+  }).catch((err) => {
+    cleanup()
+    const message = err instanceof Error ? err.message : String(err)
+    wsService.emit(workspaceId, `${eventPrefix}:output`, { text: `[kobo] Script failed to start: ${message}` })
+    wsService.emitEphemeral(workspaceId, `${eventPrefix}:error`, { exitCode: 1, message })
+    return { exitCode: 1 }
   })
 }

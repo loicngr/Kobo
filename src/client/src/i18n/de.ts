@@ -2012,6 +2012,8 @@ export default {
   'prCheckout.workspace.restore': 'Worktree wiederherstellen',
   'prCheckout.worktree.orphanHint': 'Auf diesem Branch existiert bereits eine Worktree unter {path}.',
   'prCheckout.worktree.attach': 'Anhängen',
+  'prCheckout.worktree.branchInUse':
+    'Dieser Branch ist bereits ausgecheckt. Verwenden Sie seinen vorhandenen Worktree.',
   'prCheckout.worktree.createElsewhere': 'Eine neue an anderer Stelle erstellen',
   'prCheckout.operation.hint': 'In dieser Worktree läuft gerade ein {operation}.',
   'prCheckout.operation.abort': 'Abbrechen',
@@ -2020,6 +2022,8 @@ export default {
   'prCheckout.changes.stash': 'Stashen',
   'prCheckout.changes.commit': 'Committen',
   'prCheckout.changes.discard': 'Verwerfen (als benannter Stash aufbewahrt)',
+  'prCheckout.changes.keepResetConflict':
+    'Lokale Änderungen können bei einem Hard Reset nicht behalten werden. Zuerst Stash oder Commit wählen oder den Branch behalten.',
   'prCheckout.changes.keep': 'So belassen, wie sie sind',
   'prCheckout.divergence.behindHint': 'Dein Branch liegt {behind} Commit(s) hinter origin zurück.',
   'prCheckout.divergence.aheadHint': 'Dein Branch hat {ahead} nicht gepushte(n) Commit(s).',

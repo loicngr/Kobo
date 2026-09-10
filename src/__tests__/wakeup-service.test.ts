@@ -74,6 +74,23 @@ describe('wakeup-service', () => {
     }
   })
 
+  it('rehydrates a wakeup armed during suspension without consuming it during shutdown', async () => {
+    const service = await import('../server/services/wakeup-service.js')
+    const orch = await import('../server/services/agent/orchestrator.js')
+    service.schedule(wsId, 60, 'original', undefined)
+    service.suspendForShutdown()
+    service.schedule(wsId, 60, 'late request', undefined)
+    const pending = service.getPending(wsId)
+    await vi.advanceTimersByTimeAsync(60_001)
+    expect(orch.startAgent).not.toHaveBeenCalled()
+    expect(service.getPending(wsId)).toEqual(pending)
+    service.rehydrate()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(orch.startAgent).toHaveBeenCalledTimes(1)
+    expect(vi.mocked(orch.startAgent).mock.calls[0]?.[2]).toBe('late request')
+    expect(service.getPending(wsId)).toBeNull()
+  })
+
   it('schedule inserts a row with the correct target_at and emits wakeup:scheduled', async () => {
     const wakeupService = await import('../server/services/wakeup-service.js')
     const ws = await import('../server/services/websocket-service.js')

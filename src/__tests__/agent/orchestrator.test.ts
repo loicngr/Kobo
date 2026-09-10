@@ -557,13 +557,13 @@ describe('Orchestrator — lifecycle-safe fallback delivery', () => {
         }
       },
     })
-    const { _getControllers, getRunningCount, startAgent, stopAgent } = await import(
+    const { _getControllers, getRunningCount, startAgent, stopAgentAndWait } = await import(
       '../../server/services/agent/orchestrator.js'
     )
     startAgent(ws.id, '/tmp', 'first')
     await flushControllerStart()
 
-    stopAgent(ws.id)
+    await stopAgentAndWait(ws.id)
     const replacement = startAgent(ws.id, '/tmp', 'replacement')
     await flushControllerStart()
     firstEmitEvent({ kind: 'session:ended', reason: 'killed', exitCode: null })

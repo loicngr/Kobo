@@ -1,3 +1,4 @@
+import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -224,6 +225,22 @@ describe('getStatus', () => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'at-devserver-status-'))
   })
 
+  it('uses the exact Compose label, including custom container names', async () => {
+    fs.mkdirSync(path.join(tmpDir, '.container/instances'), { recursive: true })
+    fs.writeFileSync(
+      path.join(tmpDir, '.container/instances/foo.env'),
+      'INSTANCE_NAME=foo\nPROJECT_NAME=foo\nHTTP_PORT=3000',
+    )
+    mockCommandOutput('friendly-name\tfoo\nfoo-bar-web-1\tfoo-bar\nfoo_extra-web-1\tfoo_extra\n')
+    expect((await getStatus(tmpDir, 'foo')).containers).toEqual(['friendly-name'])
+    expect(execFile).toHaveBeenCalledWith(
+      'docker',
+      expect.arrayContaining(['--filter', 'label=com.docker.compose.project=foo']),
+      expect.anything(),
+      expect.anything(),
+    )
+  })
+
   it('returns running status when containers match', async () => {
     const instancesDir = path.join(tmpDir, '.container', 'instances')
     fs.mkdirSync(instancesDir, { recursive: true })
@@ -232,7 +249,7 @@ describe('getStatus', () => {
       'INSTANCE_NAME=feature-test\nPROJECT_NAME=myapp\nHTTP_PORT=3000',
     )
 
-    mockCommandOutput('myapp-web-1\nmyapp-db-1\nother-app-1\n')
+    mockCommandOutput('myapp-web-1\tmyapp\nmyapp-db-1\tmyapp\nother-app-1\tother-app\n')
 
     const status = await getStatus(tmpDir, 'feature/test')
     expect(status.status).toBe('running')
@@ -370,7 +387,7 @@ describe('getStatus', () => {
     vi.mocked(spawn).mockReturnValue(mockProc as unknown as ReturnType<typeof spawn>)
     startDevServer('ws-running')
 
-    mockCommandOutput('myapp-web-1\n')
+    mockCommandOutput('myapp-web-1\tmyapp\n')
 
     const status = await getStatus(tmpDir, 'feature/test', 'ws-running')
     expect(status.status).toBe('running')
@@ -599,4 +616,108 @@ describe('getDevServerLogs', () => {
     const logs = await getDevServerLogs('ws-1')
     expect(logs).toBe('No dev-server instance found')
   })
+})
+
+it('rejects a dev-server start while lifecycle teardown owns the workspace', async () => {
+  const { withWorkspaceLifecycleGuard } = await import('../server/utils/workspace-lifecycle-guard.js')
+  vi.mocked(getWorkspace).mockReturnValue(makeWorkspace({ id: 'ws-1' }))
+  vi.mocked(getProjectSettings).mockReturnValue(
+    makeProjectSettings({ devServer: { startCommand: 'npm run dev', stopCommand: '' } }),
+  )
+  await withWorkspaceLifecycleGuard('ws-1', async () => {
+    expect(() => startDevServer('ws-1')).toThrow(/operation is in progress/)
+    expect(spawn).not.toHaveBeenCalled()
+  })
+})
+
+it('retains a stopping process and ignores its stale events after replacement', async () => {
+  const child = () =>
+    Object.assign(new EventEmitter(), {
+      stdout: null,
+      stderr: null,
+      exitCode: null as number | null,
+      signalCode: null,
+      kill: vi.fn(),
+    })
+  const a = child(),
+    b = child()
+  vi.mocked(getWorkspace).mockReturnValue(
+    makeWorkspace({ id: 'ws-race', projectPath: '/tmp/no-dev-config', worktreePath: '/tmp/no-dev-config' }),
+  )
+  vi.mocked(getProjectSettings).mockReturnValue(
+    makeProjectSettings({ devServer: { startCommand: 'npm run dev', stopCommand: '' } }),
+  )
+  vi.mocked(spawn)
+    .mockReturnValueOnce(a as never)
+    .mockReturnValueOnce(b as never)
+  startDevServer('ws-race')
+  const stopping = stopDevServer('ws-race')
+  expect(() => startDevServer('ws-race')).toThrow(/stopping|already starting/)
+  a.exitCode = 0
+  a.emit('exit', 0)
+  await stopping
+  startDevServer('ws-race')
+  a.emit('exit', 0)
+  a.emit('error', new Error('old process error'))
+  const stopB = stopDevServer('ws-race')
+  expect(b.kill).toHaveBeenCalledWith('SIGTERM')
+  b.exitCode = 0
+  b.emit('exit', 0)
+  await stopB
+})
+
+it.each(['empty', 'running', 'unavailable'])(
+  'verifies Compose state after a successful custom stop and failed fallback: %s',
+  async (dockerState) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'kobo-custom-stop-'))
+    try {
+      fs.mkdirSync(path.join(dir, '.container/instances'), { recursive: true })
+      fs.writeFileSync(path.join(dir, '.container/instances/foo.env'), 'INSTANCE_NAME=foo\nPROJECT_NAME=foo\n')
+      vi.mocked(getWorkspace).mockReturnValue(
+        makeWorkspace({ id: 'w', projectPath: dir, worktreePath: dir, workingBranch: 'foo' }),
+      )
+      vi.mocked(getProjectSettings).mockReturnValue(
+        makeProjectSettings({ devServer: { startCommand: 'true', stopCommand: 'custom-stop' } }),
+      )
+      vi.mocked(execFile).mockImplementation(((command: string, args: string[], ...rest: unknown[]) => {
+        const callback = rest.at(-1) as (err: Error | null, stdout: string) => void
+        if (command === 'bash') callback(null, '')
+        else if (args[0] === 'ps') {
+          if (dockerState === 'unavailable') callback(new Error('daemon unreachable'), '')
+          else callback(null, dockerState === 'running' ? 'container-id' : '')
+        } else callback(new Error('no configuration file provided'), '')
+        return {}
+      }) as never)
+      if (dockerState === 'empty') expect((await stopDevServer('w')).status).toBe('stopped')
+      else await expect(stopDevServer('w')).rejects.toThrow('Dev server stop failed')
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  },
+)
+
+it('retains ownership when the process group cannot be inspected', async () => {
+  const proc = Object.assign(new EventEmitter(), {
+    pid: 987654,
+    exitCode: null,
+    signalCode: null,
+    stdout: null,
+    stderr: null,
+  })
+  const kill = vi.spyOn(process, 'kill').mockReturnValue(true)
+  try {
+    vi.mocked(getWorkspace).mockReturnValue(
+      makeWorkspace({ id: 'inspection', projectPath: '/tmp', worktreePath: '/tmp' }),
+    )
+    vi.mocked(getProjectSettings).mockReturnValue(
+      makeProjectSettings({ devServer: { startCommand: 'run', stopCommand: '' } }),
+    )
+    vi.mocked(spawn).mockReturnValue(proc as never)
+    mockCommandFailure(new Error('process inspection failed'))
+    startDevServer('inspection')
+    await expect(stopDevServer('inspection')).rejects.toThrow('process inspection failed')
+    expect(() => startDevServer('inspection')).toThrow('already starting')
+  } finally {
+    kill.mockRestore()
+  }
 })

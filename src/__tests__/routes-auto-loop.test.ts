@@ -21,6 +21,7 @@ vi.mock('../server/services/agent/orchestrator.js', () => ({
   stopAgentAndWait: vi.fn().mockResolvedValue('not-running'),
   sendMessage: vi.fn(),
   hasController: vi.fn(() => false),
+  isShuttingDown: vi.fn(() => false),
   getAgentStatus: vi.fn(() => null),
   forgetRateLimitInfo: vi.fn(),
   forgetTasksDoneSnapshot: vi.fn(),

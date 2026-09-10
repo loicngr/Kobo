@@ -63,3 +63,23 @@ function assertLeafIsNotSymlink(candidate: string): void {
     throw err
   }
 }
+
+/** Create storage directories without accepting symlinked path components. */
+export function ensureDirectoryInside(rootPath: string, relativePath: string): string {
+  assertPathInside(rootPath, relativePath)
+  const root = fs.realpathSync(rootPath)
+  let current = root
+  for (const segment of relativePath.split(path.sep).filter(Boolean)) {
+    current = path.join(current, segment)
+    try {
+      fs.mkdirSync(current)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+    }
+    const stat = fs.lstatSync(current)
+    if (stat.isSymbolicLink() || !stat.isDirectory())
+      throw new Error('Symbolic links are not allowed in storage directories')
+    current = resolveExistingPathInside(root, current)
+  }
+  return current
+}

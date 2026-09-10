@@ -1015,6 +1015,7 @@ import { playNotificationSound } from 'src/utils/notifications'
 import { prefillFromPr } from 'src/utils/pr-prefill'
 import { projectNameForPath } from 'src/utils/project-color'
 import { registerUnsavedScope, unregisterUnsavedScope } from 'src/utils/unsaved-guard'
+import { workspaceCreationRoute } from 'src/utils/workspace-creation-route'
 import { applyPreset, capturePreset, type PresetFormState, type WorkspacePreset } from 'src/utils/workspace-preset'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -2489,9 +2490,10 @@ async function handleCreate() {
   }
 
   const first = created[0]
+  const destination = workspaceCreationRoute(created)
   // Nothing was created: the error was shown above, and nothing below may run
   // — the prefs save and the navigation both assume at least one workspace.
-  if (!first) return
+  if (!first || !destination) return
 
   // Persist last-used inputs so the next Create-workspace visit pre-fills
   // them. Reached only after a successful create (see the guard above), so a
@@ -2513,7 +2515,7 @@ async function handleCreate() {
   // workspace that was already created. `onUnmounted` unregisters again; the
   // registry tolerates that (see unsaved-guard.test.ts).
   unregisterUnsavedScope('create:form')
-  void router.push({ name: 'workspace', params: { id: first.id } })
+  void router.push(destination)
 }
 
 interface EnginePlan {

@@ -1,3 +1,4 @@
+import type { ChildProcess } from 'node:child_process'
 import { getPackageVersion } from '../../../../utils/paths.js'
 import { isWorkspacePermissionAllowed } from '../../../workspace-permission-policy-service.js'
 import { createStreamingBatcher } from '../../streaming-batcher.js'
@@ -35,6 +36,7 @@ import { spawnAppServer } from './spawn.js'
 
 /** Long enough for normal tool work, short enough to recover a lost turn event. */
 export const CODEX_TURN_IDLE_TIMEOUT_MS = 120_000
+export const CODEX_TOOL_IDLE_TIMEOUT_MS = 30 * 60_000
 export const CODEX_GRACEFUL_INTERRUPT_TIMEOUT_MS = 3_000
 /** Grace given to a SIGTERM before the child is killed outright. */
 const CODEX_FORCE_KILL_TIMEOUT_MS = 3_000
@@ -48,6 +50,34 @@ export const CODEX_SUBAGENT_STALL_TIMEOUT_MS = 10 * 60_000
 
 function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+/** A sent signal is only a request; resolve true exclusively on confirmed exit. */
+function signalAndWaitForExit(child: ChildProcess, signal: NodeJS.Signals, timeoutMs: number): Promise<boolean> {
+  if (child.exitCode !== null || child.signalCode !== null || child.pid === undefined) return Promise.resolve(true)
+  return new Promise((resolve, reject) => {
+    const cleanup = (): void => {
+      clearTimeout(timer)
+      child.removeListener('exit', onExit)
+    }
+    const onExit = (): void => {
+      cleanup()
+      resolve(true)
+    }
+    const timer = setTimeout(() => {
+      cleanup()
+      resolve(false)
+    }, timeoutMs)
+    timer.unref?.()
+    // Install before signalling so an immediate exit cannot be missed.
+    child.once('exit', onExit)
+    try {
+      child.kill(signal)
+    } catch (err) {
+      cleanup()
+      reject(err)
+    }
+  })
 }
 
 class CodexTurnTimeoutError extends Error {
@@ -108,7 +138,15 @@ export function createCodexEngine(): AgentEngine {
         }
       }
       const streamingBatcher = createStreamingBatcher(emitDirect)
-      const safeEmit = (ev: AgentEvent): void => streamingBatcher.push(ev)
+      const pendingToolCalls = new Set<string>()
+      const safeEmit = (ev: AgentEvent): void => {
+        if (ev.kind === 'tool:call') pendingToolCalls.add(ev.toolCallId)
+        if (ev.kind === 'tool:result') pendingToolCalls.delete(ev.toolCallId)
+        if (ev.kind === 'tool:call' || ev.kind === 'tool:result') {
+          turnLiveness.setTimeoutMs(pendingToolCalls.size ? CODEX_TOOL_IDLE_TIMEOUT_MS : CODEX_TURN_IDLE_TIMEOUT_MS)
+        }
+        streamingBatcher.push(ev)
+      }
 
       let rejectChildFailure!: (error: Error) => void
       const childFailurePromise = new Promise<never>((_resolve, reject) => {
@@ -376,6 +414,7 @@ export function createCodexEngine(): AgentEngine {
           })
         },
 
+        onDisconnect: rejectChildFailure,
         onError(err: Error) {
           console.error('[codex] JSON-RPC transport error:', err)
           rejectTurnDone(err)
@@ -482,6 +521,7 @@ export function createCodexEngine(): AgentEngine {
             }
           }
           pendingByCallId.clear()
+          pendingToolCalls.clear()
           client.close()
           try {
             child.kill('SIGTERM')
@@ -565,15 +605,10 @@ export function createCodexEngine(): AgentEngine {
           // stop, the archive, the delete and Kōbō's own shutdown, holding the
           // worktree and its share of the model quota, with nothing left in
           // this process tracking it.
-          if (child.exitCode === null && child.signalCode === null) {
-            child.kill('SIGTERM')
-            const exited = await Promise.race([
-              new Promise<boolean>((resolve) => child.once('exit', () => resolve(true))),
-              wait(CODEX_FORCE_KILL_TIMEOUT_MS).then(() => false),
-            ])
-            if (!exited) {
-              console.warn('[codex] app-server ignored SIGTERM — sending SIGKILL')
-              child.kill('SIGKILL')
+          if (!(await signalAndWaitForExit(child, 'SIGTERM', CODEX_FORCE_KILL_TIMEOUT_MS))) {
+            console.warn('[codex] app-server ignored SIGTERM — sending SIGKILL')
+            if (!(await signalAndWaitForExit(child, 'SIGKILL', CODEX_FORCE_KILL_TIMEOUT_MS))) {
+              throw new Error('Codex app-server did not exit after SIGKILL')
             }
           }
         },

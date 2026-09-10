@@ -1,7 +1,5 @@
 <template>
-  <!-- Workspace-switch spinner: shown at least WORKSPACE_SWITCH_SPINNER_MS
-       every time the user clicks a workspace, hiding the mid-swap flicker
-       and the empty transition while sync:response arrives. -->
+  <!-- Follow actual conversation requests; cached and empty feeds need no artificial delay. -->
   <div v-if="switching" class="activity-feed-switching">
     <q-spinner-dots size="40px" color="primary" />
   </div>
@@ -111,6 +109,7 @@ import {
 import { findPreviousUserTurnIndex, groupIntoTurns, type Turn, turnKey } from 'src/services/conversation-turns'
 import { useAgentStreamStore } from 'src/stores/agent-stream'
 import { useSettingsStore } from 'src/stores/settings'
+import { useWebSocketStore } from 'src/stores/websocket'
 import { useWorkspaceStore } from 'src/stores/workspace'
 import type { AgentEvent } from 'src/types/agent-event'
 import { waitForCondition } from 'src/utils/wait-for'
@@ -125,6 +124,7 @@ const props = defineProps<{ workspaceId: string }>()
 const stream = useAgentStreamStore()
 const settings = useSettingsStore()
 const workspaceStore = useWorkspaceStore()
+const websocketStore = useWebSocketStore()
 
 // Live "engine is compacting context" banner state (transient, ephemeral).
 const isCompacting = computed(() => stream.isCompacting(props.workspaceId))
@@ -288,11 +288,20 @@ const loadingOlder = ref(false)
 const highlightedEventId = ref<string | null>(null)
 let initialScrollDone = false
 
-// Workspace-switch spinner: true on mount and whenever the workspace id
-// changes, flipped back to false once BOTH (a) the minimum display time
-// has elapsed AND (b) the first event batch has arrived. Guarantees a
-// visible loader even on instant switches and hides the mid-swap flicker.
-const switching = ref(true)
+// Key pending requests by view so an old response cannot end the current loader.
+const pendingSessionFetches = ref(new Set<string>())
+const switching = computed(() => {
+  // Background refreshes must preserve the rendered conversation and its scroll
+  // state, including a conversation containing only user messages.
+  if (turns.value.length > 0 || rawLines.value.length > 0) return false
+  const id = props.workspaceId
+  const sid = selectedSessionId.value
+  return (
+    !!workspaceStore.loadingSessions[id] ||
+    websocketStore.isSyncPending(id) ||
+    (sid !== null && pendingSessionFetches.value.has(sessionCacheKey(id, sid)))
+  )
+})
 const sessionHasMoreOlder = ref<Map<string, boolean>>(new Map())
 
 interface ScrollInfo {
@@ -347,10 +356,6 @@ function oldestVisibleEventId(workspaceId: string): string | undefined {
   return undefined
 }
 
-const MIN_LOADER_MS = 200
-const COOLDOWN_AFTER_PREPEND_MS = 400
-const WORKSPACE_SWITCH_SPINNER_MS = 200
-
 // One load at a time, and the in-flight promise is shareable: callers that
 // need to wait for it can `await` instead of polling `loadingOlder` every
 // fifty milliseconds.
@@ -370,7 +375,6 @@ async function loadOlder(): Promise<void> {
   const before = oldestVisibleEventId(workspaceId)
   if (!before) return
   loadingOlder.value = true
-  const startedAt = Date.now()
   try {
     const area = scrollRef.value
     // Wait for Vue to render the "loading older messages…" DOM block so its
@@ -383,17 +387,12 @@ async function loadOlder(): Promise<void> {
     const prevSize = area?.getScroll().verticalSize ?? 0
     const prevPos = area?.getScroll().verticalPosition ?? 0
 
-    // Fetch and (in parallel) a minimum-display delay so the loader stays
-    // visible long enough for the user to see what's happening — avoids a
-    // flashing spinner on fast networks.
     const params = new URLSearchParams({
       before,
       limit: '200',
     })
     if (sessionId) params.set('session', sessionId)
-    const fetchPromise = fetch(`/api/workspaces/${workspaceId}/events?${params.toString()}`)
-    const minDelay = new Promise((r) => setTimeout(r, MIN_LOADER_MS))
-    const [res] = await Promise.all([fetchPromise, minDelay])
+    const res = await fetch(`/api/workspaces/${workspaceId}/events?${params.toString()}`)
 
     if (!res.ok) {
       if (sessionId) setSessionHasMoreOlder(workspaceId, sessionId, false)
@@ -463,12 +462,6 @@ async function loadOlder(): Promise<void> {
     // can refresh to retry. We still allow subsequent loads since we
     // don't mark hasMoreOlder=false here.
   } finally {
-    // Keep the loader flag on for a short cooldown after all the DOM has
-    // settled. Guarantees that an onScroll firing immediately after the
-    // position-preserve won't re-trigger loadOlder before the dust settles.
-    const elapsed = Date.now() - startedAt
-    const remainingMin = Math.max(0, MIN_LOADER_MS - elapsed)
-    await new Promise((r) => setTimeout(r, remainingMin + COOLDOWN_AFTER_PREPEND_MS))
     loadingOlder.value = false
   }
 }
@@ -681,45 +674,12 @@ const eventCount = computed(() => {
   return n
 })
 
-// Unfiltered count — used by the switching spinner to know whether the
-// workspace stream has been populated at all. We must NOT use `eventCount`
-// (session-filtered) here: an old session with zero events in the current
-// sync:response window would loop the spinner to its grace-period timeout
-// before the session-scoped fetch even gets a chance to run.
-const rawEventCount = computed(() => stream.eventsFor(props.workspaceId).length)
-
-/** Un workspace neuf n'émettra JAMAIS d'événement : attendre cinq secondes
- *  pour finir par n'afficher rien du tout est une punition, pas un chargement.
- *  Une grâce courte suffit à masquer le battement de `sync:response`. */
-const EMPTY_FEED_GRACE_MS = 1200
-
-/**
- * Shows the switching spinner for at least `WORKSPACE_SWITCH_SPINNER_MS`
- * AND until the workspace stream has at least one event. Flip to false
- * once both conditions meet.
- */
-async function showSwitchingSpinner() {
-  switching.value = true
-  const startedAt = Date.now()
-  await new Promise((r) => setTimeout(r, WORKSPACE_SWITCH_SPINNER_MS))
-  // Wait for the sync:response to land, capped — the remaining budget after
-  // the minimum spinner display.
-  const remaining = Math.max(0, startedAt + EMPTY_FEED_GRACE_MS - Date.now())
-  await waitForCondition(rawEventCount, (count) => count > 0, remaining)
-  switching.value = false
-}
-
 // When the spinner disappears and the scroll-area is (re-)mounted, we need
 // to anchor at the bottom. armInitialScroll waits for a nextTick so it
 // works even if the scroll-area just transitioned from v-if=false.
 watch(switching, async (isSwitching) => {
   if (!isSwitching && eventCount.value > 0) {
     await armInitialScroll()
-  }
-  // First mount with a session already selected (e.g. refresh on ?session=X)
-  // but no events landed yet for that session → targeted session-scoped fetch.
-  if (!isSwitching && eventCount.value === 0 && selectedSessionId.value) {
-    void fetchSessionIfMissing()
   }
   // QVirtualScroll needs the QScrollArea's inner scroller; the q-scroll-area
   // is remounted every time the spinner reappears/disappears (v-if), so its
@@ -738,7 +698,6 @@ onMounted(() => {
   void nextTick(() => {
     scrollTargetEl.value = scrollRef.value?.getScrollTarget() ?? null
   })
-  void showSwitchingSpinner()
   if (eventCount.value > 0) void armInitialScroll()
   // Fire the session-scoped fetch in parallel with sync:response, not after
   // the spinner ends. For refreshes on ?session=X where that session is
@@ -788,7 +747,7 @@ watch(
     stickToBottom.value = true
     firstPopulateDone = eventCount.value > 0
     initialScrollDone = false
-    void showSwitchingSpinner()
+    void fetchSessionIfMissing()
     if (eventCount.value > 0) void armInitialScroll()
   },
 )
@@ -800,8 +759,8 @@ watch(
   async () => {
     stickToBottom.value = true
     initialScrollDone = false
-    await armInitialScroll()
     void fetchSessionIfMissing()
+    await armInitialScroll()
   },
 )
 
@@ -814,22 +773,27 @@ watch(
 const sessionsFetched = new Set<string>()
 
 async function fetchSessionIfMissing(): Promise<void> {
+  const workspaceId = props.workspaceId
   const sid = selectedSessionId.value
   if (!sid) return
   if (eventCount.value > 0) return
-  const cacheKey = sessionCacheKey(props.workspaceId, sid)
+  const cacheKey = sessionCacheKey(workspaceId, sid)
   if (sessionsFetched.has(cacheKey)) return
   sessionsFetched.add(cacheKey)
+  pendingSessionFetches.value.add(cacheKey)
 
   try {
-    const res = await fetch(`/api/workspaces/${props.workspaceId}/events?session=${encodeURIComponent(sid)}&limit=500`)
-    if (!res.ok) return
+    const res = await fetch(`/api/workspaces/${workspaceId}/events?session=${encodeURIComponent(sid)}&limit=500`)
+    if (!res.ok) {
+      sessionsFetched.delete(cacheKey)
+      return
+    }
     const body = (await res.json()) as { events: FetchedEvent[]; hasMore: boolean }
     const fetched = body.events ?? []
     if (fetched.length === 0) return
 
-    const agentEvents = fetched.filter((e) => e.type === 'agent:event' && e.workspaceId === props.workspaceId)
-    const userMsgs = fetched.filter((e) => e.type === 'user:message' && e.workspaceId === props.workspaceId)
+    const agentEvents = fetched.filter((e) => e.type === 'agent:event' && e.workspaceId === workspaceId)
+    const userMsgs = fetched.filter((e) => e.type === 'user:message' && e.workspaceId === workspaceId)
 
     // Prepend into the stream — these events are older than whatever is
     // currently loaded (the stream holds the most recent 300). Order is
@@ -838,11 +802,11 @@ async function fetchSessionIfMissing(): Promise<void> {
     const olderTs = agentEvents.map((e) => e.createdAt)
     const olderSids = agentEvents.map((e) => e.sessionId ?? null)
     const olderIds = agentEvents.map((e) => e.id)
-    setSessionHasMoreOlder(props.workspaceId, sid, body.hasMore)
+    setSessionHasMoreOlder(workspaceId, sid, body.hasMore)
     if (olderEvents.length > 0) {
-      stream.prepend(props.workspaceId, olderEvents, olderTs, {
+      stream.prepend(workspaceId, olderEvents, olderTs, {
         oldestId: fetched[0].id,
-        hasMoreOlder: stream.hasMoreOlderFor(props.workspaceId),
+        hasMoreOlder: stream.hasMoreOlderFor(workspaceId),
         sessionIds: olderSids,
         eventIds: olderIds,
       })
@@ -851,7 +815,7 @@ async function fetchSessionIfMissing(): Promise<void> {
     for (const m of userMsgs) {
       const p = m.payload
       if (typeof p.content === 'string') {
-        workspaceStore.addActivityItem(props.workspaceId, {
+        workspaceStore.addActivityItem(workspaceId, {
           id: m.id,
           type: 'text',
           content: p.content,
@@ -863,10 +827,12 @@ async function fetchSessionIfMissing(): Promise<void> {
     }
 
     await nextTick()
-    await scrollToBottom(0)
+    if (props.workspaceId === workspaceId && selectedSessionId.value === sid) await scrollToBottom(0)
   } catch (err) {
     console.error('[ActivityFeed] fetchSessionIfMissing failed:', err)
     sessionsFetched.delete(cacheKey) // allow retry
+  } finally {
+    pendingSessionFetches.value.delete(cacheKey)
   }
 }
 

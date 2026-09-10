@@ -1,6 +1,7 @@
 import { type ChildProcess, execFile, spawn } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
+import { assertWorkspaceLifecycleAvailable } from '../utils/workspace-lifecycle-guard.js'
 import { getProjectSettings } from './settings-service.js'
 import { emitEphemeral } from './websocket-service.js'
 import { getWorkspace, listWorkspaces, updateDevServerStatus } from './workspace-service.js'
@@ -50,10 +51,14 @@ export interface InstanceConfig {
 
 /** workspaceId -> spawned dev-server process */
 const trackedProcesses = new Map<string, ChildProcess>()
+const stoppingProcesses = new Map<string, Promise<DevServerStatus>>()
+const generations = new Map<string, number>()
 
 /** Test-only: clear the tracked-processes map between tests. */
 export function _resetTrackedProcessesForTests(): void {
   trackedProcesses.clear()
+  stoppingProcesses.clear()
+  generations.clear()
 }
 
 // ── Pure helpers ───────────────────────────────────────────────────────────────
@@ -127,25 +132,30 @@ export function resolveInstance(projectPath: string, workingBranch: string): Ins
   return null
 }
 
-function containerBelongsToProject(containerName: string, projectName: string): boolean {
-  const name = containerName.toLowerCase()
-  const project = projectName.toLowerCase()
-  return name === project || name.startsWith(`${project}-`) || name.startsWith(`${project}_`)
-}
-
 // ── Docker helpers ─────────────────────────────────────────────────────────────
 
 /**
  * List all running Docker container names.
  * Uses execFile so Docker inspection cannot block the Node event loop.
  */
-export async function listRunningContainers(): Promise<string[]> {
+export async function listRunningContainers(projectName?: string): Promise<string[]> {
   try {
-    const output = await runCommand('docker', ['ps', '--format', '{{.Names}}'], { timeout: 10_000 })
+    const args = projectName
+      ? [
+          'ps',
+          '--filter',
+          `label=com.docker.compose.project=${projectName}`,
+          '--format',
+          '{{.Names}}\t{{.Label "com.docker.compose.project"}}',
+        ]
+      : ['ps', '--format', '{{.Names}}']
+    const output = await runCommand('docker', args, { timeout: 10_000 })
     return output
       .split('\n')
       .map((s) => s.trim())
       .filter(Boolean)
+      .filter((line) => !projectName || line.split('\t')[1] === projectName)
+      .map((line) => (projectName ? line.split('\t')[0]! : line))
   } catch {
     return []
   }
@@ -180,8 +190,7 @@ export async function getStatus(
     }
   }
 
-  const running = await listRunningContainers()
-  const matching = running.filter((name) => containerBelongsToProject(name, config.projectName))
+  const matching = await listRunningContainers(config.projectName)
 
   if (matching.length > 0) {
     return {
@@ -224,6 +233,7 @@ export async function getStatus(
  * Start the dev-server for a workspace.
  */
 export function startDevServer(workspaceId: string): DevServerStatus {
+  assertWorkspaceLifecycleAvailable(workspaceId)
   const workspace = getWorkspace(workspaceId)
   if (!workspace) {
     throw new Error(`Workspace '${workspaceId}' not found`)
@@ -238,6 +248,7 @@ export function startDevServer(workspaceId: string): DevServerStatus {
   // silently overwriting the tracked process — the first process would
   // otherwise become untrackable (never killed by stopDevServer) and its
   // exit handler could later clobber state set by the second process.
+  if (stoppingProcesses.has(workspaceId)) throw new Error(`Dev server for workspace '${workspaceId}' is stopping`)
   if (trackedProcesses.has(workspaceId)) {
     throw new Error(`Dev server for workspace '${workspaceId}' is already starting`)
   }
@@ -258,6 +269,8 @@ export function startDevServer(workspaceId: string): DevServerStatus {
     detached: true,
   })
 
+  const generation = (generations.get(workspaceId) ?? 0) + 1
+  generations.set(workspaceId, generation)
   trackedProcesses.set(workspaceId, proc)
 
   // Log stdout/stderr for debugging
@@ -269,22 +282,31 @@ export function startDevServer(workspaceId: string): DevServerStatus {
   })
 
   proc.on('exit', (code) => {
-    trackedProcesses.delete(workspaceId)
-    void getStatus(workspace.projectPath, workspace.workingBranch)
-      .then((currentStatus) => {
+    // Shell exit does not imply that its background children have stopped.
+    void (async () => {
+      while (trackedProcesses.get(workspaceId) === proc && !stoppingProcesses.has(workspaceId)) {
+        if (proc.pid && (await hasLiveProcessGroup(proc.pid))) {
+          await pollDelay(250)
+          continue
+        }
+        if (trackedProcesses.get(workspaceId) !== proc || stoppingProcesses.has(workspaceId)) return
+        trackedProcesses.delete(workspaceId)
+        const currentStatus = await getStatus(workspace.projectPath, workspace.workingBranch)
+        if (generations.get(workspaceId) !== generation || stoppingProcesses.has(workspaceId)) return
         updateDevServerStatus(workspaceId, currentStatus.status)
         emitEphemeral(workspaceId, 'devserver:status', currentStatus)
-      })
-      .catch((err) => {
-        console.error(`[dev-server] Failed to refresh status for workspace ${workspaceId}:`, err)
-      })
-    if (code !== 0) {
-      console.error(`[dev-server] Process exited with code ${code} for workspace ${workspaceId}`)
-    }
+        return
+      }
+    })().catch((err) => {
+      console.error(`[dev-server] Failed to confirm process-group exit for workspace ${workspaceId}:`, err)
+    })
+    if (code !== 0) console.error(`[dev-server] Process exited with code ${code} for workspace ${workspaceId}`)
   })
 
   proc.on('error', (err) => {
-    trackedProcesses.delete(workspaceId)
+    if (trackedProcesses.get(workspaceId) !== proc) return
+    // A signal failure is also an 'error' event; it does not prove process exit.
+    if (!proc.pid) trackedProcesses.delete(workspaceId)
     updateDevServerStatus(workspaceId, 'error')
     console.error(`[dev-server] Process error for workspace ${workspaceId}:`, err)
     emitEphemeral(workspaceId, 'devserver:status', {
@@ -318,6 +340,88 @@ export function startDevServer(workspaceId: string): DevServerStatus {
  * Stop the dev-server for a workspace.
  */
 export async function stopDevServer(workspaceId: string): Promise<DevServerStatus> {
+  const pending = stoppingProcesses.get(workspaceId)
+  if (pending) return pending
+  generations.set(workspaceId, (generations.get(workspaceId) ?? 0) + 1)
+  const stopping = stopDevServerOwned(workspaceId)
+  stoppingProcesses.set(workspaceId, stopping)
+  try {
+    return await stopping
+  } finally {
+    if (stoppingProcesses.get(workspaceId) === stopping) stoppingProcesses.delete(workspaceId)
+  }
+}
+
+function pollDelay(ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    timer.unref?.()
+  })
+}
+
+/** A zombie cannot write files, even if the OS has not reaped its PID yet. */
+async function hasLiveProcessGroup(groupId: number): Promise<boolean> {
+  try {
+    process.kill(-groupId, 0)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ESRCH') return false
+    throw err
+  }
+  const processes = await runCommand('ps', ['-eo', 'pgid=,stat='], { timeout: 1000 })
+  return processes.split('\n').some((line) => {
+    const [group, state] = line.trim().split(/\s+/)
+    return Number(group) === groupId && !!state && !/^[ZX]/.test(state)
+  })
+}
+
+async function signalGroupAndWait(groupId: number, signal: NodeJS.Signals, timeoutMs: number): Promise<boolean> {
+  try {
+    process.kill(-groupId, signal)
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ESRCH') return true
+    throw err
+  }
+  const deadline = Date.now() + timeoutMs
+  while (await hasLiveProcessGroup(groupId)) {
+    if (Date.now() >= deadline) return false
+    await pollDelay(50)
+  }
+  return true
+}
+
+function signalAndWait(proc: ChildProcess, signal: NodeJS.Signals, timeoutMs: number): Promise<boolean> {
+  if (proc.pid) return signalGroupAndWait(proc.pid, signal, timeoutMs)
+  if (proc.exitCode != null || proc.signalCode != null) return Promise.resolve(true)
+  return new Promise((resolve, reject) => {
+    const finish = (exited: boolean): void => {
+      clearTimeout(timer)
+      proc.removeListener('exit', onExit)
+      proc.removeListener('error', onError)
+      resolve(exited)
+    }
+    const onExit = (): void => finish(true)
+    const onError = (err: Error): void => {
+      clearTimeout(timer)
+      proc.removeListener('exit', onExit)
+      proc.removeListener('error', onError)
+      reject(err)
+    }
+    const timer = setTimeout(() => finish(false), timeoutMs)
+    proc.once('exit', onExit)
+    proc.once('error', onError)
+    try {
+      if (proc.pid) process.kill(-proc.pid, signal)
+      else proc.kill(signal)
+    } catch (err) {
+      clearTimeout(timer)
+      proc.removeListener('exit', onExit)
+      proc.removeListener('error', onError)
+      reject(err)
+    }
+  })
+}
+
+async function stopDevServerOwned(workspaceId: string): Promise<DevServerStatus> {
   const workspace = getWorkspace(workspaceId)
   if (!workspace) {
     throw new Error(`Workspace '${workspaceId}' not found`)
@@ -331,20 +435,15 @@ export async function stopDevServer(workspaceId: string): Promise<DevServerStatu
   // Kill tracked process first (covers Node servers and any spawned process)
   const tracked = trackedProcesses.get(workspaceId)
   if (tracked) {
-    try {
-      if (tracked.pid) {
-        process.kill(-tracked.pid, 'SIGTERM')
-      } else {
-        tracked.kill('SIGTERM')
-      }
-    } catch (err) {
-      console.error('[dev-server] Failed to kill tracked process:', err instanceof Error ? err.message : err)
-    }
-    trackedProcesses.delete(workspaceId)
+    const exited = (await signalAndWait(tracked, 'SIGTERM', 3_000)) || (await signalAndWait(tracked, 'SIGKILL', 1_000))
+    if (!exited) throw new Error('Dev server stop is not confirmed; retry after the process exits')
+    if (trackedProcesses.get(workspaceId) === tracked) trackedProcesses.delete(workspaceId)
   }
 
   const settings = getProjectSettings(workspace.projectPath)
 
+  let stopError: unknown
+  let customStopSucceeded = false
   if (settings?.devServer.stopCommand) {
     try {
       await runCommand('bash', ['-c', settings.devServer.stopCommand], {
@@ -356,8 +455,9 @@ export async function stopDevServer(workspaceId: string): Promise<DevServerStatu
         },
         timeout: 30_000,
       })
+      customStopSucceeded = true
     } catch (err) {
-      console.error(`[dev-server] Stop command failed:`, err instanceof Error ? err.message : err)
+      stopError = err
     }
   }
 
@@ -366,10 +466,28 @@ export async function stopDevServer(workspaceId: string): Promise<DevServerStatu
   if (config?.projectName) {
     try {
       await runCommand('docker', ['compose', '-p', config.projectName, 'down'], { cwd, timeout: 30_000 })
-    } catch {
-      // May already be stopped by the custom command — ignore
+      stopError = undefined
+    } catch (err) {
+      stopError = err
+      // The custom command may use -f/--env-file absent from the generic fallback.
+      // Only an independent, successful Docker query can confirm it stopped everything.
+      if (customStopSucceeded) {
+        try {
+          const remaining = await runCommand(
+            'docker',
+            ['ps', '--filter', `label=com.docker.compose.project=${config.projectName}`, '--format', '{{.ID}}'],
+            { timeout: 10_000 },
+          )
+          if (!remaining.trim()) stopError = undefined
+        } catch {
+          // An unavailable daemon is not confirmation of shutdown.
+        }
+      }
     }
   }
+
+  if (stopError)
+    throw new Error(`Dev server stop failed: ${stopError instanceof Error ? stopError.message : String(stopError)}`)
 
   const status: DevServerStatus = {
     status: 'stopped',
@@ -416,8 +534,7 @@ export async function getDevServerLogs(workspaceId: string, tail = 200): Promise
     return 'No dev-server instance found'
   }
 
-  const running = await listRunningContainers()
-  const matching = running.filter((name) => containerBelongsToProject(name, config.projectName))
+  const matching = await listRunningContainers(config.projectName)
 
   if (matching.length === 0) {
     return 'No running containers found'

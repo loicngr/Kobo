@@ -631,11 +631,26 @@ describe('handleItemStarted — webSearch', () => {
 
 describe('handleItemCompleted — plan', () => {
   function todosOf(events: ReturnType<typeof handleItemCompleted>) {
-    expect(events).toHaveLength(1)
+    expect(events).toHaveLength(2)
     expect(events[0]).toMatchObject({ kind: 'tool:call', name: 'TodoWrite' })
+    expect(events[1]).toEqual({
+      kind: 'tool:result',
+      toolCallId: (events[0] as { toolCallId: string }).toolCallId,
+      output: null,
+      isError: false,
+    })
     const ev = events[0] as { input: { todos: Array<{ content: string; status: string }> } }
     return ev.input.todos
   }
+
+  it('waits for the completed plan before emitting the synthetic todo update', () => {
+    const state = mkState()
+    const item = { id: 'item_6', type: 'plan' as const, text: '' }
+    expect(handleItemStarted(item, state)).toEqual([])
+    expect(todosOf(handleItemCompleted({ ...item, text: '- Final task' }, state))).toEqual([
+      { content: 'Final task', status: 'pending' },
+    ])
+  })
 
   it('falls back to a single-item list when the text has no bullets', () => {
     const state = mkState()
@@ -710,9 +725,7 @@ describe('handleItemCompleted — plan', () => {
     const events = handleItemCompleted(item, state)
     // Empty plan should still emit a TodoWrite call (so the UI can clear stale
     // todos), but with an empty list.
-    expect(events).toHaveLength(1)
-    const ev = events[0] as { input: { todos: unknown[] } }
-    expect(ev.input.todos).toEqual([])
+    expect(todosOf(events)).toEqual([])
   })
 })
 

@@ -2003,6 +2003,7 @@ export default {
   'prCheckout.workspace.restore': 'Ricrea la sua worktree',
   'prCheckout.worktree.orphanHint': 'Esiste già una worktree su questo branch in {path}.',
   'prCheckout.worktree.attach': 'Collegala',
+  'prCheckout.worktree.branchInUse': 'Questo branch è già estratto. Collega il worktree esistente.',
   'prCheckout.worktree.createElsewhere': "Creane un'altra altrove",
   'prCheckout.operation.hint': 'Un {operation} è in corso in quella worktree.',
   'prCheckout.operation.abort': 'Interrompilo',
@@ -2011,6 +2012,8 @@ export default {
   'prCheckout.changes.stash': 'Metti in stash',
   'prCheckout.changes.commit': 'Fai il commit',
   'prCheckout.changes.discard': 'Scartale (conservate in uno stash etichettato)',
+  'prCheckout.changes.keepResetConflict':
+    'Conservare le modifiche locali è incompatibile con un reset. Usa stash o commit, oppure conserva il branch.',
   'prCheckout.changes.keep': 'Lasciale come sono',
   'prCheckout.divergence.behindHint': 'Il tuo branch è indietro di {behind} commit rispetto a origin.',
   'prCheckout.divergence.aheadHint': 'Il tuo branch ha {ahead} commit non pushati.',

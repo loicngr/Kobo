@@ -38,7 +38,7 @@ import {
   setBackendPort,
   startAgent,
   startWatchdog,
-  stopAgent,
+  stopAgentAndWait,
   stopAllAgents,
   stopWatchdog,
 } from './services/agent/orchestrator.js'
@@ -46,7 +46,11 @@ import * as autoLoopService from './services/auto-loop-service.js'
 import { startAwaitingUserReminder, stopAwaitingUserReminder } from './services/awaiting-user-reminder-service.js'
 import { runContentMigrationIfNeeded } from './services/content-migration-service.js'
 import * as cronService from './services/cron-service.js'
-import { createDailyDbBackupIfNeeded, createPreMigrationBackup } from './services/db-backup-service.js'
+import {
+  createDailyDbBackupIfNeeded,
+  createPreMigrationBackup,
+  startDailyDbBackupScheduler,
+} from './services/db-backup-service.js'
 import { startDevServer, stopAllDevServers, stopDevServer } from './services/dev-server-service.js'
 import {
   authorizeWsUpgrade,
@@ -138,24 +142,11 @@ const RETENTION_INTERVAL_MS = 24 * 60 * 60 * 1000
 const retentionTimer = setInterval(() => runRetentionPass('daily'), RETENTION_INTERVAL_MS)
 retentionTimer.unref?.()
 
-// Daily DB backup (best-effort, fire-and-forget — never blocks boot).
-// Creates a WAL-safe snapshot alongside kobo.db if no backup exists in the
-// last 24h, and rotates out older backups beyond the retention window.
-void createDailyDbBackupIfNeeded(db, getDbPath())
-  .then((r) => {
-    if (r.created) {
-      startupDebug(`[kobo] Daily DB backup: ${r.created}`)
-      if (r.deleted.length > 0) {
-        startupDebug(`[kobo] Rotated ${r.deleted.length} old DB backup(s)`)
-      }
-    }
-  })
-  .catch((err) => {
-    // A full disk or an unwritable backup directory must not stop the server
-    // from booting: without this catch the rejection reaches the last-resort
-    // handler below and Kōbō exits before it ever listens.
-    console.error('[kobo] Daily DB backup failed (continuing):', err)
-  })
+// Check on boot and hourly so servers running longer than a day keep backing up.
+const dailyBackupScheduler = startDailyDbBackupScheduler(async () => {
+  const result = await createDailyDbBackupIfNeeded(db, getDbPath())
+  if (result.created) startupDebug(`[kobo] Daily DB backup: ${result.created}`)
+})
 
 // Initialize process cleanup, agent watchdog, PR watcher, and wakeup rehydration
 reconcileOrphanSessions()
@@ -166,7 +157,7 @@ autoLoopService.rehydrate()
 // otherwise the next arm() after restart would compute the next ladder rung
 // from retryCount=0 and undo the progression.
 restoreRetryCountsFromDb()
-quotaBackoffService.restoreOnBoot((workspaceId) => autoLoopService.onQuotaBackoffExpired(workspaceId))
+quotaBackoffService.restoreOnBoot((workspaceId, pending) => autoLoopService.onQuotaBackoffExpired(workspaceId, pending))
 cronService.restoreOnBoot()
 // Deliver any new default prompt templates to existing installs (seed-once via the
 // seededDefaultSlugs watermark; never overwrites or re-adds deleted defaults).
@@ -542,10 +533,8 @@ setMessageHandler(async (type, payload) => {
 
   if (type === 'workspace:stop' && p?.workspaceId) {
     try {
-      // A deliberate stop must not be treated like a recoverable engine
-      // interruption: disable before the engine emits session:ended(killed).
-      autoLoopService.disable(p.workspaceId, 'user-action')
-      stopAgent(p.workspaceId)
+      // Share the HTTP stop contract, including loops waiting without an agent.
+      await stopAgentAndWait(p.workspaceId)
     } catch (err) {
       console.error('[ws] Failed to stop agent:', err)
     }
@@ -717,6 +706,7 @@ async function gracefulShutdown(signal: string, exitCode = 0): Promise<void> {
     console.log('[kobo] HTTP and WebSocket servers closed')
   } finally {
     try {
+      await dailyBackupScheduler.stop()
       closeDb()
       console.log('[kobo] Database closed')
     } catch {

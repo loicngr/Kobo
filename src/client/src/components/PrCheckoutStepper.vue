@@ -5,6 +5,7 @@
         <div class="text-subtitle1 text-kobo-1">{{ $t('prCheckout.title') }}</div>
       </q-card-section>
 
+      <div v-if="decisionError" class="text-negative q-pa-md" role="alert">{{ $t(decisionError) }}</div>
       <q-separator dark />
 
       <!-- No steps at all: nothing to ask, apply immediately. -->
@@ -17,7 +18,8 @@
         <q-card-section class="column q-gutter-y-sm">
           <div class="text-body2 text-kobo-1">{{ $t(blockedReasonKey) }}</div>
         </q-card-section>
-        <q-separator dark />
+        <div v-if="decisionError" class="text-negative q-pa-md" role="alert">{{ $t(decisionError) }}</div>
+      <q-separator dark />
         <q-card-actions align="right" class="q-pa-md">
           <q-btn v-if="hasIndexLockBlocker" flat no-caps :label="$t('prCheckout.retry')" color="kobo-2" :loading="loading" @click="retryDiagnose" />
           <q-btn flat no-caps :label="$t('prCheckout.cancel')" color="kobo-2" @click="close" />
@@ -84,9 +86,10 @@
                   color="primary"
                   :options="[
                     { label: $t('prCheckout.worktree.attach'), value: 'attach' },
-                    { label: $t('prCheckout.worktree.createElsewhere'), value: 'create-elsewhere' },
+                    { label: $t('prCheckout.worktree.createElsewhere'), value: 'create-elsewhere', disable: true },
                   ]"
                 />
+                <div class="text-caption text-kobo-3">{{ $t('prCheckout.worktree.branchInUse') }}</div>
               </template>
 
               <!-- path -->
@@ -148,6 +151,7 @@
         </q-card-section>
       </template>
 
+      <div v-if="decisionError" class="text-negative q-pa-md" role="alert">{{ $t(decisionError) }}</div>
       <q-separator dark />
 
       <q-card-actions v-if="report && steps.length > 0 && steps[0].id !== 'blocked'" align="right" class="q-pa-md">
@@ -158,7 +162,7 @@
           :label="$t('prCheckout.apply')"
           color="primary"
           :loading="applying"
-          :disable="needsPathInput"
+          :disable="needsPathInput || !!decisionError"
           @click="apply"
         />
       </q-card-actions>
@@ -171,6 +175,7 @@ import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {
   type CheckoutStep,
+  checkoutDecisionError,
   defaultDecisions,
   deriveSteps,
   type PrCheckoutDecisions,
@@ -306,6 +311,8 @@ const orphanWorktreePath = computed(() => {
 // (see `onPathCollisionInput`), which makes the server fall back to the exact
 // same already-occupied default path — guaranteed to fail again. Block Apply
 // until the user has actually typed something for this step.
+const decisionError = computed(() => (report.value ? checkoutDecisionError(report.value, decisions) : null))
+
 const needsPathInput = computed(() => steps.value.some((s) => s.id === 'path') && !decisions.pathCollision)
 
 const BLOCKER_KEY_BY_KIND: Record<string, string> = {
@@ -379,7 +386,7 @@ async function apply() {
   applyError.value = null
 
   const currentReport = report.value
-  if (!currentReport) return
+  if (!currentReport || decisionError.value) return
 
   // Short-circuit 1: open an already-active workspace, no /resolve call.
   if (decisions.existingWorkspace === 'open' && currentReport.workspace.state === 'active') {

@@ -233,6 +233,7 @@ const TEMPLATE_WITH_PROJECT = 'PROJECT TEMPLATE — branch {{branch_name}} base 
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(agentManager.stopAgentAndWait).mockResolvedValue('not-running')
 
   // Default execFile behaviour: git fetch + git rev-parse both succeed.
   execFilePromiseMock.mockImplementation(async (cmd: string, args: string[]) => {
@@ -427,9 +428,9 @@ describe('POST /api/workspaces/:id/start-review', () => {
   })
 
   it('newSession=true without running agent still starts fresh (stopAgent best-effort)', async () => {
-    // stopAgentAndWait throws because no agent is running — must still proceed.
+    // Absence is an explicit successful outcome, distinct from a failed stop.
     vi.mocked(agentManager.stopAgentAndWait).mockImplementation(async () => {
-      throw new Error('No agent running')
+      return 'not-running'
     })
     vi.mocked(agentManager.startAgent).mockReturnValue({ agentSessionId: 'fresh' } as never)
 
@@ -446,7 +447,7 @@ describe('POST /api/workspaces/:id/start-review', () => {
     expect(workspaceService.updateWorkspaceStatus).toHaveBeenCalledWith('ws-1', 'executing')
   })
 
-  it('newSession=true: stopAgent throws but startAgent still runs', async () => {
+  it('newSession=true: stop failure prevents starting a replacement', async () => {
     vi.mocked(agentManager.stopAgentAndWait).mockImplementation(async () => {
       throw new Error('stop failed')
     })
@@ -458,10 +459,10 @@ describe('POST /api/workspaces/:id/start-review', () => {
       body: JSON.stringify({ newSession: true }),
     })
 
-    expect(res.status).toBe(200)
+    expect(res.status).toBe(500)
     // Both called: stop first (and threw), then start.
     expect(agentManager.stopAgentAndWait).toHaveBeenCalledTimes(1)
-    expect(agentManager.startAgent).toHaveBeenCalledTimes(1)
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
   })
 
   it('uses customReviewTemplate when skillSuite === custom (suite-aware path)', async () => {

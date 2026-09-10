@@ -2,10 +2,12 @@ import fs from 'node:fs'
 import { buildE2eIterationBlock, buildFinalizationIterationBlock } from '../../shared/auto-loop-prompts.js'
 import { getDb } from '../db/index.js'
 import { slugifyProjectName } from '../utils/project-slug.js'
+import { deferUntilWorkspaceAvailable, isWorkspaceLifecycleBusy } from '../utils/workspace-lifecycle-guard.js'
 import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 import * as orchestrator from './agent/orchestrator.js'
 import * as cleanupScriptService from './cleanup-script-service.js'
 import * as lifecycleHookService from './lifecycle-hook-service.js'
+import * as quotaBackoffService from './quota-backoff-service.js'
 import * as settingsService from './settings-service.js'
 import { getSuitePrompts } from './skill-suite-prompts.js'
 import { emit, emitEphemeral } from './websocket-service.js'
@@ -344,7 +346,8 @@ function hasFreeAgentSlot(): boolean {
  * free, exactly one starts and the other two keep waiting rather than each
  * re-announcing that they wait.
  */
-export function resumeWaitingWorkspaces(): void {
+export function resumeWaitingWorkspaces(excluded: ReadonlySet<string> = new Set()): void {
+  if (orchestrator.isShuttingDown()) return
   const db = getDb()
   const rows = db
     .prepare(
@@ -354,6 +357,7 @@ export function resumeWaitingWorkspaces(): void {
     )
     .all() as Array<{ id: string; status: string }>
   for (const row of rows) {
+    if (excluded.has(row.id)) continue
     if (!hasFreeAgentSlot()) return
     if (orchestrator.hasController(row.id)) continue
     // Same guards as spawnNextIteration's own callers: a quota backoff or a
@@ -368,8 +372,12 @@ export function resumeWaitingWorkspaces(): void {
 }
 
 function spawnNextIteration(workspaceId: string, opts: { throwOnStartAgentError?: boolean } = {}): void {
+  // Lifecycle/ready callbacks can outlive timer suspension; preserve their persisted loop intent.
+  if (orchestrator.isShuttingDown()) return
   const row = getRow(workspaceId)
-  if (!row) return
+  if (!row || row.archived_at || !row.auto_loop) return
+  if (deferUntilWorkspaceAvailable(workspaceId, resumeWaitingWorkspaces)) return
+  if (orchestrator.hasController(workspaceId)) return
   // Same guard as onSessionEnded — never race a deferred-resume start.
   if (row.status === 'awaiting-user') return
   const task = pickNextTask(workspaceId)
@@ -503,12 +511,54 @@ function spawnNextIteration(workspaceId: string, opts: { throwOnStartAgentError?
  *   - `status !== 'quota'` (user already manually resumed, or another path
  *     transitioned the workspace)
  */
-export function onQuotaBackoffExpired(workspaceId: string): void {
+const pendingQuotaStops = new Set<string>()
+const QUOTA_STOP_RETRY_MS = 15_000
+
+function deferQuotaRetry(workspaceId: string, pending?: quotaBackoffService.PendingQuotaBackoff): void {
+  const attempt = pending ?? quotaBackoffService.getPending(workspaceId)
+  quotaBackoffService.arm(workspaceId, QUOTA_STOP_RETRY_MS, {
+    resetsAt: attempt?.resetsAt ?? null,
+    source: attempt?.source ?? 'fallback_ladder',
+    reason: attempt?.reason ?? 'quota',
+    retryCount: attempt?.retryCount ?? 1,
+  })
+}
+
+export function onQuotaBackoffExpired(workspaceId: string, pending?: quotaBackoffService.PendingQuotaBackoff): void {
   const row = getRow(workspaceId)
   if (!row) return
   if (row.archived_at !== null) return
   if (row.auto_loop !== 1) return
   if (row.status !== 'quota') return
+  if (pendingQuotaStops.has(workspaceId) || orchestrator.isShuttingDown() || isWorkspaceLifecycleBusy(workspaceId)) {
+    deferQuotaRetry(workspaceId, pending)
+    return
+  }
+  if (orchestrator.hasController(workspaceId)) {
+    pendingQuotaStops.add(workspaceId)
+    const stopped = orchestrator.stopAgentAndWait(workspaceId, undefined, 'replacement')
+    // The timer already consumed its row. Persist recovery immediately, after the
+    // technical stop's synchronous cancellation, so shutdown/crash during the await loses no intent.
+    deferQuotaRetry(workspaceId, pending)
+    void stopped
+      .then((outcome) => {
+        // Stop, archive, or a manual replacement may have superseded this retry while we awaited the engine.
+        const current = getRow(workspaceId)
+        if (!current || current.archived_at || !current.auto_loop || current.status !== 'quota') return
+        if (outcome === 'timeout' || outcome === 'failed' || orchestrator.isShuttingDown()) {
+          deferQuotaRetry(workspaceId, pending)
+          return
+        }
+        updateWorkspaceStatus(workspaceId, 'idle')
+        quotaBackoffService.cancel(workspaceId, 'completed')
+        spawnNextIteration(workspaceId)
+      })
+      .catch((err) => {
+        console.error(`[auto-loop] quota controller stop failed for '${workspaceId}':`, err)
+      })
+      .finally(() => pendingQuotaStops.delete(workspaceId))
+    return
+  }
   // The timer has consumed its persisted row. Release quota ownership before
   // checking capacity so resumeWaitingWorkspaces can pick this workspace up
   // when a slot frees, even if no agent can start at this instant.

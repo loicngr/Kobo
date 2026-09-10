@@ -721,3 +721,18 @@ describe('changeSourceBranch', () => {
     await expect(pending).rejects.toThrow(/index of this worktree is locked/)
   })
 })
+
+it('rejects the wrong checkout before running a custom script', async () => {
+  g(repo, ['branch', 'feature'])
+  getWorkspaceMock.mockReturnValue({
+    id: 'w1',
+    sourceBranch: 'main',
+    workingBranch: 'feature',
+    worktreePath: repo,
+    projectPath: repo,
+  })
+  getEffectiveSettingsMock.mockReturnValue({ changeSourceBranchScript: 'true' })
+  await expect(changeSourceBranch('w1', 'develop')).rejects.toThrow(/Expected.*feature/)
+  expect(spawnMock).not.toHaveBeenCalled()
+  expect(updateSourceMock).not.toHaveBeenCalled()
+})

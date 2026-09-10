@@ -98,7 +98,7 @@ describe('resolvePrCheckout', () => {
       baseBranch: 'main',
       worktreesPath: null,
       decisions: {},
-      fingerprint: computeFingerprint(report),
+      fingerprint: await computeFingerprint(report),
     })
     expect(fs.existsSync(result.worktreePath)).toBe(true)
     expect(result.workingBranch).toBe('feat/r')
@@ -118,10 +118,93 @@ describe('resolvePrCheckout', () => {
       baseBranch: 'main',
       worktreesPath: null,
       decisions: { orphanWorktree: 'attach' },
-      fingerprint: computeFingerprint(report),
+      fingerprint: await computeFingerprint(report),
     })
     expect(result.worktreePath).toBe(wt)
     expect(result.applied.map((a) => a.kind)).toContain('attach-worktree')
+  })
+
+  it.each(['keep', undefined] as const)(
+    'rejects hard reset with %s local edits without changing files or refs',
+    async (localChanges) => {
+      remoteOnlyBranch()
+      const wt = path.join(repo.path, '.worktrees', 'feat-r')
+      repo.git(['worktree', 'add', '-b', 'feat/r', wt, 'origin/feat/r'])
+      fs.writeFileSync(path.join(wt, 'a.txt'), 'staged work\n')
+      repo.git(['add', 'a.txt'], wt)
+      fs.writeFileSync(path.join(wt, 'a.txt'), 'unstaged work\n')
+      const report = diagnoseLocalState(repo.path, 'feat/r', null)
+      const before = repo.git(['show-ref'])
+      await expect(
+        resolvePrCheckout({
+          projectPath: repo.path,
+          headBranch: 'feat/r',
+          baseBranch: 'main',
+          worktreesPath: null,
+          decisions: { localChanges, divergence: 'reset-hard' },
+          fingerprint: await computeFingerprint(report),
+        }),
+      ).rejects.toThrow(/preserve local changes/i)
+      expect(repo.git(['show-ref'])).toBe(before)
+      expect(fs.readFileSync(path.join(wt, 'a.txt'), 'utf8')).toBe('unstaged work\n')
+      expect(repo.git(['show', ':a.txt'], wt)).toBe('staged work')
+      expect(repo.git(['stash', 'list'])).toBe('')
+    },
+  )
+
+  it('rejects an impossible duplicate checkout before branch mutations', async () => {
+    remoteOnlyBranch()
+    const wt = path.join(repo.path, '.worktrees', 'feat-r')
+    repo.git(['worktree', 'add', '-b', 'feat/r', wt, 'origin/feat/r'])
+    const destination = path.join(repo.path, '.worktrees', 'elsewhere')
+    const report = diagnoseLocalState(repo.path, 'feat/r', null)
+    const refs = repo.git(['show-ref'])
+    await expect(
+      resolvePrCheckout({
+        projectPath: repo.path,
+        headBranch: 'feat/r',
+        baseBranch: 'main',
+        worktreesPath: null,
+        decisions: {
+          orphanWorktree: 'create-elsewhere',
+          pathCollision: { worktreePath: destination },
+          divergence: 'reset-hard',
+        },
+        fingerprint: await computeFingerprint(report),
+      }),
+    ).rejects.toThrow(/already checked out/)
+    expect(repo.git(['show-ref'])).toBe(refs)
+    expect(fs.existsSync(destination)).toBe(false)
+  })
+
+  it.each(['unstaged', 'staged', 'untracked', 'symlink'])('invalidates same-count %s content changes', async (kind) => {
+    remoteOnlyBranch()
+    const wt = path.join(repo.path, '.worktrees', 'feat-r')
+    repo.git(['worktree', 'add', '-b', 'feat/r', wt, 'origin/feat/r'])
+    const file = path.join(wt, kind === 'untracked' || kind === 'symlink' ? 'new' : 'a.txt')
+    if (kind === 'symlink') fs.symlinkSync('target1', file)
+    else fs.writeFileSync(file, 'v1\n')
+    if (kind === 'staged') repo.git(['add', '.'], wt)
+    const report = diagnoseLocalState(repo.path, 'feat/r', null)
+    const fingerprint = await computeFingerprint(report)
+    if (kind === 'symlink') {
+      fs.unlinkSync(file)
+      fs.symlinkSync('target2', file)
+    } else fs.writeFileSync(file, 'v2\n')
+    if (kind === 'staged') repo.git(['add', '.'], wt)
+    const fresh = diagnoseLocalState(repo.path, 'feat/r', null)
+    expect(fresh.localChanges).toEqual(report.localChanges)
+    expect(await computeFingerprint(fresh)).not.toBe(fingerprint)
+    await expect(
+      resolvePrCheckout({
+        projectPath: repo.path,
+        headBranch: 'feat/r',
+        baseBranch: 'main',
+        worktreesPath: null,
+        decisions: { localChanges: 'stash' },
+        fingerprint,
+      }),
+    ).rejects.toBeInstanceOf(StaleDiagnosisError)
   })
 
   it('stashes uncommitted changes when asked to', async () => {
@@ -136,7 +219,7 @@ describe('resolvePrCheckout', () => {
       baseBranch: 'main',
       worktreesPath: null,
       decisions: { orphanWorktree: 'attach', localChanges: 'stash' },
-      fingerprint: computeFingerprint(report),
+      fingerprint: await computeFingerprint(report),
     })
     expect(fs.readFileSync(path.join(wt, 'a.txt'), 'utf-8')).toBe('a\n')
     expect(repo.git(['stash', 'list'], wt)).toContain('kobo-pr-checkout')
@@ -144,7 +227,7 @@ describe('resolvePrCheckout', () => {
 
   it('rejects a plan built on a stale fingerprint', async () => {
     remoteOnlyBranch()
-    const stale = computeFingerprint(diagnoseLocalState(repo.path, 'feat/r', null))
+    const stale = await computeFingerprint(diagnoseLocalState(repo.path, 'feat/r', null))
     repo.git(['checkout', '-b', 'feat/r', 'origin/feat/r'])
     repo.commit('drift.txt', 'x\n', 'feat: drift')
     repo.git(['checkout', 'main'])
@@ -169,7 +252,7 @@ describe('resolvePrCheckout', () => {
         baseBranch: 'main',
         worktreesPath: null,
         decisions: {},
-        fingerprint: computeFingerprint(diagnoseLocalState(repo.path, 'feat/r', null)),
+        fingerprint: await computeFingerprint(diagnoseLocalState(repo.path, 'feat/r', null)),
         afterWorktreeHook: () => {
           throw new Error('boom')
         },
@@ -190,7 +273,7 @@ describe('resolvePrCheckout', () => {
         baseBranch: 'main',
         worktreesPath: null,
         decisions: { orphanWorktree: 'attach' },
-        fingerprint: computeFingerprint(report),
+        fingerprint: await computeFingerprint(report),
         afterWorktreeHook: () => {
           throw new Error('boom')
         },
@@ -227,7 +310,7 @@ describe('resolvePrCheckout', () => {
       baseBranch: 'main',
       worktreesPath: null,
       decisions: { orphanWorktree: 'attach', divergence: 'fast-forward' },
-      fingerprint: computeFingerprint(report),
+      fingerprint: await computeFingerprint(report),
     })
 
     expect(result.worktreePath).toBe(wt)

@@ -290,6 +290,29 @@ describe('cron-service — restoreOnBoot', () => {
     if (tmpDir && fs.existsSync(tmpDir)) fs.rmSync(tmpDir, { recursive: true, force: true })
   })
 
+  it('preserves suspended one-shot crons and late arms for the next boot', async () => {
+    const service = await import('../server/services/cron-service.js')
+    const orch = await import('../server/services/agent/orchestrator.js')
+    vi.mocked(orch.hasController).mockReturnValue(false)
+    vi.mocked(orch.startAgent).mockReturnValue({ agentSessionId: 'started', pid: undefined })
+    service.arm(wsId, { expression: '* * * * *', prompt: 'original', oneShot: true })
+    service.suspendForShutdown()
+    service.arm(wsId, { expression: '* * * * *', prompt: 'late', oneShot: true })
+    const before = service.listForWorkspace(wsId)
+    await vi.advanceTimersByTimeAsync(70_000)
+    expect(orch.startAgent).not.toHaveBeenCalled()
+    expect(service.listForWorkspace(wsId)).toEqual(before)
+    service.restoreOnBoot()
+    // Cron retains its existing skip-missed policy, including one-shot crons.
+    expect(service.listForWorkspace(wsId).map((row) => row.nextFireAt)).toEqual([
+      '2026-05-07T10:02:00.000Z',
+      '2026-05-07T10:02:00.000Z',
+    ])
+    await vi.advanceTimersByTimeAsync(50_000)
+    expect(orch.startAgent).toHaveBeenCalledTimes(2)
+    expect(service.listForWorkspace(wsId)).toEqual([])
+  })
+
   it('arms a future row as-is', async () => {
     const { getDb } = await import('../server/db/index.js')
     const db = getDb()

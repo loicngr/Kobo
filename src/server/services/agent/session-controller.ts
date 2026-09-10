@@ -1,7 +1,7 @@
 import type { AgentEngine, AgentEvent, EngineProcess, StartOptions } from './engines/types.js'
 
 /** Why a controller was asked to stop; read by the session-ended hook. */
-export type StopCause = 'user' | 'delete' | 'purge'
+export type StopCause = 'user' | 'delete' | 'purge' | 'replacement' | 'setup' | 'archive' | 'shutdown'
 
 export class SessionController {
   /**
@@ -12,6 +12,7 @@ export class SessionController {
   stopCause?: StopCause
   private _engineProcess?: EngineProcess
   private _startPromise?: Promise<void>
+  private _stopPromise?: Promise<void>
   private _status: 'running' | 'stopping' = 'running'
   /**
    * Set by `stop()`. Distinct from `_status` so the check in `startEngine` is
@@ -76,8 +77,8 @@ export class SessionController {
     const process = await this.engine.start(options, (ev) => this.handle(ev))
     this._engineProcess = process
     if (this._status === 'stopping') {
-      this._engineProcess = undefined
       await process.stop()
+      this._engineProcess = undefined
       return
     }
     this._status = 'running'
@@ -96,7 +97,17 @@ export class SessionController {
     this._engineProcess.interrupt()
   }
 
-  async stop(): Promise<void> {
+  stop(): Promise<void> {
+    if (!this._stopPromise) {
+      this._stopPromise = this.stopEngine().catch((err) => {
+        this._stopPromise = undefined
+        throw err
+      })
+    }
+    return this._stopPromise
+  }
+
+  private async stopEngine(): Promise<void> {
     this._stopRequested = true
     this._status = 'stopping'
     // `startEngine` may still be in flight: `_engineProcess` stays undefined

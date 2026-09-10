@@ -39,7 +39,16 @@ interface PendingQuotaBackoffRow {
 }
 
 const timers = new Map<string, ReturnType<typeof setTimeout>>()
-let onFireCallback: ((workspaceId: string) => void) | null = null
+let suspended = false
+type OnFire = (workspaceId: string, pending: PendingQuotaBackoff) => void
+let onFireCallback: OnFire | null = null
+
+/** Stop in-memory delivery without consuming the schedules needed by the next boot. */
+export function suspendForShutdown(): void {
+  suspended = true
+  for (const timer of timers.values()) clearTimeout(timer)
+  timers.clear()
+}
 
 function rowToPending(row: PendingQuotaBackoffRow): PendingQuotaBackoff {
   return {
@@ -64,16 +73,14 @@ function rowToPending(row: PendingQuotaBackoffRow): PendingQuotaBackoff {
 export function arm(
   workspaceId: string,
   delayMs: number,
-  meta: { resetsAt: string | null; source: QuotaBackoffSource; reason: QuotaBackoffReason },
+  meta: { resetsAt: string | null; source: QuotaBackoffSource; reason: QuotaBackoffReason; retryCount: number },
 ): void {
   const db = getDb()
   const now = new Date()
   const targetAt = new Date(now.getTime() + delayMs).toISOString()
 
-  const existing = db
-    .prepare('SELECT retry_count FROM pending_quota_backoffs WHERE workspace_id = ?')
-    .get(workspaceId) as { retry_count: number } | undefined
-  const retryCount = (existing?.retry_count ?? 0) + 1
+  const retryCount = meta.retryCount
+  if (!Number.isSafeInteger(retryCount) || retryCount < 1) throw new Error('retryCount must be a positive integer')
 
   db.prepare(
     `INSERT INTO pending_quota_backoffs (workspace_id, target_at, resets_at, source, reason, retry_count, created_at)
@@ -89,9 +96,12 @@ export function arm(
 
   const previous = timers.get(workspaceId)
   if (previous) clearTimeout(previous)
-  const timer = setTimeout(() => fireOrSkip(workspaceId), Math.max(0, delayMs))
-  timer.unref?.()
-  timers.set(workspaceId, timer)
+  timers.delete(workspaceId)
+  if (!suspended) {
+    const timer = setTimeout(() => fireOrSkip(workspaceId), Math.max(0, delayMs))
+    timer.unref?.()
+    timers.set(workspaceId, timer)
+  }
 
   emitEphemeral(workspaceId, 'agent:quota-backoff', {
     targetAt,
@@ -135,7 +145,7 @@ export function listPending(): PendingQuotaBackoff[] {
   return rows.map(rowToPending)
 }
 
-export function setOnFireCallback(fn: (workspaceId: string) => void): void {
+export function setOnFireCallback(fn: OnFire): void {
   onFireCallback = fn
 }
 
@@ -144,7 +154,9 @@ export function setOnFireCallback(fn: (workspaceId: string) => void): void {
  * `setTimeout`; past rows fire immediately (delay = 0). Rows pointing at
  * archived or missing workspaces are deleted without firing.
  */
-export function restoreOnBoot(onFire: (workspaceId: string) => void): void {
+export function restoreOnBoot(onFire: OnFire): void {
+  suspendForShutdown()
+  suspended = false
   setOnFireCallback(onFire)
   const db = getDb()
   const rows = db.prepare('SELECT * FROM pending_quota_backoffs').all() as PendingQuotaBackoffRow[]
@@ -163,7 +175,10 @@ export function restoreOnBoot(onFire: (workspaceId: string) => void): void {
 
 /** Internal — invoked when a timer fires. */
 function fireOrSkip(workspaceId: string): void {
+  if (suspended) return
   timers.delete(workspaceId)
+  const pending = getPending(workspaceId)
+  if (!pending) return
   // Final archive check before firing — workspace might have been archived
   // between the timer being armed and now.
   const ws = getWorkspace(workspaceId)
@@ -179,7 +194,7 @@ function fireOrSkip(workspaceId: string): void {
   getDb().prepare('DELETE FROM pending_quota_backoffs WHERE workspace_id = ?').run(workspaceId)
   const cb = onFireCallback
   if (!cb) return
-  cb(workspaceId)
+  cb(workspaceId, pending)
 }
 
 /** @internal test-only */

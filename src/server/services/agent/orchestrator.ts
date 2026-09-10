@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { nanoid } from 'nanoid'
 import { getDb } from '../../db/index.js'
+import { assertAgentStopped, type StopAgentOutcome } from '../../utils/agent-stop-result.js'
 import {
   ensureKoboHome,
   getCompiledMcpServerPath,
@@ -10,6 +11,7 @@ import {
   getSettingsPath,
   getSkillsPath,
 } from '../../utils/paths.js'
+import { assertWorkspaceLifecycleAvailable } from '../../utils/workspace-lifecycle-guard.js'
 import * as autoLoopService from '../auto-loop-service.js'
 import * as cleanupScriptService from '../cleanup-script-service.js'
 import * as cronService from '../cron-service.js'
@@ -81,6 +83,30 @@ export function getBackendPort(): number {
 
 /** workspaceId -> SessionController */
 const controllers = new Map<string, SessionController>()
+/** Replacements waiting for the previous controller to release its worktree. */
+const pendingStarts = new Map<string, SessionController>()
+let shuttingDown = false
+let capacityTimer: ReturnType<typeof setTimeout> | undefined
+const stoppedCapacityOwners = new Set<string>()
+
+function notifyCapacityAvailable(stoppedWorkspaceId: string): void {
+  if (shuttingDown) return
+  stoppedCapacityOwners.add(stoppedWorkspaceId)
+  if (capacityTimer) return
+  // Let the stopping caller finish disabling/archiving before scheduling other work.
+  capacityTimer = setTimeout(() => {
+    capacityTimer = undefined
+    const excluded = new Set(stoppedCapacityOwners)
+    stoppedCapacityOwners.clear()
+    if (shuttingDown) return
+    try {
+      autoLoopService.resumeWaitingWorkspaces(excluded)
+    } catch (err) {
+      console.error('[orchestrator] capacity resume failed:', err)
+    }
+  }, 0)
+  capacityTimer.unref?.()
+}
 
 interface SessionLifecycleOwnership {
   owner: SessionController
@@ -308,8 +334,7 @@ function runWatchdog(): void {
   for (const [workspaceId, ctrl] of controllers) {
     // D1 — a controller already in `stopping` state is being torn down by
     // `stopController`/`stopAgentAndWait`, which has its own bounded deadline
-    // (STOP_AGENT_TIMEOUT_MS) and its own eviction path once that deadline
-    // passes. Before D1 this branch could never see a stopping controller —
+    // (STOP_AGENT_TIMEOUT_MS). A deadline alone never evicts the controller. Before D1 this branch could never see a stopping controller —
     // the entry was removed from `controllers` synchronously, before
     // `ctrl.stop()` was even awaited. Now that the entry survives the whole
     // stop, a slow-but-honest voluntary stop (the engine's iterator already
@@ -353,7 +378,10 @@ function runWatchdog(): void {
       console.warn('[watchdog] Failed to route death notification events:', err)
     }
 
-    if (controllers.get(workspaceId) === ctrl) controllers.delete(workspaceId)
+    if (controllers.get(workspaceId) === ctrl) {
+      controllers.delete(workspaceId)
+      notifyCapacityAvailable(workspaceId)
+    }
     retryCounts.delete(workspaceId)
 
     // This end never goes through handleEvent → onSessionEnded, so the user's
@@ -1062,7 +1090,10 @@ function handleEvent(
 
     if (!ownsWorkspaceLifecycle) return
 
-    if (watchdogRecovery) return
+    if (watchdogRecovery) {
+      notifyCapacityAvailable(workspaceId)
+      return
+    }
 
     // resume_failed exits with an error but the workspace is fine (stale id
     // cleared, next iteration will start fresh) — report 'completed' to
@@ -1209,7 +1240,7 @@ function onSessionEnded(
   const preserveQuotaBackoff = currentWorkspace?.status === 'quota'
   const wasStopping = sourceController?.status === 'stopping'
 
-  if (registeredController === sourceController) {
+  if (!wasStopping && registeredController === sourceController) {
     controllers.delete(workspaceId)
   }
 
@@ -1294,6 +1325,8 @@ export function startAgent(
   existingSessionId?: string,
   reasoningEffort?: string,
 ): StartAgentResult {
+  if (shuttingDown) throw new Error('Cannot start an agent while the server is shutting down')
+  assertWorkspaceLifecycleAvailable(workspaceId)
   const workspace = getWs(workspaceId)
   if (!workspace) throw new Error(`Workspace '${workspaceId}' not found`)
   if (workspace.archivedAt) throw new Error(`Workspace '${workspaceId}' is archived`)
@@ -1305,30 +1338,23 @@ export function startAgent(
   // callback can leave its controller in the map after the workspace is
   // logically idle. Evict it instead of refusing the new session.
   //
-  // A controller already in `stopping` state is evictable too: it stays
-  // registered for the whole teardown now (D1), and refusing here would break
-  // every legitimate stop-then-start sequence.
+  // A controller already stopping keeps ownership until its stop completes;
+  // callers replacing it must await stopAgentAndWait before starting again.
   let zombieEviction: Promise<void> = Promise.resolve()
   const existingCtrl = controllers.get(workspaceId)
   if (existingCtrl) {
+    if (existingCtrl.status === 'stopping') throw new Error('Agent is still stopping; retry after its stop completes')
     const wsForCheck = getWs(workspaceId)
     const status = wsForCheck?.status
     const isLogicallyDone = status === 'idle' || status === 'completed' || status === 'error' || status === 'quota'
-    if (isLogicallyDone || existingCtrl.status === 'stopping') {
+    if (isLogicallyDone) {
       console.warn(
         `[orchestrator] Evicting zombie controller for workspace '${workspaceId}' (status=${status}, controller=${existingCtrl.status}) before starting fresh session`,
       )
       // The new engine must not touch the worktree while the zombie may still
       // be writing to it — a zombie that ignores its own stop is exactly the
-      // case this path exists for. Bounded: it cannot hold the new session
-      // hostage for more than STOP_AGENT_TIMEOUT_MS.
-      zombieEviction = stopWithTimeout(existingCtrl, STOP_AGENT_TIMEOUT_MS).then((stopped) => {
-        if (!stopped) {
-          console.error(
-            `[orchestrator] Zombie controller for workspace '${workspaceId}' did not stop within ${STOP_AGENT_TIMEOUT_MS}ms — starting the new session anyway`,
-          )
-        }
-      })
+      // case this path exists for. An unconfirmed stop fails the replacement.
+      zombieEviction = stopAgentAndWait(workspaceId, undefined, 'replacement').then(assertAgentStopped)
       // Drop any queued pending items + persisted user-input-requested events
       // tied to the zombie's agentSessionId so the new session doesn't inherit
       // a stale queue and so a future sync replay doesn't resurrect them.
@@ -1346,7 +1372,6 @@ export function startAgent(
       } catch (err) {
         console.warn('[orchestrator] Failed to purge zombie pending state:', err)
       }
-      controllers.delete(workspaceId)
     } else {
       throw new Error(`Agent already running for workspace '${workspaceId}'`)
     }
@@ -1403,13 +1428,27 @@ export function startAgent(
     handleEvent(workspaceId, agentSessionId, controller, ev),
   )
   registerSessionLifecycleOwner(workspaceId, agentSessionId, controller)
-  controllers.set(workspaceId, controller)
+  if (!existingCtrl) controllers.set(workspaceId, controller)
+  else pendingStarts.set(workspaceId, controller)
 
   // Kick off engine.start asynchronously, BEHIND the zombie eviction so the
   // new engine never runs concurrently with the one it replaces. Errors
   // surface as error events.
   void zombieEviction
-    .then(() => controller.start(options))
+    .then(() => {
+      // An explicit stop can cancel this replacement while its predecessor
+      // still owns the worktree. Its session row was already finalized there.
+      if (existingCtrl && controller.status === 'stopping') return
+      if (pendingStarts.get(workspaceId) === controller) pendingStarts.delete(workspaceId)
+      assertWorkspaceLifecycleAvailable(workspaceId)
+      const current = getWs(workspaceId)
+      if (!current || current.archivedAt || current.worktreePurgedAt)
+        throw new Error('Workspace is no longer available')
+      const registered = controllers.get(workspaceId)
+      if (registered && registered !== controller) throw new Error('Agent is still stopping')
+      controllers.set(workspaceId, controller)
+      return controller.start(options)
+    })
     .then(() => {
       const pid = controller.pid
       if (pid !== undefined) {
@@ -1422,6 +1461,7 @@ export function startAgent(
       }
     })
     .catch((err) => {
+      if (existingCtrl && controller.status === 'stopping') return
       console.error('[orchestrator] engine.start failed:', err)
       const message = err instanceof Error ? err.message : String(err)
       handleEvent(workspaceId, agentSessionId, controller, {
@@ -1434,6 +1474,9 @@ export function startAgent(
         reason: 'error',
         exitCode: null,
       })
+    })
+    .finally(() => {
+      if (pendingStarts.get(workspaceId) === controller) pendingStarts.delete(workspaceId)
     })
 
   return { agentSessionId, pid: undefined }
@@ -1469,24 +1512,13 @@ export function interruptAgent(workspaceId: string, options: InterruptAgentOptio
   }
 }
 
-/**
- * Upper bound on a stop. Beyond this the engine is considered deaf to its own
- * stop path: we evict the controller so the workspace becomes usable again.
- *
- * This is an honest abandonment, not an escalation to something else that
- * watches over the process: Kōbō has no graduated SIGTERM/SIGKILL path of its
- * own, the `process-tracker` module that used to exist was removed, and the
- * session watchdog only walks the `controllers` map — the very map this
- * eviction just removed the entry from. Whatever survives past this timeout
- * is untracked by anyone in this process; only the OS or the user can end it.
- */
+/** Bound the caller's wait, retaining ownership until actual engine shutdown. */
 export const STOP_AGENT_TIMEOUT_MS = 15_000
 
-export type StopAgentOutcome = 'stopped' | 'not-running' | 'timeout'
+export type { StopAgentOutcome } from '../../utils/agent-stop-result.js'
 
 async function stopController(workspaceId: string, ctrl: SessionController, cause: StopCause = 'user'): Promise<void> {
   ctrl.stopCause = cause
-  wakeupService.cancel(workspaceId, 'stopped')
 
   // Normalize the state synchronously so callers (archive, delete, manual
   // stop) see a clean workspace immediately — without waiting for the async
@@ -1517,25 +1549,22 @@ async function stopController(workspaceId: string, ctrl: SessionController, caus
     }
   }
 
-  // Manual stop should also drop any pending quota auto-resume.
-  quotaBackoffService.cancel(workspaceId, 'user')
-
   // D1 — the controller stays REGISTERED for the whole stop, in `stopping`
   // state. Removing it up-front (as we used to) made the only "is an agent
   // running?" signal of the system lie for the entire teardown window: cron
   // and auto-loop could start a second agent on the same worktree, and delete
   // could pull the worktree from under a process still writing to it.
-  try {
-    await ctrl.stop()
-  } finally {
-    if (controllers.get(workspaceId) === ctrl) controllers.delete(workspaceId)
+  await ctrl.stop()
+  if (controllers.get(workspaceId) === ctrl) {
+    controllers.delete(workspaceId)
+    notifyCapacityAvailable(workspaceId)
   }
 }
 
 /**
  * Race an arbitrary promise against a bounded deadline. Resolves to the
  * winner's value; if the deadline wins, `onTimeout()` supplies the value
- * instead. Never throws — the timer is always cleared. Single source of
+ * instead. The timer is always cleared. Single source of
  * truth for the "stop, but not forever" pattern: both `stopWithTimeout` and
  * `stopAgentAndWait` used to hand-roll their own `Promise.race` + timer, two
  * copies of the same logic that could silently drift apart.
@@ -1555,21 +1584,6 @@ async function raceWithTimeout<T>(promise: Promise<T>, timeoutMs: number, onTime
   }
 }
 
-/** Race a controller stop against a bounded deadline. Never throws. */
-async function stopWithTimeout(ctrl: SessionController, timeoutMs: number): Promise<boolean> {
-  return raceWithTimeout(
-    ctrl
-      .stop()
-      .then(() => true)
-      .catch((err) => {
-        console.error('[orchestrator] controller.stop rejected:', err)
-        return true
-      }),
-    timeoutMs,
-    () => false,
-  )
-}
-
 /**
  * Stop the agent and wait for it to actually die. Every caller that mutates
  * the worktree afterwards — delete, archive, purge, setup script, engine
@@ -1579,30 +1593,56 @@ async function stopWithTimeout(ctrl: SessionController, timeoutMs: number): Prom
 export async function stopAgentAndWait(
   workspaceId: string,
   timeoutMs: number = STOP_AGENT_TIMEOUT_MS,
-  /** Why. `delete` and `purge` tell the session-ended hook to stand down. */
+  /** Only `user` disables auto-loop; technical stops preserve its persisted intent. */
   cause: StopCause = 'user',
 ): Promise<StopAgentOutcome> {
+  const pending = pendingStarts.get(workspaceId)
+  let pendingStop = Promise.resolve()
+  if (pending) {
+    pendingStarts.delete(workspaceId)
+    pending.stopCause = cause
+    pendingStop = pending.stop().then(() => {
+      handleEvent(workspaceId, pending.agentSessionId, pending, {
+        kind: 'session:ended',
+        reason: 'killed',
+        exitCode: null,
+      })
+    })
+  }
   const ctrl = controllers.get(workspaceId)
-  if (!ctrl) return 'not-running'
+  const controllerStop = ctrl ? stopController(workspaceId, ctrl, cause) : Promise.resolve()
+  // Cancel synchronously, including schedules whose controller already exited.
+  // A Promise executor contains DB failures within the bounded stop outcome.
+  // Shutdown only suspends timers: persisted intent belongs to the next boot.
+  const cancelSchedules = new Promise<void>((resolve) => {
+    if (cause !== 'shutdown') {
+      wakeupService.cancel(workspaceId, 'stopped')
+      quotaBackoffService.cancel(workspaceId, 'user')
+    }
+    resolve()
+  })
+  // Mark every controller as stopping before the disable hook can run. Persist
+  // the user's intent even for a loop waiting for capacity with no controller.
+  const disableLoop =
+    cause === 'user'
+      ? Promise.resolve().then(() => autoLoopService.disable(workspaceId, 'user-action'))
+      : Promise.resolve()
 
-  const finished = await raceWithTimeout(
-    stopController(workspaceId, ctrl, cause).then(
-      () => true,
+  const outcome = await raceWithTimeout<StopAgentOutcome>(
+    Promise.all([pendingStop, controllerStop, cancelSchedules, disableLoop]).then(
+      () => (ctrl || pending ? ('stopped' as const) : ('not-running' as const)),
       (err) => {
         console.error(`[orchestrator] controller.stop failed for '${workspaceId}':`, err)
-        return true
+        return 'failed' as const
       },
     ),
     timeoutMs,
-    () => false,
+    () => 'timeout',
   )
-  if (finished) return 'stopped'
-
-  console.error(
-    `[orchestrator] Agent for workspace '${workspaceId}' did not stop within ${timeoutMs}ms — evicting its controller`,
-  )
-  if (controllers.get(workspaceId) === ctrl) controllers.delete(workspaceId)
-  return 'timeout'
+  if (outcome === 'timeout') {
+    console.error(`[orchestrator] Agent '${workspaceId}' did not stop within ${timeoutMs}ms; retaining its controller`)
+  }
+  return outcome
 }
 
 /**
@@ -1623,13 +1663,26 @@ export function stopAgent(workspaceId: string): void {
 
 /** Stop every live engine before process shutdown, with a bounded wait per engine. */
 export async function stopAllAgents(timeoutMs = 3_000): Promise<void> {
+  quotaBackoffService.suspendForShutdown()
+  wakeupService.suspendForShutdown()
+  cronService.suspendForShutdown()
+  shuttingDown = true
+  if (capacityTimer) clearTimeout(capacityTimer)
+  capacityTimer = undefined
+  stoppedCapacityOwners.clear()
   // No per-workspace try/catch here: unlike the pre-D1 shutdown path,
   // `stopAgentAndWait` never rejects — every internal failure (a rejecting
   // `controller.stop()`, or the bounded deadline firing) is already converted
-  // into a logged, returned `StopAgentOutcome` ('stopped' | 'timeout')
+  // into a logged, returned `StopAgentOutcome`
   // instead of a thrown error. A wrapping catch here would be unreachable
   // dead code pretending to guard against a failure mode that can't occur.
-  await Promise.all([...controllers.keys()].map((workspaceId) => stopAgentAndWait(workspaceId, timeoutMs)))
+  const workspaceIds = new Set([...controllers.keys(), ...pendingStarts.keys()])
+  await Promise.all([...workspaceIds].map((workspaceId) => stopAgentAndWait(workspaceId, timeoutMs, 'shutdown')))
+}
+
+/** Automatic continuations must preserve their durable intent during teardown. */
+export function isShuttingDown(): boolean {
+  return shuttingDown
 }
 
 /** Deliver a scheduled check without stopping background work or cancelling the wakeup as user input. */
@@ -2260,7 +2313,12 @@ async function handleQuota(workspaceId: string, _agentSessionId?: string): Promi
 
     // The quotaBackoffService owns the timer + the persistent row + the
     // 'agent:quota-backoff' WS emit. Hand off everything to it.
-    quotaBackoffService.arm(workspaceId, delayMs, { resetsAt: resetsAt ?? null, source, reason: 'quota' })
+    quotaBackoffService.arm(workspaceId, delayMs, {
+      resetsAt: resetsAt ?? null,
+      source,
+      reason: 'quota',
+      retryCount: retryCount + 1,
+    })
   } catch (err) {
     console.error(`[orchestrator] Could not arm the quota backoff for workspace '${workspaceId}':`, err)
     // The status was already moved to 'quota' above, and the banner offering
@@ -2326,7 +2384,12 @@ async function handleTransientAutoLoopFailure(workspaceId: string): Promise<void
     const { delayMs, resetsAt, source } = await computeQuotaBackoffMs(workspaceId, retryCount, false)
     const effectiveDelayMs = retryCount === 0 ? Math.min(delayMs, TRANSIENT_FIRST_RETRY_MS) : delayMs
     retryCounts.set(workspaceId, retryCount + 1)
-    quotaBackoffService.arm(workspaceId, effectiveDelayMs, { resetsAt: resetsAt ?? null, source, reason: 'transient' })
+    quotaBackoffService.arm(workspaceId, effectiveDelayMs, {
+      resetsAt: resetsAt ?? null,
+      source,
+      reason: 'transient',
+      retryCount: retryCount + 1,
+    })
   } catch (err) {
     console.error(`[orchestrator] Could not arm the transient retry for workspace '${workspaceId}':`, err)
     failVisibly(workspaceId)
@@ -2362,8 +2425,8 @@ export function restoreRetryCountsFromDb(): void {
 // in `quota` status and require manual user action (resume / new message)
 // to leave that state. This is intentional: without an auto-loop intent,
 // firing a fresh agent run in the user's absence would surprise them.
-quotaBackoffService.setOnFireCallback((workspaceId: string) => {
-  autoLoopService.onQuotaBackoffExpired(workspaceId)
+quotaBackoffService.setOnFireCallback((workspaceId, pending) => {
+  autoLoopService.onQuotaBackoffExpired(workspaceId, pending)
 })
 
 // ── Testing utilities ─────────────────────────────────────────────────────────

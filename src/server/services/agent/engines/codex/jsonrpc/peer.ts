@@ -34,6 +34,7 @@ export interface JsonRpcPeerOptions {
   onNotification: (method: string, params: unknown) => void
   onServerRequest: (id: number | string, method: string, params: unknown) => void
   onError?: (err: Error) => void
+  onDisconnect?: (err: Error) => void
   /** Deadline applied to every request without an explicit one. `0` disables it. */
   defaultRequestTimeoutMs?: number
 }
@@ -46,6 +47,7 @@ interface PendingSlot {
 
 export function createJsonRpcPeer(opts: JsonRpcPeerOptions): JsonRpcPeer {
   let nextId = 1
+  let closedError: Error | undefined
   const pending = new Map<number | string, PendingSlot>()
 
   /** Remove a pending slot and clear its deadline in one place. */
@@ -57,10 +59,20 @@ export function createJsonRpcPeer(opts: JsonRpcPeerOptions): JsonRpcPeer {
     return slot
   }
 
+  const rejectPending = (err: Error): void => {
+    if (closedError) return
+    closedError = err
+    for (const id of pending.keys()) takePending(id)?.reject(err)
+  }
+
   const transport = createJsonRpcTransport({
     stdin: opts.stdin,
     stdout: opts.stdout,
     onError: opts.onError ?? (() => {}),
+    onDisconnect(err) {
+      rejectPending(err)
+      opts.onDisconnect?.(err)
+    },
     onMessage(msg: JsonRpcMessage) {
       // Response to one of our requests
       if (msg.id != null && (msg.result !== undefined || msg.error !== undefined)) {
@@ -87,6 +99,7 @@ export function createJsonRpcPeer(opts: JsonRpcPeerOptions): JsonRpcPeer {
 
   return {
     request<TResult>(method: string, params?: unknown, timeoutMs?: number): Promise<TResult> {
+      if (closedError) return Promise.reject(closedError)
       const id = nextId++
       const deadlineMs = timeoutMs ?? opts.defaultRequestTimeoutMs ?? DEFAULT_JSONRPC_REQUEST_TIMEOUT_MS
       return new Promise<TResult>((resolve, reject) => {
@@ -99,7 +112,11 @@ export function createJsonRpcPeer(opts: JsonRpcPeerOptions): JsonRpcPeer {
           slot.timer.unref?.()
         }
         pending.set(id, slot)
-        transport.send({ jsonrpc: '2.0', id, method, params })
+        try {
+          transport.send({ jsonrpc: '2.0', id, method, params })
+        } catch (err) {
+          takePending(id)?.reject(err instanceof Error ? err : new Error(String(err)))
+        }
       })
     },
     notify(method, params) {
@@ -112,13 +129,8 @@ export function createJsonRpcPeer(opts: JsonRpcPeerOptions): JsonRpcPeer {
       transport.send({ jsonrpc: '2.0', id, error: { code, message } })
     },
     close() {
+      rejectPending(new Error('peer closed'))
       transport.close()
-      const err = new Error('peer closed')
-      for (const slot of pending.values()) {
-        if (slot.timer) clearTimeout(slot.timer)
-        slot.reject(err)
-      }
-      pending.clear()
     },
   }
 }

@@ -707,12 +707,18 @@ export function listProperCommits(repoPath: string, workingBranch: string, newBa
  * `repoPath`. The caller (and the Kōbō worktree orchestrator) must ensure
  * `workingBranch` is the active branch — do NOT add a `git checkout` here.
  */
+export function assertCurrentBranch(repoPath: string, expected: string): void {
+  const actual = getCurrentBranch(repoPath)
+  if (actual !== expected) throw new Error(`Expected checkout '${expected}', found '${actual || 'detached HEAD'}'`)
+}
+
 export function reconstructBranchOnto(
   repoPath: string,
   workingBranch: string,
   newBase: string,
   commits: readonly string[],
 ): string {
+  assertCurrentBranch(repoPath, workingBranch)
   const baseRef = resolveBase(repoPath, newBase)
   const backupBranch = `kobo-backup/${workingBranch}-${Date.now()}`
   git(repoPath, ['branch', backupBranch, workingBranch])
@@ -795,8 +801,9 @@ export function pruneBackupBranches(
 
 /** Abort any in-progress operation, then hard-reset `workingBranch` to a backup branch. */
 export function restoreBranchFromBackup(repoPath: string, workingBranch: string, backupBranch: string): void {
+  assertCurrentBranch(repoPath, workingBranch)
   abortOngoingGitOperation(repoPath)
-  git(repoPath, ['checkout', '-q', workingBranch])
+  assertCurrentBranch(repoPath, workingBranch)
   git(repoPath, ['reset', '--hard', backupBranch])
 }
 

@@ -56,7 +56,8 @@ Contents:
 ```
 $KOBO_HOME/
 ├── kobo.db                  # SQLite (WAL mode). Forward-only migrations.
-├── kobo.db.backup-<ISO>-<seq>  # Pre-migration backup (auto-created before any schema change).
+├── kobo.db.backup-<ISO>-<seq>  # Daily WAL-safe backup (seven most recent kept).
+├── kobo.db.premigration-*    # Separate snapshot before schema changes (five kept).
 ├── settings.json            # Global and per-project settings.
 ├── templates.json           # Prompt templates.
 ├── skills.json              # Skill suite configuration.
@@ -468,6 +469,10 @@ The two workspaces are created **one after the other**, not in parallel: each
 one fetches, branches and builds a worktree in the same repository, and two of
 those at once contend on the git index lock. If the second creation fails you
 are told so explicitly — the first workspace exists and is usable on its own.
+
+Once both workspaces are created, Kōbō opens them automatically in the side-by-side
+view, with the first engine on the left and the comparison engine on the right.
+If only the first workspace was created, it opens in the usual single-workspace view.
 
 ### Reading the result
 
@@ -1635,3 +1640,20 @@ the conversation history is preserved and new errors still appear. The Help menu
 can mark all current tour steps as seen at once, without hiding future additions.
 Queued messages are shared with split panes through the host client, so they
 remain visible and cancellable across view changes. Unsent drafts are guarded.
+
+
+### Checkout and process recovery
+
+PR checkout matches an existing workspace by project and branch. A branch already checked out in a worktree can be attached; creating another worktree on that same branch is disabled. Keeping uncommitted changes cannot be combined with a hard reset: choose stash or commit first, or keep the branch. Checkout diagnosis includes staged, unstaged and untracked contents, including nested Git repositories; changing them invalidates the pending decision. Ignored files are excluded. This check detects changes between diagnosis and resolution; it cannot lock out edits from an unrelated terminal at the instant Git mutates a file.
+
+Source-branch changes and their rollback require the worktree to be on the workspace's expected branch. If an agent or development server cannot confirm its shutdown, destructive workspace operations stop with an error and leave the worktree in place. Retry after shutdown completes. Starts are refused while an incompatible workspace operation is in progress.
+
+Stopping an agent also cancels a queued replacement and disables auto-loop for that workspace, including while waiting for a free agent slot. Enable auto-loop again to resume automatic iterations. Internal restarts and application shutdown preserve the auto-loop setting.
+
+Development-server shutdown waits for the entire process group, including children that outlive their shell. Process-group verification requires the standard POSIX `ps` command. When a custom stop script succeeds but the generic Docker shutdown fails, Kōbō confirms shutdown only if an independent Docker query reports no running containers for the project.
+
+Docker status and logs identify containers by their exact `com.docker.compose.project` label. Custom container names work; unlabeled containers are not attributed by a name prefix.
+
+### Automatic database backups
+
+Kōbō checks for a daily backup at startup and every hour while running. A new WAL-safe snapshot is created when the latest backup is at least 24 hours old, keeping the seven most recent daily snapshots. Slow backups never overlap. Failures are logged and retried at the next check; graceful shutdown waits for the active backup before closing SQLite. Pre-migration snapshots have their own independent retention.

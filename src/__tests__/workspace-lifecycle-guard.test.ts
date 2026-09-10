@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { isWorkspaceLifecycleBusy, withWorkspaceLifecycleGuard } from '../server/utils/workspace-lifecycle-guard.js'
+import {
+  deferUntilWorkspaceAvailable,
+  isWorkspaceLifecycleBusy,
+  withWorkspaceLifecycleGuard,
+} from '../server/utils/workspace-lifecycle-guard.js'
 
 describe('workspace lifecycle exclusion', () => {
   it('rejects overlapping operations on the same workspace, but allows another workspace', async () => {
@@ -29,4 +33,19 @@ describe('workspace lifecycle exclusion', () => {
     ).rejects.toThrow('git failed')
     await expect(withWorkspaceLifecycleGuard('failed', async () => 'retried')).resolves.toBe('retried')
   })
+})
+
+it('reconsiders a deferred operation after the guard releases, once per callback', async () => {
+  let calls = 0
+  const retry = () => {
+    calls++
+  }
+  await withWorkspaceLifecycleGuard('busy', async () => {
+    expect(deferUntilWorkspaceAvailable('busy', retry)).toBe(true)
+    expect(deferUntilWorkspaceAvailable('busy', retry)).toBe(true)
+    expect(calls).toBe(0)
+  })
+  await Promise.resolve()
+  expect(calls).toBe(1)
+  expect(deferUntilWorkspaceAvailable('busy', retry)).toBe(false)
 })

@@ -19,10 +19,23 @@ export interface JsonRpcTransportOptions {
   stdout: Readable
   onMessage: (msg: JsonRpcMessage) => void
   onError: (err: Error) => void
+  onDisconnect?: (err: Error) => void
 }
 
 export function createJsonRpcTransport(opts: JsonRpcTransportOptions): JsonRpcTransport {
   let buffer = ''
+  let closed = false
+  const fail = (err: Error): void => {
+    if (closed) return
+    closed = true
+    opts.onDisconnect?.(err)
+    opts.onError(err)
+  }
+  // Keep listeners installed through teardown: late pipe errors must stay handled.
+  opts.stdin.on('error', fail)
+  opts.stdout.on('error', fail)
+  opts.stdout.on('end', () => fail(new Error('JSON-RPC transport closed')))
+
   opts.stdout.setEncoding?.('utf-8')
   opts.stdout.on('data', (chunk: string) => {
     buffer += chunk
@@ -40,13 +53,24 @@ export function createJsonRpcTransport(opts: JsonRpcTransportOptions): JsonRpcTr
       }
     }
   })
-  opts.stdout.on('error', opts.onError)
   return {
     send(msg) {
-      opts.stdin.write(`${JSON.stringify(msg)}\n`)
+      if (closed) throw new Error('JSON-RPC transport closed')
+      try {
+        opts.stdin.write(`${JSON.stringify(msg)}\n`)
+      } catch (err) {
+        fail(err instanceof Error ? err : new Error(String(err)))
+        throw err
+      }
     },
     close() {
-      opts.stdin.end()
+      if (closed) return
+      closed = true
+      try {
+        opts.stdin.end()
+      } catch {
+        /* Already disconnected. */
+      }
     },
   }
 }

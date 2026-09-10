@@ -19,14 +19,25 @@ function makeChild() {
 
   const emitter = new EventEmitter()
 
-  return Object.assign(emitter, {
+  const child = Object.assign(emitter, {
     stdin,
     stdout,
     stderr,
     pid: 12345 as number | undefined,
-    kill: vi.fn(),
+    exitCode: null as number | null,
+    signalCode: null as NodeJS.Signals | null,
+    kill: vi.fn<(signal?: NodeJS.Signals) => boolean>(),
     _written: written,
   })
+  child.kill.mockImplementation((signal = 'SIGTERM') => {
+    queueMicrotask(() => {
+      if (child.exitCode !== null || child.signalCode !== null) return
+      child.signalCode = signal
+      child.emit('exit', null, signal)
+    })
+    return true
+  })
+  return child
 }
 
 let _child = makeChild()
@@ -636,6 +647,53 @@ describe('createCodexEngine — child process errors', () => {
 })
 
 describe('createCodexEngine — stop()', () => {
+  it.each(['delayed-exit', 'no-exit', 'signal-failed'] as const)(
+    'requires confirmed process exit after escalation: %s',
+    async (scenario) => {
+      resetChild()
+      _child.kill.mockReturnValue(scenario !== 'signal-failed')
+      vi.useFakeTimers()
+      try {
+        const proc = await createCodexEngine().start(BASE_OPTIONS, () => {})
+        await vi.advanceTimersByTimeAsync(5)
+        pushInitializeResponse()
+        await vi.advanceTimersByTimeAsync(5)
+        pushThreadStartResponse('thr_stop')
+        await vi.advanceTimersByTimeAsync(5)
+        pushTurnStartResponse()
+        await vi.advanceTimersByTimeAsync(5)
+        const initialListeners = _child.listenerCount('exit')
+
+        let stopped = false
+        const stopping = proc.stop().then(() => {
+          stopped = true
+        })
+        const outcome = stopping.catch((error: Error) => error)
+        await vi.advanceTimersByTimeAsync(5)
+        const interrupt = _child._written.map((line) => JSON.parse(line)).find((m) => m.method === 'turn/interrupt')
+        pushLine({ jsonrpc: '2.0', id: interrupt.id, result: {} })
+        pushNotification('turn/completed', { threadId: 'thr_stop', turn: { id: 'turn_1', status: 'interrupted' } })
+        await vi.advanceTimersByTimeAsync(3100)
+
+        expect(_child.kill).toHaveBeenCalledWith('SIGKILL')
+        expect(stopped).toBe(false)
+        if (scenario === 'delayed-exit') {
+          _child.signalCode = 'SIGKILL'
+          _child.emit('exit', null, 'SIGKILL')
+          await stopping
+          expect(stopped).toBe(true)
+        } else {
+          await vi.advanceTimersByTimeAsync(3100)
+          expect(await outcome).toEqual(expect.objectContaining({ message: expect.stringMatching(/did not exit/) }))
+          expect(stopped).toBe(false)
+          expect(_child.listenerCount('exit')).toBe(initialListeners)
+        }
+      } finally {
+        vi.useRealTimers()
+      }
+    },
+  )
+
   it('aborts the active session, kills the child, and resolves session:ended killed', async () => {
     resetChild()
     const engine = createCodexEngine()
@@ -1094,4 +1152,104 @@ describe('createCodexEngine — handshake liveness', () => {
       vi.useRealTimers()
     }
   })
+})
+
+it('keeps silent foreground tools alive and restores the stream deadline after completion', async () => {
+  resetChild()
+  vi.useFakeTimers()
+  try {
+    const events: AgentEvent[] = []
+    await createCodexEngine().start(BASE_OPTIONS, (ev) => events.push(ev))
+    await vi.advanceTimersByTimeAsync(10)
+    pushInitializeResponse()
+    await vi.advanceTimersByTimeAsync(5)
+    pushThreadStartResponse('thread_tools')
+    await vi.advanceTimersByTimeAsync(5)
+    pushTurnStartResponse()
+    await vi.advanceTimersByTimeAsync(5)
+    const item = {
+      id: 'silent',
+      type: 'commandExecution',
+      command: 'sleep 180',
+      cwd: '/tmp',
+      status: 'inProgress',
+      commandActions: [],
+      aggregatedOutput: '',
+      exitCode: null,
+      durationMs: null,
+    }
+    pushNotification('item/started', { threadId: 'thread_tools', turnId: 'turn_1', item })
+    pushNotification('item/started', { threadId: 'thread_tools', turnId: 'turn_1', item: { ...item, id: 'second' } })
+    await vi.advanceTimersByTimeAsync(CODEX_TURN_IDLE_TIMEOUT_MS + 10)
+    expect(events.some((ev) => ev.kind === 'session:ended')).toBe(false)
+    pushNotification('item/completed', {
+      threadId: 'thread_tools',
+      turnId: 'turn_1',
+      item: { ...item, status: 'completed', exitCode: 0 },
+    })
+    await vi.advanceTimersByTimeAsync(CODEX_TURN_IDLE_TIMEOUT_MS + 10)
+    expect(events.some((ev) => ev.kind === 'session:ended')).toBe(false)
+    pushNotification('item/completed', {
+      threadId: 'thread_tools',
+      turnId: 'turn_1',
+      item: { ...item, id: 'second', status: 'completed', exitCode: 0 },
+    })
+    await vi.advanceTimersByTimeAsync(CODEX_TURN_IDLE_TIMEOUT_MS + 10)
+    expect(events.filter((ev) => ev.kind === 'session:ended')).toEqual([
+      { kind: 'session:ended', reason: 'error', exitCode: null },
+    ])
+  } finally {
+    vi.useRealTimers()
+  }
+})
+
+it.each([false, true])('uses the stream deadline after a completed plan (foreground tool: %s)', async (withTool) => {
+  resetChild()
+  vi.useFakeTimers()
+  try {
+    const events: AgentEvent[] = []
+    await createCodexEngine().start(BASE_OPTIONS, (ev) => events.push(ev))
+    await vi.advanceTimersByTimeAsync(10)
+    pushInitializeResponse()
+    await vi.advanceTimersByTimeAsync(5)
+    pushThreadStartResponse('thread_plan')
+    await vi.advanceTimersByTimeAsync(5)
+    pushTurnStartResponse()
+    await vi.advanceTimersByTimeAsync(5)
+
+    const tool = {
+      id: 'silent',
+      type: 'commandExecution',
+      command: 'sleep 180',
+      cwd: '/tmp',
+      status: 'inProgress',
+      commandActions: [],
+      aggregatedOutput: '',
+      exitCode: null,
+      durationMs: null,
+    }
+    if (withTool) pushNotification('item/started', { threadId: 'thread_plan', turnId: 'turn_1', item: tool })
+    pushNotification('item/completed', {
+      threadId: 'thread_plan',
+      turnId: 'turn_1',
+      item: { id: 'plan_1', type: 'plan', text: '- Inspect code' },
+    })
+
+    if (withTool) {
+      await vi.advanceTimersByTimeAsync(CODEX_TURN_IDLE_TIMEOUT_MS + 10)
+      expect(events.some((ev) => ev.kind === 'session:ended')).toBe(false)
+      pushNotification('item/completed', {
+        threadId: 'thread_plan',
+        turnId: 'turn_1',
+        item: { ...tool, status: 'completed', exitCode: 0 },
+      })
+    }
+
+    await vi.advanceTimersByTimeAsync(CODEX_TURN_IDLE_TIMEOUT_MS + 10)
+    expect(events.filter((ev) => ev.kind === 'session:ended')).toEqual([
+      { kind: 'session:ended', reason: 'error', exitCode: null },
+    ])
+  } finally {
+    vi.useRealTimers()
+  }
 })
