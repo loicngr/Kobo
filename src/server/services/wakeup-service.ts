@@ -193,6 +193,19 @@ function fire(workspaceId: string): void {
     if (!row) return
 
     if (orchestrator.hasController(workspaceId)) {
+      // Claude can keep the stream open after a result while a background
+      // task runs. Waiting for that controller to disappear deadlocks a
+      // scheduled check on the very work it is meant to inspect.
+      try {
+        if (orchestrator.sendWakeupIfWaiting(workspaceId, row.prompt, row.agent_session_id ?? undefined)) {
+          failedRetries.delete(workspaceId)
+          db.prepare('DELETE FROM pending_wakeups WHERE workspace_id = ?').run(workspaceId)
+          emitEphemeral(workspaceId, 'wakeup:fired', {})
+          return
+        }
+      } catch (err) {
+        console.error(`[wakeup-service] delivery to active session failed for '${workspaceId}':`, err)
+      }
       defer(workspaceId, row)
       return
     }

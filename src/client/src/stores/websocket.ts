@@ -1481,7 +1481,14 @@ export const useWebSocketStore = defineStore('websocket', {
           break
         }
         case 'agent:quota-backoff-cancelled': {
-          if (wid) workspaceStore.clearPendingQuotaBackoff(wid)
+          if (wid) {
+            workspaceStore.clearPendingQuotaBackoff(wid)
+            // An expired quota can leave the workspace idle while it waits
+            // for capacity, with no session event to refresh its status.
+            if ((payload as { reason?: string }).reason === 'completed') {
+              void workspaceStore.fetchWorkspaces()
+            }
+          }
           break
         }
 

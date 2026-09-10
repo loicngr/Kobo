@@ -9,7 +9,7 @@ import * as lifecycleHookService from './lifecycle-hook-service.js'
 import * as settingsService from './settings-service.js'
 import { getSuitePrompts } from './skill-suite-prompts.js'
 import { emit, emitEphemeral } from './websocket-service.js'
-import { listTasks, type Task } from './workspace-service.js'
+import { listTasks, type Task, updateWorkspaceStatus } from './workspace-service.js'
 
 export interface AutoLoopStatus {
   auto_loop: boolean
@@ -232,6 +232,9 @@ export function rehydrate(): void {
         // if the agent hadn't yet seeded any task before the reload.
         const row = getRow(id)
         if (row?.auto_loop_ready !== 1) continue
+        // Persisted quota timers own the restart of these workspaces. Boot
+        // restores them after this pass; starting here bypasses their delay.
+        if (row.status === 'quota') continue
         if (countPendingTasks(id) === 0) {
           disable(id, 'completed')
           continue
@@ -492,9 +495,9 @@ function spawnNextIteration(workspaceId: string, opts: { throwOnStartAgentError?
  * Spawns the next auto-loop iteration if the workspace is still in quota status
  * with auto_loop active; no-ops otherwise (race-safe).
  *
- * No-op cases — these all leave the workspace in `quota` status awaiting
- * manual user action:
+ * No-op cases — leave the workspace unchanged:
  *   - workspace was deleted between arm and fire
+ *   - workspace was archived during the backoff window
  *   - `auto_loop !== 1` (workspace was never an auto-loop target, OR the user
  *     toggled the loop off during the backoff window)
  *   - `status !== 'quota'` (user already manually resumed, or another path
@@ -503,8 +506,14 @@ function spawnNextIteration(workspaceId: string, opts: { throwOnStartAgentError?
 export function onQuotaBackoffExpired(workspaceId: string): void {
   const row = getRow(workspaceId)
   if (!row) return
+  if (row.archived_at !== null) return
   if (row.auto_loop !== 1) return
   if (row.status !== 'quota') return
+  // The timer has consumed its persisted row. Release quota ownership before
+  // checking capacity so resumeWaitingWorkspaces can pick this workspace up
+  // when a slot frees, even if no agent can start at this instant.
+  updateWorkspaceStatus(workspaceId, 'idle')
+  emitEphemeral(workspaceId, 'agent:quota-backoff-cancelled', { reason: 'completed' })
   spawnNextIteration(workspaceId)
 }
 

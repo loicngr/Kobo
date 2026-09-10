@@ -473,6 +473,59 @@ describe('auto-loop-service', () => {
   })
 
   describe('onQuotaBackoffExpired', () => {
+    it('resumes exactly once after quota expires with no free agent slot', async () => {
+      const svc = await import('../server/services/auto-loop-service.js')
+      const quota = await import('../server/services/quota-backoff-service.js')
+      const orch = await import('../server/services/agent/orchestrator.js')
+      const settings = await import('../server/services/settings-service.js')
+      const ws = await import('../server/services/websocket-service.js')
+      const { createTask, getWorkspace } = await import('../server/services/workspace-service.js')
+      const db = (await import('../server/db/index.js')).getDb()
+      createTask(wsId, { title: 'resume me', isAcceptanceCriterion: false, sortOrder: 0 })
+      db.prepare("UPDATE workspaces SET auto_loop = 1, auto_loop_ready = 1, status = 'quota' WHERE id = ?").run(wsId)
+      const settingsSpy = vi.spyOn(settings, 'getGlobalSettings').mockReturnValue({
+        maxConcurrentAgents: 1,
+      } as never)
+      vi.mocked(orch.runningAgentCount).mockReturnValue(1)
+      vi.useFakeTimers()
+      try {
+        quota.setOnFireCallback(svc.onQuotaBackoffExpired)
+        quota.arm(wsId, 60_000, { resetsAt: null, source: 'fallback_ladder', reason: 'quota' })
+        await vi.advanceTimersByTimeAsync(60_000)
+        expect(quota.getPending(wsId)).toBeNull()
+        expect(orch.startAgent).not.toHaveBeenCalled()
+
+        vi.mocked(orch.runningAgentCount).mockReturnValue(0)
+        svc.resumeWaitingWorkspaces()
+        expect(orch.startAgent).toHaveBeenCalledTimes(1)
+        expect(getWorkspace(wsId)?.status).toBe('idle')
+        expect(ws.emitEphemeral).toHaveBeenCalledWith(wsId, 'agent:quota-backoff-cancelled', { reason: 'completed' })
+        svc.onQuotaBackoffExpired(wsId)
+        expect(orch.startAgent).toHaveBeenCalledTimes(1)
+      } finally {
+        quota.cancel(wsId, 'user')
+        vi.useRealTimers()
+        settingsSpy.mockRestore()
+        vi.mocked(orch.runningAgentCount).mockReturnValue(0)
+      }
+    })
+
+    it('does not resume or change the status of an archived workspace', async () => {
+      const svc = await import('../server/services/auto-loop-service.js')
+      const orch = await import('../server/services/agent/orchestrator.js')
+      const { createTask, getWorkspace } = await import('../server/services/workspace-service.js')
+      const db = (await import('../server/db/index.js')).getDb()
+      createTask(wsId, { title: 't', isAcceptanceCriterion: false, sortOrder: 0 })
+      db.prepare(
+        "UPDATE workspaces SET auto_loop = 1, auto_loop_ready = 1, status = 'quota', archived_at = ? WHERE id = ?",
+      ).run(new Date().toISOString(), wsId)
+
+      svc.onQuotaBackoffExpired(wsId)
+
+      expect(orch.startAgent).not.toHaveBeenCalled()
+      expect(getWorkspace(wsId)?.status).toBe('quota')
+    })
+
     it('spawns next iteration when workspace is in quota status with auto_loop=1', async () => {
       const svc = await import('../server/services/auto-loop-service.js')
       const orch = await import('../server/services/agent/orchestrator.js')
@@ -563,6 +616,39 @@ describe('auto-loop-service', () => {
   })
 
   describe('rehydrate', () => {
+    it('waits for the restored quota deadline before resuming', async () => {
+      const svc = await import('../server/services/auto-loop-service.js')
+      const quota = await import('../server/services/quota-backoff-service.js')
+      const orch = await import('../server/services/agent/orchestrator.js')
+      const { createTask } = await import('../server/services/workspace-service.js')
+      const db = (await import('../server/db/index.js')).getDb()
+      createTask(wsId, { title: 'resume after restart', isAcceptanceCriterion: false, sortOrder: 0 })
+      db.prepare("UPDATE workspaces SET auto_loop = 1, auto_loop_ready = 1, status = 'quota' WHERE id = ?").run(wsId)
+      vi.useFakeTimers()
+      try {
+        db.prepare(`INSERT INTO pending_quota_backoffs
+          (workspace_id, target_at, source, retry_count, created_at)
+          VALUES (?, ?, 'fallback_ladder', 1, ?)`).run(
+          wsId,
+          new Date(Date.now() + 60_000).toISOString(),
+          new Date().toISOString(),
+        )
+
+        // Match the server's boot order: auto-loop first, persisted timers second.
+        svc.rehydrate()
+        quota.restoreOnBoot(svc.onQuotaBackoffExpired)
+        await vi.advanceTimersByTimeAsync(59_999)
+        expect(orch.startAgent).not.toHaveBeenCalled()
+        expect(quota.getPending(wsId)).not.toBeNull()
+        await vi.advanceTimersByTimeAsync(1)
+        expect(orch.startAgent).toHaveBeenCalledTimes(1)
+        expect(quota.getPending(wsId)).toBeNull()
+      } finally {
+        quota.cancel(wsId, 'user')
+        vi.useRealTimers()
+      }
+    })
+
     it('spawns a new session for workspaces with auto_loop=true and pending tasks', async () => {
       const svc = await import('../server/services/auto-loop-service.js')
       const { createTask } = await import('../server/services/workspace-service.js')

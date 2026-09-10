@@ -40,6 +40,8 @@ export interface EngineProcess {
   readonly pid: number | undefined
   readonly engineSessionId: string | undefined
   sendMessage(text: string): void | Promise<void>
+  /** Atomically queue a wakeup only after a turn ended waiting on background work. */
+  sendWakeupIfWaiting?(text: string): boolean
   interrupt(): void
   stop(): Promise<void>
   /**

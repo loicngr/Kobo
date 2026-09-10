@@ -8,10 +8,12 @@ let emitActivityAfterSubagentCompletion = false
 let completeSubagent: (() => void) | undefined
 let extraTurnGate: (() => void) | undefined
 let releaseStream: (() => void) | undefined
+let sdkInput: AsyncIterable<unknown>
 let stopTaskMock: Mock<(taskId: string) => Promise<void>>
 
 vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
-  query: vi.fn((args: { options: { abortController?: AbortController } }) => {
+  query: vi.fn((args: { prompt: AsyncIterable<unknown>; options: { abortController?: AbortController } }) => {
+    sdkInput = args.prompt
     abortSignal = args.options.abortController?.signal
     stopTaskMock = vi.fn(async (_taskId: string) => {})
     return {
@@ -94,6 +96,73 @@ function resetControls(): void {
 }
 
 describe('claude-code engine — result drain watchdog', () => {
+  it('delivers a wakeup to the existing stream while only a background task remains', async () => {
+    vi.useFakeTimers()
+    try {
+      emitSubagentStarted = true
+      const events: AgentEvent[] = []
+      const process = await createClaudeCodeEngine().start(BASE_OPTIONS, (event) => events.push(event))
+      const input = sdkInput[Symbol.asyncIterator]()
+      await input.next() // The SDK consumes the initial prompt.
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(process.sendWakeupIfWaiting?.('check the reset log')).toBe(true)
+      expect((await input.next()).value).toMatchObject({
+        message: { role: 'user', content: 'check the reset log' },
+      })
+      expect(process.sendWakeupIfWaiting?.('duplicate')).toBe(false)
+      expect(abortSignal?.aborted).toBe(false)
+      expect(stopTaskMock).not.toHaveBeenCalled()
+      expect(events.some((event) => event.kind === 'session:ended')).toBe(false)
+    } finally {
+      completeSubagent?.()
+      await vi.advanceTimersByTimeAsync(0)
+      releaseStream?.()
+      resetControls()
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not inject a wakeup while the parent is continuing after background completion', async () => {
+    vi.useFakeTimers()
+    try {
+      emitSubagentStarted = true
+      skipSecondResult = true
+      emitActivityAfterSubagentCompletion = true
+      const process = await createClaudeCodeEngine().start(BASE_OPTIONS, () => {})
+      await vi.advanceTimersByTimeAsync(0)
+      completeSubagent?.()
+      await vi.advanceTimersByTimeAsync(0)
+
+      expect(process.sendWakeupIfWaiting?.('too early')).toBe(false)
+    } finally {
+      completeSubagent?.()
+      await vi.advanceTimersByTimeAsync(0)
+      releaseStream?.()
+      resetControls()
+      vi.useRealTimers()
+    }
+  })
+
+  it('defers a wakeup when a user message is already queued on the background wait', async () => {
+    vi.useFakeTimers()
+    try {
+      emitSubagentStarted = true
+      const process = await createClaudeCodeEngine().start(BASE_OPTIONS, () => {})
+      await vi.advanceTimersByTimeAsync(0)
+      process.sendMessage('new instructions from the user')
+
+      expect(process.sendWakeupIfWaiting?.('check logs')).toBe(false)
+      expect(abortSignal?.aborted).toBe(false)
+    } finally {
+      completeSubagent?.()
+      await vi.advanceTimersByTimeAsync(0)
+      releaseStream?.()
+      resetControls()
+      vi.useRealTimers()
+    }
+  })
+
   it('emits a turn-completed signal as soon as a result has no background work', async () => {
     vi.useFakeTimers()
     try {

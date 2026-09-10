@@ -67,6 +67,29 @@ function workspaceFixture(status = 'executing'): Workspace {
 describe('websocket dispatch — AgentEvent side-effects to workspace store', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
+  it('refreshes workspace status when a quota wait ends without starting an agent', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const store = useWorkspaceStore()
+    store.workspaces = [workspaceFixture('quota')]
+    store.setPendingQuotaBackoff('w1', {
+      targetAt: '2026-09-09T18:00:00Z',
+      resetsAt: null,
+      source: 'fallback_ladder',
+      reason: 'quota',
+    })
+    const refresh = vi.spyOn(store, 'fetchWorkspaces').mockResolvedValue(undefined)
+
+    useWebSocketStore()._routeMessage({
+      type: 'agent:quota-backoff-cancelled',
+      workspaceId: 'w1',
+      payload: { reason: 'completed' },
+    })
+
+    expect(store.pendingQuotaBackoffs.w1).toBeUndefined()
+    expect(refresh).toHaveBeenCalledTimes(1)
+  })
+
   it('restores busy controls and clears the retry banner after quota recovery', async () => {
     const { useWorkspaceStore } = await import('../stores/workspace.js')
     const { useWebSocketStore } = await import('../stores/websocket.js')

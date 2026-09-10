@@ -1632,6 +1632,19 @@ export async function stopAllAgents(timeoutMs = 3_000): Promise<void> {
   await Promise.all([...controllers.keys()].map((workspaceId) => stopAgentAndWait(workspaceId, timeoutMs)))
 }
 
+/** Deliver a scheduled check without stopping background work or cancelling the wakeup as user input. */
+export function sendWakeupIfWaiting(workspaceId: string, content: string, expectedSessionId?: string): boolean {
+  const ctrl = controllers.get(workspaceId)
+  if (ctrl?.status !== 'running') return false
+  if (expectedSessionId && ctrl.agentSessionId !== expectedSessionId) return false
+  const workspace = getWs(workspaceId)
+  if (!workspace || workspace.archivedAt || workspace.worktreePurgedAt) return false
+  if (workspace.status === 'awaiting-user' || workspace.status === 'quota') return false
+  if (!ctrl.engineProcess?.sendWakeupIfWaiting?.(content)) return false
+  emit(workspaceId, 'user:message', { content, sender: 'system-prompt' }, ctrl.agentSessionId)
+  return true
+}
+
 /** Write a user message to the running agent. */
 export async function sendMessage(workspaceId: string, content: string, expectedSessionId?: string): Promise<void> {
   const ctrl = controllers.get(workspaceId)

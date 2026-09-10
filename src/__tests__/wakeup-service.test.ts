@@ -15,6 +15,7 @@ vi.mock('../server/services/websocket-service.js', () => ({
 vi.mock('../server/services/agent/orchestrator.js', () => ({
   startAgent: vi.fn(),
   hasController: vi.fn(() => false),
+  sendWakeupIfWaiting: vi.fn(() => false),
 }))
 
 // Mock settings-service to avoid filesystem access during tests.
@@ -206,6 +207,27 @@ describe('wakeup-service', () => {
       // clearAllMocks keeps implementations, so a throwing startAgent would
       // leak into the next test.
       ;(orch.startAgent as ReturnType<typeof vi.fn>).mockImplementation(() => undefined)
+    })
+
+    it('delivers an expired wakeup once to the session waiting on background work', async () => {
+      const wakeupService = await import('../server/services/wakeup-service.js')
+      const orch = await import('../server/services/agent/orchestrator.js')
+      const ws = await import('../server/services/websocket-service.js')
+      vi.mocked(orch.hasController).mockReturnValue(true)
+      vi.mocked(orch.sendWakeupIfWaiting).mockReturnValueOnce(true)
+      try {
+        wakeupService.schedule(wsId, 60, 'check background work', 'check logs', 'session-1')
+        await vi.advanceTimersByTimeAsync(60_000)
+
+        expect(orch.sendWakeupIfWaiting).toHaveBeenCalledWith(wsId, 'check background work', 'session-1')
+        expect(orch.startAgent).not.toHaveBeenCalled()
+        expect(wakeupService.getPending(wsId)).toBeNull()
+        expect(ws.emitEphemeral).toHaveBeenCalledWith(wsId, 'wakeup:fired', {})
+        await vi.advanceTimersByTimeAsync(45_000)
+        expect(orch.sendWakeupIfWaiting).toHaveBeenCalledTimes(1)
+      } finally {
+        vi.mocked(orch.hasController).mockReturnValue(false)
+      }
     })
 
     it('defers fire when a controller is already active and retries after 15 seconds', async () => {

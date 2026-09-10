@@ -307,6 +307,7 @@ export function createClaudeCodeEngine(): AgentEngine {
       let iteratorRunning = false
       let userInterrupted = false
       let completedResponses = 0
+      let waitingForBackground = false
       let turnCompletedEmittedForResponse = 0
 
       // `result` is the Claude Agent SDK's per-turn completion signal. Keep
@@ -489,6 +490,11 @@ export function createClaudeCodeEngine(): AgentEngine {
         turnLiveness.start()
         try {
           for await (const msg of q as AsyncIterable<SDKMessage>) {
+            // A parent continuation owns the foreground again. Background
+            // progress notifications alone do not end the between-turn wait.
+            if (msg.type === 'assistant' || msg.type === 'user' || msg.type === 'stream_event') {
+              waitingForBackground = false
+            }
             // This SDK message proves that any drain condition armed by a
             // *previous* message is no longer current. A drain armed while
             // processing this message remains active if the generator then
@@ -547,6 +553,7 @@ export function createClaudeCodeEngine(): AgentEngine {
             )
             reevaluateLivenessPause()
             if ((msg as { type?: string }).type === 'result') {
+              waitingForBackground = false
               pendingToolCallIds.clear()
               completedResponses++
               emitTurnCompletedIfSettled()
@@ -557,6 +564,7 @@ export function createClaudeCodeEngine(): AgentEngine {
                   inputStream.close()
                   armResultDrainWatchdog()
                 } else {
+                  waitingForBackground = true
                   armSubagentStallWatchdog()
                 }
               }
@@ -630,6 +638,26 @@ export function createClaudeCodeEngine(): AgentEngine {
         sendMessage(text: string) {
           if (!iteratorRunning) throw new Error(`Claude ${AGENT_NO_LONGER_RUNNING_TEXT}`)
           inputStream.send(text)
+        },
+        sendWakeupIfWaiting(text: string): boolean {
+          if (
+            !iteratorRunning ||
+            abortController.signal.aborted ||
+            mapperState.sawErrorResult ||
+            !waitingForBackground ||
+            activeSubagentTaskIds.size === 0 ||
+            pendingToolCallIds.size > 0 ||
+            pendingResolvers.size > 0 ||
+            isCompacting ||
+            inputStream.hasUnansweredInput(completedResponses)
+          )
+            return false
+          inputStream.send(text)
+          waitingForBackground = false
+          // The wakeup starts another turn on this stream; its result will
+          // re-arm the stall deadline if background work is still outstanding.
+          clearSubagentStallWatchdog()
+          return true
         },
         interrupt() {
           userInterrupted = true

@@ -4,6 +4,7 @@ import path from 'node:path'
 import Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { initSchema } from '../server/db/schema.js'
+import type { SessionController } from '../server/services/agent/session-controller.js'
 
 // Mock websocket-service so tests don't open sockets.
 vi.mock('../server/services/websocket-service.js', () => ({
@@ -59,6 +60,61 @@ describe('orchestrator — ScheduleWakeup detection in handleEvent', () => {
       fs.rmSync(tmpDir, { recursive: true, force: true })
     }
   })
+
+  it('delivers a wakeup only to its matching, running controller', async () => {
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const ws = await import('../server/services/websocket-service.js')
+    const sendWakeupIfWaiting = vi.fn(() => true)
+    const controller = {
+      agentSessionId: 'session-1',
+      status: 'running',
+      engineProcess: { sendWakeupIfWaiting },
+    }
+    orch._getControllers().set(wsId, controller as unknown as SessionController)
+    try {
+      expect(orch.sendWakeupIfWaiting(wsId, 'check logs', 'different-session')).toBe(false)
+      controller.status = 'stopping'
+      expect(orch.sendWakeupIfWaiting(wsId, 'check logs', 'session-1')).toBe(false)
+      expect(sendWakeupIfWaiting).not.toHaveBeenCalled()
+
+      controller.status = 'running'
+      expect(orch.sendWakeupIfWaiting(wsId, 'check logs', 'session-1')).toBe(true)
+      expect(sendWakeupIfWaiting).toHaveBeenCalledWith('check logs')
+      expect(ws.emit).toHaveBeenCalledWith(
+        wsId,
+        'user:message',
+        { content: 'check logs', sender: 'system-prompt' },
+        'session-1',
+      )
+    } finally {
+      orch._getControllers().delete(wsId)
+    }
+  })
+
+  it.each(['awaiting-user', 'quota', 'archived', 'purged'])(
+    'defers wakeups for a workspace that is %s',
+    async (state) => {
+      const orch = await import('../server/services/agent/orchestrator.js')
+      const db = (await import('../server/db/index.js')).getDb()
+      if (state === 'archived')
+        db.prepare('UPDATE workspaces SET archived_at = ? WHERE id = ?').run(new Date().toISOString(), wsId)
+      else if (state === 'purged')
+        db.prepare('UPDATE workspaces SET worktree_purged_at = ? WHERE id = ?').run(new Date().toISOString(), wsId)
+      else db.prepare('UPDATE workspaces SET status = ? WHERE id = ?').run(state, wsId)
+      const sendWakeupIfWaiting = vi.fn(() => true)
+      orch._getControllers().set(wsId, {
+        agentSessionId: 'session-1',
+        status: 'running',
+        engineProcess: { sendWakeupIfWaiting },
+      } as unknown as SessionController)
+      try {
+        expect(orch.sendWakeupIfWaiting(wsId, 'check logs', 'session-1')).toBe(false)
+        expect(sendWakeupIfWaiting).not.toHaveBeenCalled()
+      } finally {
+        orch._getControllers().delete(wsId)
+      }
+    },
+  )
 
   it('invokes wakeupService.schedule on tool:call ScheduleWakeup with valid input', async () => {
     const wakeup = await import('../server/services/wakeup-service.js')
