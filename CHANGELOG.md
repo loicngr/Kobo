@@ -4,6 +4,10 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.11.38
+
+- feat(workspaces): show compaction status and block chat sends
+
 ## 1.11.37
 
 - fix(kobo): harden workspace lifecycle and comparison navigation
