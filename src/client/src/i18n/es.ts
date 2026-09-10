@@ -1884,6 +1884,8 @@ export default {
   'workspaceStatus.created': 'creado',
   'workspaceStatus.extracting': 'extracción',
   'workspaceStatus.brainstorming': 'brainstorming',
+  'workspaceStatus.compacting': 'compactando',
+  'chatInput.compactingBanner': 'Compactando el contexto. Podrás enviar mensajes cuando termine.',
   'workspaceStatus.executing': 'en curso',
   'workspaceStatus.awaitingUser': 'esperando tu respuesta',
   'workspaceStatus.completed': 'completado',

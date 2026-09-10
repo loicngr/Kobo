@@ -16,6 +16,7 @@ export type WorkspaceStatus =
   | 'extracting'
   | 'brainstorming'
   | 'executing'
+  | 'compacting'
   | 'awaiting-user'
   | 'completed'
   | 'idle'
@@ -160,10 +161,11 @@ const VALID_TRANSITIONS: Record<WorkspaceStatus, WorkspaceStatus[]> = {
   // workspace with a distinct brainstormModel silently lost its backoff: the
   // transition threw, the error was swallowed, and the very next lines
   // cancelled the timer that had just been armed.
-  extracting: ['extracting', 'brainstorming', 'idle', 'error', 'awaiting-user', 'quota'],
-  brainstorming: ['executing', 'completed', 'idle', 'error', 'awaiting-user', 'quota'],
-  executing: ['completed', 'idle', 'error', 'quota', 'awaiting-user'],
-  'awaiting-user': ['executing', 'brainstorming', 'extracting', 'idle', 'error', 'completed', 'quota'],
+  extracting: ['compacting', 'extracting', 'brainstorming', 'idle', 'error', 'awaiting-user', 'quota'],
+  brainstorming: ['compacting', 'executing', 'completed', 'idle', 'error', 'awaiting-user', 'quota'],
+  executing: ['compacting', 'completed', 'idle', 'error', 'quota', 'awaiting-user'],
+  'awaiting-user': ['compacting', 'executing', 'brainstorming', 'extracting', 'idle', 'error', 'completed', 'quota'],
+  compacting: ['extracting', 'brainstorming', 'executing', 'awaiting-user', 'completed', 'idle', 'error', 'quota'],
   completed: ['idle', 'executing'],
   idle: ['executing', 'brainstorming', 'extracting', 'error'],
   error: ['idle', 'executing', 'brainstorming', 'extracting'],
@@ -431,6 +433,9 @@ export function updateWorkspaceStatus(id: string, status: WorkspaceStatus): Work
   const now = new Date().toISOString()
   db.prepare('UPDATE workspaces SET status = ?, updated_at = ? WHERE id = ?').run(status, now, id)
 
+  if (status === 'compacting' || workspace.status === 'compacting') {
+    emitEphemeral(id, 'workspace:status', { status })
+  }
   return getWorkspace(id) as Workspace
 }
 

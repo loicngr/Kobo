@@ -184,7 +184,6 @@ import router from '../server/routes/workspaces.js'
 import * as agentManager from '../server/services/agent/orchestrator.js'
 import { DEFAULT_REVIEW_PROMPT_TEMPLATE } from '../server/services/review-template-service.js'
 import * as settingsService from '../server/services/settings-service.js'
-import * as wakeupService from '../server/services/wakeup-service.js'
 import * as wsService from '../server/services/websocket-service.js'
 import * as workspaceService from '../server/services/workspace-service.js'
 import * as gitOps from '../server/utils/git-ops.js'
@@ -338,9 +337,6 @@ describe('POST /api/workspaces/:id/start-review', () => {
       expect.objectContaining({ content: prompt, sender: 'user' }),
       'recipient-session',
     )
-
-    // wakeupService.cancel called
-    expect(wakeupService.cancel).toHaveBeenCalledWith('ws-1', 'user-message')
 
     // No fallback start
     expect(agentManager.startAgent).not.toHaveBeenCalled()

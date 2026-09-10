@@ -409,6 +409,7 @@ export function createClaudeCodeEngine(): AgentEngine {
             `[claude-engine] Compaction still reported active ${COMPACTION_STALL_TIMEOUT_MS}ms after it started — resuming the liveness deadline.`,
           )
           isCompacting = false
+          safeEmit({ kind: 'session:compacting', active: false })
           reevaluateLivenessPause()
           if (activeSubagentTaskIds.size > 0 && !subagentStallTimer) {
             // Resume declined because a subagent is still tracked — but the
@@ -518,6 +519,20 @@ export function createClaudeCodeEngine(): AgentEngine {
                 isCompacting = false
                 clearCompactionStallTimer()
               }
+            }
+            // Actual foreground output proves work resumed even if the SDK
+            // omitted its trailing status/compact_boundary message. Tool results
+            // and background progress can drain during compaction, so exclude them.
+            if (
+              isCompacting &&
+              !('parent_tool_use_id' in msg && msg.parent_tool_use_id != null) &&
+              events.some(
+                (ev) => ev.kind === 'message:text' || ev.kind === 'message:thinking' || ev.kind === 'tool:call',
+              )
+            ) {
+              isCompacting = false
+              clearCompactionStallTimer()
+              safeEmit({ kind: 'session:compacting', active: false })
             }
             for (const ev of events) {
               if (ev.kind === 'tool:call') pendingToolCallIds.add(ev.toolCallId)

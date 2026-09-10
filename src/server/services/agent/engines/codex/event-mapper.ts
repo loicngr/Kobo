@@ -247,7 +247,7 @@ export function handleItemStarted(item: ThreadItem, state: MapperState): AgentEv
   }
 
   if (item.type === 'contextCompaction') {
-    events.push({ kind: 'session:compacted' })
+    events.push({ kind: 'session:compacting', active: true })
     return events
   }
 
@@ -259,6 +259,8 @@ export function handleItemStarted(item: ThreadItem, state: MapperState): AgentEv
  */
 export function handleItemCompleted(item: ThreadItem, state: MapperState): AgentEvent[] {
   const events: AgentEvent[] = []
+
+  if (item.type === 'contextCompaction') return [{ kind: 'session:compacted' }]
 
   if (item.type === 'agentMessage') {
     const text = item.text ?? ''

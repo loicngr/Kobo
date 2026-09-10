@@ -126,8 +126,8 @@ const settings = useSettingsStore()
 const workspaceStore = useWorkspaceStore()
 const websocketStore = useWebSocketStore()
 
-// Live "engine is compacting context" banner state (transient, ephemeral).
-const isCompacting = computed(() => stream.isCompacting(props.workspaceId))
+// Persisted status also restores the banner when opening a compacting workspace.
+const isCompacting = computed(() => websocketStore.isCompacting(props.workspaceId))
 
 // Resolve the engine_session_id of the selected session to also accept legacy
 // events tagged with the engine UUID (before the v6 backfill migration).

@@ -8,7 +8,7 @@
  * keep them in sync through this single source of truth.
  */
 
-export const BUSY_STATUSES = ['executing', 'extracting', 'brainstorming'] as const
+export const BUSY_STATUSES = ['executing', 'extracting', 'brainstorming', 'compacting'] as const
 
 export type BusyStatus = (typeof BUSY_STATUSES)[number]
 
@@ -61,7 +61,7 @@ export function shouldWarnAgentNotRunning(
 }
 
 /**
- * The nine lifecycle statuses the server can put on a workspace. Mirrors
+ * The lifecycle statuses the server can put on a workspace. Mirrors
  * `WorkspaceStatus` in `src/server/services/workspace-service.ts` — keep both
  * lists in sync when a status is added.
  */
@@ -70,6 +70,7 @@ export const WORKSPACE_STATUSES = [
   'extracting',
   'brainstorming',
   'executing',
+  'compacting',
   'awaiting-user',
   'completed',
   'idle',
@@ -82,6 +83,7 @@ const STATUS_KEYS: Record<string, string> = {
   extracting: 'workspaceStatus.extracting',
   brainstorming: 'workspaceStatus.brainstorming',
   executing: 'workspaceStatus.executing',
+  compacting: 'workspaceStatus.compacting',
   'awaiting-user': 'workspaceStatus.awaitingUser',
   completed: 'workspaceStatus.completed',
   idle: 'workspaceStatus.idle',

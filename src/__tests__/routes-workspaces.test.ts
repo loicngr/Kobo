@@ -8018,3 +8018,41 @@ describe('GET /api/workspaces/:id/preset', () => {
     expect(res.status).toBe(404)
   })
 })
+
+describe('compacting workspaces reject user prompts before side effects', () => {
+  it.each([
+    'start',
+    'switch-engine',
+    'git/commit-with-agent',
+    'git/resolve-with-agent',
+    'open-pr',
+    'start-review',
+    'start-ci-fix',
+  ])('rejects %s with a retriable conflict', async (action) => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(makeWorkspace({ status: 'compacting' }))
+    const res = await app.request(`/api/workspaces/${fakeWorkspace.id}/${action}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ prompt: 'New prompt', force: true, newSession: true }),
+    })
+    expect(res.status).toBe(409)
+    expect(await res.json()).toMatchObject({ code: 'compacting' })
+    expect(agentManager.stopAgentAndWait).not.toHaveBeenCalled()
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+    expect(agentManager.sendMessageForFallback).not.toHaveBeenCalled()
+    expect(wakeupService.cancel).not.toHaveBeenCalled()
+    expect(wsService.emit).not.toHaveBeenCalled()
+  })
+})
+
+it('rejects a client-forced compacting status without changing workspace state', async () => {
+  vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+  const res = await app.request(`/api/workspaces/${fakeWorkspace.id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ status: 'compacting' }),
+  })
+  expect(res.status).toBe(400)
+  expect(workspaceService.updateWorkspaceFields).not.toHaveBeenCalled()
+  expect(workspaceService.updateWorkspaceStatus).not.toHaveBeenCalled()
+})

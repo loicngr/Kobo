@@ -114,7 +114,9 @@ src/
 | `workspace_chat_history` | chat-input history per workspace: message text + `created_at`, ordered by autoincrement id, capped at 200 entries by the service; CASCADE DELETE on workspace |
 | `workspace_permission_rules` | remembered per-workspace tool approvals, scoped to an exact operation or every invocation of a tool; CASCADE DELETE on workspace |
 
-`status` enum: `created | extracting | brainstorming | executing | completed | idle | error | quota`. Transitions are validated in `updateWorkspaceStatus` against `VALID_TRANSITIONS`.
+`status` enum: `created | extracting | brainstorming | executing | compacting | awaiting-user | completed | idle | error | quota`. Transitions are validated in `updateWorkspaceStatus` against `VALID_TRANSITIONS`.
+
+`compacting` is a server-owned busy state while the agent compacts context. The orchestrator associates the previous status with the current controller and restores it when compaction ends; stop, errors and startup reconciliation must not leave the workspace stuck in compaction. Normal workspace status updates make this state available after reload and across clients. Chat sends are refused during compaction before delivery or fallback starts, and the client keeps the user's draft while disabling send. The existing status column is unrestricted TEXT, so adding this state does not change the database schema.
 
 `archived_at` is **orthogonal** to `status`. Archiving is a visibility flag, not a lifecycle state. Unarchive restores the exact pre-archive `status`.
 

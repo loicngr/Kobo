@@ -154,6 +154,7 @@ const STATUS_LABEL_KEYS: Record<string, string> = {
   extracting: 'workspaceStatus.extracting',
   brainstorming: 'workspaceStatus.brainstorming',
   executing: 'workspaceStatus.executing',
+  compacting: 'workspaceStatus.compacting',
   'awaiting-user': 'workspaceStatus.awaitingUser',
   completed: 'workspaceStatus.completed',
   idle: 'workspaceStatus.idle',

@@ -254,7 +254,7 @@ export async function checkPrStatuses(): Promise<void> {
           })
           prMergedHook = lifecycleHookService.onPrMerged(ws.id, { prNumber: pr.number, prUrl: pr.url })
         }
-        if (['extracting', 'brainstorming', 'executing'].includes(ws.status) || hasController(ws.id)) {
+        if (['extracting', 'brainstorming', 'executing', 'compacting'].includes(ws.status) || hasController(ws.id)) {
           // Agent is working — update the cache but skip auto-archive.
           // (The defensive base preservation from the no-base branch doesn't apply here
           // because we ARE in the OPEN→MERGED/CLOSED branch which always has a base.)
@@ -279,7 +279,11 @@ export async function checkPrStatuses(): Promise<void> {
         }
         if (stale()) return
         const current = getWorkspace(ws.id)
-        if (!current || ['extracting', 'brainstorming', 'executing'].includes(current.status) || hasController(ws.id))
+        if (
+          !current ||
+          ['extracting', 'brainstorming', 'executing', 'compacting'].includes(current.status) ||
+          hasController(ws.id)
+        )
           return
         try {
           destroyTerminal(ws.id)
@@ -357,7 +361,7 @@ export async function checkPrStatuses(): Promise<void> {
           emitEphemeral(ws.id, 'pr:merge-conflict', payload)
           markUnread(ws.id)
         }
-        const notBusy = !['extracting', 'brainstorming', 'executing'].includes(ws.status)
+        const notBusy = !['extracting', 'brainstorming', 'executing', 'compacting'].includes(ws.status)
         if (notBusy && !prev.readyToMerge && pr.readyToMerge) {
           emitEphemeral(ws.id, 'pr:ready-to-merge', payload)
           markUnread(ws.id)

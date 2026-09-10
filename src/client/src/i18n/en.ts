@@ -1860,6 +1860,8 @@ export default {
   'workspaceStatus.created': 'created',
   'workspaceStatus.extracting': 'extracting',
   'workspaceStatus.brainstorming': 'brainstorming',
+  'workspaceStatus.compacting': 'compacting',
+  'chatInput.compactingBanner': 'Context compaction in progress. Sending will be available when it finishes.',
   'workspaceStatus.executing': 'running',
   'workspaceStatus.awaitingUser': 'awaiting your answer',
   'workspaceStatus.completed': 'completed',

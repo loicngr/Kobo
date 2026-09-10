@@ -601,11 +601,11 @@ describe('handleItemStarted — review mode', () => {
 })
 
 describe('handleItemStarted — contextCompaction', () => {
-  it('emits session:compacted (no payload)', () => {
+  it('emits session:compacting when compaction starts', () => {
     const state = mkState()
     const item = { id: 'cmp_1', type: 'contextCompaction' as const }
     const events = handleItemStarted(item, state)
-    expect(events).toEqual([{ kind: 'session:compacted' }])
+    expect(events).toEqual([{ kind: 'session:compacting', active: true }])
   })
 })
 
@@ -998,4 +998,11 @@ describe('createMapperState', () => {
     const state = createMapperState()
     expect(state.sessionPrefix).toMatch(/^cdx_[A-Za-z0-9_-]{10}$/)
   })
+})
+
+it('emits session:compacted only when the context compaction item completes', () => {
+  const state = mkState()
+  expect(handleItemCompleted({ id: 'cmp_1', type: 'contextCompaction' }, state)).toEqual([
+    { kind: 'session:compacted' },
+  ])
 })

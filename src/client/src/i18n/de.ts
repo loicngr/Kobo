@@ -1893,6 +1893,8 @@ export default {
   'workspaceStatus.created': 'erstellt',
   'workspaceStatus.extracting': 'Extraktion',
   'workspaceStatus.brainstorming': 'Brainstorming',
+  'workspaceStatus.compacting': 'Kontextkomprimierung',
+  'chatInput.compactingBanner': 'Der Kontext wird komprimiert. Danach können Nachrichten wieder gesendet werden.',
   'workspaceStatus.executing': 'läuft',
   'workspaceStatus.awaitingUser': 'wartet auf deine Antwort',
   'workspaceStatus.completed': 'abgeschlossen',

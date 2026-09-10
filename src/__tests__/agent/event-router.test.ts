@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../server/services/websocket-service.js', () => ({
   emit: vi.fn(),
+  emitEphemeral: vi.fn(),
 }))
 
 describe('routeEvent', () => {
@@ -21,4 +22,11 @@ describe('routeEvent', () => {
       's1',
     )
   })
+})
+
+it('tags transient compaction signals with their owning session', async () => {
+  const { routeEvent } = await import('../../server/services/agent/event-router.js')
+  const ws = await import('../../server/services/websocket-service.js')
+  routeEvent('w1', 's1', { kind: 'session:compacting', active: true })
+  expect(ws.emitEphemeral).toHaveBeenCalledWith('w1', 'agent:event', { kind: 'session:compacting', active: true }, 's1')
 })

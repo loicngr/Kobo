@@ -102,6 +102,11 @@
       />
     </div>
 
+    <div v-if="isCompacting" class="row items-center q-pa-xs q-px-sm text-caption text-kobo-2">
+      <q-spinner-dots size="14px" color="primary" class="q-mr-sm" />
+      <span>{{ $t('chatInput.compactingBanner') }}</span>
+    </div>
+
     <!-- SDK paused on canUseTool — force the user through the panel above. -->
     <div
       v-if="isAwaitingUser && !isAutoLoopRunning"
@@ -203,7 +208,7 @@
         dense
         icon="send"
         color="primary"
-        :disable="isDisabled || (!message.trim() && pendingImages.length === 0) || hasUploading"
+        :disable="isDisabled || isCompacting || (!message.trim() && pendingImages.length === 0) || hasUploading"
         @click="sendMessage"
       >
         <q-tooltip>{{ $t('tooltip.sendMessage') }}</q-tooltip>
@@ -311,6 +316,7 @@ async function handleInterrupt() {
 }
 
 const isAgentBusy = computed(() => isBusyStatus(store.selectedWorkspace?.status))
+const isCompacting = computed(() => wsStore.isCompacting(props.workspaceId))
 
 const queuedSessionId = computed(() => store.selectedSessionId)
 const queuedMessage = computed(() => store.getQueuedMessage(props.workspaceId, queuedSessionId.value))
@@ -327,7 +333,7 @@ const canForceQueuedMessage = computed(() => {
   const workspace =
     store.workspaces.find((item) => item.id === props.workspaceId) ??
     store.archivedWorkspaces.find((item) => item.id === props.workspaceId)
-  return supportsLiveSteering(workspace?.engine) && isAgentBusy.value
+  return supportsLiveSteering(workspace?.engine) && isAgentBusy.value && !isCompacting.value
 })
 
 // Chat input element ref (for caret position access)
@@ -831,7 +837,8 @@ watch(() => props.workspaceId, loadHistory)
 
 async function sendMessage() {
   const text = message.value.trim()
-  if ((!text && pendingImages.value.length === 0) || isDisabled.value || hasUploading.value) return
+  if ((!text && pendingImages.value.length === 0) || isDisabled.value || isCompacting.value || hasUploading.value)
+    return
 
   let session = currentSession.value
 
@@ -892,6 +899,7 @@ async function sendMessage() {
       return
     }
   }
+  if (isCompacting.value) return
   const sessionTag = session?.id ?? store.selectedSessionId ?? undefined
 
   const requiresWebSocket = session?.status !== 'idle' && session?.status !== 'completed' && session?.status !== 'error'

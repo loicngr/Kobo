@@ -1641,6 +1641,12 @@ can mark all current tour steps as seen at once, without hiding future additions
 Queued messages are shared with split panes through the host client, so they
 remain visible and cancellable across view changes. Unsent drafts are guarded.
 
+While the agent compacts its context, the workspace shows **Compacting** in its
+status indicators. Sending a chat message is temporarily disabled, including
+keyboard shortcuts; the draft remains editable and is preserved. Sending becomes
+available again when compaction finishes. This status survives page reloads, and
+**Stop** remains available if you need to stop the agent.
+
 
 ### Checkout and process recovery
 

@@ -204,6 +204,26 @@ const pendingQueue = new Map<string, PendingItem[]>()
  * returns to that status instead of being yanked to `executing`.
  */
 const preAwaitStatus = new Map<string, WorkspaceStatus>()
+/** The lifecycle phase hidden by this controller's temporary compaction. */
+const preCompactionStatus = new Map<SessionController, WorkspaceStatus>()
+
+function finishCompaction(workspaceId: string, controller: SessionController): void {
+  const previous = preCompactionStatus.get(controller)
+  preCompactionStatus.delete(controller)
+  if (getWs(workspaceId)?.status !== 'compacting') return
+  const restored = peekPending(workspaceId)
+    ? 'awaiting-user'
+    : previous === 'awaiting-user'
+      ? consumePreAwaitStatus(workspaceId)
+      : (previous ?? 'executing')
+  updateWorkspaceStatus(workspaceId, restored)
+}
+
+export function assertWorkspaceNotCompacting(workspaceId: string): void {
+  if (getWs(workspaceId)?.status === 'compacting') {
+    throw new Error('Workspace is compacting its context; wait until compaction finishes before sending a message')
+  }
+}
 
 function enqueuePending(workspaceId: string, item: PendingItem): void {
   const arr = pendingQueue.get(workspaceId) ?? []
@@ -274,6 +294,12 @@ function rememberPreAwaitStatus(workspaceId: string): void {
   const ws = getWs(workspaceId)
   if (!ws) return
   if (ws.status === 'awaiting-user') return
+  if (ws.status === 'compacting') {
+    const controller = controllers.get(workspaceId)
+    const previous = controller && preCompactionStatus.get(controller)
+    if (previous && previous !== 'awaiting-user') preAwaitStatus.set(workspaceId, previous)
+    return
+  }
   preAwaitStatus.set(workspaceId, ws.status)
 }
 
@@ -382,6 +408,7 @@ function runWatchdog(): void {
       controllers.delete(workspaceId)
       notifyCapacityAvailable(workspaceId)
     }
+    preCompactionStatus.delete(ctrl)
     retryCounts.delete(workspaceId)
 
     // This end never goes through handleEvent → onSessionEnded, so the user's
@@ -455,7 +482,7 @@ export function reconcileOrphanSessions(): void {
     const result = db
       .prepare(
         `UPDATE workspaces SET status = 'idle', updated_at = ?
-          WHERE status IN ('executing', 'brainstorming', 'extracting', 'awaiting-user')`,
+          WHERE status IN ('executing', 'brainstorming', 'extracting', 'awaiting-user', 'compacting')`,
       )
       .run(now)
     if (result.changes > 0) {
@@ -893,9 +920,26 @@ function handleEvent(
   // `awaiting-user`/`executing`. Every branch that does one of those must
   // check this guard.
   const sourceControllerIsStopping = sourceController?.status === 'stopping'
+  if (sourceControllerIsStopping && ev.kind === 'session:compacting') return
   const routedEvent =
     ev.kind === 'session:ended' && (hasReplacement || sourceIsSuperseded) ? { ...ev, superseded: true } : ev
   routeEvent(workspaceId, agentSessionId, routedEvent)
+
+  if (sourceController && !sourceControllerIsStopping) {
+    if (ev.kind === 'session:compacting' && ev.active) {
+      const status = getWs(workspaceId)?.status
+      if (status && ['extracting', 'brainstorming', 'executing', 'awaiting-user'].includes(status)) {
+        preCompactionStatus.set(sourceController, status)
+        updateWorkspaceStatus(workspaceId, 'compacting')
+      }
+    } else if (
+      (ev.kind === 'session:compacting' && !ev.active) ||
+      ev.kind === 'session:compacted' ||
+      ev.kind === 'error'
+    ) {
+      finishCompaction(workspaceId, sourceController)
+    }
+  }
 
   // A fresh tool invocation proves this controller resumed working (for
   // example after an account change). Tool results can still drain after a
@@ -1000,7 +1044,11 @@ function handleEvent(
   // nothing but this status transition (no separate bookkeeping to preserve),
   // so it is entirely behind the guard; the event itself is still
   // persisted/broadcast unconditionally via `routeEvent` above.
-  if (ev.kind === 'session:brainstorm-complete' && !sourceControllerIsStopping) {
+  if (
+    ev.kind === 'session:brainstorm-complete' &&
+    !sourceControllerIsStopping &&
+    getWs(workspaceId)?.status !== 'compacting'
+  ) {
     try {
       const ws = getWs(workspaceId)
       if (ws && ws.status !== 'executing') {
@@ -1130,7 +1178,7 @@ function handleEvent(
     }
     rememberPreAwaitStatus(workspaceId)
     try {
-      updateWorkspaceStatus(workspaceId, 'awaiting-user')
+      if (getWs(workspaceId)?.status !== 'compacting') updateWorkspaceStatus(workspaceId, 'awaiting-user')
     } catch (err) {
       console.warn('[orchestrator] Failed to transition to awaiting-user:', err)
     }
@@ -1229,6 +1277,7 @@ function onSessionEnded(
   const registeredController = controllers.get(workspaceId)
   const isSuperseded =
     sourceController !== undefined && registeredController !== undefined && registeredController !== sourceController
+  if (sourceController) preCompactionStatus.delete(sourceController)
   if (isSuperseded) return false
 
   // A superseded end (above) is a session that was replaced, not one that
@@ -1329,6 +1378,7 @@ export function startAgent(
   assertWorkspaceLifecycleAvailable(workspaceId)
   const workspace = getWs(workspaceId)
   if (!workspace) throw new Error(`Workspace '${workspaceId}' not found`)
+  assertWorkspaceNotCompacting(workspaceId)
   if (workspace.archivedAt) throw new Error(`Workspace '${workspaceId}' is archived`)
   if (workspace.worktreePurgedAt) throw new Error(`Workspace '${workspaceId}' worktree is purged`)
 
@@ -1519,6 +1569,7 @@ export type { StopAgentOutcome } from '../../utils/agent-stop-result.js'
 
 async function stopController(workspaceId: string, ctrl: SessionController, cause: StopCause = 'user'): Promise<void> {
   ctrl.stopCause = cause
+  preCompactionStatus.delete(ctrl)
 
   // Normalize the state synchronously so callers (archive, delete, manual
   // stop) see a clean workspace immediately — without waiting for the async
@@ -1536,9 +1587,9 @@ async function stopController(workspaceId: string, ctrl: SessionController, caus
   // Steps 1-2 are `awaiting-user`-specific: they only make sense when the
   // session actually left a pending question/permission behind.
   const wsBefore = getWs(workspaceId)
-  const activeStatuses: WorkspaceStatus[] = ['executing', 'brainstorming', 'extracting', 'awaiting-user']
+  const activeStatuses: WorkspaceStatus[] = ['executing', 'brainstorming', 'extracting', 'awaiting-user', 'compacting']
   if (wsBefore && activeStatuses.includes(wsBefore.status)) {
-    if (wsBefore.status === 'awaiting-user') {
+    if (wsBefore.status === 'awaiting-user' || wsBefore.status === 'compacting') {
       clearPendingForSession(workspaceId, ctrl.agentSessionId)
       purgeAllPersistedUserInputRequests(workspaceId, ctrl.agentSessionId)
     }
@@ -1692,7 +1743,8 @@ export function sendWakeupIfWaiting(workspaceId: string, content: string, expect
   if (expectedSessionId && ctrl.agentSessionId !== expectedSessionId) return false
   const workspace = getWs(workspaceId)
   if (!workspace || workspace.archivedAt || workspace.worktreePurgedAt) return false
-  if (workspace.status === 'awaiting-user' || workspace.status === 'quota') return false
+  if (workspace.status === 'awaiting-user' || workspace.status === 'quota' || workspace.status === 'compacting')
+    return false
   if (!ctrl.engineProcess?.sendWakeupIfWaiting?.(content)) return false
   emit(workspaceId, 'user:message', { content, sender: 'system-prompt' }, ctrl.agentSessionId)
   return true
@@ -1700,6 +1752,7 @@ export function sendWakeupIfWaiting(workspaceId: string, content: string, expect
 
 /** Write a user message to the running agent. */
 export async function sendMessage(workspaceId: string, content: string, expectedSessionId?: string): Promise<void> {
+  assertWorkspaceNotCompacting(workspaceId)
   const ctrl = controllers.get(workspaceId)
   if (!ctrl) {
     throw new Error(`No agent running for workspace '${workspaceId}'`)
@@ -1719,14 +1772,15 @@ export async function sendMessage(workspaceId: string, content: string, expected
 export type FallbackDeliveryResult = { status: 'sent'; sessionId: string } | { status: 'stopped' }
 
 export async function sendMessageForFallback(workspaceId: string, content: string): Promise<FallbackDeliveryResult> {
+  assertWorkspaceNotCompacting(workspaceId)
   const capturedController = controllers.get(workspaceId)
-  if (!capturedController) return { status: 'stopped' }
-
   wakeupService.cancel(workspaceId, 'user-message')
+  if (!capturedController) return { status: 'stopped' }
   try {
     await capturedController.sendMessage(content)
     return { status: 'sent', sessionId: capturedController.agentSessionId }
   } catch {
+    assertWorkspaceNotCompacting(workspaceId)
     const deadline = Date.now() + FALLBACK_CONTROLLER_TURNOVER_TIMEOUT_MS
     while (controllers.get(workspaceId) === capturedController) {
       const remaining = deadline - Date.now()
@@ -1740,6 +1794,7 @@ export async function sendMessageForFallback(workspaceId: string, content: strin
 
     const replacementController = controllers.get(workspaceId)
     if (!replacementController) return { status: 'stopped' }
+    assertWorkspaceNotCompacting(workspaceId)
     await replacementController.sendMessage(content)
     return { status: 'sent', sessionId: replacementController.agentSessionId }
   }
@@ -1867,7 +1922,8 @@ export async function answerPendingQuestion(
   purgePersistedUserInputRequest(workspaceId, head.toolCallId)
   const restoreTo = peekPending(workspaceId) ? 'awaiting-user' : consumePreAwaitStatus(workspaceId)
   try {
-    updateWorkspaceStatus(workspaceId, restoreTo)
+    if (getWs(workspaceId)?.status === 'compacting') preCompactionStatus.set(ctrl, restoreTo)
+    else updateWorkspaceStatus(workspaceId, restoreTo)
   } catch (err) {
     console.warn(`[orchestrator] Failed to transition awaiting-user → ${restoreTo}:`, err)
   }
@@ -1969,7 +2025,8 @@ export async function answerPendingPermission(
   purgePersistedUserInputRequest(workspaceId, head.toolCallId)
   const restoreTo = peekPending(workspaceId) ? 'awaiting-user' : consumePreAwaitStatus(workspaceId)
   try {
-    updateWorkspaceStatus(workspaceId, restoreTo)
+    if (getWs(workspaceId)?.status === 'compacting') preCompactionStatus.set(ctrl, restoreTo)
+    else updateWorkspaceStatus(workspaceId, restoreTo)
   } catch (err) {
     console.warn(`[orchestrator] Failed to transition awaiting-user → ${restoreTo}:`, err)
   }
@@ -2034,7 +2091,8 @@ export async function cancelPendingQuestion(
   purgePersistedUserInputRequest(workspaceId, head.toolCallId)
   const restoreTo = peekPending(workspaceId) ? 'awaiting-user' : consumePreAwaitStatus(workspaceId)
   try {
-    updateWorkspaceStatus(workspaceId, restoreTo)
+    if (getWs(workspaceId)?.status === 'compacting') preCompactionStatus.set(ctrl, restoreTo)
+    else updateWorkspaceStatus(workspaceId, restoreTo)
   } catch (err) {
     console.warn(`[orchestrator] Failed to transition awaiting-user → ${restoreTo}:`, err)
   }

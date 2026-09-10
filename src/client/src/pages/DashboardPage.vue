@@ -147,6 +147,7 @@ const STATUS_LABEL_KEYS: Record<string, string> = {
   extracting: 'workspaceStatus.extracting',
   brainstorming: 'workspaceStatus.brainstorming',
   executing: 'workspaceStatus.executing',
+  compacting: 'workspaceStatus.compacting',
   'awaiting-user': 'workspaceStatus.awaitingUser',
   completed: 'workspaceStatus.completed',
   idle: 'workspaceStatus.idle',
@@ -181,7 +182,8 @@ const rows = computed(() =>
 function statusColor(status: string): string {
   if (status === 'error' || status === 'quota') return 'kobo-danger'
   // Not the accent: DESIGN.md keeps it for UI components, never for text.
-  if (status === 'executing' || status === 'brainstorming' || status === 'extracting') return 'kobo-2'
+  if (status === 'executing' || status === 'brainstorming' || status === 'extracting' || status === 'compacting')
+    return 'kobo-2'
   if (status === 'awaiting-user') return 'kobo-warning'
   return 'kobo-3'
 }

@@ -172,7 +172,7 @@ export function onSessionEnded(
 
   // Don't spawn a competing session while paused on canUseTool — the user
   // will resume the deferred turn explicitly.
-  if (row.status === 'awaiting-user') return
+  if (row.status === 'awaiting-user' || row.status === 'compacting') return
 
   // A watchdog denotes Kōbō's own forced recovery from a stuck engine stream.
   // The orchestrator owns its bounded backoff/retry path; counting it as a
@@ -362,7 +362,7 @@ export function resumeWaitingWorkspaces(excluded: ReadonlySet<string> = new Set(
     if (orchestrator.hasController(row.id)) continue
     // Same guards as spawnNextIteration's own callers: a quota backoff or a
     // pending question owns the next start of that workspace.
-    if (row.status === 'awaiting-user' || row.status === 'quota') continue
+    if (row.status === 'awaiting-user' || row.status === 'compacting' || row.status === 'quota') continue
     try {
       spawnNextIteration(row.id)
     } catch (err) {
@@ -379,7 +379,7 @@ function spawnNextIteration(workspaceId: string, opts: { throwOnStartAgentError?
   if (deferUntilWorkspaceAvailable(workspaceId, resumeWaitingWorkspaces)) return
   if (orchestrator.hasController(workspaceId)) return
   // Same guard as onSessionEnded — never race a deferred-resume start.
-  if (row.status === 'awaiting-user') return
+  if (row.status === 'awaiting-user' || row.status === 'compacting') return
   const task = pickNextTask(workspaceId)
   if (!task) {
     disable(workspaceId, 'completed')

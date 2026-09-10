@@ -15,6 +15,11 @@ describe('isBusyStatus', () => {
     }
   })
 
+  it('keeps compacting workspaces busy and localized', () => {
+    expect(isBusyStatus('compacting')).toBe(true)
+    expect(workspaceStatusKey('compacting')).toBe('workspaceStatus.compacting')
+  })
+
   it('returns false for terminal / idle statuses', () => {
     for (const status of ['created', 'idle', 'completed', 'error', 'quota']) {
       expect(isBusyStatus(status)).toBe(false)
@@ -82,6 +87,7 @@ describe('workspaceStatusKey', () => {
       'extracting',
       'brainstorming',
       'executing',
+      'compacting',
       'awaiting-user',
       'completed',
       'idle',

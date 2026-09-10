@@ -86,6 +86,31 @@ for (const route of ['/:id/archive', '/:id/run-setup-script', '/:id/cancel-sourc
   })
 }
 
+// User prompt actions must reject before cancelling timers, stopping engines,
+// creating a PR or persisting input. The orchestrator also checks at delivery.
+for (const route of [
+  '/:id/start',
+  '/:id/switch-engine',
+  '/:id/git/commit-with-agent',
+  '/:id/git/resolve-with-agent',
+  '/:id/open-pr',
+  '/:id/start-review',
+  '/:id/start-ci-fix',
+]) {
+  app.use(route, async (c, next) => {
+    if (c.req.method === 'POST' && workspaceService.getWorkspace(c.req.param('id')!)?.status === 'compacting') {
+      return c.json(
+        {
+          code: 'compacting',
+          error: 'Workspace is compacting its context; wait until compaction finishes before sending a message',
+        },
+        409,
+      )
+    }
+    await next()
+  })
+}
+
 /** Tracks workspaces currently running a setup script to prevent concurrent executions. */
 const setupScriptRunning = new Set<string>()
 
@@ -367,6 +392,16 @@ app.post('/:id/switch-engine', migrationGuard, async (c) => {
       typeof body.handoff === 'string' && body.handoff.trim()
         ? body.handoff.trim().slice(0, 30_000)
         : buildEngineHandoff(workspace, workspace.engine, body.engine)
+
+    if (workspaceService.getWorkspace(workspace.id)?.status === 'compacting') {
+      return c.json(
+        {
+          code: 'compacting',
+          error: 'Workspace is compacting its context; wait until compaction finishes before sending a message',
+        },
+        409,
+      )
+    }
 
     // A new engine is started three lines below: the previous one must be dead
     // first, or two agents share the worktree.
@@ -3590,6 +3625,16 @@ app.post('/:id/start', migrationGuard, async (c) => {
     const agentSessionId = body.agentSessionId
     const resume = body.resume === true
 
+    if (workspaceService.getWorkspace(id)?.status === 'compacting') {
+      return c.json(
+        {
+          code: 'compacting',
+          error: 'Workspace is compacting its context; wait until compaction finishes before sending a message',
+        },
+        409,
+      )
+    }
+
     // A manual start supersedes any scheduled retry (quota or transient
     // watchdog recovery). Leaving its timer armed could spawn a second agent
     // after the user has already resumed the workspace.
@@ -4318,8 +4363,6 @@ app.post('/:id/git/commit-with-agent', migrationGuard, async (c) => {
 
 When finished, report the commit SHA, its message, the files included, and the checks you ran.`
 
-    wakeupService.cancel(workspace.id, 'user-message')
-
     let messageSent = false
     try {
       const { agentSessionId } = await deliverAgentPrompt(workspace, workspace.worktreePath, prompt)
@@ -4409,10 +4452,6 @@ ${fileList}
 6. Report the summary: which files you touched, the key decisions you made, and the final test result.${cherryPickNote}
 
 Start now.`
-
-    // Cancel any pending wakeup: the user is driving this turn, the
-    // scheduler should not also wake the agent a few minutes later.
-    wakeupService.cancel(workspace.id, 'user-message')
 
     let messageSent = false
     try {
@@ -4778,9 +4817,6 @@ app.post('/:id/open-pr', async (c) => {
       tasks,
     })
 
-    // Cancel any pending wakeup: the user is driving this turn.
-    wakeupService.cancel(workspace.id, 'user-message')
-
     // Send to the running agent, or resume the agent with the PR prompt
     let messageSent = false
     try {
@@ -4855,14 +4891,18 @@ app.post('/:id/start-review', async (c) => {
       additionalInstructions,
     })
 
-    try {
-      wakeupService.cancel(workspace.id, 'user-message')
-    } catch {
-      /* swallow */
-    }
-
     let messageSent = false
     let emitSessionId: string | undefined
+
+    if (workspaceService.getWorkspace(workspace.id)?.status === 'compacting') {
+      return c.json(
+        {
+          code: 'compacting',
+          error: 'Workspace is compacting its context; wait until compaction finishes before sending a message',
+        },
+        409,
+      )
+    }
 
     if (newSession) {
       // Stop current agent, wait for it, then start fresh.
@@ -4962,12 +5002,6 @@ app.post('/:id/start-ci-fix', migrationGuard, async (c) => {
       failedChecks,
       ciRunUrl,
     })
-
-    try {
-      wakeupService.cancel(workspace.id, 'user-message')
-    } catch {
-      /* swallow */
-    }
 
     const session = workspaceService.getActiveSession(workspace.id)
     let emitSessionId: string | undefined = session?.id

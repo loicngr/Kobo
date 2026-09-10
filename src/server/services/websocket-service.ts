@@ -254,11 +254,19 @@ export function emit(workspaceId: string, type: string, payload: unknown, sessio
  * Broadcast an event to subscribed clients WITHOUT persisting to the database.
  * Used for ephemeral status updates (e.g., dev-server status) that don't need replay.
  */
-export function emitEphemeral(workspaceId: string, type: string, payload: unknown): void {
+export function emitEphemeral(workspaceId: string, type: string, payload: unknown, sessionId?: string): void {
   recordActivity(workspaceId, type, payload)
   const id = nanoid()
   const createdAt = new Date().toISOString()
-  const event: WsEvent = { id, workspaceId, type, payload, createdAt, replayable: false }
+  const event: WsEvent = {
+    id,
+    workspaceId,
+    type,
+    payload,
+    createdAt,
+    replayable: false,
+    ...(sessionId ? { sessionId } : {}),
+  }
   const message = JSON.stringify(event)
 
   let sendErrorLogged = false

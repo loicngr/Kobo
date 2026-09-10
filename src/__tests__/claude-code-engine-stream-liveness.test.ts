@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest'
 let abortSignal: AbortSignal | undefined
 let releaseStream: (() => void) | undefined
 let emitCompactingStatus = false
+let emitOutputAfterCompaction = false
+let emitSubagentOutputAfterCompaction = false
 let emitToolResult = false
 let emitSubagentStart = false
 let emitPermissionRequest = false
@@ -22,9 +24,6 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
     return {
       async *[Symbol.asyncIterator]() {
         yield { type: 'system', subtype: 'init', session_id: 'sess-live', model: 'm', slash_commands: [] }
-        if (emitCompactingStatus) {
-          yield { type: 'system', subtype: 'status', status: 'compacting', session_id: 'sess-live' }
-        }
         if (emitSubagentStart) {
           // Maps to a `subagent:progress` event with status 'running' (see
           // event-mapper.ts, subtype task_started) — the engine then tracks
@@ -56,6 +55,22 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
           yield {
             type: 'user',
             message: { content: [{ type: 'tool_result', tool_use_id: 'toolu_1', content: 'done' }] },
+          }
+        }
+        if (emitCompactingStatus) {
+          yield { type: 'system', subtype: 'status', status: 'compacting', session_id: 'sess-live' }
+          if (emitSubagentOutputAfterCompaction) {
+            yield {
+              type: 'assistant',
+              parent_tool_use_id: 'task-1',
+              message: {
+                id: 'child',
+                content: [{ type: 'tool_use', id: 'child-tool', name: 'Bash', input: { command: 'echo child' } }],
+              },
+            }
+          }
+          if (emitOutputAfterCompaction) {
+            yield { type: 'assistant', message: { id: 'resumed', content: [{ type: 'text', text: 'Resumed' }] } }
           }
         }
         await new Promise<void>((resolve) => {
@@ -129,6 +144,7 @@ describe('claude-code engine — shared turn liveness', () => {
       // No tool in flight anymore: silence past the SHORT deadline reaps it.
       await vi.advanceTimersByTimeAsync(CLAUDE_STREAM_IDLE_TIMEOUT_MS)
       expect(events).toContainEqual({ kind: 'session:ended', reason: 'watchdog', exitCode: null })
+      if (emitCompactingStatus) expect(events).toContainEqual({ kind: 'session:compacting', active: false })
     } finally {
       releaseStream?.()
       releaseStream = undefined
@@ -158,6 +174,49 @@ describe('claude-code engine — shared turn liveness', () => {
     }
   })
 
+  it('keeps parent compaction active while a subagent emits tool calls', async () => {
+    vi.useFakeTimers()
+    emitCompactingStatus = true
+    emitSubagentOutputAfterCompaction = true
+    try {
+      const events: AgentEvent[] = []
+      const engine = createClaudeCodeEngine()
+      await engine.start(BASE_OPTIONS, (event) => events.push(event))
+      await vi.advanceTimersByTimeAsync(CLAUDE_STREAM_IDLE_TIMEOUT_MS * 2)
+      expect(events).toContainEqual({ kind: 'session:compacting', active: true })
+      expect(events.some((event) => event.kind === 'tool:call' && event.toolCallId === 'child-tool')).toBe(true)
+      expect(events).not.toContainEqual({ kind: 'session:compacting', active: false })
+      expect(events.some((event) => event.kind === 'session:ended')).toBe(false)
+    } finally {
+      releaseStream?.()
+      releaseStream = undefined
+      emitCompactingStatus = false
+      emitSubagentOutputAfterCompaction = false
+      vi.useRealTimers()
+    }
+  })
+
+  it('ends the compaction pause when real output resumes without a status update', async () => {
+    vi.useFakeTimers()
+    emitCompactingStatus = true
+    emitOutputAfterCompaction = true
+    try {
+      const events: AgentEvent[] = []
+      const engine = createClaudeCodeEngine()
+      await engine.start(BASE_OPTIONS, (event) => events.push(event))
+      await vi.advanceTimersByTimeAsync(1)
+      expect(events).toContainEqual({ kind: 'session:compacting', active: false })
+      await vi.advanceTimersByTimeAsync(CLAUDE_TOOL_IDLE_TIMEOUT_MS)
+      expect(events).toContainEqual({ kind: 'session:ended', reason: 'watchdog', exitCode: null })
+    } finally {
+      releaseStream?.()
+      releaseStream = undefined
+      emitCompactingStatus = false
+      emitOutputAfterCompaction = false
+      vi.useRealTimers()
+    }
+  })
+
   it('reaps a compaction that never completes after the stall ceiling', async () => {
     vi.useFakeTimers()
     try {
@@ -174,6 +233,7 @@ describe('claude-code engine — shared turn liveness', () => {
       // (the mock stream has a tool call in flight — see the mock generator).
       await vi.advanceTimersByTimeAsync(COMPACTION_STALL_TIMEOUT_MS + CLAUDE_TOOL_IDLE_TIMEOUT_MS)
       expect(events).toContainEqual({ kind: 'session:ended', reason: 'watchdog', exitCode: null })
+      if (emitCompactingStatus) expect(events).toContainEqual({ kind: 'session:compacting', active: false })
     } finally {
       releaseStream?.()
       releaseStream = undefined
@@ -242,6 +302,7 @@ describe('claude-code engine — shared turn liveness', () => {
       // not the longer tool-aware ceiling.
       await vi.advanceTimersByTimeAsync(COMPACTION_STALL_TIMEOUT_MS + CLAUDE_STREAM_IDLE_TIMEOUT_MS)
       expect(events).toContainEqual({ kind: 'session:ended', reason: 'watchdog', exitCode: null })
+      if (emitCompactingStatus) expect(events).toContainEqual({ kind: 'session:compacting', active: false })
     } finally {
       releaseStream?.()
       releaseStream = undefined

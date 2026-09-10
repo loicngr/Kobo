@@ -422,6 +422,15 @@ setMessageHandler(async (type, payload) => {
   } | null
 
   if (type === 'chat:message' && p?.workspaceId && p?.content) {
+    if (getWorkspace(p.workspaceId)?.status === 'compacting') {
+      emitEphemeral(p.workspaceId, 'chat:rejected', {
+        reason: 'compacting',
+        sessionId: p.sessionId,
+        content: p.content,
+        message: 'Workspace is compacting its context; wait until compaction finishes before sending a message',
+      })
+      return
+    }
     // Auto-loop owns the agent's turns. A user message means the user wants
     // to redirect the conversation, so disable the loop (idempotent — the
     // `autoloop:disabled` event is emitted with reason='user-action' so the

@@ -247,10 +247,12 @@ export function dispatchAgentEvent(
   sessionId?: string | null,
 ): void {
   const agentStream = useAgentStreamStore()
+  const activeOwner = useWorkspaceStore().activeAgentSessionIds[workspaceId]
+  const isCurrentSession = !sessionId || !activeOwner || sessionId === activeOwner
 
   // Transient compaction indicator — ephemeral, never enters the persisted feed.
   if (event.kind === 'session:compacting') {
-    agentStream.setCompacting(workspaceId, event.active)
+    if (!_replayingNotifications && isCurrentSession) agentStream.setCompacting(workspaceId, event.active)
     return
   }
 
@@ -258,7 +260,11 @@ export function dispatchAgentEvent(
 
   // Compaction is over once the boundary lands, the session ends, or the agent
   // resumes producing output (text / tool calls) — clear the live banner.
-  if (event.kind === 'session:compacted' || event.kind === 'message:text' || event.kind === 'tool:call') {
+  if (
+    !_replayingNotifications &&
+    isCurrentSession &&
+    (event.kind === 'session:compacted' || event.kind === 'message:text' || event.kind === 'tool:call')
+  ) {
     agentStream.setCompacting(workspaceId, false)
   }
 
@@ -284,9 +290,12 @@ export function dispatchAgentEvent(
         toolInput: event.payload,
       })
     }
-    // Backend transitions to `awaiting-user` but doesn't broadcast it; mirror
-    // locally so the sidebar/header badges flip immediately.
-    workspaceStore.updateWorkspaceFromEvent(workspaceId, { status: 'awaiting-user' })
+    // A pending question or approval may arrive from a sub-agent while the
+    // parent compacts. Keep compaction authoritative until its status event
+    // restores awaiting-user; the request is still queued and notified below.
+    if (!useWebSocketStore().isCompacting(workspaceId)) {
+      workspaceStore.updateWorkspaceFromEvent(workspaceId, { status: 'awaiting-user' })
+    }
     if (!_replayingNotifications) {
       const wsName = workspaceStore.workspaces.find((w) => w.id === workspaceId)?.name ?? ''
       const title =
@@ -413,7 +422,7 @@ export function dispatchAgentEvent(
       }
       return
     }
-    agentStream.setCompacting(workspaceId, false)
+    if (!_replayingNotifications) agentStream.setCompacting(workspaceId, false)
     if (sessionId) {
       workspaceStore.clearActiveAgentSession(workspaceId, sessionId)
     } else {
@@ -628,6 +637,14 @@ export const useWebSocketStore = defineStore('websocket', {
       })
     },
 
+    isCompacting(workspaceId: string): boolean {
+      const store = useWorkspaceStore()
+      const workspace =
+        store.workspaces.find((item) => item.id === workspaceId) ??
+        store.archivedWorkspaces.find((item) => item.id === workspaceId)
+      return workspace?.status === 'compacting' || useAgentStreamStore().isCompacting(workspaceId)
+    },
+
     sendChatMessage(
       workspaceId: string,
       content: string,
@@ -635,19 +652,12 @@ export const useWebSocketStore = defineStore('websocket', {
       agentPermissionModeOverride?: 'plan' | 'bypass' | 'strict' | 'interactive',
       force = false,
     ): boolean {
+      if (this.isCompacting(workspaceId)) return false
       const sent = this._send({
         type: 'chat:message',
         payload: { workspaceId, content, sessionId, agentPermissionModeOverride, force },
       })
 
-      // The native `/compact` command triggers a context compaction that runs
-      // for a minute or two with NO feed output. Surface the live banner right
-      // away: the SDK's `status:'compacting'` message isn't emitted without
-      // `includePartialMessages`, so the command itself is our reliable signal.
-      // Cleared by the `compact_boundary` (session:compacted) / session end.
-      if (/^\/compact(\s|$)/.test(content.trim())) {
-        useAgentStreamStore().setCompacting(workspaceId, true)
-      }
       if (!sent) return false
 
       // Optimistic status update — flip to `executing` instantly if the
@@ -777,6 +787,14 @@ export const useWebSocketStore = defineStore('websocket', {
       }
 
       switch (msg.type) {
+        case 'workspace:status': {
+          if (!wid || this._replaying || typeof payload.status !== 'string') break
+          const owner = workspaceStore.activeAgentSessionIds[wid]
+          if (owner && typeof payload.sessionId === 'string' && owner !== payload.sessionId) break
+          workspaceStore.updateWorkspaceFromEvent(wid, { status: payload.status })
+          break
+        }
+
         case 'chat:accepted': {
           const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : undefined
           if (wid && sessionId) workspaceStore.cancelQueuedMessage(wid, sessionId)

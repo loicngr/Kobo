@@ -714,6 +714,7 @@ export const useWorkspaceStore = defineStore('workspace', {
         // missed (WS reconnect, browser tab returning from sleep, etc.)
         // and sub-agents still marked `running` keep AgentBusyBanner visible.
         for (const ws of this.workspaces) {
+          useAgentStreamStore().setCompacting(ws.id, ws.status === 'compacting')
           if (['completed', 'idle', 'error', 'quota'].includes(ws.status)) {
             this.finalizeRunningSubagents(ws.id)
           }
@@ -790,6 +791,9 @@ export const useWorkspaceStore = defineStore('workspace', {
           const statusChangedDuringRequest = (_workspaceEventVersions.get(id) ?? 0) !== eventVersionAtStart
           const incomingRaw = data.workspace ?? data
           const incoming = statusChangedDuringRequest ? {} : incomingRaw
+          if (typeof incoming.status === 'string') {
+            useAgentStreamStore().setCompacting(id, incoming.status === 'compacting')
+          }
 
           // Update workspace in whichever list it lives in (active or archived).
           const idx = this.workspaces.findIndex((w) => w.id === id)
@@ -1719,6 +1723,7 @@ export const useWorkspaceStore = defineStore('workspace', {
           return current && changedDuringRequest ? { ...incoming, ...current } : incoming
         })
         for (const ws of this.workspaces) {
+          useAgentStreamStore().setCompacting(ws.id, ws.status === 'compacting')
           if (['completed', 'idle', 'error', 'quota'].includes(ws.status)) {
             this.finalizeRunningSubagents(ws.id)
           }
@@ -2388,8 +2393,10 @@ export const useWorkspaceStore = defineStore('workspace', {
       if (host) return host.flush(workspaceId, sessionId)
       const queued = this.getQueuedMessage(workspaceId, sessionId)
       if (!queued) return
+      const websocket = useWebSocketStore()
+      if (websocket.isCompacting(workspaceId)) return
       this.cancelQueuedMessage(workspaceId, sessionId)
-      useWebSocketStore().sendChatMessage(workspaceId, queued.content, sessionId)
+      websocket.sendChatMessage(workspaceId, queued.content, sessionId)
     },
 
     setActiveAgentSession(workspaceId: string, sessionId: string) {
@@ -2434,6 +2441,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       // liveness) closes that window without adding a new poll or a
       // dedicated WebSocket channel.
       if (data.status !== undefined) {
+        useAgentStreamStore().setCompacting(workspaceId, data.status === 'compacting')
         // Any prior liveness confirmation predates this status change and
         // can no longer be trusted to describe it — e.g. a workspace that
         // was confirmed idle a moment ago flips to "executing" here, and

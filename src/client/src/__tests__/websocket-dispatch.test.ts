@@ -470,15 +470,151 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
     expect(notify).toHaveBeenCalledTimes(1)
   })
 
-  it('sets the compacting flag when a `/compact` command is sent', async () => {
+  it('waits for the engine before flagging a sent `/compact` command', async () => {
     const { useAgentStreamStore } = await import('../stores/agent-stream.js')
     const stream = useAgentStreamStore()
     const { useWebSocketStore } = await import('../stores/websocket.js')
     const wsStore = useWebSocketStore()
 
+    vi.spyOn(wsStore, '_send').mockReturnValue(true)
     expect(stream.isCompacting('w1')).toBe(false)
     wsStore.sendChatMessage('w1', '/compact')
+    expect(stream.isCompacting('w1')).toBe(false)
+  })
+
+  it.each([false, true])('blocks chat sends while persisted status is compacting (force=%s)', async (force) => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const ws = useWorkspaceStore()
+    ws.workspaces = [workspaceFixture('compacting')]
+    const socket = useWebSocketStore()
+    const send = vi.spyOn(socket, '_send').mockReturnValue(true)
+    expect(socket.sendChatMessage('w1', 'keep this draft', 's1', undefined, force)).toBe(false)
+    expect(send).not.toHaveBeenCalled()
+    expect(ws.workspaces[0]?.status).toBe('compacting')
+    ws.updateWorkspaceFromEvent('w1', { status: 'executing' })
+    expect(socket.sendChatMessage('w1', 'keep this draft', 's1')).toBe(true)
+  })
+
+  it('does not enter compaction when the compact command could not be sent', async () => {
+    const { useAgentStreamStore } = await import('../stores/agent-stream.js')
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const socket = useWebSocketStore()
+    vi.spyOn(socket, '_send').mockReturnValue(false)
+    expect(socket.sendChatMessage('w1', '/compact')).toBe(false)
+    expect(useAgentStreamStore().isCompacting('w1')).toBe(false)
+  })
+
+  it('blocks sends from the start of live compaction until it ends', async () => {
+    const { useWebSocketStore, dispatchAgentEvent } = await import('../stores/websocket.js')
+    const socket = useWebSocketStore()
+    const send = vi.spyOn(socket, '_send').mockReturnValue(true)
+    dispatchAgentEvent('w1', { kind: 'session:compacting', active: true })
+    expect(socket.sendChatMessage('w1', 'later')).toBe(false)
+    expect(send).not.toHaveBeenCalled()
+    dispatchAgentEvent('w1', { kind: 'session:compacting', active: false })
+    expect(socket.sendChatMessage('w1', 'later')).toBe(true)
+  })
+
+  it('does not change live compaction while replaying historical output', async () => {
+    const { useAgentStreamStore } = await import('../stores/agent-stream.js')
+    const { dispatchAgentEvent, _setReplayingForDispatch } = await import('../stores/websocket.js')
+    const stream = useAgentStreamStore()
+    stream.setCompacting('w1', true)
+    _setReplayingForDispatch(true)
+    try {
+      dispatchAgentEvent('w1', { kind: 'message:text', messageId: 'old', text: 'past', streaming: false })
+      expect(stream.isCompacting('w1')).toBe(true)
+      stream.setCompacting('w1', false)
+      dispatchAgentEvent('w1', { kind: 'session:compacting', active: true })
+      expect(stream.isCompacting('w1')).toBe(false)
+    } finally {
+      _setReplayingForDispatch(false)
+    }
+  })
+
+  it('receives authoritative compaction status and ignores an old session status', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const ws = useWorkspaceStore()
+    ws.workspaces = [workspaceFixture()]
+    ws.setActiveAgentSession('w1', 'current')
+    const socket = useWebSocketStore()
+    socket._routeMessage({
+      type: 'workspace:status',
+      workspaceId: 'w1',
+      payload: { status: 'compacting', sessionId: 'current' },
+    })
+    expect(ws.workspaces[0]?.status).toBe('compacting')
+    expect(socket.isCompacting('w1')).toBe(true)
+    socket._routeMessage({
+      type: 'workspace:status',
+      workspaceId: 'w1',
+      payload: { status: 'executing', sessionId: 'old' },
+    })
+    expect(ws.workspaces[0]?.status).toBe('compacting')
+    socket._routeMessage({
+      type: 'workspace:status',
+      workspaceId: 'w1',
+      payload: { status: 'brainstorming', sessionId: 'current' },
+    })
+    expect(socket.isCompacting('w1')).toBe(false)
+    expect(ws.workspaces[0]?.status).toBe('brainstorming')
+  })
+
+  it('ignores compaction signals and output from a superseded session', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const { useAgentStreamStore } = await import('../stores/agent-stream.js')
+    const { dispatchAgentEvent } = await import('../stores/websocket.js')
+    const store = useWorkspaceStore()
+    store.setActiveAgentSession('w1', 'current')
+    const stream = useAgentStreamStore()
+    dispatchAgentEvent('w1', { kind: 'session:compacting', active: true }, undefined, undefined, 'old')
+    expect(stream.isCompacting('w1')).toBe(false)
+    stream.setCompacting('w1', true)
+    dispatchAgentEvent(
+      'w1',
+      { kind: 'message:text', messageId: 'old', text: 'past', streaming: false },
+      undefined,
+      undefined,
+      'old',
+    )
     expect(stream.isCompacting('w1')).toBe(true)
+  })
+
+  it('retains queued content when compaction blocks an automatic flush', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const store = useWorkspaceStore()
+    store.workspaces = [workspaceFixture('compacting')]
+    const send = vi.spyOn(useWebSocketStore(), '_send').mockReturnValue(true)
+    store.queueMessage('w1', 'queued draft', 's1')
+    store.flushQueuedMessage('w1', 's1')
+    expect(store.getQueuedMessage('w1', 's1')?.content).toBe('queued draft')
+    expect(send).not.toHaveBeenCalled()
+    store.updateWorkspaceFromEvent('w1', { status: 'completed' })
+    store.flushQueuedMessage('w1', 's1')
+    expect(store.getQueuedMessage('w1', 's1')).toBeUndefined()
+    expect(send).toHaveBeenCalledTimes(1)
+  })
+
+  it('reconciles a missed compaction end from a fresh workspace snapshot', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const { useAgentStreamStore } = await import('../stores/agent-stream.js')
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const store = useWorkspaceStore()
+    store.workspaces = [workspaceFixture('compacting')]
+    useAgentStreamStore().setCompacting('w1', true)
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(new Response(JSON.stringify([workspaceFixture('executing')]), { status: 200 })),
+    )
+    try {
+      await store.fetchWorkspaces()
+      expect(useWebSocketStore().isCompacting('w1')).toBe(false)
+    } finally {
+      vi.unstubAllGlobals()
+    }
   })
 
   it('does not set the compacting flag for a regular message', async () => {
@@ -687,6 +823,37 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
       snapshot: expect.objectContaining({ status: 'ok' }),
     })
   })
+
+  it.each(['question', 'permission'] as const)(
+    'keeps chat blocked when a %s arrives during compaction',
+    async (requestKind) => {
+      const { useWorkspaceStore } = await import('../stores/workspace.js')
+      const { useWebSocketStore, dispatchAgentEvent } = await import('../stores/websocket.js')
+      const store = useWorkspaceStore()
+      store.workspaces = [workspaceFixture('compacting')]
+      const socket = useWebSocketStore()
+      const send = vi.spyOn(socket, '_send').mockReturnValue(true)
+      vi.mocked(notify).mockClear()
+      dispatchAgentEvent(
+        'w1',
+        {
+          kind: 'session:user-input-requested',
+          requestKind,
+          toolCallId: 'pending-during-compaction',
+          toolName: requestKind === 'question' ? 'AskUserQuestion' : 'Bash',
+          payload: { question: 'Proceed?' },
+        },
+        undefined,
+        undefined,
+        'current',
+      )
+      expect(store.workspaces[0]?.status).toBe('compacting')
+      expect(store.peekPending('w1')?.kind).toBe(requestKind)
+      expect(notify).toHaveBeenCalledTimes(1)
+      expect(socket.sendChatMessage('w1', 'draft', 'current', undefined, true)).toBe(false)
+      expect(send).not.toHaveBeenCalled()
+    },
+  )
 
   it('routes session:user-input-requested(question) to enqueuePending as a question item', async () => {
     const { useWorkspaceStore } = await import('../stores/workspace.js')

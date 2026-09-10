@@ -5,7 +5,7 @@ export function routeEvent(workspaceId: string, agentSessionId: string, event: A
   // The compaction "in progress" signal is a transient live indicator — deliver
   // it once and never persist/replay it. The persistent trace is `session:compacted`.
   if (event.kind === 'session:compacting') {
-    emitEphemeral(workspaceId, 'agent:event', event)
+    emitEphemeral(workspaceId, 'agent:event', event, agentSessionId)
     return
   }
   if (event.kind === 'mcp:status' && event.status !== 'error') {
