@@ -4,6 +4,11 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.11.36
+
+- fix(agent): resume quota waits and scheduled background checks
+- ✨ feat(quota): Améliorer la détection et récupération des erreurs de limite de quota
+
 ## 1.11.35
 
 - feat(workspaces): add split view, activity digest and compact toolbar
