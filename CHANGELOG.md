@@ -4,6 +4,10 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.11.40
+
+- feat(workspaces): add external MCP access and harden workspace flows
+
 ## 1.11.39
 
 - fix(deps): require Claude SDK with Fable 5.1 support
