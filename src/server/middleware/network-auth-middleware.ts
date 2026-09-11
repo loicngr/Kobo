@@ -22,11 +22,15 @@ export const networkAuthMiddleware: MiddlewareHandler = async (c, next) => {
   if (c.req.path === '/api/health') return next()
   const address = getConnInfo(c).remote.address
   const global = getGlobalSettings()
+  // MCP clients commonly send the shared token as an Authorization header.
+  const bearerToken = /^\/api\/mcp\/?$/.test(c.req.path)
+    ? c.req.header('Authorization')?.match(/^Bearer\s+(.+)$/i)?.[1]
+    : undefined
   const decision = evaluateNetworkAccess({
     address,
     enabled: global.networkAccessEnabled,
     expectedToken: global.networkAccessToken,
-    providedToken: c.req.header('X-Kobo-Token'),
+    providedToken: c.req.header('X-Kobo-Token') ?? bearerToken,
     trustLoopback: !global.networkAccessBehindProxy,
   })
   if (decision.allow) return next()

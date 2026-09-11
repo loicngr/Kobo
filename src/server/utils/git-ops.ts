@@ -1,6 +1,6 @@
 import { execFile as execFileCb, execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, relative, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { resolvePathInside } from './safe-path.js'
 
@@ -1007,6 +1007,41 @@ export interface DiffFile {
   status: 'added' | 'modified' | 'deleted' | 'renamed' | 'untracked'
 }
 
+/** Git -z never quotes filenames; renames have a second source record. */
+function parsePorcelain(output: string): { path: string; x: string; y: string }[] {
+  const records = output.split('\0')
+  const entries: { path: string; x: string; y: string }[] = []
+  for (let i = 0; i < records.length; i++) {
+    const record = records[i]!
+    if (!record) continue
+    const x = record[0]!
+    const y = record[1]!
+    entries.push({ path: record.slice(3), x, y })
+    if (x === 'R' || x === 'C' || y === 'R' || y === 'C') i++
+  }
+  return entries
+}
+
+function parseNameStatus(output: string): DiffFile[] {
+  const records = output.split('\0')
+  const files: DiffFile[] = []
+  for (let i = 0; i < records.length - 1; ) {
+    const code = records[i++]!
+    let filePath = records[i++]!
+    if (code.startsWith('R') || code.startsWith('C')) filePath = records[i++]!
+    if (!filePath) continue
+    const status = code.startsWith('R')
+      ? 'renamed'
+      : code.startsWith('A')
+        ? 'added'
+        : code.startsWith('D')
+          ? 'deleted'
+          : 'modified'
+    files.push({ path: filePath, status })
+  }
+  return files
+}
+
 /** List files changed between base and HEAD (committed), plus working tree changes. */
 /**
  * List the worktree's files — tracked plus untracked-but-not-git-ignored.
@@ -1016,9 +1051,9 @@ export interface DiffFile {
  */
 export function listWorktreeFiles(worktreePath: string, limit = 5000): string[] {
   try {
-    const out = git(worktreePath, ['ls-files', '--cached', '--others', '--exclude-standard'])
+    const out = git(worktreePath, ['ls-files', '-z', '--cached', '--others', '--exclude-standard'])
     if (!out) return []
-    const files = out.split('\n').filter((line) => line.length > 0)
+    const files = out.split('\0').filter((line) => line.length > 0)
     return files.length > limit ? files.slice(0, limit) : files
   } catch {
     return []
@@ -1031,7 +1066,7 @@ export function listWorktreeFiles(worktreePath: string, limit = 5000): string[] 
  */
 export function worktreeHasChanges(worktreePath: string): boolean {
   try {
-    return git(worktreePath, ['status', '--porcelain']).length > 0
+    return git(worktreePath, ['status', '--porcelain', '-z']).length > 0
   } catch {
     return false
   }
@@ -1042,7 +1077,7 @@ export function worktreeHasChanges(worktreePath: string): boolean {
  *  the worktree holds uncommitted work, "unknown" must never be read as
  *  "nothing to lose". */
 export function worktreeHasChangesStrict(worktreePath: string): boolean {
-  return git(worktreePath, ['status', '--porcelain']).length > 0
+  return git(worktreePath, ['status', '--porcelain', '-z']).length > 0
 }
 
 export function getChangedFiles(repoPath: string, base: string, includeUntracked = false): DiffFile[] {
@@ -1052,25 +1087,8 @@ export function getChangedFiles(repoPath: string, base: string, includeUntracked
 
   // Committed changes (base..HEAD)
   try {
-    const output = git(repoPath, ['diff', '--name-status', `${ref}...HEAD`])
-    for (const line of output.split('\n')) {
-      if (!line) continue
-      const [statusCode, ...pathParts] = line.split('\t')
-      if (!statusCode || pathParts.length === 0) continue
-      // For renames/copies (R100 old new), use the new path (last element)
-      const filePath =
-        (statusCode.startsWith('R') || statusCode.startsWith('C')
-          ? pathParts[pathParts.length - 1]
-          : pathParts[0]
-        )?.replace(/\/$/, '') ?? ''
-      if (!filePath) continue
-      let status: DiffFile['status'] = 'modified'
-      if (statusCode.startsWith('A')) status = 'added'
-      else if (statusCode.startsWith('D')) status = 'deleted'
-      else if (statusCode.startsWith('R')) status = 'renamed'
-      files.push({ path: filePath, status })
-      seen.add(filePath)
-    }
+    files.push(...parseNameStatus(git(repoPath, ['diff', '--name-status', '-z', `${ref}...HEAD`])))
+    for (const file of files) seen.add(file.path)
   } catch {
     // No commits yet
   }
@@ -1082,18 +1100,16 @@ export function getChangedFiles(repoPath: string, base: string, includeUntracked
   // we use `-uall` and surface them with status='added'.
   try {
     const flag = includeUntracked ? '-uall' : '-uno'
-    const output = git(repoPath, ['status', '--porcelain', flag])
-    for (const line of output.split('\n')) {
-      if (!line) continue
-      const filePath = line.substring(3).replace(/\/$/, '')
-      if (!filePath || seen.has(filePath)) continue
-      const x = line[0]
-      const y = line[1]
+    const output = git(repoPath, ['status', '--porcelain', '-z', flag])
+    for (const { path: filePath, x, y } of parsePorcelain(output)) {
+      if (seen.has(filePath)) continue
       let status: DiffFile['status'] = 'modified'
       if (x === '?' && y === '?') status = 'untracked'
+      else if (x === 'R' || y === 'R') status = 'renamed'
       else if (x === 'A' || y === 'A') status = 'added'
       else if (x === 'D' || y === 'D') status = 'deleted'
       files.push({ path: filePath, status })
+      seen.add(filePath)
     }
   } catch {
     // Ignore
@@ -1119,23 +1135,7 @@ export function getUnpushedChangedFiles(repoPath: string, branchName: string, re
 
   const files: DiffFile[] = []
   try {
-    const output = git(repoPath, ['diff', '--name-status', `${remoteRef}..HEAD`])
-    for (const line of output.split('\n')) {
-      if (!line) continue
-      const [statusCode, ...pathParts] = line.split('\t')
-      if (!statusCode || pathParts.length === 0) continue
-      const filePath =
-        (statusCode.startsWith('R') || statusCode.startsWith('C')
-          ? pathParts[pathParts.length - 1]
-          : pathParts[0]
-        )?.replace(/\/$/, '') ?? ''
-      if (!filePath) continue
-      let status: DiffFile['status'] = 'modified'
-      if (statusCode.startsWith('A')) status = 'added'
-      else if (statusCode.startsWith('D')) status = 'deleted'
-      else if (statusCode.startsWith('R')) status = 'renamed'
-      files.push({ path: filePath, status })
-    }
+    files.push(...parseNameStatus(git(repoPath, ['diff', '--name-status', '-z', `${remoteRef}..HEAD`])))
   } catch {
     // Unlikely after the rev-parse check, but keep the happy path robust.
   }
@@ -1189,23 +1189,7 @@ export function commitExists(repoPath: string, ref: string): boolean {
 export function getChangedFilesBetween(repoPath: string, fromRef: string, toRef: string): DiffFile[] {
   const files: DiffFile[] = []
   try {
-    const output = git(repoPath, ['diff', '--name-status', `${fromRef}..${toRef}`])
-    for (const line of output.split('\n')) {
-      if (!line) continue
-      const [statusCode, ...pathParts] = line.split('\t')
-      if (!statusCode || pathParts.length === 0) continue
-      const filePath =
-        (statusCode.startsWith('R') || statusCode.startsWith('C')
-          ? pathParts[pathParts.length - 1]
-          : pathParts[0]
-        )?.replace(/\/$/, '') ?? ''
-      if (!filePath) continue
-      let status: DiffFile['status'] = 'modified'
-      if (statusCode.startsWith('A')) status = 'added'
-      else if (statusCode.startsWith('D')) status = 'deleted'
-      else if (statusCode.startsWith('R')) status = 'renamed'
-      files.push({ path: filePath, status })
-    }
+    files.push(...parseNameStatus(git(repoPath, ['diff', '--name-status', '-z', `${fromRef}..${toRef}`])))
   } catch {
     // invalid refs / no diff → empty list
   }
@@ -1238,39 +1222,27 @@ export function rollbackFile(
   filePath: string,
   remote = 'origin',
 ): RollbackTarget {
-  const absPath = resolvePathInside(repoPath, filePath)
+  resolvePathInside(repoPath, filePath)
+  const absPath = resolve(repoPath, filePath)
+  filePath = relative(resolve(repoPath), absPath)
   const remoteRef = `${remote}/${branchName}`
-  let remoteRefExists = false
-  try {
-    git(repoPath, ['rev-parse', '--verify', remoteRef])
-    remoteRefExists = true
-  } catch {
-    // Branch never pushed — fall through to HEAD.
+  // show-ref distinguishes an absent ref from repository/IO errors. Tree
+  // inspection must succeed before absence authorizes deletion.
+  const refs = git(repoPath, ['for-each-ref', '--format=%(refname)', `refs/remotes/${remoteRef}`]).split('\n')
+  const fileExistsAt = (ref: string) =>
+    git(repoPath, ['ls-tree', '-r', '-z', '--name-only', ref, '--', `:(literal)${filePath}`])
+      .split('\0')
+      .includes(filePath)
+  if (refs.includes(`refs/remotes/${remoteRef}`) && fileExistsAt(remoteRef)) {
+    git(repoPath, ['checkout', remoteRef, '--', `:(literal)${filePath}`])
+    return 'remote'
   }
-  if (remoteRefExists) {
-    try {
-      git(repoPath, ['cat-file', '-e', `${remoteRef}:${filePath}`])
-      git(repoPath, ['checkout', remoteRef, '--', filePath])
-      return 'remote'
-    } catch {
-      // File doesn't exist at origin/<branch> (added locally) — fall through.
-    }
-  }
-  try {
-    git(repoPath, ['cat-file', '-e', `HEAD:${filePath}`])
-    git(repoPath, ['checkout', 'HEAD', '--', filePath])
+  if (fileExistsAt('HEAD')) {
+    git(repoPath, ['checkout', 'HEAD', '--', `:(literal)${filePath}`])
     return 'head'
-  } catch {
-    // File is untracked OR has already been rolled back — delete it from
-    // disk if still present. Idempotent: if the file is already gone (race
-    // with a previous rollback, stale UI list, manual rm), we still return
-    // 'deleted' since the end state matches the user's intent. `rmSync`
-    // over `git clean -f` keeps the action narrow to one file.
-    if (existsSync(absPath)) {
-      rmSync(absPath, { force: true })
-    }
-    return 'deleted'
   }
+  if (existsSync(absPath)) rmSync(absPath, { force: true })
+  return 'deleted'
 }
 
 /** @deprecated kept for backwards-compat with older imports — use `rollbackFile`. */
@@ -1300,7 +1272,7 @@ export interface WorkingTreeStatus {
 /** Parse `git status --porcelain` into counts of staged, modified, and untracked files. */
 export function getWorkingTreeStatus(repoPath: string): WorkingTreeStatus {
   try {
-    return parseWorkingTreeStatus(git(repoPath, ['status', '--porcelain']))
+    return parseWorkingTreeStatus(git(repoPath, ['status', '--porcelain', '-z']))
   } catch {
     return { staged: 0, modified: 0, untracked: 0 }
   }
@@ -1310,10 +1282,7 @@ function parseWorkingTreeStatus(output: string): WorkingTreeStatus {
   let staged = 0
   let modified = 0
   let untracked = 0
-  for (const line of output.split('\n')) {
-    if (!line) continue
-    const x = line[0]
-    const y = line[1]
+  for (const { x, y } of parsePorcelain(output)) {
     if (x === '?' && y === '?') {
       untracked++
     } else {
@@ -1339,15 +1308,9 @@ export interface WorkingTreeFile {
  */
 export function getWorkingTreeFiles(repoPath: string): WorkingTreeFile[] {
   try {
-    const output = git(repoPath, ['status', '--porcelain'])
+    const output = git(repoPath, ['status', '--porcelain', '-z'])
     const files: WorkingTreeFile[] = []
-    for (const line of output.split('\n')) {
-      if (!line) continue
-      const x = line[0]
-      const y = line[1]
-      let filePath = line.slice(3)
-      const arrowIdx = filePath.indexOf(' -> ')
-      if (arrowIdx !== -1) filePath = filePath.slice(arrowIdx + 4)
+    for (const { path: filePath, x, y } of parsePorcelain(output)) {
       const untracked = x === '?' && y === '?'
       files.push({
         path: filePath,
@@ -1527,7 +1490,7 @@ export async function getStructuredDiffStatsBetweenAsync(
 /** Non-blocking working-tree summary for request and polling hot paths. */
 export async function getWorkingTreeStatusAsync(repoPath: string): Promise<WorkingTreeStatus> {
   try {
-    return parseWorkingTreeStatus(await gitAsync(repoPath, ['status', '--porcelain']))
+    return parseWorkingTreeStatus(await gitAsync(repoPath, ['status', '--porcelain', '-z']))
   } catch {
     return { staged: 0, modified: 0, untracked: 0 }
   }

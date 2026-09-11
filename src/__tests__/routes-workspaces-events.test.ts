@@ -3,8 +3,9 @@ import os from 'node:os'
 import path from 'node:path'
 import Database from 'better-sqlite3'
 import { nanoid } from 'nanoid'
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { initSchema } from '../server/db/schema.js'
+import { getSearchIndexStatus, startSearchIndex, stopSearchIndex } from '../server/services/search-service.js'
 
 // Real DB, real route — this endpoint (GET /:id/events) reads ws_events
 // directly via getDb() and doesn't go through workspace-service, so we
@@ -62,6 +63,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   const { closeDb } = await import('../server/db/index.js')
+  await stopSearchIndex()
   closeDb()
   if (tmpDir && fs.existsSync(tmpDir)) {
     fs.rmSync(tmpDir, { recursive: true, force: true })
@@ -72,6 +74,53 @@ async function getApp() {
   const mod = await import('../server/routes/workspaces.js')
   return mod.default
 }
+
+it.each(['global', 'workspace'])(
+  'opens the matched passage of a long streamed response from %s search',
+  async (scope) => {
+    const { getDb } = await import('../server/db/index.js')
+    const db = getDb()
+    const insert = db.prepare(
+      "INSERT INTO ws_events(id,workspace_id,session_id,type,payload,created_at) VALUES (?,?,?,'agent:event',?,?)",
+    )
+    db.transaction(() => {
+      for (let i = 0; i < 1000; i++) {
+        insert.run(
+          `event-${i}`,
+          workspaceId,
+          'long-session',
+          JSON.stringify({
+            kind: 'message:text',
+            messageId: 'long-response',
+            streaming: true,
+            text: i === 900 ? 'authenti' : i === 901 ? 'cation' : 'filler ',
+          }),
+          '2026-09-11T00:00:00.000Z',
+        )
+      }
+    })()
+    startSearchIndex()
+    await vi.waitFor(() => expect(getSearchIndexStatus().state).toBe('ready'))
+    const app = await getApp()
+    const response =
+      scope === 'workspace'
+        ? await app.request(`/${workspaceId}/history-search?q=authentication`)
+        : await (await import('../server/routes/search.js')).default.request('/?q=authentication')
+    expect(response.status).toBe(200)
+    const body = await response.json()
+    const results = scope === 'workspace' ? body.results : body
+    expect(results).toHaveLength(1)
+    expect(results[0].snippet).toContain('authentication')
+    const windowResponse = await app.request(
+      `/${workspaceId}/events?around=${results[0].eventId}&session=${results[0].sessionId}&limit=200`,
+    )
+    expect(windowResponse.status).toBe(200)
+    const window = await windowResponse.json()
+    expect(window.events.map((event: { id: string }) => event.id)).toEqual(
+      expect.arrayContaining(['event-900', 'event-901']),
+    )
+  },
+)
 
 describe('GET /:id/events — around cursor hasMore', () => {
   it('returns hasMore: true for an "around" window without a session filter when older events exist', async () => {

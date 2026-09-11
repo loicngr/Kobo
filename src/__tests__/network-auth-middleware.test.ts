@@ -15,6 +15,7 @@ import { getGlobalSettings } from '../server/services/settings-service.js'
 const app = new Hono()
 app.use('/api/*', networkAuthMiddleware)
 app.get('/api/ping', (c) => c.json({ ok: true }))
+app.post('/api/mcp', (c) => c.json({ ok: true }))
 app.get('/api/health', (c) => c.json({ status: 'ok' }))
 
 function setup(address: string | undefined, enabled: boolean, token: string, behindProxy = false) {
@@ -29,6 +30,16 @@ function setup(address: string | undefined, enabled: boolean, token: string, beh
 beforeEach(() => vi.clearAllMocks())
 
 describe('networkAuthMiddleware', () => {
+  it('accepts the configured token as Bearer on the MCP endpoint only', async () => {
+    setup('192.168.1.5', true, 'secret')
+    expect(
+      (await app.request('/api/mcp', { method: 'POST', headers: { Authorization: 'Bearer secret' } })).status,
+    ).toBe(200)
+    expect((await app.request('/api/mcp', { method: 'POST', headers: { Authorization: 'Bearer wrong' } })).status).toBe(
+      401,
+    )
+    expect((await app.request('/api/ping', { headers: { Authorization: 'Bearer secret' } })).status).toBe(401)
+  })
   it('allows loopback without a token', async () => {
     setup('127.0.0.1', true, 'secret')
     const res = await app.request('/api/ping')

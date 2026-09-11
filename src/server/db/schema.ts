@@ -1,4 +1,6 @@
 import type Database from 'better-sqlite3'
+import { initMcpMessageSchema } from './mcp-message-schema.js'
+import { initSearchSchema } from './search-schema.js'
 
 /** Create all tables and indexes for a fresh install. Not used for upgrades -- see migrations.ts. */
 export function initSchema(db: Database.Database): void {
@@ -223,4 +225,6 @@ export function initSchema(db: Database.Database): void {
     CREATE INDEX IF NOT EXISTS idx_session_event_metrics_session
       ON session_event_metrics(session_id);
   `)
+  initSearchSchema(db)
+  initMcpMessageSchema(db)
 }

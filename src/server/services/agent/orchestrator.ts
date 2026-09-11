@@ -1,5 +1,6 @@
 import { readFileSync, writeFileSync } from 'node:fs'
 import { nanoid } from 'nanoid'
+import type { MessageSource } from '../../../shared/workspace-message-types.js'
 import { getDb } from '../../db/index.js'
 import { assertAgentStopped, type StopAgentOutcome } from '../../utils/agent-stop-result.js'
 import {
@@ -864,6 +865,22 @@ export function forgetResumeFailed(workspaceId: string): void {
   resumeFailedSessions.delete(workspaceId)
 }
 
+/** Public reconnect snapshot: select DTO fields and detach nested JSON inputs. */
+export function getPendingInputs(workspaceId: string): PendingItem[] {
+  return (pendingQueue.get(workspaceId) ?? []).map((item) => {
+    const identity = {
+      agentSessionId: item.agentSessionId,
+      toolCallId: item.toolCallId,
+      toolName: item.toolName,
+    }
+    // Engine tool inputs are JSON. Serialization also strips accidental callbacks.
+    const input = JSON.parse(JSON.stringify((item.kind === 'question' ? item.input : item.toolInput) ?? null))
+    return item.kind === 'question'
+      ? { kind: 'question', ...identity, input }
+      : { kind: 'permission', ...identity, toolInput: input }
+  })
+}
+
 /** Drop the pending question/permission queue for a workspace (called on delete). */
 export function forgetPendingQueue(workspaceId: string): void {
   pendingQueue.delete(workspaceId)
@@ -1373,6 +1390,7 @@ export function startAgent(
   agentPermissionMode?: 'plan' | 'bypass' | 'strict' | 'interactive',
   existingSessionId?: string,
   reasoningEffort?: string,
+  beforeDispatch?: () => void,
 ): StartAgentResult {
   if (shuttingDown) throw new Error('Cannot start an agent while the server is shutting down')
   assertWorkspaceLifecycleAvailable(workspaceId)
@@ -1473,6 +1491,7 @@ export function startAgent(
     env: ws ? buildAgentEnv(ws.projectPath) : undefined,
   }
 
+  beforeDispatch?.()
   let controller: SessionController
   controller = new SessionController(workspaceId, agentSessionId, engine, (ev) =>
     handleEvent(workspaceId, agentSessionId, controller, ev),
@@ -1751,7 +1770,12 @@ export function sendWakeupIfWaiting(workspaceId: string, content: string, expect
 }
 
 /** Write a user message to the running agent. */
-export async function sendMessage(workspaceId: string, content: string, expectedSessionId?: string): Promise<void> {
+export async function sendMessage(
+  workspaceId: string,
+  content: string,
+  expectedSessionId?: string,
+  beforeDispatch?: () => void,
+): Promise<void> {
   assertWorkspaceNotCompacting(workspaceId)
   const ctrl = controllers.get(workspaceId)
   if (!ctrl) {
@@ -1761,6 +1785,7 @@ export async function sendMessage(workspaceId: string, content: string, expected
     throw new Error(`Session '${expectedSessionId}' is not active for workspace '${workspaceId}'`)
   }
   wakeupService.cancel(workspaceId, 'user-message')
+  beforeDispatch?.()
   await ctrl.sendMessage(content)
 }
 
@@ -1866,7 +1891,7 @@ export async function answerPendingQuestion(
   workspaceId: string,
   answers: Record<string, string>,
   expectedToolCallId?: string,
-  opts?: { awaitingFreeForm?: boolean; response?: string },
+  opts?: { awaitingFreeForm?: boolean; response?: string; source?: MessageSource },
 ): Promise<void> {
   const head = peekPending(workspaceId)
   if (!head) {
@@ -1944,7 +1969,12 @@ export async function answerPendingQuestion(
   try {
     const formatted = formatDeferredAnswerForChat(questions, answers)
     if (formatted) {
-      emit(workspaceId, 'user:message', { content: formatted, sender: 'user' }, head.agentSessionId)
+      emit(
+        workspaceId,
+        'user:message',
+        { content: formatted, sender: 'user', ...(opts?.source ? { source: opts.source } : {}) },
+        head.agentSessionId,
+      )
     }
   } catch (err) {
     console.error('[orchestrator] Failed to emit user:message for question answer:', err)

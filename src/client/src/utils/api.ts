@@ -82,6 +82,7 @@ export async function apiFetch<T = unknown>(path: string, options: ApiOptions = 
   // uniformly present across the browsers Kōbō is opened in from a phone, and
   // the manual version is what lets us tell a deadline apart from a caller
   // abort in the catch below.
+  if (signal?.aborted) throw signal.reason ?? new DOMException('Aborted', 'AbortError')
   const controller = new AbortController()
   let timedOut = false
   const timer =
@@ -94,54 +95,52 @@ export async function apiFetch<T = unknown>(path: string, options: ApiOptions = 
   const onCallerAbort = () => controller.abort()
   signal?.addEventListener('abort', onCallerAbort)
 
-  const init: RequestInit = { ...rest, signal: controller.signal }
-  if (body !== undefined) {
-    if (typeof body === 'string' || body instanceof FormData || body instanceof Blob) {
-      init.body = body as BodyInit
-      if (headers) init.headers = headers
-    } else {
-      init.body = JSON.stringify(body)
-      init.headers = { 'Content-Type': 'application/json', ...((headers as Record<string, string>) ?? {}) }
-    }
-  } else if (headers) {
-    init.headers = headers
-  }
-
-  let res: Response
   try {
-    res = await fetch(path, init)
+    const init: RequestInit = { ...rest, signal: controller.signal }
+    if (body !== undefined) {
+      if (typeof body === 'string' || body instanceof FormData || body instanceof Blob) {
+        init.body = body as BodyInit
+        if (headers) init.headers = headers
+      } else {
+        init.body = JSON.stringify(body)
+        init.headers = { 'Content-Type': 'application/json', ...((headers as Record<string, string>) ?? {}) }
+      }
+    } else if (headers) {
+      init.headers = headers
+    }
+
+    const res = await fetch(path, init)
+    if (!res.ok) {
+      const raw = await res.text()
+      const { message, code } = extractError(raw, res.status)
+      throw new ApiError(message, res.status, code, raw)
+    }
+
+    // No body to parse: 204 by convention, or a 2xx with an empty payload.
+    // See the type-honesty note above — the caller's `T` is not honored here.
+    if (res.status === 204) return undefined as T
+    const text = await res.text()
+    if (text.length === 0) return undefined as T
+
+    try {
+      return JSON.parse(text) as T
+    } catch (err) {
+      // A 2xx response whose body isn't valid JSON is still a failure the
+      // caller needs to handle — wrap it in ApiError so every failure path
+      // (HTTP error, timeout, bad body) is catchable the same way.
+      const reason = err instanceof Error ? err.message : String(err)
+      throw new ApiError(
+        `Server returned a non-JSON body for a successful response: ${reason}`,
+        res.status,
+        undefined,
+        text,
+      )
+    }
   } catch (err) {
     if (timedOut) throw new ApiTimeoutError(timeoutMs)
     throw err
   } finally {
     if (timer !== null) clearTimeout(timer)
     signal?.removeEventListener('abort', onCallerAbort)
-  }
-
-  if (!res.ok) {
-    const raw = await res.text().catch(() => '')
-    const { message, code } = extractError(raw, res.status)
-    throw new ApiError(message, res.status, code, raw)
-  }
-
-  // No body to parse: 204 by convention, or a 2xx with an empty payload.
-  // See the type-honesty note above — the caller's `T` is not honored here.
-  if (res.status === 204) return undefined as T
-  const text = await res.text()
-  if (text.length === 0) return undefined as T
-
-  try {
-    return JSON.parse(text) as T
-  } catch (err) {
-    // A 2xx response whose body isn't valid JSON is still a failure the
-    // caller needs to handle — wrap it in ApiError so every failure path
-    // (HTTP error, timeout, bad body) is catchable the same way.
-    const reason = err instanceof Error ? err.message : String(err)
-    throw new ApiError(
-      `Server returned a non-JSON body for a successful response: ${reason}`,
-      res.status,
-      undefined,
-      text,
-    )
   }
 }

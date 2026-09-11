@@ -49,7 +49,7 @@ app.get('/files', (c) => {
 
 // GET /api/git/orphan-worktrees?projectPath=<path> — list worktrees of a
 // project that are NOT attached to any Kōbō workspace yet.
-app.get('/orphan-worktrees', (c) => {
+app.get('/orphan-worktrees', async (c) => {
   try {
     const projectPath = c.req.query('projectPath')
     if (!projectPath) {
@@ -62,7 +62,7 @@ app.get('/orphan-worktrees', (c) => {
     }>
     const attachedPaths = new Set(rows.map((r) => r.worktree_path).filter((p): p is string => !!p))
 
-    const orphans = listOrphanWorktrees(projectPath, attachedPaths)
+    const orphans = await listOrphanWorktrees(projectPath, attachedPaths)
     return c.json(orphans)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)

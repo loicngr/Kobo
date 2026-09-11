@@ -19,6 +19,7 @@ export interface PendingCron {
   lastFiredAt: string | null
   oneShot: boolean
   createdAt: string
+  validationError?: string
 }
 
 interface PendingCronRow {
@@ -91,6 +92,20 @@ function rowToCron(row: PendingCronRow): PendingCron {
     lastFiredAt: row.last_fired_at,
     oneShot: row.one_shot === 1,
     createdAt: row.created_at,
+    ...(expressionError(row.expression) ? { validationError: expressionError(row.expression)! } : {}),
+  }
+}
+
+function expressionError(expression: string): string | null {
+  const trimmed = expression.trim()
+  if (!['@hourly', '@daily', '@weekly', '@monthly', '@yearly'].includes(trimmed) && trimmed.split(/\s+/).length !== 5) {
+    return `Invalid cron expression: ${expression} — expected five fields or a supported alias`
+  }
+  try {
+    CronExpressionParser.parse(trimmed)
+    return null
+  } catch (err) {
+    return `Invalid cron expression: ${expression} — ${err instanceof Error ? err.message : String(err)}`
   }
 }
 
@@ -101,6 +116,8 @@ function rowToCron(row: PendingCronRow): PendingCron {
  * `@monthly` / `@yearly` are accepted natively.
  */
 function nextAfter(expression: string, from: Date): Date {
+  const validationError = expressionError(expression)
+  if (validationError) throw new Error(validationError)
   try {
     const it = CronExpressionParser.parse(expression, { currentDate: from })
     return it.next().toDate()
@@ -226,6 +243,7 @@ function fireOrSkip(id: string): void {
     const db = getDb()
     const row = db.prepare('SELECT * FROM pending_crons WHERE id = ?').get(id) as PendingCronRow | undefined
     if (!row) return // cancelled in flight
+    if (expressionError(row.expression)) return // Retain invalid legacy intent without executing it.
 
     const wsRow = db
       .prepare(
@@ -297,6 +315,9 @@ function fireOrSkip(id: string): void {
     const now = new Date()
     let nextFire: Date
     try {
+      // Valid five-field schedules have at most one occurrence per minute.
+      // Skip missed slots from now, without adding a minute of timer jitter
+      // that would discard the next scheduled occurrence too.
       nextFire = nextAfter(row.expression, now)
     } catch (err) {
       // Defensive — the expression validated at create time, so reaching here
@@ -304,7 +325,6 @@ function fireOrSkip(id: string): void {
       // arm and this fire. Cancel as 'completed' (the cron self-terminates)
       // rather than 'user' which would imply the user requested it.
       console.error(`[cron-service] failed to recompute next fire for cron '${id}':`, err)
-      cancel(id, 'completed')
       return
     }
 
@@ -373,6 +393,11 @@ export function restoreOnBoot(): void {
           continue
         }
 
+        const validationError = expressionError(row.expression)
+        if (validationError) {
+          console.warn(`[cron-service] ${validationError}; cron ${row.id} remains inactive`)
+          continue
+        }
         const storedDate = new Date(row.next_fire_at)
         let nextFireAt: string
         if (storedDate.getTime() <= now.getTime()) {

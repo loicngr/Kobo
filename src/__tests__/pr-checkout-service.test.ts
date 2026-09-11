@@ -16,39 +16,39 @@ describe('diagnoseLocalState', () => {
   })
   afterEach(() => repo.cleanup())
 
-  it('reports an absent branch when nothing local matches', () => {
-    const report = diagnoseLocalState(repo.path, 'feat/new', null)
+  it('reports an absent branch when nothing local matches', async () => {
+    const report = await diagnoseLocalState(repo.path, 'feat/new', null)
     expect(report.branch).toEqual({ state: 'absent' })
     expect(report.worktree).toEqual({ state: 'none' })
     expect(report.localChanges.present).toBe(false)
   })
 
-  it('reports in-sync when the local branch matches origin', () => {
+  it('reports in-sync when the local branch matches origin', async () => {
     repo.git(['checkout', '-b', 'feat/x'])
     repo.commit('a.txt', 'a\n', 'feat: a')
     repo.git(['push', '-u', 'origin', 'feat/x'])
-    expect(diagnoseLocalState(repo.path, 'feat/x', null).branch).toEqual({ state: 'in-sync' })
+    expect((await diagnoseLocalState(repo.path, 'feat/x', null)).branch).toEqual({ state: 'in-sync' })
   })
 
-  it('reports how far behind the local branch is', () => {
+  it('reports how far behind the local branch is', async () => {
     repo.git(['checkout', '-b', 'feat/y'])
     repo.commit('b.txt', 'b\n', 'feat: b')
     repo.git(['push', '-u', 'origin', 'feat/y'])
     repo.commit('c.txt', 'c\n', 'feat: c')
     repo.git(['push', 'origin', 'feat/y'])
     repo.git(['reset', '--hard', 'HEAD~1'])
-    expect(diagnoseLocalState(repo.path, 'feat/y', null).branch).toEqual({ state: 'behind', behind: 1 })
+    expect((await diagnoseLocalState(repo.path, 'feat/y', null)).branch).toEqual({ state: 'behind', behind: 1 })
   })
 
-  it('reports unpushed commits as ahead', () => {
+  it('reports unpushed commits as ahead', async () => {
     repo.git(['checkout', '-b', 'feat/z'])
     repo.commit('d.txt', 'd\n', 'feat: d')
     repo.git(['push', '-u', 'origin', 'feat/z'])
     repo.commit('e.txt', 'e\n', 'feat: e')
-    expect(diagnoseLocalState(repo.path, 'feat/z', null).branch).toEqual({ state: 'ahead', ahead: 1 })
+    expect((await diagnoseLocalState(repo.path, 'feat/z', null)).branch).toEqual({ state: 'ahead', ahead: 1 })
   })
 
-  it('reports a divergence with both counts', () => {
+  it('reports a divergence with both counts', async () => {
     repo.git(['checkout', '-b', 'feat/w'])
     repo.commit('f.txt', 'f\n', 'feat: f')
     repo.git(['push', '-u', 'origin', 'feat/w'])
@@ -56,22 +56,22 @@ describe('diagnoseLocalState', () => {
     repo.git(['push', 'origin', 'feat/w'])
     repo.git(['reset', '--hard', 'HEAD~1'])
     repo.commit('h.txt', 'h\n', 'feat: h')
-    expect(diagnoseLocalState(repo.path, 'feat/w', null).branch).toEqual({
+    expect((await diagnoseLocalState(repo.path, 'feat/w', null)).branch).toEqual({
       state: 'diverged',
       ahead: 1,
       behind: 1,
     })
   })
 
-  it('flags a target path already occupied by a non-worktree directory', () => {
+  it('flags a target path already occupied by a non-worktree directory', async () => {
     const busy = resolveWorkspaceWorktreePath(repo.path, 'feat/busy', null)
     fs.mkdirSync(busy, { recursive: true })
     fs.writeFileSync(path.join(busy, 'stray.txt'), 'x')
-    const report = diagnoseLocalState(repo.path, 'feat/busy', null)
+    const report = await diagnoseLocalState(repo.path, 'feat/busy', null)
     expect(report.blockers.some((b) => b.kind === 'path-occupied')).toBe(true)
   })
 
-  it('detects an ongoing operation and a dirty tree in an existing worktree', () => {
+  it('detects an ongoing operation and a dirty tree in an existing worktree', async () => {
     repo.git(['checkout', '-b', 'feat/dirty'])
     repo.commit('i.txt', 'i\n', 'feat: i')
     repo.git(['push', '-u', 'origin', 'feat/dirty'])
@@ -80,21 +80,21 @@ describe('diagnoseLocalState', () => {
     repo.git(['worktree', 'add', wt, 'feat/dirty'])
     fs.writeFileSync(path.join(wt, 'i.txt'), 'changed\n')
     fs.writeFileSync(path.join(wt, 'new.txt'), 'new\n')
-    const report = diagnoseLocalState(repo.path, 'feat/dirty', null)
+    const report = await diagnoseLocalState(repo.path, 'feat/dirty', null)
     expect(report.worktree.state).toBe('orphan')
     expect(report.localChanges).toMatchObject({ present: true, modified: 1, untracked: 1 })
     expect(report.ongoingOperation).toBeNull()
   })
 
-  it('does not flag no-common-ancestor for an ordinary unpushed local branch', () => {
+  it('does not flag no-common-ancestor for an ordinary unpushed local branch', async () => {
     repo.git(['checkout', '-b', 'feat/local-only'])
     repo.commit('j.txt', 'j\n', 'feat: j')
-    const report = diagnoseLocalState(repo.path, 'feat/local-only', null)
+    const report = await diagnoseLocalState(repo.path, 'feat/local-only', null)
     expect(report.branch).toEqual({ state: 'in-sync' })
     expect(report.blockers.some((b) => b.kind === 'no-common-ancestor')).toBe(false)
   })
 
-  it('still flags a genuine no-common-ancestor collision', () => {
+  it('still flags a genuine no-common-ancestor collision', async () => {
     // Push an orphan-history branch to origin under the target name.
     repo.git(['checkout', '--orphan', 'feat/collision'])
     repo.git(['reset', '--hard'])
@@ -105,7 +105,7 @@ describe('diagnoseLocalState', () => {
     repo.git(['branch', '-D', 'feat/collision'])
     repo.git(['checkout', '-b', 'feat/collision'])
     repo.commit('local.txt', 'y\n', 'feat: local history')
-    const report = diagnoseLocalState(repo.path, 'feat/collision', null)
+    const report = await diagnoseLocalState(repo.path, 'feat/collision', null)
     expect(report.blockers.some((b) => b.kind === 'no-common-ancestor')).toBe(true)
   })
 })
@@ -120,11 +120,11 @@ describe('resolveWorkspaceState', () => {
     worktreePurgedAt: null,
   }
 
-  it('reports none when no workspace tracks the branch', () => {
+  it('reports none when no workspace tracks the branch', async () => {
     expect(resolveWorkspaceState([], 'fix/login', '/repo')).toEqual({ state: 'none' })
   })
 
-  it('reports an active workspace', () => {
+  it('reports an active workspace', async () => {
     expect(resolveWorkspaceState([base], 'fix/login', '/repo')).toEqual({
       state: 'active',
       id: 'w1',
@@ -132,7 +132,7 @@ describe('resolveWorkspaceState', () => {
     })
   })
 
-  it('reports an archived workspace', () => {
+  it('reports an archived workspace', async () => {
     const archived = { ...base, archivedAt: '2026-08-01T00:00:00Z' }
     expect(resolveWorkspaceState([archived], 'fix/login', '/repo')).toEqual({
       state: 'archived',
@@ -141,7 +141,7 @@ describe('resolveWorkspaceState', () => {
     })
   })
 
-  it('reports a purged worktree ahead of the archived flag', () => {
+  it('reports a purged worktree ahead of the archived flag', async () => {
     const purged = { ...base, archivedAt: '2026-08-01T00:00:00Z', worktreePurgedAt: '2026-08-02T00:00:00Z' }
     expect(resolveWorkspaceState([purged], 'fix/login', '/repo')).toEqual({
       state: 'purged',
@@ -159,21 +159,21 @@ describe('computeFingerprint', () => {
   afterEach(() => repo.cleanup())
 
   it('is stable across two diagnoses of an unchanged repository', async () => {
-    const a = diagnoseLocalState(repo.path, 'feat/fp', null)
-    const b = diagnoseLocalState(repo.path, 'feat/fp', null)
+    const a = await diagnoseLocalState(repo.path, 'feat/fp', null)
+    const b = await diagnoseLocalState(repo.path, 'feat/fp', null)
     expect(await computeFingerprint(a)).toBe(await computeFingerprint(b))
   })
 
   it('changes when the branch advances', async () => {
     repo.git(['checkout', '-b', 'feat/fp'])
     repo.commit('a.txt', 'a\n', 'feat: a')
-    const before = await computeFingerprint(diagnoseLocalState(repo.path, 'feat/fp', null))
+    const before = await computeFingerprint(await diagnoseLocalState(repo.path, 'feat/fp', null))
     repo.commit('b.txt', 'b\n', 'feat: b')
-    expect(await computeFingerprint(diagnoseLocalState(repo.path, 'feat/fp', null))).not.toBe(before)
+    expect(await computeFingerprint(await diagnoseLocalState(repo.path, 'feat/fp', null))).not.toBe(before)
   })
 
   it('changes when the tracked workspace state changes', async () => {
-    const withoutWorkspace = diagnoseLocalState(repo.path, 'feat/fp2', null)
+    const withoutWorkspace = await diagnoseLocalState(repo.path, 'feat/fp2', null)
     const before = await computeFingerprint(withoutWorkspace)
     const active = {
       projectPath: repo.path,
@@ -183,7 +183,7 @@ describe('computeFingerprint', () => {
       archivedAt: null,
       worktreePurgedAt: null,
     }
-    const withWorkspace = diagnoseLocalState(repo.path, 'feat/fp2', null, new Map(), [active])
+    const withWorkspace = await diagnoseLocalState(repo.path, 'feat/fp2', null, new Map(), [active])
     expect(await computeFingerprint(withWorkspace)).not.toBe(before)
   })
 })

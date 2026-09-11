@@ -397,7 +397,7 @@ describe('changeSourceBranch', () => {
   it('runs the custom script when changeSourceBranchScript is set and updates metadata on exit 0', async () => {
     g(repo, ['checkout', '-q', '-b', 'feature'])
     getEffectiveSettingsMock.mockReturnValue({ changeSourceBranchScript: 'echo running' })
-    spawnMock.mockReturnValue(fakeChildProcess(0))
+    spawnMock.mockImplementation(() => fakeChildProcess(0))
     getWorkspaceMock.mockReturnValue({
       id: 'w1',
       name: 'Refactor auth',
@@ -439,7 +439,7 @@ describe('changeSourceBranch', () => {
   it('spawns the custom script detached so a background child does not outlive the timeout kill', async () => {
     g(repo, ['checkout', '-q', '-b', 'feature'])
     getEffectiveSettingsMock.mockReturnValue({ changeSourceBranchScript: 'echo running' })
-    spawnMock.mockReturnValue(fakeChildProcess(0))
+    spawnMock.mockImplementation(() => fakeChildProcess(0))
     getWorkspaceMock.mockReturnValue({
       id: 'w1',
       name: 'Refactor auth',
@@ -474,7 +474,7 @@ describe('changeSourceBranch', () => {
       pending.catch(() => {}) // settled below once the child "exits"
 
       // Flush the PR-lookup microtask hop that precedes spawn().
-      await flushMicrotasks()
+      await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1))
       expect(spawnMock).toHaveBeenCalledTimes(1)
       expect(killSpy).not.toHaveBeenCalled()
 
@@ -485,7 +485,8 @@ describe('changeSourceBranch', () => {
 
       // Let the child exit so the pending promise settles and nothing leaks.
       child.emit('exit', 0, null)
-      await pending
+      child.emit('close', 0, null)
+      await expect(pending).rejects.toThrow('timed out')
     } finally {
       vi.useRealTimers()
     }
@@ -511,16 +512,18 @@ describe('changeSourceBranch', () => {
 
       // Flush the PR-lookup microtask hop that precedes spawn(), then exit
       // normally well before the watchdog would ever fire.
-      await flushMicrotasks()
+      await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1))
       expect(spawnMock).toHaveBeenCalledTimes(1)
       child.emit('exit', 0, null)
+      child.emit('close', 0, null)
       await pending
 
       // Advance past the full timeout window — clearTimeout should have
       // cancelled the watchdog, so process.kill must never fire.
       await vi.advanceTimersByTimeAsync(SCRIPT_TIMEOUT_MS)
 
-      expect(killSpy).not.toHaveBeenCalled()
+      expect(killSpy).not.toHaveBeenCalledWith(-4242, 'SIGTERM')
+      expect(killSpy).not.toHaveBeenCalledWith(-4242, 'SIGKILL')
     } finally {
       vi.useRealTimers()
     }
@@ -529,7 +532,7 @@ describe('changeSourceBranch', () => {
   it('exposes KOBO_PR_NUMBER when the forge reports an open PR for the working branch', async () => {
     g(repo, ['checkout', '-q', '-b', 'feature'])
     getEffectiveSettingsMock.mockReturnValue({ changeSourceBranchScript: 'echo running' })
-    spawnMock.mockReturnValue(fakeChildProcess(0))
+    spawnMock.mockImplementation(() => fakeChildProcess(0))
     getPrStatusMock.mockResolvedValueOnce({ number: 42, url: 'https://example.com/pr/42', state: 'OPEN' })
     getWorkspaceMock.mockReturnValue({
       id: 'w1',
@@ -549,7 +552,7 @@ describe('changeSourceBranch', () => {
   it('keeps KOBO_PR_NUMBER empty when the PR lookup throws (offline / missing CLI)', async () => {
     g(repo, ['checkout', '-q', '-b', 'feature'])
     getEffectiveSettingsMock.mockReturnValue({ changeSourceBranchScript: 'echo running' })
-    spawnMock.mockReturnValue(fakeChildProcess(0))
+    spawnMock.mockImplementation(() => fakeChildProcess(0))
     getPrStatusMock.mockRejectedValueOnce(new Error('gh: command not found'))
     getWorkspaceMock.mockReturnValue({
       id: 'w1',
@@ -569,7 +572,7 @@ describe('changeSourceBranch', () => {
   it('throws the script stderr on a non-zero exit and does not update metadata', async () => {
     g(repo, ['checkout', '-q', '-b', 'feature'])
     getEffectiveSettingsMock.mockReturnValue({ changeSourceBranchScript: 'exit 1' })
-    spawnMock.mockReturnValue(fakeChildProcess(1, 'something failed\n'))
+    spawnMock.mockImplementation(() => fakeChildProcess(1, 'something failed\n'))
     getWorkspaceMock.mockReturnValue({
       id: 'w1',
       sourceBranch: 'main',
@@ -705,9 +708,9 @@ describe('changeSourceBranch', () => {
 
     // Occupy the repository lock so the change is queued behind it, exactly
     // like a concurrent PR-watcher fetch would.
-    let release: () => void = () => {}
+    let release: (() => void) | undefined
     const holder = withGitRepoLock(repo, () => new Promise<void>((resolve) => (release = resolve)))
-    await flushMicrotasks()
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
 
     const pending = changeSourceBranch('w1', 'develop')
     await flushMicrotasks()
@@ -715,7 +718,7 @@ describe('changeSourceBranch', () => {
     // The lock only appears WHILE we are queued: a guard evaluated at request
     // time cannot see it, one evaluated after acquisition must.
     writeFileSync(join(repo, '.git', 'index.lock'), '')
-    release()
+    release!()
     await holder
 
     await expect(pending).rejects.toThrow(/index of this worktree is locked/)
@@ -735,4 +738,66 @@ it('rejects the wrong checkout before running a custom script', async () => {
   await expect(changeSourceBranch('w1', 'develop')).rejects.toThrow(/Expected.*feature/)
   expect(spawnMock).not.toHaveBeenCalled()
   expect(updateSourceMock).not.toHaveBeenCalled()
+})
+
+it('drains script stdout so a verbose successful script cannot block on its pipe', async () => {
+  const actual = await vi.importActual<typeof import('node:child_process')>('node:child_process')
+  let child: import('node:child_process').ChildProcess | undefined
+  spawnMock.mockImplementation((...args: Parameters<typeof actual.spawn>) => {
+    child = actual.spawn(...args)
+    return child
+  })
+  g(repo, ['checkout', '-q', '-b', 'feature'])
+  getEffectiveSettingsMock.mockReturnValue({ changeSourceBranchScript: 'head -c 2097152 /dev/zero' })
+  getWorkspaceMock.mockReturnValue({
+    id: 'verbose',
+    sourceBranch: 'main',
+    workingBranch: 'feature',
+    worktreePath: repo,
+    projectPath: repo,
+  })
+  const pending = changeSourceBranch('verbose', 'develop')
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const result = await Promise.race([
+      pending,
+      new Promise((resolve) => {
+        timer = setTimeout(() => resolve('blocked'), 1500)
+      }),
+    ])
+    expect(result).toMatchObject({ status: 'done' })
+  } finally {
+    clearTimeout(timer)
+    if (child?.pid && child.exitCode === null) process.kill(-child.pid, 'SIGKILL')
+    await pending.catch(() => {})
+  }
+})
+
+it('escalates a timed-out script to SIGKILL before releasing its operation', async () => {
+  vi.useFakeTimers()
+  g(repo, ['checkout', '-q', '-b', 'feature'])
+  getEffectiveSettingsMock.mockReturnValue({ changeSourceBranchScript: 'trap "" TERM; sleep 999' })
+  const child = fakePendingChildProcess(4242)
+  spawnMock.mockReturnValue(child)
+  getWorkspaceMock.mockReturnValue({
+    id: 'escalation',
+    sourceBranch: 'main',
+    workingBranch: 'feature',
+    worktreePath: repo,
+    projectPath: repo,
+  })
+  const killSpy = vi.spyOn(process, 'kill').mockImplementation(() => true)
+  const pending = changeSourceBranch('escalation', 'develop')
+  pending.catch(() => {})
+  try {
+    await vi.waitFor(() => expect(spawnMock).toHaveBeenCalledTimes(1))
+    await vi.advanceTimersByTimeAsync(SCRIPT_TIMEOUT_MS + 5000)
+    expect(killSpy).toHaveBeenCalledWith(-4242, 'SIGKILL')
+  } finally {
+    child.emit('exit', null, 'SIGKILL')
+    child.emit('close', null, 'SIGKILL')
+    await pending.catch(() => {})
+    vi.restoreAllMocks()
+    vi.useRealTimers()
+  }
 })

@@ -605,9 +605,17 @@ describe('MCP tasks server handlers', () => {
       fs.mkdirSync(worktreePath, { recursive: true })
     })
 
+    it('preserves repeated thoughts with the same title and tag', () => {
+      const first = logThoughtHandler(worktreePath, { title: 'Note', content: 'first', tag: 'arch' })
+      const second = logThoughtHandler(worktreePath, { title: 'Note', content: 'second', tag: 'arch' })
+      expect(second.path).not.toBe(first.path)
+      expect(fs.readFileSync(path.join(worktreePath, first.path), 'utf8')).toContain('first')
+      expect(fs.readFileSync(path.join(worktreePath, second.path), 'utf8')).toContain('second')
+    })
+
     it('crée un fichier dans .ai/thoughts/logs/ avec un slug depuis le titre', () => {
       const res = logThoughtHandler(worktreePath, { title: 'Decision: use pinia', content: 'Reason is X.' })
-      expect(res.path).toMatch(/^\.ai\/thoughts\/logs\/\d{4}-\d{2}-\d{2}-decision-use-pinia\.md$/)
+      expect(res.path).toMatch(/^\.ai\/thoughts\/logs\/\d{4}-\d{2}-\d{2}-decision-use-pinia-\d+-[\w-]+\.md$/)
       const absolutePath = path.join(worktreePath, res.path)
       expect(fs.existsSync(absolutePath)).toBe(true)
       const content = fs.readFileSync(absolutePath, 'utf-8')
@@ -623,7 +631,7 @@ describe('MCP tasks server handlers', () => {
 
     it('ajoute le tag en suffixe quand fourni', () => {
       const res = logThoughtHandler(worktreePath, { title: 'Note', content: 'body', tag: 'arch' })
-      expect(res.path).toMatch(/-note-arch\.md$/)
+      expect(res.path).toMatch(/-note-arch-\d+-[\w-]+\.md$/)
     })
 
     it('throw si title ou content manquent', () => {

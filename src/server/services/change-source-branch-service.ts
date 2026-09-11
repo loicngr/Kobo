@@ -1,8 +1,9 @@
 import { withWorkspaceLifecycleGuard } from '../utils/workspace-lifecycle-guard.js'
+
 // src/server/services/change-source-branch-service.ts
 
-import { spawn } from 'node:child_process'
 import * as path from 'node:path'
+import { runBoundedProcess } from '../utils/bounded-process.js'
 import * as gitOps from '../utils/git-ops.js'
 import { withGitRepoLock } from '../utils/git-repo-lock.js'
 import { getAgentStatus } from './agent/orchestrator.js'
@@ -288,9 +289,10 @@ async function runCustomScript(
     return { status: 'dirty', forcePushNeeded: false, commitCount: 0 }
   if (getAgentStatus(workspace.id) !== null)
     throw new Error('Cannot change the source branch while the agent is running')
-  return new Promise((resolve, reject) => {
-    const child = spawn('bash', ['-c', script], {
+  try {
+    await runBoundedProcess('bash', ['-c', script], {
       cwd: workspace.worktreePath,
+      timeoutMs: SCRIPT_TIMEOUT_MS,
       env: {
         ...process.env,
         KOBO_NEW_BASE: newBase,
@@ -304,47 +306,12 @@ async function runCustomScript(
         KOBO_FORGE: forgeId,
         KOBO_PR_NUMBER: prNumber,
       },
-      // Detached so `child` leads its own process group. Node's native
-      // `timeout` option below only signals `child` itself — without this,
-      // a script that backgrounds a long-running command (`docker compose
-      // up -d &`) leaves it running as an orphan after the timeout fires.
-      detached: true,
-      timeout: SCRIPT_TIMEOUT_MS,
-      killSignal: 'SIGTERM',
     })
-
-    // Node's `timeout` option kills only `child`. Mirror that same signal to
-    // the whole process group so a backgrounded child dies with it.
-    const groupKillTimer = setTimeout(() => {
-      try {
-        if (child.pid) process.kill(-child.pid, 'SIGTERM')
-      } catch {
-        /* process group already gone */
-      }
-    }, SCRIPT_TIMEOUT_MS)
-
-    let stderrBuf = ''
-    child.stderr?.on('data', (chunk: Buffer) => {
-      stderrBuf += chunk.toString()
-      if (stderrBuf.length > 8 * 1024) stderrBuf = stderrBuf.slice(-8 * 1024)
-    })
-
-    child.on('error', (err) => {
-      clearTimeout(groupKillTimer)
-      reject(new Error(`Custom change-source-branch script failed to spawn: ${err.message}`))
-    })
-
-    child.on('exit', (code, signal) => {
-      clearTimeout(groupKillTimer)
-      if (code === 0) {
-        updateWorkspaceSourceBranch(workspace.id, newBase)
-        resolve({ status: 'done', forcePushNeeded: false, commitCount: 0 })
-        return
-      }
-      const detail = stderrBuf.trim().slice(-500) || `exit code ${code ?? signal ?? 'unknown'}`
-      reject(new Error(`Custom change-source-branch script failed: ${detail}`))
-    })
-  })
+  } catch (err) {
+    throw new Error(`Custom change-source-branch script failed: ${err instanceof Error ? err.message : String(err)}`)
+  }
+  updateWorkspaceSourceBranch(workspace.id, newBase)
+  return { status: 'done', forcePushNeeded: false, commitCount: 0 }
 }
 
 /** Async lookups must not authorize mutations using obsolete workspace metadata. */

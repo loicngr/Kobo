@@ -74,8 +74,9 @@ vi.mock('../server/services/workspace-service.js', () => ({
   listComparisonMembers: vi.fn(() => []),
 }))
 
-vi.mock('../server/services/worktree-service.js', () => ({
-  createWorktree: vi.fn(),
+vi.mock('../server/services/worktree-service.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../server/services/worktree-service.js')>()),
+  createWorktreeUnlocked: vi.fn(),
   removeWorktree: vi.fn(),
 }))
 
@@ -92,6 +93,7 @@ vi.mock('../server/services/agent/orchestrator.js', () => ({
   getActiveSessionId: vi.fn().mockReturnValue('active-session-id'),
   getAgentLiveness: vi.fn().mockReturnValue(null),
   getAllAgentLiveness: vi.fn().mockReturnValue({}),
+  getPendingInputs: vi.fn().mockReturnValue([]),
 }))
 
 vi.mock('../server/services/agent/engines/registry.js', () => ({
@@ -574,7 +576,7 @@ describe('GET /api/workspaces', () => {
 describe('POST /api/workspaces', () => {
   it('creates workspace without Notion URL', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/worktree',
       base: 'origin',
       branchCreated: true,
@@ -597,7 +599,7 @@ describe('POST /api/workspaces', () => {
     const data = await res.json()
     expect(data.id).toBe('ws-1')
     expect(workspaceService.createWorkspace).toHaveBeenCalledOnce()
-    expect(worktreeService.createWorktree).toHaveBeenCalledWith(
+    expect(worktreeService.createWorktreeUnlocked).toHaveBeenCalledWith(
       '/tmp/project',
       'feature/test',
       'origin/main',
@@ -645,7 +647,7 @@ describe('POST /api/workspaces', () => {
 
   it('does not validate workingBranch when it is derived from an existing worktreePath', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/worktree',
       base: 'origin',
       branchCreated: true,
@@ -671,7 +673,7 @@ describe('POST /api/workspaces', () => {
 
   it('emits one named progress beat per creation step on the creationId channel', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/worktree',
       base: 'origin',
       branchCreated: true,
@@ -709,7 +711,7 @@ describe('POST /api/workspaces', () => {
 
   it('stays silent when the caller sends no creationId', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/worktree',
       base: 'origin',
       branchCreated: true,
@@ -736,7 +738,7 @@ describe('POST /api/workspaces', () => {
 
   it('names the failing step when worktree creation fails', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(worktreeService.createWorktree).mockImplementationOnce(() => {
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockImplementationOnce(async () => {
       throw new Error('fatal: File name too long')
     })
 
@@ -766,7 +768,7 @@ describe('POST /api/workspaces', () => {
   it('rolls back the workspace record when worktree creation fails (no orphan)', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(worktreeService.createWorktree).mockImplementationOnce(() => {
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockImplementationOnce(async () => {
       throw new Error('fatal: File name too long')
     })
 
@@ -784,15 +786,48 @@ describe('POST /api/workspaces', () => {
     expect(res.status).toBe(500)
     const data = await res.json()
     expect(data.error).toContain('Failed to create worktree')
+    // A failed checkout never acquired ownership of the requested path.
+    expect(worktreeService.removeWorktree).not.toHaveBeenCalled()
     // The just-inserted workspace must be deleted, not left as an orphan 'error' record.
     expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-1')
     expect(agentManager.startAgent).not.toHaveBeenCalled()
   })
 
+  it.each([true, false])(
+    'cleans a checkout created before bookkeeping failed (new branch: %s)',
+    async (branchCreated) => {
+      vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+      vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+      vi.mocked(worktreeService.createWorktreeUnlocked).mockRejectedValueOnce(
+        new worktreeService.WorktreeCreationError(
+          fakeWorkspace.worktreePath,
+          branchCreated,
+          new Error('exclude write failed'),
+        ),
+      )
+      const res = await app.request('/api/workspaces', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: 'Test Workspace',
+          projectPath: '/tmp/project',
+          sourceBranch: 'main',
+          workingBranch: 'feature/test',
+        }),
+      })
+      expect(res.status).toBe(500)
+      expect((await res.json()).error).toContain('exclude write failed')
+      expect(worktreeService.removeWorktree).toHaveBeenCalledWith(fakeWorkspace.projectPath, fakeWorkspace.worktreePath)
+      expect(gitOps.deleteLocalBranch).toHaveBeenCalledTimes(branchCreated ? 1 : 0)
+      expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith(fakeWorkspace.id)
+      expect(agentManager.startAgent).not.toHaveBeenCalled()
+    },
+  )
+
   it('destroys everything it created when the agent fails to start', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/worktree',
       base: 'origin',
       branchCreated: true,
@@ -842,10 +877,63 @@ describe('POST /api/workspaces', () => {
     )
   })
 
+  it('preserves a pre-existing branch when the agent fails to start', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: false,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+    vi.mocked(agentManager.startAgent).mockImplementationOnce(() => {
+      throw new Error('claude: command not found')
+    })
+
+    const res = await app.request('/api/workspaces', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Test Workspace',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/test',
+        creationId: 'create-ghi',
+      }),
+    })
+
+    // A half-created workspace is exactly the kind of object whose existence
+    // lies to the user. Nothing is kept.
+    expect(res.status).toBe(500)
+    const data = await res.json()
+    expect(data.step).toBe('start-agent')
+    expect(data.error).toContain('claude: command not found')
+    expect(data.error).not.toContain('its branch were removed')
+
+    // Remove the checkout created here, but retain the user's existing branch.
+    expect(worktreeService.removeWorktree).toHaveBeenCalledWith('/tmp/project', '/tmp/project/.worktrees/feature/test')
+    expect(gitOps.deleteLocalBranch).not.toHaveBeenCalled()
+    expect(workspaceService.deleteWorkspace).toHaveBeenCalledWith('ws-1')
+
+    // The progress stream must say the creation was undone, not sit on the last
+    // step it managed to reach.
+    expect(wsService.emitEphemeral).toHaveBeenCalledWith(
+      'create-ghi',
+      'workspace:create-progress',
+      expect.objectContaining({ step: 'rollback' }),
+    )
+    expect(wsService.emitEphemeral).toHaveBeenCalledWith(
+      'create-ghi',
+      'workspace:create-failed',
+      expect.objectContaining({ step: 'start-agent' }),
+    )
+  })
+
   it('warns that the setup script may have left effects the rollback cannot undo', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/worktree',
       base: 'origin',
       branchCreated: true,
@@ -890,7 +978,7 @@ describe('POST /api/workspaces', () => {
   it('never lets a cleanup failure replace the original error', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/worktree',
       base: 'origin',
       branchCreated: true,
@@ -959,7 +1047,7 @@ describe('POST /api/workspaces', () => {
 
   it('still creates the workspace when everything works', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/worktree',
       base: 'origin',
       branchCreated: true,
@@ -1004,7 +1092,7 @@ describe('POST /api/workspaces', () => {
       }),
     )
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/home/test/kobo/worktress/feature/test',
       base: 'origin',
       branchCreated: true,
@@ -1027,7 +1115,7 @@ describe('POST /api/workspaces', () => {
     expect(workspaceService.createWorkspace).toHaveBeenCalledWith(
       expect.objectContaining({ worktreesPath: '$HOME/kobo/worktress' }),
     )
-    expect(worktreeService.createWorktree).toHaveBeenCalledWith(
+    expect(worktreeService.createWorktreeUnlocked).toHaveBeenCalledWith(
       '/tmp/project',
       'feature/test',
       'origin/main',
@@ -1062,7 +1150,7 @@ describe('POST /api/workspaces', () => {
       name: 'Notion Page Title',
       workingBranch: 'feature/TK-123--notion-page-title',
     } as never)
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/worktree',
       base: 'origin',
       branchCreated: true,
@@ -1098,7 +1186,7 @@ describe('POST /api/workspaces', () => {
 
   it('calls fetchSourceBranch before createWorkspace on workspace creation', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/worktree',
       base: 'origin',
       branchCreated: true,
@@ -1156,7 +1244,7 @@ describe('POST /api/workspaces', () => {
   it('bases the worktree on origin and sets no fallback header when fetch succeeds', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
     vi.mocked(gitOps.fetchSourceBranchOrThrowAsync).mockImplementation(async () => {})
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/wt',
       base: 'origin',
       branchCreated: true,
@@ -1177,7 +1265,7 @@ describe('POST /api/workspaces', () => {
 
     expect(res.status).toBe(201)
     expect(res.headers.get('X-Kobo-Source-Fallback')).toBeNull()
-    expect(worktreeService.createWorktree).toHaveBeenCalledWith(
+    expect(worktreeService.createWorktreeUnlocked).toHaveBeenCalledWith(
       '/tmp/project',
       'feature/test',
       'origin/main',
@@ -1192,7 +1280,7 @@ describe('POST /api/workspaces', () => {
       throw new Error('no origin')
     })
     vi.mocked(gitOps.localBranchExists).mockReturnValue(true)
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/wt',
       base: 'local',
       branchCreated: true,
@@ -1213,7 +1301,7 @@ describe('POST /api/workspaces', () => {
 
     expect(res.status).toBe(201)
     expect(res.headers.get('X-Kobo-Source-Fallback')).toBe('local')
-    expect(worktreeService.createWorktree).toHaveBeenCalledWith(
+    expect(worktreeService.createWorktreeUnlocked).toHaveBeenCalledWith(
       '/tmp/project',
       'feature/test',
       'main',
@@ -1240,7 +1328,7 @@ describe('POST /api/workspaces', () => {
     })
 
     expect(res.status).toBe(422)
-    expect(worktreeService.createWorktree).not.toHaveBeenCalled()
+    expect(worktreeService.createWorktreeUnlocked).not.toHaveBeenCalled()
     // The hard-block happens before any DB write, so no orphan workspace row is left behind.
     expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
   })
@@ -1280,7 +1368,7 @@ describe('POST /api/workspaces', () => {
     })
 
     expect(res.status).toBe(201)
-    expect(worktreeService.createWorktree).not.toHaveBeenCalled()
+    expect(worktreeService.createWorktreeUnlocked).not.toHaveBeenCalled()
 
     // This test permanently overrides fs.existsSync / getDb (vi.clearAllMocks
     // clears call history but not implementations) — restore the file-wide
@@ -1310,7 +1398,7 @@ describe('POST /api/workspaces', () => {
 
   it('returns 500 when worktree creation fails', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(worktreeService.createWorktree).mockImplementation(() => {
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockImplementation(async () => {
       throw new Error('git worktree add failed')
     })
 
@@ -1334,7 +1422,10 @@ describe('POST /api/workspaces', () => {
 
   it('crée des tasks et critères manuels quand pas de Notion', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue({ id: 'ws-1', name: 'workspace' } as never)
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({ worktreePath: '/tmp/wt', base: 'origin' } as never)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/wt',
+      base: 'origin',
+    } as never)
     vi.mocked(workspaceService.listTasks).mockReturnValue([])
     vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue({ id: 'ws-1' } as never)
 
@@ -1369,7 +1460,7 @@ describe('POST /api/workspaces', () => {
 
   it('runs setup script when configured and continues on success', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/worktree',
       base: 'origin',
       branchCreated: true,
@@ -1408,7 +1499,7 @@ describe('POST /api/workspaces', () => {
 
   it('returns workspace in error status when setup script fails', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/worktree',
       base: 'origin',
       branchCreated: true,
@@ -1449,7 +1540,7 @@ describe('POST /api/workspaces', () => {
 
   it('emits create-failed and never emits done when the setup script fails', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/worktree',
       base: 'origin',
       branchCreated: true,
@@ -1508,7 +1599,7 @@ describe('POST /api/workspaces', () => {
     // the user. It now rolls back everything and answers 500 instead.
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/worktree',
       base: 'origin',
       branchCreated: true,
@@ -1551,7 +1642,7 @@ describe('POST /api/workspaces', () => {
 
   it('names the last-known step when an unforeseen error escapes every per-step handler', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/worktree',
       base: 'origin',
       branchCreated: true,
@@ -1592,7 +1683,7 @@ describe('POST /api/workspaces', () => {
     // had their own handler.
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/worktree',
       base: 'origin',
       branchCreated: true,
@@ -1638,7 +1729,7 @@ describe('POST /api/workspaces', () => {
     // Demolishing here would destroy work in progress to tidy up a failed read.
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
     vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/worktree',
       base: 'origin',
       branchCreated: true,
@@ -1690,7 +1781,7 @@ describe('POST /api/workspaces', () => {
 
   it('does not run setup script when not configured', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/worktree',
       base: 'origin',
       branchCreated: true,
@@ -1728,7 +1819,7 @@ describe('POST /api/workspaces', () => {
 
   it('POST / brainstorm prompt advertises kobo__set_workspace_agent_description with the user-description boundary', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/worktree',
       base: 'origin',
       branchCreated: true,
@@ -1771,7 +1862,7 @@ describe('POST /api/workspaces', () => {
       brainstormModel: 'claude-opus-4-8',
       autoLoop: true,
     })
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/worktree',
       base: 'origin',
       branchCreated: true,
@@ -1817,7 +1908,7 @@ describe('POST /api/workspaces', () => {
       brainstormModel: null,
       autoLoop: true,
     })
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/worktree',
       base: 'origin',
       branchCreated: true,
@@ -1852,7 +1943,7 @@ describe('POST /api/workspaces', () => {
       brainstormModel: 'claude-opus-4-8',
       autoLoop: false,
     })
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/worktree',
       base: 'origin',
       branchCreated: true,
@@ -1881,7 +1972,7 @@ describe('POST /api/workspaces', () => {
 
   it('accepts engine: codex on creation', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/worktree',
       base: 'origin',
       branchCreated: true,
@@ -2029,7 +2120,7 @@ describe('POST /api/workspaces — Notion/Sentry initial prompt injection', () =
       ...fakeWorkspace,
       name: 'Renamed by Notion/Sentry',
     } as never)
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/wt',
       base: 'origin',
       branchCreated: true,
@@ -3396,7 +3487,7 @@ describe('DELETE /api/workspaces/archived', () => {
 describe('git conventions file creation on workspace create', () => {
   beforeEach(() => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace as never)
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/worktree',
       base: 'origin',
       branchCreated: true,
@@ -5520,7 +5611,7 @@ describe('POST /api/workspaces — pre-flight URL validation', () => {
     const body = (await res.json()) as { error: string }
     expect(body.error).toMatch(/Could not extract page ID/)
     expect(vi.mocked(wsService.createWorkspace)).not.toHaveBeenCalled()
-    expect(vi.mocked(worktreeService.createWorktree)).not.toHaveBeenCalled()
+    expect(vi.mocked(worktreeService.createWorktreeUnlocked)).not.toHaveBeenCalled()
   })
 
   it('returns 422 and creates nothing when sentryUrl extraction fails', async () => {
@@ -5546,7 +5637,7 @@ describe('POST /api/workspaces — pre-flight URL validation', () => {
     const body = (await res.json()) as { error: string }
     expect(body.error).toMatch(/Sentry/)
     expect(vi.mocked(wsService.createWorkspace)).not.toHaveBeenCalled()
-    expect(vi.mocked(worktreeService.createWorktree)).not.toHaveBeenCalled()
+    expect(vi.mocked(worktreeService.createWorktreeUnlocked)).not.toHaveBeenCalled()
   })
 
   it('happy path: extraction precedes createWorkspace, sentryUrl is forwarded', async () => {
@@ -5657,7 +5748,7 @@ describe('POST /api/workspaces — pre-flight URL validation', () => {
       sentryUrl: 'https://my-org.sentry.io/issues/99/',
     })
     vi.mocked(wsService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/wt',
       base: 'origin',
       branchCreated: true,
@@ -5679,7 +5770,7 @@ describe('POST /api/workspaces — pre-flight URL validation', () => {
       'ws-1',
       'SEKUR-IOS-9 | TypeError: undefined is not an object',
     )
-    expect(worktreeService.createWorktree).toHaveBeenCalledWith(
+    expect(worktreeService.createWorktreeUnlocked).toHaveBeenCalledWith(
       '/tmp/proj',
       'feat/SEKUR-IOS-9--typeerror-undefined-is-not-an-object',
       'origin/main',
@@ -5877,7 +5968,7 @@ describe('POST /api/workspaces — reuse existing worktree', () => {
         worktreeOwned: false,
       }),
     )
-    expect(worktreeService.createWorktree).not.toHaveBeenCalled()
+    expect(worktreeService.createWorktreeUnlocked).not.toHaveBeenCalled()
     expect(setupScriptService.runSetupScript).not.toHaveBeenCalled()
   })
 })
@@ -6283,7 +6374,7 @@ describe('POST /api/workspaces — worktree path collision', () => {
       return false
     })
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(worktreeService.createWorktree).mockImplementation((_p, branch) => ({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockImplementation(async (_p, branch) => ({
       worktreePath: `/tmp/project/.worktrees/${branch}`,
       base: 'origin',
       branchCreated: true,
@@ -6360,7 +6451,7 @@ describe('POST /api/workspaces — worktree path collision', () => {
     )
     vi.mocked(fs.existsSync).mockReturnValue(false)
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/project/.worktrees/sekur/feature/test',
       base: 'origin',
       branchCreated: true,
@@ -6393,7 +6484,7 @@ describe('POST /api/workspaces — Working directory in brainstorm prompt', () =
   it('passes "Working directory: <path>" to agentManager.startAgent', async () => {
     vi.mocked(fs.existsSync).mockReturnValue(false)
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
-    vi.mocked(worktreeService.createWorktree).mockReturnValue({
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/worktree',
       base: 'origin',
       branchCreated: true,

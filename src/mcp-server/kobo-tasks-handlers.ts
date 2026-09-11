@@ -5,7 +5,7 @@ import { nanoid } from 'nanoid'
 import * as cronService from '../server/services/cron-service.js'
 import * as settingsService from '../server/services/settings-service.js'
 import { slugifyProjectName } from '../server/utils/project-slug.js'
-import { resolveExistingPathInside } from '../server/utils/safe-path.js'
+import { ensureDirectoryInside, resolveExistingPathInside } from '../server/utils/safe-path.js'
 import { resolveWorkspaceWorktreePath } from '../server/utils/worktree-paths.js'
 import { MASKED_SECRET, SECRET_GLOBAL_KEYS } from '../shared/consts.js'
 
@@ -583,7 +583,7 @@ export function readDocumentHandler(worktreePath: string, relPath: string): Docu
 
 /**
  * Append a thought / decision / note to
- * `.ai/thoughts/logs/<YYYY-MM-DD>-<slug>.md`. Creates the directory if missing.
+ * `.ai/thoughts/logs/<YYYY-MM-DD>-<slug>-<timestamp>-<id>.md`. Creates the directory if missing.
  * Returns the path (worktree-relative) of the file actually written — useful
  * for the agent to reference it in chat.
  *
@@ -600,8 +600,7 @@ export function logThoughtHandler(
   const content = data.content?.trim()
   if (!content) throw new Error('content is required')
 
-  const thoughtsDir = path.join(worktreePath, '.ai', 'thoughts', 'logs')
-  fs.mkdirSync(thoughtsDir, { recursive: true })
+  const thoughtsDir = ensureDirectoryInside(worktreePath, path.join('.ai', 'thoughts', 'logs'))
 
   const date = new Date().toISOString().slice(0, 10)
   const slug =
@@ -613,14 +612,18 @@ export function logThoughtHandler(
       .replace(/^-+|-+$/g, '')
       .slice(0, 60) || 'note'
   const tagSuffix = data.tag ? `-${data.tag.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}` : ''
-  const filename = `${date}-${slug}${tagSuffix}.md`
-  const abs = path.join(thoughtsDir, filename)
-  const relPath = `.ai/thoughts/logs/${filename}`
-
   const header = `# ${title}\n\n_${new Date().toISOString()}_${data.tag ? ` · tag: \`${data.tag}\`` : ''}\n\n`
-  fs.writeFileSync(abs, header + content + (content.endsWith('\n') ? '' : '\n'), 'utf-8')
-
-  return { path: relPath }
+  for (let attempt = 0; attempt < 5; attempt++) {
+    const filename = `${date}-${slug}${tagSuffix}-${Date.now()}-${nanoid(10)}.md`
+    const abs = path.join(thoughtsDir, filename)
+    try {
+      fs.writeFileSync(abs, header + content + (content.endsWith('\n') ? '' : '\n'), { encoding: 'utf-8', flag: 'wx' })
+      return { path: `.ai/thoughts/logs/${filename}` }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err
+    }
+  }
+  throw new Error('Could not allocate a unique thought filename')
 }
 
 // ── Session usage ────────────────────────────────────────────────────────────

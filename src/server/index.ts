@@ -18,6 +18,7 @@ import fsRouter from './routes/fs.js'
 import gitRouter from './routes/git.js'
 import healthRouter from './routes/health.js'
 import imagesRouter from './routes/images.js'
+import mcpRouter from './routes/mcp.js'
 import { migrationRouter } from './routes/migration.js'
 import notionRouter from './routes/notion.js'
 import pullRequestsRouter from './routes/pull-requests.js'
@@ -31,10 +32,8 @@ import workspaceTemplatesRouter from './routes/workspace-templates.js'
 import workspacesRouter from './routes/workspaces.js'
 import {
   getAvailableSkills,
-  isAgentUnavailableError,
   reconcileOrphanSessions,
   restoreRetryCountsFromDb,
-  sendMessage,
   setBackendPort,
   startAgent,
   startWatchdog,
@@ -52,6 +51,7 @@ import {
   startDailyDbBackupScheduler,
 } from './services/db-backup-service.js'
 import { startDevServer, stopAllDevServers, stopDevServer } from './services/dev-server-service.js'
+import { reconcileMessageRequests } from './services/mcp-message-request-service.js'
 import {
   authorizeWsUpgrade,
   generateToken,
@@ -66,13 +66,16 @@ import {
 } from './services/network-access-service.js'
 import { startPrWatcher, stopPrWatcher } from './services/pr-watcher-service.js'
 import * as quotaBackoffService from './services/quota-backoff-service.js'
+import { startSearchIndex, stopSearchIndex } from './services/search-service.js'
 import { getGlobalSettings, updateNetworkAccessSettings } from './services/settings-service.js'
 import { reloadDefaultTemplates } from './services/templates-service.js'
 import { createTerminal, destroyAllTerminals, getTerminal } from './services/terminal-service.js'
+import { startUpdateChecker, stopUpdateChecker } from './services/update-check-service.js'
 import { startUsagePoller, stopUsagePoller } from './services/usage/index.js'
 import * as wakeupService from './services/wakeup-service.js'
-import { emit, emitEphemeral, handleConnection, setMessageHandler } from './services/websocket-service.js'
-import { getActiveSession, getWorkspace, updateWorkspaceStatus } from './services/workspace-service.js'
+import { handleConnection, setMessageHandler } from './services/websocket-service.js'
+import { deliverWorkspaceMessage } from './services/workspace-message-service.js'
+import { getWorkspace } from './services/workspace-service.js'
 import { pruneWsEvents, resolveRetentionConfig } from './services/ws-events-retention-service.js'
 import {
   getChangelogPath,
@@ -106,6 +109,8 @@ try {
 }
 
 runMigrations(db)
+reconcileMessageRequests(db)
+startSearchIndex()
 
 // Event retention. OPT-IN: disabled by default, so this is a no-op until the
 // user sets a window in Settings → Worktrees. Deliberately not enabled by
@@ -190,6 +195,7 @@ app.get('/api/health', (c) => c.json({ status: 'ok', version: getPackageVersion(
 
 // Mount route sub-routers
 app.route('/api/workspaces', workspacesRouter)
+app.route('/api/mcp', mcpRouter)
 app.route('/api/pull-requests', pullRequestsRouter)
 app.route('/api/workspaces', imagesRouter)
 app.route('/api/notion', notionRouter)
@@ -275,6 +281,7 @@ const server = serve(
   },
   (info) => {
     setBackendPort(info.port)
+    startUpdateChecker()
     stopStartupSpinner()
     const settings = getGlobalSettings()
     console.log(
@@ -419,100 +426,14 @@ setMessageHandler(async (type, payload) => {
     sessionId?: string
     agentPermissionModeOverride?: 'plan' | 'bypass' | 'strict' | 'interactive'
     force?: boolean
+    clientMessageId?: string
   } | null
 
   if (type === 'chat:message' && p?.workspaceId && p?.content) {
-    if (getWorkspace(p.workspaceId)?.status === 'compacting') {
-      emitEphemeral(p.workspaceId, 'chat:rejected', {
-        reason: 'compacting',
-        sessionId: p.sessionId,
-        content: p.content,
-        message: 'Workspace is compacting its context; wait until compaction finishes before sending a message',
-      })
-      return
-    }
-    // Auto-loop owns the agent's turns. A user message means the user wants
-    // to redirect the conversation, so disable the loop (idempotent — the
-    // `autoloop:disabled` event is emitted with reason='user-action' so the
-    // frontend chip updates) and let the message through to the running
-    // session. The user can re-enable auto-loop manually once their
-    // intervention is done. Grooming phase (ready=0) is skipped — the loop
-    // hasn't started yet, so chat messages during grooming pass through
-    // untouched (the user can still answer the agent's questions).
-    const autoLoopStatus = autoLoopService.getStatus(p.workspaceId)
-    if (autoLoopStatus.auto_loop && autoLoopStatus.auto_loop_ready) {
-      autoLoopService.disable(p.workspaceId, 'user-action')
-    }
-
-    // Reject chat input while paused on canUseTool — sending here would spawn
-    // a parallel session and orphan the pending callback.
-    const wsRow = getWorkspace(p.workspaceId)
-    if (wsRow?.status === 'awaiting-user') {
-      emitEphemeral(p.workspaceId, 'chat:rejected', {
-        reason: 'awaiting-user',
-        sessionId: p.sessionId,
-        content: p.content,
-        message: 'Answer via the question panel — typing in chat would orphan the pending callback',
-      })
-      return
-    }
-
-    // Prefer the session explicitly selected by the client (sessionId hint),
-    // falling back to the running/most-recent non-idle session so idle sessions
-    // never steal the tagging.
-    const activeSession = getActiveSession(p.workspaceId)
-    const sessionTag = p.sessionId ?? activeSession?.id ?? undefined
     try {
-      await sendMessage(p.workspaceId, p.content, p.sessionId)
-      emit(p.workspaceId, 'user:message', { content: p.content, sender: 'user' }, sessionTag)
-      if (p.force) emitEphemeral(p.workspaceId, 'chat:accepted', { sessionId: p.sessionId })
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      // Resume on every shape that means "no agent can receive this message"
-      // — the closed-stdin case included. Anything else (queue full, disk
-      // error, a stop in progress) surfaces to the user instead of silently
-      // respawning a fresh agent.
-      if (!isAgentUnavailableError(msg)) {
-        emitEphemeral(p.workspaceId, 'chat:rejected', { sessionId: p.sessionId, content: p.content, message: msg })
-        console.error(`[ws] chat:message failed for workspace ${p.workspaceId}:`, err)
-        return
-      }
-      // Agent not running — resume the session hinted by the client if any,
-      // otherwise the most-recent active session.
-      try {
-        const workspace = getWorkspace(p.workspaceId)
-        if (workspace) {
-          const worktreePath = workspace.worktreePath
-          // Plan mode blocks MCP tools — when the caller knows the message
-          // requires them (e.g. grooming), it sets the override to bypass the
-          // workspace default for this spawn only.
-          const effectiveMode = p.agentPermissionModeOverride ?? workspace.agentPermissionMode
-          const started = startAgent(
-            p.workspaceId,
-            worktreePath,
-            p.content,
-            workspace.model,
-            true,
-            effectiveMode,
-            p.sessionId,
-            workspace.reasoningEffort,
-          )
-          updateWorkspaceStatus(p.workspaceId, 'executing')
-          const resumedSessionId = p.sessionId ?? started.agentSessionId
-          emit(p.workspaceId, 'user:message', { content: p.content, sender: 'user' }, resumedSessionId)
-          if (p.force) emitEphemeral(p.workspaceId, 'chat:accepted', { sessionId: resumedSessionId })
-        } else {
-          emitEphemeral(p.workspaceId, 'chat:rejected', {
-            sessionId: p.sessionId,
-            content: p.content,
-            message: `Workspace '${p.workspaceId}' not found`,
-          })
-        }
-      } catch (restartErr) {
-        const message = restartErr instanceof Error ? restartErr.message : String(restartErr)
-        emitEphemeral(p.workspaceId, 'chat:rejected', { sessionId: p.sessionId, content: p.content, message })
-        console.error('[ws] Failed to resume agent:', message)
-      }
+      await deliverWorkspaceMessage(p.workspaceId, { ...p, content: p.content })
+    } catch (error) {
+      console.error(`[ws] chat:message failed for workspace ${p.workspaceId}:`, error)
     }
   }
 
@@ -648,6 +569,7 @@ let isShuttingDown = false
 async function gracefulShutdown(signal: string, exitCode = 0): Promise<void> {
   if (isShuttingDown) return
   isShuttingDown = true
+  stopUpdateChecker()
 
   console.log(`\n[kobo] Received ${signal}, shutting down gracefully…`)
 
@@ -715,6 +637,7 @@ async function gracefulShutdown(signal: string, exitCode = 0): Promise<void> {
     console.log('[kobo] HTTP and WebSocket servers closed')
   } finally {
     try {
+      await stopSearchIndex()
       await dailyBackupScheduler.stop()
       closeDb()
       console.log('[kobo] Database closed')

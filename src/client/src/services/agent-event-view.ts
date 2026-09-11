@@ -1,3 +1,4 @@
+import type { MessageSource } from '../../../shared/workspace-message-types'
 import type { AgentEvent } from '../types/agent-event'
 
 export type ConversationItem =
@@ -13,7 +14,14 @@ export type ConversationItem =
       eventIds?: string[]
     }
   | { type: 'session'; kind: 'started' | 'ended' | 'compacted'; detail?: unknown; ts?: string; eventIds?: string[] }
-  | { type: 'user'; content: string; sender: 'user' | 'system-prompt' | string; ts?: string; eventIds?: string[] }
+  | {
+      type: 'user'
+      source?: MessageSource
+      content: string
+      sender: 'user' | 'system-prompt' | string
+      ts?: string
+      eventIds?: string[]
+    }
   | { type: 'error'; category: string; message: string; ts?: string; eventIds?: string[] }
 
 /**
@@ -172,6 +180,7 @@ export function foldEventsCached(
   eventIds?: Array<string | null>,
 ): ConversationItem[] {
   const isAppend = cache.count > 0 && events.length >= cache.count && events[cache.count - 1] === cache.lastEvent
+  const previousItems = !isAppend ? cache.items : null
   if (!isAppend) {
     // Prepended history, a session switch, a sync:response reset — anything
     // that is not a pure append invalidates the resumable state.
@@ -186,6 +195,24 @@ export function foldEventsCached(
   cache.count = events.length
   cache.lastEvent = events.length > 0 ? events[events.length - 1] : null
   closeStaleStreamingText(cache, sessionActive)
+  if (previousItems?.length) {
+    // Eviction/history rebuilds need new reducer slots, but unchanged cards keep
+    // their references. Event anchors disambiguate otherwise identical messages.
+    const previous = new Map(previousItems.map((item) => [JSON.stringify(item), item]))
+    for (let i = 0; i < cache.items.length; i++) {
+      const item = cache.items[i]
+      const retained = previous.get(JSON.stringify(item))
+      if (!retained) continue
+      cache.items[i] = retained
+      if (retained.type === 'text') {
+        const slot = cache.textItems.get(retained.messageId)
+        if (slot) slot.item = retained
+      } else if (retained.type === 'tool') {
+        const slot = cache.toolItems.get(retained.toolCallId)
+        if (slot) slot.item = retained
+      }
+    }
+  }
   return cache.items
 }
 
@@ -379,6 +406,7 @@ function closeTextItemAt(cache: FoldCache, index: number): void {
 }
 
 export interface UserMessage {
+  source?: MessageSource
   content: string
   sender: string
   ts: string
@@ -440,6 +468,7 @@ export function mergeWithUserMessages(agentItems: ConversationItem[], userMessag
     type: 'user' as const,
     content: m.content,
     sender: m.sender,
+    ...(m.source ? { source: m.source } : {}),
     ts: m.ts,
     eventIds: m.eventIds,
   }))

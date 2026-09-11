@@ -6,6 +6,7 @@ import {
   DEFAULT_NOTION_INITIAL_PROMPT,
   DEFAULT_SENTRY_INITIAL_PROMPT,
 } from '../services/initial-prompt-template-service.js'
+import { getMcpConnectionInfo } from '../services/mcp-connection-info-service.js'
 import { generateToken, getLanUrls } from '../services/network-access-service.js'
 import { DEFAULT_REVIEW_PROMPT_TEMPLATE } from '../services/review-template-service.js'
 import { DEFAULT_CHANGE_SOURCE_BRANCH_SCRIPT } from '../services/settings-defaults.js'
@@ -95,6 +96,11 @@ app.get('/ws-events-retention-preview', (c) => {
     const message = err instanceof Error ? err.message : String(err)
     return c.json({ error: message }, 500)
   }
+})
+
+// GET /api/settings/mcp — protected connection metadata, without credentials
+app.get('/mcp', (c) => {
+  return c.json(getMcpConnectionInfo(getBackendPort(), settingsService.getGlobalSettings(), getDb().name))
 })
 
 // GET /api/settings/network — network access state + LAN URLs

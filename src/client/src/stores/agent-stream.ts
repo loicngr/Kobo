@@ -3,6 +3,7 @@ import { ref, shallowRef } from 'vue'
 import type { AgentEvent } from '../types/agent-event'
 
 export const MAX_LIVE_EVENTS_PER_WORKSPACE = 5000
+export const LIVE_EVENT_EVICTION_BATCH = 500
 
 /**
  * Per-workspace AgentEvent stream. Keeps the Map stable and uses a monotonic
@@ -46,6 +47,16 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
   // constantly. Vue tracks `Map.get(key)` per key, so reading this counter
   // establishes a dependency scoped to exactly one workspace.
   const versions = ref<Map<string, number>>(new Map())
+  const liveAppends = shallowRef(new Map<string, Map<string | null, number>>())
+
+  function liveAppendCountFor(workspaceId: string, matches: (sessionId: string | null) => boolean): number {
+    track(workspaceId)
+    let total = 0
+    for (const [sessionId, count] of liveAppends.value.get(workspaceId) ?? []) {
+      if (matches(sessionId)) total += count
+    }
+    return total
+  }
 
   /** Register a reactive dependency on THIS workspace's stream. */
   function track(workspaceId: string): void {
@@ -118,6 +129,7 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
     ts?: string,
     eventId?: string,
     sessionId?: string | null,
+    live = true,
   ): void {
     const list = events.value.get(workspaceId) ?? []
     const tsList = timestamps.value.get(workspaceId) ?? []
@@ -125,6 +137,11 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
     const idList = eventIds.value.get(workspaceId) ?? []
     const known = idIndexFor(workspaceId)
     if (eventId && known.has(eventId)) return
+    if (live) {
+      const counts = liveAppends.value.get(workspaceId) ?? new Map<string | null, number>()
+      counts.set(sessionId ?? null, (counts.get(sessionId ?? null) ?? 0) + 1)
+      liveAppends.value.set(workspaceId, counts)
+    }
     const isFirst = list.length === 0
     list.push(event)
     tsList.push(ts ?? new Date().toISOString())
@@ -151,15 +168,16 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
   ): void {
     const overflow = list.length - MAX_LIVE_EVENTS_PER_WORKSPACE
     if (overflow <= 0) return
+    const removedCount = overflow + LIVE_EVENT_EVICTION_BATCH - 1
     // Capture the ids BEFORE splicing: they have to leave the index too, or a
     // re-delivered old event could never be appended again after a reconnect.
-    const removedIds = idList.slice(0, overflow)
+    const removedIds = idList.slice(0, removedCount)
     const known = idIndexFor(workspaceId)
     for (const id of removedIds) if (id) known.delete(id)
-    list.splice(0, overflow)
-    tsList.splice(0, overflow)
-    sList.splice(0, overflow)
-    idList.splice(0, overflow)
+    list.splice(0, removedCount)
+    tsList.splice(0, removedCount)
+    sList.splice(0, removedCount)
+    idList.splice(0, removedCount)
     const firstPersistedId = idList.find((id): id is string => typeof id === 'string')
     if (firstPersistedId) oldestIds.value.set(workspaceId, firstPersistedId)
     else oldestIds.value.delete(workspaceId)
@@ -305,6 +323,7 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
     hasMoreOlder.value.delete(workspaceId)
     compacting.value.delete(workspaceId)
     eventIdIndex.value.delete(workspaceId)
+    liveAppends.value.delete(workspaceId)
     // Bump rather than delete: consumers still tracking this workspace need a
     // trigger to re-read an empty stream.
     touch(workspaceId)
@@ -317,6 +336,7 @@ export const useAgentStreamStore = defineStore('agent-stream', () => {
     eventIds,
     versions,
     versionFor,
+    liveAppendCountFor,
     eventsFor,
     timestampsFor,
     sessionIdsFor,

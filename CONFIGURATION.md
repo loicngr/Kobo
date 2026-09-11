@@ -16,6 +16,8 @@ Complete reference for every Kōbō setting, environment variable, and external 
 - [Auto-purge worktree on PR merged](#auto-purge-worktree-on-pr-merged)
 - [Network access](#network-access)
   - [Reachable addresses](#reachable-addresses)
+- [External LLM access through MCP](#external-llm-access-through-mcp)
+- [Kōbō update checks](#kōbō-update-checks)
 - [Docker deployment](#docker-deployment)
   - [Choosing a compose file](#choosing-a-compose-file)
   - [The image](#the-image)
@@ -657,6 +659,26 @@ The setting lives in `settings.json` under `global` and has no UI control yet:
 ```json
 { "global": { "maxConcurrentAgents": 3 } }
 ```
+
+## External LLM access through MCP
+
+An external MCP client can connect to `http://127.0.0.1:3000/api/mcp` using Streamable HTTP (use your backend's configured port). It can discover workspaces, read their conversations, send messages to their agents and answer pending questions. The existing global stdio MCP server exposes these conversation tools too.
+
+Remote HTTP clients follow the [network access](#network-access) settings and supply the Kōbō token as `Authorization: Bearer <token>` or `X-Kobo-Token`. The endpoint uses the same Host/Origin and reverse-proxy policy as the rest of the backend. No network setting is changed automatically.
+
+See [Connect an external LLM](src/mcp-server/README.md#connect-an-external-llm) for connection examples, tool arguments, cursor polling and authentication details.
+
+The **External LLM access (MCP)** panel within global Network access settings provides copyable URLs and HTTP/stdio configurations for this running installation. Previews use token placeholders; copying a configuration with the real token is a separate action. Set a client name to identify its messages and question answers in workspace history.
+
+External senders can supply `idempotency_key` once per intended message and reuse it on retries. The durable receipt survives backend restarts and event retention. An uncertain delivery is explicitly reported and never automatically sent again; see the MCP guide for response codes and limitations.
+
+## Kōbō update checks
+
+The backend checks the package's npm `latest` release at startup and then every **20 minutes**, even with no browser open. All connected interfaces receive the result through the existing update banner, without reloading the page. Reconnecting clients retrieve the current snapshot.
+
+Checks share one request across browser tabs, have a five-second deadline, and do not interrupt running agents when the registry is unreachable. A transient error preserves the last known valid version until the next check. Dismissing the banner hides that version; a newer release appears again. The post-install What's New dialog remains separate.
+
+These checks report availability only: they do not install packages or restart Kōbō automatically.
 
 ## Network access
 
@@ -1663,3 +1685,43 @@ Docker status and logs identify containers by their exact `com.docker.compose.pr
 ### Automatic database backups
 
 Kōbō checks for a daily backup at startup and every hour while running. A new WAL-safe snapshot is created when the latest backup is at least 24 hours old, keeping the seven most recent daily snapshots. Slow backups never overlap. Failures are logged and retried at the next check; graceful shutdown waits for the active backup before closing SQLite. Pre-migration snapshots have their own independent retention.
+
+## Conversation search index
+
+Global search and workspace history search use the same index of complete messages.
+Streamed fragments are assembled before indexing, so a word can match across token
+boundaries. Queries are literal substrings, with Unicode normalization and
+case-insensitive matching; quotes and wildcard characters are treated literally.
+
+On the first upgrade to database migration 42, Kōbō builds the index in the
+background. Search remains available with partial results and an indexing progress
+indicator. The original conversation events are preserved, and indexing resumes
+from its saved progress after a restart. Existing workspaces and agents remain
+usable during this operation. Indexing and search run in a dedicated worker;
+no additional credentials or configuration are required.
+
+An unavailable index affects search only and is reported explicitly. Restarting
+Kōbō restarts the worker and resumes pending indexing. The derived index lives in
+the existing SQLite database and is covered by its normal backups.
+Temporary SQLite writer contention is retried automatically. Search results link
+to the fragment containing the match, including within long streamed responses
+and across Unicode normalization boundaries.
+
+## Audit compatibility notes
+
+- Previously remembered Codex **exact-operation** file-edit approvals are inactive
+  when their old fingerprints did not identify the actual changes. Approve the
+  operation again to create a precise rule. Deliberately remembered whole-tool
+  approvals and Claude approvals retain their existing scope.
+- Cron schedules accept five fields or `@hourly`, `@daily`, `@weekly`, `@monthly`,
+  and `@yearly`. Older invalid expressions, including six-field schedules with
+  seconds, remain visible as inactive entries; replace them with a valid schedule.
+- Submitting a review keeps its draft until the server confirms delivery and
+  persistence. Rejections, disconnects, and a 30-second confirmation timeout
+  preserve the draft. If confirmation is missing, inspect the conversation before
+  manually retrying: the agent may already have received the message.
+- A slow WebSocket connection is disconnected and replays missed events on
+  reconnection. Current questions, agent state, and previously viewed development
+  servers are refreshed after replay.
+- MCP thought logs use unique filenames. Repeated notes with the same title and
+  tag no longer replace earlier files.

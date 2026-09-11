@@ -188,6 +188,7 @@ export function createClaudeCodeEngine(): AgentEngine {
           // A user decision is intentional inactivity — suspend the deadline
           // rather than cancel it, so it resumes the moment the card is answered.
           turnLiveness.pause()
+          clearSubagentStallWatchdog()
 
           const onAbort = (): void => {
             if (pendingResolvers.get(toolCallId) === resolver) {
@@ -385,6 +386,8 @@ export function createClaudeCodeEngine(): AgentEngine {
       // windows. Every call site that changes one of these three conditions
       // must re-evaluate through this helper, not duplicate the check.
       const reevaluateLivenessPause = (): void => {
+        if (pendingResolvers.size > 0 || activeSubagentTaskIds.size === 0) clearSubagentStallWatchdog()
+        else if (!subagentStallTimer) armSubagentStallWatchdog()
         if (activeSubagentTaskIds.size > 0 || pendingResolvers.size > 0 || isCompacting) turnLiveness.pause()
         else turnLiveness.resume()
       }
@@ -411,16 +414,6 @@ export function createClaudeCodeEngine(): AgentEngine {
           isCompacting = false
           safeEmit({ kind: 'session:compacting', active: false })
           reevaluateLivenessPause()
-          if (activeSubagentTaskIds.size > 0 && !subagentStallTimer) {
-            // Resume declined because a subagent is still tracked — but the
-            // subagent stall net is only armed from the `result` branch, which
-            // a fully wedged generator may never reach. Arm it here as a
-            // second stage so this combination can't hang forever. The
-            // `!subagentStallTimer` guard matters: arming re-sets the
-            // deadline, and a net already armed by a prior `result` must not
-            // be extended by this backstop (it is not new activity).
-            armSubagentStallWatchdog()
-          }
         }, COMPACTION_STALL_TIMEOUT_MS)
         compactionStallTimer.unref?.()
       }
@@ -460,28 +453,24 @@ export function createClaudeCodeEngine(): AgentEngine {
         clearTimeout(subagentStallTimer)
         subagentStallTimer = undefined
       }
-      // Re-armed (not merely armed-once) on every qualifying `result` so the
-      // deadline tracks the last observed activity, matching the warning
-      // message below — a long chain of legitimate subagent-backed turns
-      // must not be cut off just because 10 minutes have passed in total.
+      // Runs from the first task_started, including before the first result.
+      // Human waits suspend it independently; genuine activity restarts it.
       const armSubagentStallWatchdog = (): void => {
         clearSubagentStallWatchdog()
+        if (pendingResolvers.size > 0 || activeSubagentTaskIds.size === 0) return
         subagentStallTimer = setTimeout(() => {
           subagentStallTimer = undefined
-          // A message queued between arming and firing means a new turn is
-          // about to start on this same stream — don't discard the subagent
-          // tracking or force-close under it; the next 'result' re-evaluates.
-          if (inputStream.hasUnansweredInput(completedResponses)) return
+          if (pendingResolvers.size > 0 || activeSubagentTaskIds.size === 0) return
           console.warn(
-            `[claude-engine] Subagent(s) still tracked active ${SUBAGENT_STALL_TIMEOUT_MS}ms after the last turn ended — forcing session drain.`,
+            `[claude-engine] No subagent activity for ${SUBAGENT_STALL_TIMEOUT_MS}ms — forcing session:ended`,
           )
-          activeSubagentTaskIds.clear()
-          // This is a forced, unclean termination (the subagent may still be
-          // alive server-side) — never report it as a normal completion, so
-          // auto-loop doesn't treat an orphaned run as forward progress.
-          mapperState.sawErrorResult = true
-          inputStream.close()
-          armResultDrainWatchdog()
+          safeEmit({
+            kind: 'error',
+            category: 'other',
+            message: 'Session force-ended: background subagents stopped reporting activity (watchdog).',
+          })
+          emitSessionEnded('watchdog', null)
+          abortController.abort()
         }, SUBAGENT_STALL_TIMEOUT_MS)
         subagentStallTimer.unref?.()
       }
@@ -507,6 +496,19 @@ export function createClaudeCodeEngine(): AgentEngine {
               if (ev.status === 'running') activeSubagentTaskIds.set(ev.toolCallId, ev.taskId ?? ev.toolCallId)
               else activeSubagentTaskIds.delete(ev.toolCallId)
             }
+            if (
+              activeSubagentTaskIds.size > 0 &&
+              (events.some(
+                (ev) =>
+                  ev.kind === 'subagent:progress' ||
+                  ev.kind === 'message:text' ||
+                  ev.kind === 'message:thinking' ||
+                  ev.kind === 'tool:call' ||
+                  ev.kind === 'tool:result',
+              ) ||
+                ('parent_tool_use_id' in msg && msg.parent_tool_use_id != null))
+            )
+              armSubagentStallWatchdog()
             for (const ev of events) {
               if (ev.kind === 'session:compacting') {
                 isCompacting = ev.active
@@ -538,10 +540,8 @@ export function createClaudeCodeEngine(): AgentEngine {
               if (ev.kind === 'tool:call') pendingToolCallIds.add(ev.toolCallId)
               else if (ev.kind === 'tool:result') pendingToolCallIds.delete(ev.toolCallId)
             }
-            // The stall watchdog is only armed while we're waiting purely on
-            // background subagents (no further SDK turn expected unless one
-            // reports done). React the moment the last one clears instead of
-            // waiting for a 'result' message that may never come.
+            // After a settled result, the last background completion can
+            // drain the stream without waiting for another result.
             if (
               subagentStallTimer &&
               activeSubagentTaskIds.size === 0 &&
@@ -653,6 +653,7 @@ export function createClaudeCodeEngine(): AgentEngine {
         sendMessage(text: string) {
           if (!iteratorRunning) throw new Error(`Claude ${AGENT_NO_LONGER_RUNNING_TEXT}`)
           inputStream.send(text)
+          armSubagentStallWatchdog()
         },
         sendWakeupIfWaiting(text: string): boolean {
           if (
@@ -669,9 +670,8 @@ export function createClaudeCodeEngine(): AgentEngine {
             return false
           inputStream.send(text)
           waitingForBackground = false
-          // The wakeup starts another turn on this stream; its result will
-          // re-arm the stall deadline if background work is still outstanding.
-          clearSubagentStallWatchdog()
+          // Sending a new turn restarts, but never removes, the stall bound.
+          armSubagentStallWatchdog()
           return true
         },
         interrupt() {

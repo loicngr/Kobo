@@ -1,4 +1,7 @@
 export default {
+  'chat.externalLlm': 'LLM esterno · {name}',
+  'search.indexing': 'Indicizzazione cronologia: {processed}/{total}. Risultati parziali.',
+  'search.indexUnavailable': 'Indice di ricerca non disponibile. Riprova più tardi.',
   'blockers.setupConfiguration':
     'Nessuno script di preparazione configurato. Aggiungine uno nella sezione Script delle impostazioni.',
   'blockers.noWorkspace': 'Seleziona un workspace per usare questa azione.',
@@ -1473,6 +1476,9 @@ export default {
   'diff.reviewEmpty': 'Nessun commento — passa sopra una riga del diff e clicca + per aggiungerne uno.',
   'diff.reviewGlobalPlaceholder': 'Messaggio generale di revisione (opzionale)',
   'diff.submitReview': 'Invia revisione ({n})',
+  'diff.reviewPending': 'Una revisione è già in fase di invio.',
+  'diff.reviewEmptySubmission': 'La revisione è vuota.',
+  'diff.reviewNotAccepted': 'Il messaggio non è stato accettato. La revisione è stata conservata.',
   'diff.reviewSubmitted': "Revisione inviata all'agente",
   'diff.reviewSubmitFailed': 'Invio della revisione fallito: {error}',
   'diff.scopeBranch': 'Branch',
@@ -1671,6 +1677,30 @@ export default {
   'settings.importConfirmTitle': 'Importa configurazione',
   'settings.importConfirmMessage':
     'Questo sostituirà le tue impostazioni, template e tag attuali. Le chiavi MCP vengono preservate. Continuare?',
+  'settings.mcp.title': 'Connessioni LLM esterni (MCP)',
+  'settings.mcp.hint':
+    'Collega un client MCP per leggere conversazioni, inviare messaggi e rispondere alle domande dei workspace.',
+  'settings.mcp.remoteDisabled':
+    'Le connessioni remote richiedono accesso alla rete e un riavvio del server dopo l’attivazione.',
+  'settings.mcp.clientName': 'Nome del client (facoltativo)',
+  'settings.mcp.connection': 'Connessione',
+  'settings.mcp.local': 'HTTP locale',
+  'settings.mcp.remote': 'HTTP remoto',
+  'settings.mcp.proxy': 'Proxy inverso',
+  'settings.mcp.stdio': 'Stdio locale',
+  'settings.mcp.copyUrl': 'Copia URL',
+  'settings.mcp.copyConfig': 'Copia configurazione',
+  'settings.mcp.copyWithToken': 'Copia con token',
+  'settings.mcp.genericFormat':
+    'Questi esempi usano il formato generico mcpServers. Adatta il contenitore al tuo client MCP. Le anteprime mostrano un segnaposto per il token.',
+  'settings.mcp.tokenUnavailable':
+    'Nessun token disponibile. Attiva l’accesso alla rete prima di copiare una configurazione autenticata.',
+  'settings.mcp.stdioUnavailable':
+    'Il punto di ingresso stdio non è disponibile in questa installazione. Usa HTTP o compila prima Kōbō.',
+  'settings.mcp.copyFailed': 'Impossibile copiare negli appunti.',
+  'tours.settings.mcp.title': 'Collega un LLM esterno',
+  'tours.settings.mcp.description':
+    'Copia una configurazione HTTP o stdio per consentire a un assistente esterno di comunicare con i tuoi workspace.',
   'settings.network.title': 'Accesso di rete',
   'settings.network.hint':
     'Controlla Kōbō da un altro dispositivo della tua LAN affidabile. Off = solo localhost. On = raggiungibile sulla rete, protetto da un token. Riavvia Kōbō dopo il cambio.',
@@ -1826,6 +1856,7 @@ export default {
   'schedule.cronsTitle': 'Pianificazioni ricorrenti',
   'schedule.noWakeup': 'Nessun wakeup pianificato',
   'schedule.noCrons': 'Nessun cron pianificato',
+  'schedule.invalidCron': 'Inattiva: espressione non valida. Elimina e ricrea questa pianificazione.',
   'schedule.nextFireAt': 'prossimo alle {time}',
   'schedule.lastFiredAt': 'ultimo {time} fa',
   'schedule.addCronTitle': "Aggiungi un'attività ricorrente",
@@ -1869,6 +1900,7 @@ export default {
   'permissionRequest.allow': 'Consenti',
   'permissionRequest.allowOnce': 'Consenti una volta',
   'permissionRequest.allowTurn': 'Consenti questo turno',
+  'permissionRequest.operationUnavailable': 'Dettagli non disponibili; autorizza una volta o l’intero strumento.',
   'permissionRequest.allowOperation': 'Consenti sempre questa operazione',
   'permissionRequest.allowTool': 'Consenti sempre questo strumento',
   'permissionRequest.deny': 'Nega',

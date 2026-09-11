@@ -109,3 +109,27 @@ describe('apiFetch', () => {
     await expect(promise).rejects.toSatisfy((err: unknown) => !(err instanceof ApiTimeoutError))
   })
 })
+
+it('does not issue a request with an already aborted signal', async () => {
+  const fetchMock = vi.fn()
+  vi.stubGlobal('fetch', fetchMock)
+  const controller = new AbortController()
+  controller.abort()
+  await expect(apiFetch('/api/test', { signal: controller.signal })).rejects.toMatchObject({ name: 'AbortError' })
+  expect(fetchMock).not.toHaveBeenCalled()
+})
+
+it('keeps the deadline active while consuming the response body', async () => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(async (_url, init) => ({
+      ok: true,
+      status: 200,
+      text: () =>
+        new Promise((_resolve, reject) => {
+          init.signal.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
+        }),
+    })),
+  )
+  await expect(apiFetch('/api/test', { timeoutMs: 10 })).rejects.toBeInstanceOf(ApiTimeoutError)
+})

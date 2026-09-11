@@ -8,6 +8,9 @@ let emitSubagentOutputAfterCompaction = false
 let emitToolResult = false
 let emitSubagentStart = false
 let emitPermissionRequest = false
+let emitDelayedSubagentProgress = false
+let emitDelayedForegroundProgress = false
+let releaseProgress: (() => void) | undefined
 
 type MockCanUseTool = (
   toolName: string,
@@ -30,6 +33,19 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
           // the subagent in activeSubagentTaskIds until a task_notification
           // arrives... which never does in this frozen stream.
           yield { type: 'system', subtype: 'task_started', task_id: 'task-sub-1', tool_use_id: 'toolu_sub_1' }
+        }
+        if (emitDelayedSubagentProgress) {
+          await new Promise<void>((resolve) => {
+            releaseProgress = resolve
+          })
+          if (emitDelayedForegroundProgress) {
+            yield {
+              type: 'assistant',
+              message: { id: 'parent-progress', content: [{ type: 'text', text: 'Still working' }] },
+            }
+          } else {
+            yield { type: 'system', subtype: 'task_progress', task_id: 'task-sub-1', tool_use_id: 'toolu_sub_1' }
+          }
         }
         if (emitPermissionRequest && args.options.canUseTool) {
           // Fire-and-forget: canUseTool synchronously registers the pending
@@ -242,13 +258,8 @@ describe('claude-code engine — shared turn liveness', () => {
     }
   })
 
-  it('still drains a stalled compaction with a subagent tracked (second-stage subagent net)', async () => {
-    // Residual-hang regression: compaction stalls AND a subagent is still
-    // tracked. The compaction backstop fires but declines to resume the
-    // liveness deadline (the subagent legitimately pauses it), and the
-    // subagent stall net was previously only armed from the `result` branch —
-    // which a fully wedged generator never reaches. The backstop must arm it
-    // as a second stage so the session cannot hang forever.
+  it('still drains a stalled compaction with a subagent tracked (independent subagent watchdog)', async () => {
+    // Compaction and the foreground idle pause cannot mask a dead subagent.
     vi.useFakeTimers()
     try {
       emitCompactingStatus = true
@@ -264,16 +275,13 @@ describe('claude-code engine — shared turn liveness', () => {
       )
       expect(events.some((event) => event.kind === 'session:ended')).toBe(false)
 
-      // Compaction stall ceiling elapses. The resume is declined (subagent
-      // still tracked) — before the fix, NO timer covered this window and the
-      // session hung forever.
+      // The independently armed subagent deadline expires during compaction.
       await vi.advanceTimersByTimeAsync(COMPACTION_STALL_TIMEOUT_MS + 1_000)
-      expect(events.some((event) => event.kind === 'session:ended')).toBe(false)
-
-      // Second stage: the subagent stall net force-drains, then the
-      // result-drain watchdog force-emits session:ended.
-      await vi.advanceTimersByTimeAsync(SUBAGENT_STALL_TIMEOUT_MS + RESULT_DRAIN_TIMEOUT_MS + 1_000)
       expect(events.some((event) => event.kind === 'session:ended')).toBe(true)
+
+      // Later timers must not duplicate the terminal event.
+      await vi.advanceTimersByTimeAsync(SUBAGENT_STALL_TIMEOUT_MS + RESULT_DRAIN_TIMEOUT_MS + 1_000)
+      expect(events.filter((event) => event.kind === 'session:ended')).toHaveLength(1)
       expect(abortSignal?.aborted).toBe(true)
     } finally {
       releaseStream?.()
@@ -364,4 +372,56 @@ describe('claude-code engine — shared turn liveness', () => {
       vi.useRealTimers()
     }
   })
+})
+
+it('bounds a silent subagent before the first result without timing out a human', async () => {
+  vi.useFakeTimers()
+  emitSubagentStart = true
+  emitPermissionRequest = true
+  const events: AgentEvent[] = []
+  try {
+    const proc = await createClaudeCodeEngine().start(BASE_OPTIONS, (event) => events.push(event))
+    await vi.advanceTimersByTimeAsync(SUBAGENT_STALL_TIMEOUT_MS * 2)
+    expect(events.some((event) => event.kind === 'session:ended')).toBe(false)
+    proc.resolvePendingUserInput('toolu_perm_1', { kind: 'question', answers: { 'Q?': 'A' } })
+    await vi.advanceTimersByTimeAsync(SUBAGENT_STALL_TIMEOUT_MS + RESULT_DRAIN_TIMEOUT_MS + 1)
+    expect(events.filter((event) => event.kind === 'session:ended')).toEqual([
+      expect.objectContaining({ reason: 'watchdog' }),
+    ])
+    expect(abortSignal?.aborted).toBe(true)
+  } finally {
+    releaseStream?.()
+    emitSubagentStart = false
+    emitPermissionRequest = false
+    await vi.advanceTimersByTimeAsync(1)
+    vi.useRealTimers()
+  }
+})
+
+it.each(['subagent', 'foreground'])('renews the pre-result watchdog on meaningful %s progress', async (source) => {
+  vi.useFakeTimers()
+  emitSubagentStart = true
+  emitDelayedSubagentProgress = true
+  emitDelayedForegroundProgress = source === 'foreground'
+  const events: AgentEvent[] = []
+  try {
+    await createClaudeCodeEngine().start(BASE_OPTIONS, (event) => events.push(event))
+    await vi.advanceTimersByTimeAsync(SUBAGENT_STALL_TIMEOUT_MS - 1_000)
+    expect(events.some((event) => event.kind === 'session:ended')).toBe(false)
+    releaseProgress?.()
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(events.some((event) => event.kind === 'session:ended')).toBe(false)
+    await vi.advanceTimersByTimeAsync(SUBAGENT_STALL_TIMEOUT_MS)
+    expect(events.filter((event) => event.kind === 'session:ended')).toEqual([
+      expect.objectContaining({ reason: 'watchdog' }),
+    ])
+  } finally {
+    releaseProgress?.()
+    releaseStream?.()
+    emitSubagentStart = false
+    emitDelayedSubagentProgress = false
+    emitDelayedForegroundProgress = false
+    await vi.advanceTimersByTimeAsync(1)
+    vi.useRealTimers()
+  }
 })

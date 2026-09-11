@@ -1,4 +1,5 @@
 import type { AgentEvent } from '../types.js'
+import type { FileChangeItem } from './protocol/types.js'
 
 export interface PendingApproval {
   requestId: number | string
@@ -13,6 +14,9 @@ export interface HandleServerRequestArgs {
   emit: (ev: AgentEvent) => void
   register: (callId: string, pending: PendingApproval) => void
   respond?: (id: number | string, result: unknown) => void
+  resolveFileChange?: (
+    params: Record<string, unknown>,
+  ) => { changes: FileChangeItem['changes']; cwd: string } | undefined
   autoApprove?: (toolName: string, payload: unknown) => boolean
   /**
    * Optional respondError hook used by `handleServerRequest` to immediately
@@ -56,7 +60,14 @@ export function handleServerRequest(args: HandleServerRequestArgs): boolean {
   }
 
   if (method === 'item/fileChange/requestApproval' || method === 'applyPatchApproval') {
-    const payload = { changes: p.changes, reason: p.reason }
+    const details = args.resolveFileChange?.(p)
+    const payload = {
+      changes: details?.changes ?? p.changes,
+      cwd: details?.cwd,
+      grantRoot: p.grantRoot ?? null,
+      reason: p.reason,
+      operationApprovalAvailable: Boolean(details && details.changes.length > 0),
+    }
     if (autoApprove?.('Edit', payload)) {
       respond?.(requestId, { decision: 'accept' })
       return true

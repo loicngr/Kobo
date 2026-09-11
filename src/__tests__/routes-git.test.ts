@@ -152,7 +152,7 @@ describe('GET /api/git/orphan-worktrees', () => {
         suggestedSourceBranch: 'main',
       },
     ]
-    vi.mocked(worktreeService.listOrphanWorktrees).mockReturnValue(orphans)
+    vi.mocked(worktreeService.listOrphanWorktrees).mockResolvedValue(orphans)
 
     const res = await app.request('/api/git/orphan-worktrees?projectPath=/repo')
     expect(res.status).toBe(200)
@@ -171,7 +171,7 @@ describe('GET /api/git/orphan-worktrees', () => {
   it('returns an empty array when there are no orphan worktrees', async () => {
     mockAll.mockReturnValue([])
     mockPrepare.mockReturnValue({ all: mockAll })
-    vi.mocked(worktreeService.listOrphanWorktrees).mockReturnValue([])
+    vi.mocked(worktreeService.listOrphanWorktrees).mockResolvedValue([])
 
     const res = await app.request('/api/git/orphan-worktrees?projectPath=/repo')
     expect(res.status).toBe(200)

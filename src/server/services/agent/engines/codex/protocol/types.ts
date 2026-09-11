@@ -32,7 +32,7 @@ export type ModelReasoningEffort = 'none' | 'low' | 'medium' | 'high' | 'xhigh' 
  * when `mode = 'plan'`. Set per-turn via `TurnStartParams.collaborationMode`.
  *
  * Kōbō's `plan` permission mode maps to `'plan'` here. All other Kōbō modes
- * leave the field unset (Codex defaults to `'default'`).
+ * explicitly send `'default'` to reset a previous sticky plan mode.
  */
 export type ModeKind = 'plan' | 'default'
 
@@ -80,7 +80,10 @@ export type InitializeResponse = {
 // UserInput (subset — text and local image only)
 // ---------------------------------------------------------------------------
 
-export type UserInput = { type: 'text'; text: string } | { type: 'localImage'; path: string }
+export type TextElement = { byteRange: { start: number; end: number }; placeholder: string | null }
+export type UserInput =
+  | { type: 'text'; text: string; text_elements: TextElement[] }
+  | { type: 'localImage'; path: string }
 
 // ---------------------------------------------------------------------------
 // Thread / ThreadStart
@@ -116,6 +119,8 @@ export type Thread = {
 
 export type ThreadStartResponse = {
   thread: Thread
+  /** Resolved model returned by both thread/start and thread/resume. */
+  model: string
 }
 
 // ---------------------------------------------------------------------------
@@ -152,14 +157,14 @@ export type TurnStartParams = {
 }
 
 export type TurnStartResponse = {
-  turnId: string
+  turn: { id: string; status: 'completed' | 'interrupted' | 'failed' | 'inProgress' }
 }
 
 export type TurnSteerParams = {
   threadId: string
   expectedTurnId: string
   clientUserMessageId?: string | null
-  input: Array<{ type: 'text'; text: string; text_elements: unknown[] }>
+  input: Array<{ type: 'text'; text: string; text_elements: TextElement[] }>
 }
 
 export type TurnSteerResponse = {
@@ -168,7 +173,7 @@ export type TurnSteerResponse = {
 
 export type TurnInterruptParams = {
   threadId: string
-  turnId?: string
+  turnId: string
 }
 
 // ---------------------------------------------------------------------------
@@ -212,7 +217,7 @@ export type FileChangeItem = {
   id: string
   type: 'fileChange'
   changes: FileUpdateChange[]
-  status: 'completed' | 'failed'
+  status: 'inProgress' | 'completed' | 'failed' | 'declined'
 }
 
 export type McpToolCallItem = {
@@ -384,7 +389,10 @@ export type AgentMessageDeltaNotification = {
 }
 
 export type ErrorNotification = {
-  message: string
+  error: { message: string }
+  willRetry: boolean
+  threadId: string
+  turnId: string
 }
 
 // ---------------------------------------------------------------------------
@@ -408,7 +416,9 @@ export type FileChangeRequestApprovalParams = {
   threadId: string
   turnId: string
   itemId: string
+  startedAtMs: number
   reason?: string | null
+  grantRoot?: string | null
 }
 
 export type FileChangeRequestApprovalResponse = {

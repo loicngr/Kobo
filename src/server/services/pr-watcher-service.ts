@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import { fetchSourceBranchAsync } from '../utils/git-ops.js'
 import { withGitRepoLock } from '../utils/git-repo-lock.js'
-import { isWorkspaceLifecycleBusy } from '../utils/workspace-lifecycle-guard.js'
+import { isWorkspaceLifecycleBusy, withWorkspaceLifecycleGuard } from '../utils/workspace-lifecycle-guard.js'
 import { hasController } from './agent/orchestrator.js'
 import { stopDevServer } from './dev-server-service.js'
 import { getForgeProvider } from './forge/registry.js'
@@ -123,16 +123,20 @@ function markUnread(workspaceId: string): void {
   }
 }
 
-function autoRestoreManuallyRecreatedWorktrees(): void {
+async function autoRestoreManuallyRecreatedWorktrees(): Promise<void> {
   for (const ws of listArchivedWorkspaces()) {
     if (!ws.worktreePurgedAt || !ws.worktreeOwned || isWorkspaceLifecycleBusy(ws.id)) continue
     if (!fs.existsSync(ws.worktreePath)) continue
-    if (!isMatchingWorkspaceWorktree(ws)) continue
     try {
-      const restored = restoreWorktreeFromDisk(ws.id)
-      invalidateWorkspacePrCaches(ws.id)
-      emitEphemeral(ws.id, 'workspace:worktree-restored', { workspace: restored })
-      console.log(`[pr-watcher] auto-restored worktree for workspace '${ws.name}' (manual restore detected)`)
+      await withWorkspaceLifecycleGuard(ws.id, async () => {
+        const current = getWorkspace(ws.id)
+        if (!current?.worktreePurgedAt || !current.worktreeOwned) return
+        if (!(await isMatchingWorkspaceWorktree(current))) return
+        const restored = restoreWorktreeFromDisk(ws.id)
+        invalidateWorkspacePrCaches(ws.id)
+        emitEphemeral(ws.id, 'workspace:worktree-restored', { workspace: restored })
+        console.log(`[pr-watcher] auto-restored worktree for workspace '${ws.name}' (manual restore detected)`)
+      })
     } catch (err) {
       console.error(`[pr-watcher] auto-restore failed for '${ws.name}':`, err instanceof Error ? err.message : err)
     }
@@ -140,7 +144,7 @@ function autoRestoreManuallyRecreatedWorktrees(): void {
 }
 
 export async function checkPrStatuses(): Promise<void> {
-  autoRestoreManuallyRecreatedWorktrees()
+  await autoRestoreManuallyRecreatedWorktrees()
   const workspaces = listWorkspaces(false) // non-archived only
 
   // Clean up entries for workspaces that no longer exist

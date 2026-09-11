@@ -45,6 +45,10 @@
       </div>
     </div>
 
+    <div v-if="store.indexStatus.state === 'building'" class="text-caption text-kobo-3 q-mt-sm" role="status">
+      {{ $t('search.indexing', { processed: store.indexStatus.processed, total: store.indexStatus.total }) }}
+    </div>
+    <div v-else-if="store.indexStatus.state === 'error'" class="text-caption text-negative q-mt-sm" role="status">{{ $t('search.indexUnavailable') }}</div>
     <q-separator dark class="q-my-md" />
 
     <div v-if="store.loading" class="text-kobo-3 text-caption">{{ $t('search.loading') }}</div>
@@ -87,14 +91,16 @@
 <script setup lang="ts">
 import DrawerToggleButton from 'src/components/DrawerToggleButton.vue'
 import TourReplayButton from 'src/components/TourReplayButton.vue'
+import { useSearchIndexStatus } from 'src/composables/use-search-index-status'
 import { useTours } from 'src/composables/use-tours'
 import { type SearchResult, useSearchStore } from 'src/stores/search'
 import { useTimeAgo } from 'src/utils/formatters'
-import { onMounted, ref, watch } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 
 const store = useSearchStore()
+useSearchIndexStatus(() => store.search(true))
 const router = useRouter()
 const { t } = useI18n()
 const { timeAgo } = useTimeAgo()
@@ -106,6 +112,10 @@ onMounted(() => {
 
 const inputEl = ref<HTMLInputElement | null>(null)
 let debounceTimer: ReturnType<typeof setTimeout> | null = null
+onUnmounted(() => {
+  if (debounceTimer) clearTimeout(debounceTimer)
+  store.cancel()
+})
 
 function scheduleSearch(): void {
   if (debounceTimer) clearTimeout(debounceTimer)
@@ -137,7 +147,7 @@ function openResult(result: SearchResult): void {
 
 function typeLabel(type: string): string {
   if (type === 'user:message') return t('search.eventType.userMessage')
-  if (type === 'agent:output') return t('search.eventType.agentOutput')
+  if (type === 'agent:output' || type === 'agent:event') return t('search.eventType.agentOutput')
   return type
 }
 </script>

@@ -141,3 +141,8 @@ release-version-check:
 	  exit 1; \
 	fi; \
 	echo "✓ Version $$version not yet released."
+
+# Explicit live-engine check; requires credentials and never runs in ci.
+.PHONY: test-mcp-live
+test-mcp-live:
+	npm run test:mcp:live

@@ -4,6 +4,7 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema, type Tool } from '@modelcontextprotocol/sdk/types.js'
 import type Database from 'better-sqlite3'
 import { getDb } from '../server/db/index.js'
+import { WORKSPACE_DIALOGUE_TOOLS } from '../shared/workspace-dialogue-tools.js'
 import {
   createTaskHandler,
   cronListHandler,
@@ -25,6 +26,7 @@ import {
   setWorkspaceAgentDescriptionHandler,
   updateTaskHandler,
 } from './kobo-tasks-handlers.js'
+import { callWorkspaceDialogueTool } from './workspace-dialogue-client.js'
 
 const workspaceId = process.env.KOBO_WORKSPACE_ID
 const dbPath = process.env.KOBO_DB_PATH
@@ -122,9 +124,12 @@ async function backendRequest(
   body?: unknown,
 ): Promise<unknown> {
   const url = `${backendUrl}${pathname}`
-  const init: RequestInit = { method }
+  const headers: Record<string, string> = process.env.KOBO_NETWORK_TOKEN
+    ? { 'X-Kobo-Token': process.env.KOBO_NETWORK_TOKEN }
+    : {}
+  const init: RequestInit = { method, headers }
   if (body !== undefined) {
-    init.headers = { 'Content-Type': 'application/json' }
+    headers['Content-Type'] = 'application/json'
     init.body = JSON.stringify(body)
   }
   const res = await fetch(url, init)
@@ -537,6 +542,7 @@ const WORKSPACE_SCOPED_TOOLS: Tool[] = [
 ]
 
 const GLOBAL_TOOLS: typeof WORKSPACE_SCOPED_TOOLS = [
+  ...WORKSPACE_DIALOGUE_TOOLS,
   {
     name: 'list_workspaces',
     description:
@@ -668,6 +674,17 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   try {
+    if (WORKSPACE_DIALOGUE_TOOLS.some((tool) => tool.name === name)) {
+      if (workspaceId && a.workspace_id === workspaceId && name === 'send_workspace_message')
+        return fail('Use the normal conversation to communicate in your own workspace.')
+      return await callWorkspaceDialogueTool(
+        backendUrl,
+        name,
+        a,
+        process.env.KOBO_NETWORK_TOKEN,
+        process.env.KOBO_MCP_CLIENT_NAME ?? server.getClientVersion()?.name,
+      )
+    }
     if (name === 'list_tasks') {
       return ok(listTasksHandler(db, workspaceId!))
     }

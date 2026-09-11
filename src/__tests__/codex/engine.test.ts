@@ -104,11 +104,12 @@ function pushInitializeResponse(id = 1) {
 }
 
 /** Thread start response. */
-function pushThreadStartResponse(threadId: string, id = 2) {
+function pushThreadStartResponse(threadId: string, id = 2, model: unknown = 'gpt-resolved') {
   pushLine({
     jsonrpc: '2.0',
     id,
     result: {
+      model,
       thread: {
         id: threadId,
         sessionId: 'sess_1',
@@ -124,7 +125,7 @@ function pushThreadStartResponse(threadId: string, id = 2) {
 
 /** Turn start response. */
 function pushTurnStartResponse(turnId = 'turn_1', id = 3) {
-  pushLine({ jsonrpc: '2.0', id, result: { turnId } })
+  pushLine({ jsonrpc: '2.0', id, result: { turn: { id: turnId, status: 'inProgress' } } })
 }
 
 /** Notification helper. */
@@ -143,6 +144,70 @@ function resetChild() {
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
+
+describe('createCodexEngine — resolved default model', () => {
+  it.each([
+    { model: 'auto', resume: false, mode: 'plan' as const },
+    { model: undefined, resume: false, mode: 'bypass' as const },
+    { model: 'auto', resume: true, mode: 'bypass' as const },
+    { model: undefined, resume: true, mode: 'plan' as const },
+    { model: 'gpt-explicit', resume: false, mode: 'plan' as const },
+    { model: 'gpt-explicit', resume: true, mode: 'bypass' as const },
+  ])('uses the resolved thread model while resetting collaboration mode: %j', async ({ model, resume, mode }) => {
+    resetChild()
+    await createCodexEngine().start(
+      {
+        ...BASE_OPTIONS,
+        model,
+        agentPermissionMode: mode,
+        ...(resume ? { resumeFromEngineSessionId: 'thr_model' } : {}),
+      },
+      () => {},
+    )
+    try {
+      await flush(5)
+      pushInitializeResponse()
+      await flush(5)
+      pushThreadStartResponse('thr_model', 2, 'gpt-resolved')
+      await flush(5)
+      const requests = _child._written.map((line) => JSON.parse(line))
+      const thread = requests.find((request) => request.method === (resume ? 'thread/resume' : 'thread/start'))
+      expect(thread.params.model).toBe(model === 'auto' ? undefined : model)
+      const turn = requests.find((request) => request.method === 'turn/start')
+      expect(turn?.params.collaborationMode).toMatchObject({
+        mode: mode === 'plan' ? 'plan' : 'default',
+        settings: { model: model && model !== 'auto' ? model : 'gpt-resolved' },
+      })
+    } finally {
+      _child.kill('SIGTERM')
+      await flush(5)
+    }
+  })
+
+  it.each([null, '', 'auto', undefined])(
+    'fails clearly when automatic selection has no resolved model: %j',
+    async (model) => {
+      resetChild()
+      const events: AgentEvent[] = []
+      await createCodexEngine().start({ ...BASE_OPTIONS, model: 'auto' }, (event) => events.push(event))
+      try {
+        await flush(5)
+        pushInitializeResponse()
+        await flush(5)
+        if (model === undefined) pushLine({ jsonrpc: '2.0', id: 2, result: { thread: { id: 'thr_model' } } })
+        else pushThreadStartResponse('thr_model', 2, model)
+        await flush(5)
+        expect(_child._written.some((line) => JSON.parse(line).method === 'turn/start')).toBe(false)
+        expect(events).toContainEqual(
+          expect.objectContaining({ kind: 'error', message: expect.stringContaining('resolved model') }),
+        )
+      } finally {
+        _child.kill('SIGTERM')
+        await flush(5)
+      }
+    },
+  )
+})
 
 describe('createCodexEngine — happy path', () => {
   it('emits turn:completed before session:ended on a successful turn', async () => {
@@ -480,6 +545,7 @@ describe('createCodexEngine — resume', () => {
       jsonrpc: '2.0',
       id: 2,
       result: {
+        model: 'gpt-resumed',
         thread: {
           id: 'thr_old',
           sessionId: 'sess_2',
@@ -1252,4 +1318,82 @@ it.each([false, true])('uses the stream deadline after a completed plan (foregro
   } finally {
     vi.useRealTimers()
   }
+})
+
+describe('canonical error and interrupt notifications', () => {
+  it('keeps retryable structured errors transient and interrupts the active turn', async () => {
+    resetChild()
+    const events: AgentEvent[] = []
+    const proc = await createCodexEngine().start(BASE_OPTIONS, (ev) => events.push(ev))
+    await flush(10)
+    pushInitializeResponse()
+    await flush(5)
+    pushThreadStartResponse('thr_contract')
+    await flush(5)
+    pushTurnStartResponse('turn_contract')
+    await flush(5)
+    pushNotification('error', {
+      error: { message: 'temporarily unavailable' },
+      willRetry: true,
+      threadId: 'thr_contract',
+      turnId: 'turn_contract',
+    })
+    await flush(5)
+    expect(events.some((ev) => ev.kind === 'error')).toBe(false)
+    proc.interrupt()
+    await flush(5)
+    const request = _child._written.map((line) => JSON.parse(line)).find((line) => line.method === 'turn/interrupt')
+    pushLine({ jsonrpc: '2.0', id: request.id, result: {} })
+    pushNotification('turn/completed', {
+      threadId: 'thr_contract',
+      turn: { id: 'turn_contract', status: 'completed', error: null },
+    })
+    await flush()
+    expect(request.params).toEqual({ threadId: 'thr_contract', turnId: 'turn_contract' })
+    expect(events.find((ev) => ev.kind === 'session:ended')).toMatchObject({ reason: 'completed' })
+  })
+})
+
+it('correlates file approvals to the exact thread, turn and item without reusing other changes', async () => {
+  resetChild()
+  const events: AgentEvent[] = []
+  await createCodexEngine().start(BASE_OPTIONS, (ev) => events.push(ev))
+  await flush(10)
+  pushInitializeResponse()
+  await flush(5)
+  pushThreadStartResponse('thr_files')
+  await flush(5)
+  pushTurnStartResponse('turn_files')
+  await flush(5)
+  const changes = [{ path: '/workspace/a.ts', kind: { type: 'add' }, diff: '+safe' }]
+  pushNotification('item/started', {
+    threadId: 'thr_files',
+    turnId: 'turn_files',
+    startedAtMs: 0,
+    item: { id: 'edit_a', type: 'fileChange', changes, status: 'inProgress' },
+  })
+  for (const [id, threadId, turnId, itemId] of [
+    [100, 'thr_files', 'turn_files', 'edit_a'],
+    [101, 'thr_files', 'turn_files', 'edit_b'],
+    [102, 'thr_other', 'turn_files', 'edit_a'],
+    [103, 'thr_files', 'turn_other', 'edit_a'],
+  ]) {
+    pushLine({
+      jsonrpc: '2.0',
+      id,
+      method: 'item/fileChange/requestApproval',
+      params: { threadId, turnId, itemId, startedAtMs: 0, reason: null, grantRoot: null },
+    })
+  }
+  await flush()
+  const approvals = events.filter(
+    (ev): ev is Extract<AgentEvent, { kind: 'session:user-input-requested' }> =>
+      ev.kind === 'session:user-input-requested',
+  )
+  expect(approvals).toHaveLength(4)
+  expect(approvals[0].payload).toMatchObject({ changes, cwd: '/workspace', operationApprovalAvailable: true })
+  for (const approval of approvals.slice(1))
+    expect(approval.payload).toMatchObject({ operationApprovalAvailable: false })
+  pushNotification('turn/completed', { threadId: 'thr_files', turn: { id: 'turn_files', status: 'completed' } })
+  await flush()
 })

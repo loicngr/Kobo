@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia'
+import { is } from 'quasar'
 import { disposeTerminalEntry } from 'src/services/terminal-registry'
 import { getWorkspaceQueueHost } from 'src/services/workspace-queue-bridge'
 import { apiFetch } from 'src/utils/api'
@@ -340,6 +341,7 @@ export interface PrSnapshot {
 }
 
 export interface PendingCron {
+  validationError?: string
   id: string
   workspaceId: string
   expression: string
@@ -371,6 +373,7 @@ const _workspaceEventVersions = new Map<string, number>()
 const _prSnapshotVersions = new Map<string, number>()
 const _sessionsRequestVersions = new Map<string, number>()
 const _workspaceDetailsRequestVersions = new Map<string, number>()
+const _pendingInputVersions = new Map<string, number>()
 const _worktreeRestorations = new WeakMap<object, Map<string, Promise<Workspace>>>()
 
 function markPrSnapshotChanged(workspaceId: string): void {
@@ -1497,8 +1500,10 @@ export const useWorkspaceStore = defineStore('workspace', {
           throw new Error(body.error ?? `HTTP ${res.status}`)
         }
         const session: AgentSession = await res.json()
-        this.sessions.unshift(session)
-        this.selectSession(session.id)
+        if (this.selectedWorkspaceId === workspaceId) {
+          this.sessions.unshift(session)
+          this.selectSession(session.id)
+        }
         return session
       } catch (err) {
         console.error('[workspace store] createSession failed:', err)
@@ -1692,12 +1697,14 @@ export const useWorkspaceStore = defineStore('workspace', {
       const requestToken = ++_workspacesInfoRequestToken
       const eventVersionsAtStart = new Map(_workspaceEventVersions)
       const prVersionsAtStart = new Map(_prSnapshotVersions)
+      const pendingAtStart = new Map(_pendingInputVersions)
       try {
         const data = await apiFetch<{
           workspaces: Workspace[]
           prSnapshots: Record<string, PrSnapshot>
           gitStats: Record<string, GitStats>
           agentLiveness?: Record<string, AgentLiveness>
+          pendingInputs?: Record<string, PendingItem[]>
         }>('/api/workspaces/info', { cache: 'no-store' })
         // The backend answered: that is true whether or not this particular
         // response is still the freshest one, so lift the banner before the
@@ -1709,6 +1716,22 @@ export const useWorkspaceStore = defineStore('workspace', {
         // Full replacement, never a merge: an entry that disappeared means the
         // controller is gone, which is the single most important thing to show.
         this.agentLiveness = data.agentLiveness ?? {}
+        if (data.pendingInputs) {
+          for (const workspace of data.workspaces) {
+            if ((_pendingInputVersions.get(workspace.id) ?? 0) !== (pendingAtStart.get(workspace.id) ?? 0)) continue
+            const current = this.pendingQueue[workspace.id] ?? []
+            const byId = new Map(current.map((item) => [item.toolCallId, item]))
+            // Question forms reset when their input changes. Reuse unchanged
+            // items so polling does not erase an answer still being written.
+            const incoming = (data.pendingInputs[workspace.id] ?? []).map((item) => {
+              const previous = byId.get(item.toolCallId)
+              return previous && is.deepEqual(previous, item) ? previous : item
+            })
+            if (incoming.length === current.length && incoming.every((item, index) => item === current[index])) continue
+            this.clearAllPending(workspace.id)
+            for (const item of incoming) this.enqueuePending(workspace.id, item)
+          }
+        }
         // Every workspace covered by this snapshot now has a confirmed
         // liveness read, whether or not it appears in `agentLiveness` above —
         // absence from the map above IS the confirmation for those ids.
@@ -1994,6 +2017,7 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     /** Append an item to the pending queue for a workspace. */
     enqueuePending(workspaceId: string, item: PendingItem): void {
+      _pendingInputVersions.set(workspaceId, (_pendingInputVersions.get(workspaceId) ?? 0) + 1)
       const arr = this.pendingQueue[workspaceId] ?? []
       // Dedup by toolCallId — a `session:user-input-requested` event can land
       // twice (live arrival + replay before purge succeeded); without this
@@ -2018,6 +2042,7 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     /** Remove and return the head of the queue. */
     dequeuePending(workspaceId: string): PendingItem | undefined {
+      _pendingInputVersions.set(workspaceId, (_pendingInputVersions.get(workspaceId) ?? 0) + 1)
       const arr = this.pendingQueue[workspaceId]
       if (!arr || arr.length === 0) return undefined
       const head = arr.shift()
@@ -2043,6 +2068,7 @@ export const useWorkspaceStore = defineStore('workspace', {
      * where unscoped clears were opt-in).
      */
     clearPendingForSession(workspaceId: string, agentSessionId: string | null): void {
+      _pendingInputVersions.set(workspaceId, (_pendingInputVersions.get(workspaceId) ?? 0) + 1)
       if (agentSessionId === null) return
       const arr = this.pendingQueue[workspaceId]
       if (!arr) return
@@ -2058,6 +2084,7 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     /** Wipe the whole queue for a workspace (e.g. user explicit stop). */
     clearAllPending(workspaceId: string): void {
+      _pendingInputVersions.set(workspaceId, (_pendingInputVersions.get(workspaceId) ?? 0) + 1)
       delete this.pendingQueue[workspaceId]
       delete this.pendingDeferred[workspaceId]
     },

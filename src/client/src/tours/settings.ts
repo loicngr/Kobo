@@ -1,4 +1,4 @@
-import { clickAnchor } from './dom'
+import { anchorPresent, clickAnchor } from './dom'
 import type { TourDefinition, TourStep } from './types'
 
 /**
@@ -33,5 +33,17 @@ export const settingsTour: TourDefinition = {
   id: 'settings',
   route: 'settings',
   i18nKey: 'tours.settings',
-  steps: (Object.keys(SETTINGS_GROUPS) as SettingsGroup[]).map(groupStep),
+  steps: [
+    ...(Object.keys(SETTINGS_GROUPS) as SettingsGroup[]).map(groupStep),
+    {
+      id: 'settings-mcp',
+      anchor: 'settings-mcp',
+      i18nKey: 'tours.settings.mcp',
+      clickTarget: 'settings-nav-general',
+      beforeShow: () => clickAnchor('settings-nav-general', 'settings-mcp'),
+      // The tab switch renders the panel in beforeShow; gate on its available navigation.
+      when: () => anchorPresent('settings-nav-general'),
+      gate: 'dom',
+    },
+  ],
 }

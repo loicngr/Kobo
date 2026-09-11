@@ -28,20 +28,20 @@ describe('applyBranchStrategy', () => {
     repo.git(['checkout', 'main'])
   }
 
-  it('fast-forwards a branch that is only behind', () => {
+  it('fast-forwards a branch that is only behind', async () => {
     branchBehindOrigin()
     applyBranchStrategy(repo.path, 'feat/s', 'fast-forward')
     expect(repo.git(['rev-parse', 'feat/s'])).toBe(repo.git(['rev-parse', 'origin/feat/s']))
   })
 
-  it('leaves the branch alone on keep', () => {
+  it('leaves the branch alone on keep', async () => {
     branchBehindOrigin()
     const before = repo.git(['rev-parse', 'feat/s'])
     applyBranchStrategy(repo.path, 'feat/s', 'keep')
     expect(repo.git(['rev-parse', 'feat/s'])).toBe(before)
   })
 
-  it('creates a backup branch before discarding local commits', () => {
+  it('creates a backup branch before discarding local commits', async () => {
     branchBehindOrigin()
     repo.git(['checkout', 'feat/s'])
     repo.commit('c.txt', 'c\n', 'feat: local only')
@@ -53,7 +53,7 @@ describe('applyBranchStrategy', () => {
     expect(repo.git(['rev-parse', 'feat/s'])).toBe(repo.git(['rev-parse', 'origin/feat/s']))
   })
 
-  it('replays local commits on top of origin when rebasing', () => {
+  it('replays local commits on top of origin when rebasing', async () => {
     branchBehindOrigin()
     repo.git(['checkout', 'feat/s'])
     repo.commit('d.txt', 'd\n', 'feat: mine')
@@ -63,7 +63,7 @@ describe('applyBranchStrategy', () => {
     expect(() => repo.git(['merge-base', '--is-ancestor', 'origin/feat/s', 'feat/s'])).not.toThrow()
   })
 
-  it('restores the original checkout after a clean rebase', () => {
+  it('restores the original checkout after a clean rebase', async () => {
     branchBehindOrigin()
     repo.git(['checkout', 'feat/s'])
     repo.commit('e.txt', 'e\n', 'feat: mine again')
@@ -91,7 +91,7 @@ describe('resolvePrCheckout', () => {
 
   it('creates the worktree from origin when nothing exists locally', async () => {
     remoteOnlyBranch()
-    const report = diagnoseLocalState(repo.path, 'feat/r', null)
+    const report = await diagnoseLocalState(repo.path, 'feat/r', null)
     const result = await resolvePrCheckout({
       projectPath: repo.path,
       headBranch: 'feat/r',
@@ -110,7 +110,7 @@ describe('resolvePrCheckout', () => {
     remoteOnlyBranch()
     const wt = path.join(repo.path, '.worktrees', 'feat-r')
     repo.git(['worktree', 'add', '-b', 'feat/r', wt, 'origin/feat/r'])
-    const report = diagnoseLocalState(repo.path, 'feat/r', null)
+    const report = await diagnoseLocalState(repo.path, 'feat/r', null)
     expect(report.worktree.state).toBe('orphan')
     const result = await resolvePrCheckout({
       projectPath: repo.path,
@@ -133,7 +133,7 @@ describe('resolvePrCheckout', () => {
       fs.writeFileSync(path.join(wt, 'a.txt'), 'staged work\n')
       repo.git(['add', 'a.txt'], wt)
       fs.writeFileSync(path.join(wt, 'a.txt'), 'unstaged work\n')
-      const report = diagnoseLocalState(repo.path, 'feat/r', null)
+      const report = await diagnoseLocalState(repo.path, 'feat/r', null)
       const before = repo.git(['show-ref'])
       await expect(
         resolvePrCheckout({
@@ -157,7 +157,7 @@ describe('resolvePrCheckout', () => {
     const wt = path.join(repo.path, '.worktrees', 'feat-r')
     repo.git(['worktree', 'add', '-b', 'feat/r', wt, 'origin/feat/r'])
     const destination = path.join(repo.path, '.worktrees', 'elsewhere')
-    const report = diagnoseLocalState(repo.path, 'feat/r', null)
+    const report = await diagnoseLocalState(repo.path, 'feat/r', null)
     const refs = repo.git(['show-ref'])
     await expect(
       resolvePrCheckout({
@@ -185,14 +185,14 @@ describe('resolvePrCheckout', () => {
     if (kind === 'symlink') fs.symlinkSync('target1', file)
     else fs.writeFileSync(file, 'v1\n')
     if (kind === 'staged') repo.git(['add', '.'], wt)
-    const report = diagnoseLocalState(repo.path, 'feat/r', null)
+    const report = await diagnoseLocalState(repo.path, 'feat/r', null)
     const fingerprint = await computeFingerprint(report)
     if (kind === 'symlink') {
       fs.unlinkSync(file)
       fs.symlinkSync('target2', file)
     } else fs.writeFileSync(file, 'v2\n')
     if (kind === 'staged') repo.git(['add', '.'], wt)
-    const fresh = diagnoseLocalState(repo.path, 'feat/r', null)
+    const fresh = await diagnoseLocalState(repo.path, 'feat/r', null)
     expect(fresh.localChanges).toEqual(report.localChanges)
     expect(await computeFingerprint(fresh)).not.toBe(fingerprint)
     await expect(
@@ -212,7 +212,7 @@ describe('resolvePrCheckout', () => {
     const wt = path.join(repo.path, '.worktrees', 'feat-r')
     repo.git(['worktree', 'add', '-b', 'feat/r', wt, 'origin/feat/r'])
     fs.writeFileSync(path.join(wt, 'a.txt'), 'dirty\n')
-    const report = diagnoseLocalState(repo.path, 'feat/r', null)
+    const report = await diagnoseLocalState(repo.path, 'feat/r', null)
     await resolvePrCheckout({
       projectPath: repo.path,
       headBranch: 'feat/r',
@@ -227,7 +227,7 @@ describe('resolvePrCheckout', () => {
 
   it('rejects a plan built on a stale fingerprint', async () => {
     remoteOnlyBranch()
-    const stale = await computeFingerprint(diagnoseLocalState(repo.path, 'feat/r', null))
+    const stale = await computeFingerprint(await diagnoseLocalState(repo.path, 'feat/r', null))
     repo.git(['checkout', '-b', 'feat/r', 'origin/feat/r'])
     repo.commit('drift.txt', 'x\n', 'feat: drift')
     repo.git(['checkout', 'main'])
@@ -252,7 +252,7 @@ describe('resolvePrCheckout', () => {
         baseBranch: 'main',
         worktreesPath: null,
         decisions: {},
-        fingerprint: await computeFingerprint(diagnoseLocalState(repo.path, 'feat/r', null)),
+        fingerprint: await computeFingerprint(await diagnoseLocalState(repo.path, 'feat/r', null)),
         afterWorktreeHook: () => {
           throw new Error('boom')
         },
@@ -265,7 +265,7 @@ describe('resolvePrCheckout', () => {
     remoteOnlyBranch()
     const wt = path.join(repo.path, '.worktrees', 'feat-r')
     repo.git(['worktree', 'add', '-b', 'feat/r', wt, 'origin/feat/r'])
-    const report = diagnoseLocalState(repo.path, 'feat/r', null)
+    const report = await diagnoseLocalState(repo.path, 'feat/r', null)
     await expect(
       resolvePrCheckout({
         projectPath: repo.path,
@@ -300,7 +300,7 @@ describe('resolvePrCheckout', () => {
     repo.git(['checkout', 'main'])
     repo.git(['branch', '-D', 'tmp/push'])
 
-    const report = diagnoseLocalState(repo.path, 'feat/r', null)
+    const report = await diagnoseLocalState(repo.path, 'feat/r', null)
     expect(report.worktree.state).toBe('orphan')
     expect(report.branch.state).toBe('behind')
 

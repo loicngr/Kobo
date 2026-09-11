@@ -46,7 +46,8 @@
         @click="decide('allow', 'once')"
       />
       <q-btn flat dense :label="t('permissionRequest.allowTurn')" :disable="submitting" @click="decide('allow', 'turn')" />
-      <q-btn flat dense :label="t('permissionRequest.allowOperation')" :disable="submitting" @click="decide('allow', 'operation')" />
+      <q-btn flat dense :label="t('permissionRequest.allowOperation')" :disable="submitting || !operationApprovalAvailable" @click="decide('allow', 'operation')" />
+      <span v-if="!operationApprovalAvailable" class="text-caption text-kobo-3">{{ t('permissionRequest.operationUnavailable') }}</span>
       <q-btn flat dense :label="t('permissionRequest.allowTool')" :disable="submitting" @click="decide('allow', 'tool')" />
       <q-btn
         :label="t('permissionRequest.deny')"
@@ -75,6 +76,15 @@ const pending = computed(() => {
   const head = store.peekPending(props.workspaceId)
   if (head?.kind !== 'permission') return undefined
   return head
+})
+
+const operationApprovalAvailable = computed(() => {
+  const input = pending.value?.toolInput
+  return (
+    !input ||
+    typeof input !== 'object' ||
+    (input as { operationApprovalAvailable?: boolean }).operationApprovalAvailable !== false
+  )
 })
 
 const formattedInput = computed(() => {
@@ -113,6 +123,7 @@ async function decide(
   scope: 'once' | 'turn' | 'operation' | 'tool' = 'once',
 ): Promise<void> {
   if (!pending.value) return
+  if (scope === 'operation' && !operationApprovalAvailable.value) return
   if (submitting.value) return
   submitting.value = true
   error.value = null

@@ -1,169 +1,124 @@
+import { Worker } from 'node:worker_threads'
 import { getDb } from '../db/index.js'
+import type { SearchIndexStatus, SearchOptions, SearchResult } from './search/indexer.js'
 
-/** A single search hit returned by `searchEvents`. */
-export interface SearchResult {
-  eventId: string
-  sessionId: string | null
-  workspaceId: string
-  workspaceName: string
-  archived: boolean
-  /** Persisted event type that supplied the readable text. */
-  type: string
-  /** ISO timestamp of the event (ws_events.created_at). */
-  timestamp: string
-  /** Up to ~230 chars of readable text surrounding the first match. */
-  snippet: string
+export type { SearchIndexStatus, SearchOptions, SearchResult } from './search/indexer.js'
+
+interface PendingSearch {
+  resolve: (results: SearchResult[]) => void
+  reject: (error: Error) => void
+  cleanup: () => void
 }
+let active:
+  | { worker: Worker; dbPath: string; pending: Map<number, PendingSearch>; status: SearchIndexStatus }
+  | undefined
+let requestId = 0
 
-export interface SearchOptions {
-  /** Max number of results to return. Default 50. */
-  limit?: number
-  /** Include matches from archived workspaces. Default false. */
-  includeArchived?: boolean
-}
-
-/** Event types that carry user-authored or assistant-authored readable text. */
-const SEARCHABLE_TYPES = ['user:message', 'agent:event', 'agent:output'] as const
-
-const SNIPPET_CONTEXT = 100 // chars on each side of the match
-
-/**
- * Extract the readable text content of a ws_events payload, or `null` when
- * the event carries no natural-language content (system events, rate-limit
- * pings, etc.).
- */
-function extractReadableText(type: string, payload: unknown): string | null {
-  if (!payload || typeof payload !== 'object') return null
-  const p = payload as Record<string, unknown>
-
-  if (type === 'user:message') {
-    return typeof p.content === 'string' ? p.content : null
+/** Start lazily for service consumers, eagerly at server boot. Never opens another home directory. */
+export function startSearchIndex(): void {
+  const dbPath = getDb().name
+  if (active?.dbPath === dbPath) return
+  if (active) void stopSearchIndex()
+  const development = import.meta.url.endsWith('.ts')
+  const entry = new URL(`./search/worker.${development ? 'ts' : 'js'}`, import.meta.url)
+  const worker = development
+    ? new Worker(
+        `const { workerData } = require('node:worker_threads'); import('tsx/esm/api').then(({ tsImport }) => tsImport(workerData.entry, workerData.parent));`,
+        {
+          eval: true,
+          workerData: { dbPath, entry: entry.href, parent: import.meta.url },
+        },
+      )
+    : new Worker(entry, { workerData: { dbPath } })
+  const state = {
+    worker,
+    dbPath,
+    pending: new Map<number, PendingSearch>(),
+    status: { state: 'building', processed: 0, total: 0 } as SearchIndexStatus,
   }
-
-  if (type === 'agent:output') {
-    // Claude Code streams `{type: 'assistant', message: {content: [{type: 'text', text: '...'}, ...]}}`
-    const msg = p.message as { content?: unknown } | undefined
-    if (msg && Array.isArray(msg.content)) {
-      const parts: string[] = []
-      for (const block of msg.content) {
-        if (block && typeof block === 'object') {
-          const b = block as { type?: unknown; text?: unknown }
-          if (b.type === 'text' && typeof b.text === 'string') parts.push(b.text)
-        }
-      }
-      return parts.length > 0 ? parts.join('\n') : null
+  active = state
+  worker.unref()
+  const fail = (error: Error) => {
+    state.status = { ...state.status, state: 'error', error: error.message }
+    for (const pending of state.pending.values()) {
+      pending.cleanup()
+      pending.reject(error)
     }
+    state.pending.clear()
   }
-
-  if (type === 'agent:event' && p.kind === 'message:text') {
-    return typeof p.text === 'string' ? p.text : null
-  }
-
-  return null
-}
-
-function buildSnippet(text: string, matchIndex: number, query: string): string {
-  const start = Math.max(0, matchIndex - SNIPPET_CONTEXT)
-  const end = Math.min(text.length, matchIndex + query.length + SNIPPET_CONTEXT)
-  const prefix = start > 0 ? '…' : ''
-  const suffix = end < text.length ? '…' : ''
-  return `${prefix}${text.slice(start, end).trim()}${suffix}`
-}
-
-interface Row {
-  id: string
-  workspace_id: string
-  session_id: string | null
-  workspace_name: string
-  archived_at: string | null
-  type: string
-  created_at: string
-  payload: string
-}
-
-/**
- * Full-text-ish search across `ws_events.payload` joined with `workspaces`.
- *
- * - Trimmed empty queries return `[]` without hitting the database.
- * - SQLite does the first filter via `LIKE '%q%'` on the raw payload JSON.
- *   Results are then post-filtered in JS against the **readable** text
- *   (extracted from the JSON) to avoid false positives like matches inside
- *   field names or schema strings.
- * - Snippets are 100 chars of context on either side of the first match.
- */
-export function searchEvents(query: string, options: SearchOptions = {}): SearchResult[] {
-  const trimmed = query.trim()
-  if (trimmed.length === 0) return []
-
-  const { limit = 50, includeArchived = false } = options
-
-  const db = getDb()
-  const typePlaceholders = SEARCHABLE_TYPES.map(() => '?').join(', ')
-  const archiveFilter = includeArchived ? '' : 'AND w.archived_at IS NULL'
-  const escapedQuery = trimmed.replace(/[\\%_]/g, '\\$&')
-  const likePattern = `%${escapedQuery}%`
-
-  const needle = trimmed.toLowerCase()
-  const results: SearchResult[] = []
-  const batchSize = Math.min(Math.max(limit * 3, 100), 500)
-  const statement = db.prepare(
-    `SELECT e.id, e.workspace_id, e.session_id, e.type, e.created_at, e.payload,
-            w.name AS workspace_name, w.archived_at
-     FROM ws_events e
-     JOIN workspaces w ON e.workspace_id = w.id
-     WHERE e.type IN (${typePlaceholders})
-       AND e.payload LIKE ? ESCAPE '\\'
-       ${archiveFilter}
-       AND (? IS NULL OR e.created_at < ? OR (e.created_at = ? AND e.id < ?))
-     ORDER BY e.created_at DESC, e.id DESC
-     LIMIT ?`,
+  worker.on('error', fail)
+  worker.on('exit', (code) => {
+    if (active === state) fail(new Error(`Search worker stopped (${code})`))
+  })
+  worker.on(
+    'message',
+    (message: { status?: SearchIndexStatus; id?: number; results?: SearchResult[]; error?: string }) => {
+      if (message.status) state.status = message.status
+      if (message.id !== undefined) {
+        const pending = state.pending.get(message.id)
+        if (!pending) return
+        state.pending.delete(message.id)
+        pending.cleanup()
+        if (message.error) pending.reject(new Error(message.error))
+        else pending.resolve(message.results ?? [])
+      }
+    },
   )
-  let cursorCreatedAt: string | null = null
-  let cursorId: string | null = null
+}
 
-  while (results.length < limit) {
-    const rows = statement.all(
-      ...SEARCHABLE_TYPES,
-      likePattern,
-      cursorCreatedAt,
-      cursorCreatedAt,
-      cursorCreatedAt,
-      cursorId,
-      batchSize,
-    ) as Row[]
+export function getSearchIndexStatus(): SearchIndexStatus {
+  startSearchIndex()
+  return { ...active!.status }
+}
 
-    for (const row of rows) {
-      let parsed: unknown
-      try {
-        parsed = JSON.parse(row.payload)
-      } catch {
-        continue
-      }
-      const text = extractReadableText(row.type, parsed)
-      if (!text) continue
-      const idx = text.toLowerCase().indexOf(needle)
-      if (idx < 0) continue
-
-      results.push({
-        eventId: row.id,
-        sessionId: row.session_id,
-        workspaceId: row.workspace_id,
-        workspaceName: row.workspace_name,
-        archived: row.archived_at !== null,
-        type: row.type,
-        timestamp: row.created_at,
-        snippet: buildSnippet(text, idx, trimmed),
-      })
-
-      if (results.length >= limit) break
+export async function searchEvents(
+  query: string,
+  options: SearchOptions = {},
+  signal?: AbortSignal,
+): Promise<SearchResult[]> {
+  if (!query.trim()) return []
+  if (signal?.aborted) throw new Error('Search cancelled')
+  startSearchIndex()
+  const state = active!
+  if (state.status.state === 'error') throw new Error(state.status.error ?? 'Search index unavailable')
+  const id = ++requestId
+  return new Promise((resolve, reject) => {
+    const cancel = (message: string) => {
+      state.pending.delete(id)
+      cleanup()
+      state.worker.postMessage({ id, cancel: true })
+      reject(new Error(message))
     }
+    const aborted = () => cancel('Search cancelled')
+    const timeout = setTimeout(() => cancel('Search timed out'), 10_000)
+    const cleanup = () => {
+      clearTimeout(timeout)
+      signal?.removeEventListener('abort', aborted)
+    }
+    state.pending.set(id, { resolve, reject, cleanup })
+    signal?.addEventListener('abort', aborted, { once: true })
+    state.worker.postMessage({ id, query, options })
+  })
+}
 
-    if (rows.length < batchSize) break
-    const last = rows.at(-1)
-    if (!last) break
-    cursorCreatedAt = last.created_at
-    cursorId = last.id
+export async function stopSearchIndex(): Promise<void> {
+  const state = active
+  if (!state) return
+  active = undefined
+  for (const pending of state.pending.values()) {
+    pending.cleanup()
+    pending.reject(new Error('Search index stopped'))
   }
-
-  return results
+  state.pending.clear()
+  if (state.worker.threadId === -1) return
+  await new Promise<void>((resolve) => {
+    const timeout = setTimeout(() => {
+      void state.worker.terminate()
+    }, 5_000)
+    state.worker.once('exit', () => {
+      clearTimeout(timeout)
+      resolve()
+    })
+    state.worker.postMessage({ stop: true })
+  })
 }

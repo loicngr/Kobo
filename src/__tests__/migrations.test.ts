@@ -9,10 +9,25 @@ import {
 } from '../server/db/migrations.js'
 import { initSchema } from '../server/db/schema.js'
 
+// Historical unit fixtures intentionally omit unrelated tables. Supply the event-log
+// table that has existed since v1 before exercising all later migrations.
+function migrateFixture(db: Database.Database): void {
+  if (
+    db
+      .prepare("SELECT 1 FROM sqlite_master WHERE name IN ('workspaces', 'schema_migrations', 'schema_version')")
+      .get() &&
+    !db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'ws_events'").get()
+  ) {
+    db.exec(`CREATE TABLE ws_events (id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+      type TEXT NOT NULL, payload TEXT NOT NULL, session_id TEXT, created_at TEXT NOT NULL)`)
+  }
+  runMigrations(db)
+}
+
 describe('runMigrations(db)', () => {
   it('crée toutes les tables requises (fresh install)', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
 
     const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name").all() as {
       name: string
@@ -31,7 +46,7 @@ describe('runMigrations(db)', () => {
 
   it('enregistre toutes les migrations dans schema_migrations (fresh install)', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
 
     const history = getMigrationHistory(db)
     // init-schema (v1) + all incremental migrations
@@ -42,8 +57,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 41', () => {
-    expect(SCHEMA_VERSION).toBe(41)
+  it('exporte SCHEMA_VERSION = 43', () => {
+    expect(SCHEMA_VERSION).toBe(43)
   })
 
   it('migration v33 records and backfills the engine on agent sessions', () => {
@@ -67,7 +82,7 @@ describe('runMigrations(db)', () => {
       )
     }
 
-    runMigrations(db)
+    migrateFixture(db)
 
     const columns = (db.prepare('PRAGMA table_info(agent_sessions)').all() as Array<{ name: string }>).map(
       (column) => column.name,
@@ -102,7 +117,7 @@ describe('runMigrations(db)', () => {
       db.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(version, `v${version}`, 'now')
     }
 
-    runMigrations(db)
+    migrateFixture(db)
     expect(db.prepare('SELECT * FROM session_event_metrics').get()).toMatchObject({
       workspace_id: 'ws-1',
       session_id: 'session-1',
@@ -151,7 +166,7 @@ describe('runMigrations(db)', () => {
       upgraded.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(version, `v${version}`, 'now')
     }
 
-    runMigrations(upgraded)
+    migrateFixture(upgraded)
 
     expect(
       (upgraded.prepare('PRAGMA table_info(agent_sessions)').all() as Array<{ name: string }>).map(
@@ -200,7 +215,7 @@ describe('runMigrations(db)', () => {
       upgraded.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(version, `v${version}`, 'now')
     }
 
-    runMigrations(upgraded)
+    migrateFixture(upgraded)
 
     const upgradedObjects = (
       upgraded
@@ -259,7 +274,7 @@ describe('runMigrations(db)', () => {
       upgraded.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(version, `v${version}`, 'now')
     }
 
-    runMigrations(upgraded)
+    migrateFixture(upgraded)
 
     expect(
       (upgraded.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>).map((column) => column.name),
@@ -311,7 +326,7 @@ describe('runMigrations(db)', () => {
       upgraded.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(version, `v${version}`, 'now')
     }
 
-    runMigrations(upgraded)
+    migrateFixture(upgraded)
 
     expect(
       (upgraded.prepare('PRAGMA table_info(pending_quota_backoffs)').all() as Array<{ name: string }>).map(
@@ -404,7 +419,7 @@ describe('runMigrations(db)', () => {
     insert.run('auto-strict', 'auto-accept', 'strict', now, now)
     insert.run('auto-interactive', 'auto-accept', 'interactive', now, now)
 
-    runMigrations(db)
+    migrateFixture(db)
 
     const rows = db.prepare('SELECT id, agent_permission_mode FROM workspaces ORDER BY id').all() as Array<{
       id: string
@@ -420,7 +435,7 @@ describe('runMigrations(db)', () => {
     expect(map['auto-interactive']).toBe('interactive')
 
     // Idempotent: a second run preserves the data and stays at the latest version.
-    runMigrations(db)
+    migrateFixture(db)
     const second = db.prepare('SELECT agent_permission_mode FROM workspaces WHERE id = ?').get('plan-bypass') as {
       agent_permission_mode: string
     }
@@ -443,7 +458,7 @@ describe('runMigrations(db)', () => {
       ].join('; '),
     )
 
-    runMigrations(db)
+    migrateFixture(db)
 
     // Legacy table should be dropped
     const hasLegacy = (
@@ -469,9 +484,9 @@ describe('runMigrations(db)', () => {
   it('est idempotent (peut être appelé plusieurs fois)', () => {
     const db = new Database(':memory:')
     expect(() => {
-      runMigrations(db)
-      runMigrations(db)
-      runMigrations(db)
+      migrateFixture(db)
+      migrateFixture(db)
+      migrateFixture(db)
     }).not.toThrow()
 
     // Should still have exactly the same number of records
@@ -482,7 +497,7 @@ describe('runMigrations(db)', () => {
 
   it('rolls back both schema changes and history when a migration fails', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
     const failingVersion = SCHEMA_VERSION + 1
     migrations.push({
       version: failingVersion,
@@ -507,13 +522,13 @@ describe('runMigrations(db)', () => {
 
   it("n'applique pas une migration déjà présente", () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
 
     const beforeCount = (
       db.prepare("SELECT count(*) as c FROM sqlite_master WHERE type='table'").get() as { c: number }
     ).c
 
-    runMigrations(db)
+    migrateFixture(db)
 
     const afterCount = (db.prepare("SELECT count(*) as c FROM sqlite_master WHERE type='table'").get() as { c: number })
       .c
@@ -524,7 +539,7 @@ describe('runMigrations(db)', () => {
 
   it('crée les index workspace_id après migration (fresh install)', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
 
     const indexes = db
       .prepare("SELECT name FROM sqlite_master WHERE type='index' AND name LIKE 'idx_%_workspace_id'")
@@ -567,7 +582,7 @@ describe('runMigrations(db)', () => {
       .all() as { name: string }[]
     expect(beforeIndexes.length).toBe(0)
 
-    runMigrations(db)
+    migrateFixture(db)
 
     // Indexes should now exist
     const afterIndexes = db
@@ -622,7 +637,7 @@ describe('runMigrations(db)', () => {
       "INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at) VALUES ('w1', 'test', '/tmp', 'main', 'feat', ?, ?)",
     ).run(now, now)
 
-    runMigrations(db)
+    migrateFixture(db)
 
     // has_unread column should exist with default value 0
     const row = db.prepare('SELECT has_unread FROM workspaces WHERE id = ?').get('w1') as { has_unread: number }
@@ -666,7 +681,7 @@ describe('runMigrations(db)', () => {
         (4, 'add-has-unread', '2025-01-01');
     `)
 
-    runMigrations(db)
+    migrateFixture(db)
 
     const cols = db.prepare('PRAGMA table_info(agent_sessions)').all() as { name: string }[]
     expect(cols.map((c) => c.name)).toContain('name')
@@ -678,7 +693,7 @@ describe('runMigrations(db)', () => {
 
   it('fresh install v5: agent_sessions a la colonne name', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
     const cols = db.prepare('PRAGMA table_info(agent_sessions)').all() as { name: string }[]
     expect(cols.map((c) => c.name)).toContain('name')
     db.close()
@@ -721,7 +736,7 @@ describe('runMigrations(db)', () => {
         ('e5', 'w1', 'agent:output', '{}', 'unknown-uuid', '2025-01-02');
     `)
 
-    runMigrations(db)
+    migrateFixture(db)
 
     // Events tagged with known claude_session_id should be rewritten to agent_sessions.id
     const events = db.prepare('SELECT id, session_id FROM ws_events ORDER BY id').all() as {
@@ -743,7 +758,7 @@ describe('runMigrations(db)', () => {
 
   it('migration v6 est idempotente (un second runMigrations ne re-modifie rien)', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
 
     // Insert legacy data AFTER the initial migration — this mimics events
     // that could have been written by an older backend still running
@@ -759,7 +774,7 @@ describe('runMigrations(db)', () => {
 
     // Run migrations a second time — schema_migrations already has v6, so the
     // backfill should NOT run again. The legacy row must remain unchanged.
-    runMigrations(db)
+    migrateFixture(db)
 
     const row = db.prepare('SELECT session_id FROM ws_events WHERE id = ?').get('e1') as {
       session_id: string | null
@@ -812,7 +827,7 @@ describe('runMigrations(db)', () => {
       "INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at) VALUES ('w1', 'test', '/tmp', 'main', 'feat', ?, ?)",
     ).run(now, now)
 
-    runMigrations(db)
+    migrateFixture(db)
 
     // favorited_at column should exist and be nullable
     const cols = db.prepare('PRAGMA table_info(workspaces)').all() as {
@@ -922,7 +937,7 @@ describe('runMigrations(db)', () => {
         VALUES ('s1', 'w1', 123, 'claude-uuid-preserved', 'completed', '2025-01-01');
     `)
 
-    runMigrations(db)
+    migrateFixture(db)
 
     // Migration should be recorded
     const history = getMigrationHistory(db)
@@ -1017,7 +1032,7 @@ describe('runMigrations(db)', () => {
     // Simulate a real v13 schema: run all migrations, then unwind the v14
     // history row + drop the column. SQLite's DROP COLUMN (3.35+) lets us
     // do this without rebuilding the table by hand.
-    runMigrations(db)
+    migrateFixture(db)
     db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(14)
     db.prepare('ALTER TABLE workspaces DROP COLUMN sentry_url').run()
 
@@ -1026,7 +1041,7 @@ describe('runMigrations(db)', () => {
       "INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, notion_url, created_at, updated_at) VALUES ('w1', 'preexisting', '/tmp', 'main', 'feat', 'https://www.notion.so/abc-1234567890abcdef1234567890abcd', ?, ?)",
     ).run(now, now)
 
-    runMigrations(db)
+    migrateFixture(db)
 
     const row = db.prepare('SELECT sentry_url, notion_url FROM workspaces WHERE id = ?').get('w1') as {
       sentry_url: string | null
@@ -1042,7 +1057,7 @@ describe('runMigrations(db)', () => {
 
   it('expose la colonne sentry_url sur un fresh install', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
     const cols = db.prepare("PRAGMA table_info('workspaces')").all() as Array<{
       name: string
       type: string
@@ -1059,7 +1074,7 @@ describe('runMigrations(db)', () => {
   it("ajoute les colonnes worktree_path et worktree_owned lors d'un upgrade v14 -> v15", () => {
     const db = new Database(':memory:')
     // Simulate a v14 schema by running all migrations then unwinding v15.
-    runMigrations(db)
+    migrateFixture(db)
     db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(15)
     db.prepare('ALTER TABLE workspaces DROP COLUMN worktree_path').run()
     db.prepare('ALTER TABLE workspaces DROP COLUMN worktree_owned').run()
@@ -1069,7 +1084,7 @@ describe('runMigrations(db)', () => {
       "INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at) VALUES ('w1', 'pre', '/tmp/proj', 'main', 'feature/foo', ?, ?)",
     ).run(now, now)
 
-    runMigrations(db)
+    migrateFixture(db)
 
     const row = db.prepare('SELECT worktree_path, worktree_owned FROM workspaces WHERE id = ?').get('w1') as {
       worktree_path: string
@@ -1085,7 +1100,7 @@ describe('runMigrations(db)', () => {
 
   it('expose les colonnes worktree_path et worktree_owned sur un fresh install', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
     const cols = db.prepare("PRAGMA table_info('workspaces')").all() as Array<{
       name: string
       type: string
@@ -1106,7 +1121,7 @@ describe('runMigrations(db)', () => {
 describe('migration v11: add-pending-wakeups-table', () => {
   it('adds pending_wakeups table with expected columns after runMigrations', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
 
     const table = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='pending_wakeups'").get()
     expect(table).toBeTruthy()
@@ -1140,7 +1155,7 @@ describe('migration v11: add-pending-wakeups-table', () => {
   it('v10 → v11 upgrade preserves existing workspace data', () => {
     const db = new Database(':memory:')
     // Seed via runMigrations up through v10, then simulate an existing row
-    runMigrations(db)
+    migrateFixture(db)
     db.prepare(
       `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -1161,7 +1176,7 @@ describe('migration v11: add-pending-wakeups-table', () => {
 describe('migration v12: add-auto-loop-columns', () => {
   it('adds 3 columns to workspaces with correct defaults', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
     const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{
       name: string
       dflt_value: string | null
@@ -1198,7 +1213,7 @@ describe('migration v12: add-auto-loop-columns', () => {
   // v12 migration with its data intact and the 3 new columns defaulted to 0.
   it('v11 → v12 upgrade preserves existing workspace data', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
 
     db.prepare(
       `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
@@ -1232,7 +1247,7 @@ describe('migration v12: add-auto-loop-columns', () => {
   // list) instead of the --dangerously-skip-permissions bypass default.
   it('v13 upgrade: workspaces gain permission_profile column defaulted to bypass', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
 
     db.prepare(
       `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
@@ -1251,7 +1266,7 @@ describe('migration v12: add-auto-loop-columns', () => {
 describe('usage_snapshots table', () => {
   it('is created by runMigrations on a fresh install', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
     const cols = db.prepare('PRAGMA table_info(usage_snapshots)').all() as Array<{ name: string }>
     const names = cols.map((c) => c.name).sort()
     expect(names).toEqual(['buckets_json', 'error_message', 'fetched_at', 'provider_id', 'status'])
@@ -1260,11 +1275,11 @@ describe('usage_snapshots table', () => {
 
   it('is created when applying migration v16 on a database that already has versions 1..15', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
     db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(16)
     db.prepare('DROP TABLE usage_snapshots').run()
 
-    runMigrations(db)
+    migrateFixture(db)
 
     const cols = db.prepare('PRAGMA table_info(usage_snapshots)').all() as Array<{ name: string }>
     expect(cols.length).toBe(5)
@@ -1279,7 +1294,7 @@ describe('usage_snapshots table', () => {
 describe('migration v18: add-pending-wakeup-agent-session-id', () => {
   it('adds the agent_session_id column to pending_wakeups (nullable)', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
 
     const cols = db.prepare('PRAGMA table_info(pending_wakeups)').all() as Array<{
       name: string
@@ -1324,7 +1339,7 @@ describe('migration v18: add-pending-wakeup-agent-session-id', () => {
     db.prepare("INSERT INTO workspaces VALUES ('w1', 'W', '/p', 'main', 'feat', 'idle', 'auto', ?, ?)").run(now, now)
     db.prepare('INSERT INTO pending_wakeups VALUES (?, ?, ?, ?, ?)').run('w1', now, 'resume', null, now)
 
-    runMigrations(db)
+    migrateFixture(db)
 
     const row = db.prepare('SELECT * FROM pending_wakeups WHERE workspace_id = ?').get('w1') as {
       workspace_id: string
@@ -1342,11 +1357,11 @@ describe('migration v19 — add-pending-quota-backoffs', () => {
   it('creates pending_quota_backoffs table on a v18 database', () => {
     const db = new Database(':memory:')
     // Build a v18 schema by running all migrations, then unwinding v19 history.
-    runMigrations(db)
+    migrateFixture(db)
     db.prepare('DELETE FROM schema_migrations WHERE version = ?').run(19)
     db.prepare('DROP TABLE IF EXISTS pending_quota_backoffs').run()
 
-    runMigrations(db)
+    migrateFixture(db)
 
     const cols = db.prepare('PRAGMA table_info(pending_quota_backoffs)').all() as Array<{
       name: string
@@ -1391,7 +1406,7 @@ describe('migration v19 — add-pending-quota-backoffs', () => {
 describe('migration v20 — add-workspace-description', () => {
   it('seeds a fresh DB with the description column', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
     const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string; type: string }>
     const desc = cols.find((c) => c.name === 'description')
     expect(desc).toBeDefined()
@@ -1466,7 +1481,7 @@ describe('migration v20 — add-workspace-description', () => {
        VALUES ('w1', 'Test', '/tmp/p', 'main', 'feature/x', 'created', 'claude-opus-4-7', 'auto', 'auto-accept', 'stopped', 0, 1, '[]', 'claude-code', 0, 0, 0, 'bypass', 'bypass', ?, ?)`,
     ).run(now, now)
 
-    runMigrations(db)
+    migrateFixture(db)
 
     const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
     expect(cols.some((c) => c.name === 'description')).toBe(true)
@@ -1483,7 +1498,7 @@ describe('migration v20 — add-workspace-description', () => {
 
   it('is idempotent (re-running migrations does not fail or duplicate the column)', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
     expect(() => runMigrations(db)).not.toThrow()
     const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
     const descCount = cols.filter((c) => c.name === 'description').length
@@ -1495,7 +1510,7 @@ describe('migration v20 — add-workspace-description', () => {
 describe('migration v21 — add-workspace-agent-description', () => {
   it('seeds a fresh DB with the agent_description column', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
     const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string; type: string }>
     const agentDesc = cols.find((c) => c.name === 'agent_description')
     expect(agentDesc).toBeDefined()
@@ -1571,7 +1586,7 @@ describe('migration v21 — add-workspace-agent-description', () => {
        VALUES ('w1', 'Test', '/tmp/p', 'main', 'feature/x', 'created', 'claude-opus-4-7', 'auto', 'auto-accept', 'stopped', 0, 1, '[]', 'claude-code', 0, 0, 0, 'bypass', 'bypass', 'human summary', ?, ?)`,
     ).run(now, now)
 
-    runMigrations(db)
+    migrateFixture(db)
 
     const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
     expect(cols.some((c) => c.name === 'agent_description')).toBe(true)
@@ -1589,8 +1604,8 @@ describe('migration v21 — add-workspace-agent-description', () => {
   it('is idempotent — re-running migrations does not fail or duplicate the column', () => {
     const db = new Database(':memory:')
     expect(() => {
-      runMigrations(db)
-      runMigrations(db)
+      migrateFixture(db)
+      migrateFixture(db)
     }).not.toThrow()
     const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
     const agentDescCount = cols.filter((c) => c.name === 'agent_description').length
@@ -1602,7 +1617,7 @@ describe('migration v21 — add-workspace-agent-description', () => {
 describe('migration v22 — add-pending-crons', () => {
   it('seeds a fresh DB with the pending_crons table', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
     const cols = db.prepare('PRAGMA table_info(pending_crons)').all() as Array<{
       name: string
       type: string
@@ -1695,7 +1710,7 @@ describe('migration v22 — add-pending-crons', () => {
        VALUES ('w1', 'Test', '/tmp/p', 'main', 'feature/x', 'created', 'claude-opus-4-7', 'auto', 'auto-accept', 'stopped', 0, 1, '[]', 'claude-code', 0, 0, 0, 'bypass', 'bypass', 'pre-existing description', 'pre-existing agent description', ?, ?)`,
     ).run(now, now)
 
-    runMigrations(db)
+    migrateFixture(db)
 
     const cols = db.prepare('PRAGMA table_info(pending_crons)').all() as Array<{ name: string }>
     expect(cols.some((c) => c.name === 'id')).toBe(true)
@@ -1712,7 +1727,7 @@ describe('migration v22 — add-pending-crons', () => {
 
   it('cascade deletes pending_crons on workspace delete', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
     // Foreign keys must be enabled for ON DELETE CASCADE to fire.
     db.pragma('foreign_keys = ON')
     db.prepare(
@@ -1732,7 +1747,7 @@ describe('migration v22 — add-pending-crons', () => {
 
   it('is idempotent — re-running migrations does not fail or duplicate the table', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
     expect(() => runMigrations(db)).not.toThrow()
     const dupes = db
       .prepare(
@@ -1749,7 +1764,7 @@ describe('migration v23 — add-pending-crons-one-shot', () => {
     const db = new Database(':memory:')
     db.pragma('foreign_keys = ON')
     initSchema(db)
-    runMigrations(db)
+    migrateFixture(db)
     const cols = db.prepare('PRAGMA table_info(pending_crons)').all() as Array<{
       name: string
       type: string
@@ -1796,7 +1811,7 @@ describe('migration v23 — add-pending-crons-one-shot', () => {
        VALUES ('c1', 'w1', '@hourly', 'tick', '2027-01-01T00:00:00Z', '2026-05-07T00:00:00Z')`,
     ).run()
 
-    runMigrations(db)
+    migrateFixture(db)
 
     const row = db.prepare('SELECT id, one_shot FROM pending_crons WHERE id=?').get('c1') as {
       id: string
@@ -1810,7 +1825,7 @@ describe('migration v23 — add-pending-crons-one-shot', () => {
   it('is idempotent — re-running runMigrations does not fail or add the column twice', () => {
     const db = new Database(':memory:')
     initSchema(db)
-    runMigrations(db)
+    migrateFixture(db)
     expect(() => runMigrations(db)).not.toThrow()
     const dupes = db
       .prepare('PRAGMA table_info(pending_crons)')
@@ -1830,14 +1845,14 @@ describe('getPendingMigrations(db)', () => {
 
   it('returns [] for a fully-migrated database', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
     expect(getPendingMigrations(db)).toEqual([])
     db.close()
   })
 
   it('lists versions not yet applied (database migrated by an older build)', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
     // Simulate a DB last migrated by an older Kōbō: drop the 2 latest records.
     const versionsDesc = migrations.map((m) => m.version).sort((a, b) => b - a)
     db.prepare('DELETE FROM schema_migrations WHERE version IN (?, ?)').run(versionsDesc[0], versionsDesc[1])
@@ -1852,7 +1867,7 @@ describe('getPendingMigrations(db)', () => {
 describe('runMigrations(db) — soft downgrade guard', () => {
   it('warns when the database carries a schema version newer than this build', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
     // Simulate a DB migrated by a FUTURE Kōbō build.
     db.prepare('INSERT INTO schema_migrations (version, name, applied_at) VALUES (?, ?, ?)').run(
       SCHEMA_VERSION + 5,
@@ -1861,7 +1876,7 @@ describe('runMigrations(db) — soft downgrade guard', () => {
     )
 
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    runMigrations(db)
+    migrateFixture(db)
     // Read calls BEFORE mockRestore — restoring also clears mock.calls.
     const warned = warnSpy.mock.calls.some((c) => String(c[0]).includes('Database schema version'))
     warnSpy.mockRestore()
@@ -1873,7 +1888,7 @@ describe('runMigrations(db) — soft downgrade guard', () => {
   it('does not warn for a normally-migrated database', () => {
     const db = new Database(':memory:')
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
-    runMigrations(db)
+    migrateFixture(db)
     const warned = warnSpy.mock.calls.some((c) => String(c[0]).includes('Database schema version'))
     warnSpy.mockRestore()
 
@@ -1885,7 +1900,7 @@ describe('runMigrations(db) — soft downgrade guard', () => {
 describe('migration v24: add-workspace-chat-history-table', () => {
   it('adds workspace_chat_history table with expected columns after runMigrations', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
 
     const table = db
       .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='workspace_chat_history'")
@@ -1928,7 +1943,7 @@ describe('migration v24: add-workspace-chat-history-table', () => {
 
   it('v23 → v24 upgrade preserves existing workspace data', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
     db.prepare(
       `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -1947,7 +1962,7 @@ describe('migration v24: add-workspace-chat-history-table', () => {
   it('ON DELETE CASCADE removes history rows when workspace is deleted', () => {
     const db = new Database(':memory:')
     db.pragma('foreign_keys=ON')
-    runMigrations(db)
+    migrateFixture(db)
     db.prepare(
       `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -1966,7 +1981,7 @@ describe('migration v24: add-workspace-chat-history-table', () => {
 describe('migration v25: add-workspace-initial-prompt', () => {
   it('adds the nullable initial_prompt column to workspaces after runMigrations', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
     const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{
       name: string
       notnull: number
@@ -1999,7 +2014,7 @@ describe('migration v25: add-workspace-initial-prompt', () => {
 
   it('v24 → v25 upgrade preserves existing workspace data and defaults initial_prompt to NULL', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
     db.prepare(
       `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -2014,8 +2029,8 @@ describe('migration v25: add-workspace-initial-prompt', () => {
 
   it('is idempotent — re-running runMigrations does not re-add the column', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
-    runMigrations(db) // second pass should be a no-op
+    migrateFixture(db)
+    migrateFixture(db) // second pass should be a no-op
     const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
     expect(cols.filter((c) => c.name === 'initial_prompt')).toHaveLength(1)
     db.close()
@@ -2025,7 +2040,7 @@ describe('migration v25: add-workspace-initial-prompt', () => {
 describe('migration v28: add-auto-loop-session-mode', () => {
   it('adds the auto_loop_session_mode column with default per_task after runMigrations', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
     const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{
       name: string
       notnull: number
@@ -2058,7 +2073,7 @@ describe('migration v28: add-auto-loop-session-mode', () => {
 
   it('v27 → v28 upgrade defaults existing rows to per_task', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
     db.prepare(
       `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -2073,8 +2088,8 @@ describe('migration v28: add-auto-loop-session-mode', () => {
 
   it('is idempotent — re-running runMigrations does not re-add the column', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
-    runMigrations(db)
+    migrateFixture(db)
+    migrateFixture(db)
     const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
     expect(cols.filter((c) => c.name === 'auto_loop_session_mode')).toHaveLength(1)
     db.close()
@@ -2084,7 +2099,7 @@ describe('migration v28: add-auto-loop-session-mode', () => {
 describe('migration v29: add-brainstorm-model', () => {
   it('adds the brainstorm_model column (nullable, no default) after runMigrations', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
     const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{
       name: string
       notnull: number
@@ -2117,7 +2132,7 @@ describe('migration v29: add-brainstorm-model', () => {
 
   it('v28 → v29 upgrade leaves existing rows with a null brainstorm_model', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
     db.prepare(
       `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -2132,8 +2147,8 @@ describe('migration v29: add-brainstorm-model', () => {
 
   it('is idempotent — re-running runMigrations does not re-add the column', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
-    runMigrations(db)
+    migrateFixture(db)
+    migrateFixture(db)
     const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
     expect(cols.filter((c) => c.name === 'brainstorm_model')).toHaveLength(1)
     db.close()
@@ -2143,7 +2158,7 @@ describe('migration v29: add-brainstorm-model', () => {
 describe('migration v30: add-pr-watch-disabled', () => {
   it('adds the pr_watch_disabled_at column (nullable, no default) after runMigrations', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
     const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{
       name: string
       notnull: number
@@ -2176,7 +2191,7 @@ describe('migration v30: add-pr-watch-disabled', () => {
 
   it('v29 → v30 upgrade leaves existing rows with a null pr_watch_disabled_at', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
     db.prepare(
       `INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?)`,
@@ -2191,8 +2206,8 @@ describe('migration v30: add-pr-watch-disabled', () => {
 
   it('is idempotent — re-running runMigrations does not re-add the column', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
-    runMigrations(db)
+    migrateFixture(db)
+    migrateFixture(db)
     const cols = db.prepare('PRAGMA table_info(workspaces)').all() as Array<{ name: string }>
     expect(cols.filter((c) => c.name === 'pr_watch_disabled_at')).toHaveLength(1)
     db.close()
@@ -2202,7 +2217,7 @@ describe('migration v30: add-pr-watch-disabled', () => {
 describe('v39 — agent_sessions.end_reason', () => {
   it('adds the column to a database that predates it, without losing rows', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
     // Rewind to v38: drop the column and forget the migration ever ran.
     db.exec('ALTER TABLE agent_sessions DROP COLUMN end_reason')
     db.prepare('DELETE FROM schema_migrations WHERE version = 39').run()
@@ -2214,7 +2229,7 @@ describe('v39 — agent_sessions.end_reason', () => {
       "INSERT INTO agent_sessions (id, workspace_id, status, started_at) VALUES ('s1', 'w1', 'completed', '2026-01-01')",
     ).run()
 
-    runMigrations(db)
+    migrateFixture(db)
 
     const row = db.prepare('SELECT status, end_reason FROM agent_sessions WHERE id = ?').get('s1') as {
       status: string
@@ -2231,7 +2246,7 @@ describe('v39 — agent_sessions.end_reason', () => {
 describe('v40 — workspaces.comparison_id', () => {
   it('adds the column to a database that predates it, without losing rows', () => {
     const db = new Database(':memory:')
-    runMigrations(db)
+    migrateFixture(db)
     // Rewind to v39: drop the column and forget the migration ever ran.
     db.exec('ALTER TABLE workspaces DROP COLUMN comparison_id')
     db.prepare('DELETE FROM schema_migrations WHERE version = 40').run()
@@ -2240,7 +2255,7 @@ describe('v40 — workspaces.comparison_id', () => {
        VALUES ('w1', 'legacy', '/tmp/p', 'main', 'feat', '2026-01-01', '2026-01-01')`,
     ).run()
 
-    runMigrations(db)
+    migrateFixture(db)
 
     const row = db.prepare('SELECT name, comparison_id FROM workspaces WHERE id = ?').get('w1') as {
       name: string
@@ -2329,4 +2344,41 @@ describe('schema convergence', () => {
     fresh.close()
     migrated.close()
   })
+})
+
+it('migration v42 preserves historical events and can be reapplied safely', () => {
+  const db = new Database(':memory:')
+  db.exec(`CREATE TABLE workspaces(id TEXT PRIMARY KEY);
+    CREATE TABLE ws_events(id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL, session_id TEXT, type TEXT NOT NULL, payload TEXT NOT NULL, created_at TEXT NOT NULL);
+    INSERT INTO workspaces VALUES ('old');
+    INSERT INTO ws_events VALUES ('event', 'old', NULL, 'user:message', '{"content":"Keep this history"}', '2026-09-11');`)
+  const source = db.prepare('SELECT * FROM ws_events').all()
+  const migration = migrations.find((entry) => entry.version === 42)!
+  migration.migrate(db)
+  migration.migrate(db)
+  expect(db.prepare('SELECT * FROM ws_events').all()).toEqual(source)
+  expect(db.prepare('SELECT complete FROM search_index_state').get()).toEqual({ complete: 0 })
+  expect(db.prepare("SELECT name FROM sqlite_master WHERE name = 'search_messages_fts'").get()).toBeDefined()
+  db.close()
+})
+
+it('upgrades v42 with durable MCP receipts without losing existing data', () => {
+  const db = new Database(':memory:')
+  runMigrations(db)
+  db.exec('DROP TABLE IF EXISTS mcp_message_requests; DELETE FROM schema_migrations WHERE version > 42;')
+  db.exec(
+    "INSERT INTO workspaces(id,name,project_path,source_branch,working_branch,created_at,updated_at) VALUES ('kept','kept','/tmp','main','work','now','now')",
+  )
+  runMigrations(db)
+  runMigrations(db)
+  expect(db.prepare("SELECT name FROM workspaces WHERE id='kept'").get()).toEqual({ name: 'kept' })
+  const fresh = new Database(':memory:')
+  runMigrations(fresh)
+  const shape = (database: Database.Database) =>
+    database.prepare("SELECT sql FROM sqlite_master WHERE tbl_name='mcp_message_requests' ORDER BY name").all()
+  expect(shape(db)).toEqual(shape(fresh))
+  expect(db.prepare("SELECT name FROM sqlite_master WHERE name='mcp_message_requests'").get()).toBeTruthy()
+  expect(getMigrationHistory(db).at(-1)?.version).toBe(SCHEMA_VERSION)
+  db.close()
+  fresh.close()
 })

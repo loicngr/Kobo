@@ -35,33 +35,63 @@
 </template>
 
 <script setup lang="ts">
+import { useAuthenticatedImages } from 'src/composables/use-authenticated-images'
 import type { ConversationItem } from 'src/services/agent-event-view'
-import { useWorkspaceStore } from 'src/stores/workspace'
+import { acquireAuthenticatedImage, type ImageLease } from 'src/services/authenticated-images'
 import { injectImagePreviews } from 'src/utils/inject-image-previews'
 import { renderChatMarkdown } from 'src/utils/render-chat-markdown'
-import { computed, ref } from 'vue'
+import { computed, onScopeDispose, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 
-const props = defineProps<{ item: Extract<ConversationItem, { type: 'user' }> }>()
+const props = defineProps<{ item: Extract<ConversationItem, { type: 'user' }>; workspaceId: string }>()
 
-const workspaceStore = useWorkspaceStore()
+const { t } = useI18n()
 
 const isSystemPrompt = computed(() => props.item.sender === 'system-prompt')
 
-const html = computed(() => {
-  const withImages = injectImagePreviews(props.item.content, workspaceStore.selectedWorkspaceId ?? '')
+const sanitizedHtml = computed(() => {
+  const withImages = injectImagePreviews(props.item.content, props.workspaceId)
   return renderChatMarkdown(withImages)
 })
+
+const html = useAuthenticatedImages(sanitizedHtml, () => t('network.login.unreachable'))
 
 // Lightbox state: clicking a rendered image opens it at full size in a
 // maximized dialog. Escape or click on the backdrop closes it.
 const zoomSrc = ref<string | null>(null)
 const zoomOpen = ref(false)
+let zoomLease: ImageLease | undefined
+function closeZoom() {
+  zoomOpen.value = false
+  zoomSrc.value = null
+  zoomLease?.release()
+  zoomLease = undefined
+}
+watch(zoomOpen, (open) => {
+  if (!open) closeZoom()
+})
+watch(() => props.workspaceId, closeZoom)
+const onStorage = (event: StorageEvent) => {
+  if (event.key === 'kobo:network-token' || event.key === null) closeZoom()
+}
+window.addEventListener('storage', onStorage)
+window.addEventListener('kobo:auth-token-changed', closeZoom)
+onScopeDispose(() => {
+  closeZoom()
+  window.removeEventListener('kobo:auth-token-changed', closeZoom)
+  window.removeEventListener('storage', onStorage)
+})
 
 function onMessageClick(event: MouseEvent) {
   const target = event.target as HTMLElement | null
   if (target?.tagName !== 'IMG') return
   const img = target as HTMLImageElement
   if (!img.src) return
+  closeZoom()
+  if (img.dataset.koboImageUrl) {
+    zoomLease = acquireAuthenticatedImage(img.dataset.koboImageUrl)
+    void zoomLease.ready.catch(closeZoom)
+  }
   zoomSrc.value = img.src
   zoomOpen.value = true
 }

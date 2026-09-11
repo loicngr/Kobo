@@ -9,7 +9,7 @@ import { fingerprintWorktree } from '../utils/git-worktree-fingerprint.js'
 import { withWorkspaceLifecycleGuard } from '../utils/workspace-lifecycle-guard.js'
 import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 import { hasController } from './agent/orchestrator.js'
-import { createWorktree, listWorktrees, removeWorktreeUnlocked } from './worktree-service.js'
+import { createWorktreeUnlocked, listWorktrees, removeWorktreeUnlocked } from './worktree-service.js'
 
 /**
  * A `pathCollision.worktreePath` decision is untrusted input reaching
@@ -130,14 +130,14 @@ function hasCommonAncestor(repoPath: string, branch: string): boolean {
 }
 
 /** Locate any worktree already sitting on `branch`, or at the target path. */
-function diagnoseWorktree(
+async function diagnoseWorktree(
   projectPath: string,
   branch: string,
   targetPath: string,
   attachedPaths: Map<string, string>,
-): { worktree: WorktreeState; blockers: PrCheckoutBlocker[] } {
+): Promise<{ worktree: WorktreeState; blockers: PrCheckoutBlocker[] }> {
   const blockers: PrCheckoutBlocker[] = []
-  const worktrees = listWorktrees(projectPath)
+  const worktrees = await listWorktrees(projectPath)
 
   const onBranch = worktrees.find((wt) => wt.branch === branch)
   if (onBranch) {
@@ -238,13 +238,13 @@ export async function computeFingerprint(report: PrCheckoutReport): Promise<stri
  * `attachedPaths` maps worktree path -> workspace id; the route supplies it so
  * this function stays free of database access and easy to test.
  */
-export function diagnoseLocalState(
+export async function diagnoseLocalState(
   projectPath: string,
   headBranch: string,
   worktreesPath: string | null,
   attachedPaths: Map<string, string> = new Map(),
   workspaces: WorkspaceLike[] = [],
-): PrCheckoutReport {
+): Promise<PrCheckoutReport> {
   const targetWorktreePath = resolveWorkspaceWorktreePath(projectPath, headBranch, worktreesPath)
   const blockers: PrCheckoutBlocker[] = []
 
@@ -259,7 +259,7 @@ export function diagnoseLocalState(
     blockers.push({ kind: 'no-common-ancestor', branch: headBranch })
   }
 
-  const { worktree, blockers: worktreeBlockers } = diagnoseWorktree(
+  const { worktree, blockers: worktreeBlockers } = await diagnoseWorktree(
     projectPath,
     headBranch,
     targetWorktreePath,
@@ -417,8 +417,8 @@ export class StaleDiagnosisError extends Error {
  * `change-source-branch-service`, so it cannot interleave with a worktree purge
  * or a source-branch change.
  */
-export function resolvePrCheckout(input: ResolvePrCheckoutInput): Promise<ResolvePrCheckoutResult> {
-  const initial = diagnoseLocalState(
+export async function resolvePrCheckout(input: ResolvePrCheckoutInput): Promise<ResolvePrCheckoutResult> {
+  const initial = await diagnoseLocalState(
     input.projectPath,
     input.headBranch,
     input.worktreesPath,
@@ -447,7 +447,7 @@ function resolvePrCheckoutLocked(
     gitOps.fetchSourceBranch(input.projectPath, input.headBranch)
     applied.push({ kind: 'fetch', detail: `origin/${input.headBranch}` })
 
-    const fresh = diagnoseLocalState(
+    const fresh = await diagnoseLocalState(
       input.projectPath,
       input.headBranch,
       input.worktreesPath,
@@ -535,7 +535,7 @@ function resolvePrCheckoutLocked(
       const baseRef = gitOps.localBranchExists(input.projectPath, input.headBranch)
         ? input.headBranch
         : `origin/${input.headBranch}`
-      const target = createWorktree(
+      const target = await createWorktreeUnlocked(
         input.projectPath,
         input.headBranch,
         baseRef,
@@ -557,7 +557,7 @@ function resolvePrCheckoutLocked(
     } catch (err) {
       if (created) {
         try {
-          removeWorktreeUnlocked(input.projectPath, worktreePath)
+          await removeWorktreeUnlocked(input.projectPath, worktreePath)
         } catch (cleanupErr) {
           console.error('[pr-checkout] rollback failed to remove the worktree:', cleanupErr)
           const original = err instanceof Error ? err.message : String(err)

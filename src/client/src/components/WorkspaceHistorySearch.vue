@@ -8,6 +8,8 @@
         </q-btn>
       </template>
     </q-input>
+    <div v-if="indexStore.indexStatus.state === 'building'" class="text-caption text-kobo-3 q-mt-sm" role="status">{{ $t('search.indexing', { processed: indexStore.indexStatus.processed, total: indexStore.indexStatus.total }) }}</div>
+    <div v-if="error || indexStore.indexStatus.state === 'error'" class="text-caption text-negative q-mt-sm" role="status">{{ $t('search.indexUnavailable') }}</div>
     <q-list v-if="results.length" dark class="history-results q-mt-sm rounded-borders">
       <q-item v-for="result in results" :key="result.eventId" clickable class="history-result" @click="open(result)">
         <q-item-section avatar top class="history-result-avatar">
@@ -27,8 +29,9 @@
 </template>
 
 <script setup lang="ts">
+import { useSearchIndexStatus } from 'src/composables/use-search-index-status'
 import { useWorkspaceStore } from 'src/stores/workspace'
-import { nextTick, onMounted, ref, watch } from 'vue'
+import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 interface SearchResult {
@@ -47,22 +50,37 @@ const results = ref<SearchResult[]>([])
 const searchInput = ref<{ focus: () => void } | null>(null)
 
 let requestToken = 0
+let controller: AbortController | undefined
+const error = ref(false)
+const indexStore = useSearchIndexStatus(runSearch)
+onUnmounted(() => {
+  requestToken++
+  controller?.abort()
+})
+watch([query, () => props.workspaceId], () => void runSearch())
 
-watch(query, async (value) => {
-  const search = value ?? ''
+async function runSearch(): Promise<void> {
+  controller?.abort()
+  const search = query.value ?? ''
+  const token = ++requestToken
+  error.value = false
   if (search.trim().length < 2) {
-    requestToken += 1
     results.value = []
     return
   }
-  const token = ++requestToken
-  const response = await fetch(`/api/workspaces/${props.workspaceId}/history-search?q=${encodeURIComponent(search)}`)
-  // A newer keystroke may have started its own request while this one was
-  // in flight — only the most recently issued request may write results.
-  if (token !== requestToken) return
-  if (!response.ok) return
-  results.value = ((await response.json()) as { results: SearchResult[] }).results
-})
+  controller = new AbortController()
+  try {
+    const response = await fetch(
+      `/api/workspaces/${props.workspaceId}/history-search?q=${encodeURIComponent(search)}`,
+      { signal: controller.signal },
+    )
+    if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    const body = (await response.json()) as { results: SearchResult[] }
+    if (token === requestToken) results.value = body.results
+  } catch {
+    if (token === requestToken) error.value = true
+  }
+}
 
 async function open(result: SearchResult) {
   if (result.sessionId) await store.fetchSessions(props.workspaceId, result.sessionId)

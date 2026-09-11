@@ -115,14 +115,16 @@ describe('createAppServerClient', () => {
   it('startTurn() sends turn/start with the params verbatim', async () => {
     const { stdin, stdout, written } = makeStreams()
     const client = createAppServerClient({ stdin, stdout, clientInfo: CLIENT_INFO })
-    const turnParams = { threadId: 'thr_1', input: [{ type: 'text' as const, text: 'Hello' }] }
+    const turnParams = { threadId: 'thr_1', input: [{ type: 'text' as const, text: 'Hello', text_elements: [] }] }
     const p = client.startTurn(turnParams)
     expect(written).toHaveLength(1)
     const msg = JSON.parse(written[0])
     expect(msg.method).toBe('turn/start')
     expect(msg.params).toEqual(turnParams)
-    stdout.push(`${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { turnId: 'turn_42' } })}\n`)
-    await expect(p).resolves.toEqual({ turnId: 'turn_42' })
+    stdout.push(
+      `${JSON.stringify({ jsonrpc: '2.0', id: msg.id, result: { turn: { id: 'turn_42', status: 'inProgress' } } })}\n`,
+    )
+    await expect(p).resolves.toEqual({ turn: { id: 'turn_42', status: 'inProgress' } })
   })
 
   it('steerTurn() sends turn/steer with the active-turn precondition', async () => {

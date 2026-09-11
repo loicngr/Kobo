@@ -19,9 +19,12 @@ vi.mock('../server/services/settings-service.js', async (importOriginal) => ({
   deleteProject: vi.fn(),
 }))
 
-vi.mock('../server/services/network-access-service.js', () => ({
+vi.mock('../server/services/network-access-service.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../server/services/network-access-service.js')>()),
   generateToken: vi.fn(() => 'fresh-token'),
   getLanUrls: vi.fn(() => ['http://192.168.1.5:3300']),
+  getLanHostnames: vi.fn(() => ['192.168.1.5']),
+  resolveProxyHostname: vi.fn(() => null),
 }))
 
 vi.mock('../server/services/agent/orchestrator.js', () => ({
@@ -30,6 +33,7 @@ vi.mock('../server/services/agent/orchestrator.js', () => ({
 
 vi.mock('../server/db/index.js', () => ({
   getDb: vi.fn(() => ({
+    name: '/tmp/kobo-custom-db/kobo.db',
     prepare: vi.fn(() => ({ get: vi.fn(() => ({ c: 0 })) })),
   })),
 }))
@@ -498,5 +502,23 @@ describe('GET /ws-events-retention-preview', () => {
     const res = await app.request('/api/settings/ws-events-retention-preview?days=0&keep=0')
     expect(res.status).toBe(200)
     expect((await res.json()) as { deletable: number }).toMatchObject({ deletable: 0 })
+  })
+})
+
+describe('GET /api/settings/mcp', () => {
+  it('returns backend connection metadata without credentials or forwarded origins', async () => {
+    vi.mocked(settingsService.getGlobalSettings).mockReturnValue(
+      makeGlobalSettings({ networkAccessEnabled: true, networkAccessToken: 'never-in-metadata' }),
+    )
+    const res = await app.request('/api/settings/mcp', {
+      headers: { 'X-Forwarded-Host': 'untrusted.example', 'X-Forwarded-Proto': 'https' },
+    })
+    expect(res.status).toBe(200)
+    const info = await res.json()
+    expect(info.localUrl).toBe('http://127.0.0.1:3300/api/mcp')
+    expect(info.lanUrls).toEqual(['http://192.168.1.5:3300/api/mcp'])
+    expect(info.stdio?.env.KOBO_DB_PATH).toBe('/tmp/kobo-custom-db/kobo.db')
+    expect(JSON.stringify(info)).not.toContain('never-in-metadata')
+    expect(JSON.stringify(info)).not.toContain('untrusted.example')
   })
 })

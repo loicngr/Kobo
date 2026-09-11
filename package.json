@@ -57,6 +57,7 @@
     "install-all": "npm install && cd src/client && npm install && cd src-pwa && npm install",
     "start": "node dist/server/index.js",
     "test": "vitest run --config vitest.config.ts --root .",
+    "test:mcp:live": "vitest run --config vitest.live.config.ts",
     "test:watch": "vitest --config vitest.config.ts --root .",
     "test:client": "cd src/client && npm test",
     "test:all": "npm test && npm run test:client",

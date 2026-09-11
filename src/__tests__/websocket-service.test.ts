@@ -285,7 +285,7 @@ describe('setMessageHandler()', () => {
     const ws = new MockWebSocket()
     handleConnection(ws as unknown as import('ws').WebSocket)
 
-    ws.simulateMessage({ type: 'chat:message', payload: { content: 'hello' } })
+    ws.simulateMessage({ type: 'chat:message', payload: { workspaceId: 'ws-1', content: 'hello' } })
     ws.simulateMessage({ type: 'workspace:start', payload: { workspaceId: 'ws-1' } })
     ws.simulateMessage({ type: 'workspace:stop', payload: { workspaceId: 'ws-1' } })
 
@@ -315,7 +315,7 @@ describe('setMessageHandler()', () => {
 
     const ws = new MockWebSocket()
     handleConnection(ws as unknown as import('ws').WebSocket)
-    ws.simulateMessage({ type: 'chat:message', payload: { content: 'hello' } })
+    ws.simulateMessage({ type: 'chat:message', payload: { workspaceId: 'ws-1', content: 'hello' } })
 
     await new Promise((resolve) => setTimeout(resolve, 20))
 
@@ -341,7 +341,9 @@ describe('setMessageHandler()', () => {
     const ws = new MockWebSocket()
     handleConnection(ws as unknown as import('ws').WebSocket)
 
-    expect(() => ws.simulateMessage({ type: 'chat:message', payload: { content: 'hello' } })).not.toThrow()
+    expect(() =>
+      ws.simulateMessage({ type: 'chat:message', payload: { workspaceId: 'ws-1', content: 'hello' } }),
+    ).not.toThrow()
     // Le throw est capture par le wrapper async, donc le log arrive au tick suivant.
     await new Promise((resolve) => setTimeout(resolve, 20))
     expect(errorSpy).toHaveBeenCalled()
@@ -748,4 +750,66 @@ describe('broadcastAll', () => {
     expect(parsed.payload.state).toBe('running')
     _connectionsForTest().delete(fakeClient as unknown as import('ws').WebSocket)
   })
+})
+
+describe('audit transport regressions', () => {
+  it.each([
+    null,
+    [],
+    1,
+    { type: 2 },
+    { type: 'subscribe', payload: { workspaceId: 5 } },
+    { type: 'workspace:start', payload: { workspaceId: 'ws', prompt: 5 } },
+    { type: 'chat:message', payload: { workspaceId: 'ws', content: 'hello', agentPermissionModeOverride: ['plan'] } },
+    { type: 'sync:request', payload: { workspaceIds: 'invalid' } },
+  ])('rejects malformed frames without throwing: %j', async (frame) => {
+    const svc = await import('../server/services/websocket-service.js')
+    const ws = new MockWebSocket()
+    svc.handleConnection(ws as unknown as import('ws').WebSocket)
+    expect(() => ws.emit('message', Buffer.from(JSON.stringify(frame)))).not.toThrow()
+    expect(JSON.parse(ws.sentMessages.at(-1)!).type).toBe('error')
+    ws.close()
+  })
+
+  it('terminates a congested client before a later event can advance its cursor', async () => {
+    const svc = await import('../server/services/websocket-service.js')
+    const { createWorkspace } = await import('../server/services/workspace-service.js')
+    const workspace = createWorkspace({
+      name: 'slow',
+      projectPath: '/tmp',
+      sourceBranch: 'main',
+      workingBranch: 'slow',
+    })
+    const ws = new MockWebSocket()
+    svc.handleConnection(ws as unknown as import('ws').WebSocket)
+    ws.simulateMessage({ type: 'subscribe', payload: { workspaceId: workspace.id } })
+    const first = svc.emit(workspace.id, 'user:message', { content: 'one' })
+    ws.bufferedAmount = 1024 * 1024 + 1
+    const second = svc.emit(workspace.id, 'user:message', { content: 'two' })
+    expect(ws.terminated).toBe(true)
+    ws.bufferedAmount = 0
+    const third = svc.emit(workspace.id, 'user:message', { content: 'three' })
+    expect(ws.sentMessages.some((raw) => JSON.parse(raw).id === third)).toBe(false)
+    const resumed = new MockWebSocket()
+    svc.handleConnection(resumed as unknown as import('ws').WebSocket)
+    svc.handleSyncRequest(resumed as unknown as import('ws').WebSocket, first, [workspace.id])
+    expect(JSON.parse(resumed.sentMessages.at(-1)!).payload.events.map((event: { id: string }) => event.id)).toEqual([
+      second,
+      third,
+    ])
+    resumed.close()
+  })
+})
+
+it('does not broadcast a confirmed delivery when its persistence fails', async () => {
+  const svc = await import('../server/services/websocket-service.js')
+  const ws = new MockWebSocket()
+  svc.handleConnection(ws as unknown as import('ws').WebSocket)
+  ws.simulateMessage({ type: 'subscribe', payload: { workspaceId: 'missing-workspace' } })
+  const before = ws.sentMessages.length
+  expect(() =>
+    svc.emit('missing-workspace', 'user:message', { content: 'review' }, undefined, { requirePersistence: true }),
+  ).toThrow()
+  expect(ws.sentMessages).toHaveLength(before)
+  ws.close()
 })

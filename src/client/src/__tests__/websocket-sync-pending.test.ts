@@ -1,6 +1,8 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { computed } from 'vue'
+import { useDevServerStore } from '../stores/dev-server'
+import { useUpdateStore } from '../stores/update'
 import { useWebSocketStore } from '../stores/websocket'
 import { useWorkspaceStore, type Workspace } from '../stores/workspace'
 
@@ -41,7 +43,10 @@ describe('websocket sync request loading', () => {
     useWorkspaceStore().$reset()
     FakeWebSocket.instances = []
     vi.stubGlobal('WebSocket', FakeWebSocket)
+    vi.spyOn(useUpdateStore(), 'refreshSnapshot').mockResolvedValue()
     vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true)
+    vi.spyOn(useWorkspaceStore(), 'fetchWorkspacesInfo').mockResolvedValue()
+    vi.spyOn(useDevServerStore(), 'fetchStatus').mockResolvedValue()
   })
 
   afterEach(() => {
@@ -57,6 +62,14 @@ describe('websocket sync request loading', () => {
     socket.open()
     return { store, socket }
   }
+
+  it('retrieves release availability on initial connection and reconnect', () => {
+    const { store } = connect()
+    expect(useUpdateStore().refreshSnapshot).toHaveBeenCalledTimes(1)
+    store.disconnect()
+    connect()
+    expect(useUpdateStore().refreshSnapshot).toHaveBeenCalledTimes(2)
+  })
 
   it('tracks an actual subscribe sync reactively until even an empty response arrives', () => {
     const { store, socket } = connect()
@@ -147,6 +160,8 @@ describe('websocket sync request loading', () => {
     vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(false)
     window.dispatchEvent(new Event('offline'))
     vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true)
+    vi.spyOn(useWorkspaceStore(), 'fetchWorkspacesInfo').mockResolvedValue()
+    vi.spyOn(useDevServerStore(), 'fetchStatus').mockResolvedValue()
     window.dispatchEvent(new Event('online'))
     const replacement = FakeWebSocket.instances.at(-1)!
     replacement.open()
@@ -179,5 +194,25 @@ describe('websocket sync request loading', () => {
     expect(store.isSyncPending('w2')).toBe(true)
     socket.respond()
     expect(store.isSyncPending('w2')).toBe(false)
+  })
+  it('refreshes live status and pending inputs after the reconnect delta drain completes', async () => {
+    const workspace = useWorkspaceStore()
+    workspace.workspaces = [{ id: 'w1' }] as Workspace[]
+    workspace.selectedWorkspaceId = 'w1'
+    const ws = useWebSocketStore()
+    ws.lastEventId = 'before'
+    const { socket } = connect()
+    expect(workspace.fetchWorkspacesInfo).not.toHaveBeenCalled()
+    socket.respond({
+      truncated: true,
+      events: [
+        { id: 'middle', workspaceId: 'w1', type: 'agent:event', payload: { kind: 'message:end', messageId: 'm' } },
+      ],
+    })
+    expect(workspace.fetchWorkspacesInfo).not.toHaveBeenCalled()
+    socket.respond()
+    await Promise.resolve()
+    expect(workspace.fetchWorkspacesInfo).toHaveBeenCalledTimes(1)
+    expect(useDevServerStore().fetchStatus).toHaveBeenCalledWith('w1')
   })
 })

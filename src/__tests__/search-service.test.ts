@@ -4,7 +4,7 @@ import path from 'node:path'
 import Database from 'better-sqlite3'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { initSchema } from '../server/db/schema.js'
-import { searchEvents } from '../server/services/search-service.js'
+import { searchEvents, stopSearchIndex } from '../server/services/search-service.js'
 
 let tmpDir: string
 let dbPath: string
@@ -29,6 +29,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   const { closeDb } = await import('../server/db/index.js')
+  await stopSearchIndex()
   closeDb()
   if (tmpDir && fs.existsSync(tmpDir)) {
     fs.rmSync(tmpDir, { recursive: true, force: true })
@@ -58,16 +59,16 @@ function seedEvent(workspaceId: string, type: string, payload: object, createdAt
 }
 
 describe('searchEvents', () => {
-  it('returns empty array for empty query', () => {
-    expect(searchEvents('')).toEqual([])
-    expect(searchEvents('   ')).toEqual([])
+  it('returns empty array for empty query', async () => {
+    expect(await searchEvents('')).toEqual([])
+    expect(await searchEvents('   ')).toEqual([])
   })
 
-  it('finds matches in user:message content', () => {
+  it('finds matches in user:message content', async () => {
     seedWorkspace('ws-1', 'My Workspace')
     seedEvent('ws-1', 'user:message', { content: 'Please refactor the authentication module', sender: 'user' })
 
-    const results = searchEvents('authentication')
+    const results = await searchEvents('authentication')
     expect(results).toHaveLength(1)
     expect(results[0].workspaceId).toBe('ws-1')
     expect(results[0].workspaceName).toBe('My Workspace')
@@ -75,7 +76,7 @@ describe('searchEvents', () => {
     expect(results[0].snippet).toContain('authentication')
   })
 
-  it('finds matches in agent:output text blocks', () => {
+  it('finds matches in agent:output text blocks', async () => {
     seedWorkspace('ws-1', 'Work')
     seedEvent('ws-1', 'agent:output', {
       type: 'assistant',
@@ -85,13 +86,13 @@ describe('searchEvents', () => {
       },
     })
 
-    const results = searchEvents('migration')
+    const results = await searchEvents('migration')
     expect(results).toHaveLength(1)
     expect(results[0].type).toBe('agent:output')
     expect(results[0].snippet).toContain('migration')
   })
 
-  it('finds matches in normalized agent:event message text', () => {
+  it('finds matches in normalized agent:event message text', async () => {
     seedWorkspace('ws-1', 'Work')
     seedEvent('ws-1', 'agent:event', {
       kind: 'message:text',
@@ -100,39 +101,39 @@ describe('searchEvents', () => {
       streaming: false,
     })
 
-    const results = searchEvents('cursor')
+    const results = await searchEvents('cursor')
     expect(results).toHaveLength(1)
     expect(results[0].type).toBe('agent:event')
     expect(results[0].snippet).toContain('cursor')
   })
 
-  it('treats LIKE wildcard characters as literal search text', () => {
+  it('treats LIKE wildcard characters as literal search text', async () => {
     seedWorkspace('ws-1', 'Work')
     for (let i = 0; i < 160; i++) seedEvent('ws-1', 'user:message', { content: `unrelated message ${i}` })
     seedEvent('ws-1', 'user:message', { content: 'CPU reached 90% during the run' }, '2020-01-01T00:00:00Z')
 
-    expect(searchEvents('%')).toHaveLength(1)
+    expect(await searchEvents('%')).toHaveLength(1)
   })
 
-  it('ignores events that are not user:message or agent:output', () => {
+  it('ignores events that are not user:message or agent:output', async () => {
     seedWorkspace('ws-1', 'Work')
     seedEvent('ws-1', 'agent:status', { status: 'executing' })
     seedEvent('ws-1', 'task:updated', { title: 'executing migration' })
 
-    expect(searchEvents('executing')).toHaveLength(0)
-    expect(searchEvents('migration')).toHaveLength(0)
+    expect(await searchEvents('executing')).toHaveLength(0)
+    expect(await searchEvents('migration')).toHaveLength(0)
   })
 
-  it('matches case-insensitively', () => {
+  it('matches case-insensitively', async () => {
     seedWorkspace('ws-1', 'Work')
     seedEvent('ws-1', 'user:message', { content: 'Fix the BUG in production' })
 
-    expect(searchEvents('bug')).toHaveLength(1)
-    expect(searchEvents('BUG')).toHaveLength(1)
-    expect(searchEvents('Bug')).toHaveLength(1)
+    expect(await searchEvents('bug')).toHaveLength(1)
+    expect(await searchEvents('BUG')).toHaveLength(1)
+    expect(await searchEvents('Bug')).toHaveLength(1)
   })
 
-  it('does not return false positives matching only JSON structure', () => {
+  it('does not return false positives matching only JSON structure', async () => {
     seedWorkspace('ws-1', 'Work')
     seedEvent('ws-1', 'agent:output', {
       type: 'assistant',
@@ -140,11 +141,11 @@ describe('searchEvents', () => {
     })
 
     // "assistant" appears in the JSON structure but NOT in the readable text
-    const results = searchEvents('assistant')
+    const results = await searchEvents('assistant')
     expect(results).toHaveLength(0)
   })
 
-  it('keeps paging past JSON-only false positives to find older readable matches', () => {
+  it('keeps paging past JSON-only false positives to find older readable matches', async () => {
     seedWorkspace('ws-1', 'Work')
     seedEvent('ws-1', 'user:message', { content: 'the assistant found the actual answer' }, '2020-01-01T00:00:00Z')
     for (let i = 0; i < 180; i++) {
@@ -154,61 +155,110 @@ describe('searchEvents', () => {
       })
     }
 
-    expect(searchEvents('assistant')).toHaveLength(1)
+    expect(await searchEvents('assistant')).toHaveLength(1)
   })
 
-  it('builds a snippet with context around the match', () => {
+  it('builds a snippet with context around the match', async () => {
     seedWorkspace('ws-1', 'Work')
     const longText = `${'x'.repeat(300)} needle ${'y'.repeat(300)}`
     seedEvent('ws-1', 'user:message', { content: longText })
 
-    const results = searchEvents('needle')
+    const results = await searchEvents('needle')
     expect(results).toHaveLength(1)
     expect(results[0].snippet).toContain('needle')
     expect(results[0].snippet.length).toBeLessThanOrEqual(250)
   })
 
-  it('respects the limit option', () => {
+  it('respects the limit option', async () => {
     seedWorkspace('ws-1', 'Work')
     for (let i = 0; i < 10; i++) {
       seedEvent('ws-1', 'user:message', { content: `match ${i}` })
     }
 
-    expect(searchEvents('match', { limit: 3 })).toHaveLength(3)
-    expect(searchEvents('match', { limit: 100 })).toHaveLength(10)
+    expect(await searchEvents('match', { limit: 3 })).toHaveLength(3)
+    expect(await searchEvents('match', { limit: 100 })).toHaveLength(10)
   })
 
-  it('excludes archived workspaces by default', () => {
+  it('excludes archived workspaces by default', async () => {
     seedWorkspace('ws-live', 'Live')
     seedWorkspace('ws-archived', 'Archived', '2026-04-01T00:00:00Z')
     seedEvent('ws-live', 'user:message', { content: 'unique-token-live' })
     seedEvent('ws-archived', 'user:message', { content: 'unique-token-archived' })
 
-    expect(searchEvents('unique-token-live')).toHaveLength(1)
-    expect(searchEvents('unique-token-archived')).toHaveLength(0)
+    expect(await searchEvents('unique-token-live')).toHaveLength(1)
+    expect(await searchEvents('unique-token-archived')).toHaveLength(0)
   })
 
-  it('includes archived workspaces when includeArchived is true', () => {
+  it('includes archived workspaces when includeArchived is true', async () => {
     seedWorkspace('ws-archived', 'Archived', '2026-04-01T00:00:00Z')
     seedEvent('ws-archived', 'user:message', { content: 'from-archive' })
 
-    const results = searchEvents('from-archive', { includeArchived: true })
+    const results = await searchEvents('from-archive', { includeArchived: true })
     expect(results).toHaveLength(1)
     expect(results[0].archived).toBe(true)
     expect(results[0].workspaceName).toBe('Archived')
   })
 
-  it('returns most recent matches first', () => {
+  it('returns most recent matches first', async () => {
     seedWorkspace('ws-1', 'Work')
     seedEvent('ws-1', 'user:message', { content: 'needle one' }, '2026-04-15T10:00:00Z')
     seedEvent('ws-1', 'user:message', { content: 'needle two' }, '2026-04-17T10:00:00Z')
     seedEvent('ws-1', 'user:message', { content: 'needle three' }, '2026-04-16T10:00:00Z')
 
-    const results = searchEvents('needle')
+    const results = await searchEvents('needle')
     expect(results.map((r) => r.timestamp)).toEqual([
       '2026-04-17T10:00:00Z',
       '2026-04-16T10:00:00Z',
       '2026-04-15T10:00:00Z',
     ])
   })
+})
+
+describe('logical message search regressions', () => {
+  it('finds a word spanning streamed fragments as one complete message', async () => {
+    seedWorkspace('ws-1', 'Work')
+    seedEvent('ws-1', 'agent:event', { kind: 'message:text', messageId: 'same', text: 'authenti', streaming: true })
+    seedEvent('ws-1', 'agent:event', { kind: 'message:text', messageId: 'same', text: 'cation fixed', streaming: true })
+    const results = await searchEvents('authentication')
+    expect(results).toHaveLength(1)
+    expect(results[0].snippet).toContain('authentication fixed')
+  })
+
+  it('searches decoded text and normalized Unicode rather than raw JSON', async () => {
+    seedWorkspace('ws-1', 'Work')
+    seedEvent('ws-1', 'user:message', { content: 'ÉCHEC: "special value"' })
+    expect(await searchEvents('échec')).toHaveLength(1)
+    expect(await searchEvents('"special value"')).toHaveLength(1)
+  })
+})
+
+it('cancels a real worker request and accepts subsequent searches', async () => {
+  seedWorkspace('ws-1', 'Work')
+  seedEvent('ws-1', 'user:message', { content: 'needle' })
+  const controller = new AbortController()
+  const pending = searchEvents('needle', {}, controller.signal)
+  controller.abort()
+  await expect(pending).rejects.toThrow('cancelled')
+  expect(await searchEvents('needle')).toHaveLength(1)
+})
+
+it('stops a worker with pending requests before closing its database', async () => {
+  seedWorkspace('ws-1', 'Work')
+  seedEvent('ws-1', 'user:message', { content: 'needle' })
+  const pending = searchEvents('needle')
+  const rejected = expect(pending).rejects.toThrow('stopped')
+  await stopSearchIndex()
+  await rejected
+  expect(await searchEvents('needle')).toHaveLength(1)
+})
+
+it('lets the main event loop run while a worker prepares search results', async () => {
+  seedWorkspace('ws-1', 'Work')
+  seedEvent('ws-1', 'user:message', { content: 'needle' })
+  let yielded = false
+  setImmediate(() => {
+    yielded = true
+  })
+  expect(await searchEvents('needle')).toHaveLength(1)
+  expect(yielded).toBe(true)
 })

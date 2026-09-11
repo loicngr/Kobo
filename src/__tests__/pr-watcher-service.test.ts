@@ -332,11 +332,16 @@ describe('checkPrStatuses — active-agent guard', () => {
     // A hook that takes a while — the purge must not start before it ends,
     // or a deploy script loses its worktree mid-run.
     let releaseHook: () => void = () => {}
+    let notifyHookStarted!: () => void
+    const hookStarted = new Promise<void>((resolve) => {
+      notifyHookStarted = resolve
+    })
     const trace: string[] = []
     vi.mocked(hooks.onPrMerged).mockImplementation(
       () =>
         new Promise<void>((resolve) => {
           trace.push('hook:start')
+          notifyHookStarted()
           releaseHook = () => {
             trace.push('hook:end')
             resolve()
@@ -353,7 +358,7 @@ describe('checkPrStatuses — active-agent guard', () => {
       await checkPrStatuses()
       getPrStatusMock.mockResolvedValueOnce(makePrSnapshot({ state: 'MERGED', base: 'main', number: 42 }))
       const tick = checkPrStatuses()
-      await new Promise((resolve) => setTimeout(resolve, 20))
+      await hookStarted
 
       expect(hooks.onPrMerged).toHaveBeenCalledWith('ws-1', expect.objectContaining({ prNumber: 42 }))
       expect(trace).toEqual(['hook:start'])
@@ -362,6 +367,7 @@ describe('checkPrStatuses — active-agent guard', () => {
       expect(trace).toEqual(['hook:start', 'hook:end', 'purge'])
       expect(purge.purgeWorktree).toHaveBeenCalledWith('ws-1', '2026-09-09T01:00:00.000Z')
     } finally {
+      releaseHook()
       // `clearAllMocks` in beforeEach keeps implementations: a pending hook
       // left behind would hang the next test's tick.
       vi.mocked(hooks.onPrMerged).mockImplementation(async () => {})
@@ -859,7 +865,7 @@ describe('checkPrStatuses — auto-restore guards against purge leftovers', () =
 
   it('does NOT restore an unrelated Git checkout at the recorded path', async () => {
     vi.mocked(wsService.listArchivedWorkspaces).mockReturnValue([makePurged() as never])
-    vi.mocked(isMatchingWorkspaceWorktree).mockReturnValue(false)
+    vi.mocked(isMatchingWorkspaceWorktree).mockResolvedValue(false)
     vi.mocked(gitOps.isGitWorktree).mockReturnValue(true) // A Git checkout alone is insufficient.
 
     await checkPrStatuses()
@@ -867,10 +873,32 @@ describe('checkPrStatuses — auto-restore guards against purge leftovers', () =
     expect(wsService.restoreWorktreeFromDisk).not.toHaveBeenCalled()
   })
 
+  it('holds lifecycle ownership throughout asynchronous checkout verification', async () => {
+    const purged = makePurged()
+    vi.mocked(wsService.listArchivedWorkspaces).mockReturnValue([purged as never])
+    let finish!: (matches: boolean) => void
+    vi.mocked(isMatchingWorkspaceWorktree).mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve
+        }),
+    )
+    const pending = checkPrStatuses()
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+    try {
+      await expect(withWorkspaceLifecycleGuard(purged.id, async () => {})).rejects.toMatchObject({
+        code: 'workspace-busy',
+      })
+    } finally {
+      finish(false)
+      await pending
+    }
+  })
+
   it('DOES restore when the worktree path is a valid git worktree (manual recreation)', async () => {
     const purged = makePurged()
     vi.mocked(wsService.listArchivedWorkspaces).mockReturnValue([purged as never])
-    vi.mocked(isMatchingWorkspaceWorktree).mockReturnValue(true)
+    vi.mocked(isMatchingWorkspaceWorktree).mockResolvedValue(true)
     vi.mocked(wsService.restoreWorktreeFromDisk).mockReturnValue(purged as never)
 
     await checkPrStatuses()
@@ -899,7 +927,7 @@ describe('watcher restoration lifecycle races', () => {
     vi.mocked(wsService.listArchivedWorkspaces).mockReturnValue([
       { ...makeWorkspace(), worktreePurgedAt: 'purged' },
     ] as never)
-    vi.mocked(isMatchingWorkspaceWorktree).mockReturnValue(true)
+    vi.mocked(isMatchingWorkspaceWorktree).mockResolvedValue(true)
     await withWorkspaceLifecycleGuard('ws-1', async () => {
       await checkPrStatuses()
       expect(wsService.restoreWorktreeFromDisk).not.toHaveBeenCalled()
@@ -917,6 +945,7 @@ describe('watcher restoration lifecycle races', () => {
         }),
     )
     const pending = checkPrStatuses()
+    await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
     invalidateWorkspacePrCaches('ws-1')
     finish(makePrSnapshot({ state: 'MERGED' }))
     await pending

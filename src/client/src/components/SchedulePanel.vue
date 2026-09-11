@@ -16,7 +16,7 @@
         <q-badge v-if="activeCount > 0" rounded color="primary" :label="activeCount" />
       </div>
 
-      <q-card v-if="activeCount === 0" dark flat bordered class="empty-state row items-center q-gutter-sm q-pa-md">
+      <q-card v-if="crons.length === 0 && !pendingWakeup" dark flat bordered class="empty-state row items-center q-gutter-sm q-pa-md">
         <q-icon name="event_available" size="24px" color="kobo-3" />
         <div>
           <div class="text-body2 text-weight-medium">{{ $t('schedule.emptyTitle') }}</div>
@@ -60,7 +60,8 @@
               </div>
               <div class="col min-width-zero">
                 <div class="text-body2 text-weight-medium ellipsis">{{ cron.label || cron.expression }}</div>
-                <div class="text-caption text-kobo-3">
+                <div v-if="cron.validationError" class="text-caption text-negative" :title="cron.validationError">{{ $t('schedule.invalidCron') }}</div>
+                <div v-else class="text-caption text-kobo-3">
                   {{ $t('schedule.nextFireAt', { time: formatDateTime(cron.nextFireAt) }) }}
                 </div>
               </div>
@@ -284,7 +285,9 @@ const store = useWorkspaceStore()
 
 const pendingWakeup = computed(() => store.pendingWakeups[props.workspaceId] ?? null)
 const crons = computed(() => store.crons[props.workspaceId] ?? [])
-const activeCount = computed(() => crons.value.length + (pendingWakeup.value ? 1 : 0))
+const activeCount = computed(
+  () => crons.value.filter((cron) => !cron.validationError).length + (pendingWakeup.value ? 1 : 0),
+)
 
 watch(
   () => props.workspaceId,

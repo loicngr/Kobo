@@ -1006,3 +1006,15 @@ it('emits session:compacted only when the context compaction item completes', ()
     { kind: 'session:compacted' },
   ])
 })
+
+it.each([
+  'Le bug du calcul de quota est corrigé et les tests passent.',
+  'We handle 429 and rate limits correctly.',
+  'Quota exceeded. That was the bug; it is now fixed.',
+])('does not classify ordinary prose as quota exhaustion: %s', (text) => {
+  expect(
+    handleItemCompleted({ id: 'prose', type: 'agentMessage', text }, createMapperState()).some(
+      (ev) => ev.kind === 'error',
+    ),
+  ).toBe(false)
+})

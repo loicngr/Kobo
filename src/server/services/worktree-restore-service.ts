@@ -65,7 +65,7 @@ export async function restorePurgedWorktree(id: string): Promise<RestoreWorktree
           headCommitSha: savedHead(workspace.worktreePurgeRestoreData),
         }
         if (!workspace.worktreePurgedAt) {
-          if (!isMatchingWorkspaceWorktree(input)) {
+          if (!(await isMatchingWorkspaceWorktree(input))) {
             throw new WorktreeRestoreError(
               'not-purged',
               'Workspace is not marked as purged and its checkout is missing or different.',
@@ -75,7 +75,7 @@ export async function restorePurgedWorktree(id: string): Promise<RestoreWorktree
         }
 
         const checkout = await restoreWorktreeCheckoutUnlocked(input)
-        if (!isMatchingWorkspaceWorktree(input)) {
+        if (!(await isMatchingWorkspaceWorktree(input))) {
           throw new WorktreeRestoreError('path-conflict', 'The recreated checkout does not match this workspace.')
         }
         // Preserve a valid checkout on DB failure. A retry or manual detection can

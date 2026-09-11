@@ -29,10 +29,71 @@ export interface WsMessage {
 /** Maps each WS client to the set of workspaceIds they are subscribed to */
 const clients = new Map<WebSocket, Set<string>>()
 
-/** Above this many bytes queued for a single client, we stop sending it events
- *  rather than growing the process heap on its behalf. It will catch up through
+/** Above this many bytes queued for a single client, we terminate the connection
+ *  before a later event can advance its cursor past an undelivered frame. It will catch up through
  *  `sync:request` on its next reconnect. */
 const MAX_BUFFERED_BYTES = 1024 * 1024
+
+/** A dropped frame must end the connection so its replay cursor cannot skip it. */
+function sendFrame(ws: WebSocket, message: string): void {
+  if (ws.readyState !== 1) return
+  if (ws.bufferedAmount > MAX_BUFFERED_BYTES) {
+    clients.delete(ws)
+    ws.terminate()
+    return
+  }
+  try {
+    ws.send(message)
+  } catch {
+    clients.delete(ws)
+    ws.terminate()
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+}
+
+function validMessage(value: unknown): value is WsMessage {
+  if (!isRecord(value) || typeof value.type !== 'string') return false
+  const p = value.payload
+  if (!isRecord(p)) return false
+  if (value.type === 'sync:request') {
+    return (
+      (p.lastEventId === undefined || typeof p.lastEventId === 'string') &&
+      (p.workspaceIds === undefined ||
+        (Array.isArray(p.workspaceIds) && p.workspaceIds.every((id) => typeof id === 'string' && id.length > 0)))
+    )
+  }
+  if (
+    ![
+      'subscribe',
+      'unsubscribe',
+      'chat:message',
+      'workspace:start',
+      'workspace:stop',
+      'devserver:start',
+      'devserver:stop',
+    ].includes(value.type)
+  )
+    return true
+  if (typeof p.workspaceId !== 'string' || !p.workspaceId) return false
+  if (p.sessionId !== undefined && typeof p.sessionId !== 'string') return false
+  if (value.type === 'workspace:start' && p.prompt !== undefined && typeof p.prompt !== 'string') return false
+  if (value.type === 'chat:message') {
+    return (
+      typeof p.content === 'string' &&
+      p.content.length > 0 &&
+      (p.sessionId === undefined || typeof p.sessionId === 'string') &&
+      (p.clientMessageId === undefined || (typeof p.clientMessageId === 'string' && p.clientMessageId.length > 0)) &&
+      (p.force === undefined || typeof p.force === 'boolean') &&
+      (p.agentPermissionModeOverride === undefined ||
+        (typeof p.agentPermissionModeOverride === 'string' &&
+          ['plan', 'bypass', 'strict', 'interactive'].includes(p.agentPermissionModeOverride)))
+    )
+  }
+  return true
+}
 
 // ── Message handler (decoupled routing) ────────────────────────────────────────
 
@@ -56,7 +117,8 @@ export function handleConnection(ws: WebSocket): void {
   // immediately instead of waiting up to POLL_INTERVAL_MS for the next tick.
   try {
     for (const snap of getAllPersistedSnapshots()) {
-      ws.send(
+      sendFrame(
+        ws,
         JSON.stringify({
           type: 'usage:snapshot',
           payload: { providerId: snap.providerId, snapshot: snap },
@@ -70,9 +132,20 @@ export function handleConnection(ws: WebSocket): void {
   ws.on('message', (data: WebSocket.RawData) => {
     let msg: WsMessage
     try {
-      msg = JSON.parse(data.toString()) as WsMessage
+      const parsed: unknown = JSON.parse(data.toString())
+      if (!validMessage(parsed)) {
+        sendFrame(
+          ws,
+          JSON.stringify({
+            type: 'error',
+            payload: { message: 'Invalid message payload (check workspaceId and field types)' },
+          }),
+        )
+        return
+      }
+      msg = parsed
     } catch {
-      ws.send(JSON.stringify({ type: 'error', payload: { message: 'Invalid JSON' } }))
+      sendFrame(ws, JSON.stringify({ type: 'error', payload: { message: 'Invalid JSON' } }))
       return
     }
 
@@ -82,24 +155,24 @@ export function handleConnection(ws: WebSocket): void {
       case 'subscribe': {
         const workspaceId = (payload as { workspaceId?: string })?.workspaceId
         if (!workspaceId) {
-          ws.send(JSON.stringify({ type: 'error', payload: { message: 'Missing workspaceId' } }))
+          sendFrame(ws, JSON.stringify({ type: 'error', payload: { message: 'Missing workspaceId' } }))
           return
         }
         const subs = clients.get(ws)
         subs?.add(workspaceId)
-        ws.send(JSON.stringify({ type: 'subscribed', payload: { workspaceId } }))
+        sendFrame(ws, JSON.stringify({ type: 'subscribed', payload: { workspaceId } }))
         break
       }
 
       case 'unsubscribe': {
         const workspaceId = (payload as { workspaceId?: string })?.workspaceId
         if (!workspaceId) {
-          ws.send(JSON.stringify({ type: 'error', payload: { message: 'Missing workspaceId' } }))
+          sendFrame(ws, JSON.stringify({ type: 'error', payload: { message: 'Missing workspaceId' } }))
           return
         }
         const subs = clients.get(ws)
         subs?.delete(workspaceId)
-        ws.send(JSON.stringify({ type: 'unsubscribed', payload: { workspaceId } }))
+        sendFrame(ws, JSON.stringify({ type: 'unsubscribed', payload: { workspaceId } }))
         break
       }
 
@@ -128,14 +201,33 @@ export function handleConnection(ws: WebSocket): void {
             // Every other branch of this switch answers on failure; a routed
             // message that vanishes silently leaves the user waiting forever.
             const message = err instanceof Error ? err.message : String(err)
-            ws.send(JSON.stringify({ type: 'error', payload: { message: `Failed to handle '${type}': ${message}` } }))
+            if (type === 'chat:message' && isRecord(payload) && typeof payload.clientMessageId === 'string') {
+              sendFrame(
+                ws,
+                JSON.stringify({
+                  type: 'chat:rejected',
+                  workspaceId: payload.workspaceId,
+                  payload: {
+                    clientMessageId: payload.clientMessageId,
+                    sessionId: payload.sessionId,
+                    content: payload.content,
+                    message,
+                  },
+                }),
+              )
+              return
+            }
+            sendFrame(
+              ws,
+              JSON.stringify({ type: 'error', payload: { message: `Failed to handle '${type}': ${message}` } }),
+            )
           })
         }
         break
       }
 
       default:
-        ws.send(JSON.stringify({ type: 'error', payload: { message: `Unknown message type: ${type}` } }))
+        sendFrame(ws, JSON.stringify({ type: 'error', payload: { message: `Unknown message type: ${type}` } }))
     }
   })
 
@@ -206,7 +298,13 @@ function insertEventStatement(): Statement<[string, string, string, string, stri
   return cachedInsert.statement
 }
 
-export function emit(workspaceId: string, type: string, payload: unknown, sessionId?: string): string {
+export function emit(
+  workspaceId: string,
+  type: string,
+  payload: unknown,
+  sessionId?: string,
+  options?: { requirePersistence?: boolean },
+): string {
   recordActivity(workspaceId, type, payload, sessionId)
   const id = nanoid()
   const createdAt = new Date().toISOString()
@@ -217,37 +315,55 @@ export function emit(workspaceId: string, type: string, payload: unknown, sessio
     insertEventStatement().run(id, workspaceId, type, JSON.stringify(payload), sessionId ?? null, createdAt)
     replayable = true
   } catch (err) {
+    if (options?.requirePersistence) throw err
     console.error(`[websocket-service] Failed to persist event (workspace=${workspaceId}, type=${type}):`, err)
   }
 
   // Build the event object to send
   const event: WsEvent = { id, workspaceId, type, payload, sessionId, createdAt, replayable }
+  broadcastPersistedEvent(event)
+  return id
+}
+
+/** Insert durably within the caller's transaction; broadcast only after commit. */
+export function persistWorkspaceEvent(
+  workspaceId: string,
+  type: string,
+  payload: unknown,
+  sessionId?: string,
+): WsEvent {
+  const event: WsEvent = {
+    id: nanoid(),
+    workspaceId,
+    type,
+    payload,
+    sessionId,
+    createdAt: new Date().toISOString(),
+    replayable: true,
+  }
+  insertEventStatement().run(event.id, workspaceId, type, JSON.stringify(payload), sessionId ?? null, event.createdAt)
+  recordActivity(workspaceId, type, payload, sessionId)
+  return event
+}
+
+export function broadcastPersistedEvent(event: WsEvent): void {
   const message = JSON.stringify(event)
 
   // Broadcast to subscribed clients. Wrap `.send` in try/catch so a dropped
   // client doesn't throw and abort delivery to the remaining subscribers.
   let emitSendErrorLogged = false
   for (const [ws, subs] of clients) {
-    if (subs.has(workspaceId) && ws.readyState === 1 /* WebSocket.OPEN */) {
-      if (((ws as { bufferedAmount?: number }).bufferedAmount ?? 0) > MAX_BUFFERED_BYTES) {
-        if (!emitSendErrorLogged) {
-          console.warn(`[ws] client backlogged, dropping live events (workspace=${workspaceId}, type=${type})`)
-          emitSendErrorLogged = true
-        }
-        continue
-      }
+    if (subs.has(event.workspaceId) && ws.readyState === 1 /* WebSocket.OPEN */) {
       try {
-        ws.send(message)
+        sendFrame(ws, message)
       } catch (err) {
         if (!emitSendErrorLogged) {
-          console.warn(`[ws] emit send failed (workspace=${workspaceId}, type=${type}):`, err)
+          console.warn(`[ws] emit send failed (workspace=${event.workspaceId}, type=${event.type}):`, err)
           emitSendErrorLogged = true
         }
       }
     }
   }
-
-  return id
 }
 
 /**
@@ -272,15 +388,8 @@ export function emitEphemeral(workspaceId: string, type: string, payload: unknow
   let sendErrorLogged = false
   for (const [ws, subs] of clients) {
     if (subs.has(workspaceId) && ws.readyState === 1 /* WebSocket.OPEN */) {
-      if (((ws as { bufferedAmount?: number }).bufferedAmount ?? 0) > MAX_BUFFERED_BYTES) {
-        if (!sendErrorLogged) {
-          console.warn(`[ws] client backlogged, dropping ephemeral event (workspace=${workspaceId}, type=${type})`)
-          sendErrorLogged = true
-        }
-        continue
-      }
       try {
-        ws.send(message)
+        sendFrame(ws, message)
       } catch (err) {
         if (!sendErrorLogged) {
           console.warn(`[ws] emitEphemeral send failed (workspace=${workspaceId}, type=${type}):`, err)
@@ -307,7 +416,7 @@ export function handleSyncRequest(ws: WebSocket, lastEventId: string, workspaceI
         })()
 
   if (resolvedIds.length === 0) {
-    ws.send(JSON.stringify({ type: 'sync:empty', payload: { message: 'No subscriptions' } }))
+    sendFrame(ws, JSON.stringify({ type: 'sync:empty', payload: { message: 'No subscriptions' } }))
     return
   }
 
@@ -405,13 +514,14 @@ export function handleSyncRequest(ws: WebSocket, lastEventId: string, workspaceI
       }
     })
 
-    ws.send(JSON.stringify({ type: 'sync:response', payload: { events, mode, truncated } }))
+    sendFrame(ws, JSON.stringify({ type: 'sync:response', payload: { events, mode, truncated } }))
   } catch (err) {
     // This handler runs inside ws's 'message' callback: an uncaught SQLite
     // error here used to reach the process, not the client.
     console.error('[ws] sync request failed:', err)
     try {
-      ws.send(
+      sendFrame(
+        ws,
         JSON.stringify({
           type: 'sync:error',
           payload: { message: err instanceof Error ? err.message : String(err) },
@@ -453,7 +563,7 @@ export function broadcastAll(type: string, payload: unknown): void {
   for (const client of clients.keys()) {
     if (client.readyState === 1 /* WebSocket.OPEN */) {
       try {
-        client.send(message)
+        sendFrame(client, message)
       } catch (err) {
         // client dropped; next iteration will fail its .readyState check.
         // Log the first occurrence so real regressions surface without

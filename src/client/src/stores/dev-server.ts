@@ -1,4 +1,7 @@
 import { defineStore } from 'pinia'
+import { apiFetch } from 'src/utils/api'
+
+const statusRequests = new Map<string, number>()
 
 export interface DevServerStatus {
   status: 'unknown' | 'stopped' | 'starting' | 'running' | 'stopping' | 'error'
@@ -25,11 +28,13 @@ export const useDevServerStore = defineStore('devServer', {
 
   actions: {
     async fetchStatus(workspaceId: string) {
+      const version = (statusRequests.get(workspaceId) ?? 0) + 1
+      statusRequests.set(workspaceId, version)
+      const previous = this.statuses[workspaceId]
       try {
-        const res = await fetch(`/api/dev-server/${workspaceId}/status`)
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const data = await res.json()
-        this.statuses[workspaceId] = data
+        const data = await apiFetch<DevServerStatus>(`/api/dev-server/${workspaceId}/status`)
+        if (statusRequests.get(workspaceId) === version && this.statuses[workspaceId] === previous)
+          this.statuses[workspaceId] = data
       } catch (err) {
         console.error('[dev-server store] fetchStatus failed:', err)
       }

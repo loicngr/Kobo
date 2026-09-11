@@ -1,4 +1,7 @@
 export default {
+  'chat.externalLlm': 'External LLM · {name}',
+  'search.indexing': 'Indexing history: {processed}/{total}. Results are partial.',
+  'search.indexUnavailable': 'Search index unavailable. Try again later.',
   'blockers.setupConfiguration': 'No setup script is configured. Add one in the Scripts section of settings.',
   'blockers.noWorkspace': 'Select a workspace to use this action.',
   'blockers.purged': 'Restore the worktree from the workspace banner before this action.',
@@ -1457,6 +1460,9 @@ export default {
   'diff.reviewEmpty': 'No comments yet — hover a line in the diff and click + to add one.',
   'diff.reviewGlobalPlaceholder': 'Add an overall review message (optional)',
   'diff.submitReview': 'Submit review ({n})',
+  'diff.reviewPending': 'A review is already being sent.',
+  'diff.reviewEmptySubmission': 'The review is empty.',
+  'diff.reviewNotAccepted': 'The message was not accepted. Your review has been kept.',
   'diff.reviewSubmitted': 'Review submitted to agent',
   'diff.reviewSubmitFailed': 'Failed to submit review: {error}',
   'diff.scopeBranch': 'Branch',
@@ -1652,6 +1658,28 @@ export default {
   'settings.importConfirmTitle': 'Import configuration',
   'settings.importConfirmMessage':
     'This will replace your current settings, templates and tags. Your MCP keys are preserved. Continue?',
+  'settings.mcp.title': 'External LLM connections (MCP)',
+  'settings.mcp.hint': 'Connect an MCP client to read workspace conversations, send messages and answer questions.',
+  'settings.mcp.remoteDisabled': 'Remote connections require network access and a server restart after enabling it.',
+  'settings.mcp.clientName': 'Client name (optional)',
+  'settings.mcp.connection': 'Connection',
+  'settings.mcp.local': 'Local HTTP',
+  'settings.mcp.remote': 'Remote HTTP',
+  'settings.mcp.proxy': 'Reverse proxy',
+  'settings.mcp.stdio': 'Local stdio',
+  'settings.mcp.copyUrl': 'Copy URL',
+  'settings.mcp.copyConfig': 'Copy configuration',
+  'settings.mcp.copyWithToken': 'Copy with token',
+  'settings.mcp.genericFormat':
+    'These examples use a generic mcpServers format. Adapt the container format to your MCP client. Token placeholders are kept in previews.',
+  'settings.mcp.tokenUnavailable':
+    'No token is available. Enable network access before copying authenticated configuration.',
+  'settings.mcp.stdioUnavailable':
+    'The stdio entrypoint is unavailable in this installation. Use HTTP or build Kōbō first.',
+  'settings.mcp.copyFailed': 'Could not copy to the clipboard.',
+  'tours.settings.mcp.title': 'Connect an external LLM',
+  'tours.settings.mcp.description':
+    'Copy an HTTP or stdio configuration to let an external assistant communicate with your workspaces.',
   'settings.network.title': 'Network access',
   'settings.network.hint':
     'Control Kōbō from another device on your trusted LAN. Off = localhost only. On = reachable on your network, protected by a token. Restart Kōbō after toggling.',
@@ -1806,6 +1834,7 @@ export default {
   'schedule.cronsTitle': 'Recurring schedules',
   'schedule.noWakeup': 'No wakeup scheduled',
   'schedule.noCrons': 'No cron scheduled',
+  'schedule.invalidCron': 'Inactive: invalid expression. Remove and recreate this schedule.',
   'schedule.nextFireAt': 'next at {time}',
   'schedule.lastFiredAt': 'last fired {time} ago',
   'schedule.addCronTitle': 'Add a recurring task',
@@ -1848,6 +1877,7 @@ export default {
   'permissionRequest.allow': 'Allow',
   'permissionRequest.allowOnce': 'Allow once',
   'permissionRequest.allowTurn': 'Allow this turn',
+  'permissionRequest.operationUnavailable': 'Operation details unavailable; approve once or the entire tool.',
   'permissionRequest.allowOperation': 'Always this operation',
   'permissionRequest.allowTool': 'Always this tool',
   'permissionRequest.deny': 'Deny',

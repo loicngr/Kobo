@@ -1,9 +1,11 @@
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { computed, nextTick, ref, watch } from 'vue'
 import { useAgentStreamStore } from '../stores/agent-stream'
 import { useWebSocketStore } from '../stores/websocket'
 import {
   isSubagentTerminalEvent,
+  type PendingItem,
   type PrSnapshot,
   useWorkspaceStore,
   type Workspace,
@@ -2611,4 +2613,169 @@ it('retains a workspace created while an older list was loading', async () => {
   finish(Response.json([]))
   await pending
   expect(store.workspaces.map((workspace) => workspace.id)).toEqual(['new'])
+})
+
+it('does not select a created session after navigating to another workspace', async () => {
+  setActivePinia(createPinia())
+  const store = useWorkspaceStore()
+  store.selectedWorkspaceId = 'a'
+  let respond!: (response: Response) => void
+  vi.stubGlobal(
+    'fetch',
+    vi.fn(
+      () =>
+        new Promise<Response>((resolve) => {
+          respond = resolve
+        }),
+    ),
+  )
+  try {
+    const request = store.createSession('a')
+    store.selectedWorkspaceId = 'b'
+    store.selectedSessionId = 'session-b'
+    const sessionB = {
+      id: 'session-b',
+      workspaceId: 'b',
+      status: 'idle',
+      pid: null,
+      engineSessionId: null,
+      startedAt: '',
+      endedAt: null,
+      name: null,
+    }
+    store.sessions = [sessionB]
+    respond(new Response(JSON.stringify({ ...sessionB, id: 'session-a', workspaceId: 'a' })))
+    expect((await request).id).toBe('session-a')
+    expect(store.selectedSessionId).toBe('session-b')
+    expect(store.sessions).toEqual([sessionB])
+    expect(localStorage.getItem('kobo:session:b')).toBeNull()
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+it('reconciles pending input snapshots without overwriting a newer live question', async () => {
+  setActivePinia(createPinia())
+  const store = useWorkspaceStore()
+  const question = (id: string) => ({
+    kind: 'question' as const,
+    agentSessionId: 's',
+    toolCallId: id,
+    toolName: 'Ask',
+    input: {},
+  })
+  const response = () =>
+    new Response(
+      JSON.stringify({
+        workspaces: [makeWorkspace()],
+        agentLiveness: {},
+        prSnapshots: {},
+        gitStats: {},
+        pendingInputs: { w1: [] },
+      }),
+    )
+  store.enqueuePending('w1', question('answered-elsewhere'))
+  vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response()))
+  try {
+    await store.fetchWorkspacesInfo()
+    expect(store.peekPending('w1')).toBeUndefined()
+    let respond!: (response: Response) => void
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            respond = resolve
+          }),
+      ),
+    )
+    const pending = store.fetchWorkspacesInfo()
+    store.enqueuePending('w1', question('new-live'))
+    respond(response())
+    await pending
+    expect(store.peekPending('w1')?.toolCallId).toBe('new-live')
+  } finally {
+    vi.unstubAllGlobals()
+  }
+})
+
+describe('pending input snapshot identity', () => {
+  const question = (id: string, text = 'Choose an option'): PendingItem => ({
+    kind: 'question',
+    agentSessionId: 's',
+    toolCallId: id,
+    toolName: 'Ask',
+    input: { questions: [{ question: text, options: [{ label: 'A' }] }] },
+  })
+  const response = (items: PendingItem[]) =>
+    Response.json({
+      workspaces: [makeWorkspace()],
+      pendingInputs: { w1: items },
+      agentLiveness: {},
+      prSnapshots: {},
+      gitStats: {},
+    })
+
+  it('keeps an answer draft when an identical question arrives in a periodic snapshot', async () => {
+    setActivePinia(createPinia())
+    const store = useWorkspaceStore()
+    store.enqueuePending('w1', question('same'))
+    const original = store.peekPending('w1')
+    // Mirror the panel's computed dependency and reset-on-question-change behavior.
+    const pending = computed(() => store.peekPending('w1'))
+    const questions = computed(() =>
+      pending.value?.kind === 'question'
+        ? (pending.value.input as { questions: unknown[] }).questions.map((q) => ({ ...(q as object) }))
+        : [],
+    )
+    const draft = ref('')
+    const reset = vi.fn(() => {
+      draft.value = ''
+    })
+    const stop = watch(questions, reset, { immediate: true })
+    draft.value = 'My answer is still being written'
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockImplementation(async () => response([question('same')])),
+    )
+    try {
+      await store.fetchWorkspacesInfo()
+      await nextTick()
+      expect(draft.value).toBe('My answer is still being written')
+      expect(reset).toHaveBeenCalledTimes(1)
+      expect(store.peekPending('w1')).toBe(original)
+    } finally {
+      stop()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  it('reconciles order, removals and changed payloads while retaining unchanged pending items', async () => {
+    setActivePinia(createPinia())
+    const store = useWorkspaceStore()
+    const permission: PendingItem = {
+      kind: 'permission',
+      agentSessionId: 's',
+      toolCallId: 'permission',
+      toolName: 'Bash',
+      toolInput: { command: 'pwd' },
+    }
+    for (const item of [question('gone'), question('kept'), permission, question('changed')])
+      store.enqueuePending('w1', item)
+    const kept = store.pendingQueue.w1![1]
+    const keptPermission = store.pendingQueue.w1![2]
+    const changed = store.pendingQueue.w1![3]
+    const incoming = [permission, question('changed', 'A different question'), question('kept')]
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(response(incoming)))
+    try {
+      await store.fetchWorkspacesInfo()
+      expect(store.pendingQueue.w1).toEqual(incoming)
+      expect(store.pendingQueue.w1![0]).toBe(keptPermission)
+      expect(store.pendingQueue.w1![1]).not.toBe(changed)
+      expect(store.pendingQueue.w1![2]).toBe(kept)
+      expect(store.pendingDeferred.w1?.toolCallId).toBe('kept')
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
 })

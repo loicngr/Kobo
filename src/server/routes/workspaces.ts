@@ -1,5 +1,6 @@
 import { execFile as execFileCb, execFileSync, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
+import { getSearchIndexStatus, searchEvents } from '../services/search-service.js'
 import { AgentStopError, assertAgentStopped } from '../utils/agent-stop-result.js'
 import { withGitRepoLock } from '../utils/git-repo-lock.js'
 
@@ -75,7 +76,7 @@ function workspaceErrorStatus(err: unknown): 409 | 500 {
 const app = new Hono()
 
 // These handlers own teardown across awaits; purge/delete/restore own their guard in the service.
-for (const route of ['/:id/archive', '/:id/run-setup-script', '/:id/cancel-source-change']) {
+for (const route of ['/:id/archive', '/:id/run-setup-script', '/:id/cancel-source-change', '/:id/rollback-file']) {
   app.use(route, async (c, next) => {
     try {
       await withWorkspaceLifecycleGuard(c.req.param('id')!, next)
@@ -205,11 +206,12 @@ function emitCreateFailed(creationId: string | undefined, step: CreateWorkspaceS
  */
 async function rollbackFailedCreation(
   workspace: WorkspaceRow,
-  opts: { deleteLocalBranch: boolean },
+  opts: { deleteLocalBranch: boolean; removeWorktree: boolean },
 ): Promise<string[]> {
   try {
     return await deleteWorkspaceWithSideEffects(workspace, {
       deleteLocalBranch: opts.deleteLocalBranch,
+      removeWorktree: opts.removeWorktree,
       // Nothing was ever pushed at this point in the creation flow.
       deleteRemoteBranch: false,
     })
@@ -454,6 +456,7 @@ app.post('/', migrationGuard, async (c) => {
   // Set only once WE created the worktree, which is also what created the
   // branch. A failure before that point must not delete a branch we never made.
   let createdBranch = false
+  let createdWorktree = false
   // Hoisted out of the `build-prompt` block (declared with `const` there) so
   // both rollback paths — the `start-agent` branch and the outermost catch —
   // can read it to decide whether the setup-script caveat applies.
@@ -819,207 +822,220 @@ app.post('/', migrationGuard, async (c) => {
     //      worktree path so they stay aligned.
     currentStep = 'create-record'
     emitCreateProgress(creationId, currentStep)
-    let prospectiveWorktreePath: string
     let workingBranchAdjusted = false
-    if (useReusedWorktree) {
-      prospectiveWorktreePath = body.worktreePath as string
-    } else {
-      try {
-        const resolved = resolveUniqueBranchAndPath({
-          projectPath: body.projectPath,
-          baseBranch: workingBranch,
-          worktreesPath: globalSettings.worktreesPath,
-          projectSlug,
-        })
-        workingBranch = resolved.workingBranch
-        prospectiveWorktreePath = resolved.worktreePath
-        workingBranchAdjusted = resolved.adjusted
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        emitCreateFailed(creationId, 'create-record', message)
-        return c.json({ error: message, step: 'create-record' }, 409)
-      }
-    }
-
-    let workspace = workspaceService.createWorkspace({
-      name: body.name,
-      projectPath: body.projectPath,
-      sourceBranch: body.sourceBranch,
-      workingBranch,
-      notionUrl: body.notionUrl,
-      notionPageId: body.notionPageId,
-      sentryUrl: body.sentryUrl,
-      prUrl: body.prUrl,
-      worktreePath: prospectiveWorktreePath,
-      worktreeOwned: !useReusedWorktree,
-      model: body.model,
-      brainstormModel: body.brainstormModel,
-      reasoningEffort: body.reasoningEffort,
-      agentPermissionMode: resolveCreateAgentPermissionMode(
-        body.agentPermissionMode,
-        body.projectPath,
-        globalSettings,
-        body.engine ?? 'claude-code',
-      ),
-      engine: body.engine,
-      // Set by the engine-comparison flow, which posts here once per engine
-      // with the same id so the resulting workspaces can find each other.
-      comparisonId: body.comparisonId,
-      ...(useReusedWorktree ? {} : { worktreesPath: globalSettings.worktreesPath }),
-    })
-    createdWorkspace = workspace
-
-    // Enable auto-loop before starting the initial brainstorming session so
-    // its model override is available when selecting that session's model.
-    if (body.autoLoop === true) {
-      const notionProducedTasks =
-        body.notionUrl !== undefined &&
-        notionContent != null &&
-        notionContent.todos.length > 0 &&
-        notionContent.gherkinFeatures.length > 0
-      const sessionMode = body.autoLoopSessionMode === 'continuous' ? 'continuous' : 'per_task'
-      const db = getDb()
-      db.prepare(
-        'UPDATE workspaces SET auto_loop = 1, auto_loop_ready = ?, auto_loop_session_mode = ? WHERE id = ?',
-      ).run(notionProducedTasks ? 1 : 0, sessionMode, workspace.id)
-      workspace = workspaceService.getWorkspace(workspace.id) ?? workspace
-      // Emit events so the frontend refreshes autoLoopStates without F5.
-      wsService.emitEphemeral(workspace.id, 'autoloop:enabled', {})
-      if (notionProducedTasks) {
-        wsService.emitEphemeral(workspace.id, 'autoloop:ready-flipped', {})
-      }
-    }
-
-    // Auto-tag the workspace based on its creation source — `notion` when
-    // imported from a Notion page, `sentry` when bootstrapped from a Sentry
-    // issue URL. Pre-seeded in the global tag catalogue via migration v9.
-    // Skip any tag the user has removed from the catalogue so we respect
-    // their choice (they may have pruned "notion"/"sentry" on purpose).
-    const catalogTags = new Set(globalSettings.tags ?? [])
-    const autoTags: string[] = []
-    if (body.notionUrl && catalogTags.has('notion')) autoTags.push('notion')
-    if (body.sentryUrl && catalogTags.has('sentry')) autoTags.push('sentry')
-    if (autoTags.length > 0) {
-      try {
-        const tagged = workspaceService.setWorkspaceTags(workspace.id, autoTags)
-        if (tagged) workspace = tagged
-      } catch (err) {
-        console.error('[workspaces] Failed to apply auto tags:', err)
-      }
-    }
-
-    // Update workspace name with Sentry issue title if the user did not provide
-    // a custom name and Notion hasn't already filled it. Prefix with the Sentry
-    // short-id (e.g. "SEKUR-IOS-9 | TypeError: …") so the workspace stays
-    // identifiable in the sidebar without opening the panel.
-    if (sentryContent?.title && !notionContent?.title) {
-      const prefix = sentryContent.issueId ? `${sentryContent.issueId} | ` : ''
-      const renamed = resolveExtractedName(workspace.name, `${prefix}${sentryContent.title}`)
-      if (renamed) workspace = workspaceService.updateWorkspaceName(workspace.id, renamed)
-    }
-
-    currentStep = 'create-tasks'
-    emitCreateProgress(creationId, currentStep)
-    // Create tasks from extracted Notion data
-    if (notionContent) {
-      let sortOrder = 0
-
-      for (const todo of notionContent.todos) {
-        workspaceService.createTask(workspace.id, {
-          title: todo.title,
-          isAcceptanceCriterion: false,
-          sortOrder: sortOrder++,
-        })
+    // Allocate the unique branch/path and create its checkout under one lock.
+    // Cleanup is deliberately outside: it acquires the same repository lock.
+    const creation = await withGitRepoLock(body.projectPath, async () => {
+      let prospectiveWorktreePath: string
+      if (useReusedWorktree) {
+        // Another attachment may have completed while this request waited for the lock.
+        const existing = getDb().prepare('SELECT id FROM workspaces WHERE worktree_path = ?').get(body.worktreePath)
+        if (existing) {
+          const failure = 'This worktree is already attached to another Kōbō workspace'
+          emitCreateFailed(creationId, 'inspect-worktree', failure)
+          return c.json({ error: failure, step: 'inspect-worktree' }, 422)
+        }
+        prospectiveWorktreePath = body.worktreePath as string
+      } else {
+        try {
+          const resolved = resolveUniqueBranchAndPath({
+            projectPath: body.projectPath,
+            baseBranch: workingBranch,
+            worktreesPath: globalSettings.worktreesPath,
+            projectSlug,
+          })
+          workingBranch = resolved.workingBranch
+          prospectiveWorktreePath = resolved.worktreePath
+          workingBranchAdjusted = resolved.adjusted
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          emitCreateFailed(creationId, 'create-record', message)
+          return c.json({ error: message, step: 'create-record' }, 409)
+        }
       }
 
-      for (const feature of notionContent.gherkinFeatures) {
-        workspaceService.createTask(workspace.id, {
-          title: feature,
-          isAcceptanceCriterion: true,
-          sortOrder: sortOrder++,
-        })
+      let workspace = workspaceService.createWorkspace({
+        name: body.name,
+        projectPath: body.projectPath,
+        sourceBranch: body.sourceBranch,
+        workingBranch,
+        notionUrl: body.notionUrl,
+        notionPageId: body.notionPageId,
+        sentryUrl: body.sentryUrl,
+        prUrl: body.prUrl,
+        worktreePath: prospectiveWorktreePath,
+        worktreeOwned: !useReusedWorktree,
+        model: body.model,
+        brainstormModel: body.brainstormModel,
+        reasoningEffort: body.reasoningEffort,
+        agentPermissionMode: resolveCreateAgentPermissionMode(
+          body.agentPermissionMode,
+          body.projectPath,
+          globalSettings,
+          body.engine ?? 'claude-code',
+        ),
+        engine: body.engine,
+        // Set by the engine-comparison flow, which posts here once per engine
+        // with the same id so the resulting workspaces can find each other.
+        comparisonId: body.comparisonId,
+        ...(useReusedWorktree ? {} : { worktreesPath: globalSettings.worktreesPath }),
+      })
+      createdWorkspace = workspace
+
+      // Enable auto-loop before starting the initial brainstorming session so
+      // its model override is available when selecting that session's model.
+      if (body.autoLoop === true) {
+        const notionProducedTasks =
+          body.notionUrl !== undefined &&
+          notionContent != null &&
+          notionContent.todos.length > 0 &&
+          notionContent.gherkinFeatures.length > 0
+        const sessionMode = body.autoLoopSessionMode === 'continuous' ? 'continuous' : 'per_task'
+        const db = getDb()
+        db.prepare(
+          'UPDATE workspaces SET auto_loop = 1, auto_loop_ready = ?, auto_loop_session_mode = ? WHERE id = ?',
+        ).run(notionProducedTasks ? 1 : 0, sessionMode, workspace.id)
+        workspace = workspaceService.getWorkspace(workspace.id) ?? workspace
+        // Emit events so the frontend refreshes autoLoopStates without F5.
+        wsService.emitEphemeral(workspace.id, 'autoloop:enabled', {})
+        if (notionProducedTasks) {
+          wsService.emitEphemeral(workspace.id, 'autoloop:ready-flipped', {})
+        }
       }
 
-      // Update workspace name with Notion page title only if user didn't
-      // provide a custom name. Prefix with the Notion unique-id (e.g.
-      // Use the Notion page title when the user left the generic placeholder.
-      if (notionContent.title) {
-        const renamed = resolveExtractedName(workspace.name, notionContent.title)
+      // Auto-tag the workspace based on its creation source — `notion` when
+      // imported from a Notion page, `sentry` when bootstrapped from a Sentry
+      // issue URL. Pre-seeded in the global tag catalogue via migration v9.
+      // Skip any tag the user has removed from the catalogue so we respect
+      // their choice (they may have pruned "notion"/"sentry" on purpose).
+      const catalogTags = new Set(globalSettings.tags ?? [])
+      const autoTags: string[] = []
+      if (body.notionUrl && catalogTags.has('notion')) autoTags.push('notion')
+      if (body.sentryUrl && catalogTags.has('sentry')) autoTags.push('sentry')
+      if (autoTags.length > 0) {
+        try {
+          const tagged = workspaceService.setWorkspaceTags(workspace.id, autoTags)
+          if (tagged) workspace = tagged
+        } catch (err) {
+          console.error('[workspaces] Failed to apply auto tags:', err)
+        }
+      }
+
+      // Update workspace name with Sentry issue title if the user did not provide
+      // a custom name and Notion hasn't already filled it. Prefix with the Sentry
+      // short-id (e.g. "SEKUR-IOS-9 | TypeError: …") so the workspace stays
+      // identifiable in the sidebar without opening the panel.
+      if (sentryContent?.title && !notionContent?.title) {
+        const prefix = sentryContent.issueId ? `${sentryContent.issueId} | ` : ''
+        const renamed = resolveExtractedName(workspace.name, `${prefix}${sentryContent.title}`)
         if (renamed) workspace = workspaceService.updateWorkspaceName(workspace.id, renamed)
       }
-    }
 
-    // Update workspace name with the PR/MR title if the user did not provide
-    // a custom name and neither Notion nor Sentry already claimed it. This
-    // makes the PR a THIRD context source, lowest priority of the three
-    // (Notion > Sentry > PR), consistent with the checks above.
-    if (prContent && !notionContent?.title && !sentryContent?.title) {
-      const renamed = resolveExtractedName(workspace.name, prContent.title)
-      if (renamed) workspace = workspaceService.updateWorkspaceName(workspace.id, renamed)
-    }
+      currentStep = 'create-tasks'
+      emitCreateProgress(creationId, currentStep)
+      // Create tasks from extracted Notion data
+      if (notionContent) {
+        let sortOrder = 0
 
-    // Create manual tasks/criteria if no Notion content was extracted
-    if (!notionContent && (Array.isArray(body.tasks) || Array.isArray(body.acceptanceCriteria))) {
-      let sortOrder = 0
-      if (Array.isArray(body.tasks)) {
-        for (const title of body.tasks) {
-          if (typeof title === 'string' && title.trim()) {
-            workspaceService.createTask(workspace.id, {
-              title: title.trim(),
-              isAcceptanceCriterion: false,
-              sortOrder: sortOrder++,
-            })
+        for (const todo of notionContent.todos) {
+          workspaceService.createTask(workspace.id, {
+            title: todo.title,
+            isAcceptanceCriterion: false,
+            sortOrder: sortOrder++,
+          })
+        }
+
+        for (const feature of notionContent.gherkinFeatures) {
+          workspaceService.createTask(workspace.id, {
+            title: feature,
+            isAcceptanceCriterion: true,
+            sortOrder: sortOrder++,
+          })
+        }
+
+        // Update workspace name with Notion page title only if user didn't
+        // provide a custom name. Prefix with the Notion unique-id (e.g.
+        // Use the Notion page title when the user left the generic placeholder.
+        if (notionContent.title) {
+          const renamed = resolveExtractedName(workspace.name, notionContent.title)
+          if (renamed) workspace = workspaceService.updateWorkspaceName(workspace.id, renamed)
+        }
+      }
+
+      // Update workspace name with the PR/MR title if the user did not provide
+      // a custom name and neither Notion nor Sentry already claimed it. This
+      // makes the PR a THIRD context source, lowest priority of the three
+      // (Notion > Sentry > PR), consistent with the checks above.
+      if (prContent && !notionContent?.title && !sentryContent?.title) {
+        const renamed = resolveExtractedName(workspace.name, prContent.title)
+        if (renamed) workspace = workspaceService.updateWorkspaceName(workspace.id, renamed)
+      }
+
+      // Create manual tasks/criteria if no Notion content was extracted
+      if (!notionContent && (Array.isArray(body.tasks) || Array.isArray(body.acceptanceCriteria))) {
+        let sortOrder = 0
+        if (Array.isArray(body.tasks)) {
+          for (const title of body.tasks) {
+            if (typeof title === 'string' && title.trim()) {
+              workspaceService.createTask(workspace.id, {
+                title: title.trim(),
+                isAcceptanceCriterion: false,
+                sortOrder: sortOrder++,
+              })
+            }
+          }
+        }
+        if (Array.isArray(body.acceptanceCriteria)) {
+          for (const title of body.acceptanceCriteria) {
+            if (typeof title === 'string' && title.trim()) {
+              workspaceService.createTask(workspace.id, {
+                title: title.trim(),
+                isAcceptanceCriterion: true,
+                sortOrder: sortOrder++,
+              })
+            }
           }
         }
       }
-      if (Array.isArray(body.acceptanceCriteria)) {
-        for (const title of body.acceptanceCriteria) {
-          if (typeof title === 'string' && title.trim()) {
-            workspaceService.createTask(workspace.id, {
-              title: title.trim(),
-              isAcceptanceCriterion: true,
-              sortOrder: sortOrder++,
-            })
+
+      currentStep = 'create-worktree'
+      emitCreateProgress(creationId, currentStep)
+      // Create git worktree for the working branch — unless we're reusing an
+      // existing one, in which case the path is taken straight from the body.
+      let worktreePath: string
+      if (useReusedWorktree) {
+        worktreePath = body.worktreePath as string
+      } else {
+        try {
+          const created = await worktreeService.createWorktreeUnlocked(
+            body.projectPath,
+            workingBranch,
+            baseRef,
+            globalSettings.worktreesPath,
+            projectSlug,
+          )
+          worktreePath = created.worktreePath
+          // Not an assumption: `createWorktree` reports which git command it ran.
+          // It falls back to attaching an existing branch, and deleting that one
+          // on rollback would destroy commits the user made before Kobo existed.
+          createdBranch = created.branchCreated
+          createdWorktree = true
+        } catch (err) {
+          if (err instanceof worktreeService.WorktreeCreationError) {
+            createdWorktree = true
+            createdBranch = err.branchCreated
           }
+          throw new Error(`Failed to create worktree: ${err instanceof Error ? err.message : String(err)}`, {
+            cause: err,
+          })
         }
       }
-    }
 
-    currentStep = 'create-worktree'
-    emitCreateProgress(creationId, currentStep)
-    // Create git worktree for the working branch — unless we're reusing an
-    // existing one, in which case the path is taken straight from the body.
-    let worktreePath: string
-    if (useReusedWorktree) {
-      worktreePath = body.worktreePath as string
-    } else {
-      try {
-        const created = worktreeService.createWorktree(
-          body.projectPath,
-          workingBranch,
-          baseRef,
-          globalSettings.worktreesPath,
-          projectSlug,
-        )
-        worktreePath = created.worktreePath
-        // Not an assumption: `createWorktree` reports which git command it ran.
-        // It falls back to attaching an existing branch, and deleting that one
-        // on rollback would destroy commits the user made before Kobo existed.
-        createdBranch = created.branchCreated
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err)
-        // Roll back the half-created workspace through the SHARED demolition
-        // path — a second inline cleanup here would drift from it. The branch
-        // is not deleted: `createWorktree` failed, so we never created one.
-        const rollbackWarnings = await rollbackFailedCreation(workspace, { deleteLocalBranch: false })
-        const failure = `Failed to create worktree: ${message}`
-        emitCreateFailed(creationId, 'create-worktree', failure)
-        return c.json(
-          { error: failure, step: 'create-worktree', rollback: { done: true, warnings: rollbackWarnings } },
-          500,
-        )
-      }
-    }
+      return { workspace, worktreePath }
+    })
+    if (creation instanceof Response) return creation
+    const { workspace } = creation
+    const { worktreePath } = creation
 
     currentStep = 'write-conventions'
     emitCreateProgress(creationId, currentStep)
@@ -1544,13 +1560,19 @@ Once the brainstorming + planning steps above are complete and you have a saved 
       // already guards the worktree via `worktreeOwned`; the branch flag is
       // ours to set.
       const rollbackWarnings = await rollbackFailedCreation(workspace, {
-        deleteLocalBranch: !useReusedWorktree,
+        deleteLocalBranch: createdBranch,
+        removeWorktree: createdWorktree,
       })
 
       // The setup script has already run by this point — see the caveat's own
       // comment for what that rollback cannot reach.
       const setupCaveat = setupScriptConfigured ? SETUP_SCRIPT_ROLLBACK_CAVEAT : ''
-      const failure = `Failed to start the agent: ${agentStartError}. The workspace, its worktree and its branch were removed.${setupCaveat}`
+      const removed = createdBranch
+        ? 'The workspace, its worktree and its branch were removed.'
+        : createdWorktree
+          ? 'The workspace and its worktree were removed.'
+          : 'The half-created workspace was removed.'
+      const failure = `Failed to start the agent: ${agentStartError}. ${removed}${setupCaveat}`
 
       emitCreateFailed(creationId, 'start-agent', failure)
       return c.json({ error: failure, step: 'start-agent', rollback: { done: true, warnings: rollbackWarnings } }, 500)
@@ -1597,7 +1619,10 @@ Once the brainstorming + planning steps above are complete and you have a saved 
     // reported error.
     if (createdWorkspace) {
       emitCreateProgress(creationId, 'rollback')
-      const rollbackWarnings = await rollbackFailedCreation(createdWorkspace, { deleteLocalBranch: createdBranch })
+      const rollbackWarnings = await rollbackFailedCreation(createdWorkspace, {
+        deleteLocalBranch: createdBranch,
+        removeWorktree: createdWorktree,
+      })
       logError('workspaces', 'Rolled back a creation that failed outside any per-step handler', {
         workspaceId: createdWorkspace.id,
         step: currentStep,
@@ -1675,8 +1700,12 @@ app.get('/pr-states', (c) => {
 // stay before GET /:id.
 app.get('/info', (c) => {
   try {
+    const workspaces = workspaceService.listWorkspaces(false)
     return c.json({
-      workspaces: workspaceService.listWorkspaces(false),
+      workspaces,
+      pendingInputs: Object.fromEntries(
+        workspaces.map((workspace) => [workspace.id, agentManager.getPendingInputs(workspace.id)]),
+      ),
       prSnapshots: getAllPrSnapshots(),
       gitStats: getAllGitStats(),
       // In-memory truth, not the `status` column: a workspace missing from
@@ -2387,88 +2416,29 @@ app.post('/:id/tasks/:taskId/notify-done', (c) => {
   }
 })
 
-// Cap how many recent rows one search may scan: the LIKE below cannot use an
-// index past the workspace_id prefix, and better-sqlite3 is synchronous — an
-// unbounded scan of a months-old workspace blocks every request and WS emit.
-const HISTORY_SEARCH_SCAN_CAP = 20_000
-
-// GET /api/workspaces/:id/history-search — full-workspace persisted conversation search.
-app.get('/:id/history-search', (c) => {
+// GET /api/workspaces/:id/history-search — the same logical-message index as global search.
+app.get('/:id/history-search', async (c) => {
   try {
     const id = c.req.param('id')
     if (!workspaceService.getWorkspace(id)) return c.json({ error: `Workspace '${id}' not found` }, 404)
     const query = (c.req.query('q') ?? '').trim()
     if (query.length < 2) return c.json({ results: [] })
-    const limit = Math.min(parseInt(c.req.query('limit') ?? '30', 10) || 30, 100)
-    const needle = `%${query.replace(/[%_]/g, '\\$&')}%`
-    const rows = getDb()
-      .prepare(
-        `SELECT id, session_id, type, payload, created_at FROM (
-           SELECT rowid AS rid, id, session_id, type, payload, created_at FROM ws_events
-           WHERE workspace_id = ? ORDER BY rowid DESC LIMIT ?
-         )
-         WHERE payload LIKE ? ESCAPE '\\'
-         ORDER BY rid DESC LIMIT ?`,
-      )
-      .all(id, HISTORY_SEARCH_SCAN_CAP, needle, limit * 4) as Array<{
-      id: string
-      session_id: string | null
-      type: string
-      payload: string
-      created_at: string
-    }>
-    const normalized = rows.flatMap((row) => {
-      const result = readableHistorySearchResult(row.type, row.payload, query)
-      if (!result) return []
-      return [{ eventId: row.id, sessionId: row.session_id, createdAt: row.created_at, ...result }]
+    const limit = Math.max(1, Math.min(parseInt(c.req.query('limit') ?? '30', 10) || 30, 100))
+    const results = await searchEvents(query, { workspaceId: id, includeArchived: true, limit }, c.req.raw.signal)
+    return c.json({
+      results: results.map((result) => ({
+        eventId: result.eventId,
+        sessionId: result.sessionId,
+        createdAt: result.timestamp,
+        kind: result.type === 'user:message' ? 'user' : 'agent',
+        snippet: result.snippet,
+      })),
+      partial: getSearchIndexStatus().state !== 'ready',
     })
-    return c.json({ results: normalized.slice(0, limit) })
   } catch (err) {
-    return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 503)
   }
 })
-
-function readableHistorySearchResult(
-  type: string,
-  rawPayload: string,
-  query: string,
-): { kind: 'user' | 'agent'; snippet: string } | null {
-  let payload: Record<string, unknown>
-  try {
-    payload = JSON.parse(rawPayload) as Record<string, unknown>
-  } catch {
-    return null
-  }
-
-  let text: string | null = null
-  let kind: 'user' | 'agent' = 'agent'
-  if (type === 'user:message') {
-    text = typeof payload.content === 'string' ? payload.content : null
-    kind = 'user'
-  } else if (type === 'agent:event') {
-    if (payload.kind === 'message:text' && typeof payload.text === 'string') text = payload.text
-  } else if (type === 'agent:output') {
-    const message = payload.message as { content?: unknown } | undefined
-    if (Array.isArray(message?.content)) {
-      text = message.content
-        .flatMap((block) => {
-          if (!block || typeof block !== 'object') return []
-          const candidate = block as { type?: unknown; text?: unknown }
-          return candidate.type === 'text' && typeof candidate.text === 'string' ? [candidate.text] : []
-        })
-        .join('\n')
-    }
-  }
-  if (!text) return null
-  const matchIndex = text.toLowerCase().indexOf(query.toLowerCase())
-  if (matchIndex < 0) return null
-  const start = Math.max(0, matchIndex - 90)
-  const end = Math.min(text.length, matchIndex + query.length + 180)
-  return {
-    kind,
-    snippet: `${start > 0 ? '…' : ''}${text.slice(start, end).replace(/\s+/g, ' ').trim()}${end < text.length ? '…' : ''}`,
-  }
-}
 
 /**
  * GET /api/workspaces/:id/sessions/:sessionId/summary — why a session ended.
@@ -3399,7 +3369,7 @@ type WorkspaceRow = NonNullable<ReturnType<typeof workspaceService.getWorkspace>
 // list of user-facing warning messages (empty when everything was clean).
 async function deleteWorkspaceWithSideEffects(
   workspace: WorkspaceRow,
-  opts: { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean },
+  opts: { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean; removeWorktree?: boolean },
 ): Promise<string[]> {
   return withWorkspaceLifecycleGuard(workspace.id, async () => {
     const current = workspaceService.getWorkspace(workspace.id)
@@ -3414,7 +3384,7 @@ async function deleteWorkspaceWithSideEffects(
 
 async function deleteWorkspaceWithSideEffectsUnlocked(
   workspace: WorkspaceRow,
-  opts: { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean },
+  opts: { deleteLocalBranch?: boolean; deleteRemoteBranch?: boolean; removeWorktree?: boolean },
 ): Promise<string[]> {
   // Stop the agent and WAIT for it to die. `git worktree remove --force` runs
   // a few lines below: firing and forgetting here pulled the directory from
@@ -3453,7 +3423,7 @@ async function deleteWorkspaceWithSideEffectsUnlocked(
   const worktreePath = workspace.worktreePath
   if (workspace.worktreePurgedAt) {
     console.log(`[workspaces] skipping worktree removal on delete (already purged): ${worktreePath}`)
-  } else if (workspace.worktreeOwned) {
+  } else if (workspace.worktreeOwned && opts.removeWorktree !== false) {
     try {
       await worktreeService.removeWorktree(workspace.projectPath, worktreePath)
     } catch (err) {
@@ -3873,7 +3843,7 @@ app.post('/:id/rollback-file', async (c) => {
     }
 
     const body = await c.req.json<{ path?: unknown }>().catch(() => ({}) as { path?: unknown })
-    const filePath = typeof body?.path === 'string' ? body.path.trim() : ''
+    const filePath = typeof body?.path === 'string' ? body.path : ''
     if (!filePath) {
       return c.json({ error: 'Missing or invalid `path` field' }, 400)
     }
@@ -3887,7 +3857,12 @@ app.post('/:id/rollback-file', async (c) => {
 
     let target: gitOps.RollbackTarget
     try {
-      target = gitOps.rollbackFile(workspace.worktreePath, workspace.workingBranch, filePath)
+      target = await withGitRepoLock(workspace.worktreePath, async () => {
+        if (agentManager.getAgentStatus(id) !== null) throw new Error('Stop the agent before rolling back a file')
+        gitOps.assertCurrentBranch(workspace.worktreePath, workspace.workingBranch)
+        gitOps.assertNoIndexLock(workspace.worktreePath)
+        return gitOps.rollbackFile(workspace.worktreePath, workspace.workingBranch, filePath)
+      })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       return c.json({ error: message }, 422)

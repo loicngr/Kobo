@@ -1,5 +1,7 @@
 import type Database from 'better-sqlite3'
+import { initMcpMessageSchema } from './mcp-message-schema.js'
 import { initSchema } from './schema.js'
+import { initSearchSchema } from './search-schema.js'
 
 // ── Migration registry ────────────────────────────────────────────────────────
 // Each entry describes a single schema upgrade step.
@@ -767,6 +769,8 @@ export const migrations: Migration[] = [
     CREATE INDEX IF NOT EXISTS idx_workspace_activity_created ON workspace_activity(created_at);`)
     },
   },
+  { version: 42, name: 'index-logical-search-messages', migrate: initSearchSchema },
+  { version: 43, name: 'durable-mcp-message-requests', migrate: initMcpMessageSchema },
 ]
 
 /** Current schema version — always equals the highest migration version. */

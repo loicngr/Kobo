@@ -23,8 +23,10 @@ export interface BuildCodexOptionsResult {
   threadParams: ThreadStartParams
   input: UserInput[]
   isResume: boolean
-  /** Always emitted — sticky server-side, gates `request_user_input` in `plan`. */
-  collaborationMode: CollaborationMode
+  /** Always emitted after the engine fills in the thread's resolved default model. */
+  collaborationMode: Omit<CollaborationMode, 'settings'> & {
+    settings: Omit<CollaborationMode['settings'], 'model'> & { model?: string }
+  }
 }
 
 const CODEX_KOBO_MCP_BRIEF = [
@@ -109,11 +111,12 @@ export function buildCodexOptions(input: BuildCodexOptionsInput): BuildCodexOpti
   // Always emit collaborationMode — it's sticky server-side, so omitting it
   // would leave a resumed thread stuck in the previous turn's mode. Plan also
   // gates the `request_user_input` internal tool. Settings echo the resolved
-  // model/effort because collaborationMode takes precedence over them.
-  const collaborationMode: CollaborationMode = {
+  // model/effort because collaborationMode takes precedence over them. Automatic
+  // model selection is filled from thread/start or thread/resume by the engine.
+  const collaborationMode: BuildCodexOptionsResult['collaborationMode'] = {
     mode: input.agentPermissionMode === 'plan' ? 'plan' : 'default',
     settings: {
-      model: threadParams.model ?? 'auto',
+      ...(threadParams.model ? { model: threadParams.model } : {}),
       reasoning_effort: (threadParams.modelReasoningEffort as ModelReasoningEffort | undefined) ?? null,
       developer_instructions: null,
     },
@@ -121,7 +124,7 @@ export function buildCodexOptions(input: BuildCodexOptionsInput): BuildCodexOpti
 
   return {
     threadParams,
-    input: [{ type: 'text', text: effectivePrompt }],
+    input: [{ type: 'text', text: effectivePrompt, text_elements: [] }],
     isResume,
     collaborationMode,
   }

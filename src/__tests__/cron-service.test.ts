@@ -67,6 +67,17 @@ describe('cron-service — arm / cancel / get / list', () => {
     }
   })
 
+  it('rejects six-field expressions and retains invalid legacy rows without arming them', async () => {
+    const svc = await import('../server/services/cron-service.js')
+    expect(() => svc.arm(wsId, { expression: '* * * * * *', prompt: 'too frequent' })).toThrow(/invalid cron/i)
+    const valid = svc.arm(wsId, { expression: '@hourly', prompt: 'legacy' })
+    const { getDb } = await import('../server/db/index.js')
+    getDb().prepare('UPDATE pending_crons SET expression = ? WHERE id = ?').run('* * * * * *', valid.id)
+    svc.restoreOnBoot()
+    expect(svc._timers.has(valid.id)).toBe(false)
+    expect(svc.getCron(valid.id)).toMatchObject({ expression: '* * * * * *', validationError: expect.any(String) })
+  })
+
   it('arm() inserts a row, computes nextFireAt, and emits cron:created', async () => {
     const svc = await import('../server/services/cron-service.js')
     const ws = await import('../server/services/websocket-service.js')
@@ -196,6 +207,27 @@ describe('cron-service — fireOrSkip', () => {
     expect(persisted).not.toBeNull()
     expect(new Date(persisted!.nextFireAt).getTime()).toBeGreaterThan(new Date(firstNext).getTime())
   })
+
+  it.each([
+    [2, '2026-05-07T10:02:00.000Z'],
+    [50, '2026-05-07T10:02:00.000Z'],
+    [1000, '2026-05-07T10:02:00.000Z'],
+    [75_000, '2026-05-07T10:03:00.000Z'],
+  ])(
+    'preserves minute cadence after a %i ms late callback without replaying missed slots',
+    async (lateMs, expected) => {
+      const orch = await import('../server/services/agent/orchestrator.js')
+      ;(orch.hasController as ReturnType<typeof vi.fn>).mockReturnValue(true)
+      const svc = await import('../server/services/cron-service.js')
+      const cron = svc.arm(wsId, { expression: '* * * * *', prompt: 'tick' })
+      expect(cron.nextFireAt).toBe('2026-05-07T10:01:00.000Z')
+      // setSystemTime shifts wall time without firing timers, like a busy event loop.
+      vi.setSystemTime(Date.now() + lateMs)
+      await vi.advanceTimersByTimeAsync(60_000)
+      expect(svc.getCron(cron.id)?.nextFireAt).toBe(expected)
+      expect(orch.hasController).toHaveBeenCalledTimes(1)
+    },
+  )
 
   it('fires when no controller is active, calls orchestrator.startAgent with resume=true, recomputes next', async () => {
     const orch = await import('../server/services/agent/orchestrator.js')

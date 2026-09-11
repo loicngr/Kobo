@@ -669,12 +669,8 @@ function setupReviewMode() {
 const wsStore = useWebSocketStore()
 const workspaceStore = useWorkspaceStore()
 const reviewDraft = useReviewDraft(props.workspaceId, {
-  sendChatMessage: async (workspaceId, content, sessionId) => {
-    if (!wsStore.isConnected()) {
-      throw new Error('WebSocket not connected — cannot send the review')
-    }
-    wsStore.sendChatMessage(workspaceId, content, sessionId)
-  },
+  sendChatMessage: (workspaceId, content, sessionId) =>
+    wsStore.sendChatMessageConfirmed(workspaceId, content, sessionId),
 })
 
 // Computed wrappers around `reviewDraft.draft` (a Ref) so the template can
@@ -684,12 +680,13 @@ const draftGlobalMessage = computed(() => reviewDraft.draft.value.globalMessage)
 
 const submittingReview = ref(false)
 async function onSubmitReview() {
+  if (submittingReview.value) return
   submittingReview.value = true
   try {
     const result = await reviewDraft.submit(workspaceStore.selectedSessionId ?? undefined)
     if (result.ok) {
       $q.notify({ type: 'positive', message: t('diff.reviewSubmitted'), position: 'top' })
-      emit('close')
+      if (!reviewDraft.draft.value.comments.length && !reviewDraft.draft.value.globalMessage) emit('close')
     } else {
       $q.notify({
         type: 'negative',

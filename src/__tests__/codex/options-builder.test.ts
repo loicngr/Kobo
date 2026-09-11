@@ -181,6 +181,12 @@ describe('buildCodexOptions — required fields', () => {
 // ── CollaborationMode (Codex internal mode, separate from sandbox) ────────────
 
 describe('buildCodexOptions — collaborationMode', () => {
+  it.each(['auto', undefined])('defers the default model until the thread response: %s', (model) => {
+    const result = buildCodexOptions({ ...BASE_INPUT, model })
+    expect(result.threadParams.model).toBeUndefined()
+    expect(result.collaborationMode.settings.model).toBeUndefined()
+  })
+
   it('sets collaborationMode { mode: "plan" } when Kōbō permission mode is "plan"', () => {
     const result = buildCodexOptions({ ...BASE_INPUT, agentPermissionMode: 'plan' })
     expect(result.collaborationMode.mode).toBe('plan')

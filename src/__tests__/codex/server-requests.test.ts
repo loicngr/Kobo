@@ -177,3 +177,22 @@ describe('buildResponseForResolve — file_change + permission-allow', () => {
     expect(result).toEqual({ decision: 'accept' })
   })
 })
+
+it('makes exact file approvals unavailable when the canonical request carries no changes', () => {
+  const args = makeArgs('item/fileChange/requestApproval', { threadId: 't', turnId: 'turn', itemId: 'file' })
+  handleServerRequest(args)
+  expect(args.emitted[0]).toMatchObject({ payload: { operationApprovalAvailable: false } })
+})
+it('uses the resolved item changes and working directory for precise file approvals', () => {
+  const args = makeArgs('item/fileChange/requestApproval', {
+    threadId: 't',
+    turnId: 'turn',
+    itemId: 'file',
+    grantRoot: '/repo',
+  })
+  const changes = [{ path: 'a.ts', kind: { type: 'add' as const }, diff: '+hello' }]
+  handleServerRequest({ ...args, resolveFileChange: () => ({ changes, cwd: '/repo' }) })
+  expect(args.emitted[0]).toMatchObject({
+    payload: { operationApprovalAvailable: true, changes, cwd: '/repo', grantRoot: '/repo' },
+  })
+})

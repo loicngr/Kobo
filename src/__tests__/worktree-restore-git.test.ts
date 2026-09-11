@@ -40,7 +40,7 @@ describe('restoreWorktreeCheckoutUnlocked', () => {
     worktreePath = path.join(projectPath, '.worktrees', name)
     const headCommitSha = purge()
     expect(await restoreWorktreeCheckoutUnlocked(input())).toEqual({ source: 'local-branch', headCommitSha })
-    expect(isMatchingWorkspaceWorktree(input())).toBe(true)
+    expect(await isMatchingWorkspaceWorktree(input())).toBe(true)
     expect((await restoreWorktreeCheckoutUnlocked(input())).source).toBe('existing-worktree')
   })
   it('restores the surviving local branch offline, preserving main and adding its exclude entry', async () => {
@@ -89,7 +89,7 @@ describe('restoreWorktreeCheckoutUnlocked', () => {
     worktreePath = path.join(linked, '.worktrees', 'restored')
     const headCommitSha = purge()
     expect(await restoreWorktreeCheckoutUnlocked(input())).toEqual({ source: 'local-branch', headCommitSha })
-    expect(isMatchingWorkspaceWorktree(input())).toBe(true)
+    expect(await isMatchingWorkspaceWorktree(input())).toBe(true)
   })
   it('does not run a post-checkout hook during restoration', async () => {
     purge()
@@ -113,7 +113,7 @@ describe('restoreWorktreeCheckoutUnlocked', () => {
         if (kind === 'files') fs.writeFileSync(path.join(worktreePath, 'precious'), 'keep')
         if (kind === 'nested') worktreePath = path.join(projectPath, '.worktrees')
       }
-      expect(isMatchingWorkspaceWorktree(input())).toBe(false)
+      expect(await isMatchingWorkspaceWorktree(input())).toBe(false)
       await expect(restoreWorktreeCheckoutUnlocked(input())).rejects.toMatchObject({ code: 'path-conflict' })
       expect(fs.lstatSync(worktreePath)).toBeDefined()
       if (kind === 'files') expect(fs.readFileSync(path.join(worktreePath, 'precious'), 'utf8')).toBe('keep')

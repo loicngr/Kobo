@@ -18,6 +18,10 @@ import type {
 
 export const QUOTA_PATTERN = /\b429\b|rate[_ ]limit|quota|usage limit|insufficient[_ ]quota|out of (extra )?usage/i
 
+// Standalone provider notices only: normal assistant prose can discuss quotas.
+const ASSISTANT_QUOTA_NOTICE =
+  /^(?:rate[_ ]limit (?:exceeded|reached)|quota exceeded|insufficient[_ ]quota|out of (?:extra )?usage|usage limit (?:exceeded|reached)|you(?:'ve| have) (?:hit|reached) (?:your |the )?usage limit)(?:[.!]?(?:[ \t]*[·—-]?[ \t]*resets?\b[^\r\n]*)?)?[.!]?$/i
+
 // ── MapperState ───────────────────────────────────────────────────────────────
 
 /** Mutable state carried across app-server notifications within the same turn. */
@@ -275,7 +279,7 @@ export function handleItemCompleted(item: ThreadItem, state: MapperState): Agent
     if (text.includes('[BRAINSTORM_COMPLETE]')) {
       events.push({ kind: 'session:brainstorm-complete' })
     }
-    if (QUOTA_PATTERN.test(text)) {
+    if (ASSISTANT_QUOTA_NOTICE.test(text.trim())) {
       tryEmitQuotaInline(state, events, text)
     }
     events.push({ kind: 'message:end', messageId })

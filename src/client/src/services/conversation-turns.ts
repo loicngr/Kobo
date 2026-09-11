@@ -52,7 +52,12 @@ export function groupIntoTurns(items: ConversationItem[]): Turn[] {
     const standalone = speaker === 'session' || speaker === 'system-prompt'
     // Script turns are keyed by their sender so a cleanup run and an archive
     // run (both speaker 'script') never merge into a single mislabelled card.
-    const key = speaker === 'script' && item.type === 'user' ? `script:${item.sender}` : speaker
+    const key =
+      speaker === 'script' && item.type === 'user'
+        ? `script:${item.sender}`
+        : speaker === 'user' && item.type === 'user' && item.source
+          ? JSON.stringify(['mcp', item.source.transport, item.source.clientName])
+          : speaker
 
     if (!current || currentKey !== key || standalone) {
       current = { speaker, ts: item.ts, items: [item] }

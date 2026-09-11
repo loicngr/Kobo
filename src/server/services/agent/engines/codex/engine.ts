@@ -27,8 +27,10 @@ import { buildCodexOptions } from './options-builder.js'
 import type {
   AgentMessageDeltaNotification,
   ErrorNotification,
+  FileChangeItem,
   ItemCompletedNotification,
   ItemStartedNotification,
+  ThreadStartResponse,
   TurnCompletedNotification,
 } from './protocol/types.js'
 import { buildResponseForResolve, handleServerRequest, type PendingApproval } from './server-requests.js'
@@ -252,6 +254,9 @@ export function createCodexEngine(): AgentEngine {
         rejectTurnDone(err)
       })
 
+      const fileChanges = new Map<string, FileChangeItem>()
+      const itemKey = (threadId: string, turnId: string, itemId: string): string =>
+        JSON.stringify([threadId, turnId, itemId])
       const client = createAppServerClient({
         stdin: child.stdin!,
         stdout: child.stdout!,
@@ -288,6 +293,7 @@ export function createCodexEngine(): AgentEngine {
 
           if (method === 'item/started') {
             const n = params as ItemStartedNotification
+            if (n.item.type === 'fileChange') fileChanges.set(itemKey(n.threadId, n.turnId, n.item.id), n.item)
             const events = handleItemStarted(n.item, mapperState)
             for (const ev of events) safeEmit(ev)
             if (n.item.type === 'collabAgentToolCall' && n.item.tool === 'spawnAgent') {
@@ -310,6 +316,7 @@ export function createCodexEngine(): AgentEngine {
 
           if (method === 'item/completed') {
             const n = params as ItemCompletedNotification
+            if (n.item.type === 'fileChange') fileChanges.set(itemKey(n.threadId, n.turnId, n.item.id), n.item)
             const events = handleItemCompleted(n.item, mapperState)
             for (const ev of events) safeEmit(ev)
             if (n.item.type === 'collabAgentToolCall') {
@@ -342,6 +349,10 @@ export function createCodexEngine(): AgentEngine {
 
           if (method === 'turn/completed') {
             const n = params as TurnCompletedNotification
+            for (const key of fileChanges.keys()) {
+              const [threadId, turnId] = JSON.parse(key)
+              if (threadId === n.threadId && turnId === n.turn.id) fileChanges.delete(key)
+            }
             for (const ev of handleTurnCompleted(n, mapperState)) safeEmit(ev)
             if (!activeTurnId || !n.turn?.id || n.turn.id === activeTurnId) {
               if (n.turn?.status === 'completed' && activeSubagentThreads.size > 0) {
@@ -386,7 +397,8 @@ export function createCodexEngine(): AgentEngine {
 
           if (method === 'error') {
             const n = params as ErrorNotification
-            const msg = n?.message ?? 'unknown error'
+            if (n.willRetry) return
+            const msg = n?.error?.message ?? 'unknown error'
             if (QUOTA_PATTERN.test(msg)) {
               tryEmitQuota(mapperState, safeEmit, msg)
             } else {
@@ -409,6 +421,16 @@ export function createCodexEngine(): AgentEngine {
             },
             respondError: (reqId, code, message) => client.peer.respondError(reqId, code, message),
             respond: (reqId, result) => client.peer.respond(reqId, result),
+            resolveFileChange: (params) => {
+              if (
+                typeof params.threadId !== 'string' ||
+                typeof params.turnId !== 'string' ||
+                typeof params.itemId !== 'string'
+              )
+                return undefined
+              const item = fileChanges.get(itemKey(params.threadId, params.turnId, params.itemId))
+              return item ? { changes: item.changes, cwd: options.workingDir } : undefined
+            },
             autoApprove: (toolName, payload) =>
               isWorkspacePermissionAllowed(options.workspaceId, { engine: 'codex', toolName, payload }),
           })
@@ -431,8 +453,9 @@ export function createCodexEngine(): AgentEngine {
           turnLiveness.start()
           await waitForChild(client.connect())
 
+          let threadResponse: ThreadStartResponse
           if (isResume && options.resumeFromEngineSessionId) {
-            await waitForChild(
+            threadResponse = await waitForChild(
               client.resumeThread({
                 threadId: options.resumeFromEngineSessionId,
                 cwd: options.workingDir,
@@ -447,8 +470,15 @@ export function createCodexEngine(): AgentEngine {
               }),
             )
           } else {
-            const startResp = await waitForChild(client.startThread(threadParams))
-            discoveredSessionId = startResp.thread.id
+            threadResponse = await waitForChild(client.startThread(threadParams))
+            discoveredSessionId = threadResponse.thread.id
+          }
+
+          // "auto" is a Kōbō sentinel, never a provider model identifier. The
+          // collaboration override must use the model the app-server resolved.
+          const model = threadParams.model ?? threadResponse.model
+          if (typeof model !== 'string' || !model.trim() || model === 'auto') {
+            throw new Error('Codex did not return a resolved model. Select an explicit model or update the Codex CLI.')
           }
 
           for (const ev of emitSessionStarted(discoveredSessionId!, mapperState)) safeEmit(ev)
@@ -459,10 +489,10 @@ export function createCodexEngine(): AgentEngine {
             client.startTurn({
               threadId: discoveredSessionId!,
               input,
-              collaborationMode,
+              collaborationMode: { ...collaborationMode, settings: { ...collaborationMode.settings, model } },
             }),
           )
-          activeTurnId = initialTurn.turnId
+          activeTurnId = initialTurn.turn.id
           turnLiveness.activity()
           readySettled = true
           resolveReady()
@@ -520,6 +550,7 @@ export function createCodexEngine(): AgentEngine {
               // best-effort
             }
           }
+          fileChanges.clear()
           pendingByCallId.clear()
           pendingToolCalls.clear()
           client.close()
@@ -577,9 +608,9 @@ export function createCodexEngine(): AgentEngine {
           userInterrupted = true
           if (gracefulInterruptPromise) return
           gracefulInterruptPromise = (async () => {
-            if (discoveredSessionId) {
+            if (discoveredSessionId && activeTurnId) {
               await Promise.race([
-                client.interruptTurn({ threadId: discoveredSessionId }).catch(() => {}),
+                client.interruptTurn({ threadId: discoveredSessionId, turnId: activeTurnId }).catch(() => {}),
                 wait(CODEX_GRACEFUL_INTERRUPT_TIMEOUT_MS),
               ])
             }

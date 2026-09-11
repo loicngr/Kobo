@@ -169,3 +169,11 @@ describe('findPreviousUserTurnIndex', () => {
     expect(findPreviousUserTurnIndex(mixed, 3)).toBe(0)
   })
 })
+
+it('separates external clients from human turns and from each other', () => {
+  const base = { type: 'user' as const, sender: 'user', content: 'hello' }
+  const a = { kind: 'mcp' as const, clientName: 'A', transport: 'http' as const }
+  const b = { ...a, clientName: 'B' }
+  const turns = groupIntoTurns([base, { ...base, source: a }, { ...base, source: a }, { ...base, source: b }, base])
+  expect(turns.map((turn) => turn.items.length)).toEqual([1, 2, 1, 1])
+})

@@ -1,10 +1,12 @@
 import { defineStore } from 'pinia'
 import { Notify } from 'quasar'
 import i18n from 'src/i18n'
+import { ChatDeliveryTracker } from 'src/services/chat-delivery'
 import { disposeTerminalEntry } from 'src/services/terminal-registry'
 import { getWorkspaceQueueHost } from 'src/services/workspace-queue-bridge'
 import { useAgentStreamStore } from 'src/stores/agent-stream'
 import { type GlobalSettings, useSettingsStore } from 'src/stores/settings'
+import { useUpdateStore } from 'src/stores/update'
 import type { AgentEvent } from 'src/types/agent-event'
 import type { ProviderId, UsageSnapshot } from 'src/types/usage'
 import { appendTokenToWsUrl, getToken } from 'src/utils/auth-token'
@@ -13,6 +15,7 @@ import { openNetworkLogin } from 'src/utils/network-login-bus'
 import { resolveNotificationSoundOverride } from 'src/utils/notification-sounds'
 import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
 import { notify } from 'src/utils/notifications'
+import { parseMessageSource } from '../utils/message-source'
 import type { DevServerStatus } from './dev-server'
 import { useDevServerStore } from './dev-server'
 import type { MigrationStatus } from './migration'
@@ -21,6 +24,8 @@ import type { PendingCron, Workspace } from './workspace'
 import { useWorkspaceStore } from './workspace'
 
 const t = i18n.global.t
+const chatDeliveries = new ChatDeliveryTracker()
+let nextChatDeliveryId = 0
 
 type PrNotificationEvent =
   | 'pr:ci-failed'
@@ -256,7 +261,7 @@ export function dispatchAgentEvent(
     return
   }
 
-  agentStream.append(workspaceId, event, timestamp, eventId, sessionId)
+  agentStream.append(workspaceId, event, timestamp, eventId, sessionId, !_replayingNotifications)
 
   // Compaction is over once the boundary lands, the session ends, or the agent
   // resumes producing output (text / tool calls) — clear the live banner.
@@ -495,6 +500,7 @@ export const useWebSocketStore = defineStore('websocket', {
     // fresh snapshot, but a later drain-round response can still carry
     // older events for that workspace and merge() them in afterward.
     _drainInProgress: false,
+    _refreshAfterSync: false,
     _workspacesToRefreshAfterDrain: new Set<string>(),
   }),
 
@@ -513,6 +519,7 @@ export const useWebSocketStore = defineStore('websocket', {
           this.pendingSyncRequests = []
           // Abandon the corresponding connection too: its late responses
           // cannot be paired with requests sent after we come back online.
+          chatDeliveries.disconnect(t('network.login.unreachable'))
           const offlineSocket = _ws
           _ws = null
           offlineSocket?.close()
@@ -538,6 +545,7 @@ export const useWebSocketStore = defineStore('websocket', {
       ws.addEventListener('open', () => {
         if (_ws !== ws) return
         this.connected = true
+        void useUpdateStore().refreshSnapshot()
         this.reconnecting = false
         _reconnectAttempt = 0
         this.reconnectAttempt = 0
@@ -549,12 +557,16 @@ export const useWebSocketStore = defineStore('websocket', {
           this._send({ type: 'subscribe', payload: { workspaceId: wid } })
         }
 
+        this._refreshAfterSync = true
         // Request sync to catch up on missed events
         if (this.lastEventId) {
           this._send({
             type: 'sync:request',
             payload: { lastEventId: this.lastEventId, workspaceIds: allIds },
           })
+        } else {
+          this._refreshAfterSync = false
+          void this.refreshLiveState()
         }
       })
 
@@ -570,6 +582,7 @@ export const useWebSocketStore = defineStore('websocket', {
 
       ws.addEventListener('close', () => {
         if (_ws !== ws) return
+        chatDeliveries.disconnect(t('network.login.unreachable'))
         this.connected = false
         this.pendingSyncRequests = []
         _ws = null
@@ -581,7 +594,25 @@ export const useWebSocketStore = defineStore('websocket', {
       })
     },
 
+    async refreshLiveState(): Promise<void> {
+      const workspaceStore = useWorkspaceStore()
+      const previousIds = new Set(workspaceStore.workspaces.map((workspace) => workspace.id))
+      await workspaceStore.fetchWorkspacesInfo()
+      if (!this.connected) return
+      for (const workspace of workspaceStore.workspaces) {
+        if (!previousIds.has(workspace.id)) {
+          this._refreshAfterSync = true
+          this.subscribe(workspace.id)
+        }
+      }
+      const devServers = useDevServerStore()
+      const tracked = new Set(Object.keys(devServers.statuses))
+      if (workspaceStore.selectedWorkspaceId) tracked.add(workspaceStore.selectedWorkspaceId)
+      await Promise.allSettled([...tracked].map((id) => devServers.fetchStatus(id)))
+    },
+
     disconnect() {
+      chatDeliveries.disconnect(t('network.login.unreachable'))
       _shouldReconnect = false
       this.pendingSyncRequests = []
       if (_reconnectTimer) {
@@ -651,11 +682,12 @@ export const useWebSocketStore = defineStore('websocket', {
       sessionId?: string,
       agentPermissionModeOverride?: 'plan' | 'bypass' | 'strict' | 'interactive',
       force = false,
+      clientMessageId?: string,
     ): boolean {
       if (this.isCompacting(workspaceId)) return false
       const sent = this._send({
         type: 'chat:message',
-        payload: { workspaceId, content, sessionId, agentPermissionModeOverride, force },
+        payload: { workspaceId, content, sessionId, agentPermissionModeOverride, force, clientMessageId },
       })
 
       if (!sent) return false
@@ -675,6 +707,17 @@ export const useWebSocketStore = defineStore('websocket', {
         ws.updateWorkspaceFromEvent(workspaceId, { status: 'executing' })
       }
       return true
+    },
+
+    sendChatMessageConfirmed(workspaceId: string, content: string, sessionId?: string): Promise<void> {
+      // getRandomValues is available on HTTP LAN origins too (randomUUID is not).
+      const entropy = Array.from(crypto.getRandomValues(new Uint32Array(4)), (n) => n.toString(16)).join('-')
+      const clientMessageId = `${entropy}-${++nextChatDeliveryId}`
+      const pending = chatDeliveries.wait(workspaceId, clientMessageId, t('network.login.unreachable'))
+      if (!this.sendChatMessage(workspaceId, content, sessionId, undefined, false, clientMessageId)) {
+        chatDeliveries.settle(workspaceId, clientMessageId, new Error(t('network.login.unreachable')))
+      }
+      return pending
     },
 
     _send(data: Record<string, unknown>): boolean {
@@ -787,6 +830,9 @@ export const useWebSocketStore = defineStore('websocket', {
       }
 
       switch (msg.type) {
+        case 'kobo:update-checked':
+          useUpdateStore().applySnapshot(payload)
+          break
         case 'workspace:status': {
           if (!wid || this._replaying || typeof payload.status !== 'string') break
           const owner = workspaceStore.activeAgentSessionIds[wid]
@@ -796,12 +842,25 @@ export const useWebSocketStore = defineStore('websocket', {
         }
 
         case 'chat:accepted': {
+          if (typeof payload.clientMessageId === 'string') {
+            if (wid) chatDeliveries.settle(wid, payload.clientMessageId)
+            break
+          }
           const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : undefined
           if (wid && sessionId) workspaceStore.cancelQueuedMessage(wid, sessionId)
           break
         }
 
         case 'chat:rejected': {
+          if (typeof payload.clientMessageId === 'string') {
+            if (wid)
+              chatDeliveries.settle(
+                wid,
+                payload.clientMessageId,
+                new Error(typeof payload.message === 'string' ? payload.message : t('network.login.unreachable')),
+              )
+            break
+          }
           const sessionId = typeof payload.sessionId === 'string' ? payload.sessionId : undefined
           const content = typeof payload.content === 'string' ? payload.content : undefined
           const message = typeof payload.message === 'string' ? payload.message : t('network.login.unreachable')
@@ -835,6 +894,7 @@ export const useWebSocketStore = defineStore('websocket', {
           break
 
         case 'user:message': {
+          if (wid && typeof payload.clientMessageId === 'string') chatDeliveries.settle(wid, payload.clientMessageId)
           if (wid && payload.content) {
             // User messages are now represented as `message:text` events in
             // the agent-stream, but we still surface them via the workspace
@@ -842,6 +902,7 @@ export const useWebSocketStore = defineStore('websocket', {
             // resolution logic keeps working.
             const content = payload.content as string
             const sender = (payload.sender as string) ?? 'user'
+            const source = parseMessageSource(payload.source)
             const sessionId = (msg as Record<string, unknown>).sessionId as string | undefined
             const eventId = msg.id ?? msg.eventId ?? `user-${Date.now()}`
             // `msg.createdAt` is the server's persisted timestamp (server clock —
@@ -851,6 +912,7 @@ export const useWebSocketStore = defineStore('websocket', {
             const timestamp = serverTimestamp ?? new Date().toISOString()
             const items = workspaceStore.activityFeeds[wid] ?? []
             const alreadyExists =
+              !source &&
               sender === 'user' &&
               items.some((i) => i.meta?.sender === 'user' && i.content === content && i.meta?.pending)
             if (alreadyExists) {
@@ -876,7 +938,7 @@ export const useWebSocketStore = defineStore('websocket', {
                 content,
                 timestamp,
                 sessionId,
-                meta: { sender },
+                meta: { sender, ...(source ? { source } : {}) },
               })
             }
           }
@@ -1082,6 +1144,10 @@ export const useWebSocketStore = defineStore('websocket', {
             if (pendingRequest) {
               const index = this.pendingSyncRequests.indexOf(pendingRequest)
               if (index !== -1) this.pendingSyncRequests.splice(index, 1)
+            }
+            if (this._refreshAfterSync && this.pendingSyncRequests.length === 0) {
+              this._refreshAfterSync = false
+              void this.refreshLiveState()
             }
           }
           break

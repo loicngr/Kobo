@@ -25,7 +25,7 @@
         <TextMessageItem v-if="item.type === 'text'" :item="item" />
         <ThinkingItem v-else-if="item.type === 'thinking'" :item="item" />
         <ToolCallItem v-else-if="item.type === 'tool'" :item="item" />
-        <UserMessageItem v-else-if="item.type === 'user'" :item="item" />
+        <UserMessageItem v-else-if="item.type === 'user'" :item="item" :workspace-id="workspaceId" />
         <SessionEventItem v-else-if="item.type === 'session'" :item="item" />
         <AgentErrorItem v-else-if="item.type === 'error'" :item="item" />
       </template>
@@ -65,6 +65,7 @@ import UserMessageItem from './items/UserMessageItem.vue'
 
 const props = defineProps<{
   turn: Turn
+  workspaceId: string
   highlighted?: boolean
 }>()
 const emit = defineEmits<{
@@ -101,8 +102,15 @@ interface HeaderMeta {
 
 const header = computed<HeaderMeta>(() => {
   switch (props.turn.speaker) {
-    case 'user':
-      return { label: t('chat.you'), accent: 'var(--kobo-turn-user)', badgeClass: 'turn-badge-user' }
+    case 'user': {
+      const first = props.turn.items[0]
+      const source = first?.type === 'user' ? first.source : undefined
+      return {
+        label: source ? t('chat.externalLlm', { name: source.clientName }) : t('chat.you'),
+        accent: 'var(--kobo-turn-user)',
+        badgeClass: 'turn-badge-user',
+      }
+    }
     case 'agent':
       return { label: t('chat.agent'), accent: 'var(--kobo-turn-agent)', badgeClass: 'turn-badge-agent' }
     case 'system-prompt':

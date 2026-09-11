@@ -49,7 +49,9 @@ describe('absence activity journal', () => {
       upgraded.prepare("INSERT INTO schema_migrations VALUES (?, 'previous', '2026-09-09')").run(version)
     }
     runMigrations(upgraded)
-    expect(SCHEMA_VERSION).toBe(41)
+    expect(upgraded.prepare('SELECT MAX(version) AS version FROM schema_migrations').get()).toEqual({
+      version: SCHEMA_VERSION,
+    })
     expect(upgraded.prepare('SELECT name FROM workspaces').get()).toEqual({ name: 'Mission' })
     const fresh = setup()
     expect(upgraded.prepare('PRAGMA table_info(workspace_activity)').all()).toEqual(

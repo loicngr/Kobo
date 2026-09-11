@@ -67,6 +67,7 @@ describe('tours registry', () => {
 
   it('gates the steps whose anchor is rendered conditionally, as DOM gates', () => {
     const gated = [
+      'settings-mcp',
       'create-brainstorm',
       'create-comparison',
       'ws-selectors',

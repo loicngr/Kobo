@@ -98,7 +98,7 @@ app.post('/diagnose', async (c) => {
     const workspaces = listWorkspaces(true).filter(
       (workspace) => path.resolve(workspace.projectPath) === path.resolve(projectPath),
     )
-    const report = prCheckout.diagnoseLocalState(
+    const report = await prCheckout.diagnoseLocalState(
       projectPath,
       pr.headBranch,
       worktreesPath ?? null,

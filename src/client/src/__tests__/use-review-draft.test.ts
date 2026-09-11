@@ -195,3 +195,31 @@ describe('useReviewDraft submit()', () => {
     expect(sendChatMessage).not.toHaveBeenCalled()
   })
 })
+
+describe('review delivery acknowledgement', () => {
+  it('preserves a rejected draft', async () => {
+    const review = useReviewDraft('reject', { sendChatMessage: () => false })
+    review.setGlobalMessage('Keep this')
+    expect((await review.submit()).ok).toBe(false)
+    expect(review.draft.value.globalMessage).toBe('Keep this')
+  })
+  it('preserves edits made while awaiting delivery and blocks duplicate submissions', async () => {
+    let accept!: () => void
+    const send = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          accept = resolve
+        }),
+    )
+    const review = useReviewDraft('pending', { sendChatMessage: send })
+    review.setGlobalMessage('Original')
+    const pending = review.submit()
+    expect((await review.submit()).ok).toBe(false)
+    review.setGlobalMessage('Changed')
+    accept()
+    expect((await pending).ok).toBe(true)
+    expect(review.draft.value.globalMessage).toBe('Changed')
+    expect(send).toHaveBeenCalledTimes(1)
+    review.flush()
+  })
+})

@@ -1,4 +1,7 @@
 export default {
+  'chat.externalLlm': 'LLM externe · {name}',
+  'search.indexing': 'Indexation de l’historique : {processed}/{total}. Résultats partiels.',
+  'search.indexUnavailable': 'Index de recherche indisponible. Réessayez plus tard.',
   'blockers.setupConfiguration':
     'Aucun script de préparation n’est configuré. Ajoutez-en un dans la section Scripts des paramètres.',
   'blockers.noWorkspace': 'Sélectionnez un workspace pour utiliser cette action.',
@@ -1483,6 +1486,9 @@ export default {
   'diff.reviewEmpty': 'Aucun commentaire — survole une ligne dans le diff et clique + pour en ajouter un.',
   'diff.reviewGlobalPlaceholder': 'Ajoute un message global de revue (optionnel)',
   'diff.submitReview': 'Soumettre la revue ({n})',
+  'diff.reviewPending': 'Une revue est déjà en cours d’envoi.',
+  'diff.reviewEmptySubmission': 'La revue est vide.',
+  'diff.reviewNotAccepted': 'Le message n’a pas été accepté. Votre revue a été conservée.',
   'diff.reviewSubmitted': "Revue soumise à l'agent",
   'diff.reviewSubmitFailed': 'Échec de la soumission : {error}',
   'diff.scopeBranch': 'Branche',
@@ -1681,6 +1687,30 @@ export default {
   'settings.importConfirmTitle': 'Importer la configuration',
   'settings.importConfirmMessage':
     'Cela remplacera tes paramètres, templates et tags actuels. Tes clés MCP seront conservées. Continuer ?',
+  'settings.mcp.title': 'Connexions des LLM externes (MCP)',
+  'settings.mcp.hint':
+    'Connectez un client MCP pour lire les conversations, envoyer des messages et répondre aux questions des workspaces.',
+  'settings.mcp.remoteDisabled':
+    'Les connexions distantes nécessitent l’accès réseau et un redémarrage du serveur après son activation.',
+  'settings.mcp.clientName': 'Nom du client (facultatif)',
+  'settings.mcp.connection': 'Connexion',
+  'settings.mcp.local': 'HTTP local',
+  'settings.mcp.remote': 'HTTP distant',
+  'settings.mcp.proxy': 'Proxy inverse',
+  'settings.mcp.stdio': 'Stdio local',
+  'settings.mcp.copyUrl': 'Copier l’URL',
+  'settings.mcp.copyConfig': 'Copier la configuration',
+  'settings.mcp.copyWithToken': 'Copier avec le jeton',
+  'settings.mcp.genericFormat':
+    'Ces exemples utilisent le format générique mcpServers. Adaptez le conteneur à votre client MCP. Les aperçus affichent un emplacement réservé au jeton.',
+  'settings.mcp.tokenUnavailable':
+    'Aucun jeton disponible. Activez l’accès réseau avant de copier une configuration authentifiée.',
+  'settings.mcp.stdioUnavailable':
+    'Le point d’entrée stdio est indisponible dans cette installation. Utilisez HTTP ou compilez Kōbō.',
+  'settings.mcp.copyFailed': 'Impossible de copier dans le presse-papiers.',
+  'tours.settings.mcp.title': 'Connecter un LLM externe',
+  'tours.settings.mcp.description':
+    'Copiez une configuration HTTP ou stdio pour permettre à un assistant externe de communiquer avec vos workspaces.',
   'settings.network.title': 'Accès réseau',
   'settings.network.hint':
     'Pilote Kōbō depuis un autre appareil de ton LAN de confiance. Off = localhost uniquement. On = accessible sur ton réseau, protégé par un token. Redémarre Kōbō après bascule.',
@@ -1836,6 +1866,7 @@ export default {
   'schedule.cronsTitle': 'Tâches récurrentes',
   'schedule.noWakeup': 'Aucun wakeup programmé',
   'schedule.noCrons': 'Aucun cron programmé',
+  'schedule.invalidCron': 'Inactive : expression invalide. Supprimez puis recréez cette programmation.',
   'schedule.nextFireAt': 'prochain à {time}',
   'schedule.lastFiredAt': 'dernier fire il y a {time}',
   'schedule.addCronTitle': 'Ajouter une tâche récurrente',
@@ -1878,6 +1909,7 @@ export default {
   'permissionRequest.allow': 'Autoriser',
   'permissionRequest.allowOnce': 'Autoriser une fois',
   'permissionRequest.allowTurn': 'Autoriser ce tour',
+  'permissionRequest.operationUnavailable': 'Détails indisponibles ; autorisez une fois ou pour tout l’outil.',
   'permissionRequest.allowOperation': 'Toujours cette opération',
   'permissionRequest.allowTool': 'Toujours cet outil',
   'permissionRequest.deny': 'Refuser',

@@ -18,6 +18,7 @@ export interface WorkspacePermissionRule {
   displayLabel: string
   createdAt: string
   updatedAt: string
+  active: boolean
 }
 const turnRules = new Map<string, Set<string>>()
 function turnKey(request: PermissionRequest): string {
@@ -44,8 +45,43 @@ function stable(value: unknown): string {
 export function permissionFingerprint(payload: unknown): string {
   return createHash('sha256').update(stable(payload)).digest('hex')
 }
+const CODEX_EDIT_FINGERPRINT_PREFIX = 'codex-edit-v2:'
+
+function operationFingerprint(request: PermissionRequest): string | null {
+  if (request.engine !== 'codex' || request.toolName !== 'Edit') return permissionFingerprint(request.payload)
+  const payload = request.payload as Record<string, unknown> | null
+  if (payload?.operationApprovalAvailable !== true || !Array.isArray(payload.changes) || payload.changes.length === 0)
+    return null
+  if (
+    typeof payload.cwd !== 'string' ||
+    payload.changes.some(
+      (change) =>
+        !change ||
+        typeof change.path !== 'string' ||
+        typeof change.diff !== 'string' ||
+        !change.kind ||
+        !['add', 'delete', 'update'].includes(change.kind.type),
+    )
+  )
+    return null
+  return (
+    CODEX_EDIT_FINGERPRINT_PREFIX +
+    permissionFingerprint({
+      changes: payload.changes,
+      cwd: payload.cwd,
+      grantRoot: payload.grantRoot ?? null,
+    })
+  )
+}
+
 function toRule(row: Record<string, unknown>): WorkspacePermissionRule {
   return {
+    active: !(
+      row.scope === 'operation' &&
+      row.tool_name === 'Edit' &&
+      (row.engine ?? row.workspace_engine) === 'codex' &&
+      !String(row.fingerprint ?? '').startsWith(CODEX_EDIT_FINGERPRINT_PREFIX)
+    ),
     id: String(row.id),
     workspaceId: String(row.workspace_id),
     engine: row.engine as string | null,
@@ -60,7 +96,9 @@ function toRule(row: Record<string, unknown>): WorkspacePermissionRule {
 export function listWorkspacePermissionRules(workspaceId: string): WorkspacePermissionRule[] {
   return (
     getDb()
-      .prepare('SELECT * FROM workspace_permission_rules WHERE workspace_id=? ORDER BY created_at DESC')
+      .prepare(`SELECT rules.*, workspaces.engine AS workspace_engine
+        FROM workspace_permission_rules AS rules JOIN workspaces ON workspaces.id=rules.workspace_id
+        WHERE workspace_id=? ORDER BY rules.created_at DESC`)
       .all(workspaceId) as Record<string, unknown>[]
   ).map(toRule)
 }
@@ -71,7 +109,8 @@ export function createWorkspacePermissionRule(
 ): WorkspacePermissionRule {
   const now = new Date().toISOString()
   const id = nanoid()
-  const fingerprint = scope === 'operation' ? permissionFingerprint(request.payload) : null
+  const fingerprint = scope === 'operation' ? operationFingerprint(request) : null
+  if (scope === 'operation' && fingerprint === null) throw new Error('Exact operation details are unavailable')
   const displayLabel = scope === 'tool' ? request.toolName : `${request.toolName} — opération précise`
   getDb()
     .prepare(
@@ -86,6 +125,7 @@ export function createWorkspacePermissionRule(
     scope,
     fingerprint,
     displayLabel,
+    active: true,
     createdAt: now,
     updatedAt: now,
   }
@@ -98,7 +138,7 @@ export function removeWorkspacePermissionRule(workspaceId: string, ruleId: strin
 }
 export function isWorkspacePermissionAllowed(workspaceId: string, request: PermissionRequest): boolean {
   if (turnRules.get(workspaceId)?.has(turnKey(request))) return true
-  const fingerprint = permissionFingerprint(request.payload)
+  const fingerprint = operationFingerprint(request)
   try {
     return Boolean(
       getDb()

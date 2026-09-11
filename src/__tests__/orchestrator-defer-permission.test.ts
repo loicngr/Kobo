@@ -30,6 +30,50 @@ interface CapturedStart {
 const captured: CapturedStart[] = []
 
 describe('Orchestrator — pending permission queue (canUseTool)', () => {
+  it('exports detached serializable pending-input snapshots without callbacks', async () => {
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const question = {
+      kind: 'question' as const,
+      agentSessionId: 'session',
+      toolCallId: 'q',
+      toolName: 'AskUserQuestion',
+      input: { questions: [{ question: 'Choose', options: [{ label: 'A' }] }], callback: () => {} },
+      resolve: () => {},
+    }
+    const permission = {
+      kind: 'permission' as const,
+      agentSessionId: 'session',
+      toolCallId: 'p',
+      toolName: 'Edit',
+      toolInput: { operationApprovalAvailable: false },
+      resolve: () => {},
+    }
+    orch._getPendingQueue().set('snapshot-ws', [question, permission])
+    const snapshot = orch.getPendingInputs('snapshot-ws')
+    expect(snapshot).toEqual([
+      {
+        kind: 'question',
+        agentSessionId: 'session',
+        toolCallId: 'q',
+        toolName: 'AskUserQuestion',
+        input: { questions: [{ question: 'Choose', options: [{ label: 'A' }] }] },
+      },
+      {
+        kind: 'permission',
+        agentSessionId: 'session',
+        toolCallId: 'p',
+        toolName: 'Edit',
+        toolInput: { operationApprovalAvailable: false },
+      },
+    ])
+    if (snapshot[0]?.kind !== 'question') throw new Error('Expected question')
+    ;(snapshot[0].input as typeof question.input).questions[0].options[0].label = 'changed'
+    snapshot.pop()
+    expect(question.input.questions[0].options[0].label).toBe('A')
+    expect(orch._getPendingQueue().get('snapshot-ws')).toHaveLength(2)
+    expect(orch.getPendingInputs('unknown')).toEqual([])
+  })
+
   beforeEach(async () => {
     vi.resetModules()
     await resetDb()

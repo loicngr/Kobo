@@ -124,11 +124,11 @@ describe('search store', () => {
     const secondCall = store.search()
 
     // Newer request's response lands first.
-    resolveSecond({ ok: true, json: async () => [{ eventId: 'e2', snippet: 'second' }] })
+    resolveSecond({ ok: true, headers: new Headers(), json: async () => [{ eventId: 'e2', snippet: 'second' }] })
     await secondCall
 
     // Older request's response lands after — must NOT overwrite.
-    resolveFirst({ ok: true, json: async () => [{ eventId: 'e1', snippet: 'first' }] })
+    resolveFirst({ ok: true, headers: new Headers(), json: async () => [{ eventId: 'e1', snippet: 'first' }] })
     await firstCall
 
     expect(store.results).toEqual([{ eventId: 'e2', snippet: 'second' }])
@@ -165,7 +165,7 @@ describe('search store', () => {
     expect(store.query).toBe('')
 
     // The stale in-flight response resolves after clear().
-    resolveFirst({ ok: true, json: async () => fakeResults })
+    resolveFirst({ ok: true, headers: new Headers(), json: async () => fakeResults })
     await firstCall
 
     // Must still reflect the cleared state, not the stale response.
@@ -194,10 +194,68 @@ describe('search store', () => {
     expect(store.results).toEqual([])
 
     // The stale in-flight response resolves after the short-circuit.
-    resolveFirst({ ok: true, json: async () => fakeResults })
+    resolveFirst({ ok: true, headers: new Headers(), json: async () => fakeResults })
     await firstCall
 
     expect(store.results).toEqual([])
     expect(store.loading).toBe(false)
   })
+})
+
+it('tracks progressive index status without hiding existing results during refresh', async () => {
+  const store = useSearchStore()
+  store.query = 'needle'
+  store.results = fakeResults
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    new Response(JSON.stringify({ state: 'building', processed: 500, total: 1200 })),
+  )
+  expect(await store.refreshIndexStatus()).toBe(true)
+  expect(store.indexStatus).toEqual({ state: 'building', processed: 500, total: 1200 })
+  expect(store.results).toEqual(fakeResults)
+  vi.mocked(fetch).mockResolvedValue(
+    new Response(JSON.stringify(fakeResults), { headers: { 'X-Kobo-Search-Partial': 'true' } }),
+  )
+  const pending = store.search(true)
+  expect(store.loading).toBe(false)
+  await pending
+  expect(store.partial).toBe(true)
+})
+
+it('does not regress index progress when concurrent status responses arrive out of order', async () => {
+  const store = useSearchStore()
+  let first!: (response: Response) => void
+  vi.spyOn(globalThis, 'fetch')
+    .mockImplementationOnce(
+      () =>
+        new Promise<Response>((resolve) => {
+          first = resolve
+        }),
+    )
+    .mockResolvedValueOnce(new Response(JSON.stringify({ state: 'ready', processed: 1200, total: 1200 })))
+  const older = store.refreshIndexStatus()
+  await store.refreshIndexStatus()
+  first(new Response(JSON.stringify({ state: 'building', processed: 500, total: 1200 })))
+  await older
+  expect(store.indexStatus.state).toBe('ready')
+  expect(store.indexStatus.processed).toBe(1200)
+})
+
+it('cancels an unmounted search without clearing the last displayed results', async () => {
+  const store = useSearchStore()
+  store.query = 'needle'
+  store.results = fakeResults
+  vi.spyOn(globalThis, 'fetch').mockImplementation(
+    (_url, options) =>
+      new Promise((_resolve, reject) => {
+        options?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')), {
+          once: true,
+        })
+      }),
+  )
+  const pending = store.search()
+  store.cancel()
+  await pending
+  expect(store.results).toEqual(fakeResults)
+  expect(store.error).toBe('')
+  expect(store.loading).toBe(false)
 })

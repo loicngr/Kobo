@@ -11,6 +11,7 @@ export function getToken(): string | null {
 export function setToken(token: string): void {
   try {
     localStorage.setItem(STORAGE_KEY, token)
+    window.dispatchEvent(new Event('kobo:auth-token-changed'))
   } catch {
     // best-effort
   }
@@ -19,6 +20,7 @@ export function setToken(token: string): void {
 export function clearToken(): void {
   try {
     localStorage.removeItem(STORAGE_KEY)
+    window.dispatchEvent(new Event('kobo:auth-token-changed'))
   } catch {
     // best-effort
   }

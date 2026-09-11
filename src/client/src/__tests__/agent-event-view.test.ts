@@ -1,7 +1,9 @@
 import { describe, expect, it, vi } from 'vitest'
 import {
   type ConversationItem,
+  createFoldCache,
   foldEvents,
+  foldEventsCached,
   getLatestThinkingItem,
   isNormalSessionEnd,
   mergeWithUserMessages,
@@ -490,4 +492,31 @@ describe('mergeWithUserMessages fast path', () => {
     const merged = mergeWithUserMessages(agentItems, [{ content: 'u1', sender: 'user', ts: '2026-01-01T00:00:02Z' }])
     expect(merged.map((i) => i.ts)).toEqual(['2026-01-01T00:00:01Z', '2026-01-01T00:00:02Z', '2026-01-01T00:00:03Z'])
   })
+})
+
+it('retains unchanged card identities after a batched eviction and resumes incremental folding', () => {
+  const events = Array.from(
+    { length: 5000 },
+    (_, i) => ({ kind: 'message:text', messageId: `m${Math.floor(i / 100)}`, text: 'x', streaming: false }) as const,
+  )
+  const ids = events.map((_, i) => `event-${i}`)
+  const cache = createFoldCache()
+  foldEventsCached(cache, events, undefined, true, ids)
+  const retained = cache.items[10]
+  events.splice(0, 500)
+  ids.splice(0, 500)
+  foldEventsCached(cache, events, undefined, true, ids)
+  expect(cache.items[5]).toBe(retained)
+  events.push({ kind: 'message:text', messageId: 'm999', text: 'x', streaming: false })
+  ids.push('tail')
+  foldEventsCached(cache, events, undefined, true, ids)
+  expect(cache.items[5]).toBe(retained)
+  expect(cache.items.at(-1)).toMatchObject({ messageId: 'm999', text: 'x' })
+})
+
+it('preserves MCP provenance while merging user messages', () => {
+  const source = { kind: 'mcp' as const, clientName: 'External', transport: 'http' as const }
+  expect(mergeWithUserMessages([], [{ content: 'hello', sender: 'user', ts: 'now', source }])).toMatchObject([
+    { type: 'user', source },
+  ])
 })

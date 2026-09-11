@@ -327,7 +327,7 @@ describe('claude-code engine — result drain watchdog', () => {
     }
   })
 
-  it('force-ends the session as an error when a subagent never reports a terminal notification', async () => {
+  it('force-ends the session through the watchdog when a subagent never reports a terminal notification', async () => {
     vi.useFakeTimers()
     try {
       emitSubagentStarted = true
@@ -341,9 +341,9 @@ describe('claude-code engine — result drain watchdog', () => {
       await vi.advanceTimersByTimeAsync(10 * 60 * 1000 + 20_000)
 
       // Forced by the stall watchdog rather than a clean finish — reported
-      // as an error, not 'completed', so auto-loop/UI don't mistake a
+      // as watchdog, not 'completed', so auto-loop/UI don't mistake a
       // possibly-still-running orphaned subagent for successful progress.
-      expect(events).toContainEqual({ kind: 'session:ended', reason: 'error', exitCode: null })
+      expect(events).toContainEqual({ kind: 'session:ended', reason: 'watchdog', exitCode: null })
       expect(abortSignal?.aborted).toBe(true)
     } finally {
       completeSubagent?.()

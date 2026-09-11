@@ -1,5 +1,7 @@
+import { createPinia, setActivePinia } from 'pinia'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useWhatsNew } from '../composables/use-whats-new'
+import { useUpdateStore } from '../stores/update'
 
 interface ChangelogPayload {
   currentVersion: string
@@ -23,9 +25,22 @@ const ALL_VERSIONS = [
 describe('useWhatsNew', () => {
   beforeEach(() => {
     localStorage.clear()
+    setActivePinia(createPinia())
   })
   afterEach(() => {
     vi.restoreAllMocks()
+  })
+
+  it('updates the banner through periodic snapshots without reopening release notes', async () => {
+    localStorage.setItem('kobo:last-seen-version', '1.7.12')
+    mockChangelog({ currentVersion: '1.7.14', versions: ALL_VERSIONS })
+    const hook = useWhatsNew()
+    await hook.checkForUpdate()
+    expect(hook.showDialog.value).toBe(true)
+    hook.showDialog.value = false
+    useUpdateStore().applySnapshot({ currentVersion: '1.7.14', latestVersion: '1.8.0' })
+    expect(hook.availableVersion.value).toBe('1.8.0')
+    expect(hook.showDialog.value).toBe(false)
   })
 
   it('announces a newer version published on npm', async () => {

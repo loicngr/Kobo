@@ -1,6 +1,8 @@
-import { execFile, execFileSync } from 'node:child_process'
-import fs from 'node:fs'
+import { randomUUID } from 'node:crypto'
+import fs from 'node:fs/promises'
 import path from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
+import { runBoundedProcess } from '../utils/bounded-process.js'
 import { isGitBranchExistsError } from '../utils/git-ops.js'
 import { withGitRepoLock } from '../utils/git-repo-lock.js'
 import { resolveWorkspaceWorktreePath, resolveWorktreesRoot } from '../utils/worktree-paths.js'
@@ -20,16 +22,18 @@ export interface OrphanWorktreeInfo {
   suggestedSourceBranch: string
 }
 
-function git(repoPath: string, args: string[]): string {
-  return execFileSync('git', args, {
-    cwd: repoPath,
-    encoding: 'utf-8',
-    stdio: ['pipe', 'pipe', 'pipe'],
-    // Force the C locale so git (and libc strerror) emit English error messages.
-    // Without this, a French host reports "Permission non accordée" instead of
-    // "Permission denied", and permission-failure detection silently misses it.
-    env: { ...process.env, LC_ALL: 'C', LANG: 'C' },
-  }).trim()
+const READ_TIMEOUT_MS = 10_000
+const MUTATION_TIMEOUT_MS = 5 * 60_000
+
+async function git(repoPath: string, args: string[], timeoutMs = READ_TIMEOUT_MS): Promise<string> {
+  return (
+    await runBoundedProcess('git', args, {
+      cwd: repoPath,
+      timeoutMs,
+      stdoutLimit: 64 * 1024 * 1024,
+      env: { ...process.env, LC_ALL: 'C', LANG: 'C', GIT_TERMINAL_PROMPT: '0' },
+    })
+  ).replace(/\n$/, '')
 }
 
 /** True when an exec/git error message indicates a filesystem permission failure.
@@ -48,20 +52,68 @@ export function buildDockerChownArgs(worktreePath: string, uid: number, gid: num
 
 const DEFAULT_CLEANUP_IMAGE = 'alpine'
 
-function isDockerAvailable(): boolean {
+async function isDockerAvailable(): Promise<boolean> {
   try {
-    execFileSync('docker', ['version'], { stdio: ['ignore', 'ignore', 'ignore'] })
+    await runBoundedProcess('docker', ['version'], { timeoutMs: READ_TIMEOUT_MS })
     return true
   } catch {
     return false
   }
 }
 
-function reclaimWorktreeOwnershipViaDocker(worktreePath: string, uid: number, gid: number, image: string): void {
-  execFileSync('docker', buildDockerChownArgs(worktreePath, uid, gid, image), {
-    encoding: 'utf-8',
-    stdio: ['pipe', 'pipe', 'pipe'],
-  })
+async function reclaimWorktreeOwnershipViaDocker(
+  worktreePath: string,
+  uid: number,
+  gid: number,
+  image: string,
+): Promise<void> {
+  const containerName = `kobo-cleanup-${randomUUID()}`
+  const args = buildDockerChownArgs(worktreePath, uid, gid, image)
+  args.splice(1, 0, '--name', containerName)
+  let failure: unknown
+  try {
+    await runBoundedProcess('docker', args, { timeoutMs: MUTATION_TIMEOUT_MS })
+  } catch (err) {
+    failure = err
+  }
+  // Docker containers belong to the daemon, not the CLI's process group.
+  // A killed/disconnected `docker run` cannot prove that chown has stopped.
+  let stopRequested = false
+  let warned = false
+  for (;;) {
+    try {
+      const state = await runBoundedProcess(
+        'docker',
+        ['ps', '-a', '--filter', `name=^/${containerName}$`, '--format', '{{.ID}} {{.State}}'],
+        { timeoutMs: READ_TIMEOUT_MS, stdoutLimit: 8192 },
+      )
+      const active = state
+        .trim()
+        .split('\n')
+        .filter(Boolean)
+        .some((line) => !/ (?:exited|dead|created)$/.test(line))
+      if (!active) break
+      try {
+        await runBoundedProcess(
+          'docker',
+          stopRequested ? ['kill', containerName] : ['stop', '--time', '5', containerName],
+          { timeoutMs: READ_TIMEOUT_MS },
+        )
+      } finally {
+        stopRequested = true
+      }
+    } catch (err) {
+      if (!warned) {
+        warned = true
+        console.error(
+          `[worktree] Cannot yet confirm cleanup container '${containerName}' stopped; retaining ownership:`,
+          err,
+        )
+      }
+    }
+    await delay(1000)
+  }
+  if (failure) throw failure
 }
 
 function getExcludeFilePath(projectPath: string): string {
@@ -74,42 +126,46 @@ function projectRelativeWorktreePath(projectPath: string, worktreePath: string):
   return relativePath
 }
 
-function addToExclude(projectPath: string, worktreePath: string, excludeFile = getExcludeFilePath(projectPath)): void {
+async function addToExclude(
+  projectPath: string,
+  worktreePath: string,
+  excludeFile = getExcludeFilePath(projectPath),
+): Promise<void> {
   const relativePath = projectRelativeWorktreePath(projectPath, worktreePath)
   if (!relativePath) return
 
   // Ensure the .git/info directory exists
   const infoDir = path.dirname(excludeFile)
-  if (!fs.existsSync(infoDir)) {
-    fs.mkdirSync(infoDir, { recursive: true })
+  if (!(await restorePathExists(infoDir))) {
+    await fs.mkdir(infoDir, { recursive: true })
   }
 
   const entry = `/${relativePath}`
 
   let current = ''
-  if (fs.existsSync(excludeFile)) {
-    current = fs.readFileSync(excludeFile, 'utf-8')
+  if (await restorePathExists(excludeFile)) {
+    current = await fs.readFile(excludeFile, 'utf-8')
   }
 
   if (!current.split('\n').includes(entry)) {
     const newContent = current.endsWith('\n') || current === '' ? `${current}${entry}\n` : `${current}\n${entry}\n`
-    fs.writeFileSync(excludeFile, newContent, 'utf-8')
+    await fs.writeFile(excludeFile, newContent, 'utf-8')
   }
 }
 
-function removeFromExclude(projectPath: string, worktreePath: string): void {
+async function removeFromExclude(projectPath: string, worktreePath: string): Promise<void> {
   const relativePath = projectRelativeWorktreePath(projectPath, worktreePath)
   if (!relativePath) return
 
   const excludeFile = getExcludeFilePath(projectPath)
-  if (!fs.existsSync(excludeFile)) return
+  if (!(await restorePathExists(excludeFile))) return
 
   const entry = `/${relativePath}`
 
-  const lines = fs.readFileSync(excludeFile, 'utf-8').split('\n')
+  const lines = (await fs.readFile(excludeFile, 'utf-8')).split('\n')
   const filtered = lines.filter((line) => line !== entry)
   const trimmed = filtered.join('\n').replace(/\n+$/, '')
-  fs.writeFileSync(excludeFile, trimmed ? `${trimmed}\n` : '', 'utf-8')
+  await fs.writeFile(excludeFile, trimmed ? `${trimmed}\n` : '', 'utf-8')
 }
 
 /** Create a git worktree for the given branch, based on `baseRef`.
@@ -123,35 +179,81 @@ export function createWorktree(
   worktreesPath?: string | null,
   projectSlug?: string,
   explicitPath?: string | null,
-): { worktreePath: string; base: 'origin' | 'local'; branchCreated: boolean } {
+): Promise<{ worktreePath: string; base: 'origin' | 'local'; branchCreated: boolean }> {
+  return withGitRepoLock(projectPath, () =>
+    createWorktreeUnlocked(projectPath, branchName, baseRef, worktreesPath, projectSlug, explicitPath),
+  )
+}
+
+/** A checkout was created even though a Git hook or subsequent bookkeeping failed. */
+export class WorktreeCreationError extends Error {
+  constructor(
+    readonly worktreePath: string,
+    readonly branchCreated: boolean,
+    cause: unknown,
+  ) {
+    super(cause instanceof Error ? cause.message : String(cause), { cause })
+    this.name = 'WorktreeCreationError'
+  }
+}
+
+/** Create a worktree while the caller already owns the shared repository lock. */
+export async function createWorktreeUnlocked(
+  projectPath: string,
+  branchName: string,
+  baseRef: string,
+  worktreesPath?: string | null,
+  projectSlug?: string,
+  explicitPath?: string | null,
+): Promise<{ worktreePath: string; base: 'origin' | 'local'; branchCreated: boolean }> {
   const worktreesDir = resolveWorktreesRoot(projectPath, worktreesPath)
-  if (!fs.existsSync(worktreesDir)) {
-    fs.mkdirSync(worktreesDir, { recursive: true })
+  if (!(await restorePathExists(worktreesDir))) {
+    await fs.mkdir(worktreesDir, { recursive: true })
   }
 
   const worktreePath = explicitPath || resolveWorkspaceWorktreePath(projectPath, branchName, worktreesPath, projectSlug)
   const base: 'origin' | 'local' = baseRef.startsWith('origin/') ? 'origin' : 'local'
 
-  // Tracks which of the two git commands below actually ran. Callers use it to
-  // decide whether a rollback may delete the branch: deleting one we merely
-  // attached to would destroy commits Kobo never created.
+  // Capture ownership evidence before Git runs: a failing post-checkout hook
+  // can leave a fully registered checkout even though `git worktree add` fails.
+  const pathExisted = await restorePathExists(worktreePath)
+  const registeredBefore = (await listWorktrees(projectPath)).some(
+    (entry) => path.resolve(entry.path) === path.resolve(worktreePath),
+  )
+  const branchRef = `refs/heads/${branchName}`
+  const branchExisted = (await git(projectPath, ['for-each-ref', '--format=%(refname)', branchRef]))
+    .split('\n')
+    .includes(branchRef)
   let branchCreated = true
 
   try {
-    git(projectPath, ['worktree', 'add', '-b', branchName, worktreePath, baseRef])
-  } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-
-    // If branch already exists, add worktree without creating the branch
-    if (isGitBranchExistsError(message)) {
-      git(projectPath, ['worktree', 'add', worktreePath, branchName])
+    try {
+      await git(projectPath, ['worktree', 'add', '-b', branchName, worktreePath, baseRef], MUTATION_TIMEOUT_MS)
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      if (!isGitBranchExistsError(message)) throw err
       branchCreated = false
-    } else {
-      throw new Error(`Failed to create worktree for branch '${branchName}': ${message}`)
+      await git(projectPath, ['worktree', 'add', worktreePath, branchName], MUTATION_TIMEOUT_MS)
     }
+  } catch (err) {
+    if (
+      !pathExisted &&
+      !registeredBefore &&
+      (await isMatchingWorkspaceWorktree({ projectPath, worktreePath, workingBranch: branchName }))
+    ) {
+      throw new WorktreeCreationError(worktreePath, branchCreated && !branchExisted, err)
+    }
+    throw new Error(
+      `Failed to create worktree for branch '${branchName}': ${err instanceof Error ? err.message : String(err)}`,
+      { cause: err },
+    )
   }
 
-  addToExclude(projectPath, worktreePath)
+  try {
+    await addToExclude(projectPath, worktreePath)
+  } catch (err) {
+    throw new WorktreeCreationError(worktreePath, branchCreated, err)
+  }
 
   return { worktreePath, base, branchCreated }
 }
@@ -164,13 +266,13 @@ export function createWorktree(
  *
  *  Callers hold the repository lock: acquiring it again here would deadlock on
  *  the same key, since the chain is strictly sequential per common git dir. */
-function assertWorktreeGone(projectPath: string, worktreePath: string): void {
+async function assertWorktreeGone(projectPath: string, worktreePath: string): Promise<void> {
   try {
-    git(projectPath, ['worktree', 'prune'])
+    await git(projectPath, ['worktree', 'prune'])
   } catch (err) {
     console.warn(`[worktree] prune after removing '${worktreePath}' failed:`, err instanceof Error ? err.message : err)
   }
-  if (fs.existsSync(worktreePath)) {
+  if (await restorePathExists(worktreePath)) {
     throw new Error(`Failed to remove worktree '${worktreePath}': the directory is still on disk after removal`)
   }
 }
@@ -192,30 +294,30 @@ export function removeWorktree(projectPath: string, worktreePath: string): Promi
 }
 
 /** Remove a worktree. Call ONLY while already holding the repository lock. */
-export function removeWorktreeUnlocked(projectPath: string, worktreePath: string): void {
+export async function removeWorktreeUnlocked(projectPath: string, worktreePath: string): Promise<void> {
   try {
-    git(projectPath, ['worktree', 'remove', worktreePath, '--force'])
+    await git(projectPath, ['worktree', 'remove', worktreePath, '--force'], MUTATION_TIMEOUT_MS)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     const uid = typeof process.getuid === 'function' ? process.getuid() : null
     const gid = typeof process.getgid === 'function' ? process.getgid() : null
 
-    if (isPermissionError(message) && uid != null && gid != null && isDockerAvailable()) {
+    if (isPermissionError(message) && uid != null && gid != null && (await isDockerAvailable())) {
       const image = process.env.KOBO_WORKTREE_CLEANUP_IMAGE || DEFAULT_CLEANUP_IMAGE
       console.warn(
         `[worktree] '${worktreePath}' has root-owned files (permission denied); reclaiming ownership via Docker (${image})…`,
       )
       try {
-        reclaimWorktreeOwnershipViaDocker(worktreePath, uid, gid, image)
+        await reclaimWorktreeOwnershipViaDocker(worktreePath, uid, gid, image)
         // The first `git worktree remove` already de-registered this worktree (it
         // drops the admin entry even when the directory rm fails on permission), so
         // retrying it errors with "is not a working tree". Now that we own the files,
         // delete the directory directly and prune any dangling worktree metadata.
-        fs.rmSync(worktreePath, { recursive: true, force: true })
-        git(projectPath, ['worktree', 'prune'])
+        await fs.rm(worktreePath, { recursive: true, force: true })
+        await git(projectPath, ['worktree', 'prune'])
         console.log(`[worktree] Docker cleanup succeeded; removed '${worktreePath}'`)
-        removeFromExclude(projectPath, worktreePath)
-        assertWorktreeGone(projectPath, worktreePath)
+        await removeFromExclude(projectPath, worktreePath)
+        await assertWorktreeGone(projectPath, worktreePath)
         return
       } catch (retryErr) {
         const retryMessage = retryErr instanceof Error ? retryErr.message : String(retryErr)
@@ -227,24 +329,24 @@ export function removeWorktreeUnlocked(projectPath: string, worktreePath: string
     throw new Error(`Failed to remove worktree '${worktreePath}': ${message}`)
   }
 
-  removeFromExclude(projectPath, worktreePath)
-  assertWorktreeGone(projectPath, worktreePath)
+  await removeFromExclude(projectPath, worktreePath)
+  await assertWorktreeGone(projectPath, worktreePath)
 }
 
 /** List all git worktrees for a repository by parsing `git worktree list --porcelain`. */
-export function listWorktrees(projectPath: string): WorktreeInfo[] {
-  const output = git(projectPath, ['worktree', 'list', '--porcelain'])
+export async function listWorktrees(projectPath: string): Promise<WorktreeInfo[]> {
+  const output = await git(projectPath, ['worktree', 'list', '--porcelain', '-z'])
 
   const worktrees: WorktreeInfo[] = []
-  const blocks = output.split('\n\n').filter(Boolean)
+  const blocks = output.split('\0\0').filter(Boolean)
 
   for (const block of blocks) {
-    const lines = block.split('\n')
+    const lines = block.split('\0')
     const worktree: Partial<WorktreeInfo> = {}
 
     for (const line of lines) {
       if (line.startsWith('worktree ')) {
-        worktree.path = line.slice('worktree '.length).trim()
+        worktree.path = line.slice('worktree '.length)
       } else if (line.startsWith('HEAD ')) {
         worktree.head = line.slice('HEAD '.length).trim()
       } else if (line.startsWith('branch ')) {
@@ -269,34 +371,34 @@ export function listWorktrees(projectPath: string): WorktreeInfo[] {
 }
 
 /** Check whether a worktree for the given branch already exists. */
-export function worktreeExists(projectPath: string, branchName: string): boolean {
+export async function worktreeExists(projectPath: string, branchName: string): Promise<boolean> {
   try {
-    const worktrees = listWorktrees(projectPath)
+    const worktrees = await listWorktrees(projectPath)
     return worktrees.some((wt) => wt.branch === branchName)
   } catch {
     return false
   }
 }
 
-function canonicalize(p: string): string {
+async function canonicalize(p: string): Promise<string> {
   try {
-    return fs.realpathSync(p)
+    return await fs.realpath(p)
   } catch {
     return p
   }
 }
 
-function detectSourceBranch(projectPath: string, worktreePath: string, branch: string): string {
+async function detectSourceBranch(projectPath: string, worktreePath: string, branch: string): Promise<string> {
   // 1. Branch's tracked upstream (configured locally)
   try {
-    const upstream = git(worktreePath, ['config', '--get', `branch.${branch}.merge`])
+    const upstream = await git(worktreePath, ['config', '--get', `branch.${branch}.merge`])
     if (upstream) return upstream.replace(/^refs\/heads\//, '')
   } catch {
     /* no upstream configured */
   }
   // 2. Repo's default branch (origin/HEAD)
   try {
-    const head = git(projectPath, ['symbolic-ref', 'refs/remotes/origin/HEAD'])
+    const head = await git(projectPath, ['symbolic-ref', 'refs/remotes/origin/HEAD'])
     if (head) return head.replace(/^refs\/remotes\/origin\//, '')
   } catch {
     /* no origin/HEAD */
@@ -311,20 +413,29 @@ function detectSourceBranch(projectPath: string, worktreePath: string, branch: s
  * branch to anchor a workspace to). Both sides of the path comparison are
  * canonicalized to defeat symlinks / trailing-slash variants.
  */
-export function listOrphanWorktrees(projectPath: string, attachedPaths: Set<string>): OrphanWorktreeInfo[] {
-  const canonAttached = new Set(Array.from(attachedPaths).map(canonicalize))
-  const canonProject = canonicalize(projectPath)
+export async function listOrphanWorktrees(
+  projectPath: string,
+  attachedPaths: Set<string>,
+): Promise<OrphanWorktreeInfo[]> {
+  const canonAttached = new Set(await Promise.all(Array.from(attachedPaths).map(canonicalize)))
+  const canonProject = await canonicalize(projectPath)
 
-  return listWorktrees(projectPath)
-    .filter((wt) => canonicalize(wt.path) !== canonProject)
-    .filter((wt) => !!wt.branch && wt.branch !== '(detached HEAD)')
-    .filter((wt) => !canonAttached.has(canonicalize(wt.path)))
-    .map((wt) => ({
-      path: wt.path,
-      branch: wt.branch,
-      head: wt.head,
-      suggestedSourceBranch: detectSourceBranch(projectPath, wt.path, wt.branch),
-    }))
+  const orphans: OrphanWorktreeInfo[] = []
+  for (const worktree of await listWorktrees(projectPath)) {
+    const canonicalPath = await canonicalize(worktree.path)
+    if (
+      canonicalPath === canonProject ||
+      canonAttached.has(canonicalPath) ||
+      !worktree.branch ||
+      worktree.branch === '(detached HEAD)'
+    )
+      continue
+    orphans.push({
+      ...worktree,
+      suggestedSourceBranch: await detectSourceBranch(projectPath, worktree.path, worktree.branch),
+    })
+  }
+  return orphans
 }
 
 export interface RestoreCheckoutInput {
@@ -354,19 +465,21 @@ export class WorktreeCheckoutError extends Error {
 
 const restoreGitEnv = () => ({ ...process.env, LC_ALL: 'C', LANG: 'C', GIT_TERMINAL_PROMPT: '0' })
 
-function restoreGit(cwd: string, args: string[]): string {
-  return execFileSync('git', ['-c', 'core.hooksPath=/dev/null', ...args], {
-    cwd,
-    encoding: 'utf8',
-    stdio: ['ignore', 'pipe', 'pipe'],
-    timeout: 30_000,
-    env: restoreGitEnv(),
-  }).replace(/\n$/, '')
+async function restoreGit(cwd: string, args: string[]): Promise<string> {
+  return (
+    await runBoundedProcess('git', ['-c', 'core.hooksPath=/dev/null', ...args], {
+      cwd,
+      timeoutMs:
+        args[0] === 'fetch' || (args[0] === 'worktree' && args[1] === 'add') ? MUTATION_TIMEOUT_MS : READ_TIMEOUT_MS,
+      stdoutLimit: 64 * 1024 * 1024,
+      env: restoreGitEnv(),
+    })
+  ).replace(/\n$/, '')
 }
 
 /** NUL delimiters preserve quoted, whitespace and newline-containing worktree paths. */
-function restoreRegistrations(projectPath: string): { path: string; branch: string }[] {
-  return restoreGit(projectPath, ['worktree', 'list', '--porcelain', '-z'])
+async function restoreRegistrations(projectPath: string): Promise<{ path: string; branch: string }[]> {
+  return (await restoreGit(projectPath, ['worktree', 'list', '--porcelain', '-z']))
     .split('\0\0')
     .filter(Boolean)
     .map((block) => {
@@ -378,30 +491,32 @@ function restoreRegistrations(projectPath: string): { path: string; branch: stri
     })
 }
 
-function commonGitDirectory(cwd: string): string {
-  return fs.realpathSync(restoreGit(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir']))
+async function commonGitDirectory(cwd: string): Promise<string> {
+  return await fs.realpath(await restoreGit(cwd, ['rev-parse', '--path-format=absolute', '--git-common-dir']))
 }
 
 /** Accept only the exact registered root in the same repository on the expected branch. */
-export function isMatchingWorkspaceWorktree(input: RestoreCheckoutInput): boolean {
+export async function isMatchingWorkspaceWorktree(input: RestoreCheckoutInput): Promise<boolean> {
   try {
-    if (!fs.lstatSync(input.worktreePath).isDirectory()) return false
-    const target = fs.realpathSync(input.worktreePath)
-    if (fs.realpathSync(restoreGit(input.worktreePath, ['rev-parse', '--show-toplevel'])) !== target) return false
-    if (commonGitDirectory(input.projectPath) !== commonGitDirectory(input.worktreePath)) return false
+    if (!(await fs.lstat(input.worktreePath)).isDirectory()) return false
+    const target = await fs.realpath(input.worktreePath)
+    if ((await fs.realpath(await restoreGit(input.worktreePath, ['rev-parse', '--show-toplevel']))) !== target)
+      return false
+    if ((await commonGitDirectory(input.projectPath)) !== (await commonGitDirectory(input.worktreePath))) return false
     const ref = `refs/heads/${input.workingBranch}`
-    if (restoreGit(input.worktreePath, ['symbolic-ref', 'HEAD']) !== ref) return false
-    return restoreRegistrations(input.projectPath).some(
-      (entry) => canonicalize(entry.path) === target && entry.branch === ref,
-    )
+    if ((await restoreGit(input.worktreePath, ['symbolic-ref', 'HEAD'])) !== ref) return false
+    for (const entry of await restoreRegistrations(input.projectPath)) {
+      if ((await canonicalize(entry.path)) === target && entry.branch === ref) return true
+    }
+    return false
   } catch {
     return false
   }
 }
 
-function restorePathExists(target: string): boolean {
+async function restorePathExists(target: string): Promise<boolean> {
   try {
-    fs.lstatSync(target)
+    await fs.lstat(target)
     return true
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return false
@@ -409,9 +524,9 @@ function restorePathExists(target: string): boolean {
   }
 }
 
-function resolveRestoreCommit(projectPath: string, ref: string): string | null {
+async function resolveRestoreCommit(projectPath: string, ref: string): Promise<string | null> {
   try {
-    return restoreGit(projectPath, ['rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`])
+    return await restoreGit(projectPath, ['rev-parse', '--verify', '--end-of-options', `${ref}^{commit}`])
   } catch {
     return null
   }
@@ -424,7 +539,7 @@ export async function restoreWorktreeCheckoutUnlocked(
   const { projectPath, workingBranch } = input
   const worktreePath = path.resolve(input.worktreePath)
   try {
-    commonGitDirectory(projectPath)
+    await commonGitDirectory(projectPath)
   } catch {
     throw new WorktreeCheckoutError(
       'project-unavailable',
@@ -433,18 +548,21 @@ export async function restoreWorktreeCheckoutUnlocked(
   }
   try {
     if (workingBranch.startsWith('-')) throw new Error('Branch names cannot start with a dash')
-    restoreGit(projectPath, ['check-ref-format', `refs/heads/${workingBranch}`])
-    if (restorePathExists(worktreePath)) {
-      if (!isMatchingWorkspaceWorktree(input)) {
+    await restoreGit(projectPath, ['check-ref-format', `refs/heads/${workingBranch}`])
+    if (await restorePathExists(worktreePath)) {
+      if (!(await isMatchingWorkspaceWorktree(input))) {
         throw new WorktreeCheckoutError(
           'path-conflict',
           'The destination is occupied by a different checkout or directory. Move it before retrying.',
         )
       }
-      return { source: 'existing-worktree', headCommitSha: restoreGit(worktreePath, ['rev-parse', '--verify', 'HEAD']) }
+      return {
+        source: 'existing-worktree',
+        headCommitSha: await restoreGit(worktreePath, ['rev-parse', '--verify', 'HEAD']),
+      }
     }
 
-    const registrations = restoreRegistrations(projectPath)
+    const registrations = await restoreRegistrations(projectPath)
     // Do not globally prune: another missing checkout may still need its registration.
     if (registrations.some((entry) => path.resolve(entry.path) === worktreePath)) {
       throw new WorktreeCheckoutError(
@@ -460,30 +578,19 @@ export async function restoreWorktreeCheckoutUnlocked(
     }
 
     let source: RestoreCheckoutSource = 'local-branch'
-    const localCommit = resolveRestoreCommit(projectPath, `refs/heads/${workingBranch}`)
+    const localCommit = await resolveRestoreCommit(projectPath, `refs/heads/${workingBranch}`)
     let commit = localCommit
     if (!commit) {
       source = 'saved-commit'
       commit =
         input.headCommitSha && /^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(input.headCommitSha)
-          ? resolveRestoreCommit(projectPath, input.headCommitSha)
+          ? await resolveRestoreCommit(projectPath, input.headCommitSha)
           : null
       if (!commit) {
         source = 'remote-branch'
         try {
-          await new Promise<void>((resolve, reject) => {
-            execFile(
-              'git',
-              ['-c', 'core.hooksPath=/dev/null', 'fetch', '--no-tags', 'origin', `refs/heads/${workingBranch}`],
-              {
-                cwd: projectPath,
-                timeout: 60_000,
-                env: restoreGitEnv(),
-              },
-              (error) => (error ? reject(error) : resolve()),
-            )
-          })
-          commit = resolveRestoreCommit(projectPath, 'FETCH_HEAD')
+          await restoreGit(projectPath, ['fetch', '--no-tags', 'origin', `refs/heads/${workingBranch}`])
+          commit = await resolveRestoreCommit(projectPath, 'FETCH_HEAD')
         } catch {
           // Avoid exposing remote credentials embedded in Git error output.
         }
@@ -496,22 +603,22 @@ export async function restoreWorktreeCheckoutUnlocked(
       }
     }
     // Recheck after the asynchronous fetch, including empty directories and dangling links.
-    if (restorePathExists(worktreePath)) {
+    if (await restorePathExists(worktreePath)) {
       throw new WorktreeCheckoutError(
         'path-conflict',
         'The destination appeared during recovery. Move the conflicting directory before retrying.',
       )
     }
-    if (localCommit) restoreGit(projectPath, ['worktree', 'add', '--', worktreePath, workingBranch])
-    else restoreGit(projectPath, ['worktree', 'add', '-b', workingBranch, '--', worktreePath, commit])
-    if (!isMatchingWorkspaceWorktree(input)) {
+    if (localCommit) await restoreGit(projectPath, ['worktree', 'add', '--', worktreePath, workingBranch])
+    else await restoreGit(projectPath, ['worktree', 'add', '-b', workingBranch, '--', worktreePath, commit])
+    if (!(await isMatchingWorkspaceWorktree(input))) {
       throw new WorktreeCheckoutError(
         'git-failed',
         'The restored checkout could not be verified. Inspect the checkout before retrying.',
       )
     }
-    addToExclude(projectPath, worktreePath, path.join(commonGitDirectory(projectPath), 'info', 'exclude'))
-    return { source, headCommitSha: restoreGit(worktreePath, ['rev-parse', '--verify', 'HEAD']) }
+    await addToExclude(projectPath, worktreePath, path.join(await commonGitDirectory(projectPath), 'info', 'exclude'))
+    return { source, headCommitSha: await restoreGit(worktreePath, ['rev-parse', '--verify', 'HEAD']) }
   } catch (err) {
     if (err instanceof WorktreeCheckoutError) throw err
     throw new WorktreeCheckoutError(

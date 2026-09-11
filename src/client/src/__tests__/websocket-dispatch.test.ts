@@ -67,6 +67,19 @@ function workspaceFixture(status = 'executing'): Workspace {
 describe('websocket dispatch — AgentEvent side-effects to workspace store', () => {
   beforeEach(() => setActivePinia(createPinia()))
 
+  it('routes global release checks without a workspace subscription or activity item', async () => {
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const { useUpdateStore } = await import('../stores/update.js')
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const addActivity = vi.spyOn(useWorkspaceStore(), 'addActivityItem')
+    useWebSocketStore()._routeMessage({
+      type: 'kobo:update-checked',
+      payload: { currentVersion: '1.9.0', latestVersion: '1.10.0' },
+    })
+    expect(useUpdateStore().availableVersion).toBe('1.10.0')
+    expect(addActivity).not.toHaveBeenCalled()
+  })
+
   it('refreshes workspace status when a quota wait ends without starting an agent', async () => {
     const { useWorkspaceStore } = await import('../stores/workspace.js')
     const { useWebSocketStore } = await import('../stores/websocket.js')
@@ -1600,4 +1613,69 @@ describe('worktree restoration HTTP/WebSocket convergence', () => {
       expect(store.activityFeeds.w1).toBe(feed)
     },
   )
+})
+
+it('correlates review acknowledgements without cancelling an unrelated queued message', async () => {
+  setActivePinia(createPinia())
+  const { useWebSocketStore } = await import('../stores/websocket')
+  const { useWorkspaceStore } = await import('../stores/workspace')
+  const ws = useWebSocketStore()
+  const store = useWorkspaceStore()
+  const cancel = vi.spyOn(store, 'cancelQueuedMessage')
+  const queue = vi.spyOn(store, 'queueMessage')
+  const send = vi.spyOn(ws, '_send').mockReturnValue(true)
+  const pending = ws.sendChatMessageConfirmed('w1', 'review', 's1')
+  const clientMessageId = (send.mock.calls[0][0].payload as { clientMessageId: string }).clientMessageId
+  ws._routeMessage({ type: 'chat:accepted', workspaceId: 'w1', payload: { sessionId: 's1', clientMessageId } })
+  await pending
+  expect(cancel).not.toHaveBeenCalled()
+  ws._routeMessage({
+    type: 'chat:rejected',
+    workspaceId: 'w1',
+    payload: { sessionId: 's1', clientMessageId, content: 'review' },
+  })
+  expect(queue).not.toHaveBeenCalled()
+  send.mockRestore()
+})
+
+it('does not count replayed agent events as live scroll activity', async () => {
+  setActivePinia(createPinia())
+  const { _setReplayingForDispatch, dispatchAgentEvent } = await import('../stores/websocket')
+  const { useAgentStreamStore } = await import('../stores/agent-stream')
+  const stream = useAgentStreamStore()
+  _setReplayingForDispatch(true)
+  try {
+    dispatchAgentEvent(
+      'w',
+      { kind: 'message:text', messageId: 'historical', text: 'old', streaming: false },
+      '',
+      'old',
+      's',
+    )
+  } finally {
+    _setReplayingForDispatch(false)
+  }
+  expect(stream.liveAppendCountFor('w', () => true)).toBe(0)
+  dispatchAgentEvent('w', { kind: 'message:text', messageId: 'live', text: 'new', streaming: true }, '', 'new', 's')
+  expect(stream.liveAppendCountFor('w', () => true)).toBe(1)
+})
+
+it('does not reconcile an external message with an identical pending human message', async () => {
+  setActivePinia(createPinia())
+  const { useWebSocketStore } = await import('../stores/websocket')
+  const { useWorkspaceStore } = await import('../stores/workspace')
+  const workspaces = useWorkspaceStore()
+  workspaces.activityFeeds.w1 = [
+    { id: 'pending', type: 'text', content: 'hello', timestamp: 'now', meta: { sender: 'user', pending: true } },
+  ]
+  const source = { kind: 'mcp', clientName: 'External', transport: 'http' }
+  useWebSocketStore()._routeMessage({
+    id: 'external',
+    workspaceId: 'w1',
+    type: 'user:message',
+    payload: { content: 'hello', sender: 'user', source },
+  })
+  expect(workspaces.activityFeeds.w1).toHaveLength(2)
+  expect(workspaces.activityFeeds.w1[0]?.id).toBe('pending')
+  expect(workspaces.activityFeeds.w1[1]?.meta?.source).toEqual(source)
 })

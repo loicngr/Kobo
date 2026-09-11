@@ -35,23 +35,23 @@ afterEach(() => {
   rmSync(otherRepo, { recursive: true, force: true })
 })
 
-describe('resolveGitCommonDir()', () => {
-  it('maps a worktree and its main repository to the same directory', () => {
-    expect(resolveGitCommonDir(worktreeA)).toBe(resolveGitCommonDir(repo))
+describe('resolveGitCommonDir()', async () => {
+  it('maps a worktree and its main repository to the same directory', async () => {
+    expect(await resolveGitCommonDir(worktreeA)).toBe(await resolveGitCommonDir(repo))
   })
 
-  it('maps two unrelated repositories to different directories', () => {
-    expect(resolveGitCommonDir(otherRepo)).not.toBe(resolveGitCommonDir(repo))
+  it('maps two unrelated repositories to different directories', async () => {
+    expect(await resolveGitCommonDir(otherRepo)).not.toBe(await resolveGitCommonDir(repo))
   })
 
-  it('never throws outside a git repository', () => {
+  it('never throws outside a git repository', async () => {
     const plain = mkdtempSync(join(tmpdir(), 'kobo-lock-plain-'))
-    expect(() => resolveGitCommonDir(plain)).not.toThrow()
+    await expect(resolveGitCommonDir(plain)).resolves.toBe(plain)
     rmSync(plain, { recursive: true, force: true })
   })
 })
 
-describe('withGitRepoLock()', () => {
+describe('withGitRepoLock()', async () => {
   it('never interleaves two operations on worktrees of the same repository', async () => {
     const trace: string[] = []
     const slow = async (tag: string) => {
@@ -83,4 +83,26 @@ describe('withGitRepoLock()', () => {
     await expect(failing).rejects.toThrow('boom')
     await expect(withGitRepoLock(repo, () => 'ok')).resolves.toBe('ok')
   })
+})
+
+it('does not block timers while resolving the common Git directory', async () => {
+  const { mkdirSync } = await import('node:fs')
+  const bin = join(repo, 'slow-bin')
+  mkdirSync(bin)
+  const realGit = execFileSync('which', ['git'], { encoding: 'utf8' }).trim()
+  writeFileSync(join(bin, 'git'), `#!/bin/sh\nsleep 0.15\nexec ${realGit} "$@"\n`, { mode: 0o755 })
+  const originalPath = process.env.PATH
+  process.env.PATH = `${bin}:${originalPath}`
+  let ticked = false
+  const timer = setTimeout(() => {
+    ticked = true
+  }, 10)
+  try {
+    await withGitRepoLock(repo, async () => {
+      expect(ticked).toBe(true)
+    })
+  } finally {
+    process.env.PATH = originalPath
+    clearTimeout(timer)
+  }
 })

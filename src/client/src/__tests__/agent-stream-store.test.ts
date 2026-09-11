@@ -39,9 +39,9 @@ describe('agent-stream store', () => {
       store.append('w1', { kind: 'message:end', messageId: `m-${i}` }, undefined, `event-${i}`)
     }
 
-    expect(store.eventsFor('w1')).toHaveLength(MAX_LIVE_EVENTS_PER_WORKSPACE)
-    expect(store.eventIdsFor('w1')[0]).toBe('event-1')
-    expect(store.oldestIdFor('w1')).toBe('event-1')
+    expect(store.eventsFor('w1')).toHaveLength(MAX_LIVE_EVENTS_PER_WORKSPACE - 499)
+    expect(store.eventIdsFor('w1')[0]).toBe('event-500')
+    expect(store.oldestIdFor('w1')).toBe('event-500')
     expect(store.hasMoreOlderFor('w1')).toBe(true)
   })
 
@@ -131,4 +131,19 @@ describe('agent-stream store', () => {
     store.reset('w1', oversized)
     expect(store.eventsFor('w1').length).toBeLessThanOrEqual(MAX_LIVE_EVENTS_PER_WORKSPACE)
   })
+})
+
+it('counts live appends past eviction without counting duplicates, history or other sessions', async () => {
+  const { useAgentStreamStore, MAX_LIVE_EVENTS_PER_WORKSPACE } = await import('../stores/agent-stream')
+  setActivePinia(createPinia())
+  const store = useAgentStreamStore()
+  const event = { kind: 'message:text', messageId: 'm', text: 'x', streaming: true } as const
+  for (let i = 0; i < MAX_LIVE_EVENTS_PER_WORKSPACE + 20; i++) store.append('w', event, '', `e${i}`, 's')
+  expect(store.liveAppendCountFor('w', (s) => s === 's')).toBe(MAX_LIVE_EVENTS_PER_WORKSPACE + 20)
+  const length = store.eventsFor('w').length
+  store.append('w', event, '', `e${MAX_LIVE_EVENTS_PER_WORKSPACE + 19}`, 's')
+  store.append('w', event, '', 'other', 'background')
+  store.prepend('w', [event], [''], { oldestId: 'old', hasMoreOlder: false, eventIds: ['old'] })
+  expect(store.liveAppendCountFor('w', (s) => s === 's')).toBe(MAX_LIVE_EVENTS_PER_WORKSPACE + 20)
+  expect(store.eventsFor('w').length).toBe(length + 2)
 })

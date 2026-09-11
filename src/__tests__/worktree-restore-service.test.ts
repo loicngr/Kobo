@@ -21,7 +21,7 @@ let tmpDir: string
 let id: string
 beforeEach(async () => {
   vi.clearAllMocks()
-  vi.mocked(isMatchingWorkspaceWorktree).mockReturnValue(true)
+  vi.mocked(isMatchingWorkspaceWorktree).mockResolvedValue(true)
   vi.mocked(restoreWorktreeCheckoutUnlocked).mockResolvedValue({
     source: 'local-branch',
     headCommitSha: 'a'.repeat(40),
@@ -73,7 +73,7 @@ describe('restorePurgedWorktree', () => {
   })
 
   it('does not finalize an invalid checkout', async () => {
-    vi.mocked(isMatchingWorkspaceWorktree).mockReturnValue(false)
+    vi.mocked(isMatchingWorkspaceWorktree).mockResolvedValue(false)
     await expect(restorePurgedWorktree(id)).rejects.toMatchObject({ code: 'path-conflict' })
     expect(workspaces.getWorkspace(id)!.worktreePurgedAt).toBeTruthy()
   })

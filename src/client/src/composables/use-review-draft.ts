@@ -1,3 +1,4 @@
+import i18n from 'src/i18n'
 import { type Ref, ref } from 'vue'
 
 export interface ReviewComment {
@@ -91,7 +92,11 @@ function readDraft(workspaceId: string): ReviewDraft {
 }
 
 export interface UseReviewDraftDeps {
-  sendChatMessage: (workspaceId: string, content: string, sessionId?: string) => Promise<void> | void
+  sendChatMessage: (
+    workspaceId: string,
+    content: string,
+    sessionId?: string,
+  ) => Promise<void> | Promise<boolean> | void | boolean
 }
 
 export interface SubmitResult {
@@ -112,6 +117,7 @@ export interface UseReviewDraft {
 
 export function useReviewDraft(workspaceId: string, deps: UseReviewDraftDeps): UseReviewDraft {
   const draft = ref<ReviewDraft>(readDraft(workspaceId))
+  let submitting = false
   let pendingTimer: ReturnType<typeof setTimeout> | null = null
 
   function persistSoon() {
@@ -172,18 +178,24 @@ export function useReviewDraft(workspaceId: string, deps: UseReviewDraftDeps): U
   }
 
   async function submit(sessionId?: string): Promise<SubmitResult> {
+    if (submitting) return { ok: false, error: i18n.global.t('diff.reviewPending') }
     if (draft.value.comments.length === 0 && draft.value.globalMessage.trim() === '') {
-      return { ok: false, error: 'Draft is empty' }
+      return { ok: false, error: i18n.global.t('diff.reviewEmptySubmission') }
     }
     flush()
+    const revision = JSON.stringify(draft.value)
     const payload = formatSubmitMessage(draft.value)
+    submitting = true
     try {
-      await deps.sendChatMessage(workspaceId, payload, sessionId)
+      const accepted = await deps.sendChatMessage(workspaceId, payload, sessionId)
+      if (accepted === false) throw new Error(i18n.global.t('diff.reviewNotAccepted'))
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       return { ok: false, error: message }
+    } finally {
+      submitting = false
     }
-    clearDraft()
+    if (JSON.stringify(draft.value) === revision) clearDraft()
     return { ok: true }
   }
 

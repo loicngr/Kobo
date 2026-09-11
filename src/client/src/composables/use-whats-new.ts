@@ -1,8 +1,9 @@
+import { storeToRefs } from 'pinia'
+import { useUpdateStore } from 'src/stores/update'
 import { compareVersions } from 'src/utils/compare-versions'
 import { ref } from 'vue'
 
 const LAST_SEEN_KEY = 'kobo:last-seen-version'
-const DISMISSED_UPDATE_KEY = 'kobo:dismissed-update-version'
 
 export interface ChangelogEntry {
   version: string
@@ -17,13 +18,8 @@ export interface ChangelogEntry {
 export function useWhatsNew() {
   const showDialog = ref(false)
   const newVersions = ref<ChangelogEntry[]>([])
-  /**
-   * A newer version exists on npm. Null when we are current, when the registry
-   * could not be reached, or when the user dismissed this particular version.
-   * "What's new" tells you what changed after you upgraded; this is the half
-   * that tells you an upgrade exists at all.
-   */
-  const availableVersion = ref<string | null>(null)
+  const updateStore = useUpdateStore()
+  const { availableVersion } = storeToRefs(updateStore)
 
   async function checkForUpdate(): Promise<void> {
     try {
@@ -37,10 +33,7 @@ export function useWhatsNew() {
       const current = body.currentVersion
       if (!current) return
 
-      const latest = body.latestVersion
-      if (latest && compareVersions(latest, current) > 0 && localStorage.getItem(DISMISSED_UPDATE_KEY) !== latest) {
-        availableVersion.value = latest
-      }
+      updateStore.applySnapshot(body)
 
       const lastSeen = localStorage.getItem(LAST_SEEN_KEY)
       // First launch - just record the version. No dialog: the home tour
@@ -67,11 +60,7 @@ export function useWhatsNew() {
     }
   }
 
-  /** Hide the banner for this version only; a later release surfaces again. */
-  function dismissUpdate(): void {
-    if (availableVersion.value) localStorage.setItem(DISMISSED_UPDATE_KEY, availableVersion.value)
-    availableVersion.value = null
-  }
+  const dismissUpdate = () => updateStore.dismissUpdate()
 
   return { showDialog, newVersions, checkForUpdate, availableVersion, dismissUpdate }
 }

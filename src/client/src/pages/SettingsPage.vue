@@ -1839,6 +1839,7 @@ where ffmpeg</pre>
                   <img :src="networkQrDataUrl" :alt="$t('settings.network.scan')" width="200" height="200" />
                 </div>
               </template>
+              <McpConnectionSettings :token="network.token" :network-enabled="network.enabled" :behind-proxy="network.behindProxy" />
             </div>
 
             <!-- Import / Export config -->
@@ -2701,6 +2702,7 @@ where ffmpeg</pre>
 import { type QInput, useQuasar } from 'quasar'
 import DrawerToggleButton from 'src/components/DrawerToggleButton.vue'
 import FolderPickerDialog from 'src/components/FolderPickerDialog.vue'
+import McpConnectionSettings from 'src/components/McpConnectionSettings.vue'
 import PrNotificationSoundSettings from 'src/components/PrNotificationSoundSettings.vue'
 import SettingsNavList from 'src/components/SettingsNavList.vue'
 import TourReplayButton from 'src/components/TourReplayButton.vue'

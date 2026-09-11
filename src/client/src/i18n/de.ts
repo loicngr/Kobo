@@ -1,4 +1,7 @@
 export default {
+  'chat.externalLlm': 'Externes LLM · {name}',
+  'search.indexing': 'Verlauf wird indexiert: {processed}/{total}. Ergebnisse sind unvollständig.',
+  'search.indexUnavailable': 'Suchindex nicht verfügbar. Bitte später erneut versuchen.',
   'blockers.setupConfiguration':
     'Kein Setup-Skript konfiguriert. Fügen Sie eines im Bereich Skripte der Einstellungen hinzu.',
   'blockers.noWorkspace': 'Wählen Sie einen Workspace für diese Aktion.',
@@ -1482,6 +1485,9 @@ export default {
     'Noch keine Kommentare — fahre mit der Maus über eine Zeile im Diff und klicke +, um einen hinzuzufügen.',
   'diff.reviewGlobalPlaceholder': 'Optionale Gesamtnachricht zur Review',
   'diff.submitReview': 'Review absenden ({n})',
+  'diff.reviewPending': 'Eine Überprüfung wird bereits gesendet.',
+  'diff.reviewEmptySubmission': 'Die Überprüfung ist leer.',
+  'diff.reviewNotAccepted': 'Die Nachricht wurde nicht angenommen. Ihre Überprüfung bleibt erhalten.',
   'diff.reviewSubmitted': 'Review an den Agenten gesendet',
   'diff.reviewSubmitFailed': 'Review konnte nicht gesendet werden: {error}',
   'diff.scopeBranch': 'Branch',
@@ -1682,6 +1688,30 @@ export default {
   'settings.importConfirmTitle': 'Konfiguration importieren',
   'settings.importConfirmMessage':
     'Dies ersetzt deine aktuellen Einstellungen, Templates und Tags. MCP-Keys bleiben erhalten. Fortfahren?',
+  'settings.mcp.title': 'Externe LLM-Verbindungen (MCP)',
+  'settings.mcp.hint':
+    'Verbinden Sie einen MCP-Client, um Workspace-Gespräche zu lesen, Nachrichten zu senden und Fragen zu beantworten.',
+  'settings.mcp.remoteDisabled':
+    'Remote-Verbindungen benötigen Netzwerkzugriff und einen Serverneustart nach der Aktivierung.',
+  'settings.mcp.clientName': 'Clientname (optional)',
+  'settings.mcp.connection': 'Verbindung',
+  'settings.mcp.local': 'Lokales HTTP',
+  'settings.mcp.remote': 'Remote-HTTP',
+  'settings.mcp.proxy': 'Reverse-Proxy',
+  'settings.mcp.stdio': 'Lokales stdio',
+  'settings.mcp.copyUrl': 'URL kopieren',
+  'settings.mcp.copyConfig': 'Konfiguration kopieren',
+  'settings.mcp.copyWithToken': 'Mit Token kopieren',
+  'settings.mcp.genericFormat':
+    'Diese Beispiele verwenden das allgemeine mcpServers-Format. Passen Sie den Container an Ihren MCP-Client an. Die Vorschau enthält Token-Platzhalter.',
+  'settings.mcp.tokenUnavailable':
+    'Kein Token verfügbar. Aktivieren Sie den Netzwerkzugriff, bevor Sie eine authentifizierte Konfiguration kopieren.',
+  'settings.mcp.stdioUnavailable':
+    'Der stdio-Einstiegspunkt ist in dieser Installation nicht verfügbar. Verwenden Sie HTTP oder bauen Sie zuerst Kōbō.',
+  'settings.mcp.copyFailed': 'Kopieren in die Zwischenablage fehlgeschlagen.',
+  'tours.settings.mcp.title': 'Ein externes LLM verbinden',
+  'tours.settings.mcp.description':
+    'Kopieren Sie eine HTTP- oder stdio-Konfiguration, damit ein externer Assistent mit Ihren Workspaces kommunizieren kann.',
   'settings.network.title': 'Netzwerkzugriff',
   'settings.network.hint':
     'Steuere Kōbō von einem anderen Gerät in deinem vertrauenswürdigen LAN. Aus = nur localhost. An = im Netzwerk erreichbar, per Token geschützt. Starte Kōbō nach dem Umschalten neu.',
@@ -1837,6 +1867,7 @@ export default {
   'schedule.cronsTitle': 'Wiederkehrende Zeitpläne',
   'schedule.noWakeup': 'Kein Wakeup geplant',
   'schedule.noCrons': 'Kein Cron geplant',
+  'schedule.invalidCron': 'Inaktiv: ungültiger Ausdruck. Diesen Zeitplan löschen und neu erstellen.',
   'schedule.nextFireAt': 'nächstes um {time}',
   'schedule.lastFiredAt': 'zuletzt vor {time}',
   'schedule.addCronTitle': 'Wiederkehrende Aufgabe hinzufügen',
@@ -1880,6 +1911,7 @@ export default {
   'permissionRequest.allow': 'Erlauben',
   'permissionRequest.allowOnce': 'Einmal erlauben',
   'permissionRequest.allowTurn': 'Diesen Zug erlauben',
+  'permissionRequest.operationUnavailable': 'Aktionsdetails fehlen; einmalig oder das gesamte Werkzeug erlauben.',
   'permissionRequest.allowOperation': 'Diese Aktion immer erlauben',
   'permissionRequest.allowTool': 'Dieses Tool immer erlauben',
   'permissionRequest.deny': 'Ablehnen',

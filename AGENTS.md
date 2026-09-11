@@ -162,6 +162,18 @@ Every feature that touches the schema:
 
 ## WebSocket protocol
 
+### External MCP dialogue and update checks
+
+`POST /api/mcp` exposes stateless Streamable HTTP discovery/dialogue tools, behind the existing Host/Origin and network-token gates. The global stdio server forwards dialogue calls through this backend so agent runtime ownership remains centralized. `workspace-message-service.ts` shares delivery with WebSocket chat.
+
+Optional `send_workspace_message.idempotency_key` uses `mcp_message_requests` (migration v43). Reserve before dispatch, preserve fingerprints and terminal outcomes, and never automatically resend an unfinished request after restart. The user event and accepted receipt commit in one SQLite transaction; broadcast follows commit. Dispatch may precede persistence, so interrupted requests are explicitly `delivery_unknown`, not an exactly-once execution promise. The backend alone calls `reconcileMessageRequests` on startup. History retention does not delete the ledger; workspace deletion cascades it.
+
+MCP messages and question answers include optional `source: { kind: 'mcp', clientName, transport }`; keep it across live, sync, history and conversation grouping paths without changing legacy `sender` behavior. Client names are display labels, not authorization identities. Unicode HTTP labels use URI encoding with `X-Kobo-Client-Name-Encoding: uri`; stdio forwards the initialization name or `KOBO_MCP_CLIENT_NAME` override.
+
+`update-check-service.ts` owns the single immediate/every-20-minute npm release check. It is explicitly started/stopped by the backend, coalesces route/poller calls, and broadcasts ephemeral global `kobo:update-checked` events. The client update store also refreshes at reconnect. Do not reintroduce a per-tab registry poll or automatically install updates.
+
+The explicit `npm run test:mcp:live` / `make test-mcp-live` command requires `KOBO_LIVE_ENGINE` and `KOBO_LIVE_MODEL`, uses real credentials and disposable data, and must stay outside `make ci`. Normal CI uses deterministic transport/service tests.
+
 Clients subscribe to individual workspace ids. The server sends `WsEvent` objects:
 
 ```ts

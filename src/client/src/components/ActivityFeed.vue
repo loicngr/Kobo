@@ -42,6 +42,7 @@
           <TurnCard
             :key="turnKey(turn)"
             :turn="turn"
+            :workspace-id="props.workspaceId"
             :data-turn-index="index"
             :highlighted="turn.items.some((i) => i.eventIds?.includes(highlightedEventId ?? '') ?? false)"
             @scroll-to="onTurnScrollTo"
@@ -116,6 +117,7 @@ import { waitForCondition } from 'src/utils/wait-for'
 import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { parseMessageSource } from '../utils/message-source'
 import TurnCard from './TurnCard.vue'
 
 const { t } = useI18n()
@@ -167,6 +169,7 @@ const userMessages = computed<(UserMessage & { sessionId?: string })[]>(() => {
     .map((i) => ({
       content: i.content,
       sender: (i.meta?.sender as string) ?? 'user',
+      source: parseMessageSource(i.meta?.source),
       ts: i.timestamp,
       sessionId: i.sessionId,
       eventIds: [i.id],
@@ -428,7 +431,7 @@ async function loadOlder(): Promise<void> {
           content: p.content,
           timestamp: m.createdAt,
           sessionId: m.sessionId ?? undefined,
-          meta: { sender: (p.sender as string) ?? 'user' },
+          meta: { sender: (p.sender as string) ?? 'user', source: parseMessageSource(p.source) },
         })
       }
     }
@@ -560,7 +563,7 @@ async function focusHistoryEvent(event: Event): Promise<void> {
         content: payload.content,
         timestamp: item.createdAt,
         sessionId: item.sessionId ?? undefined,
-        meta: { sender: (payload.sender as string) ?? 'user' },
+        meta: { sender: (payload.sender as string) ?? 'user', source: parseMessageSource(payload.source) },
       })
     }
 
@@ -717,20 +720,18 @@ onMounted(() => {
   }
 })
 
-// First-populate + live-follow watcher. Fires on any new event (including
-// streaming chunks). Skips auto-scroll while `loadOlder` is prepending —
-// that path preserves the user's visual position on its own.
+// History population anchors once; only new live events trigger follow afterwards.
 let firstPopulateDone = eventCount.value > 0
-watch(eventCount, async (newLen, oldLen) => {
+watch(eventCount, async (newLen) => {
   if (loadingOlder.value) return
   if (!firstPopulateDone && newLen > 0) {
     firstPopulateDone = true
     await armInitialScroll()
-    return
   }
-  if (newLen > oldLen && stickToBottom.value && !loadingOlder.value) {
-    requestStreamScrollToBottom()
-  }
+})
+const liveAppendCount = computed(() => stream.liveAppendCountFor(props.workspaceId, sessionMatches))
+watch(liveAppendCount, (next, previous) => {
+  if (next > previous && stickToBottom.value && !loadingOlder.value) requestStreamScrollToBottom()
 })
 
 onUnmounted(() => {
@@ -821,7 +822,7 @@ async function fetchSessionIfMissing(): Promise<void> {
           content: p.content,
           timestamp: m.createdAt,
           sessionId: m.sessionId ?? undefined,
-          meta: { sender: (p.sender as string) ?? 'user' },
+          meta: { sender: (p.sender as string) ?? 'user', source: parseMessageSource(p.source) },
         })
       }
     }

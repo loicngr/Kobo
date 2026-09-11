@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   buildDockerChownArgs,
   createWorktree,
@@ -52,31 +52,31 @@ afterAll(() => {
 })
 
 describe('createWorktree(projectPath, branchName, baseRef)', () => {
-  it('creates a worktree directory for the branch', () => {
-    const { worktreePath, base } = createWorktree(repoDir, 'feature/wt-test', 'origin/main')
+  it('creates a worktree directory for the branch', async () => {
+    const { worktreePath, base } = await createWorktree(repoDir, 'feature/wt-test', 'origin/main')
     expect(fs.existsSync(worktreePath)).toBe(true)
     expect(base).toBe('origin')
   })
 
-  it('le chemin du worktree est <projectPath>/.worktrees/<branchName>', () => {
+  it('le chemin du worktree est <projectPath>/.worktrees/<branchName>', async () => {
     const branchName = 'feature/path-check'
-    const { worktreePath } = createWorktree(repoDir, branchName, 'origin/main')
+    const { worktreePath } = await createWorktree(repoDir, branchName, 'origin/main')
     const expected = path.join(repoDir, '.worktrees', branchName)
     expect(worktreePath).toBe(expected)
     expect(fs.existsSync(worktreePath)).toBe(true)
   })
 
-  it('accepte une racine de worktrees relative personnalisée', () => {
+  it('accepte une racine de worktrees relative personnalisée', async () => {
     const branchName = 'feature/custom-root'
-    const { worktreePath } = createWorktree(repoDir, branchName, 'origin/main', 'kobo-worktrees')
+    const { worktreePath } = await createWorktree(repoDir, branchName, 'origin/main', 'kobo-worktrees')
     const expected = path.join(repoDir, 'kobo-worktrees', branchName)
     expect(worktreePath).toBe(expected)
     expect(fs.existsSync(worktreePath)).toBe(true)
   })
 
-  it('ajoute le worktree à .git/info/exclude', () => {
+  it('ajoute le worktree à .git/info/exclude', async () => {
     const branchName = 'feature/exclude-test'
-    const { worktreePath } = createWorktree(repoDir, branchName, 'origin/main')
+    const { worktreePath } = await createWorktree(repoDir, branchName, 'origin/main')
     const excludeFile = path.join(repoDir, '.git', 'info', 'exclude')
     const content = fs.readFileSync(excludeFile, 'utf-8')
     const relativePath = path.relative(repoDir, worktreePath)
@@ -89,7 +89,7 @@ describe('createWorktree(projectPath, branchName, baseRef)', () => {
     let worktreePath = ''
 
     try {
-      ;({ worktreePath } = createWorktree(repoDir, branchName, 'origin/main', externalRoot))
+      ;({ worktreePath } = await createWorktree(repoDir, branchName, 'origin/main', externalRoot))
       expect(worktreePath).toBe(path.join(externalRoot, branchName))
       expect(fs.existsSync(worktreePath)).toBe(true)
 
@@ -105,11 +105,11 @@ describe('createWorktree(projectPath, branchName, baseRef)', () => {
     }
   })
 
-  it('fonctionne si la branche existe déjà (add sans -b)', () => {
+  it('fonctionne si la branche existe déjà (add sans -b)', async () => {
     // Create branch first without a worktree
     gitSetup(repoDir, ['branch', 'feature/existing-branch'])
     // createWorktree should fall back to 'git worktree add <path> <branch>'
-    const { worktreePath } = createWorktree(repoDir, 'feature/existing-branch', 'origin/main')
+    const { worktreePath } = await createWorktree(repoDir, 'feature/existing-branch', 'origin/main')
     expect(fs.existsSync(worktreePath)).toBe(true)
   })
 
@@ -117,20 +117,20 @@ describe('createWorktree(projectPath, branchName, baseRef)', () => {
   // rollback. Reporting `true` for a branch that was already there deletes work
   // Kobo never owned, so the flag has to come from the code that knows which
   // git command actually ran — not from the caller's optimistic assumption.
-  it('reports branchCreated=false when the branch already existed', () => {
+  it('reports branchCreated=false when the branch already existed', async () => {
     gitSetup(repoDir, ['branch', 'feature/pre-existing'])
-    const { branchCreated } = createWorktree(repoDir, 'feature/pre-existing', 'origin/main')
+    const { branchCreated } = await createWorktree(repoDir, 'feature/pre-existing', 'origin/main')
     expect(branchCreated).toBe(false)
   })
 
-  it('reports branchCreated=true when it created the branch itself', () => {
-    const { branchCreated } = createWorktree(repoDir, 'feature/brand-new', 'origin/main')
+  it('reports branchCreated=true when it created the branch itself', async () => {
+    const { branchCreated } = await createWorktree(repoDir, 'feature/brand-new', 'origin/main')
     expect(branchCreated).toBe(true)
   })
 
-  it('creates a worktree from a local branch when base ref has no origin/ prefix', () => {
+  it('creates a worktree from a local branch when base ref has no origin/ prefix', async () => {
     // `main` exists locally in repoDir (the clone). Base directly off it.
-    const { worktreePath, base } = createWorktree(repoDir, 'feature/local-base', 'main')
+    const { worktreePath, base } = await createWorktree(repoDir, 'feature/local-base', 'main')
     expect(fs.existsSync(worktreePath)).toBe(true)
     expect(base).toBe('local')
     // The new branch points at the same commit as local main.
@@ -141,15 +141,15 @@ describe('createWorktree(projectPath, branchName, baseRef)', () => {
 })
 
 describe('listWorktrees(projectPath)', () => {
-  it('retourne un tableau de WorktreeInfo avec au moins le worktree principal', () => {
-    const worktrees = listWorktrees(repoDir)
+  it('retourne un tableau de WorktreeInfo avec au moins le worktree principal', async () => {
+    const worktrees = await listWorktrees(repoDir)
     expect(Array.isArray(worktrees)).toBe(true)
     expect(worktrees.length).toBeGreaterThanOrEqual(1)
     expect(worktrees[0].path).toBeTruthy()
   })
 
-  it('chaque entrée a path, branch, head', () => {
-    const worktrees = listWorktrees(repoDir)
+  it('chaque entrée a path, branch, head', async () => {
+    const worktrees = await listWorktrees(repoDir)
     worktrees.forEach((wt) => {
       expect(typeof wt.path).toBe('string')
       expect(typeof wt.branch).toBe('string')
@@ -157,31 +157,31 @@ describe('listWorktrees(projectPath)', () => {
     })
   })
 
-  it('inclut les worktrees créés', () => {
+  it('inclut les worktrees créés', async () => {
     const branchName = 'feature/list-check'
-    createWorktree(repoDir, branchName, 'origin/main')
-    const worktrees = listWorktrees(repoDir)
+    await createWorktree(repoDir, branchName, 'origin/main')
+    const worktrees = await listWorktrees(repoDir)
     const found = worktrees.some((wt) => wt.branch === branchName)
     expect(found).toBe(true)
   })
 })
 
 describe('worktreeExists(projectPath, branchName)', () => {
-  it('retourne true si le worktree existe', () => {
+  it('retourne true si le worktree existe', async () => {
     const branchName = 'feature/exists-true'
-    createWorktree(repoDir, branchName, 'origin/main')
-    expect(worktreeExists(repoDir, branchName)).toBe(true)
+    await createWorktree(repoDir, branchName, 'origin/main')
+    expect(await worktreeExists(repoDir, branchName)).toBe(true)
   })
 
-  it("retourne false si le worktree n'existe pas", () => {
-    expect(worktreeExists(repoDir, 'feature/does-not-exist-xyz')).toBe(false)
+  it("retourne false si le worktree n'existe pas", async () => {
+    expect(await worktreeExists(repoDir, 'feature/does-not-exist-xyz')).toBe(false)
   })
 })
 
 describe('removeWorktree(projectPath, worktreePath)', () => {
   it('supprime le worktree et son dossier', async () => {
     const branchName = 'feature/remove-test'
-    const { worktreePath } = createWorktree(repoDir, branchName, 'origin/main')
+    const { worktreePath } = await createWorktree(repoDir, branchName, 'origin/main')
     expect(fs.existsSync(worktreePath)).toBe(true)
 
     await removeWorktree(repoDir, worktreePath)
@@ -190,7 +190,7 @@ describe('removeWorktree(projectPath, worktreePath)', () => {
 
   it("retire l'entrée de .git/info/exclude après suppression", async () => {
     const branchName = 'feature/remove-exclude'
-    const { worktreePath } = createWorktree(repoDir, branchName, 'origin/main')
+    const { worktreePath } = await createWorktree(repoDir, branchName, 'origin/main')
     await removeWorktree(repoDir, worktreePath)
 
     const excludeFile = path.join(repoDir, '.git', 'info', 'exclude')
@@ -203,10 +203,10 @@ describe('removeWorktree(projectPath, worktreePath)', () => {
 
   it("le worktree n'apparaît plus dans listWorktrees après suppression", async () => {
     const branchName = 'feature/remove-list-check'
-    const { worktreePath } = createWorktree(repoDir, branchName, 'origin/main')
+    const { worktreePath } = await createWorktree(repoDir, branchName, 'origin/main')
     await removeWorktree(repoDir, worktreePath)
 
-    const worktrees = listWorktrees(repoDir)
+    const worktrees = await listWorktrees(repoDir)
     const found = worktrees.some((wt) => wt.branch === branchName)
     expect(found).toBe(false)
   })
@@ -214,11 +214,11 @@ describe('removeWorktree(projectPath, worktreePath)', () => {
   it('waits for the shared repository lock before touching the common git dir', async () => {
     const { withGitRepoLock, _resetGitRepoLocksForTest } = await import('../server/utils/git-repo-lock.js')
     _resetGitRepoLocksForTest()
-    const { worktreePath } = createWorktree(repoDir, 'feature/remove-under-lock', 'origin/main')
+    const { worktreePath } = await createWorktree(repoDir, 'feature/remove-under-lock', 'origin/main')
 
-    let release: () => void = () => {}
+    let release: (() => void) | undefined
     const holder = withGitRepoLock(repoDir, () => new Promise<void>((resolve) => (release = resolve)))
-    await Promise.resolve()
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'))
 
     const pending = removeWorktree(repoDir, worktreePath)
     for (let i = 0; i < 5; i++) await Promise.resolve()
@@ -226,7 +226,7 @@ describe('removeWorktree(projectPath, worktreePath)', () => {
     // while another repository operation holds the lock.
     expect(fs.existsSync(worktreePath)).toBe(true)
 
-    release()
+    release!()
     await holder
     await pending
     expect(fs.existsSync(worktreePath)).toBe(false)
@@ -234,10 +234,10 @@ describe('removeWorktree(projectPath, worktreePath)', () => {
 
   it('refuses to report success while the directory is still on disk', async () => {
     const wtPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'at-wt-verify-')), 'wt')
-    createWorktree(repoDir, 'feature/verify-removal', 'origin/main')
+    await createWorktree(repoDir, 'feature/verify-removal', 'origin/main')
     // Simulate the failure mode: git drops the administrative entry but the
     // directory survives (root-owned files, a busy mount, an open handle).
-    const realPath = listWorktrees(repoDir).find((w) => w.branch === 'feature/verify-removal')?.path as string
+    const realPath = (await listWorktrees(repoDir)).find((w) => w.branch === 'feature/verify-removal')?.path as string
     gitSetup(repoDir, ['worktree', 'remove', realPath, '--force'])
     fs.mkdirSync(realPath, { recursive: true })
     fs.writeFileSync(path.join(realPath, 'leftover.txt'), 'still here\n')
@@ -276,14 +276,14 @@ describe('listOrphanWorktrees(projectPath, attachedPaths)', () => {
     }
   })
 
-  it('returns the worktrees of a project minus the main worktree and the attached ones', () => {
+  it('returns the worktrees of a project minus the main worktree and the attached ones', async () => {
     const wt1 = path.join(tmpDir, 'wt1')
     const wt2 = path.join(tmpDir, 'wt2')
     git(projectPath, ['worktree', 'add', '-b', 'feature/foo', wt1])
     git(projectPath, ['worktree', 'add', '-b', 'feature/bar', wt2])
 
     const attached = new Set([wt1])
-    const orphans = listOrphanWorktrees(projectPath, attached)
+    const orphans = await listOrphanWorktrees(projectPath, attached)
 
     expect(orphans).toHaveLength(1)
     expect(fs.realpathSync(orphans[0].path)).toBe(fs.realpathSync(wt2))
@@ -292,24 +292,24 @@ describe('listOrphanWorktrees(projectPath, attachedPaths)', () => {
     expect(orphans[0].suggestedSourceBranch).toBe('main') // origin/HEAD fallback
   })
 
-  it('excludes the main worktree even when no attached paths are given', () => {
+  it('excludes the main worktree even when no attached paths are given', async () => {
     const wt1 = path.join(tmpDir, 'wt1')
     git(projectPath, ['worktree', 'add', '-b', 'feature/foo', wt1])
 
-    const orphans = listOrphanWorktrees(projectPath, new Set())
+    const orphans = await listOrphanWorktrees(projectPath, new Set())
     expect(orphans).toHaveLength(1)
     expect(fs.realpathSync(orphans[0].path)).toBe(fs.realpathSync(wt1))
   })
 
-  it('excludes detached HEAD worktrees', () => {
+  it('excludes detached HEAD worktrees', async () => {
     const wt1 = path.join(tmpDir, 'wt1')
     git(projectPath, ['worktree', 'add', '--detach', wt1])
 
-    const orphans = listOrphanWorktrees(projectPath, new Set())
+    const orphans = await listOrphanWorktrees(projectPath, new Set())
     expect(orphans).toHaveLength(0)
   })
 
-  it('canonicalizes both sides of the attached comparison via realpathSync', () => {
+  it('canonicalizes both sides of the attached comparison via realpathSync', async () => {
     const wt1 = path.join(tmpDir, 'wt1')
     git(projectPath, ['worktree', 'add', '-b', 'feature/foo', wt1])
 
@@ -318,13 +318,13 @@ describe('listOrphanWorktrees(projectPath, attachedPaths)', () => {
 
     // Asymmetric paths between attached set (symlink) and listWorktrees output
     // (real path) — canonicalization on both sides must collapse them.
-    const orphans = listOrphanWorktrees(projectPath, new Set([symlink]))
+    const orphans = await listOrphanWorktrees(projectPath, new Set([symlink]))
     expect(orphans).toHaveLength(0)
   })
 })
 
 describe('isPermissionError', () => {
-  it('is true for filesystem permission errors', () => {
+  it('is true for filesystem permission errors', async () => {
     expect(isPermissionError('rm: cannot remove: Permission denied')).toBe(true)
     expect(isPermissionError('EACCES: permission denied')).toBe(true)
     expect(isPermissionError('Error: EPERM operation not permitted')).toBe(true)
@@ -334,14 +334,14 @@ describe('isPermissionError', () => {
     expect(isPermissionError("erreur : échec de la suppression de '/x': Permission non accordée")).toBe(true)
     expect(isPermissionError('opération non permise')).toBe(true)
   })
-  it('is false for unrelated errors', () => {
+  it('is false for unrelated errors', async () => {
     expect(isPermissionError('fatal: not a git repository')).toBe(false)
     expect(isPermissionError('merge conflict')).toBe(false)
   })
 })
 
 describe('buildDockerChownArgs', () => {
-  it('builds a docker run argv that chowns the bind-mounted worktree', () => {
+  it('builds a docker run argv that chowns the bind-mounted worktree', async () => {
     expect(buildDockerChownArgs('/home/u/worktrees/ws', 1000, 1000, 'alpine')).toEqual([
       'run',
       '--rm',
@@ -354,7 +354,94 @@ describe('buildDockerChownArgs', () => {
       '/w',
     ])
   })
-  it('uses the provided image', () => {
+  it('uses the provided image', async () => {
     expect(buildDockerChownArgs('/w/x', 501, 20, 'busybox')[4]).toBe('busybox')
   })
+})
+
+it('keeps timers responsive while a checkout hook is running', async () => {
+  const hook = path.join(repoDir, '.git/hooks/post-checkout')
+  fs.writeFileSync(hook, '#!/bin/sh\nsleep 0.2\n', { mode: 0o755 })
+  let ticked = false
+  const timer = setTimeout(() => {
+    ticked = true
+  }, 10)
+  try {
+    await createWorktree(repoDir, 'feature/responsive-checkout', 'main')
+    expect(ticked).toBe(true)
+  } finally {
+    clearTimeout(timer)
+    fs.rmSync(hook, { force: true })
+  }
+})
+
+it('waits for repository ownership before creating a worktree', async () => {
+  const { withGitRepoLock } = await import('../server/utils/git-repo-lock.js')
+  let release!: () => void
+  const holder = withGitRepoLock(
+    repoDir,
+    () =>
+      new Promise<void>((resolve) => {
+        release = resolve
+      }),
+  )
+  await vi.waitFor(() => expect(release).toBeTypeOf('function'))
+  const pending = createWorktree(repoDir, 'feature/serialized-create', 'main')
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    expect(fs.existsSync(path.join(repoDir, '.worktrees/feature/serialized-create'))).toBe(false)
+  } finally {
+    release()
+    await holder
+    await pending
+  }
+})
+
+it('reports checkout ownership when updating Git excludes fails after creation', async () => {
+  const fsPromises = (await import('node:fs/promises')).default
+  const actualWrite = fsPromises.writeFile.bind(fsPromises)
+  const write = vi.spyOn(fsPromises, 'writeFile').mockImplementation((target, ...args) => {
+    if (String(target).endsWith('/info/exclude')) return Promise.reject(new Error('exclude write failed'))
+    return actualWrite(target, ...args)
+  })
+  const worktreePath = path.join(repoDir, '.worktrees/feature/exclude-failure')
+  try {
+    await expect(createWorktree(repoDir, 'feature/exclude-failure', 'main')).rejects.toMatchObject({
+      worktreePath,
+      branchCreated: true,
+    })
+    expect(fs.existsSync(worktreePath)).toBe(true)
+  } finally {
+    write.mockRestore()
+  }
+})
+
+it.each([false, true])(
+  'reports a checkout created before its hook fails (existing branch: %s)',
+  async (existingBranch) => {
+    const branchName = `feature/hook-failure-${existingBranch}`
+    const hook = path.join(repoDir, '.git/hooks/post-checkout')
+    const worktreePath = path.join(repoDir, '.worktrees', branchName)
+    if (existingBranch) gitSetup(repoDir, ['branch', branchName, 'main'])
+    fs.writeFileSync(hook, '#!/bin/sh\nexit 1\n', { mode: 0o755 })
+    try {
+      await expect(createWorktree(repoDir, branchName, 'main')).rejects.toMatchObject({
+        name: 'WorktreeCreationError',
+        worktreePath,
+        branchCreated: !existingBranch,
+      })
+      expect(await listWorktrees(repoDir)).toContainEqual(
+        expect.objectContaining({ path: worktreePath, branch: branchName }),
+      )
+    } finally {
+      fs.rmSync(hook, { force: true })
+    }
+  },
+)
+
+it('does not claim a checkout already present before a failed creation attempt', async () => {
+  const branchName = 'feature/pre-existing-checkout-failure'
+  const existing = await createWorktree(repoDir, branchName, 'main')
+  await expect(createWorktree(repoDir, branchName, 'main')).rejects.not.toMatchObject({ name: 'WorktreeCreationError' })
+  expect(fs.existsSync(existing.worktreePath)).toBe(true)
 })

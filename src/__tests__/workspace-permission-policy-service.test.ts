@@ -180,3 +180,51 @@ describe('persisted permission rules', () => {
     expect(listWorkspacePermissionRules('ws-1')).toEqual([])
   })
 })
+
+describe('Codex exact edit permissions', () => {
+  it('refuses incomplete operation details but preserves explicit tool grants', async () => {
+    const svc = await import('../server/services/workspace-permission-policy-service.js')
+    const request = { engine: 'codex', toolName: 'Edit', payload: { reason: null } }
+    expect(() => svc.createWorkspacePermissionRule('ws-1', request, 'operation')).toThrow(/details/i)
+    svc.createWorkspacePermissionRule('ws-1', request, 'tool')
+    expect(svc.isWorkspacePermissionAllowed('ws-1', request)).toBe(true)
+  })
+  it('versions exact changes and deactivates legacy hashes without deleting them', async () => {
+    const svc = await import('../server/services/workspace-permission-policy-service.js')
+    const { getDb } = await import('../server/db/index.js')
+    const payload = {
+      operationApprovalAvailable: true,
+      changes: [{ path: 'a.ts', kind: { type: 'add' }, diff: '+safe' }],
+      cwd: '/repo',
+      grantRoot: null,
+    }
+    const request = { engine: 'codex', toolName: 'Edit', payload }
+    const rule = svc.createWorkspacePermissionRule('ws-1', request, 'operation')
+    expect(rule.fingerprint).toMatch(/^codex-edit-v2:/)
+    expect(svc.isWorkspacePermissionAllowed('ws-1', request)).toBe(true)
+    expect(
+      svc.isWorkspacePermissionAllowed('ws-1', {
+        ...request,
+        payload: { ...payload, changes: [{ path: 'b.ts', kind: { type: 'add' }, diff: '+unsafe' }] },
+      }),
+    ).toBe(false)
+    getDb()
+      .prepare('UPDATE workspace_permission_rules SET fingerprint=? WHERE id=?')
+      .run(svc.permissionFingerprint(payload), rule.id)
+    expect(svc.isWorkspacePermissionAllowed('ws-1', request)).toBe(false)
+    expect(svc.listWorkspacePermissionRules('ws-1')).toEqual([expect.objectContaining({ id: rule.id, active: false })])
+  })
+})
+
+it('does not reuse engine-agnostic legacy Edit hashes for Codex while preserving Claude grants', async () => {
+  const svc = await import('../server/services/workspace-permission-policy-service.js')
+  const { getDb } = await import('../server/db/index.js')
+  const request = { engine: 'claude-code', toolName: 'Edit', payload: { reason: null } }
+  const rule = svc.createWorkspacePermissionRule('ws-1', request, 'operation')
+  getDb().prepare('UPDATE workspace_permission_rules SET engine=NULL WHERE id=?').run(rule.id)
+  expect(svc.isWorkspacePermissionAllowed('ws-1', { ...request, engine: 'codex' })).toBe(false)
+  expect(svc.isWorkspacePermissionAllowed('ws-1', request)).toBe(true)
+  expect(svc.listWorkspacePermissionRules('ws-1')[0].active).toBe(true)
+  getDb().prepare("UPDATE workspaces SET engine='codex' WHERE id='ws-1'").run()
+  expect(svc.listWorkspacePermissionRules('ws-1')[0].active).toBe(false)
+})
