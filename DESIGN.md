@@ -2,14 +2,20 @@
 
 ## Product Context
 
-- **What this is:** Kōbō — a Claude Code multi-agent orchestrator. Each "workspace" is a
+- **What this is:** Kōbō — a Claude Code and Codex multi-agent orchestrator. Each "workspace" is a
   self-contained mission with its own git worktree, branch, agent session, optional dev
   server, optional Notion source-of-truth, and a dedicated MCP tools server.
 - **Who it's for:** Solo developer (the maintainer) + a small community of power-users
   distributed via `npx @loicngr/kobo`.
 - **Space/industry:** Developer tools. Peers: Linear, Anthropic Console, Tailscale admin,
   Vercel dashboard. Not Notion, not Raycast, not Stripe marketing.
-- **Project type:** Internal dev tool / SPA. Dark-native, dense, ≥10 interconnected panels.
+- **Project type:** Local developer tool, served as a Quasar PWA in production.
+  Dark-native, dense, with interconnected workspace, Git, terminal and settings panels.
+
+This document defines the visual rules. The deployed token values live in
+[`src/client/src/css/design-tokens.scss`](./src/client/src/css/design-tokens.scss).
+Implementation notes below distinguish the current UI from outstanding design
+targets; documenting an existing deviation does not authorize expanding it.
 
 ## Memorable Thing
 
@@ -38,8 +44,9 @@ values (paths, UUIDs, hex codes, branch names, model identifiers).
 - **Secondary text / hints:** Geist 400, 13px, color `text-secondary`
 - **Mono (paths, hex, IDs, branches, models):** Geist Mono 400, 13px, slight
   `bg-surface-2` background pill, color `text-secondary`
-- **Loading:** Self-host from Vercel's CDN, or vendor the woff2 files into
-  `src/client/public/fonts/`. Avoid Google Fonts for licensing clarity.
+- **Loading:** Geist and Geist Mono variable WOFF2 files are vendored in
+  `src/client/public/fonts/` and loaded by `src/client/src/css/fonts.scss`.
+  Their SIL OFL license is shipped alongside them. Keep font requests local.
 
 **Never use:** Inter, Roboto, Arial, system-ui, Open Sans, Poppins, Space Grotesk
 (convergence trap), Lato. They scream "I gave up on typography."
@@ -92,7 +99,11 @@ Semantic (used only when conveying status — keep desaturated)
   --kobo-success       #34d399
   --kobo-warning       #fbbf24
   --kobo-danger        #f87171
-  --kobo-info          --kobo-accent
+  Info states use --kobo-accent; there is no separate --kobo-info token.
+
+Conversation speaker markers
+  --kobo-turn-user     #ce93d8
+  --kobo-turn-agent    #7986cb
 ```
 
 **Rules of color use:**
@@ -128,7 +139,7 @@ xl    20px   /* default card padding */
 ## Layout
 
 - **Approach:** Sidebar split.
-- **Sidebar:** 240px fixed width, dark `--kobo-surface`, 9 items rendered as
+- **Settings sidebar:** 240px fixed width, dark `--kobo-surface`, sections rendered as
   `icon (16px Lucide) + label`. Active item: `border-left: 2px solid var(--kobo-accent)`,
   text in `--kobo-text`, slight background `--kobo-hover`. Inactive: `--kobo-text-2`,
   no border, hover bg `--kobo-hover`.
@@ -168,6 +179,11 @@ instantaneous, not choreographed.
 - No emojis as decoration. Emojis are allowed only as user-content (workspace icons,
   templates), never in chrome.
 
+**Implementation status:** the shipped UI currently uses Quasar `q-icon` with
+the `material-icons` extra registered in `quasar.config.ts`; Lucide is still a
+design target, not an installed icon system. An icon migration must be handled
+as a deliberate UI change rather than assumed complete from this guide.
+
 ## Component Patterns
 
 - **Inputs:** Flat. `bg-surface-2`, `border-subtle`, focus → `border-accent` +
@@ -177,7 +193,8 @@ instantaneous, not choreographed.
     (the page's main action — typically Save).
   - Secondary: `bg-surface-2`, `text`, `border-subtle`. Used for actions like
     "Refresh", "Reset to default".
-  - Tertiary / link: no background, accent-colored text, underline on hover.
+  - Tertiary / link: no background, `--kobo-text-2` text, underline on hover,
+    consistent with the accent contrast rule above.
 - **Toggles:** Quasar's `q-toggle` default, color override to `--kobo-accent`.
 - **Segmented control / radio row:** Active option `bg-accent + text-accent-fg`,
   inactive `text-2` with hover bg `--kobo-hover`.
@@ -198,26 +215,28 @@ instantaneous, not choreographed.
 
 ## Settings-Page-Specific Application
 
-The current `SettingsPage.vue` (~2400 lines, 3 tabs Général/Projets/Modèles, ~12 stacked
-sub-cards within Général) should be redesigned to:
+`SettingsPage.vue` now uses `SettingsNavList.vue`, a desktop sidebar and a mobile
+navigation drawer, an active-section content panel, and a dirty-state save bar.
+The old three-tab redesign description is no longer the implementation baseline.
 
-1. **Replace the 3-tab strip with a 240px left sidebar** listing every section:
-   General, Models, Skills, Permissions, Notion, Sentry, Voice, Templates, Notifications,
-   Worktrees, Projects, Export. Active section gets the accent left-border.
-2. **Render only the active section** in the right panel. The current monolithic scroll
-   is the root cause of "moche / pas pro".
-3. **Replace nested `.settings-subcard` with flat rows** separated by 1px
-   `border-subtle`. Section header at top, rows below, no card chrome.
-4. **Move the floating "Enregistrer" button into a sticky save bar** that only appears
-   when the form is dirty.
-5. **Move technical values** (paths, UUIDs, hex codes, branch names) into mono pills.
-6. **Default everything to the CSS variables below** — never hardcode `#1a1a2e`,
-   never use Quasar's default indigo, never use raw `text-grey-5/6/7`.
+- Section membership is declared by `navItems` in `SettingsPage.vue`: General,
+  Agents, Skills, Prompts, Scripts, Notion, Sentry, Forge, Voice, Notifications,
+  Worktrees, Projects, prompt Templates, Workspace templates, and Export.
+- Keep new sections in the same navigation and guided-tour registry; all labels
+  go through the five locale files.
+- Use flat rows and subtle dividers, a clear section heading, and technical
+  values in Geist Mono. Avoid introducing nested card chrome.
+- Keep colors, spacing, fonts and transitions on the existing tokens. The
+  frontend `design-system-*` tests cover token consistency, palette, typography
+  and contrast; they complement browser review rather than proving every screen
+  follows this guide.
 
 ## CSS Variables
 
-These are the source of truth. Define them once in a global stylesheet, reference
-them everywhere. Quasar component theming overrides go through these.
+The following core tokens mirror `src/client/src/css/design-tokens.scss`.
+That stylesheet also defines font stacks, easing curves and the accent RGB
+triplet. Keep the document and stylesheet synchronized; Quasar theming overrides
+must stay consistent with them.
 
 ```scss
 :root {
@@ -243,6 +262,9 @@ them everywhere. Quasar component theming overrides go through these.
   --kobo-success: #34d399;
   --kobo-warning: #fbbf24;
   --kobo-danger: #f87171;
+
+  --kobo-turn-user: #ce93d8;
+  --kobo-turn-agent: #7986cb;
 
   --kobo-radius-sm: 4px;
   --kobo-radius-md: 6px;

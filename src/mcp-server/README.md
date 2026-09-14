@@ -1,6 +1,6 @@
 # Kōbō Tasks MCP Server
 
-Standalone MCP (Model Context Protocol) server spawned by Kōbō for each Claude Code agent running inside a workspace. Exposes workspace-scoped tools that the agent can invoke to interact with Kōbō state: tasks, settings, dev server, images, git, etc.
+Standalone MCP (Model Context Protocol) server configured for each Claude Code or Codex agent running inside a workspace. Exposes workspace-scoped tools that the agent can invoke to interact with Kōbō state: tasks, settings, dev server, images, git, etc.
 
 Kōbō also exposes conversation tools to external MCP clients over HTTP and through the global stdio server.
 
@@ -118,7 +118,12 @@ Use a concrete model available to your configured provider. This invokes the rea
 
 ## How it runs
 
-Kōbō's Claude Code engine (under `src/server/services/agent/engines/claude-code/`) writes a `.mcp.json` file into each worktree and passes it to Claude Code via `--mcp-config`. Claude spawns this server as a child process with stdio transport and injects these environment variables:
+The orchestrator builds the workspace's MCP server specification in
+`buildMcpServers()`. The Claude engine passes it through the SDK's `mcpServers`
+option; the Codex engine supplies it through the app-server thread's
+`config.mcp_servers`. The agent runtime launches the server over stdio with the
+following environment. This wiring does not require writing a `.mcp.json` file
+into the worktree.
 
 | Env var | Purpose |
 |---|---|
@@ -129,9 +134,45 @@ Kōbō's Claude Code engine (under `src/server/services/agent/engines/claude-cod
 | `KOBO_NETWORK_TOKEN` | Optional network access token sent with backend requests. |
 | `KOBO_MCP_CLIENT_NAME` | Optional display name overriding the external stdio client's initialization name. |
 
-The server reads the DB directly for read-only queries, writes directly for task CRUD, and calls the backend HTTP API for anything that touches runtime processes (dev server) or state transitions requiring validation.
+The server reads the DB directly for local queries, writes directly for task
+CRUD, and calls the backend HTTP API for runtime processes and validated
+workspace transitions. Conversation tools are defined in
+`src/shared/workspace-dialogue-tools.ts` and forwarded through the backend.
+The stdio server opens an existing database; schema migration belongs to backend
+startup.
 
 ## Tools
+
+The tables below document the workspace tools in addition to the detailed task,
+workspace, dev-server and settings references that follow. Global discovery and
+conversation tools are described separately. The registration schemas in
+`kobo-tasks-server.ts` are the source of truth for arguments.
+
+### Automation and workspace metadata
+
+| Tool | Input | Purpose |
+|---|---|---|
+| `mark_auto_loop_ready` | None | Mark task grooming complete so the UI can enable auto-loop. |
+| `set_auto_loop` | `enabled` | Enable or disable auto-loop for this workspace on explicit user request. |
+| `set_workspace_agent_description` | `description` | Set the agent's status summary (200 characters maximum); empty clears it. |
+| `set_workspace_name` | `name` | Rename the workspace on explicit user request. |
+| `schedule_wakeup` | `delaySeconds`, `prompt`, optional `reason` | Schedule one follow-up; the delay is clamped to 60–21,600 seconds. Replaces the workspace's pending wakeup. |
+| `cancel_wakeup` | None | Cancel the pending wakeup, if any. |
+| `cron_create` | `expression`, `prompt`, optional `label`, `mode`, `oneShot` | Persist a recurring trigger; mode is `resume` (default) or `fresh`. Accepts five-field cron or the documented hourly/daily/weekly/monthly/yearly aliases. |
+| `cron_list` | None | List this workspace's schedules. |
+| `cron_delete` | `id` | Cancel one of this workspace's schedules. |
+
+### Documents, context and history
+
+| Tool | Input | Purpose |
+|---|---|---|
+| `get_ticket` | None | Read the workspace's Notion or Sentry source context. |
+| `list_documents` | None | List Markdown under `docs/plans/`, `docs/superpowers/`, and `.ai/thoughts/`. |
+| `read_document` | `path` | Read a worktree-relative document within those roots. |
+| `log_thought` | `title`, `content`, optional `tag` | Write a uniquely named decision note under `.ai/thoughts/logs/`. |
+| `search_codebase` | `query`, optional `include_archived`, `scope`, `limit` | Search conversations, not repository source. Scope defaults to `workspace`; `all` searches across workspaces. Limit defaults to 30, maximum 100. |
+| `get_session_usage` | None | Read workspace and active-session usage totals. |
+| `read_workspace_events_csv` | Optional `session_id`, `offset`, `limit` | Read this workspace's conversation as paginated CSV; limit defaults to 100, maximum 500. |
 
 ### Tasks
 
@@ -229,10 +270,13 @@ Get git stats for the current workspace: commit count, files changed, insertions
 ### Dev server
 
 #### `get_dev_server_status`
-Check whether the dev server is running for the current workspace. Reads `dev_server_status` from the DB.
+Query the backend for the current workspace's development-server status. If the
+request fails, fall back to the saved database status.
 
 **Input:** none
-**Output:** `{ workspaceId, status }`
+**Output:** `DevServerStatus` — status, instance/project names, HTTP port, URL, and matched containers. See the [Docker status contract](../../CONFIGURATION.md#dev-server).
+Without a configured start command, the backend returns `not_configured` with
+`configured: false`. The database fallback returns `{ workspaceId, status }`.
 
 ---
 
@@ -258,7 +302,7 @@ Fetch the last N lines of the dev server logs for the current workspace.
 **Input:**
 - `tail` (number, optional) — default `200`
 
-**Output:** `{ logs: string[] }`
+**Output:** `{ logs: string }` — combined Docker log text.
 
 ---
 
@@ -324,7 +368,7 @@ Archive a workspace by id, like the "Archiver" action in the workspace context m
 ---
 
 #### `stop_workspace`
-Force-stop the currently running agent session on a workspace, like the red "Arrêter" button in the chat header. Requires the backend to be running. Safe to call when nothing is running.
+Stop the currently running agent session on a workspace, like the Stop action in the chat header. Also disables auto-loop and cancels a queued replacement. Requires the backend to be running. Safe to call when nothing is running; an unconfirmed shutdown is reported as an error.
 
 **Input:**
 - `workspace_id` (string, required) — from `list_workspaces`

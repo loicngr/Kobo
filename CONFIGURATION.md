@@ -1,6 +1,6 @@
 # Configuration
 
-Complete reference for every Kōbō setting, environment variable, and external integration. For a quick start see the [README](./README.md); for architecture, conventions, and contribution rules see [`AGENTS.md`](./AGENTS.md).
+Reference for Kōbō configuration and external integrations. The tables cover the main settings; feature sections document additional keys and behavior. For a quick start see the [README](./README.md); for architecture, conventions, and contribution rules see [`AGENTS.md`](./AGENTS.md).
 
 ## Contents
 
@@ -14,6 +14,8 @@ Complete reference for every Kōbō setting, environment variable, and external 
 - [Comparing two engines on one task](#comparing-two-engines-on-one-task)
 - [Workspace templates and duplication](#workspace-templates-and-duplication)
 - [Auto-purge worktree on PR merged](#auto-purge-worktree-on-pr-merged)
+- [Conversation history retention](#conversation-history-retention-opt-in)
+- [Concurrent agents](#concurrent-agents)
 - [Network access](#network-access)
   - [Reachable addresses](#reachable-addresses)
 - [External LLM access through MCP](#external-llm-access-through-mcp)
@@ -44,12 +46,15 @@ Complete reference for every Kōbō setting, environment variable, and external 
   - [superpowers + gstack](#superpowers--gstack)
   - [custom](#custom)
 - [gbrain (companion MCP)](#gbrain-companion-mcp)
+- [Workspace sorting, split view and absence digest](#workspace-sorting-split-view-and-absence-digest)
+- [Conversation search index](#conversation-search-index)
+- [Audit compatibility notes](#audit-compatibility-notes)
 
 ## Storage layout
 
 Kōbō persists all state under a single home directory, resolved in this order:
 
-1. `KOBO_HOME` env var (absolute path)
+1. `KOBO_HOME` env var (relative paths resolve against the working directory)
 2. `$XDG_CONFIG_HOME/kobo/`
 3. `~/.config/kobo/`
 
@@ -62,7 +67,8 @@ $KOBO_HOME/
 ├── kobo.db.premigration-*    # Separate snapshot before schema changes (five kept).
 ├── settings.json            # Global and per-project settings.
 ├── templates.json           # Prompt templates.
-├── skills.json              # Skill suite configuration.
+├── workspace-templates.json # Saved presets for the create form.
+├── skills.json              # Cached Claude slash-command catalogue; suite settings live in settings.json.
 └── voice/
     └── models/whisper/      # Downloaded ggml-*.bin models.
 ```
@@ -129,7 +135,7 @@ Settings are managed live from the **Settings** page in the UI and persisted to 
 | `cleanupScriptMode` | `'idle' \| 'no-tasks'` | When the cleanup script fires: after every session (`idle`) or only when no Kōbō task remains (`no-tasks`). In auto-loop it runs only once every task is done. |
 | `cleanupScriptOnlyOnChanges` | `boolean` | Run the cleanup script only when the worktree has uncommitted changes (modified / added / deleted / untracked files). |
 | `archiveScript` | `string` | Shell script run server-side when a workspace is archived. Empty disables. |
-| `changeSourceBranchScript` | `string` | Shell script that **replaces** the built-in change-source-branch logic. See [Custom change-source-branch script](#custom-change-source-branch-script). Empty uses the built-in cherry-pick flow. |
+| `changeSourceBranchScript` | `string` | Shell script that **replaces** the built-in change-source-branch logic. The global default is Kōbō's bundled script; clearing the effective script hides the UI action. The backend retains a built-in fallback. See [Custom change-source-branch script](#custom-change-source-branch-script). |
 | `editorCommand` | `string` | Command used by the "Open in editor" action (e.g. `code`, `phpstorm`, `cursor`). The worktree path is appended as the last argument. |
 | `browserNotifications` | `boolean` | Trigger Web Notifications when an agent finishes a turn. |
 | `audioNotifications` | `boolean` | Play a sound when an agent finishes a turn. |
@@ -160,8 +166,8 @@ Settings are managed live from the **Settings** page in the UI and persisted to 
 | `audioPrMergedEnabled` | `boolean` | Enable audio when a PR becomes merged. |
 | `audioPrMergedVolume` | `number` | PR-merged sound volume from `0` to `1`. |
 | `audioNotificationVolume` | `number` | General notification sound volume from `0` to `1`. |
-| `notionMcpKey` | `string` | Override the `~/.claude.json` key used for Notion (defaults to the first non-disabled entry containing `notion`). |
-| `sentryMcpKey` | `string` | Same logic for Sentry. |
+| `notionMcpKey` | `string` | Override the `~/.claude.json` MCP key used for Notion (defaults to the enabled entry named exactly `notion`). |
+| `sentryMcpKey` | `string` | Override the Sentry MCP key (defaults to the first enabled entry whose key contains `sentry`, case-insensitive). |
 | `notionEnabled` | `boolean` | Enable Notion imports and automations. Defaults to `true`; disabling preserves its configuration and existing workspace links. |
 | `sentryEnabled` | `boolean` | Enable Sentry imports and automations. Defaults to `true`; disabling preserves its configuration and existing workspace links. |
 | `showThinkingBlocks` | `boolean` | Display the latest agent reasoning panel immediately above the chat input. Defaults to `true`. |
@@ -236,9 +242,12 @@ the normal development client.
 
 ## Custom change-source-branch script
 
-The **Change source branch** action defaults to Kōbō's built-in cherry-pick of
-the branch-proper commits. If a project (or the global default) sets
-`changeSourceBranchScript`, that script **replaces** the built-in logic.
+The **Change source branch** action uses the effective `changeSourceBranchScript`:
+a non-empty project value overrides the global script. New installations and the
+settings migration seed Kōbō's bundled script as the global default; **Reset to Kōbō
+default** restores it. Clearing the effective script hides the UI action. The
+backend still has a built-in cherry-pick fallback for requests made without a
+custom script. A configured script **replaces** that built-in flow.
 
 ### Contract
 
@@ -369,7 +378,7 @@ the event. On top of that:
 
 | Hook | Extra variables |
 |---|---|
-| Session ended | `KOBO_SESSION_ID`, `KOBO_SESSION_END_REASON` (`completed` / `error` / `killed` / `watchdog`), `KOBO_SESSION_EXIT_CODE` (empty when the engine reports none), `KOBO_SESSION_STOP_CAUSE` (`user` when you stopped it, empty when it ended on its own), `KOBO_AUTOLOOP_ACTIVE` (`1` when auto-loop is about to start the next iteration, so a test run may overlap with the next agent's edits) |
+| Session ended | `KOBO_SESSION_ID`, `KOBO_SESSION_END_REASON` (`completed` / `error` / `killed` / `watchdog`), `KOBO_SESSION_EXIT_CODE` (empty when the engine reports none), `KOBO_SESSION_STOP_CAUSE` (`user`, `replacement`, `setup`, `archive`, or `shutdown`; empty for a natural end; superseded sessions and delete/purge stops skip the hook), `KOBO_AUTOLOOP_ACTIVE` (`1` when auto-loop is enabled, so a test run may overlap with the next agent's edits) |
 | PR merged | `KOBO_PR_NUMBER`, `KOBO_PR_URL` |
 | Auto-loop stopped | `KOBO_AUTOLOOP_REASON` (`completed` / `stall` / `error` / `user-action` / `awaiting-clarification`), `KOBO_TASKS_PENDING` |
 
@@ -446,6 +455,58 @@ Two consequences worth knowing:
   it. You get a later reminder, never a lost one.
 - However far behind the loop falls (a laptop waking from sleep, say), it sends
   **one** reminder per pass, not one per missed interval.
+
+## Attachments in the creation description
+
+On the create page, paste or drop files into the mission description, or use
+**Attach files** to choose them. Images show a preview; documents show their
+filename and an icon. Remove any attachment before creating the workspace.
+
+Supported formats:
+
+- Images: PNG, JPEG, GIF and WebP.
+- Documents: PDF, Markdown (`.md`, `.markdown`), plain text (`.txt`, `.text`),
+  CSV, TSV, JSON, JSONL, YAML, YML, XML, LOG, RST and TOML.
+
+The shared limit is 10 files, 50 MiB per file and 50 MiB total, counting images
+and documents together. An attachment can provide the mission context without
+description text; the workspace still needs a name.
+
+Files stay in the browser until you press **Create**. Kōbō then copies images
+into `.ai/images/` and documents into `.ai/attachments/` in the new or reused
+worktree before starting the agent. The initial prompt includes the paths and
+document names so the agent can read them. PDFs are copied as supplied; reading
+or extracting their content uses the selected agent's available tools. Kōbō does
+not perform PDF extraction or OCR during creation.
+
+Comparing two engines copies the same attachments into each worktree
+independently. If creation fails without creating a workspace, the form keeps
+the attachments for retry. If only the setup script fails, the workspace keeps
+the files and initial prompt for resuming later.
+
+Selected files are not saved in workspace templates or copied by **Duplicate**.
+Reloading the create page discards files that have not been submitted.
+
+## Attachments in workspace chat
+
+Existing workspaces accept the same images and documents as the creation form,
+with the same limits: 50 MiB per file, 50 MiB of newly uploaded files per draft,
+and 10 files maximum. Use **Attach files**, drag files into the chat input, or
+paste files from the clipboard. Ordinary pasted text keeps its usual behavior.
+
+Uploads show a pending badge and then the original filename. Sending is blocked
+until every upload succeeds; remove a failed attachment and select it again to
+retry. Removing a draft attachment also removes its uploaded file. Images keep
+their inline conversation previews; document references include their original
+name and worktree path for the agent to read. PDF extraction/OCR is delegated to
+the agent's available tools.
+
+Files are kept once the message is sent or queued. A failed send restores the
+draft and its attachment badges while that conversation is still selected.
+Switching workspaces or sessions discards unsent attachments; an upload that
+finishes after the switch is cleaned up in its original workspace. Queued and
+sent attachments are preserved. Documents stored in `.ai/attachments/` are added
+to the worktree's `.gitignore`, including workspaces created before this feature.
 
 ## Comparing two engines on one task
 
@@ -572,8 +633,8 @@ For example, GitHub retains PR head refs:
 
 ```bash
 # Run from the project's repository, substituting the saved values.
-git fetch origin pull/<pr-number>/head:<branch-name>
-git worktree add <original-worktree-path> <branch-name>
+git fetch origin "pull/<pr-number>/head:<branch-name>"
+git worktree add "<original-worktree-path>" "<branch-name>"
 ```
 
 Use the appropriate provider's recovery flow for a GitLab MR. Once the expected
@@ -625,12 +686,14 @@ both global (the database is single):
 | Delete events older than (days) | `0` | Age above which an agent event is deleted. **`0` means retention is disabled — nothing is ever deleted.** |
 | Events always kept per workspace | `0` | The most recent events of each workspace survive whatever their age. Set it (5000 is a good starting point) at the same time you enable retention, so an old but still-open workspace keeps a readable history. |
 
-The prune runs **once, at server start-up**, before the daily backup, in batches
-of 5 000 rows so the SQLite write lock is never held for more than a few
-milliseconds. When enough pages have been freed, a `VACUUM` returns the space to
-the filesystem.
+The prune runs **at server startup and every 24 hours** while the backend stays
+running. Each pass reads the current settings and deletes in batches of 5,000
+rows. When enough pages have been freed, a `VACUUM` returns the space to the
+filesystem.
 
-**What it deletes:** rows of `ws_events` — the recorded agent output.
+**What it deletes:** eligible rows of `ws_events` — the recorded agent output.
+Affected session metrics and the derived search index are reconciled with the
+retained history. External MCP message receipts are kept independently.
 **What it never touches:** workspaces, tasks, sessions, branches, worktrees, or
 any file in your repositories.
 
@@ -645,13 +708,13 @@ cannot be recovered, and the server logs how many each prune removed.
 `maxConcurrentAgents` (global, default `0` = no limit) caps how many agent
 sessions may run at once.
 
-Only unattended spawns respect it: the auto-loop is the one thing that starts
-sessions on its own, and ten workspaces waking together hammer the same rate
-limit, so each lands in its own backoff and nobody gets through. A session you
-start by hand always goes through, because you are standing right there.
+The limit applies to auto-loop iterations, including quota retries through that
+path. Manual starts, chat resumes, cron and one-shot wakeups are not capped by
+this setting. It is not a hard global process limit.
 
-An auto-loop workspace that finds no free slot stays enabled and waits: the next
-session to end anywhere picks it up. It emits `autoloop:waiting-for-slot` so the
+An auto-loop workspace that finds no free slot stays enabled and waits. Confirmed
+capacity release and lifecycle-guard release reconsider waiting workspaces.
+It emits `autoloop:waiting-for-slot` so the
 interface can say so rather than looking stalled.
 
 The setting lives in `settings.json` under `global` and has no UI control yet:
@@ -687,26 +750,26 @@ only). Network access is an **opt-in** feature that re-binds to all interfaces
 (`0.0.0.0`) so you can control Kōbō from another device on the same LAN: a
 phone, a tablet, a second computer.
 
-**Default posture: disabled.** Localhost connections never require a token,
-regardless of this setting.
+**Default posture: disabled.** Localhost API/WS connections bypass the token gate
+unless **Behind a reverse proxy** is enabled. `/api/health` remains exempt in
+either mode; Host/Origin checks apply separately.
 
 ### Production vs. development mode (important)
 
-**This setting only secures production.** How you run Kōbō matters:
+The setting controls the backend, not the separate development server:
 
 - **Production** (`npm start`, or `npx @loicngr/kobo`): a single Kōbō process
   serves both the UI and the API on one port, so the bind address follows this
   setting directly: disabled → `127.0.0.1` (invisible on the LAN, connections
-  refused), enabled → all interfaces + token gate. This is the only mode the
-  network-access toggle protects.
+  refused), enabled → all interfaces + token gate. Behind-a-reverse-proxy mode
+  also removes the loopback exemption.
 - **Development** (`npm run dev:all`): the Quasar/Vite dev server runs as a
-  **separate process** (port 8080) that always binds all interfaces and proxies
-  `/api` + `/ws` to the backend over `localhost`. Because those proxied requests
-  reach the backend from loopback, they are **exempt from the token gate**, and
-  the dev UI stays reachable on the LAN regardless of this setting. **Dev mode is
-  not secured by network access.** To lock it down in dev, either use production
-  mode, or bind the dev server to localhost by setting `devServer: { host:
-  '127.0.0.1' }` in `src/client/quasar.config.ts`.
+  **separate process** (port 8080) and proxies `/api` + `/ws` to the backend over
+  `localhost`. The backend toggle does not set Vite's listening address.
+  Proxied requests use the loopback token exemption unless proxy mode is enabled;
+  Host/Origin checks still apply. To keep development local, explicitly set
+  `devServer: { host: '127.0.0.1' }` in `src/client/quasar.config.ts`. Use a
+  production build for remote access through Kōbō's normal network settings.
 
 ### Enabling network access
 
@@ -753,15 +816,15 @@ session. The token is stored in the browser's `localStorage` under
 3. A login dialog appears: paste the token from the Settings panel and confirm.
 4. The token is stored in `localStorage`; subsequent visits auto-authenticate.
 
-**Host machine (localhost)**: the host always connects to `http://localhost:<port>`
-as usual and is never asked for a token, regardless of whether network access is
-enabled.
+**Host machine (localhost)**: connect to `http://localhost:<port>` as usual.
+No token is needed unless **Behind a reverse proxy** is enabled.
 
 ### Token transport
 
 | Connection type | How to supply the token |
 |---|---|
 | HTTP requests | `X-Kobo-Token: <token>` header |
+| MCP HTTP requests (`/api/mcp`) | `X-Kobo-Token` or `Authorization: Bearer <token>` |
 | WebSocket connections | `?token=<token>` query parameter on the upgrade URL |
 
 The Kōbō browser client handles both automatically once the token is stored in
@@ -854,15 +917,14 @@ keeps working. Leaving it unset preserves the previous behaviour.
   router or firewall. If you need access over the internet, place a terminating
   HTTPS reverse proxy (nginx, Caddy…) or a zero-config VPN (Tailscale, WireGuard)
   in front of Kōbō yourself. Kōbō is not responsible for that layer.
-- **A reverse proxy in front of Kōbō defeats the token gate.** The loopback
-  exemption trusts the OS socket address. A proxy that forwards requests from
-  `localhost` makes every request look like loopback, so the token check is
-  skipped. If you run one, enforce authentication (and TLS) at the proxy layer.
-  Don't rely on Kōbō's token behind it.
-- **Development mode is not protected** by this setting: the Vite dev server
-  (port 8080) is always exposed and bypasses the gate. See
+- **A loopback reverse proxy requires the proxy setting.** Enable
+  [Behind a reverse proxy](#behind-a-reverse-proxy) to disable the loopback
+  exemption, configure the expected proxy hostname, and terminate TLS at the
+  proxy. Without that setting, requests forwarded from loopback bypass the token.
+- **The Vite development server has its own network exposure.** The backend
+  toggle does not control its listener or secure its development assets. See
   [Production vs. development mode](#production-vs-development-mode-important)
-  above; only production (`npm start`) is secured.
+  above; use production (`npm start`) for the normal remote-access setup.
 - **Single shared token.** All remote devices share the same token. Regenerating
   it disconnects every device at once; there is no per-device revocation.
 
@@ -879,9 +941,11 @@ can reach the proxy publicly gets unauthenticated access to Kōbō, silently.
 Network access itself is enabled). No restart needed — unlike the main Network access toggle, this
 one only changes the per-request auth decision, not the listening address.
 
-**What changes**: the loopback bypass is disabled entirely. Every request — including ones from
-the host machine itself — must present the token. If you `curl localhost:3000` directly from
-inside the container or the host for debugging, you now need `-H "X-Kobo-Token: <token>"` too.
+**What changes**: the loopback bypass is disabled for API requests and WebSocket
+upgrades, including those from the host itself. For example, requests to
+`http://localhost:3000/api/workspaces` now need `X-Kobo-Token: <token>`.
+The application shell remains public so it can display the login dialog, and
+`/api/health` remains exempt for healthchecks.
 
 For the concrete Docker setup (which compose file, which env vars, which volumes), see
 [Docker deployment](#docker-deployment) below.
@@ -984,9 +1048,10 @@ By default the file bind-mounts `./kobo-projects` (next to it) at `/projects` �
 in there (or set `KOBO_PROJECTS_DIR` to point elsewhere) before creating a workspace. When you get
 to the project-path picker in the Create-workspace UI, remember it's browsing the **container's**
 filesystem, not your host's — your repo shows up under `/projects/<name>`, not wherever it lives on
-your machine. A repo created purely with `git init` has no `origin` remote — Kōbō needs one to
-`git fetch`, so either clone a real project into `/projects`, or point `origin` at any reachable git
-URL (a local bare repo works fine for throwaway testing — see [Troubleshooting](#troubleshooting)).
+your machine. Kōbō attempts to fetch the source branch from `origin`, then falls
+back to an existing local source branch if fetch fails. A local-only repository
+therefore works once it has a commit and the selected source branch; remote
+push and PR actions still require a configured remote.
 
 Stop with `docker compose -f docker-compose.local.yml down` (add `-v` to also drop the named volume
 and lose all Kōbō state).
@@ -1050,8 +1115,9 @@ and SSH tradeoffs before deploying this to a real machine.
   [The image](#the-image) above; the shipped image already has it.
 - **A workspace's `git fetch origin` fails with "'origin' does not appear to be a git repository"**
   — the project under `/projects/<name>` has no `origin` remote (e.g. a plain `git init` test repo).
-  Kōbō's workspace-creation flow always does `git fetch origin <branch>` first. Fix by pointing
-  `origin` at any reachable git URL; for throwaway testing, a local bare repo works fine:
+  Kōbō falls back to the selected local source branch when it exists. If neither
+  source is available, choose an existing branch or configure a reachable remote.
+  For throwaway testing, a local bare repo works fine:
   ```bash
   git init -q --bare /projects/my-repo-remote.git
   git -C /projects/my-repo push /projects/my-repo-remote.git HEAD
@@ -1082,7 +1148,7 @@ claude /login
 
 Kōbō talks to the embedded [`@anthropic-ai/claude-agent-sdk`](https://github.com/anthropics/claude-agent-sdk-typescript), which reuses the same login. The `claude` CLI is **not** required at runtime; you only need it for `/login`, `mcp add`, and other one-off setup commands. As a fallback you can export `ANTHROPIC_API_KEY` instead.
 
-Supported models include `claude-opus-4-7`, `claude-opus-4-6`, `claude-sonnet-4-6`, `claude-haiku-4-5`. Pick the default in **Settings → Agents → Default model (Claude Code)**.
+The model selector is populated from [`src/shared/models.ts`](./src/shared/models.ts), also used by backend validation. This checkout includes Fable 5.1, Mythos 5, Opus 5, Opus 4.8, Sonnet 5 and older variants. Pick the default in **Settings → Agents**. Catalogue entries describe what Kōbō offers; provider access still depends on your account. `auto` leaves model selection to the runtime.
 
 ### OpenAI Codex
 
@@ -1096,11 +1162,11 @@ codex login                                # writes ~/.codex/auth.json
 OPENAI_API_KEY=sk-… npx @loicngr/kobo
 ```
 
-Kōbō spawns a long-lived `codex app-server` subprocess per workspace and bridges its JSON-RPC stream to the same UI. The `codex` binary ships transitively via [`@openai/codex`](https://www.npmjs.com/package/@openai/codex), so no separate install is required.
+Kōbō spawns a long-lived `codex app-server` subprocess per workspace and bridges its JSON-RPC stream to the same UI. The binary is supplied by the direct `@openai/codex` dependency, so no separate runtime install is required.
 
 When a Codex session is already working, **Send now** sends a queued chat message through the app-server's `turn/steer` endpoint. The message stays queued until Codex acknowledges the steer request; a failed request is restored to the queue instead of being lost.
 
-Supported models include `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`, and `gpt-5.3-codex` (note: `gpt-5.5` requires ChatGPT auth; API-key auth is limited to `gpt-5.4` and below). Reasoning effort (`auto` / `minimal` / `low` / `medium` / `high` / `xhigh`) is selectable on every workspace. Both selectors switch automatically when you flip the engine.
+The selector reads [`src/shared/codex-models.ts`](./src/shared/codex-models.ts). This checkout lists GPT-6 Astra, GPT-5.6 Sol/Terra/Luna, GPT-5.5 and older variants; availability depends on your account and authentication. Kōbō exposes effort values `auto`, `none`, `low`, `medium`, `high`, `xhigh`, and `max`, as declared in the engine's capabilities. The runtime must support the selected model/effort combination. Both selectors switch when you change the engine.
 
 ### Permission modes
 
@@ -1146,7 +1212,11 @@ Kōbō treats the dev server in two independent layers:
 | **Start / Stop** | The shell commands you configure | ✅ Yes, any shell-startable process |
 | **Status badge, URL, container count, logs** | The `.container/instances/*.env` convention + Docker | ❌ No, requires the convention below |
 
-You can always start and stop a server. The green **Running** badge, the `http://localhost:…` link, and the logs viewer only appear when Kōbō can *resolve an instance* for the workspace. If it can't, the status stays `unknown` and no URL is shown; Start/Stop still work, just blind.
+Configured processes can be started and stopped. Docker status, a URL and logs
+require a matching instance file and running containers. Without an instance,
+runtime detection returns `unknown`; the HTTP route may show the saved process
+status instead, but has no URL or container logs. Without a start command, the
+route returns `not_configured`.
 
 > **Known limitation: Docker-coupled, for now.** Status detection, the URL, the container count, and the logs viewer are currently hard-wired to Docker and to the `.container/instances/*.env` convention described below. This is a deliberate, temporary state: it works today for Docker-instance projects, and the convention is documented here so you can adopt it. An **evolution is planned** to abstract this layer, making the URL/port configurable and the running-detection engine-agnostic (e.g. a TCP probe) so the panel works for any project, Docker or not, without imposing this file layout. Until that lands, follow the contract below.
 
@@ -1164,7 +1234,7 @@ How Kōbō runs them:
 - `startCommand` runs as `bash -c "<command>"`, detached, with the working directory set to the workspace **worktree** (falling back to the project root).
 - It runs with two extra environment variables injected:
   - `INSTANCE`: the workspace branch name, sanitized: lowercased, with `/` and `_` replaced by `-`. Example: branch `feature/My_Thing` → `INSTANCE=feature-my-thing`.
-  - `DEV_DOCKER_NO_FOLLOW=1`: a hint that your script must **not** block tailing logs. Start the server, then exit. If your start command stays in the foreground (e.g. `docker compose logs -f`), Kōbō's process never returns and the status stays stuck on `starting`.
+  - `DEV_DOCKER_NO_FOLLOW=1`: a hint that a Docker setup script should exit after starting its containers instead of following logs. A tracked start process reports `starting` when an instance file exists but no matching container is running yet; once containers appear, Docker status takes precedence.
 - `stopCommand` runs with `INSTANCE` and `PROJECT_NAME` in the environment. After it, Kōbō also unconditionally runs `docker compose -p <PROJECT_NAME> down` if a `PROJECT_NAME` was resolved, so a Docker project does not strictly need a `stopCommand` at all.
 
 ### 2. Make the status panel light up — the `.container/instances` contract
@@ -1185,28 +1255,31 @@ Notes:
 |---|---|
 | `INSTANCE_NAME` | **Matching.** Must equal the sanitized branch name, i.e. the value of the `INSTANCE` env var Kōbō passed you. This is how Kōbō finds *this workspace's* instance among all the `.env` files. |
 | `HTTP_PORT` | The URL. Kōbō shows `http://localhost:<HTTP_PORT>`. |
-| `PROJECT_NAME` | **Running detection.** Kōbō lists running Docker containers (`docker ps`) and counts those whose name *contains* `PROJECT_NAME` (case-insensitive). One or more match → status `running`. Zero → `stopped`. |
+| `PROJECT_NAME` | **Running detection.** Must equal the Docker Compose project label `com.docker.compose.project`. One or more running containers with that exact label → `running`; custom container names are supported. |
 
 The simplest correct start script therefore: read `$INSTANCE`, start your containers, then write the `.env` file with `INSTANCE_NAME=$INSTANCE`.
 
 ### 3. Running detection and logs
 
-- **Status**: `running` if at least one Docker container's name contains `PROJECT_NAME`; `starting` while the start process is still in flight; `stopped` otherwise; `unknown` if no instance file matched.
+- **Status**: `running` if at least one container has the exact Compose project label; `starting` if an instance file exists and the start process remains tracked but no container is running; `stopped` otherwise; `unknown` if no instance file matched.
 - **Logs**: the logs button runs `docker logs` on those same matched containers.
 
-Both are **Docker-only**. A project that runs a plain Node process (`npm run dev`) and writes an instance file will get a URL, but the badge will read `stopped` and the logs button will be empty, because there is no matching Docker container. If you don't use Docker, treat the URL as the useful signal and ignore the badge.
+Both are **Docker-only**. A plain Node process (`npm run dev`) does not produce a
+running Docker status or container logs. Writing an instance file alone is not
+enough to expose a URL: status responses only include the URL when matching
+containers are running. Direct processes can still be started and stopped.
 
 ### Minimal setups
 
-**Docker project**: full panel support. Follow the contract: start command creates the `.env`, containers are named after `PROJECT_NAME`.
+**Docker project**: full panel support. Follow the contract: the start command writes the `.env` under the main project root and starts Compose with `-p "$PROJECT_NAME"` so its containers carry the matching label.
 
-**Non-Docker project (e.g. Vite/Node)**: partial support. You can still get a clickable URL:
+**Non-Docker project (e.g. Vite/Node)**: configure a foreground command such as
+`npm run dev`. Kōbō tracks its process group for shutdown, including children that
+outlive the shell. Open the project's URL yourself; the Docker status, URL and
+logs contract does not provide general process health monitoring.
 
-1. Set `startCommand` to something like `PORT=$((3000)) npm run dev & echo started`.
-2. Have it (or a wrapper) write `.container/instances/<branch>.env` with `INSTANCE_NAME=$INSTANCE` and `HTTP_PORT=3000`. `PROJECT_NAME` can be anything.
-3. The URL appears; the status badge will say `stopped` (no Docker container), as expected.
-
-**No instance file at all**: Start/Stop run your commands; the panel shows `unknown` with no URL. Perfectly fine if you just want the buttons.
+**No instance file at all**: Start/Stop run your commands; the panel uses the
+saved status when available, otherwise `unknown`, with no URL or Docker logs.
 
 ### Example: the full convention end-to-end
 
@@ -1243,8 +1316,8 @@ set -e
 # so the script also works when run by hand.
 INSTANCE_NAME="${INSTANCE:-$(git branch --show-current | tr '/_' '-' | tr '[:upper:]' '[:lower:]')}"
 
-# Docker Compose project name — must appear in the container names so Kōbō's
-# `docker ps` matching detects the instance as running.
+# Docker Compose project name — Compose writes it to each container's
+# com.docker.compose.project label, which Kōbō matches exactly.
 APP_NAME="${APP_NAME:-myapp}"
 PROJECT_NAME="${APP_NAME}-${INSTANCE_NAME}"
 
@@ -1254,8 +1327,10 @@ while nc -zw1 localhost "$HTTP_PORT" 2>/dev/null; do
   HTTP_PORT=$((HTTP_PORT + 10))
 done
 
-# The instance file MUST live under the project root, in .container/instances/.
-INSTANCE_DIR="$(git rev-parse --show-toplevel)/.container/instances"
+# Resolve the main project root even when this script runs in a linked worktree.
+COMMON_GIT_DIR="$(git rev-parse --path-format=absolute --git-common-dir)"
+PROJECT_ROOT="$(dirname "$COMMON_GIT_DIR")"
+INSTANCE_DIR="${PROJECT_ROOT}/.container/instances"
 mkdir -p "$INSTANCE_DIR"
 cat > "${INSTANCE_DIR}/${PROJECT_NAME}.env" <<EOF
 # Instance: ${INSTANCE_NAME}
@@ -1264,14 +1339,14 @@ INSTANCE_NAME=${INSTANCE_NAME}
 HTTP_PORT=${HTTP_PORT}
 EOF
 
-# Start the containers. `-p "$PROJECT_NAME"` names them so detection works;
+# Start the containers. `-p "$PROJECT_NAME"` sets the matching Compose label;
 # export HTTP_PORT so compose.yaml can bind it.
 HTTP_PORT="$HTTP_PORT" docker compose -p "$PROJECT_NAME" up -d
 
 echo "Started ${PROJECT_NAME} on http://localhost:${HTTP_PORT}"
 
 # Kōbō runs this detached and sets DEV_DOCKER_NO_FOLLOW=1 — exit instead of
-# tailing logs, otherwise the status stays stuck on `starting`.
+# leaving an unnecessary log-following process running.
 if [ "${DEV_DOCKER_NO_FOLLOW:-0}" = "1" ]; then
   exit 0
 fi
@@ -1290,9 +1365,9 @@ Adapt the port stride, the `APP_NAME`, and any extra `*_PORT` keys to your stack
 
 | Symptom | Likely cause |
 |---|---|
-| Status stuck on `starting` | Start command never exits; it's tailing logs. Make it return; honor `DEV_DOCKER_NO_FOLLOW`. |
+| Status stuck on `starting` | The start process is still tracked but no matching Docker container is running. Check build/start errors and the Compose project label. |
 | Status `unknown`, no URL | No `.env` in `.container/instances/`, or its `INSTANCE_NAME` doesn't match the sanitized branch. Check `INSTANCE_NAME` equals `$INSTANCE`. |
-| URL shown but badge says `stopped` | No running Docker container whose name contains `PROJECT_NAME` (normal for non-Docker projects). |
+| Badge says `stopped`, no URL | No running Docker container with the exact Compose project label (normal for non-Docker projects). |
 | Logs button empty | Same cause: `docker logs` has no matching container. |
 | Wrong port in URL | `HTTP_PORT` in the `.env` doesn't match the port the server actually bound. |
 
@@ -1392,6 +1467,11 @@ Resolved in this order:
 2. `NOTION_TOKEN` env var
 3. `~/.claude.json` → `mcpServers.notion.env.NOTION_TOKEN` (or `NOTION_API_TOKEN`)
 
+The default config entry is named exactly `notion` and must be enabled.
+`notionMcpKey` selects another exact key. An existing `OPENAPI_MCP_HEADERS` value
+from the environment or selected entry is preserved; otherwise Kōbō constructs
+the authorization headers from the resolved token.
+
 The recommended path is **(3)**: one token shared between Claude Code and Kōbō:
 
 ```bash
@@ -1400,7 +1480,9 @@ claude mcp add notion -s user -e NOTION_TOKEN=ntn_your_token -- npx -y @notionhq
 
 ### Overriding the MCP command
 
-Pin a version or use a fork:
+The command and arguments come from `NOTION_MCP_COMMAND` / `NOTION_MCP_ARGS`,
+then the selected Claude MCP entry, then the bundled `npx -y
+@notionhq/notion-mcp-server` defaults. Pin a version or use a fork:
 
 ```bash
 NOTION_MCP_COMMAND=node \

@@ -848,16 +848,22 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
-    async createWorkspace(input: CreateWorkspaceInput) {
+    async createWorkspace(input: CreateWorkspaceInput, attachments: readonly File[] = []) {
       try {
+        let body: string | FormData = JSON.stringify(input)
+        if (attachments.length > 0) {
+          body = new FormData()
+          body.append('workspace', JSON.stringify(input))
+          for (const attachment of attachments) body.append('attachments', attachment)
+        }
         // Kept on raw fetch on purpose: this is the only call that reads the
         // X-Kobo-Branch-Adjusted / X-Kobo-Source-Fallback response headers,
         // which apiFetch deliberately does not expose. The error path below
         // already reads the server message, so F43 does not apply here.
         const res = await fetch('/api/workspaces', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(input),
+          ...(typeof body === 'string' ? { headers: { 'Content-Type': 'application/json' } } : {}),
+          body,
         })
         if (!res.ok) {
           // The server destroys what it created when a creation step fails —

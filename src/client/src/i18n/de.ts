@@ -418,6 +418,16 @@ export default {
   'voice.cancelFailed': 'Abbrechen des Downloads fehlgeschlagen',
 
   // Create Page
+  'attachments.error.upload': 'Hochladen fehlgeschlagen. Entfernen Sie den Anhang und versuchen Sie es erneut.',
+  'attachments.add': 'Dateien anhängen',
+  'attachments.remove': 'Anhang entfernen',
+  'attachments.hint': 'Dateien hier einfügen oder ablegen · maximal {count} · je {size} MB · insgesamt {total} MB',
+  'attachments.error.type':
+    'Verwenden Sie PNG-, JPEG-, GIF- oder WebP-Bilder, PDF, Markdown oder Textdokumente (TXT, CSV, JSON, YAML, XML, LOG, RST, TOML).',
+  'attachments.error.size': 'Jede Datei muss Inhalt haben und darf höchstens 50 MB groß sein.',
+  'attachments.error.count': 'Sie können bis zu 10 Dateien anhängen.',
+  'attachments.error.total': 'Die Anhänge dürfen insgesamt höchstens 50 MB groß sein.',
+  'attachments.descriptionRequired': 'Geben Sie eine Beschreibung ein oder hängen Sie eine Datei an.',
   'createPage.title': 'Workspace erstellen',
   'createPage.fromTemplate': 'Aus einer Vorlage',
   'createPage.fromTemplateNone': 'Keine',

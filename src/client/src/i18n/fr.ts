@@ -421,6 +421,16 @@ export default {
   'voice.cancelFailed': "Échec de l'annulation du téléchargement",
 
   // Create Page
+  'attachments.error.upload': 'Échec de l’envoi du fichier. Retirez la pièce jointe puis réessayez.',
+  'attachments.add': 'Joindre des fichiers',
+  'attachments.remove': 'Retirer la pièce jointe',
+  'attachments.hint': 'Collez ou déposez vos fichiers ici · {count} maximum · {size} Mo chacun · {total} Mo au total',
+  'attachments.error.type':
+    'Utilisez des images PNG, JPEG, GIF ou WebP, des PDF, du Markdown ou des documents texte (TXT, CSV, JSON, YAML, XML, LOG, RST, TOML).',
+  'attachments.error.size': 'Chaque fichier doit être non vide et ne pas dépasser 50 Mo.',
+  'attachments.error.count': 'Vous pouvez joindre jusqu’à 10 fichiers.',
+  'attachments.error.total': 'Les pièces jointes ne doivent pas dépasser 50 Mo au total.',
+  'attachments.descriptionRequired': 'Saisissez une description ou joignez un fichier.',
   'createPage.title': 'Créer un workspace',
   'createPage.fromTemplate': 'Depuis un template',
   'createPage.fromTemplateNone': 'Aucun',

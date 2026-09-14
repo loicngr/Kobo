@@ -1,12 +1,20 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { Hono } from 'hono'
+import { bodyLimit } from 'hono/body-limit'
+import {
+  DOCUMENT_EXTENSIONS,
+  MAX_ATTACHMENT_BYTES,
+  MAX_ATTACHMENT_REQUEST_BYTES,
+  validateAttachments,
+} from '../../shared/attachments.js'
+import { attachmentReference, saveAttachments } from '../services/attachment-service.js'
 import * as imageService from '../services/image-service.js'
 import * as workspaceService from '../services/workspace-service.js'
-import { isPathInside } from '../utils/safe-path.js'
+import { ensureDirectoryInside, isPathInside } from '../utils/safe-path.js'
+import { WorkspaceLifecycleBusyError, withWorkspaceLifecycleGuard } from '../utils/workspace-lifecycle-guard.js'
 
-/** Maximum allowed upload size for a single image (10 MB). */
-const MAX_FILE_SIZE = 10 * 1024 * 1024 // 10 MB
+const MAX_FILE_SIZE = MAX_ATTACHMENT_BYTES
 
 /** MIME types accepted for image uploads. */
 const ALLOWED_MIME_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp'])
@@ -23,8 +31,66 @@ const EXT_TO_MIME: Record<string, string> = {
 /** Hono sub-router for workspace image upload and deletion. */
 const app = new Hono()
 
+// New chat uploads share formats, limits and storage with workspace creation.
+app.post('/:id/attachments', bodyLimit({ maxSize: MAX_ATTACHMENT_REQUEST_BYTES }), async (c) => {
+  try {
+    const { id } = c.req.param()
+    let form: FormData
+    try {
+      form = await c.req.raw.formData()
+    } catch {
+      return c.json({ error: 'Invalid multipart body' }, 400)
+    }
+    const files = form.getAll('attachment')
+    if (files.length !== 1 || !(files[0] instanceof File)) return c.json({ error: 'Expected one attachment file' }, 400)
+    const file = files[0]
+    const error = validateAttachments([file])
+    if (error) return c.json({ error: `Invalid attachment: ${error}`, code: error }, 400)
+    return await withWorkspaceLifecycleGuard(id, async () => {
+      const workspace = workspaceService.getWorkspace(id)
+      if (!workspace) return c.json({ error: 'Workspace not found' }, 404)
+      if (workspace.worktreePurgedAt) return c.json({ error: 'Restore the worktree before uploading files' }, 409)
+      const [saved] = await saveAttachments(workspace.worktreePath, [file])
+      return c.json({ ...saved!, path: saved!.relativePath, reference: attachmentReference(saved!) }, 201)
+    })
+  } catch (error) {
+    return c.json(
+      { error: error instanceof Error ? error.message : String(error) },
+      error instanceof WorkspaceLifecycleBusyError ? 409 : 500,
+    )
+  }
+})
+
+app.delete('/:id/attachments/:filename', async (c) => {
+  try {
+    const { id, filename } = c.req.param()
+    // Accept only the generated document layout, never a caller-supplied path.
+    if (
+      !/^[A-Za-z0-9_-]{10}\.[a-z]+$/.test(filename) ||
+      !(DOCUMENT_EXTENSIONS as readonly string[]).includes(path.extname(filename))
+    ) {
+      return c.json({ error: 'Invalid attachment filename' }, 400)
+    }
+    return await withWorkspaceLifecycleGuard(id, async () => {
+      const workspace = workspaceService.getWorkspace(id)
+      if (!workspace) return c.json({ error: 'Workspace not found' }, 404)
+      if (workspace.worktreePurgedAt) return c.json({ error: 'Worktree is purged' }, 409)
+      const directory = ensureDirectoryInside(workspace.worktreePath, '.ai/attachments')
+      // unlink removes a replaced leaf symlink itself; it never follows it.
+      fs.unlinkSync(path.join(directory, filename))
+      return c.body(null, 204)
+    })
+  } catch (error) {
+    const missing = (error as NodeJS.ErrnoException).code === 'ENOENT'
+    return c.json(
+      { error: error instanceof Error ? error.message : String(error) },
+      error instanceof WorkspaceLifecycleBusyError ? 409 : missing ? 404 : 500,
+    )
+  }
+})
+
 // POST /:id/images — upload an image
-app.post('/:id/images', async (c) => {
+app.post('/:id/images', bodyLimit({ maxSize: MAX_ATTACHMENT_REQUEST_BYTES }), async (c) => {
   try {
     const { id } = c.req.param()
     const workspace = workspaceService.getWorkspace(id)
@@ -49,7 +115,7 @@ app.post('/:id/images', async (c) => {
     const buffer = Buffer.from(arrayBuffer)
 
     if (buffer.length > MAX_FILE_SIZE) {
-      return c.json({ error: `File too large (${(buffer.length / 1024 / 1024).toFixed(1)} MB). Max: 10 MB` }, 400)
+      return c.json({ error: `File too large (${(buffer.length / 1024 / 1024).toFixed(1)} MB). Max: 50 MB` }, 400)
     }
 
     const worktreePath = workspace.worktreePath

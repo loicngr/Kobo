@@ -100,7 +100,8 @@ it.each(['global', 'workspace'])(
       }
     })()
     startSearchIndex()
-    await vi.waitFor(() => expect(getSearchIndexStatus().state).toBe('ready'))
+    // Worker startup and indexing share CPU with the complete backend suite.
+    await vi.waitFor(() => expect(getSearchIndexStatus().state).toBe('ready'), { timeout: 10_000 })
     const app = await getApp()
     const response =
       scope === 'workspace'
@@ -120,6 +121,7 @@ it.each(['global', 'workspace'])(
       expect.arrayContaining(['event-900', 'event-901']),
     )
   },
+  15_000,
 )
 
 describe('GET /:id/events — around cursor hasMore', () => {

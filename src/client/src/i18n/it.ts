@@ -420,6 +420,16 @@ export default {
   'voice.cancelFailed': 'Annullamento del download non riuscito',
 
   // Create Page
+  'attachments.error.upload': 'Caricamento non riuscito. Rimuovi l’allegato e riprova.',
+  'attachments.add': 'Allega file',
+  'attachments.remove': 'Rimuovi allegato',
+  'attachments.hint': 'Incolla o trascina i file qui · massimo {count} · {size} MB ciascuno · {total} MB in totale',
+  'attachments.error.type':
+    'Usa immagini PNG, JPEG, GIF o WebP, PDF, Markdown o documenti di testo (TXT, CSV, JSON, YAML, XML, LOG, RST, TOML).',
+  'attachments.error.size': 'Ogni file deve avere contenuto e non superare 50 MB.',
+  'attachments.error.count': 'Puoi allegare fino a 10 file.',
+  'attachments.error.total': 'Gli allegati non devono superare 50 MB in totale.',
+  'attachments.descriptionRequired': 'Inserisci una descrizione o allega un file.',
   'createPage.title': 'Crea un workspace',
   'createPage.fromTemplate': 'Da un template',
   'createPage.fromTemplateNone': 'Nessuno',

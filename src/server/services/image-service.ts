@@ -61,13 +61,16 @@ function writeIndex(imagesDir: string, entries: ImageIndexEntry[]): void {
     throw new Error('Symbolic links are not allowed for image index')
   }
   const tempPath = path.join(imagesDir, `.index-${randomUUID()}.tmp`)
-  let created = false
+  const descriptor = fs.openSync(tempPath, 'wx', 0o600)
   try {
-    fs.writeFileSync(tempPath, JSON.stringify(entries, null, 2), { flag: 'wx', mode: 0o600 })
-    created = true
+    try {
+      fs.writeFileSync(descriptor, JSON.stringify(entries, null, 2))
+    } finally {
+      fs.closeSync(descriptor)
+    }
     fs.renameSync(tempPath, indexPath)
   } finally {
-    if (created && fs.existsSync(tempPath)) fs.unlinkSync(tempPath)
+    if (fs.existsSync(tempPath)) fs.unlinkSync(tempPath)
   }
 }
 
@@ -87,11 +90,15 @@ export async function saveImage(worktreePath: string, fileBuffer: Buffer, origin
   const filename = `${uid}.${ext}`
 
   await withLock(worktreePath, () => {
-    // Write the image file inside the lock so both the file write and index
-    // update happen atomically — avoids orphan files on crash between the two.
+    // Serialize image/index writes and clean up incomplete writes on failure.
     const imagePath = path.join(imagesDir, filename)
-    fs.writeFileSync(imagePath, fileBuffer, { flag: 'wx', mode: 0o600 })
+    const descriptor = fs.openSync(imagePath, 'wx', 0o600)
     try {
+      try {
+        fs.writeFileSync(descriptor, fileBuffer)
+      } finally {
+        fs.closeSync(descriptor)
+      }
       const entries = readIndex(imagesDir)
       entries.push({ uid, originalName, createdAt: new Date().toISOString() })
       writeIndex(imagesDir, entries)

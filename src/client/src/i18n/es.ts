@@ -417,6 +417,16 @@ export default {
   'voice.cancelFailed': 'No se pudo cancelar la descarga',
 
   // Create Page
+  'attachments.error.upload': 'Error al subir el archivo. Quita el adjunto e inténtalo de nuevo.',
+  'attachments.add': 'Adjuntar archivos',
+  'attachments.remove': 'Quitar adjunto',
+  'attachments.hint': 'Pega o arrastra archivos aquí · máximo {count} · {size} MB cada uno · {total} MB en total',
+  'attachments.error.type':
+    'Usa imágenes PNG, JPEG, GIF o WebP, PDF, Markdown o documentos de texto (TXT, CSV, JSON, YAML, XML, LOG, RST, TOML).',
+  'attachments.error.size': 'Cada archivo debe tener contenido y no superar los 50 MB.',
+  'attachments.error.count': 'Puedes adjuntar hasta 10 archivos.',
+  'attachments.error.total': 'Los adjuntos no deben superar los 50 MB en total.',
+  'attachments.descriptionRequired': 'Escribe una descripción o adjunta un archivo.',
   'createPage.title': 'Crear un workspace',
   'createPage.fromTemplate': 'Desde una plantilla',
   'createPage.fromTemplateNone': 'Ninguna',

@@ -58,6 +58,28 @@ describe('workspace store', () => {
     setActivePinia(createPinia())
   })
 
+  it('sends creation attachments together with metadata and keeps files reusable after failure', async () => {
+    const store = useWorkspaceStore()
+    const file = new File(['pixels'], 'screen.png', { type: 'image/png' })
+    const document = new File(['# Brief'], 'brief.md')
+    const files = [file, document]
+    const input = { name: 'Screenshots', projectPath: '/repo', sourceBranch: 'main', workingBranch: 'feature/images' }
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json({ error: 'Creation failed' }, { status: 500 }))
+      .mockResolvedValue(Response.json(makeWorkspace()))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(store.createWorkspace(input, files)).rejects.toThrow('Creation failed')
+    await store.createWorkspace(input, files)
+    for (const [, init] of fetchMock.mock.calls) {
+      expect(init.headers?.['Content-Type']).toBeUndefined()
+      expect(init.body).toBeInstanceOf(FormData)
+      expect(JSON.parse(init.body.get('workspace'))).toEqual(input)
+      expect(init.body.getAll('attachments').map((file: File) => file.name)).toEqual(['screen.png', 'brief.md'])
+    }
+    expect(files).toEqual([file, document])
+  })
+
   describe('restoreWorktree', () => {
     it.each(['workspace:archived', 'workspace:worktree-purged', 'workspace:deleted'] as const)(
       'does not overwrite a newer %s event with a delayed restore response',

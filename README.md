@@ -38,14 +38,16 @@ Default port is `3000`; if it's taken, `SERVER_PORT` (checked first) or `PORT` p
 SERVER_PORT=9997 PORT=9998 npx @loicngr/kobo@latest
 ```
 
-Kōbō's production build is an installable PWA — use your browser's **Install app** action. Want to run from source or contribute instead? See [`CONTRIBUTING.md`](./CONTRIBUTING.md). Prefer Docker? Jump to [Docker deployment](#docker-deployment).
+Kōbō's production build is an installable PWA — use your browser's **Install app** action. Want to run from source or contribute instead? See [`CONTRIBUTING.md`](./CONTRIBUTING.md). Prefer Docker? Jump to [Docker deployment](#docker).
 
 ![Diff viewer with side-by-side changes](docs/assets/images/diff-viewer.png)
 
 ## Everything else Kōbō does
 
+- **Attachments from the first prompt**: paste, drop or attach screenshots, Markdown, text files or PDFs to the creation description or workspace chat. Kōbō copies them into the worktree for the agent. See [creation attachments](./CONFIGURATION.md#attachments-in-the-creation-description) and [chat attachments](./CONFIGURATION.md#attachments-in-workspace-chat).
+
 - **Command palette & search**: `/` autocompletes skills and commands, `@` fuzzy-completes worktree file paths, `Ctrl+F` searches readable messages, `Ctrl+K` opens a command palette. The global search page deep-links to the same spot.
-- **Full MCP toolset (`kobo-tasks`)**: task/acceptance-criteria CRUD, dev server control, a unified `get_ticket` (Notion or Sentry), cross-workspace conversation search, per-session usage, and a `.ai/thoughts` decision log — see [`AGENTS.md`](./AGENTS.md) for the full tool list.
+- **MCP toolset (`kobo-tasks`)**: task/acceptance-criteria CRUD, dev server control, a unified `get_ticket` (Notion or Sentry), cross-workspace conversation search, per-session usage, and a `.ai/thoughts` decision log — see the [MCP guide](./src/mcp-server/README.md#tools). External MCP clients can also discover workspaces, read conversations, send messages, and answer questions through HTTP or global stdio.
 
   ![Sub-agents panel showing parallel tool calls](docs/assets/images/sub-agents-panel.png)
 - **Multi-forge Git panel**: GitHub (`gh`), GitLab (`glab`), or Bitbucket Community (`bkt`), auto-detected from the remote — `Open PR`, `Merge ready PR`, `Change PR base`, `Change source branch`, all from the UI.
@@ -56,7 +58,7 @@ Kōbō's production build is an installable PWA — use your browser's **Install
   ![Agent asking a clarifying question, awaiting the user's answer](docs/assets/images/agent-question.png)
 - **Quota-aware**: 5-hour / 7-day Claude usage and Codex rate-limit buckets live in the footer; sessions auto-resume after a reset.
 - **Disk-space purge**: reclaim a merged workspace's `node_modules`/`vendor` weight without losing its chat history — see [`CONFIGURATION.md`](./CONFIGURATION.md#auto-purge-worktree-on-pr-merged).
-- **Lifecycle scripts**: shell scripts run automatically on setup, cleanup, and archive, with output streamed into the chat.
+- **Lifecycle scripts**: shell scripts run on setup, cleanup, archive, session end, PR merge, or auto-loop stop, with output streamed into the chat.
 - **Observability**: a per-session timeline (duration, tools, tokens, errors) and a downloadable redacted diagnostic JSON.
 - **Optional integrations**: Notion (import missions) and Sentry (fix from issue URL), each independently toggled with a **Test connection** action; local voice transcription via `whisper.cpp`.
 
@@ -105,7 +107,7 @@ src/
 ├── client/         # Vue 3 + Quasar PWA
 ├── mcp-server/     # kobo-tasks MCP server, spawned per workspace
 ├── shared/         # types shared backend ↔ frontend
-└── __tests__/      # Vitest suite, backend + client, thousands of tests
+└── __tests__/      # backend Vitest suite; client tests live in client/src/__tests__/
 ```
 
 [`AGENTS.md`](./AGENTS.md) covers the data model, WebSocket protocol, engine contracts, MCP tool surface, migration discipline, i18n rules, and contribution guidelines.

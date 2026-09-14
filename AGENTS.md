@@ -4,9 +4,9 @@ Guidance for AI coding agents (Claude Code, Cursor, etc.) working on this reposi
 
 ## What this project is
 
-**Kōbō** (工房, Japanese for "workshop") orchestrates multiple Claude Code agents across isolated git worktrees. Each "workspace" is a self-contained mission with its own worktree, branch, Claude session, optional dev server, optional Notion source-of-truth, and a dedicated MCP tools server. A Vue 3 UI lets the human track progress, read live agent output, and manage the lifecycle.
+**Kōbō** (工房, Japanese for "workshop") orchestrates Claude Code and OpenAI Codex agents across isolated git worktrees. Each "workspace" is a self-contained mission with its own worktree, branch, agent sessions, optional dev server, optional Notion/Sentry context, and a dedicated MCP tools server. A Vue 3 UI lets the human track progress, read live agent output, review Git changes, and manage the lifecycle. A workspace can switch engines through a handoff to a fresh session while preserving its worktree and history.
 
-Single-user dev tool, local by default. The server binds `127.0.0.1` unless the opt-in "network access" setting is enabled, which binds all interfaces and gates non-loopback HTTP/WS requests behind a shared token (localhost always exempt). No multi-tenant concerns.
+Single-user dev tool, local by default. The server binds `127.0.0.1` unless the opt-in "network access" setting is enabled, which binds all interfaces and gates non-loopback API/WS requests behind a shared token. Behind-a-reverse-proxy mode also requires the token for loopback API/WS requests; `/api/health` stays exempt. Host/Origin checks apply separately. No multi-tenant concerns.
 
 ## Tech stack
 
@@ -16,9 +16,9 @@ Single-user dev tool, local by default. The server binds `127.0.0.1` unless the 
 
 **Database**: a single SQLite file under the **Kōbō home directory** (`~/.config/kobo/kobo.db` by default, overridable via `KOBO_HOME`). Fresh-install schema lives in `src/server/db/schema.ts` (`initSchema`); incremental migrations live in `src/server/db/migrations.ts`. **The project is in production**, so every schema change MUST ship as a migration that preserves data, never as a breaking change to `initSchema` alone. See [Database migrations](#database-migrations) below.
 
-**Kōbō home directory**: `KOBO_HOME` env var overrides everything. Otherwise `$XDG_CONFIG_HOME/kobo/`, else `~/.config/kobo/`. Contains `kobo.db`, `settings.json`, `skills.json`, `templates.json`. **Development uses `./data/`** via the `KOBO_HOME=./data` prefix in the `dev` npm script, so local dev never touches your real `~/.config/kobo/` and can run in parallel with a production-installed Kōbō (`npx @loicngr/kobo`). See `src/server/utils/paths.ts`.
+**Kōbō home directory**: `KOBO_HOME` env var overrides everything. Otherwise `$XDG_CONFIG_HOME/kobo/`, else `~/.config/kobo/`. Contains `kobo.db`, `settings.json`, `skills.json`, `templates.json`, and `workspace-templates.json`. **Development uses `./data/`** via the `KOBO_HOME=./data` prefix in the `dev` npm script, so local dev never touches your real `~/.config/kobo/` and can run in parallel with a production-installed Kōbō (`npx @loicngr/kobo`). See `src/server/utils/paths.ts`.
 
-**Tests**: Vitest covers backend services/routes and frontend stores/pure utilities. Vue components are not unit-tested; type-checking and manual smoke tests cover their behavior. Run `npm test` and `(cd src/client && npm test)` for the complete suites.
+**Tests**: Vitest covers backend services/routes and frontend stores, utilities, composables, and selected Vue components. The client suite uses Vue Test Utils and `happy-dom`; type-checking and manual smoke tests complement it. `npm test` runs the backend suite only; `npm run test:all` runs both suites. The three dependency trees (root, client, PWA) have separate lockfiles.
 
 ## Commands
 
@@ -36,8 +36,12 @@ npm run dev:all                     # both concurrently
 # Check & test
 npm run lint                        # biome check (linting + formatting)
 npx tsc --noEmit                    # type check backend (the project's primary quality gate)
-npm test                            # run full vitest suite (backend + client tests)
-(cd src/client && npm test)         # client tests only (stores, utils)
+npm run typecheck:tests             # type check backend test fixtures and tests
+(cd src/client && npm run type-check) # vue-tsc: client + Vue components
+npm test                            # backend vitest suite
+(cd src/client && npm test)         # client stores, utilities, composables and components
+npm run test:all                    # backend + client suites
+make ci                            # install, audit, lint, type checks, build, both suites
 npm run test:watch                  # vitest in watch mode
 
 # Build & run
@@ -56,15 +60,15 @@ src/
 │   ├── db/
 │   │   ├── index.ts                # singleton getDb / closeDb
 │   │   ├── schema.ts               # initSchema — CREATE TABLE IF NOT EXISTS …
-│   │   └── migrations.ts           # incremental migrations, bumped per feature
+│   │   └── migrations.ts           # append-only migration registry + transactional runner
 │   ├── services/                   # business logic — pure functions over db + external processes
 │   │   ├── workspace-service.ts    # workspaces + tasks + agent_sessions CRUD
 │   │   ├── agent/                  # agent engine abstraction (replaces former agent-manager.ts)
 │   │   │   ├── orchestrator.ts     # per-workspace engine map, retry/quota handling, watchdog, public API
 │   │   │   ├── session-controller.ts # lifecycle wrapper around an AgentEngine instance
-│   │   │   ├── event-router.ts     # maps engine AgentEvent stream to WS emit + DB side-effects
+│   │   │   ├── event-router.ts     # persists/broadcasts normalized AgentEvent via WebSocket
 │   │   │   └── engines/{claude-code,codex}/ # per-engine adapters implementing the AgentEngine contract
-│   │   ├── forge/                  # ForgeProvider abstraction — github / gitlab / none, with registry + auto-resolve
+│   │   ├── forge/                  # github / gitlab / bitbucket-community / none, registry + auto-resolve
 │   │   ├── change-source-branch-service.ts # re-target a workspace onto a new source branch (built-in cherry-pick or custom bash)
 │   │   ├── git-stats-service.ts    # pure compute of commit/ahead-behind/diff stats + forge availability for a workspace
 │   │   ├── settings-defaults.ts    # DEFAULT_* constants for opt-in settings (e.g. change-source-branch script)
@@ -83,7 +87,8 @@ src/
 │   │   ├── workspaces.ts           # /api/workspaces/* — the main surface
 │   │   ├── templates.ts            # /api/templates — prompt templates CRUD
 │   │   ├── workspace-templates.ts  # /api/workspace-templates - saved create-form presets
-│   │   ├── plans.ts                # /api/workspaces/:id/plans — plan file browser (read-only)
+│   │   ├── documents.ts            # workspace plans, specs and thoughts browser (read-only)
+│   │   ├── mcp.ts                  # /api/mcp — external discovery and conversation tools
 │   │   ├── dev-server.ts, git.ts, notion.ts, settings.ts
 │   ├── utils/
 │   │   ├── git-ops.ts              # pushBranch, pullBranch, getCommitsBetween, delete{Local,Remote}Branch…
@@ -91,7 +96,7 @@ src/
 ├── client/                         # Vue 3 + Quasar PWA
 │   └── src/
 │       ├── stores/                 # pinia: workspace, websocket, settings, dev-server, templates
-│       ├── components/             # WorkspaceList, NotionPanel, AcceptancePanel, ChatInput, GitPanel, PlansPanel, WorkspaceAttentionLabels, HelpMenu…
+│       ├── components/             # WorkspaceList, AcceptancePanel, ChatInput, GitPanel, DocumentsPanel, WorkspaceAttentionLabels, HelpMenu…
 │       ├── utils/                  # expand-template, formatters, workspace-attention (CI failure / changes-requested derivation)…
 │       ├── tours/                  # declarative onboarding tours, one file per zone + registry
 │       ├── pages/                  # WorkspacePage, CreatePage, SettingsPage
@@ -99,7 +104,8 @@ src/
 ├── mcp-server/                     # standalone MCP server spawned per workspace
 │   ├── kobo-tasks-server.ts        # entrypoint, registers tools
 │   └── kobo-tasks-handlers.ts      # pure handlers (list_tasks, mark_task_done)
-└── __tests__/                      # vitest, one file per service/route
+├── shared/                         # model catalogues, prompts, dialogue contracts, shared utilities
+└── __tests__/                      # backend Vitest suites; client tests live under client/src/__tests__/
 ```
 
 ## Data model (SQLite)
@@ -110,7 +116,14 @@ src/
 | `tasks` | workspace sub-items: title, status, `is_acceptance_criterion`, sort_order; CASCADE DELETE on workspace |
 | `agent_sessions` | agent-engine sessions: pid where applicable, engine session id, status, timestamps, model, and name |
 | `ws_events` | persisted WebSocket events for replay on reconnect: type, payload, session_id, created_at |
-| `pending_wakeups` | one-row-per-workspace scheduler for the `ScheduleWakeup` tool: target_at (ISO UTC), prompt, reason; CASCADE DELETE on workspace |
+| `pending_wakeups` | one-row-per-workspace scheduler for the `schedule_wakeup` MCP tool: target_at (ISO UTC), prompt, reason; CASCADE DELETE on workspace |
+| `pending_quota_backoffs` | persisted quota retries and their attempt counts |
+| `pending_crons` | recurring workspace schedules and their next run |
+| `session_event_metrics` / `usage_snapshots` | session event counters and provider usage snapshots |
+| `workspace_activity` | significant lifecycle/PR events for the absence digest |
+| `search_*` | derived logical-message search index and indexing progress; see `search-schema.ts` |
+| `mcp_message_requests` | durable external-message idempotency ledger; independent of event retention |
+| `schema_migrations` | applied migration versions, names and timestamps |
 | `workspace_chat_history` | chat-input history per workspace: message text + `created_at`, ordered by autoincrement id, capped at 200 entries by the service; CASCADE DELETE on workspace |
 | `workspace_permission_rules` | remembered per-workspace tool approvals, scoped to an exact operation or every invocation of a tool; CASCADE DELETE on workspace |
 
@@ -132,8 +145,8 @@ src/
 
 ### The two files and their roles
 
-- **`src/server/db/schema.ts`**: `initSchema(db)` is the source of truth for **fresh installs only**. It creates every table at its current shape. New installations (empty `data/` directory) run `initSchema` once and land at the latest `SCHEMA_VERSION`.
-- **`src/server/db/migrations.ts`**: `runMigrations(db)` reads the current `version` from the `schema_version` table and sequentially applies every pending migration block up to `SCHEMA_VERSION`. Existing databases upgrade through this path.
+- **`src/server/db/schema.ts`**: `initSchema(db)` creates the current application schema for **fresh installs only**, including the search and MCP-message schemas through their helpers.
+- **`src/server/db/migrations.ts`**: the ordered `migrations` registry contains `{ version, name, migrate(db) }` entries. `SCHEMA_VERSION` is derived from its last entry. `runMigrations(db)` records applied entries in `schema_migrations(version, name, applied_at)` and applies each pending entry in its own transaction. A fresh installation runs `initSchema` and records all entries as applied in one transaction. Legacy `schema_version` databases are converted to the history table automatically.
 
 Both files must be kept in sync: after adding a migration, update `initSchema` so fresh installs get the same final shape without replaying migrations.
 
@@ -141,10 +154,10 @@ Both files must be kept in sync: after adding a migration, update `initSchema` s
 
 Every feature that touches the schema:
 
-1. Bump `SCHEMA_VERSION` in `migrations.ts` (e.g. `1` → `2`)
-2. Add a new guarded block at the bottom of `runMigrations` that applies only if `currentVersion < newVersion`, using `db.exec` (better-sqlite3) to run raw SQL like `ALTER TABLE workspaces ADD COLUMN new_field TEXT`
+1. Append an entry to `migrations` with the next version and a descriptive name. `SCHEMA_VERSION` updates automatically; do not replace its derived expression with a literal.
+2. Implement the entry's `migrate(db)` using raw SQL, such as `ALTER TABLE workspaces ADD COLUMN new_field TEXT`. The runner owns the transaction and skips versions already recorded.
 3. Update `initSchema` in `schema.ts` so the fresh-install shape matches (e.g. add the new column to the `CREATE TABLE` statement)
-4. At the end of `runMigrations`, bump the row in `schema_version` to the new `SCHEMA_VERSION` (the existing code already does this)
+4. Let the runner record the new entry in `schema_migrations`; do not manually update a legacy `schema_version` row.
 5. Add a test in `src/__tests__/migrations.test.ts` that verifies:
    - A database at the previous version can be upgraded without data loss
    - The new version matches `SCHEMA_VERSION`
@@ -157,7 +170,8 @@ Every feature that touches the schema:
 - **Always idempotent where possible.** Use `IF NOT EXISTS`, check for column existence before altering, etc. Prefer migrations that can be safely re-run.
 - **`ALTER TABLE ADD COLUMN` is safe in SQLite** (even on large tables). For more invasive changes (rename, drop, change type), use the [12-step SQLite pattern](https://sqlite.org/lang_altertable.html#otheralter) within a transaction.
 
-- **Run migrations on every backend start.** `runMigrations(db)` is called from `getDb()` via `src/server/db/index.ts`.
+- **Run migrations on every backend start.** `src/server/index.ts` opens the connection with `getDb()`, checks for pending migrations, attempts a pre-migration backup, then calls `runMigrations(db)`. `getDb()` only opens/configures SQLite; it does not initialize or migrate the schema. Tests creating their own database must initialize it explicitly.
+- **Settings migrations are separate.** The JSON settings migration versions in `settings-service.ts` are independent of SQLite's `SCHEMA_VERSION`.
 - **Test upgrades, not just fresh installs.** The `migrations.test.ts` suite must exercise "old DB → new DB" paths.
 
 ## WebSocket protocol
@@ -180,7 +194,7 @@ Clients subscribe to individual workspace ids. The server sends `WsEvent` object
 { id, workspaceId, type, payload, sessionId?, createdAt }
 ```
 
-Common types: `agent:output`, `agent:status`, `agent:error`, `user:message`, `task:updated`, `devserver:status`, `workspace:archived`, `workspace:unarchived`, `sync:response`.
+Agent engines emit a normalized `AgentEvent` union, carried by `agent:event`. Common outer types include `user:message`, `task:updated`, `devserver:status`, `workspace:status`, `workspace:archived`, `workspace:unarchived`, and `sync:response`. Legacy `agent:output` rows remain supported through content migration. Keep the backend union in `services/agent/engines/types.ts` and its client mirror in `client/src/types/agent-event.ts` synchronized.
 
 Two emit flavors in `websocket-service.ts`:
 - `emit(workspaceId, type, payload)` persists to `ws_events` for later replay via `sync:request` on reconnect
@@ -190,7 +204,7 @@ Two emit flavors in `websocket-service.ts`:
 
 ### Forge providers
 
-`src/server/services/forge/` implements a `ForgeProvider` interface with three concrete providers: `github` (wraps the `gh` CLI), `gitlab` (wraps the `glab` CLI), and `none` (a no-op that disables PR/MR features cleanly). The public surface is two functions: `getForgeProvider(name)` in `registry.ts` (returns the provider for a named forge) and `resolveForge(projectPath)` in `resolve.ts` (reads the per-project `forge` setting, then falls back to auto-detection from the `origin` remote URL: host contains `github.com` → GitHub, host contains `gitlab` → GitLab, otherwise `none`). The per-project `forge` setting (`'auto' | 'github' | 'gitlab' | 'none'`, default `'auto'`) is stored in `settings.json` and seeded by settings migration v32. PR routes (`open-pr`, `change-pr-base`) and the pr-watcher go through the resolved provider. **Kōbō ships no forge credentials**, so the user must install and authenticate `gh` or `glab` themselves; when the CLI is absent or unauthenticated, PR/MR actions are disabled with a tooltip rather than a raw error.
+`src/server/services/forge/` implements `ForgeProvider` for `github` (`gh`), `gitlab` (`glab`), `bitbucket-community` (`bkt`), and `none` (disables PR/MR features). `getForgeProvider(id)` resolves a provider; `resolveForge(projectPath)` first reads the explicit project setting, then classifies the `origin` URL by `github.com`, `gitlab`, or `bitbucket`, falling back to `none`. Successful remote reads are cached for five minutes. PR routes and the watcher use the resolved provider. **Kōbō ships no forge credentials**: users authenticate `gh`/`glab` themselves; Bitbucket uses the email and API token entered in Settings, passed to `bkt` and excluded from settings exports. Missing or unauthenticated CLIs disable PR/MR actions with an explanation.
 
 ### Notion (opt-in, user-provided credentials)
 
@@ -200,7 +214,7 @@ Two emit flavors in `websocket-service.ts`:
 2. `NOTION_TOKEN` env var
 3. `~/.claude.json` → `mcpServers.notion.env.NOTION_TOKEN` / `NOTION_API_TOKEN` (Claude Code's MCP config: the recommended path, the same token shared with Claude Code)
 
-The MCP command and args can be overridden via `NOTION_MCP_COMMAND` (default `npx`) and `NOTION_MCP_ARGS` (default `-y @notionhq/notion-mcp-server`) for pinning a specific version or using a fork.
+The selected Claude config entry defaults to the enabled key named exactly `notion`; `global.notionMcpKey` selects another exact key. Its command/args are reused unless `NOTION_MCP_COMMAND` / `NOTION_MCP_ARGS` override them; otherwise the fallback is `npx -y @notionhq/notion-mcp-server`. Existing `OPENAPI_MCP_HEADERS` are preserved; when absent, the resolved token is used to construct them.
 
 When adding features touching `notion-service.ts`, remember: **no token = no feature**. The rest of Kōbō must keep working if the Notion token is absent; only the explicit Notion import endpoints should fail with a clear error. Do not throw at server startup.
 
@@ -210,7 +224,7 @@ See the "Notion integration" section of the README for the end-user setup guide.
 
 Two engines live under `src/server/services/agent/engines/`, both implementing the `AgentEngine` contract in `types.ts`:
 
-**Claude Code** (`claude-code/`): uses `@anthropic-ai/claude-agent-sdk` (in-process async iterator). Spawns no subprocess. Auth via `~/.claude.json` or `ANTHROPIC_API_KEY` env var. The engine arms a **15 s result-drain watchdog** when the SDK emits its `result` message: if the async iterator does not close cleanly within the window, `session:ended` is force-emitted so the orchestrator and auto-loop never hang on a stuck generator. The watchdog is idempotent via a `sessionEndedEmitted` guard and the timer is cleared in `finally`.
+**Claude Code** (`claude-code/`): consumes the `@anthropic-ai/claude-agent-sdk` async iterator. The SDK manages the Claude runtime; Kōbō does not launch a separate `claude` CLI command. Authentication reuses the user's Claude login or `ANTHROPIC_API_KEY`. The engine arms a **15 s result-drain watchdog** when the SDK emits its `result` message: if the async iterator does not close cleanly within the window, `session:ended` is force-emitted so the orchestrator and auto-loop never hang on a stuck generator. The watchdog is idempotent via a `sessionEndedEmitted` guard and the timer is cleared in `finally`.
 
 **OpenAI Codex** (`codex/`): uses the **`codex app-server` JSON-RPC protocol** (line-delimited JSON over stdio with a long-lived `codex` subprocess). The engine layers are:
 - `jsonrpc/transport.ts` + `jsonrpc/peer.ts`: generic JSON-RPC 2.0 stdio peer (request correlation, notifications, server-initiated requests)
@@ -232,17 +246,60 @@ Background: the engine was migrated from `@openai/codex-sdk` (one-shot `codex ex
 - **Permission mode vs collaboration mode are independent.** Sandbox + approvalPolicy control *what the agent may do at OS level* (read-only / workspace-write, never / on-request / unless-trusted). `collaborationMode` is a separate session-level flag that gates internal Codex behaviour (notably interactive Q&A). Kōbō hides both behind a single "permission mode" selector and maps them together.
 - **Sub-agents map to `collabAgentToolCall`.** Codex's analogue of Claude's Task tool is `collabAgentToolCall` (`spawnAgent` / `sendInput` / `resumeAgent` / `wait` / `closeAgent`). The mapper emits **both** a `tool:call` named `Task` (chat card) and a `subagent:progress` event (right-hand panel) per call, the same dual-emission Claude does. See `event-mapper.ts` `handleItemStarted` / `handleItemCompleted` for the `collabAgentToolCall` branch.
 - **`fileChange` items carry a unified-diff blob.** The protocol shape is `{ path, kind: PatchChangeKind, diff: string }` per change; `kind` is a discriminated union, not a string. The mapper flattens the first change into a Claude-style Edit input (`{ file_path, diff, change_kind, move_path? }`) so the existing `ToolCallItem` renderer picks it up. The client parses the unified diff into `DiffLine[]` via `parseUnifiedDiff` in `inline-diff.ts`.
-- **Streaming bursts trip auto-scroll.** Codex emits one `message:text` event per token-delta (50-200 per message), versus Claude which emits ~1 per content block. The naive `eventCount` watcher in `ActivityFeed.vue` triggered an animated `scrollToBottom(180)` per event, causing stacked animations and visible jank. The fix coalesces requests through `requestAnimationFrame` and only animates the *first* scroll after a quiet period; subsequent scrolls during a burst snap instantly.
+- **Streaming bursts trip auto-scroll.** Both engines can emit token deltas; Claude enables SDK partial messages as well. The naive `eventCount` watcher in `ActivityFeed.vue` triggered an animated `scrollToBottom(180)` per event, causing stacked animations and visible jank. Scroll requests are coalesced through `requestAnimationFrame`; preserve burst handling when changing the feed.
 - **`MCP tools` need `default_tools_approval_mode: 'auto'` in `config.mcp_servers`.** Without it Codex flags every MCP tool call as needing user approval ("user cancelled MCP tool call"). Kōbō trusts every tool it spawns, so the options-builder pre-approves the namespace.
 
 ## Workspace operations
+
+### Attachments during creation
+
+`CreationAttachments.vue` keeps `File[]` in the create form, with image-only
+object-URL previews revoked on removal/unmount. The workspace store sends
+existing JSON requests unchanged when there are no files; attachments use
+multipart fields `workspace` (one JSON string) and repeated `attachments`.
+The legacy `images` field is accepted too; both fields share validation limits.
+`attachment-service.ts` validates before workspace/git side effects,
+then saves after the worktree exists and before setup/agent launch. Images use
+`image-service.ts`; documents use generated filenames in `.ai/attachments/`,
+exclusive writes and the existing directory-containment helper. File ownership
+is recorded immediately after exclusive open so partial writes are cleaned on
+failure. Creation excludes `.ai/attachments/` from Git; document uploads also
+ensure that exclusion for existing workspaces. Never use an
+uploaded filename as a storage path. The initial prompt stores image references
+and document names/paths for normal starts and setup retries. Documents are
+copied byte-for-byte, with no PDF extraction or OCR.
+Limits and supported formats live in `src/shared/attachments.ts`:
+10 files, 50 MiB each, 50 MiB total; the creation route limits the body to 51 MiB.
+Document validation uses supported filename extensions because browser MIME
+labels can be empty or generic. A failed creation cleans its own uploaded files
+from reused worktrees, preserving existing files; setup failures retain the
+workspace, files and initial prompt. Comparison requests copy the same browser
+files independently. Attachments are not persisted in form presets.
+See [creation attachments](CONFIGURATION.md#attachments-in-the-creation-description).
+
+### Chat attachments
+
+`POST /api/workspaces/:id/attachments` in `routes/images.ts` accepts one multipart
+`attachment`, validates it with the shared `attachments.ts` policy and returns
+`uid`, `kind`, `path`, `originalName`, and `reference`. It uses the same storage as
+creation and a lifecycle guard against concurrent purge/delete. Document deletion
+accepts only the generated filename at `DELETE /:id/attachments/:filename`; images
+retain their existing retrieval/deletion endpoints. The legacy image upload also
+uses the 50 MiB limit.
+
+`use-chat-attachments.ts` owns pending upload state, draft-level limits and serial
+uploads. `ChatInput.vue` transfers file ownership when sending/queuing, restores
+badges on failed sends, and discards unsent files on workspace/session changes.
+Late upload receipts are cleaned up using the captured original workspace id.
+Never delete handed-off files when clearing a draft or changing conversations.
+See [chat attachments](CONFIGURATION.md#attachments-in-workspace-chat).
 
 ### Change source branch
 
 `change-source-branch-service.ts` re-targets a workspace onto a new source branch. The default path is a cherry-pick of the branch-proper commits (commits in the working branch but in **neither** the old nor the new base), inspired by the sekur `deploy-preprod-rebase.yml` workflow. The route is `POST /api/workspaces/:id/change-source-branch` and returns a discriminated status: `done | aligned | conflict | too-many | dirty`.
 
 - **Built-in cherry-pick**: `fetchAllBranches` → `listProperCommits` → `stashPush` (if dirty + aligned) → backup branch (`kobo-backup/<branch>-<unix-ts>`) → `reset --hard origin/<new>` → cherry-pick replay → optional force-push prompt → forge PR-base update via `provider.changePrBase`. Conflicts leave the worktree in a cherry-pick state for the user/agent to resolve via `POST /:id/git/resolve-with-agent`. `GitConflictError` carries an `operation: 'rebase' | 'merge' | 'cherry-pick'` discriminator.
-- **Custom bash override**: if `effective.changeSourceBranchScript` is non-empty (per-project override or global default), the script **replaces** the built-in flow. Spawned with `bash -c`, cwd = worktree, 5 min timeout, stderr captured (last 8 KB). Exit 0 → Kōbō updates the source-branch metadata; any non-zero exit → the stderr tail is propagated as a clean error. The user-facing menu item only shows when the resolved script is non-empty; empty means the feature is disabled (opt-in).
+- **Custom bash override**: if `effective.changeSourceBranchScript` is non-empty (per-project override or global default), the script **replaces** the built-in flow. Spawned with `bash -c`, cwd = worktree, 5 min timeout, stderr captured (last 8 KB). Exit 0 → Kōbō updates the source-branch metadata; any non-zero exit → the stderr tail is propagated as a clean error. The user-facing menu item only shows when the resolved script is non-empty; clearing the effective script hides the action; the global default is the bundled Kōbō script.
 - **Custom-script env vars**: `KOBO_NEW_BASE`, `KOBO_OLD_BASE`, `KOBO_WORKING_BRANCH`, `KOBO_WORKTREE_PATH`, `KOBO_PROJECT_PATH`, `KOBO_PROJECT_NAME`, `KOBO_WORKSPACE_ID`, `KOBO_WORKSPACE_NAME`, `KOBO_FORGE`, `KOBO_PR_NUMBER` (empty when no PR/MR is open). The default script lives in `settings-defaults.ts` and is seeded into `global.changeSourceBranchScript` by settings migration v33; the client reads it through `GET /api/settings/defaults` for the "Reset to Kōbō default" button. See [CONFIGURATION.md → Custom change-source-branch script](CONFIGURATION.md#custom-change-source-branch-script).
 
 ### Lifecycle hooks
@@ -275,9 +332,9 @@ One task, two engines, two sibling worktrees. `POST /api/workspaces` accepts a `
 
 `src/server/services/worktree-purge-service.ts` removes a workspace's worktree from disk while preserving the chat history and PR metadata. Triggered manually via `POST /api/workspaces/:id/purge-worktree` from the workspace context menu, or automatically by the pr-watcher when a PR transitions to MERGED **and** `global.autoPurgeOnPrMerged` is enabled (Settings → Worktrees toggle, settings migration v36).
 
-Sequence: `captureRestoreData` (best-effort forge lookup for PR number / URL / merge SHA) → stop agent + dev server + terminal → `archiveWorkspace` → `removeWorktree` → `markWorktreePurged(restoreData)` → emit `workspace:worktree-purged`. Permission errors on removal (EACCES / EPERM, typically Docker-owned files in `node_modules` / `vendor`) are detected via regex on the error message and the warning toast carries a copy-pasteable `sudo rm -rf` + `git worktree prune` recovery command plus prevention tips (Docker `USER` directive, `setfacl` default ACL). See [CONFIGURATION.md → Auto-purge worktree on PR merged](CONFIGURATION.md#auto-purge-worktree-on-pr-merged).
+Sequence: `captureRestoreData` (best-effort forge lookup for PR number / URL / merge SHA) → stop agent + dev server + terminal → `archiveWorkspace` → `removeWorktree` → `markWorktreePurged(restoreData)` → emit `workspace:worktree-purged`. Permission errors on removal (EACCES / EPERM, typically Docker-owned files in `node_modules` / `vendor`) trigger an attempt to reclaim ownership through a temporary Docker container and retry removal. If recovery fails, the UI offers manual cleanup guidance and prevention tips (Docker `USER`, default ACLs). Agent and dev-server shutdown must be confirmed before removal; shutdown failures leave the worktree in place. See [CONFIGURATION.md → Auto-purge worktree on PR merged](CONFIGURATION.md#auto-purge-worktree-on-pr-merged).
 
-**Auto-restore on manual recreation.** When the user manually recreates the worktree folder (`gh pr checkout <pr-number>` or `git worktree add <path> <branch>`), the pr-watcher detects the folder reappearing on its next 30 s tick via `autoRestoreManuallyRecreatedWorktrees()`: it iterates archived workspaces with `worktreePurgedAt`, checks `fs.existsSync(worktreePath)`, and on a hit calls `restoreWorktreeFromDisk(id)` which clears `worktree_purged_at` + `worktree_purge_restore_data` + `archived_at` in one transaction, then emits `workspace:worktree-restored`. The client websocket store reuses the same handler as `workspace:archived`/`unarchived` to refresh both the active and archived workspace lists. No UI action needed.
+**Auto-restore on manual recreation.** When the user manually recreates the worktree folder (`gh pr checkout <pr-number>` or `git worktree add <path> <branch>`), the pr-watcher detects the folder reappearing on its next 30 s tick via `autoRestoreManuallyRecreatedWorktrees()`: it iterates archived workspaces with `worktreePurgedAt`, validates the exact worktree root, repository and working branch via `isMatchingWorkspaceWorktree`, and on a match calls `restoreWorktreeFromDisk(id)` which clears `worktree_purged_at` + `worktree_purge_restore_data` + `archived_at` in one transaction, then emits `workspace:worktree-restored`. The client websocket store reuses the same handler as `workspace:archived`/`unarchived` to refresh both the active and archived workspace lists. No UI action needed.
 
 **Restore**: `POST /api/workspaces/:id/restore-worktree` calls `worktree-restore-service.ts` to recreate the exact checkout and only then clear purge/archive metadata via `restoreWorktreeFromDisk`. Source order: surviving local branch → optional `headCommitSha` in the existing restore JSON → exact branch fetched from `origin`. No SQL migration is needed for the optional JSON key; older records remain supported. No reset, overwrite, agent/dev-server start or setup script. `workspace-lifecycle-guard.ts` excludes overlapping restore/purge/delete operations, while the existing common-Git-directory lock serializes Git mutations. The watcher shares `isMatchingWorkspaceWorktree` validation and invalidates in-flight PR checks on restoration; delayed auto-purges carry their expected archive timestamp to avoid purging a workspace restored in the meantime. The context menu and purged banner expose the action; HTTP and the existing `workspace:worktree-restored` event reconcile client lists. Discarded uncommitted/ignored files and dependencies are not recoverable.
 
@@ -307,7 +364,7 @@ The right panel of `DiffViewer.vue` is editable when the workspace agent is stop
 
 **Route layer** is thin: always wrap the handler body in `try / catch` and return `c.json({ error: message }, status)`. Match the existing shape in `src/server/routes/workspaces.ts`.
 
-**Swallowed failures** are acceptable (and required) for best-effort side effects like `agentManager.stopAgent` and `devServerService.stopDevServer` during delete/archive. Log with `console.error` and continue. Never let these break the happy path.
+**Best-effort failures** may be logged and swallowed for non-critical side effects such as lifecycle-hook reporting. Process shutdown is a precondition for destructive operations: use `stopAgentAndWait` with `assertAgentStopped`, propagate dev-server shutdown failures, and retain the worktree when shutdown is unconfirmed. See [Audit remediation contracts](#audit-remediation-contracts-september-2026).
 
 **Route ordering matters** in Hono. Static paths (`GET /archived`) MUST be declared **before** dynamic segments (`GET /:id`) or the dynamic segment captures them. There's a regression test locking this invariant in `src/__tests__/routes-workspaces.test.ts`.
 
@@ -317,7 +374,7 @@ The right panel of `DiffViewer.vue` is editable when the workspace agent is stop
 
 ## Internationalization (i18n)
 
-The frontend uses `vue-i18n` v10 with 5 supported locales: English (`en`), French (`fr`), German (`de`), Spanish (`es`), Italian (`it`). Translation files live in `src/client/src/i18n/`.
+The frontend uses `vue-i18n` with 5 supported locales: English (`en`), French (`fr`), German (`de`), Spanish (`es`), Italian (`it`). Translation files live in `src/client/src/i18n/`; the dependency version is declared in `src/client/package.json`.
 
 **Mandatory rules for all frontend code:**
 
@@ -330,9 +387,9 @@ The frontend uses `vue-i18n` v10 with 5 supported locales: English (`en`), Frenc
 
 ## Testing discipline
 
-- **TDD for backend**: write the failing test, confirm it fails for the right reason, implement minimally, confirm it passes, commit. One commit per logical unit. See existing tests in `src/__tests__/workspace-service.test.ts` for the setup pattern (fresh in-memory DB per test via `resetDb()`).
+- **TDD for backend**: write the failing test, confirm it fails for the right reason, implement minimally, confirm it passes, commit. One commit per logical unit. See `src/__tests__/workspace-service.test.ts` for the setup pattern: `resetDb()` creates a fresh database in a temporary directory, initializes its schema, and closes/removes it after each test.
 - **Route tests** use `vi.mock()` on service modules before imports (see `src/__tests__/routes-workspaces.test.ts`). Keep mocks complete; missing exports cause obscure failures.
-- **Frontend tests** cover Pinia stores (`workspace-store`, `settings-store`, `templates-store`) and pure utility modules (`expand-template`). Run with `cd src/client && npm test`. Vue components are **not** tested: type-check via `npx tsc --noEmit` + manual smoke testing covers UI behavior.
+- **Frontend tests** cover Pinia stores, pure utilities, composables, and selected Vue components (for example `ActivityFeed`, `TurnCard`, and `WorkspaceCard`). Run with `cd src/client && npm test`; use Vue Test Utils and the existing `happy-dom` setup for component regressions. Run `cd src/client && npm run type-check` for Vue/TypeScript checking, and use manual smoke tests for browser behavior that the DOM test environment cannot exercise.
 - **`beforeEach(() => vi.clearAllMocks())`** is the convention for all route test files.
 
 ## Git workflow
@@ -397,7 +454,7 @@ deviate from the documented system without explicit user approval.
 - Don't add confirmation dialogs for reversible actions (archive, unarchive). Only destructive actions (delete) get a dialog.
 - Don't introduce ORMs, query builders, or schema validation libraries; the project is small enough for raw prepared statements and hand-written mappers.
 - Don't break the single-source-of-truth of `CLAUDE.md` → `AGENTS.md` symlink. Edit `AGENTS.md`; `CLAUDE.md` follows automatically.
-- Don't skip `try/catch` swallowing on best-effort cleanup (agent stop, dev-server stop, worktree removal). These must never break the primary operation.
+- Don't swallow failed or timed-out shutdowns before deleting, purging, or replacing a worktree. Only non-critical best-effort side effects may fail without blocking the primary operation.
 - Don't hardcode user-visible text in the frontend. Every string must go through `$t()` / `t()` with keys in all 5 locale files. See [Internationalization (i18n)](#internationalization-i18n).
 - Don't hardcode hex colors, spacing literals, or font names in components. Use the CSS variables from `src/client/src/css/design-tokens.scss` and the patterns in `DESIGN.md`. See [Design System](#design-system).
 

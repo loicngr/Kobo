@@ -1,6 +1,13 @@
 import { Hono } from 'hono'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+vi.mock('../server/services/image-service.js', () => ({
+  saveImage: vi.fn(),
+  deleteImage: vi.fn().mockResolvedValue(undefined),
+}))
+
+import * as imageService from '../server/services/image-service.js'
+
 vi.mock('../server/services/worktree-restore-service.js', () => ({
   restorePurgedWorktree: vi.fn(),
   WorktreeRestoreError: class extends Error {
@@ -368,6 +375,8 @@ vi.mock('node:fs', async () => {
     ...actual,
     mkdirSync: vi.fn(),
     writeFileSync: vi.fn(),
+    openSync: vi.fn().mockReturnValue(101),
+    closeSync: vi.fn(),
     existsSync: vi.fn().mockReturnValue(false),
     readFileSync: vi.fn().mockReturnValue(''),
     appendFileSync: vi.fn(),
@@ -401,6 +410,7 @@ import * as wsService from '../server/services/websocket-service.js'
 import * as workspaceService from '../server/services/workspace-service.js'
 import * as worktreeService from '../server/services/worktree-service.js'
 import * as gitOps from '../server/utils/git-ops.js'
+import * as safePath from '../server/utils/safe-path.js'
 import {
   makeEffectiveSettings,
   makeGlobalSettings,
@@ -574,6 +584,106 @@ describe('GET /api/workspaces', () => {
 })
 
 describe('POST /api/workspaces', () => {
+  it('saves creation images and documents before starting the agent and persists their references in the initial prompt', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(workspaceService.getWorkspaceWithTasks).mockReturnValue(fakeWorkspaceWithTasks)
+    vi.mocked(imageService.saveImage).mockResolvedValue({ uid: 'image1', relativePath: '.ai/images/image1.png' })
+    const form = new FormData()
+    form.append(
+      'workspace',
+      JSON.stringify({
+        name: 'Screenshot fix',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/screenshot',
+        description: 'Match this screenshot',
+      }),
+    )
+    form.append('images', new File(['pixels'], 'screen.png', { type: 'image/png' }))
+    form.append('attachments', new File(['# Brief'], 'brief.md'))
+    const directory = vi.spyOn(safePath, 'ensureDirectoryInside').mockReturnValue('/tmp/worktree/.ai/attachments')
+    const ignorePath = vi.spyOn(safePath, 'resolvePathInside').mockReturnValue('/tmp/worktree/.gitignore')
+
+    const response = await app.request('/api/workspaces', { method: 'POST', body: form })
+    directory.mockRestore()
+    ignorePath.mockRestore()
+    const documentWrite = vi.mocked(fs.writeFileSync).mock.calls.find(([p]) => p === 101)
+    expect(documentWrite?.[1]).toEqual(Buffer.from('# Brief'))
+    expect(workspaceService.setInitialPrompt).toHaveBeenCalledWith(
+      'ws-1',
+      expect.stringMatching(/Attached document "brief\.md": \[file: \.ai\/attachments\/[^\]]+\.md\]/),
+    )
+
+    expect(response.status).toBe(201)
+    expect(imageService.saveImage).toHaveBeenCalledWith('/tmp/worktree', Buffer.from('pixels'), 'screen.png')
+    const prompt = vi.mocked(agentManager.startAgent).mock.calls[0]?.[2]
+    expect(prompt).toContain('Match this screenshot')
+    expect(prompt).toContain('Attached document')
+    expect(
+      vi.mocked(fs.writeFileSync).mock.invocationCallOrder[
+        vi.mocked(fs.writeFileSync).mock.calls.indexOf(documentWrite!)
+      ],
+    ).toBeLessThan(vi.mocked(agentManager.startAgent).mock.invocationCallOrder[0]!)
+    expect(prompt).toContain('[image: .ai/images/image1.png]')
+    expect(workspaceService.setInitialPrompt).toHaveBeenCalledWith('ws-1', prompt)
+    expect(vi.mocked(imageService.saveImage).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(agentManager.startAgent).mock.invocationCallOrder[0]!,
+    )
+  })
+
+  it('rejects unsupported creation attachments before creating a workspace', async () => {
+    const form = new FormData()
+    form.append(
+      'workspace',
+      JSON.stringify({
+        name: 'Screenshot fix',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/screenshot',
+      }),
+    )
+    form.append('images', new File(['script'], 'script.svg', { type: 'image/svg+xml' }))
+    const response = await app.request('/api/workspaces', { method: 'POST', body: form })
+    expect(response.status).toBe(400)
+    expect((await response.json()).error).toContain('attachment')
+    expect(workspaceService.createWorkspace).not.toHaveBeenCalled()
+    expect(gitOps.fetchSourceBranchOrThrowAsync).not.toHaveBeenCalled()
+  })
+
+  it('does not start the agent when saving a creation image fails', async () => {
+    vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue(fakeWorkspace)
+    vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
+      worktreePath: '/tmp/worktree',
+      base: 'origin',
+      branchCreated: true,
+    })
+    vi.mocked(workspaceService.listTasks).mockReturnValue([])
+    vi.mocked(imageService.saveImage).mockRejectedValueOnce(new Error('Image disk full'))
+    const form = new FormData()
+    form.append(
+      'workspace',
+      JSON.stringify({
+        name: 'Screenshot fix',
+        projectPath: '/tmp/project',
+        sourceBranch: 'main',
+        workingBranch: 'feature/screenshot',
+      }),
+    )
+    form.append('images', new File(['pixels'], 'screen.png', { type: 'image/png' }))
+    const response = await app.request('/api/workspaces', { method: 'POST', body: form })
+    expect(response.status).toBe(500)
+    expect((await response.json()).error).toContain('Image disk full')
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+    expect(workspaceService.deleteWorkspace).toHaveBeenCalled()
+  })
+
   it('creates workspace without Notion URL', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
     vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
@@ -1497,7 +1607,7 @@ describe('POST /api/workspaces', () => {
     expect(vi.mocked(setupScriptService.runSetupScript)).toHaveBeenCalledOnce()
   })
 
-  it('returns workspace in error status when setup script fails', async () => {
+  it('keeps creation images and documents and their initial prompt when setup fails', async () => {
     vi.mocked(workspaceService.createWorkspace).mockReturnValue(fakeWorkspace)
     vi.mocked(worktreeService.createWorktreeUnlocked).mockResolvedValue({
       worktreePath: '/tmp/worktree',
@@ -1521,21 +1631,41 @@ describe('POST /api/workspaces', () => {
     )
     vi.mocked(setupScriptService.runSetupScript).mockResolvedValue({ exitCode: 1 })
 
-    const res = await app.request('/api/workspaces', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    vi.mocked(imageService.saveImage).mockResolvedValue({ uid: 'kept', relativePath: '.ai/images/kept.png' })
+    const form = new FormData()
+    form.append(
+      'workspace',
+      JSON.stringify({
         name: 'test-ws',
         projectPath: '/tmp/test',
         sourceBranch: 'main',
         workingBranch: 'feature/test',
       }),
-    })
+    )
+    form.append('images', new File(['pixels'], 'screen.png', { type: 'image/png' }))
+    form.append('attachments', new File(['# Brief'], 'brief.md'))
+    const directory = vi.spyOn(safePath, 'ensureDirectoryInside').mockReturnValue('/tmp/worktree/.ai/attachments')
+    const ignorePath = vi.spyOn(safePath, 'resolvePathInside').mockReturnValue('/tmp/worktree/.gitignore')
+    const res = await app.request('/api/workspaces', { method: 'POST', body: form })
+    directory.mockRestore()
+    ignorePath.mockRestore()
+    const documentWrite = vi.mocked(fs.writeFileSync).mock.calls.find(([p]) => p === 101)
+    expect(documentWrite?.[1]).toEqual(Buffer.from('# Brief'))
+    expect(workspaceService.setInitialPrompt).toHaveBeenCalledWith(
+      'ws-1',
+      expect.stringMatching(/Attached document "brief\.md": \[file: \.ai\/attachments\/[^\]]+\.md\]/),
+    )
 
     expect(res.status).toBe(201)
     expect(workspaceService.updateWorkspaceStatus).toHaveBeenCalledWith(fakeWorkspace.id, 'error')
     // Agent should NOT be started when setup script fails
     expect(agentManager.startAgent).not.toHaveBeenCalled()
+    expect(workspaceService.setInitialPrompt).toHaveBeenCalledWith(
+      'ws-1',
+      expect.stringContaining('[image: .ai/images/kept.png]'),
+    )
+    expect(imageService.deleteImage).not.toHaveBeenCalled()
+    expect(workspaceService.deleteWorkspace).not.toHaveBeenCalled()
   })
 
   it('emits create-failed and never emits done when the setup script fails', async () => {

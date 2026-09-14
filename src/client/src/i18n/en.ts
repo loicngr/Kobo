@@ -414,6 +414,16 @@ export default {
   'voice.cancelFailed': 'Failed to cancel the download',
 
   // Create Page
+  'attachments.error.upload': 'Upload failed. Remove the attachment and try again.',
+  'attachments.add': 'Attach files',
+  'attachments.remove': 'Remove attachment',
+  'attachments.hint': 'Paste or drop files here · {count} maximum · {size} MB each · {total} MB total',
+  'attachments.error.type':
+    'Use PNG, JPEG, GIF or WebP images, PDF, Markdown or text documents (TXT, CSV, JSON, YAML, XML, LOG, RST, TOML).',
+  'attachments.error.size': 'Each file must be non-empty and no larger than 50 MB.',
+  'attachments.error.count': 'You can attach up to 10 files.',
+  'attachments.error.total': 'Attachments must total no more than 50 MB.',
+  'attachments.descriptionRequired': 'Enter a description or attach a file.',
   'createPage.title': 'Create a workspace',
   'createPage.fromTemplate': 'From a template',
   'createPage.fromTemplateNone': 'None',

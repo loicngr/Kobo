@@ -9,12 +9,22 @@ const execFileAsync = promisify(execFileCb)
 import fs from 'node:fs'
 import path from 'node:path'
 import { Hono } from 'hono'
+import { bodyLimit } from 'hono/body-limit'
+import { MAX_ATTACHMENT_REQUEST_BYTES } from '../../shared/attachments.js'
 import { AUTO_LOOP_HARD_RULES, buildAutoLoopGroomingSteps, buildGroomingIntro } from '../../shared/auto-loop-prompts.js'
 import { getDb } from '../db/index.js'
 import { migrationGuard } from '../middleware/migration-guard.js'
 import { listEngines } from '../services/agent/engines/registry.js'
 import * as agentManager from '../services/agent/orchestrator.js'
 import * as archiveScriptService from '../services/archive-script-service.js'
+import {
+  AttachmentRequestError,
+  attachmentReference,
+  readWorkspaceCreationRequest,
+  removeAttachments,
+  type SavedAttachment,
+  saveAttachments,
+} from '../services/attachment-service.js'
 import * as autoLoopService from '../services/auto-loop-service.js'
 import { changeSourceBranch } from '../services/change-source-branch-service.js'
 import { listChatHistory, pushChatHistory } from '../services/chat-history-service.js'
@@ -206,15 +216,19 @@ function emitCreateFailed(creationId: string | undefined, step: CreateWorkspaceS
  */
 async function rollbackFailedCreation(
   workspace: WorkspaceRow,
-  opts: { deleteLocalBranch: boolean; removeWorktree: boolean },
+  opts: { deleteLocalBranch: boolean; removeWorktree: boolean; attachments?: SavedAttachment[] },
 ): Promise<string[]> {
   try {
-    return await deleteWorkspaceWithSideEffects(workspace, {
+    const warnings = await deleteWorkspaceWithSideEffects(workspace, {
       deleteLocalBranch: opts.deleteLocalBranch,
       removeWorktree: opts.removeWorktree,
       // Nothing was ever pushed at this point in the creation flow.
       deleteRemoteBranch: false,
     })
+    if (!opts.removeWorktree && opts.attachments?.length && fs.existsSync(workspace.worktreePath)) {
+      warnings.push(...(await removeAttachments(workspace.worktreePath, opts.attachments)))
+    }
+    return warnings
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     console.error(`[workspaces] rollback of '${workspace.id}' failed:`, message)
@@ -440,7 +454,38 @@ app.post('/:id/switch-engine', migrationGuard, async (c) => {
 })
 
 // POST /api/workspaces — create workspace
-app.post('/', migrationGuard, async (c) => {
+interface CreateWorkspaceBody {
+  name: string
+  projectPath: string
+  sourceBranch: string
+  workingBranch: string
+  notionUrl?: string
+  notionPageId?: string
+  sentryUrl?: string
+  prUrl?: string
+  model?: string
+  brainstormModel?: string
+  brainstormReasoningEffort?: string
+  reasoningEffort?: string
+  tasks?: string[]
+  acceptanceCriteria?: string[]
+  skipSetupScript?: boolean
+  description?: string
+  agentPermissionMode?: 'plan' | 'bypass' | 'strict' | 'interactive'
+  engine?: string
+  autoLoop?: boolean
+  autoLoopSessionMode?: 'per_task' | 'continuous'
+  worktreePath?: string
+  creationId?: string
+  comparisonId?: string
+}
+
+const creationBodyLimit = bodyLimit({
+  maxSize: MAX_ATTACHMENT_REQUEST_BYTES,
+  onError: (c) => c.json({ error: 'Workspace creation request is too large', step: 'validate' }, 413),
+})
+
+app.post('/', migrationGuard, creationBodyLimit, async (c) => {
   // Declared outside the try so the outermost catch (any unforeseen throw,
   // including a malformed request body) can still name a step instead of
   // leaving the create-progress channel silent. Updated in lockstep with
@@ -457,65 +502,13 @@ app.post('/', migrationGuard, async (c) => {
   // branch. A failure before that point must not delete a branch we never made.
   let createdBranch = false
   let createdWorktree = false
+  let creationAttachments: SavedAttachment[] = []
   // Hoisted out of the `build-prompt` block (declared with `const` there) so
   // both rollback paths — the `start-agent` branch and the outermost catch —
   // can read it to decide whether the setup-script caveat applies.
   let setupScriptConfigured = false
   try {
-    const body = await c.req
-      .json<{
-        name: string
-        projectPath: string
-        sourceBranch: string
-        workingBranch: string
-        notionUrl?: string
-        notionPageId?: string
-        sentryUrl?: string
-        prUrl?: string
-        model?: string
-        brainstormModel?: string
-        brainstormReasoningEffort?: string
-        reasoningEffort?: string
-        tasks?: string[]
-        acceptanceCriteria?: string[]
-        skipSetupScript?: boolean
-        description?: string
-        agentPermissionMode?: 'plan' | 'bypass' | 'strict' | 'interactive'
-        engine?: string
-        autoLoop?: boolean
-        autoLoopSessionMode?: 'per_task' | 'continuous'
-        worktreePath?: string
-        creationId?: string
-        comparisonId?: string
-      }>()
-      .catch(
-        () =>
-          ({}) as {
-            name: string
-            projectPath: string
-            sourceBranch: string
-            workingBranch: string
-            notionUrl?: string
-            notionPageId?: string
-            sentryUrl?: string
-            prUrl?: string
-            model?: string
-            brainstormModel?: string
-            brainstormReasoningEffort?: string
-            reasoningEffort?: string
-            tasks?: string[]
-            acceptanceCriteria?: string[]
-            skipSetupScript?: boolean
-            description?: string
-            agentPermissionMode?: 'plan' | 'bypass' | 'strict' | 'interactive'
-            engine?: string
-            autoLoop?: boolean
-            autoLoopSessionMode?: 'per_task' | 'continuous'
-            worktreePath?: string
-            creationId?: string
-            comparisonId?: string
-          },
-      )
+    const { body, attachments } = await readWorkspaceCreationRequest<CreateWorkspaceBody>(c.req.raw)
 
     // workingBranch is derived from git when worktreePath is provided, so
     // it's not required in that flow. The other 3 fields stay mandatory.
@@ -1055,6 +1048,7 @@ app.post('/', migrationGuard, async (c) => {
         ['.ai/.git-conventions.md', '.git-conventions.md'],
         ['.ai/thoughts/', 'thoughts/'],
         ['.ai/images/', 'images/'],
+        ['.ai/attachments/', 'attachments/'],
         ['.ai/.setup-script.tmp', '.setup-script.tmp'],
         ['.ai/.cleanup-script.tmp', '.cleanup-script.tmp'],
         ['.ai/.archive-script.tmp', '.archive-script.tmp'],
@@ -1110,6 +1104,12 @@ app.post('/', migrationGuard, async (c) => {
 
     currentStep = 'write-context-files'
     emitCreateProgress(creationId, currentStep)
+    creationAttachments = await saveAttachments(worktreePath, attachments)
+    if (creationAttachments.length > 0) {
+      body.description = [body.description?.trim(), ...creationAttachments.map(attachmentReference)]
+        .filter(Boolean)
+        .join('\n\n')
+    }
     // Save Notion content as markdown in worktree
     let notionFilePath: string | null = null
     if (notionContent && body.notionUrl) {
@@ -1562,6 +1562,7 @@ Once the brainstorming + planning steps above are complete and you have a saved 
       const rollbackWarnings = await rollbackFailedCreation(workspace, {
         deleteLocalBranch: createdBranch,
         removeWorktree: createdWorktree,
+        attachments: creationAttachments,
       })
 
       // The setup script has already run by this point — see the caveat's own
@@ -1622,6 +1623,7 @@ Once the brainstorming + planning steps above are complete and you have a saved 
       const rollbackWarnings = await rollbackFailedCreation(createdWorkspace, {
         deleteLocalBranch: createdBranch,
         removeWorktree: createdWorktree,
+        attachments: creationAttachments,
       })
       logError('workspaces', 'Rolled back a creation that failed outside any per-step handler', {
         workspaceId: createdWorkspace.id,
@@ -1640,7 +1642,7 @@ Once the brainstorming + planning steps above are complete and you have a saved 
       return c.json({ error: failure, step: currentStep, rollback: { done: true, warnings: rollbackWarnings } }, 500)
     }
     emitCreateFailed(creationId, currentStep, message)
-    return c.json({ error: message, step: currentStep }, 500)
+    return c.json({ error: message, step: currentStep }, err instanceof AttachmentRequestError ? 400 : 500)
   }
 })
 

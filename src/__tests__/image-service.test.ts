@@ -16,6 +16,25 @@ describe('image-service', () => {
   })
 
   describe('saveImage', () => {
+    it.each(['image', 'index'])('removes partial files after a failed %s write', async (target) => {
+      const writeFile = fs.writeFileSync
+      let writes = 0
+      const write = vi.spyOn(fs, 'writeFileSync').mockImplementation((file, data, options) => {
+        writes++
+        if (writes === (target === 'image' ? 1 : 2)) {
+          writeFile(file, 'partial', options)
+          throw new Error('ENOSPC')
+        }
+        return writeFile(file, data, options)
+      })
+      try {
+        await expect(saveImage(tmpDir, Buffer.from('image'), 'a.png')).rejects.toThrow('ENOSPC')
+        expect(fs.readdirSync(path.join(tmpDir, '.ai/images'))).toEqual([])
+      } finally {
+        write.mockRestore()
+      }
+    })
+
     it('does not follow a pre-existing temporary index symlink', async () => {
       const images = path.join(tmpDir, '.ai/images')
       fs.mkdirSync(images, { recursive: true })

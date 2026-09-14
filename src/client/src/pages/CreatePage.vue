@@ -127,66 +127,68 @@
               :placeholder="useNotion && isValidNotionUrl ? $t('createPage.workspaceName') : $t('createPage.workspaceNamePlaceholder')"
             />
 
-            <div class="card-textarea-wrap">
-              <q-input
-                ref="descriptionRef"
-                v-model="description"
-                dark
-                dense
-                outlined
-                stack-label
-                type="textarea"
-                autogrow
-                :rows="6"
-                :error="fieldError === 'description'"
-                :error-message="fieldErrorMessage"
-                :label="$t('createPage.descriptionLabel')"
-                :placeholder="useNotion ? $t('createPage.instructions') : $t('createPage.instructionsPlaceholder')"
-                class="create-textarea"
-                @keydown="onDescriptionKeydown"
-                @keydown.ctrl.enter="handleCreate"
-                @keydown.meta.enter="handleCreate"
-              >
-                <template #append>
-                  <div class="column items-center self-end q-pb-xs">
-                    <q-spinner-dots v-if="isCreateVoiceTranscribing" size="18px" color="amber-6" />
-                    <q-btn
-                      flat
-                      dense
-                      round
-                      size="sm"
-                      :icon="isCreateVoiceTranscribing ? 'hourglass_top' : isCreateVoiceRecording ? 'mic' : 'mic_none'"
-                      :color="isCreateVoiceRecording ? 'red-5' : isCreateVoiceTranscribing ? 'amber-6' : 'kobo-3'"
-                      :disable="!createVoiceEnabled || isCreateVoiceTranscribing"
-                      :class="{ 'voice-btn--recording': isCreateVoiceRecording }"
-                      @mousedown.prevent="startCreateVoiceCapture"
-                      @mouseup.prevent="stopCreateVoiceCapture"
-                      @mouseleave.prevent="stopCreateVoiceCapture"
-                      @touchstart.prevent="startCreateVoiceCapture"
-                      @touchend.prevent="stopCreateVoiceCapture"
-                    >
-                      <q-tooltip>
-                        {{
-                          isCreateVoiceTranscribing
-                            ? $t('voice.transcribing')
-                            : isCreateVoiceRecording
-                              ? $t('voice.recording')
-                              : $t('voice.holdToTalk')
-                        }}
-                      </q-tooltip>
-                    </q-btn>
-                  </div>
-                </template>
-              </q-input>
-              <SlashSuggestionsPopup
-                v-if="showSlashPopup && slashFlat.length > 0"
-                class="create-slash-popup"
-                :grouped-dropdown="slashGrouped"
-                :flat-dropdown="slashFlat"
-                :selected-index="slashIndex"
-                @select="onSlashSelect"
-              />
-            </div>
+            <CreationAttachments v-model="creationAttachments" :disabled="submitting">
+              <div class="card-textarea-wrap">
+                <q-input
+                  ref="descriptionRef"
+                  v-model="description"
+                  dark
+                  dense
+                  outlined
+                  stack-label
+                  type="textarea"
+                  autogrow
+                  :rows="6"
+                  :error="fieldError === 'description'"
+                  :error-message="fieldErrorMessage"
+                  :label="$t('createPage.descriptionLabel')"
+                  :placeholder="useNotion ? $t('createPage.instructions') : $t('createPage.instructionsPlaceholder')"
+                  class="create-textarea"
+                  @keydown="onDescriptionKeydown"
+                  @keydown.ctrl.enter="handleCreate"
+                  @keydown.meta.enter="handleCreate"
+                >
+                  <template #append>
+                    <div class="column items-center self-end q-pb-xs">
+                      <q-spinner-dots v-if="isCreateVoiceTranscribing" size="18px" color="amber-6" />
+                      <q-btn
+                        flat
+                        dense
+                        round
+                        size="sm"
+                        :icon="isCreateVoiceTranscribing ? 'hourglass_top' : isCreateVoiceRecording ? 'mic' : 'mic_none'"
+                        :color="isCreateVoiceRecording ? 'red-5' : isCreateVoiceTranscribing ? 'amber-6' : 'kobo-3'"
+                        :disable="!createVoiceEnabled || isCreateVoiceTranscribing"
+                        :class="{ 'voice-btn--recording': isCreateVoiceRecording }"
+                        @mousedown.prevent="startCreateVoiceCapture"
+                        @mouseup.prevent="stopCreateVoiceCapture"
+                        @mouseleave.prevent="stopCreateVoiceCapture"
+                        @touchstart.prevent="startCreateVoiceCapture"
+                        @touchend.prevent="stopCreateVoiceCapture"
+                      >
+                        <q-tooltip>
+                          {{
+                            isCreateVoiceTranscribing
+                              ? $t('voice.transcribing')
+                              : isCreateVoiceRecording
+                                ? $t('voice.recording')
+                                : $t('voice.holdToTalk')
+                          }}
+                        </q-tooltip>
+                      </q-btn>
+                    </div>
+                  </template>
+                </q-input>
+                <SlashSuggestionsPopup
+                  v-if="showSlashPopup && slashFlat.length > 0"
+                  class="create-slash-popup"
+                  :grouped-dropdown="slashGrouped"
+                  :flat-dropdown="slashFlat"
+                  :selected-index="slashIndex"
+                  @select="onSlashSelect"
+                />
+              </div>
+            </CreationAttachments>
 
             <div
               class="column q-gutter-y-sm"
@@ -992,6 +994,7 @@
 <script setup lang="ts">
 import type { QInput } from 'quasar'
 import { useQuasar } from 'quasar'
+import CreationAttachments from 'src/components/CreationAttachments.vue'
 import DrawerToggleButton from 'src/components/DrawerToggleButton.vue'
 import PrCheckoutStepper from 'src/components/PrCheckoutStepper.vue'
 import PrPickerDialog, { type PullRequestSummary } from 'src/components/PrPickerDialog.vue'
@@ -1056,6 +1059,7 @@ const pathFilterOptions = ref<string[]>([])
 // Form fields
 const workspaceName = ref('')
 const description = ref('')
+const creationAttachments = ref<File[]>([])
 const descriptionRef = ref<QInput | null>(null)
 // Tracks the last project task-prompt auto-injected into `description`. Used to
 // tell an untouched injected prompt (safe to replace) from user-typed content.
@@ -2191,7 +2195,10 @@ onMounted(async () => {
     'create:form',
     () =>
       !submitting.value &&
-      (description.value.trim().length > 0 || manualTasks.value.length > 0 || manualCriteria.value.length > 0),
+      (description.value.trim().length > 0 ||
+        creationAttachments.value.length > 0 ||
+        manualTasks.value.length > 0 ||
+        manualCriteria.value.length > 0),
   )
 
   void workspaceTemplatesStore.fetchTemplates()
@@ -2355,8 +2362,8 @@ function validate(): { field: CreateField; message: string } | null {
     return { field: 'sentryUrl', message: t('createPage.sentryValidation') }
   }
   // Description is optional when Notion or Sentry provides the workspace context
-  if (!useNotion.value && !useSentry.value && !description.value.trim()) {
-    return { field: 'description', message: t('createPage.validationDescription') }
+  if (!useNotion.value && !useSentry.value && !description.value.trim() && creationAttachments.value.length === 0) {
+    return { field: 'description', message: t('attachments.descriptionRequired') }
   }
   if (!useNotion.value && !useSentry.value && (!getFinalName() || getFinalName() === 'workspace')) {
     if (!workspaceName.value.trim() && !description.value.trim()) {
@@ -2613,7 +2620,7 @@ async function createOneWorkspace(
       agentPermissionMode: plan.agentPermissionMode,
     }
 
-    const workspace = await store.createWorkspace(payload)
+    const workspace = await store.createWorkspace(payload, creationAttachments.value)
 
     if (settingsStore.global.audioWorkspaceCreatedNotifications) {
       playNotificationSound(

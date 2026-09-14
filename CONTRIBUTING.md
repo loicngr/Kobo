@@ -35,7 +35,11 @@ npm run test:all       # both
 npm run lint           # biome check (lint + format)
 npm run lint:fix       # biome check --write
 
-make ci                # full CI pipeline (audit + lint + tsc + tests)
+npx tsc --noEmit       # backend type check
+npm run typecheck:tests # backend tests and fixtures type check
+(cd src/client && npm run type-check) # client + Vue type check
+
+make ci                # install + audit + lint + type checks + build + both test suites
 make help              # list every Makefile target
 ```
 
@@ -43,7 +47,11 @@ Run a single test file with `npx vitest run src/__tests__/<file>.test.ts`, filte
 
 ## Testing discipline
 
-TDD for backend changes: write the failing test, confirm it fails for the right reason, implement minimally, confirm it passes, commit. See [`AGENTS.md`](./AGENTS.md#testing-discipline) for the full conventions (route test mocking, `beforeEach` cleanup, frontend store coverage).
+TDD for backend changes: write the failing test, confirm it fails for the right reason, implement minimally, then confirm it passes. Frontend tests cover stores, utilities, composables, and selected Vue components using Vue Test Utils and `happy-dom`. Type-checking and browser smoke tests complement this coverage. See [`AGENTS.md`](./AGENTS.md#testing-discipline) for route mocking and cleanup conventions.
+
+Backend tests pin `KOBO_HOME` to a temporary directory; never point tests at your production data. Live MCP tests are a separate, explicit command (`npm run test:mcp:live`) requiring `KOBO_LIVE_ENGINE`, `KOBO_LIVE_MODEL`, and real provider credentials. They stay outside normal CI; see the [MCP guide](./src/mcp-server/README.md#live-engine-validation).
+
+Schema changes must append a migration and update the fresh-install schema, with upgrade tests proving data preservation. See [Database migrations](./AGENTS.md#database-migrations). UI changes must follow [`DESIGN.md`](./DESIGN.md) and update all five translation files for user-visible text.
 
 ## Git workflow
 
@@ -53,10 +61,12 @@ TDD for backend changes: write the failing test, confirm it fails for the right 
 - Keep commits atomic — each one compiles and passes tests.
 - Never force-push to shared branches.
 
-Run `make ci` before pushing. CI runs lint, type check, and tests on every PR to `develop`.
+Run `make ci` before pushing. It reinstalls all three dependency trees with `npm ci`, audits them, runs Biome and the three type checks, builds production assets, then runs both test suites. CI runs on pushes to `develop` and PRs targeting `develop` or `main`.
 
 Full commit and branch conventions are in [`AGENTS.md`](./AGENTS.md#git-workflow).
 
 ## Release process
 
-Releases are cut from `main`. Bump `package.json` on `develop`, merge into `main`, push. The release workflow builds, tests, publishes to npm, tags `v<version>`, and creates the GitHub Release. It fails early if the version or tag already exists.
+Releases are cut from `main`. Prepare the version change in a branch targeting `develop`, keeping `package.json` and its lockfile synchronized; then merge `develop` into `main`. A push to `main` starts the release workflow. Manual dispatch also requires `main`.
+
+The workflow installs and audits dependencies, lints, type-checks the server and client, runs both test suites, and builds. Before publishing, it refuses a version or tag that already exists. It then publishes to npm with provenance, tags `v<version>`, and creates the GitHub Release. `make release` runs the local CI gates plus the version/tag availability checks; publishing remains the workflow's responsibility.

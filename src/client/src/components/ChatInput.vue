@@ -7,24 +7,24 @@
     @dragleave="onDragLeave"
     @drop="onDrop"
   >
-    <!-- Pending images tags -->
-    <div v-if="pendingImages.length > 0" class="row items-center q-gutter-xs q-mb-xs q-px-xs" style="flex-wrap: wrap;">
+    <!-- Pending attachments -->
+    <div v-if="pendingAttachments.length > 0" class="row items-center q-gutter-xs q-mb-xs q-px-xs" style="flex-wrap: wrap;">
       <div
-        v-for="img in pendingImages"
+        v-for="img in pendingAttachments"
         :key="img.tempId"
-        class="image-tag row items-center q-px-sm q-py-xs rounded-borders"
+        class="attachment-tag row items-center q-px-sm q-py-xs rounded-borders"
         :class="{
-          'image-tag--uploading': img.status === 'uploading',
-          'image-tag--ready': img.status === 'ready',
-          'image-tag--error': img.status === 'error',
+          'attachment-tag--uploading': img.status === 'uploading',
+          'attachment-tag--ready': img.status === 'ready',
+          'attachment-tag--error': img.status === 'error',
         }"
       >
         <q-spinner-dots v-if="img.status === 'uploading'" size="14px" color="kobo-3" class="q-mr-xs" />
-        <q-icon v-else-if="img.status === 'ready'" name="image" size="14px" color="green-6" class="q-mr-xs" />
+        <q-icon v-else-if="img.status === 'ready'" :name="img.kind === 'image' ? 'image' : 'description'" size="14px" color="green-6" class="q-mr-xs" />
         <q-icon v-else name="error" size="14px" color="red-6" class="q-mr-xs" />
 
-        <span class="text-caption image-tag-label">
-          {{ img.status === 'uploading' ? $t('chatInput.uploading') : (img.path || img.originalName) }}
+        <span class="text-caption attachment-tag-label">
+          {{ img.status === 'uploading' ? $t('chatInput.uploading') : img.originalName }}
         </span>
 
         <q-btn
@@ -33,10 +33,12 @@
           round
           size="xs"
           icon="close"
-          class="q-ml-xs image-tag-close"
-          @click="removeImage(img.tempId)"
+          class="q-ml-xs attachment-tag-close"
+          :disable="sendingMessage || isQueued"
+          :aria-label="$t('attachments.remove')"
+          @click="removeAttachment(img.tempId)"
         >
-          <q-tooltip>{{ $t('tooltip.removeImage') }}</q-tooltip>
+          <q-tooltip>{{ $t('tooltip.removeAttachment') }}</q-tooltip>
         </q-btn>
       </div>
     </div>
@@ -128,7 +130,7 @@
         :placeholder="$t('chatInput.placeholder')"
         :input-style="{ maxHeight: '200px', overflowY: 'auto' }"
         class="chat-input col rounded-borders"
-        :disable="isDisabled"
+        :disable="isDisabled || sendingMessage"
         @keydown="onKeydown"
         @paste="onPaste"
       />
@@ -137,7 +139,8 @@
       <input
         ref="fileInputRef"
         type="file"
-        accept="image/png,image/jpeg,image/gif,image/webp"
+        :accept="ATTACHMENT_ACCEPT"
+        :disabled="isDisabled || isQueued || sendingMessage"
         multiple
         style="display: none;"
         @change="onFileSelected"
@@ -148,10 +151,11 @@
         dense
         icon="attach_file"
         color="kobo-3"
-        :disable="isDisabled"
+        :disable="isDisabled || isQueued || sendingMessage"
+        :aria-label="$t('attachments.add')"
         @click="fileInputRef?.click()"
       >
-        <q-tooltip>{{ $t('chatInput.attachImage') }}</q-tooltip>
+        <q-tooltip>{{ $t('attachments.add') }}</q-tooltip>
       </q-btn>
 
       <q-btn
@@ -208,7 +212,7 @@
         dense
         icon="send"
         color="primary"
-        :disable="isDisabled || isCompacting || (!message.trim() && pendingImages.length === 0) || hasUploading"
+        :disable="isDisabled || sendingMessage || isCompacting || (!message.trim() && pendingAttachments.length === 0) || attachmentsBlocked"
         @click="sendMessage"
       >
         <q-tooltip>{{ $t('tooltip.sendMessage') }}</q-tooltip>
@@ -264,6 +268,7 @@ import type { QInput } from 'quasar'
 import { useQuasar } from 'quasar'
 import QuotaFooter from 'src/components/QuotaFooter.vue'
 import SlashSuggestionsPopup from 'src/components/SlashSuggestionsPopup.vue'
+import { useChatAttachments } from 'src/composables/use-chat-attachments'
 import { useFileMention } from 'src/composables/use-file-mention'
 import { useIsMobile } from 'src/composables/use-is-mobile'
 import { type SlashDropdownItem, useSlashAutocomplete } from 'src/composables/use-slash-autocomplete'
@@ -278,6 +283,7 @@ import { registerUnsavedScope, unregisterUnsavedScope } from 'src/utils/unsaved-
 import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
+import { ATTACHMENT_ACCEPT } from '../../../shared/attachments'
 
 const props = defineProps<{
   workspaceId: string
@@ -291,6 +297,7 @@ const settingsStore = useSettingsStore()
 const wsStore = useWebSocketStore()
 const templatesStore = useTemplatesStore()
 const message = ref('')
+const sendingMessage = ref(false)
 const interrupting = ref(false)
 const forcingQueue = ref(false)
 
@@ -398,17 +405,17 @@ function selectFile(file: string | undefined) {
   void nextTick(() => getChatInputEl()?.focus())
 }
 
-// Image upload
-interface PendingImage {
-  tempId: string
-  uid?: string
-  path?: string
-  originalName: string
-  placeholder: string // the `[image: xxx]` token as it appears in the textarea
-  status: 'uploading' | 'ready' | 'error'
-}
+// Attachment state owns uploads and their cleanup independently of chat delivery.
+const attachments = useChatAttachments({
+  message,
+  workspaceId: () => props.workspaceId,
+  locked: () => isDisabled.value || isQueued.value || sendingMessage.value,
+  insert: insertTextAtCaret,
+  uploadingLabel: () => t('chatInput.uploading'),
+  notify: (error) => $q.notify({ type: 'negative', message: t(`attachments.error.${error}`), position: 'top' }),
+})
+const { pending: pendingAttachments, blocked: attachmentsBlocked, remove: removeAttachment } = attachments
 
-const pendingImages = ref<PendingImage[]>([])
 const fileInputRef = ref<HTMLInputElement | null>(null)
 const isDragging = ref(false)
 const isRecording = ref(false)
@@ -418,8 +425,6 @@ const mediaStreamRef = ref<MediaStream | null>(null)
 const chunksRef = ref<BlobPart[]>([])
 const recordTimeoutRef = ref<ReturnType<typeof setTimeout> | null>(null)
 const MAX_RECORDING_MS = 60_000
-
-const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp']
 
 function insertTextAtCaret(text: string) {
   const el = getChatInputEl()
@@ -436,115 +441,28 @@ function insertTextAtCaret(text: string) {
   })
 }
 
-function makeUniquePlaceholder(): string {
-  const base = `[image: ${t('chatInput.uploading')}]`
-  const existing = new Set(pendingImages.value.map((p) => p.placeholder))
-  if (!existing.has(base)) return base
-  // Disambiguate with a numeric suffix
-  let n = 2
-  while (existing.has(`[image: ${t('chatInput.uploading')} ${n}]`)) n++
-  return `[image: ${t('chatInput.uploading')} ${n}]`
-}
-
-async function uploadImage(file: File) {
-  if (!ALLOWED_TYPES.includes(file.type)) return
-
-  const tempId = crypto.randomUUID()
-  const originalName = file.name || 'pasted-image.png'
-  const placeholder = makeUniquePlaceholder()
-  const pending: PendingImage = {
-    tempId,
-    originalName,
-    placeholder,
-    status: 'uploading',
-  }
-  pendingImages.value.push(pending)
-  // Insert the readable placeholder at the caret position; it will be
-  // replaced by the real path once upload completes.
-  insertTextAtCaret(placeholder)
-
-  try {
-    const formData = new FormData()
-    formData.append('image', file)
-
-    const res = await fetch(`/api/workspaces/${props.workspaceId}/images`, {
-      method: 'POST',
-      body: formData,
-    })
-
-    if (!res.ok) {
-      const err = await res.json()
-      throw new Error(err.error || 'Upload failed')
-    }
-
-    const data = await res.json()
-    const entry = pendingImages.value.find((p) => p.tempId === tempId)
-    if (entry) {
-      entry.uid = data.uid
-      entry.path = data.path
-      entry.status = 'ready'
-      // Replace the temporary placeholder with the real path-based one,
-      // matching the tag shown in the badge above the textarea.
-      const newPlaceholder = `[image: ${data.path}]`
-      if (newPlaceholder !== entry.placeholder) {
-        message.value = message.value.split(entry.placeholder).join(newPlaceholder)
-        entry.placeholder = newPlaceholder
-      }
-    }
-  } catch {
-    const entry = pendingImages.value.find((p) => p.tempId === tempId)
-    if (entry) entry.status = 'error'
-  }
-}
-
-function deleteImageOnServer(workspaceId: string, uid: string) {
-  fetch(`/api/workspaces/${workspaceId}/images/${uid}`, { method: 'DELETE' }).catch(() => {
-    /* best-effort */
-  })
-}
-
-/**
- * Remove a pending image. Synchronous local state mutations (list + textarea
- * placeholder) run first; the network DELETE is fired asynchronously after so
- * multiple concurrent calls never interleave with the local reactive updates.
- */
-function removeImage(tempId: string) {
-  const target = pendingImages.value.find((p) => p.tempId === tempId)
-  if (!target) return
-  pendingImages.value = pendingImages.value.filter((p) => p.tempId !== tempId)
-  // Remove the placeholder from the textarea (no-op if already gone)
-  {
-    const escaped = target.placeholder.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    message.value = message.value.replace(new RegExp(`${escaped}\\s?`, 'g'), '')
-  }
-  // Fire the server DELETE last, best-effort and non-blocking
-  if (target.uid) {
-    deleteImageOnServer(props.workspaceId, target.uid)
-  }
-}
-
 function onPaste(event: ClipboardEvent) {
-  if (!event.clipboardData) return
-  for (const item of Array.from(event.clipboardData.items)) {
-    if (item.type.startsWith('image/')) {
-      const file = item.getAsFile()
-      if (file) uploadImage(file)
-    }
-  }
+  const data = event.clipboardData
+  if (!data) return
+  const files = Array.from(data.items)
+    .filter((item) => item.kind === 'file')
+    .map((item) => item.getAsFile())
+    .filter((file): file is File => file !== null)
+  if (files.length === 0) return
+  if (!data.getData('text/plain')) event.preventDefault()
+  void attachments.addFiles(files)
 }
 
 function onDrop(event: DragEvent) {
   event.preventDefault()
   isDragging.value = false
-  if (!event.dataTransfer) return
-  for (const file of Array.from(event.dataTransfer.files)) {
-    if (ALLOWED_TYPES.includes(file.type)) uploadImage(file)
-  }
+  void attachments.addFiles(Array.from(event.dataTransfer?.files ?? []))
 }
 
 function onDragOver(event: DragEvent) {
+  if (!event.dataTransfer?.types.includes('Files')) return
   event.preventDefault()
-  isDragging.value = true
+  isDragging.value = !isDisabled.value && !isQueued.value && !sendingMessage.value
 }
 
 function onDragLeave() {
@@ -553,14 +471,9 @@ function onDragLeave() {
 
 function onFileSelected(event: Event) {
   const input = event.target as HTMLInputElement
-  if (!input.files) return
-  for (const file of Array.from(input.files)) {
-    uploadImage(file)
-  }
+  void attachments.addFiles(Array.from(input.files ?? []))
   input.value = ''
 }
-
-const hasUploading = computed(() => pendingImages.value.some((p) => p.status === 'uploading'))
 
 const currentSession = computed(() => store.sessions.find((s) => s.id === store.selectedSessionId) ?? null)
 
@@ -603,42 +516,26 @@ watch(queuedMessage, (queued, previous) => {
   if (!queued) forcingQueue.value = false
   if (previous && !queued && !cancelledManually && message.value.trim() === previous.content.trim()) {
     message.value = ''
-    // The queued message (including its `[image: …]` tokens) has just been
-    // dispatched to the agent. Drop the pending-image entries WITHOUT firing a
-    // server DELETE — the agent still has to read those files from disk. We
-    // must clear the list in the same tick we clear the textarea: otherwise the
-    // reconcile watcher below sees the placeholder gone while the entry lingers,
-    // treats it as a user deletion, and removes the file before the agent reads
-    // it (mirrors the direct-send path which clears pendingImages at send time).
-    pendingImages.value = []
+    // A dispatched message owns its attachments. Clearing the draft must
+    // never remove files the agent still needs to read.
+    attachments.take()
   }
   cancelledManually = false
 })
 
 watch([() => props.workspaceId, () => store.selectedSessionId], () => {
+  attachments.discard()
   message.value = ''
   if (isRecording.value) void stopVoiceCapture()
 })
 
-// Watch the message text: re-detect slash fragments + reconcile the image
-// placeholder list (so deleting "[image: …]" from the textarea also drops
-// the upload reference). The slash detection itself lives in the composable.
+// Reconcile removed attachment references after updating autocomplete.
 watch(message, async () => {
   await nextTick()
   await detectSlashFragment()
   await detectMentionFragment()
 
-  // Detect placeholders removed by the user and delete the corresponding image.
-  // Snapshot tempIds first to avoid mutating the list while iterating.
-  const removedTempIds: string[] = []
-  for (const img of pendingImages.value) {
-    if (!message.value.includes(img.placeholder)) {
-      removedTempIds.push(img.tempId)
-    }
-  }
-  for (const tempId of removedTempIds) {
-    removeImage(tempId)
-  }
+  attachments.reconcile()
 })
 
 // Keyboard push-to-talk has no tactile effect on phones (no physical
@@ -651,6 +548,7 @@ if (!isMobile.value) {
   document.addEventListener('visibilitychange', onVisibilityChange)
 }
 onUnmounted(() => {
+  attachments.discard()
   window.removeEventListener('keydown', onWindowKeyDown)
   window.removeEventListener('keyup', onWindowKeyUp)
   window.removeEventListener('blur', onWindowBlur)
@@ -836,8 +734,25 @@ onUnmounted(() => {
 watch(() => props.workspaceId, loadHistory)
 
 async function sendMessage() {
+  if (sendingMessage.value || isQueued.value) return
+  sendingMessage.value = true
+  try {
+    await sendMessageNow()
+  } finally {
+    sendingMessage.value = false
+  }
+}
+
+async function sendMessageNow() {
+  const workspaceId = props.workspaceId
+  let targetSessionId = store.selectedSessionId
   const text = message.value.trim()
-  if ((!text && pendingImages.value.length === 0) || isDisabled.value || isCompacting.value || hasUploading.value)
+  if (
+    (!text && pendingAttachments.value.length === 0) ||
+    isDisabled.value ||
+    isCompacting.value ||
+    attachmentsBlocked.value
+  )
     return
 
   let session = currentSession.value
@@ -845,12 +760,12 @@ async function sendMessage() {
   // Intercept Kobo built-in commands
   const koboCmd = KOBO_COMMANDS[text]
   if (koboCmd) {
-    if (!wsStore.sendChatMessage(props.workspaceId, koboCmd.prompt, store.selectedSessionId ?? undefined)) {
+    if (!wsStore.sendChatMessage(workspaceId, koboCmd.prompt, store.selectedSessionId ?? undefined)) {
       $q.notify({ type: 'negative', message: t('network.login.unreachable'), position: 'top', timeout: 6000 })
       return
     }
-    store.markRead(props.workspaceId)
-    store.addActivityItem(props.workspaceId, {
+    store.markRead(workspaceId)
+    store.addActivityItem(workspaceId, {
       id: `user-${Date.now()}`,
       type: 'text',
       content: koboCmd.prompt,
@@ -867,28 +782,39 @@ async function sendMessage() {
   // Queue the message if the agent is busy
   if (isAgentBusy.value) {
     if (!store.selectedSessionId) return
-    store.queueMessage(props.workspaceId, text, store.selectedSessionId)
+    store.queueMessage(workspaceId, text, store.selectedSessionId)
+    attachments.take()
     return
   }
-  store.cancelQueuedMessage(props.workspaceId, store.selectedSessionId)
+  store.cancelQueuedMessage(workspaceId, store.selectedSessionId)
 
-  // Placeholders already contain `[image: path]` once the upload is done,
-  // so no replacement is needed. Append orphan images as a safety net.
+  // Ready attachments already have their final references in the draft.
   let composedText = text
-  const orphanTags = pendingImages.value
-    .filter((p) => p.status === 'ready' && p.path && !composedText.includes(`[image: ${p.path}]`))
-    .map((p) => `[image: ${p.path}]`)
+  const orphanTags = pendingAttachments.value
+    .filter((p) => p.status === 'ready' && p.path && !composedText.includes(p.placeholder))
+    .map((p) => p.reference ?? p.placeholder)
     .join(' ')
   if (orphanTags) {
     composedText = `${composedText} ${orphanTags}`.trim()
+  }
+  // Detach before createSession can switch the selected session. The draft's
+  // files now belong to this send until it succeeds or is restored on failure.
+  const sentAttachments = attachments.take()
+  const restoreDraft = () => {
+    if (props.workspaceId === workspaceId && store.selectedSessionId === targetSessionId) {
+      message.value = composedText
+      attachments.restore(sentAttachments)
+    }
   }
   // Historical completed/error sessions without an engine conversation cannot
   // be resumed. Start a new session transparently so the user's message can
   // still continue the workspace.
   if ((session?.status === 'completed' || session?.status === 'error') && !session.engineSessionId) {
     try {
-      session = await store.createSession(props.workspaceId)
+      session = await store.createSession(workspaceId)
+      targetSessionId = session.id
     } catch (err) {
+      restoreDraft()
       const serverMsg = err instanceof Error ? err.message : null
       $q.notify({
         type: 'negative',
@@ -899,11 +825,15 @@ async function sendMessage() {
       return
     }
   }
-  if (isCompacting.value) return
+  if (isCompacting.value) {
+    restoreDraft()
+    return
+  }
   const sessionTag = session?.id ?? store.selectedSessionId ?? undefined
 
   const requiresWebSocket = session?.status !== 'idle' && session?.status !== 'completed' && session?.status !== 'error'
   if (requiresWebSocket && !wsStore.isConnected()) {
+    restoreDraft()
     $q.notify({ type: 'negative', message: t('network.login.unreachable'), position: 'top', timeout: 6000 })
     return
   }
@@ -912,8 +842,8 @@ async function sendMessage() {
   // (which the backend may emit synchronously during /start) can find it via
   // the dedup pass and update its id instead of creating a duplicate.
   const optimisticId = `user-${Date.now()}`
-  store.markRead(props.workspaceId)
-  store.addActivityItem(props.workspaceId, {
+  store.markRead(workspaceId)
+  store.addActivityItem(workspaceId, {
     id: optimisticId,
     type: 'text',
     content: composedText,
@@ -922,19 +852,17 @@ async function sendMessage() {
     meta: { sender: 'user', pending: true },
   })
 
-  const savedText = text
   pushToHistory(text)
   resetHistoryNav()
-  message.value = ''
-  pendingImages.value = []
+  if (props.workspaceId === workspaceId && store.selectedSessionId === targetSessionId) message.value = ''
 
   // On failure: roll back the optimistic item and restore the input so the
   // user doesn't lose their message. Only applies to HTTP flows that can fail
   // before the WS event arrives to upgrade the pending item.
   const rollback = (err: unknown, contextMsg: string) => {
     console.error(`[ChatInput] ${contextMsg} failed:`, err)
-    store.removeActivityItem(props.workspaceId, optimisticId)
-    message.value = savedText
+    store.removeActivityItem(workspaceId, optimisticId)
+    restoreDraft()
     const serverMsg = err instanceof Error ? err.message : null
     $q.notify({
       type: 'negative',
@@ -947,21 +875,21 @@ async function sendMessage() {
   if (session?.status === 'idle') {
     // First message on an idle session — start a fresh agent for it
     try {
-      await store.startWorkspace(props.workspaceId, composedText, session.id)
-      await store.fetchSessions(props.workspaceId)
+      await store.startWorkspace(workspaceId, composedText, session.id)
+      await store.fetchSessions(workspaceId)
     } catch (err) {
       rollback(err, 'startWorkspace')
     }
   } else if (session?.status === 'completed' || session?.status === 'error') {
     // Continue an ended session — resume the underlying Claude conversation
     try {
-      await store.startWorkspace(props.workspaceId, composedText, session.id, true)
-      await store.fetchSessions(props.workspaceId)
+      await store.startWorkspace(workspaceId, composedText, session.id, true)
+      await store.fetchSessions(workspaceId)
     } catch (err) {
       rollback(err, 'resume session')
     }
   } else {
-    if (!wsStore.sendChatMessage(props.workspaceId, composedText, store.selectedSessionId ?? undefined)) {
+    if (!wsStore.sendChatMessage(workspaceId, composedText, store.selectedSessionId ?? undefined)) {
       rollback(new Error(t('network.login.unreachable')), 'send chat message')
     }
   }
@@ -1229,7 +1157,7 @@ function onKeydown(event: KeyboardEvent) {
   background-color: rgba(102, 95, 221, 0.15);
 }
 
-.image-tag {
+.attachment-tag {
   font-family: var(--kobo-font-mono);
   font-size: 12px;
   line-height: 1;
@@ -1253,7 +1181,7 @@ function onKeydown(event: KeyboardEvent) {
   }
 }
 
-.image-tag-label {
+.attachment-tag-label {
   max-width: 250px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1311,7 +1239,7 @@ function onKeydown(event: KeyboardEvent) {
   }
 }
 
-.image-tag-close {
+.attachment-tag-close {
   color: var(--kobo-danger);
   opacity: 0.7;
 
