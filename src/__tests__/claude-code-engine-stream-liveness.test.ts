@@ -138,7 +138,14 @@ describe('claude-code engine — shared turn liveness', () => {
       await vi.advanceTimersByTimeAsync(CLAUDE_TOOL_IDLE_TIMEOUT_MS)
       expect(events).toContainEqual({ kind: 'session:ended', reason: 'watchdog', exitCode: null })
       expect(abortSignal?.aborted).toBe(true)
-      expect(events.some((e) => e.kind === 'error' && e.category === 'other' && /watchdog/i.test(e.message))).toBe(true)
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          kind: 'error',
+          category: 'other',
+          code: 'stream_idle_timeout',
+          message: expect.stringMatching(/watchdog/i),
+        }),
+      )
     } finally {
       releaseStream?.()
       releaseStream = undefined

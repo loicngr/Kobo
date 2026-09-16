@@ -197,9 +197,12 @@ Clients subscribe to individual workspace ids. The server sends `WsEvent` object
 Agent engines emit a normalized `AgentEvent` union, carried by `agent:event`. Common outer types include `user:message`, `task:updated`, `devserver:status`, `workspace:status`, `workspace:archived`, `workspace:unarchived`, and `sync:response`. Legacy `agent:output` rows remain supported through content migration. Keep the backend union in `services/agent/engines/types.ts` and its client mirror in `client/src/types/agent-event.ts` synchronized.
 
 Error events may carry a stable `code`. Claude's post-result drain timeout uses
-`result_drain_timeout`: keep it in the chat but exclude it from `AgentErrorBanner`.
-The banner selector also recognizes the exact legacy message for persisted
-history. Do not suppress other watchdog errors or change session-end/retry behavior.
+`result_drain_timeout` and its stream inactivity timeout uses `stream_idle_timeout`:
+keep both in the chat but exclude them from `AgentErrorBanner`. The selector also
+recognizes their exact legacy messages for persisted history. Other errors keep
+their banners. A `session:ended` with reason `watchdog` leaves a manual workspace
+`idle`, unless accompanied by a nonzero exit code. Preserve the watchdog end reason
+and auto-loop's bounded recovery/backoff behavior; real engine failures remain errors.
 
 Two emit flavors in `websocket-service.ts`:
 - `emit(workspaceId, type, payload)` persists to `ws_events` for later replay via `sync:request` on reconnect
@@ -255,6 +258,13 @@ Background: the engine was migrated from `@openai/codex-sdk` (one-shot `codex ex
 - **`MCP tools` need `default_tools_approval_mode: 'auto'` in `config.mcp_servers`.** Without it Codex flags every MCP tool call as needing user approval ("user cancelled MCP tool call"). Kōbō trusts every tool it spawns, so the options-builder pre-approves the namespace.
 
 ## Workspace operations
+
+### Delete confirmation
+
+The workspace deletion dialog requires the exact `workingBranch`, not the editable
+workspace title. Trim surrounding whitespace from the confirmation input, but
+preserve case and the full branch name. Display the branch separately from the
+input label so long values remain readable; retain the worktree/history warning.
 
 ### Attachments during creation
 

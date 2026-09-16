@@ -373,6 +373,7 @@ export function createClaudeCodeEngine(): AgentEngine {
               category: 'other',
               message:
                 'Session force-ended by the liveness watchdog: no SDK activity within the deadline. If the agent was legitimately busy, this is a bug worth reporting.',
+              code: 'stream_idle_timeout',
             })
             emitSessionEnded('watchdog', null)
           }

@@ -561,7 +561,7 @@
         <div class="text-body2 q-mb-sm text-kobo-3">
           {{ deleteTarget?.name }}
         </div>
-        <div class="text-caption q-mb-md text-kobo-3" style="font-family: monospace;">
+        <div class="text-caption q-mb-md text-kobo-3" style="font-family: var(--kobo-font-mono); overflow-wrap: anywhere;">
           {{ deleteTarget?.workingBranch }}
         </div>
 
@@ -587,16 +587,21 @@
         </div>
 
         <!-- Deleting removes the worktree and the whole history. Typing the
-             name back is what separates it from the reversible actions next
+             working branch back is what separates it from the reversible actions next
              to it — in this dialog, not a second one stacked on top. -->
         <q-input
-          v-model="deleteConfirmName"
+          v-model="deleteConfirmBranch"
           dark
           dense
           outlined
           autofocus
           class="q-mt-md"
-          :label="$t('workspace.deleteTypeName', { name: deleteTarget?.name ?? '' })"
+          :label="$t('workspace.deleteTypeBranch')"
+          :hint="$t('workspace.deleteConsequences')"
+          :placeholder="deleteTarget?.workingBranch"
+          :spellcheck="false"
+          autocapitalize="off"
+          autocomplete="off"
           @keyup.enter="deleteConfirmMatches && confirmDelete()"
         />
       </q-card-section>
@@ -891,9 +896,9 @@ async function toggleArchived() {
 // Delete dialog state
 const deleteDialog = ref(false)
 /** What the user typed back; the Delete button unlocks only on an exact match. */
-const deleteConfirmName = ref('')
+const deleteConfirmBranch = ref('')
 const deleteConfirmMatches = computed(
-  () => !!deleteTarget.value && deleteConfirmName.value.trim() === deleteTarget.value.name,
+  () => !!deleteTarget.value && deleteConfirmBranch.value.trim() === deleteTarget.value.workingBranch,
 )
 const bulkDeleteConfirmCount = ref('')
 const bulkDeleteConfirmMatches = computed(() => bulkDeleteConfirmCount.value.trim() === String(store.archived.length))
@@ -912,7 +917,7 @@ function openDeleteDialog(ws: Workspace, event: Event) {
   deleteTarget.value = ws
   deleteLocalBranch.value = true
   deleteRemoteBranch.value = false
-  deleteConfirmName.value = ''
+  deleteConfirmBranch.value = ''
   deleteDialog.value = true
 }
 

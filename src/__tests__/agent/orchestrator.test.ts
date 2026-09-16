@@ -791,47 +791,61 @@ describe('Orchestrator — event dispatch', () => {
     expect(getWorkspace(ws.id)?.status).toBe('executing')
   })
 
-  it('onSessionEnded with exitCode 0 transitions workspace to completed', async () => {
-    const { createWorkspace, getWorkspace, updateWorkspaceStatus } = await import(
-      '../../server/services/workspace-service.js'
-    )
-    const ws = createWorkspace({ name: 'W', projectPath: '/tmp', sourceBranch: 'd', workingBranch: 'b' })
-    updateWorkspaceStatus(ws.id, 'brainstorming')
-    updateWorkspaceStatus(ws.id, 'executing')
-    let emitEv: (e: AgentEvent) => void = () => {}
-    const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
-    _registerEngineForTest({
-      id: 'claude-code',
-      displayName: 'Claude Code',
-      capabilities: {
-        models: [],
-        permissionModes: ['bypass'],
-        supportsResume: true,
-        supportsMcp: true,
-        supportsSkills: true,
-        supportsSubagents: false,
-        supportsQuotaStatus: false,
-      },
-      async start(_opts, onEvent) {
-        emitEv = onEvent
-        return {
-          pid: 1,
-          engineSessionId: 'sid',
-          sendMessage() {},
-          interrupt() {},
-          async stop() {},
-          resolvePendingUserInput: () => false,
-        }
-      },
-    })
-    const { startAgent, _getControllers, _getRetryCounts } = await import('../../server/services/agent/orchestrator.js')
-    startAgent(ws.id, '/tmp', 'hi')
-    await flushControllerStart()
-    emitEv({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
-    expect(getWorkspace(ws.id)?.status).toBe('completed')
-    expect(_getControllers().has(ws.id)).toBe(false)
-    expect(_getRetryCounts().has(ws.id)).toBe(false)
-  })
+  it.each([
+    { reason: 'completed', exitCode: 0, status: 'completed' },
+    { reason: 'watchdog', exitCode: null, status: 'idle' },
+    { reason: 'watchdog', exitCode: 1, status: 'error' },
+    { reason: 'error', exitCode: null, status: 'error' },
+  ] as const)(
+    'onSessionEnded with $reason and exitCode $exitCode transitions workspace to $status',
+    async ({ reason, exitCode, status }) => {
+      const { createWorkspace, getWorkspace, updateWorkspaceStatus } = await import(
+        '../../server/services/workspace-service.js'
+      )
+      const ws = createWorkspace({ name: 'W', projectPath: '/tmp', sourceBranch: 'd', workingBranch: 'b' })
+      updateWorkspaceStatus(ws.id, 'brainstorming')
+      updateWorkspaceStatus(ws.id, 'executing')
+      let emitEv: (e: AgentEvent) => void = () => {}
+      const { _registerEngineForTest } = await import('../../server/services/agent/engines/registry.js')
+      _registerEngineForTest({
+        id: 'claude-code',
+        displayName: 'Claude Code',
+        capabilities: {
+          models: [],
+          permissionModes: ['bypass'],
+          supportsResume: true,
+          supportsMcp: true,
+          supportsSkills: true,
+          supportsSubagents: false,
+          supportsQuotaStatus: false,
+        },
+        async start(_opts, onEvent) {
+          emitEv = onEvent
+          return {
+            pid: 1,
+            engineSessionId: 'sid',
+            sendMessage() {},
+            interrupt() {},
+            async stop() {},
+            resolvePendingUserInput: () => false,
+          }
+        },
+      })
+      const { startAgent, _getControllers, _getRetryCounts } = await import(
+        '../../server/services/agent/orchestrator.js'
+      )
+      const { agentSessionId } = startAgent(ws.id, '/tmp', 'hi')
+      await flushControllerStart()
+      emitEv({ kind: 'session:ended', reason, exitCode })
+      expect(getWorkspace(ws.id)?.status).toBe(status)
+      const { getDb } = await import('../../server/db/index.js')
+      expect(getDb().prepare('SELECT end_reason FROM agent_sessions WHERE id = ?').get(agentSessionId)).toEqual({
+        end_reason: reason,
+      })
+      expect(_getControllers().has(ws.id)).toBe(false)
+      expect(_getRetryCounts().has(ws.id)).toBe(false)
+    },
+  )
 
   it('onSessionEnded with exitCode 1 transitions workspace to error', async () => {
     const { createWorkspace, getWorkspace, updateWorkspaceStatus } = await import(

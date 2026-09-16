@@ -205,12 +205,7 @@ describe('orchestrator auto-loop integration', () => {
     expect(quotaBackoff.getPending(wsId)).toMatchObject({ workspaceId: wsId, source: 'fallback_ladder', retryCount: 1 })
   })
 
-  // Pins the flagship remediation behavior: a watchdog-forced end on a MANUAL
-  // (auto_loop=0) workspace is an error outcome, never a silent 'completed'.
-  // The auto-loop path above takes the quota-backoff recovery instead; the
-  // manual path must land on 'error' via isErrorOutcome (reason === 'watchdog')
-  // and must NOT arm any quota backoff.
-  it('transitions a manual (non-auto-loop) workspace to error on a watchdog end without arming a backoff', async () => {
+  it('transitions a manual workspace to idle on a watchdog end without arming a backoff', async () => {
     const orch = await import('../server/services/agent/orchestrator.js')
     const { getDb } = await import('../server/db/index.js')
     const quotaBackoff = await import('../server/services/quota-backoff-service.js')
@@ -226,7 +221,7 @@ describe('orchestrator auto-loop integration', () => {
     })
     await Promise.resolve()
 
-    expect(db.prepare('SELECT status FROM workspaces WHERE id = ?').get(wsId)).toEqual({ status: 'error' })
+    expect(db.prepare('SELECT status FROM workspaces WHERE id = ?').get(wsId)).toEqual({ status: 'idle' })
     expect(quotaBackoff.getPending(wsId)).toBeNull()
   })
 

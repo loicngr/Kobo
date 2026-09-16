@@ -1337,18 +1337,11 @@ function onSessionEnded(
   // `reason` is authoritative (with the SDK engine `exitCode` is often null,
   // so reason='error'+exitCode=null would otherwise map wrongly to 'completed').
   // `resumeFailed` is benign: stale id cleared, next iteration starts fresh.
-  // 'watchdog' is a forced kill, never a success. For an auto-loop workspace,
-  // handleTransientAutoLoopFailure (called above, before onSessionEnded) runs
-  // synchronously up to its first await and writes status 'quota' as its very
-  // first statement — that write lands before `currentWorkspace` is read above
-  // (line ~1144), so `preserveQuotaBackoff` is already true and this function
-  // returns early at the `if (preserveQuotaBackoff) return true` branch above.
-  // This computation is therefore never reached at all for that path, not
-  // merely short-circuited afterwards — it only runs on session ends that
-  // don't go through the auto-loop transient-failure path.
-  const isErrorOutcome =
-    !resumeFailed && (reason === 'error' || reason === 'watchdog' || (exitCode !== null && exitCode !== 0))
-  const targetStatus: WorkspaceStatus = isErrorOutcome ? 'error' : 'completed'
+  // A watchdog closure leaves the workspace idle unless the engine actually
+  // failed. Auto-loop watchdog recovery keeps its bounded quota backoff via
+  // the preserveQuotaBackoff branch above.
+  const isErrorOutcome = !resumeFailed && (reason === 'error' || (exitCode !== null && exitCode !== 0))
+  const targetStatus: WorkspaceStatus = isErrorOutcome ? 'error' : reason === 'watchdog' ? 'idle' : 'completed'
   // Skip the transition when the workspace is already in a terminal state.
   // This happens when stopAgent (or an equivalent caller) synchronously
   // normalised the status before the engine's async stop emitted session:ended

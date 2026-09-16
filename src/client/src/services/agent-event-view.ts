@@ -53,14 +53,17 @@ export function selectLastAgentError(
     const ev = events[i]
     if (ev.kind !== 'error' || ev.category === 'quota') continue
     if (ev.category === 'other' && isBenignAgentWarning(ev.message)) continue
-    // A post-result stream cleanup remains visible in the chat, without an
-    // additional banner. Match old persisted events exactly; other watchdog
-    // failures (no activity, stalled subagents, dead processes) still surface.
+    // Stream cleanup and inactivity notices remain visible in the chat only.
+    // Match legacy messages exactly so unrelated errors still get a banner.
     if (
       ev.category === 'other' &&
       (ev.code === 'result_drain_timeout' ||
+        ev.code === 'stream_idle_timeout' ||
         (!ev.code &&
-          ev.message === 'Session force-ended: the SDK generator stayed open after its final result (drain watchdog).'))
+          (ev.message ===
+            'Session force-ended: the SDK generator stayed open after its final result (drain watchdog).' ||
+            ev.message ===
+              'Session force-ended by the liveness watchdog: no SDK activity within the deadline. If the agent was legitimately busy, this is a bug worth reporting.')))
     )
       continue
     const eventId = eventIds[i] ?? null
