@@ -4,6 +4,10 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.11.42
+
+- feat(workspaces): refine settings and session controls
+
 ## 1.11.41
 
 - feat(attachments): support documents in workspace creation and chat
