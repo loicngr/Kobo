@@ -2054,6 +2054,8 @@ export default {
   'split.choose': 'Choose a workspace',
   'split.recipient': 'Send to: {name}',
   'absence.title': 'Since your last visit',
+  'settings.activityDigestHint':
+    'Show a summary of events that occurred while you were away. Turning this off hides the entry and stops collecting new events without deleting existing history.',
   'absence.pending': 'Changes to review',
   'absence.retention':
     'Significant activity from the last 30 days, recorded since this feature was installed. Visit tracking is local to this browser.',

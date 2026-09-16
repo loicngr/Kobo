@@ -293,6 +293,8 @@ export interface GlobalSettings {
    * — the default, since it is the user's attention being spent.
    */
   awaitingUserReminderMinutes: number
+  /** Show the absence digest and record significant activity. Default true. */
+  activityDigestEnabled: boolean
   /**
    * How many agent sessions may run at once. `0` — the default — means no
    * limit, which is what every install did before this setting existed.
@@ -1216,6 +1218,13 @@ const settingsMigrations: SettingsMigration[] = [
       global.defaultModelByEngine = map
     },
   },
+  {
+    version: 58,
+    name: 'add-activity-digest-toggle',
+    migrate: ({ global }) => {
+      if (typeof global.activityDigestEnabled !== 'boolean') global.activityDigestEnabled = true
+    },
+  },
 ]
 
 /** Current settings schema version — always equals the highest migration version. */
@@ -1302,6 +1311,7 @@ function defaultSettings(): Settings {
       autoPurgeOnPrMerged: false,
       autoLoopMaxRetries: 5,
       awaitingUserReminderMinutes: 0,
+      activityDigestEnabled: true,
       maxConcurrentAgents: 0,
       wsEventsRetentionDays: 0,
       wsEventsKeepPerWorkspace: 0,
@@ -1851,6 +1861,9 @@ export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSett
       }
     }
   }
+  if ('activityDigestEnabled' in data && typeof data.activityDigestEnabled !== 'boolean') {
+    delete data.activityDigestEnabled
+  }
   const allowedGlobalKeys = [
     'defaultModelByEngine',
     'dangerouslySkipPermissions',
@@ -1876,6 +1889,7 @@ export function updateGlobalSettings(input: Partial<GlobalSettings>): GlobalSett
     'autoPurgeOnPrMerged',
     'autoLoopMaxRetries',
     'awaitingUserReminderMinutes',
+    'activityDigestEnabled',
     'maxConcurrentAgents',
     'wsEventsRetentionDays',
     'wsEventsKeepPerWorkspace',

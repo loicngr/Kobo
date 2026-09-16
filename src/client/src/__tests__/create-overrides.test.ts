@@ -2,6 +2,17 @@ import { describe, expect, it } from 'vitest'
 import { resolveCreateOverrides } from '../utils/create-overrides'
 
 describe('resolveCreateOverrides', () => {
+  it.each([true, false])('honors skipSetupScript=%s for a resolved PR checkout', (skipSetupScript) => {
+    const resolved = resolveCreateOverrides({
+      useExistingWorktree: true,
+      prCheckout: true,
+      skipSetupScript,
+      autoLoop: false,
+      agentPermissionMode: 'bypass',
+    })
+    expect(resolved.skipSetupScript).toBe(skipSetupScript)
+    expect(resolved.applied).not.toContain('setup-script-forced')
+  })
   it('leaves the user choices untouched when nothing forces an override', () => {
     expect(
       resolveCreateOverrides({

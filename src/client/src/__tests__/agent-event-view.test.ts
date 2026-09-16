@@ -93,6 +93,33 @@ describe('foldEvents', () => {
 })
 
 describe('selectLastAgentError', () => {
+  it.each([
+    {
+      kind: 'error',
+      category: 'other',
+      code: 'result_drain_timeout',
+      message: 'Session stream closed after its result',
+    },
+    {
+      kind: 'error',
+      category: 'other',
+      message: 'Session force-ended: the SDK generator stayed open after its final result (drain watchdog).',
+    },
+  ] satisfies AgentEvent[])('keeps a post-result drain notice in the chat without a banner: %j', (notice) => {
+    expect(selectLastAgentError([notice], ['drain'], new Set())).toBeNull()
+    expect(foldEvents([notice])).toContainEqual(expect.objectContaining({ type: 'error', message: notice.message }))
+    const realError: AgentEvent = { kind: 'error', category: 'spawn_failed', message: 'Cannot start agent' }
+    expect(selectLastAgentError([realError, notice], ['real', 'drain'], new Set())?.eventId).toBe('real')
+  })
+
+  it.each([
+    'Session force-ended by the liveness watchdog: no SDK activity within the deadline. If the agent was legitimately busy, this is a bug worth reporting.',
+    'Session force-ended: background subagents stopped reporting activity (watchdog).',
+    'Agent process died unexpectedly',
+  ])('still shows a banner for other watchdog or process failures: %s', (message) => {
+    const event: AgentEvent = { kind: 'error', category: 'other', message }
+    expect(selectLastAgentError([event], ['failure'], new Set())?.eventId).toBe('failure')
+  })
   const events: AgentEvent[] = [
     { kind: 'error', category: 'spawn_failed', message: 'first failure' },
     { kind: 'error', category: 'other', message: 'Warning: something cosmetic' },

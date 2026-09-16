@@ -1455,9 +1455,10 @@ Once the brainstorming + planning steps above are complete and you have a saved 
 
       // Setup script — runs AFTER the prompt is persisted so a crash here
       // leaves the workspace in `error` state with `initial_prompt` ready for
-      // a retry via POST /:id/start. Skipped when reusing an existing worktree
-      // (rerunning could be destructive — drop a curated node_modules, etc.).
-      setupScriptConfigured = Boolean(effectiveSettings.setupScript) && !body.skipSetupScript && !useReusedWorktree
+      // a retry via POST /:id/start. PR imports require an explicit false to
+      // run setup; ordinary worktree reuse continues to skip it unconditionally.
+      const allowSetupScript = prContent ? body.skipSetupScript === false : !useReusedWorktree && !body.skipSetupScript
+      setupScriptConfigured = Boolean(effectiveSettings.setupScript) && allowSetupScript
       if (setupScriptConfigured) {
         currentStep = 'setup-script'
         emitCreateProgress(creationId, currentStep)

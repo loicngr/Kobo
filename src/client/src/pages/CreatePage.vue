@@ -944,7 +944,7 @@
               color="orange-5"
               icon="play_disabled"
               :label="$t('createPage.skipSetupScript')"
-              :disable="useExistingWorktree"
+              :disable="useExistingWorktree && !prCheckoutLocked"
             />
           </q-card-section>
         </q-expansion-item>
@@ -1437,6 +1437,7 @@ const comparisonPermissionModeOptions = computed(() => {
 const resolvedComparisonOverrides = computed(() =>
   resolveCreateOverrides({
     useExistingWorktree: useExistingWorktree.value,
+    prCheckout: prCheckoutLocked.value,
     skipSetupScript: skipSetupScript.value,
     autoLoop: autoLoop.value,
     agentPermissionMode: comparisonPermissionMode.value,
@@ -1832,7 +1833,8 @@ function toggleSentry() {
 // Existing-worktree reuse: instead of creating a new worktree under
 // `<projectPath>/.worktrees/<workingBranch>`, the user can attach an existing
 // orphan worktree (no Kōbō workspace currently owns it). Backend forces
-// `worktreeOwned=false` + `skipSetupScript=true` when this is on.
+// `worktreeOwned=false` + `skipSetupScript=true` for ordinary reuse. A PR
+// checkout starts with setup skipped but allows the user to opt in.
 const useExistingWorktree = ref(false)
 const selectedWorktreePath = ref<string | null>(null)
 const orphanWorktrees = ref<Array<{ path: string; branch: string; head: string; suggestedSourceBranch: string }>>([])
@@ -1898,6 +1900,7 @@ function onPrResolved(result: {
   selectedWorktreePath.value = result.worktreePath
   branch.value = result.sourceBranch
   prCheckoutLocked.value = true
+  skipSetupScript.value = true
   lockedPrNumber.value = selectedPr.value?.number ?? null
   lockedPrUrl.value = selectedPr.value?.url ?? null
   if (selectedPr.value) {
@@ -1955,6 +1958,7 @@ function unlockPrCheckout() {
 const resolvedOverrides = computed(() =>
   resolveCreateOverrides({
     useExistingWorktree: useExistingWorktree.value,
+    prCheckout: prCheckoutLocked.value,
     skipSetupScript: skipSetupScript.value,
     autoLoop: autoLoop.value,
     agentPermissionMode: agentPermissionMode.value,
@@ -1986,7 +1990,7 @@ function toggleExistingWorktree() {
     useSentry.value = false
     sentryUrl.value = ''
     // Reused worktree is presumed already set up — re-running the setup
-    // script could destroy state. User can still un-check manually.
+    // script could destroy state. Only PR imports allow opting back in.
     skipSetupScript.value = true
     void fetchOrphans()
   } else {
@@ -2600,7 +2604,8 @@ async function createOneWorkspace(
       ...(showManualSections.value && manualCriteria.value.length > 0
         ? { acceptanceCriteria: manualCriteria.value }
         : {}),
-      ...(resolvedOverrides.value.skipSetupScript ? { skipSetupScript: true } : {}),
+      // Preserve explicit false: PR imports skip setup when this field is absent.
+      skipSetupScript: resolvedOverrides.value.skipSetupScript,
       ...(description.value.trim() ? { description: description.value.trim() } : {}),
       ...(autoLoop.value
         ? {

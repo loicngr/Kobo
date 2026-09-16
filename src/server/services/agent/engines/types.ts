@@ -203,6 +203,8 @@ export type AgentEvent =
       kind: 'error'
       category: 'quota' | 'spawn_failed' | 'parse_error' | 'resume_failed' | 'other'
       message: string
+      /** Stable diagnostic identifier; independent of the human-readable message. */
+      code?: string
     }
 
 /** Every AgentEvent kind, as a const for exhaustive iteration in tests. */

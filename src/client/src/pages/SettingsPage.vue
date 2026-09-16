@@ -1,5 +1,5 @@
 <template>
-  <q-page class="settings-page">
+  <q-page class="settings-page" :style-fn="workspacePageStyle">
     <div v-if="store.loadError" class="settings-load-error">
       <q-icon name="error" size="18px" />
       <div class="column">
@@ -372,6 +372,12 @@
               class="settings-subcard q-pa-md rounded-borders q-pb-sm q-mb-md"
             >
               <div class="text-subtitle2 q-mb-sm">{{ $t('settings.notifications') }}</div>
+              <q-toggle
+                v-model="globalActivityDigestEnabled"
+                :label="$t('absence.title')"
+                color="primary"
+              />
+              <div class="text-kobo-3 text-caption q-mb-md">{{ $t('settings.activityDigestHint') }}</div>
               <div class="notification-sounds-grid q-mt-md">
                 <div class="notification-sound-card q-pa-md rounded-borders">
                   <div class="text-subtitle2">{{ $t('settings.notificationSound') }}</div>
@@ -2735,6 +2741,7 @@ import { PROJECT_COLOR_PALETTE, type ProjectColor } from 'src/utils/project-colo
 import { registerUnsavedScope, unregisterUnsavedScope } from 'src/utils/unsaved-guard'
 import { getWhipVolumeAvailability } from 'src/utils/whip-settings'
 import { DEFAULT_WHIP_SHORTCUT } from 'src/utils/whip-shortcut'
+import { workspacePageStyle } from 'src/utils/workspace-page-layout'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRoute } from 'vue-router'
@@ -2830,6 +2837,7 @@ const globalTerminalCommand = ref('')
 const globalAutoPurgeOnPrMerged = ref(false)
 const globalAutoLoopMaxRetries = ref(5)
 const globalAwaitingUserReminderMinutes = ref(0)
+const globalActivityDigestEnabled = ref(true)
 const globalWsEventsRetentionDays = ref(0)
 const globalWsEventsKeepPerWorkspace = ref(0)
 
@@ -3860,6 +3868,7 @@ function readGlobalForm(): Record<string, unknown> {
     autoPurgeOnPrMerged: globalAutoPurgeOnPrMerged.value,
     autoLoopMaxRetries: globalAutoLoopMaxRetries.value,
     awaitingUserReminderMinutes: globalAwaitingUserReminderMinutes.value,
+    activityDigestEnabled: globalActivityDigestEnabled.value,
     wsEventsRetentionDays: globalWsEventsRetentionDays.value,
     wsEventsKeepPerWorkspace: globalWsEventsKeepPerWorkspace.value,
     browserNotifications: globalBrowserNotifications.value,
@@ -3991,6 +4000,7 @@ function syncGlobalForm() {
   globalAutoPurgeOnPrMerged.value = store.global.autoPurgeOnPrMerged ?? false
   globalAutoLoopMaxRetries.value = store.global.autoLoopMaxRetries ?? 5
   globalAwaitingUserReminderMinutes.value = store.global.awaitingUserReminderMinutes ?? 0
+  globalActivityDigestEnabled.value = store.global.activityDigestEnabled ?? true
   globalWsEventsRetentionDays.value = store.global.wsEventsRetentionDays ?? 0
   globalWsEventsKeepPerWorkspace.value = store.global.wsEventsKeepPerWorkspace ?? 0
   globalBrowserNotifications.value = store.global.browserNotifications ?? true
@@ -4362,6 +4372,7 @@ async function saveGlobal() {
       autoPurgeOnPrMerged: globalAutoPurgeOnPrMerged.value,
       autoLoopMaxRetries: globalAutoLoopMaxRetries.value,
       awaitingUserReminderMinutes: globalAwaitingUserReminderMinutes.value,
+      activityDigestEnabled: globalActivityDigestEnabled.value,
       wsEventsRetentionDays: globalWsEventsRetentionDays.value,
       wsEventsKeepPerWorkspace: globalWsEventsKeepPerWorkspace.value,
       browserNotifications: globalBrowserNotifications.value,
@@ -4689,7 +4700,7 @@ onUnmounted(() => {
   background-color: var(--kobo-bg);
   position: relative;
   padding: 0;
-  min-height: 100vh;
+  // QPage sets the available viewport height; only the content panel scrolls.
   display: flex;
   flex-direction: column;
 }

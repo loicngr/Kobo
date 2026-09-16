@@ -2093,6 +2093,8 @@ export default {
   'split.choose': 'Workspace auswählen',
   'split.recipient': 'Senden an: {name}',
   'absence.title': 'Seit deinem letzten Besuch',
+  'settings.activityDigestHint':
+    'Zeigt eine Übersicht der Ereignisse während deiner Abwesenheit. Deaktivieren blendet den Eintrag aus und stoppt die Erfassung neuer Ereignisse, ohne den bisherigen Verlauf zu löschen.',
   'absence.pending': 'Änderungen prüfen',
   'absence.retention':
     'Wichtige Aktivitäten der letzten 30 Tage, erfasst seit Installation dieser Funktion. Besuche werden nur in diesem Browser verfolgt.',

@@ -160,6 +160,7 @@ export function makeGlobalSettings(overrides: Partial<GlobalSettings> = {}): Glo
     autoPurgeOnPrMerged: false,
     autoLoopMaxRetries: 5,
     awaitingUserReminderMinutes: 0,
+    activityDigestEnabled: true,
     maxConcurrentAgents: 0,
     wsEventsRetentionDays: 0,
     wsEventsKeepPerWorkspace: 0,

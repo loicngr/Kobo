@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3'
 import { getDb } from '../db/index.js'
+import { getGlobalSettings } from './settings-service.js'
 
 export function classifyActivity(type: string, payload: unknown): string | null {
   const event = payload && typeof payload === 'object' ? (payload as Record<string, unknown>) : {}
@@ -37,6 +38,7 @@ export function recordActivity(
   const kind = classifyActivity(type, payload)
   if (!kind) return
   try {
+    if (getGlobalSettings().activityDigestEnabled === false) return
     const database = db ?? getDb()
     database
       .prepare('INSERT INTO workspace_activity (workspace_id, kind, session_id, created_at) VALUES (?, ?, ?, ?)')

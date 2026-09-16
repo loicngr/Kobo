@@ -1438,7 +1438,8 @@ The **Create workspace** page's **Import from a PR** button (Project Git section
 
 - Requires a forge that supports listing PRs/MRs (GitHub, GitLab, or Bitbucket Community — see [CLI prerequisites](#cli-prerequisites) above); the button is disabled with a tooltip when the project's resolved forge is `none` or the CLI is unauthenticated. Forks are listed but not selectable.
 - Selecting a PR/MR opens a guided stepper that diagnoses the local state (fetches the branch first) and walks through every conflict it finds one step at a time: an existing Kōbō workspace already tracking the branch (open it, or continue past an archived one), a worktree that already exists at the target path (attach to it or pick another path), local branch divergence from the remote (fast-forward, rebase your local commits on top, discard them, or keep as-is), uncommitted changes, and an in-progress rebase/merge/cherry-pick to resolve or cancel first. A rebase conflict leaves the worktree in that state for you (or the agent, via **Resolve with agent** in the Git panel) to finish.
-- Once resolved, the worktree-mode toggle, project, and branch fields lock to the imported PR/MR (an **Unlock** control reverts to the normal "new worktree" flow). The workspace is then created through the exact same pipeline as any other — setup script included — with the PR/MR url stored on the workspace and its title/description available to seed the mission context. Your own **Description** text, if you've written one, is never overwritten.
+- Once resolved, the worktree-mode toggle, project, and branch fields lock to the imported PR/MR (an **Unlock** control reverts to the normal "new worktree" flow). The PR/MR URL is stored on the workspace and its title/description can seed the mission context. Your own **Description** text, if you've written one, is never overwritten.
+- **Advanced options → Skip setup script** is enabled by default for a PR/MR import. Turn it off to run the configured setup script before starting the agent. Ordinary attachment of an existing worktree outside PR/MR import still skips setup automatically.
 
 ## Notion integration
 
@@ -1717,6 +1718,11 @@ and WebSocket connections. Browser/audio notifications stay with the host client
 
 **Since your last visit:** the entry at the bottom of the workspace drawer lists questions, approval requests,
 session endings, agent errors and PR changes since the browser's previous visit.
+The global **Settings → Notifications → Since your last visit** toggle
+(`activityDigestEnabled`, enabled by default) hides this entry and stops browser
+visit tracking and new server-side journal entries when switched off and saved.
+Existing history and browser checkpoints are preserved. Re-enabling resumes
+tracking; events occurring while disabled are not collected retroactively.
 Click an entry to open its workspace and, where available, its session or Git panel.
 “Mark displayed events as read” acknowledges only the loaded entries; older pages
 can be loaded before acknowledging. No automatic agent or workspace action runs.

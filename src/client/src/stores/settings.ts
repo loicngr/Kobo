@@ -110,6 +110,8 @@ interface GlobalSettings {
   autoLoopMaxRetries: number
   /** Minutes before Kōbō reminds you about an unanswered question. 0 = off. */
   awaitingUserReminderMinutes: number
+  /** Show the absence digest and record significant activity. Default true. */
+  activityDigestEnabled: boolean
   wsEventsRetentionDays: number
   wsEventsKeepPerWorkspace: number
   browserNotifications: boolean
@@ -248,6 +250,7 @@ export const useSettingsStore = defineStore('settings', {
       autoPurgeOnPrMerged: false,
       autoLoopMaxRetries: 5,
       awaitingUserReminderMinutes: 0,
+      activityDigestEnabled: true,
       wsEventsRetentionDays: 0,
       wsEventsKeepPerWorkspace: 0,
       browserNotifications: true,

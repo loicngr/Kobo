@@ -2082,6 +2082,8 @@ export default {
   'split.choose': 'Scegli un workspace',
   'split.recipient': 'Invia a: {name}',
   'absence.title': 'Dalla tua ultima visita',
+  'settings.activityDigestHint':
+    'Mostra un riepilogo degli eventi avvenuti durante la tua assenza. Disattivando questa opzione, la voce viene nascosta e la raccolta di nuovi eventi si interrompe, senza eliminare la cronologia esistente.',
   'absence.pending': 'Modifiche da consultare',
   'absence.retention':
     'Attività importanti degli ultimi 30 giorni, registrate dall’installazione di questa funzione. Le visite sono memorizzate solo in questo browser.',

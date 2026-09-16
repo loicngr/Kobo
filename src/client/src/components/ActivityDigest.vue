@@ -1,5 +1,5 @@
 <template>
-  <div class="activity-entry" data-tour="activity-digest">
+  <div v-if="enabled" class="activity-entry" data-tour="activity-digest">
     <q-btn flat dense no-caps class="full-width" align="left" :label="$t('absence.title')" @click="open = true">
       <q-badge v-if="store.items.length" color="primary" class="q-ml-sm">{{ store.items.length }}{{ store.hasMore ? '+' : '' }}</q-badge>
     </q-btn>
@@ -38,11 +38,14 @@
 </template>
 <script setup lang="ts">
 import { type ActivityItem, useActivityStore } from 'src/stores/activity'
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useSettingsStore } from 'src/stores/settings'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useRouter } from 'vue-router'
 
 const store = useActivityStore()
+const settings = useSettingsStore()
+const enabled = computed(() => settings.loaded && settings.global.activityDigestEnabled !== false)
 const router = useRouter()
 const { locale } = useI18n()
 const open = ref(false)
@@ -69,20 +72,26 @@ function connectionRestored() {
   void store.heartbeat()
 }
 let timer: ReturnType<typeof setInterval> | undefined
-onMounted(() => {
+function startTracking() {
   visibilityChanged()
   document.addEventListener('visibilitychange', visibilityChanged)
   window.addEventListener('offline', connectionLost)
   window.addEventListener('online', connectionRestored)
   timer = setInterval(() => void store.heartbeat(), 15_000)
-})
-onUnmounted(() => {
+}
+function stopTracking() {
+  open.value = false
   store.leaveApp()
   clearInterval(timer)
+  timer = undefined
   document.removeEventListener('visibilitychange', visibilityChanged)
   window.removeEventListener('offline', connectionLost)
   window.removeEventListener('online', connectionRestored)
+}
+onMounted(() => {
+  watch(enabled, (value) => (value ? startTracking() : stopTracking()), { immediate: true })
 })
+onUnmounted(stopTracking)
 </script>
 <style scoped>
 .activity-entry { display: flex; align-items: center; gap: var(--kobo-space-md); padding: var(--kobo-space-xs) var(--kobo-space-md); flex-shrink: 0; }

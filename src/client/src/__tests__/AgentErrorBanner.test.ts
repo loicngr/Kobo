@@ -55,4 +55,24 @@ describe('AgentErrorBanner.vue — characterisation', () => {
 
     expect(wrapper.find('.q-banner-stub').exists()).toBe(false)
   })
+
+  it('omits the post-result watchdog banner live and after replay without hiding another failure', async () => {
+    const stream = useAgentStreamStore()
+    const wrapper = mountBanner('ws-drain')
+    stream.append('ws-drain', {
+      kind: 'error',
+      category: 'other',
+      code: 'result_drain_timeout',
+      message: 'Post-result stream closed',
+    })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('.q-banner-stub').exists()).toBe(false)
+    wrapper.unmount()
+    const replayed = mountBanner('ws-drain')
+    expect(replayed.find('.q-banner-stub').exists()).toBe(false)
+    stream.append('ws-drain', { kind: 'error', category: 'resume_failed', message: 'Session cannot be resumed' })
+    await replayed.vm.$nextTick()
+    expect(replayed.text()).toContain('Session cannot be resumed')
+    replayed.unmount()
+  })
 })

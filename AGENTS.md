@@ -196,6 +196,11 @@ Clients subscribe to individual workspace ids. The server sends `WsEvent` object
 
 Agent engines emit a normalized `AgentEvent` union, carried by `agent:event`. Common outer types include `user:message`, `task:updated`, `devserver:status`, `workspace:status`, `workspace:archived`, `workspace:unarchived`, and `sync:response`. Legacy `agent:output` rows remain supported through content migration. Keep the backend union in `services/agent/engines/types.ts` and its client mirror in `client/src/types/agent-event.ts` synchronized.
 
+Error events may carry a stable `code`. Claude's post-result drain timeout uses
+`result_drain_timeout`: keep it in the chat but exclude it from `AgentErrorBanner`.
+The banner selector also recognizes the exact legacy message for persisted
+history. Do not suppress other watchdog errors or change session-end/retry behavior.
+
 Two emit flavors in `websocket-service.ts`:
 - `emit(workspaceId, type, payload)` persists to `ws_events` for later replay via `sync:request` on reconnect
 - `emitEphemeral(workspaceId, type, payload)` delivers once and never persists. Use it for lifecycle events (archive, status changes) that shouldn't replay.
@@ -294,6 +299,15 @@ Late upload receipts are cleaned up using the captured original workspace id.
 Never delete handed-off files when clearing a draft or changing conversations.
 See [chat attachments](CONFIGURATION.md#attachments-in-workspace-chat).
 
+### Setup during PR import
+
+Resolving a PR checkout enables `skipSetupScript` by default, but the create
+form leaves this toggle editable for PR imports. `resolveCreateOverrides`
+preserves that choice and the request explicitly sends false when setup is wanted.
+After successful PR extraction, the server runs setup only for an explicit
+`skipSetupScript: false`; an omitted field continues to skip it. Ordinary worktree
+reuse outside PR import still forces setup off. Worktree ownership is unchanged.
+
 ### Change source branch
 
 `change-source-branch-service.ts` re-targets a workspace onto a new source branch. The default path is a cherry-pick of the branch-proper commits (commits in the working branch but in **neither** the old nor the new base), inspired by the sekur `deploy-preprod-rebase.yml` workflow. The route is `POST /api/workspaces/:id/change-source-branch` and returns a discriminated status: `done | aligned | conflict | too-many | dirty`.
@@ -345,6 +359,13 @@ Sequence: `captureRestoreData` (best-effort forge lookup for PR number / URL / m
 `SplitWorkspacePage.vue` hosts two same-origin embedded clients (`?pane=1`), isolating routers, stores and terminal registries. `utils/split-workspace.ts` and the router bridge synchronize the host URL without treating that bookkeeping as a departure. Actual departures consult both panes for dirty edits, unsent drafts and all in-memory queued messages. Embedded clients suppress automatic tours and browser/audio notifications; the host owns these.
 
 `activity-service.ts` records significant metadata from `emit` and `emitEphemeral` in `workspace_activity` (migration v41, 30-day retention). It excludes streaming data and superseded session endings. `/api/activity` exposes a paginated monotonic cursor; `stores/activity.ts` keeps browser-local visit checkpoints and protects against late responses after visibility changes. `ActivityDigest.vue` links events to workspace/session or Git context. Never advance an unread checkpoint to the head of unloaded pages.
+
+`global.activityDigestEnabled` (settings migration v58, default true) controls the
+feature from Settings → Notifications. When false, `recordActivity` skips new
+journal entries; `ActivityDigest.vue` hides its entry/dialog and removes its timer
+and visibility/network listeners. Wait for settings to load before starting the
+tracker. Disabling invalidates in-flight activity responses without acknowledging
+unread events or deleting history; re-enabling resumes from the saved checkpoint.
 
 ### Workspace attention indicators
 

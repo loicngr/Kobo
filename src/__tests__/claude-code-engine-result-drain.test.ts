@@ -191,6 +191,13 @@ describe('claude-code engine — result drain watchdog', () => {
       await vi.advanceTimersByTimeAsync(15_000)
 
       expect(events).toContainEqual({ kind: 'session:ended', reason: 'watchdog', exitCode: null })
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          kind: 'error',
+          category: 'other',
+          code: 'result_drain_timeout',
+        }),
+      )
       expect(abortSignal?.aborted).toBe(true)
     } finally {
       releaseStream?.()

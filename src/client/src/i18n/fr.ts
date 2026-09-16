@@ -2091,6 +2091,8 @@ export default {
   'split.choose': 'Choisir un workspace',
   'split.recipient': 'Envoyer à : {name}',
   'absence.title': 'Depuis ta dernière visite',
+  'settings.activityDigestHint':
+    'Affiche le récapitulatif des événements survenus pendant ton absence. Désactiver masque cette entrée et arrête la collecte des nouveaux événements, sans effacer l’historique existant.',
   'absence.pending': 'Changements à consulter',
   'absence.retention':
     'Activité importante des 30 derniers jours, enregistrée depuis l’installation de cette fonctionnalité. Le suivi des visites est propre à ce navigateur.',

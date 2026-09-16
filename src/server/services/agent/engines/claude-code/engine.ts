@@ -430,6 +430,7 @@ export function createClaudeCodeEngine(): AgentEngine {
               kind: 'error',
               category: 'other',
               message: 'Session force-ended: the SDK generator stayed open after its final result (drain watchdog).',
+              code: 'result_drain_timeout',
             })
             emitSessionEnded('watchdog', null)
           }

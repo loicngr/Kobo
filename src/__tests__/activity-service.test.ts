@@ -1,8 +1,13 @@
 import Database from 'better-sqlite3'
-import { describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { migrations, runMigrations, SCHEMA_VERSION } from '../server/db/migrations.js'
 import { initSchema } from '../server/db/schema.js'
 import { classifyActivity, listActivity, recordActivity } from '../server/services/activity-service.js'
+import { getGlobalSettings } from '../server/services/settings-service.js'
+import { makeGlobalSettings } from './helpers/fixtures.js'
+
+vi.mock('../server/services/settings-service.js', () => ({ getGlobalSettings: vi.fn() }))
+beforeEach(() => vi.mocked(getGlobalSettings).mockReturnValue(makeGlobalSettings({ activityDigestEnabled: true })))
 
 function setup() {
   const db = new Database(':memory:')
@@ -13,6 +18,20 @@ function setup() {
   return db
 }
 describe('absence activity journal', () => {
+  it('pauses collection while disabled, preserves history and resumes when enabled', () => {
+    const db = setup()
+    try {
+      recordActivity('w', 'pr:approved', {}, undefined, db)
+      vi.mocked(getGlobalSettings).mockReturnValue(makeGlobalSettings({ activityDigestEnabled: false }))
+      recordActivity('w', 'pr:merged', {}, undefined, db)
+      expect(listActivity(0, 200, db).items.map((item) => item.kind)).toEqual(['pr-approved'])
+      vi.mocked(getGlobalSettings).mockReturnValue(makeGlobalSettings({ activityDigestEnabled: true }))
+      recordActivity('w', 'workspace:archived', {}, undefined, db)
+      expect(listActivity(0, 200, db).items.map((item) => item.kind)).toEqual(['pr-approved', 'archived'])
+    } finally {
+      db.close()
+    }
+  })
   it('records useful events, not streaming or user-requested stops', () => {
     expect(classifyActivity('agent:event', { kind: 'message:text', text: 'secret' })).toBeNull()
     expect(classifyActivity('agent:event', { kind: 'session:ended', reason: 'killed' })).toBeNull()

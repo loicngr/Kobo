@@ -2297,7 +2297,7 @@ describe('PR notification sounds (v45)', () => {
       audioQuestionSound: 'hey.mp3',
       networkAccessToken: 'keep-me',
     })
-    expect(SETTINGS_SCHEMA_VERSION).toBe(57)
+    expect(getSettings().schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
   })
 
   it('adds the auto-loop retry limit while preserving existing settings', () => {
@@ -2715,6 +2715,34 @@ describe('lifecycle hook scripts (v55)', () => {
     )
 
     expect(getEffectiveSettings('/unknown').autoLoopDisabledScript).toBe('notify.sh')
+  })
+})
+
+describe('activity digest setting (v58)', () => {
+  it('is enabled on fresh installs and migrates older settings without losing values', () => {
+    expect(getGlobalSettings().activityDigestEnabled).toBe(true)
+    const migrated = runSettingsMigrations({ schemaVersion: 57, global: { editorCommand: 'keep' }, projects: [] })
+    expect(migrated.global).toMatchObject({ activityDigestEnabled: true, editorCommand: 'keep' })
+    expect(migrated.schemaVersion).toBe(SETTINGS_SCHEMA_VERSION)
+  })
+
+  it('preserves an explicit false during migration and across settings reloads', () => {
+    const migrated = runSettingsMigrations({
+      schemaVersion: 57,
+      global: { activityDigestEnabled: false },
+      projects: [],
+    })
+    expect(migrated.global.activityDigestEnabled).toBe(false)
+    expect(updateGlobalSettings({ activityDigestEnabled: false }).activityDigestEnabled).toBe(false)
+    _setSettingsPath(settingsPath)
+    expect(getGlobalSettings().activityDigestEnabled).toBe(false)
+    expect(updateGlobalSettings({ activityDigestEnabled: true }).activityDigestEnabled).toBe(true)
+  })
+
+  it.each(['false', 0, null])('rejects non-boolean value %j without changing the saved choice', (value) => {
+    updateGlobalSettings({ activityDigestEnabled: false })
+    const updated = updateGlobalSettings({ activityDigestEnabled: value } as unknown as Partial<GlobalSettings>)
+    expect(updated.activityDigestEnabled).toBe(false)
   })
 })
 
