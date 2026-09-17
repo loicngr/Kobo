@@ -4,6 +4,12 @@ All notable changes to Kōbō are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/). Each release is an `## <version>`
 section — the in-app "What's new" dialog reads this file.
 
+## 1.11.44
+
+- chore(deps): update packages and node to 24.21.0
+- fix(auto-loop): preserve mission intent until verified completion
+- feat(review): configure review LLM and return to original session
+
 ## 1.11.43
 
 - fix(workspaces): refine watchdog stops and deletion confirmation
