@@ -1,3 +1,7 @@
+import { DOCUMENT_DIRS } from '../shared/document-roots.js'
+
+export { DOCUMENT_DIRS } from '../shared/document-roots.js'
+
 import fs from 'node:fs'
 import path from 'node:path'
 import type Database from 'better-sqlite3'
@@ -443,7 +447,6 @@ export function getTicketSourcesHandler(worktreePath: string): TicketSource[] {
 // ── Documents ────────────────────────────────────────────────────────────────
 
 /** Directories (relative to the worktree root) scanned for AI-generated docs. */
-export const DOCUMENT_DIRS = ['docs/plans', 'docs/superpowers', '.ai/thoughts'] as const
 
 /** Depth cap to keep recursion bounded even on pathological symlink loops. */
 const DOC_MAX_DEPTH = 8

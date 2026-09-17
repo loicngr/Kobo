@@ -142,6 +142,9 @@
         @click="openExternal(workspace.sentryUrl)"
       />
 
+      <EngineSwitchButton :workspace="workspace" mode="fresh" class="q-mt-sm" />
+      <SessionHandoffStatus :workspace-id="workspace.id" />
+
 
 
       </template>
@@ -164,7 +167,9 @@ import ActionAvailability from 'src/components/ActionAvailability.vue'
 import AutoLoopPanel from 'src/components/AutoLoopPanel.vue'
 import DevServerPanel from 'src/components/DevServerPanel.vue'
 import EngineSwitchButton from 'src/components/EngineSwitchButton.vue'
+import SessionHandoffStatus from 'src/components/SessionHandoffStatus.vue'
 import StartReviewDialog from 'src/components/StartReviewDialog.vue'
+import { useSessionHandoffStore } from 'src/stores/session-handoff'
 import { useSettingsStore } from 'src/stores/settings'
 import { useWorkspaceStore, type Workspace } from 'src/stores/workspace'
 import { getActionBlocker } from 'src/utils/action-blocker'
@@ -183,6 +188,7 @@ const { t } = useI18n()
 const $q = useQuasar()
 const settingsStore = useSettingsStore()
 const workspaceStore = useWorkspaceStore()
+const handoffs = useSessionHandoffStore()
 
 const running = ref(false)
 const openingEditor = ref(false)
@@ -232,15 +238,24 @@ const baseBlockerContext = computed(() => ({
 const setupBlocker = computed(() =>
   getActionBlocker({
     ...baseBlockerContext.value,
-    operation: running.value,
+    operation: running.value || handoffs.isBlocking(workspaceId.value),
     agentBusy: isAgentBusy.value,
     missingConfiguration: !hasSetupScript.value,
   }),
 )
 const reviewBlocker = computed(() =>
-  getActionBlocker({ ...baseBlockerContext.value, operation: startingReview.value, agentBusy: isAgentBusy.value }),
+  getActionBlocker({
+    ...baseBlockerContext.value,
+    operation: startingReview.value || handoffs.isBlocking(workspaceId.value),
+    agentBusy: isAgentBusy.value,
+  }),
 )
-const ciBlocker = computed(() => getActionBlocker({ ...baseBlockerContext.value, operation: fixingCi.value }))
+const ciBlocker = computed(() =>
+  getActionBlocker({
+    ...baseBlockerContext.value,
+    operation: fixingCi.value || handoffs.isBlocking(workspaceId.value),
+  }),
+)
 
 function runSetupScript() {
   if (setupBlocker.value || !workspaceId.value) return

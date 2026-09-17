@@ -628,6 +628,7 @@ export function createCodexEngine(): AgentEngine {
       })()
 
       const engineProcess: EngineProcess = {
+        ready: readyPromise,
         closed: Promise.all([iteratorPromise, childExitedPromise]).then(() => {}),
         get pid() {
           return child.pid

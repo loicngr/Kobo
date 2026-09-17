@@ -221,3 +221,14 @@ describe('GET /api/workspaces/:id/document', () => {
     expect(await res.text()).not.toContain('outside secret')
   })
 })
+
+it('lists and reads generated session handoffs', async () => {
+  const directory = path.join(worktreePath, '.ai', 'handoffs')
+  fs.mkdirSync(directory, { recursive: true })
+  fs.writeFileSync(path.join(directory, 'transfer.md'), '# Verified handoff')
+  const listed = await app.request('/api/workspaces/ws-1/documents')
+  expect((await listed.json()).documents).toContainEqual(expect.objectContaining({ path: '.ai/handoffs/transfer.md' }))
+  const result = await app.request('/api/workspaces/ws-1/document?path=.ai/handoffs/transfer.md')
+  expect(result.status).toBe(200)
+  expect((await result.json()).content).toBe('# Verified handoff')
+})

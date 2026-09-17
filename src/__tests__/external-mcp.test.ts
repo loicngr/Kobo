@@ -241,3 +241,51 @@ it('reads streamed and legacy replies, filters sessions and advances past non-me
     await executeWorkspaceDialogueTool('read_workspace_messages', { ...args, after_cursor: 'legacy' }),
   ).toMatchObject({ messages: [{ text: 'new reply' }], nextCursor: 'new' })
 })
+
+it('limits a handoff-generation MCP to reading and submitting its backend-bound report', async () => {
+  let posted: unknown
+  const handoffApp = new Hono()
+  handoffApp.post('/api/workspaces/:id/session-handoffs/:handoffId/report', async (c) => {
+    posted = { workspace: c.req.param('id'), handoff: c.req.param('handoffId'), body: await c.req.json() }
+    return c.json({ accepted: true })
+  })
+  const listener = serve({ fetch: handoffApp.fetch, hostname: '127.0.0.1', port: 0 })
+  if (!listener.listening) await new Promise<void>((resolve) => listener.once('listening', resolve))
+  const address = listener.address()
+  if (!address || typeof address === 'string') throw new Error('Missing listener')
+  const client = new Client({ name: 'handoff-test', version: '1' })
+  try {
+    await client.connect(
+      new StdioClientTransport({
+        command: process.execPath,
+        args: ['--import', 'tsx', 'src/mcp-server/kobo-tasks-server.ts'],
+        env: {
+          PATH: process.env.PATH ?? '',
+          KOBO_DB_PATH: join(directory, 'test.db'),
+          KOBO_WORKSPACE_ID: 'a',
+          KOBO_BACKEND_URL: `http://127.0.0.1:${address.port}`,
+          KOBO_HANDOFF_ID: 'transfer-1',
+          KOBO_HANDOFF_TOKEN: 'bound-token',
+        },
+      }),
+    )
+    const { tools } = await client.listTools()
+    expect(tools.map((tool) => tool.name)).toContain('submit_session_handoff')
+    expect(tools.map((tool) => tool.name)).not.toContain('mark_task_done')
+    const blocked = await client.callTool({ name: 'create_task', arguments: { title: 'Do not mutate' } })
+    expect(blocked.isError).toBe(true)
+    const result = await client.callTool({
+      name: 'submit_session_handoff',
+      arguments: { report: '# Report', token: 'caller-spoof' },
+    })
+    expect(result.isError).not.toBe(true)
+    expect(posted).toEqual({
+      workspace: 'a',
+      handoff: 'transfer-1',
+      body: { token: 'bound-token', report: '# Report' },
+    })
+  } finally {
+    await client.close()
+    await new Promise<void>((resolve, reject) => listener.close((error) => (error ? reject(error) : resolve())))
+  }
+})

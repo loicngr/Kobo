@@ -57,8 +57,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 45', () => {
-    expect(SCHEMA_VERSION).toBe(45)
+  it('exporte SCHEMA_VERSION = 47', () => {
+    expect(SCHEMA_VERSION).toBe(47)
   })
 
   it('migration v33 records and backfills the engine on agent sessions', () => {
@@ -2408,4 +2408,54 @@ it('upgrades v43 with review returns without losing workspace or session data', 
   expect(getMigrationHistory(db).at(-1)?.version).toBe(SCHEMA_VERSION)
   fresh.close()
   db.close()
+})
+
+it('upgrades v45 without losing workspaces and converges with a fresh handoff schema', () => {
+  const old = new Database(':memory:')
+  const fresh = new Database(':memory:')
+  initSchema(old)
+  old.exec(`DROP TABLE IF EXISTS session_handoffs;
+    CREATE TABLE IF NOT EXISTS schema_migrations (version INTEGER PRIMARY KEY, name TEXT NOT NULL, applied_at TEXT NOT NULL);
+    INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+      VALUES ('mission', 'Keep me', '/tmp', 'main', 'work', 'now', 'now');`)
+  for (let version = 1; version <= 45; version++) {
+    old.prepare('INSERT INTO schema_migrations VALUES (?, ?, ?)').run(version, `v${version}`, 'now')
+  }
+  runMigrations(old)
+  runMigrations(fresh)
+  expect(old.prepare("SELECT name FROM workspaces WHERE id = 'mission'").get()).toEqual({ name: 'Keep me' })
+  expect(old.prepare('PRAGMA table_info(session_handoffs)').all().length).toBeGreaterThan(0)
+  expect(old.prepare('PRAGMA table_info(session_handoffs)').all()).toEqual(
+    fresh.prepare('PRAGMA table_info(session_handoffs)').all(),
+  )
+  expect(getMigrationHistory(old).at(-1)?.version).toBe(SCHEMA_VERSION)
+  old.close()
+  fresh.close()
+})
+
+it('upgrades v46 with session activation order without rewriting history', () => {
+  const old = new Database(':memory:')
+  const fresh = new Database(':memory:')
+  runMigrations(old)
+  old.exec(`ALTER TABLE agent_sessions DROP COLUMN activation_order;
+    DELETE FROM schema_migrations WHERE version > 46;
+    INSERT INTO workspaces (id, name, project_path, source_branch, working_branch, created_at, updated_at)
+      VALUES ('mission', 'Keep me', '/tmp', 'main', 'work', 'now', 'now');
+    INSERT INTO agent_sessions (id, workspace_id, status, started_at, ended_at, engine_session_id)
+      VALUES ('source', 'mission', 'completed', '2026-09-17T09:00:00Z', '2026-09-17T09:05:00Z', 'native-source');`)
+  runMigrations(old)
+  runMigrations(fresh)
+  expect(old.prepare('SELECT * FROM agent_sessions WHERE id=?').get('source')).toMatchObject({
+    status: 'completed',
+    started_at: '2026-09-17T09:00:00Z',
+    ended_at: '2026-09-17T09:05:00Z',
+    engine_session_id: 'native-source',
+    activation_order: 0,
+  })
+  expect(old.prepare('PRAGMA table_info(agent_sessions)').all()).toEqual(
+    fresh.prepare('PRAGMA table_info(agent_sessions)').all(),
+  )
+  expect(getMigrationHistory(old).at(-1)?.version).toBe(SCHEMA_VERSION)
+  old.close()
+  fresh.close()
 })

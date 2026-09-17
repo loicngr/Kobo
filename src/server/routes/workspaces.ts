@@ -1,8 +1,19 @@
 import { execFile as execFileCb, execFileSync, spawn } from 'node:child_process'
 import { promisify } from 'node:util'
+import { nanoid } from 'nanoid'
+import type { HandoffDecision } from '../../shared/session-handoff.js'
 import { getSearchIndexStatus, searchEvents } from '../services/search-service.js'
+import {
+  createSessionHandoff,
+  decideSessionHandoff,
+  getCurrentSessionHandoff,
+  SessionHandoffError,
+  submitSessionHandoff,
+  waitForSessionHandoff,
+} from '../services/session-handoff-service.js'
 import { AgentStopError, assertAgentStopped } from '../utils/agent-stop-result.js'
 import { withGitRepoLock } from '../utils/git-repo-lock.js'
+import { workspaceLifecycleReason } from '../utils/workspace-lifecycle-guard.js'
 import autoLoopMessagesRoutes from './auto-loop-messages.js'
 
 const execFileAsync = promisify(execFileCb)
@@ -86,6 +97,34 @@ function workspaceErrorStatus(err: unknown): 409 | 500 {
 
 /** Hono sub-router for workspace CRUD, tasks, agents, Git and PR creation. */
 const app = new Hono()
+
+// Transfers reserve the writer across multiple HTTP requests and engine invocations.
+app.use('/:id/*', async (c, next) => {
+  const id = c.req.param('id')!
+  const route = c.req.path.split(`/api/workspaces/${id}/`)[1] ?? ''
+  if (
+    !['GET', 'HEAD', 'OPTIONS'].includes(c.req.method) &&
+    workspaceLifecycleReason(id) === 'session-handoff' &&
+    !route.startsWith('session-handoffs') &&
+    ![
+      'stop',
+      'mark-read',
+      'chat-history',
+      'deferred-tool-use/answer',
+      'deferred-tool-use/cancel',
+      'deferred-permission/decision',
+    ].includes(route)
+  ) {
+    return c.json(
+      {
+        error: 'A session transfer is pending. Finish or cancel it before changing this workspace.',
+        code: 'workspace-busy',
+      },
+      409,
+    )
+  }
+  await next()
+})
 
 // These handlers own teardown across awaits; purge/delete/restore own their guard in the service.
 for (const route of ['/:id/archive', '/:id/run-setup-script', '/:id/cancel-source-change', '/:id/rollback-file']) {
@@ -352,6 +391,44 @@ app.get('/', (c) => {
   }
 })
 
+function handoffError(c: import('hono').Context, error: unknown) {
+  return c.json(
+    { error: error instanceof Error ? error.message : 'Session transfer failed' },
+    error instanceof SessionHandoffError
+      ? error.status
+      : error instanceof SyntaxError
+        ? 400
+        : workspaceErrorStatus(error),
+  )
+}
+app.post('/:id/session-handoffs', migrationGuard, async (c) => {
+  try {
+    return c.json({ handoff: createSessionHandoff(c.req.param('id'), await c.req.json()) }, 202)
+  } catch (error) {
+    return handoffError(c, error)
+  }
+})
+app.get('/:id/session-handoffs/current', (c) => {
+  if (!workspaceService.getWorkspace(c.req.param('id'))) return c.json({ error: 'Workspace not found' }, 404)
+  return c.json({ handoff: getCurrentSessionHandoff(c.req.param('id')) })
+})
+app.post('/:id/session-handoffs/:handoffId/decision', migrationGuard, async (c) => {
+  try {
+    const body = await c.req.json<{ action: HandoffDecision }>()
+    return c.json({ handoff: await decideSessionHandoff(c.req.param('id'), c.req.param('handoffId'), body.action) })
+  } catch (error) {
+    return handoffError(c, error)
+  }
+})
+app.post('/:id/session-handoffs/:handoffId/report', migrationGuard, async (c) => {
+  try {
+    const body = await c.req.json<{ token?: unknown; report?: unknown }>()
+    return c.json(submitSessionHandoff(c.req.param('id'), c.req.param('handoffId'), body.token, body.report))
+  } catch (error) {
+    return handoffError(c, error)
+  }
+})
+
 // POST /api/workspaces/:id/engine-handoff-preview — build an editable, deterministic handoff.
 app.post('/:id/engine-handoff-preview', migrationGuard, async (c) => {
   try {
@@ -421,35 +498,18 @@ app.post('/:id/switch-engine', migrationGuard, async (c) => {
       )
     }
 
-    // A new engine is started three lines below: the previous one must be dead
-    // first, or two agents share the worktree.
-    if (agentManager.hasController(id))
-      assertAgentStopped(await agentManager.stopAgentAndWait(id, undefined, 'replacement'))
-    const updated = workspaceService.updateWorkspaceEngineConfiguration(
+    const operation = createSessionHandoff(
       id,
-      body.engine,
-      model,
-      effort,
-      body.agentPermissionMode,
-    )
-    const session = agentManager.startAgent(
-      id,
-      updated.worktreePath,
+      {
+        requestId: nanoid(),
+        sourceSessionId: workspaceService.getActiveSession(id)?.id ?? null,
+        generateSummary: false,
+        target: { engine: body.engine, model, reasoningEffort: effort, agentPermissionMode: body.agentPermissionMode },
+      },
       handoff,
-      updated.model,
-      false,
-      updated.agentPermissionMode,
-      undefined,
-      updated.reasoningEffort,
     )
-    workspaceService.updateWorkspaceStatus(id, 'executing')
-    wsService.emit(
-      id,
-      'user:message',
-      { content: handoff, sender: 'user', kind: 'engine-handoff' },
-      session.agentSessionId,
-    )
-    return c.json({ workspace: workspaceService.getWorkspace(id), sessionId: session.agentSessionId })
+    const completed = await waitForSessionHandoff(operation.id)
+    return c.json({ workspace: workspaceService.getWorkspace(id), sessionId: completed.targetSessionId })
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : 'Failed to switch engine' }, 500)
   }
@@ -2937,6 +2997,8 @@ app.put('/:id/tags', async (c) => {
 
 // PATCH /api/workspaces/:id — update workspace fields (status, model, agentPermissionMode, name)
 app.patch('/:id', migrationGuard, async (c) => {
+  if (workspaceLifecycleReason(c.req.param('id')) === 'session-handoff')
+    return c.json({ error: 'A session transfer is pending', code: 'workspace-busy' }, 409)
   try {
     const id = c.req.param('id')
     const parsed: unknown = await c.req.json()

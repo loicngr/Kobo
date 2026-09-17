@@ -12,7 +12,7 @@ import {
   getSettingsPath,
   getSkillsPath,
 } from '../../utils/paths.js'
-import { assertWorkspaceLifecycleAvailable } from '../../utils/workspace-lifecycle-guard.js'
+import { assertWorkspaceLifecycleAvailable, workspaceLifecycleReason } from '../../utils/workspace-lifecycle-guard.js'
 import { listLoopMessages, settleLoopMessages } from '../auto-loop-message-service.js'
 import * as autoLoopService from '../auto-loop-service.js'
 import * as cleanupScriptService from '../cleanup-script-service.js'
@@ -21,6 +21,8 @@ import { resolveForge } from '../forge/resolve.js'
 import * as lifecycleHookService from '../lifecycle-hook-service.js'
 import * as quotaBackoffService from '../quota-backoff-service.js'
 import { buildReviewReturnPrompt, getReviewReturn, restoreReviewConfiguration } from '../review-return-service.js'
+import { activateSession, SESSION_RECENCY_ORDER } from '../session-activity-service.js'
+import { requestHandoffStop, suspendHandoffTransfers } from '../session-handoff-runtime.js'
 import { getEffectiveSettings, getGlobalSettings } from '../settings-service.js'
 import { refreshNow } from '../usage/poller.js'
 import * as wakeupService from '../wakeup-service.js'
@@ -565,7 +567,7 @@ function readEffectiveSettingsSafe(projectPath: string): ReturnType<typeof getEf
   }
 }
 
-function buildMcpServers(workspaceId: string): McpServerSpec[] {
+function buildMcpServers(workspaceId: string, extraEnv?: Record<string, string>): McpServerSpec[] {
   const mcpServerCompiled = getCompiledMcpServerPath()
   const mcpServerSource = getMcpServerSourcePath()
   return [
@@ -575,6 +577,7 @@ function buildMcpServers(workspaceId: string): McpServerSpec[] {
       args: mcpServerCompiled ? [mcpServerCompiled] : ['tsx', mcpServerSource],
       env: {
         KOBO_WORKSPACE_ID: workspaceId,
+        ...extraEnv,
         KOBO_DB_PATH: getDbPath(),
         KOBO_SETTINGS_PATH: getSettingsPath(),
         KOBO_BACKEND_URL: `http://127.0.0.1:${backendPort}`,
@@ -650,7 +653,7 @@ function resolveSessionForResume(
   } else {
     lastSession = db
       .prepare(
-        "SELECT id, engine_session_id, engine FROM agent_sessions WHERE workspace_id = ? AND COALESCE(engine, 'claude-code') = ? AND engine_session_id IS NOT NULL ORDER BY started_at DESC LIMIT 1",
+        `SELECT id, engine_session_id, engine FROM agent_sessions WHERE workspace_id = ? AND COALESCE(engine, 'claude-code') = ? AND engine_session_id IS NOT NULL ORDER BY ${SESSION_RECENCY_ORDER} LIMIT 1`,
       )
       .get(workspaceId, engineId) as AgentSessionRow | undefined
   }
@@ -1013,6 +1016,14 @@ function handleEvent(
   const routedEvent =
     ev.kind === 'session:ended' && (hasReplacement || sourceIsSuperseded) ? { ...ev, superseded: true } : ev
   routeEvent(workspaceId, agentSessionId, routedEvent)
+  const launch = sourceController ? launchOptions.get(sourceController) : undefined
+  if (ev.kind === 'error') launch?.onError?.(ev.message)
+  // Summary turns can read and report, but must not drive loop/quota/scheduler side effects.
+  if (
+    launch?.handoffGeneration &&
+    !['session:started', 'session:ended', 'session:user-input-requested'].includes(ev.kind)
+  )
+    return
 
   if (sourceController && !sourceControllerIsStopping) {
     if (ev.kind === 'session:compacting' && ev.active) {
@@ -1147,10 +1158,11 @@ function handleEvent(
       console.error('[orchestrator] Failed to transition to executing:', err)
     }
   }
+  const transferring = workspaceLifecycleReason(workspaceId) === 'session-handoff'
   const returningReview =
     (ev.kind === 'error' || ev.kind === 'session:ended') && !!getReviewReturn(workspaceId, agentSessionId)
   const quotaError = ev.kind === 'error' && (ev.category === 'quota' || /\b429\b/.test(ev.message))
-  if (quotaError && !sourceControllerIsStopping && !returningReview) {
+  if (quotaError && !sourceControllerIsStopping && !returningReview && !transferring) {
     void handleQuota(workspaceId, agentSessionId)
   }
   if (
@@ -1159,6 +1171,7 @@ function handleEvent(
     ev.category !== 'resume_failed' &&
     TRANSIENT_SERVER_ERROR_PATTERN.test(ev.message) &&
     !returningReview &&
+    !transferring &&
     getWs(workspaceId)?.autoLoop &&
     !sourceControllerIsStopping
   ) {
@@ -1184,6 +1197,23 @@ function handleEvent(
     // its persisted prompts too, otherwise a reconnect resurrects a panel
     // whose backend callback has already been discarded.
     purgeAllPersistedUserInputRequests(workspaceId, agentSessionId)
+
+    if (transferring) {
+      onSessionEnded(workspaceId, agentSessionId, sourceController, ev.exitCode, ev.reason, isResumeFailed)
+      launch?.onEnded?.(ev)
+      if (workspaceLifecycleReason(workspaceId) === 'session-handoff') {
+        if (!launch?.handoffGeneration) {
+          settleLoopMessages(workspaceId, agentSessionId, ev.reason === 'completed')
+          if (listLoopMessages(workspaceId).some((message) => message.state === 'unknown'))
+            autoLoopService.block(workspaceId, 'message-delivery-unknown')
+        }
+        notifyCapacityAvailable(workspaceId)
+        return
+      }
+      // A target can finish before its ready/start promise settles. Its callback
+      // completed the transfer and released ownership: process this actual work
+      // session through the ordinary terminal/auto-loop path below exactly once.
+    }
 
     // A watchdog end means Kōbō forced the stream closed after the engine
     // failed to drain. It is neither a clean completion nor evidence of an
@@ -1427,6 +1457,12 @@ function onSessionEnded(
   if (sourceController) preCompactionStatus.delete(sourceController)
   if (isSuperseded) return false
 
+  if (workspaceLifecycleReason(workspaceId) === 'session-handoff') {
+    if (registeredController === sourceController && sourceController?.status !== 'stopping')
+      controllers.delete(workspaceId)
+    return false
+  }
+
   // A superseded end (above) is a session that was replaced, not one that
   // ended; everything past this point is a real end the user may want to act
   // on, whatever the reason — the script reads KOBO_SESSION_END_REASON.
@@ -1496,6 +1532,17 @@ function onSessionEnded(
   return true
 }
 
+export interface AgentLaunchOptions {
+  lifecycleOwner?: symbol
+  mcpEnv?: Record<string, string>
+  /** Generation turns must not settle instructions or advance loop progress. */
+  handoffGeneration?: boolean
+  onStarted?: () => void
+  onError?: (message: string) => void
+  onEnded?: (event: Extract<AgentEvent, { kind: 'session:ended' }>) => void
+}
+const launchOptions = new WeakMap<SessionController, AgentLaunchOptions>()
+
 // ── Public API ────────────────────────────────────────────────────────────────
 
 /**
@@ -1514,9 +1561,10 @@ export function startAgent(
   existingSessionId?: string,
   reasoningEffort?: string,
   beforeDispatch?: () => void,
+  launch?: AgentLaunchOptions,
 ): StartAgentResult {
   if (shuttingDown) throw new Error('Cannot start an agent while the server is shutting down')
-  assertWorkspaceLifecycleAvailable(workspaceId)
+  assertWorkspaceLifecycleAvailable(workspaceId, launch?.lifecycleOwner)
   const workspace = getWs(workspaceId)
   if (!workspace) throw new Error(`Workspace '${workspaceId}' not found`)
   assertWorkspaceNotCompacting(workspaceId)
@@ -1588,6 +1636,7 @@ export function startAgent(
 
   // Persist before the asynchronous engine can emit its first event. This
   // survives a Kōbō restart and does not depend on SDK system:init delivery.
+  activateSession(workspaceId, agentSessionId)
   captureTaskProgressBaseline(workspaceId, agentSessionId)
 
   const settings = ws ? readEffectiveSettingsSafe(ws.projectPath) : readEffectiveSettingsSafe(workingDir)
@@ -1610,7 +1659,7 @@ export function startAgent(
       }
     })(),
     settings,
-    mcpServers: buildMcpServers(workspaceId),
+    mcpServers: buildMcpServers(workspaceId, launch?.mcpEnv),
     env: ws ? buildAgentEnv(ws.projectPath) : undefined,
   }
 
@@ -1619,6 +1668,7 @@ export function startAgent(
   controller = new SessionController(workspaceId, agentSessionId, engine, (ev) =>
     handleEvent(workspaceId, agentSessionId, controller, ev),
   )
+  if (launch) launchOptions.set(controller, launch)
   registerSessionLifecycleOwner(workspaceId, agentSessionId, controller)
   if (!existingCtrl) controllers.set(workspaceId, controller)
   else pendingStarts.set(workspaceId, controller)
@@ -1632,7 +1682,7 @@ export function startAgent(
       // still owns the worktree. Its session row was already finalized there.
       if (existingCtrl && controller.status === 'stopping') return
       if (pendingStarts.get(workspaceId) === controller) pendingStarts.delete(workspaceId)
-      assertWorkspaceLifecycleAvailable(workspaceId)
+      assertWorkspaceLifecycleAvailable(workspaceId, launch?.lifecycleOwner)
       const current = getWs(workspaceId)
       if (!current || current.archivedAt || current.worktreePurgedAt)
         throw new Error('Workspace is no longer available')
@@ -1641,7 +1691,9 @@ export function startAgent(
       controllers.set(workspaceId, controller)
       return controller.start(options)
     })
-    .then(() => {
+    .then(async () => {
+      if (launch?.onStarted) await controller.engineProcess?.ready
+      if (controller.status !== 'stopping') launch?.onStarted?.()
       const pid = controller.pid
       if (pid !== undefined) {
         try {
@@ -1790,6 +1842,9 @@ export async function stopAgentAndWait(
   /** Only `user` disables auto-loop; technical stops preserve its persisted intent. */
   cause: StopCause = 'user',
 ): Promise<StopAgentOutcome> {
+  const finishHandoffStop = ['user', 'delete', 'purge', 'archive'].includes(cause)
+    ? requestHandoffStop(workspaceId)
+    : undefined
   const pending = pendingStarts.get(workspaceId)
   let pendingStop = Promise.resolve()
   if (pending) {
@@ -1810,7 +1865,7 @@ export async function stopAgentAndWait(
   // Shutdown only suspends timers: persisted intent belongs to the next boot.
   const cancelSchedules = new Promise<void>((resolve) => {
     if (cause !== 'shutdown') {
-      wakeupService.cancel(workspaceId, 'stopped')
+      if (cause !== 'handoff') wakeupService.cancel(workspaceId, 'stopped')
       quotaBackoffService.cancel(workspaceId, 'user')
     }
     resolve()
@@ -1836,6 +1891,7 @@ export async function stopAgentAndWait(
   if (outcome === 'timeout') {
     console.error(`[orchestrator] Agent '${workspaceId}' did not stop within ${timeoutMs}ms; retaining its controller`)
   }
+  finishHandoffStop?.(outcome)
   return outcome
 }
 
@@ -1861,6 +1917,7 @@ export async function stopAllAgents(timeoutMs = 3_000): Promise<void> {
   wakeupService.suspendForShutdown()
   cronService.suspendForShutdown()
   shuttingDown = true
+  suspendHandoffTransfers()
   if (capacityTimer) clearTimeout(capacityTimer)
   capacityTimer = undefined
   stoppedCapacityOwners.clear()
@@ -1881,6 +1938,7 @@ export function isShuttingDown(): boolean {
 
 /** Deliver a scheduled check without stopping background work or cancelling the wakeup as user input. */
 export function sendWakeupIfWaiting(workspaceId: string, content: string, expectedSessionId?: string): boolean {
+  if (workspaceLifecycleReason(workspaceId) === 'session-handoff') return false
   const ctrl = controllers.get(workspaceId)
   if (ctrl?.status !== 'running') return false
   if (expectedSessionId && ctrl.agentSessionId !== expectedSessionId) return false
@@ -1900,6 +1958,7 @@ export async function sendMessage(
   expectedSessionId?: string,
   beforeDispatch?: () => void,
 ): Promise<void> {
+  assertWorkspaceLifecycleAvailable(workspaceId)
   assertWorkspaceNotCompacting(workspaceId)
   const ctrl = controllers.get(workspaceId)
   if (!ctrl) {
@@ -1921,6 +1980,7 @@ export async function sendMessage(
 export type FallbackDeliveryResult = { status: 'sent'; sessionId: string } | { status: 'stopped' }
 
 export async function sendMessageForFallback(workspaceId: string, content: string): Promise<FallbackDeliveryResult> {
+  assertWorkspaceLifecycleAvailable(workspaceId)
   assertWorkspaceNotCompacting(workspaceId)
   const capturedController = controllers.get(workspaceId)
   wakeupService.cancel(workspaceId, 'user-message')
@@ -1929,6 +1989,7 @@ export async function sendMessageForFallback(workspaceId: string, content: strin
     await capturedController.sendMessage(content)
     return { status: 'sent', sessionId: capturedController.agentSessionId }
   } catch {
+    assertWorkspaceLifecycleAvailable(workspaceId)
     assertWorkspaceNotCompacting(workspaceId)
     const deadline = Date.now() + FALLBACK_CONTROLLER_TURNOVER_TIMEOUT_MS
     while (controllers.get(workspaceId) === capturedController) {
@@ -1943,6 +2004,7 @@ export async function sendMessageForFallback(workspaceId: string, content: strin
 
     const replacementController = controllers.get(workspaceId)
     if (!replacementController) return { status: 'stopped' }
+    assertWorkspaceLifecycleAvailable(workspaceId)
     assertWorkspaceNotCompacting(workspaceId)
     await replacementController.sendMessage(content)
     return { status: 'sent', sessionId: replacementController.agentSessionId }

@@ -28,6 +28,8 @@ import {
 } from './kobo-tasks-handlers.js'
 import { callWorkspaceDialogueTool } from './workspace-dialogue-client.js'
 
+const handoffId = process.env.KOBO_HANDOFF_ID
+const handoffToken = process.env.KOBO_HANDOFF_TOKEN
 const workspaceId = process.env.KOBO_WORKSPACE_ID
 const dbPath = process.env.KOBO_DB_PATH
 const settingsPath = process.env.KOBO_SETTINGS_PATH
@@ -180,6 +182,17 @@ const TASK_ORDER_PROPERTIES = {
 }
 
 const WORKSPACE_SCOPED_TOOLS: Tool[] = [
+  {
+    name: 'submit_session_handoff',
+    description:
+      'Submit the final Markdown handoff requested by Kōbō for this generation turn, then end your turn. Only available during a backend-owned session transfer; does not launch or stop sessions.',
+    inputSchema: {
+      type: 'object',
+      properties: { report: { type: 'string', minLength: 1, maxLength: 24000 } },
+      required: ['report'],
+    },
+    annotations: { destructiveHint: false, openWorldHint: false },
+  },
   {
     name: 'list_tasks',
     description:
@@ -471,14 +484,14 @@ const WORKSPACE_SCOPED_TOOLS: Tool[] = [
   {
     name: 'list_documents',
     description:
-      'CALL EARLY on a new session to discover plans, specs, and thoughts previously written for this workspace. Recursively lists every .md under docs/plans/, docs/superpowers/, and .ai/thoughts/. Before writing a new plan, check if one already exists.',
+      'CALL EARLY on a new session to discover plans, specs, and thoughts previously written for this workspace. Recursively lists every .md under docs/plans/, docs/superpowers/, .ai/thoughts/, and .ai/handoffs/. Before writing a new plan, check if one already exists.',
     inputSchema: { type: 'object', properties: {}, required: [] },
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   {
     name: 'read_document',
     description:
-      'CALL AFTER list_documents when a file title looks relevant to the current task. Returns the full markdown content. Scoped to docs/plans/, docs/superpowers/, .ai/thoughts/ — reject anything else.',
+      'CALL AFTER list_documents when a file title looks relevant to the current task. Returns the full markdown content. Scoped to docs/plans/, docs/superpowers/, .ai/thoughts/, .ai/handoffs/ — reject anything else.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -682,9 +695,15 @@ const GLOBAL_TOOLS: typeof WORKSPACE_SCOPED_TOOLS = [
  */
 const GLOBAL_TOOL_NAMES = new Set(GLOBAL_TOOLS.map((t) => t.name))
 
-server.setRequestHandler(ListToolsRequestSchema, async () => ({
-  tools: workspaceId ? [...WORKSPACE_SCOPED_TOOLS, ...GLOBAL_TOOLS] : GLOBAL_TOOLS,
-}))
+function availableTools(): Tool[] {
+  const tools = workspaceId ? [...WORKSPACE_SCOPED_TOOLS, ...GLOBAL_TOOLS] : GLOBAL_TOOLS
+  return tools.filter((tool) =>
+    handoffId && handoffToken
+      ? tool.name === 'submit_session_handoff' || tool.annotations?.readOnlyHint === true
+      : tool.name !== 'submit_session_handoff',
+  )
+}
+server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: availableTools() }))
 
 /** Wrap a successful result as an MCP tool response with JSON text content. */
 function ok(data: unknown) {
@@ -720,6 +739,20 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
   }
 
   try {
+    if (handoffId && handoffToken && !availableTools().some((tool) => tool.name === name))
+      return fail(
+        'This turn is reserved for a handoff report. Only read tools and submit_session_handoff are available.',
+      )
+    if (name === 'submit_session_handoff') {
+      if (!workspaceId || !handoffId || !handoffToken)
+        return fail('No handoff generation is active for this MCP invocation.')
+      return ok(
+        await backendRequest('POST', `/api/workspaces/${workspaceId}/session-handoffs/${handoffId}/report`, {
+          token: handoffToken,
+          report: a.report,
+        }),
+      )
+    }
     if (WORKSPACE_DIALOGUE_TOOLS.some((tool) => tool.name === name)) {
       if (workspaceId && a.workspace_id === workspaceId && name === 'send_workspace_message')
         return fail('Use the normal conversation to communicate in your own workspace.')

@@ -264,10 +264,40 @@ Background: the engine was migrated from `@openai/codex-sdk` (one-shot `codex ex
 
 ## Workspace operations
 
+### Fresh sessions and LLM handoffs
+
+`session-handoff-service.ts` owns manual transfers within a workspace, including
+same-engine model changes. `session_handoffs` (migration v46) preserves the source,
+target, request idempotency, report and operation state. Lifecycle reservations
+permit only launches carrying their owner token; ordinary chat, reviews and
+automatic writers remain excluded until completion or explicit cancellation.
+
+Stop the source immediately and confirm closure before resuming its exact native
+conversation for the optional report-only turn. The final destination always uses
+a fresh conversation. Generation uses a scoped `submit_session_handoff` MCP tool;
+the backend persists the report, publishes `.ai/handoffs/` documents and owns the
+transition. Never treat this generation as auto-loop progress or settle uncertain
+instructions through it. Pending instruction contents stay with the loop dispatcher.
+
+`EngineProcess.ready`, when provided, confirms initial native session/turn
+acceptance. A returned process handle alone is insufficient evidence that a
+transfer started successfully. Startup reconciliation retains interrupted transfers
+for an explicit retry/skip/cancel decision and never replays them automatically.
+Stop cancels pending transfers, including while no engine is running. Preserve
+source selection by last use after a review return; loading a historical completed
+transfer must not change the user's currently selected conversation.
+Failed, interrupted and cancelled transfers restore the source conversation as well
+as its configuration once the engine is stopped. `agent_sessions.activation_order`
+(migration v47) records starts, resumes and source restoration independently of real
+start/end timestamps. Backend current-session and implicit-resume selection, and the
+client's current-session helper, use this order with the legacy timestamp fallback.
+Keep failed target sessions in history and do not force a historical handoff's
+selection over a later conversation after reload.
+
 ### Review LLM and return to the original session
 
-The current conversation is the running session, or the last used session by
-`max(startedAt, endedAt)` after it stops. Keep the session list in creation order,
+The current conversation is the running session, or the last activated session,
+falling back to `max(startedAt, endedAt)` for legacy rows. Keep the session list in creation order,
 but do not use its first entry to identify the current conversation: a temporary
 review can return to an older session. The stale-session banner and the next
 review's return target must recognize that original session, including on reload.

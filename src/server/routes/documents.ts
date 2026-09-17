@@ -1,6 +1,7 @@
 import { existsSync, lstatSync, readdirSync, readFileSync, realpathSync } from 'node:fs'
 import path from 'node:path'
 import { Hono } from 'hono'
+import { DOCUMENT_DIRS } from '../../shared/document-roots.js'
 import * as workspaceService from '../services/workspace-service.js'
 import { isPathInside, resolveExistingPathInside } from '../utils/safe-path.js'
 
@@ -15,7 +16,6 @@ const app = new Hono()
  * Kept intentionally narrow to avoid leaking unrelated project docs
  * (README, product specs, …) into the panel.
  */
-const DOCUMENT_DIRS = ['docs/plans', 'docs/superpowers', '.ai/thoughts']
 
 /** Only .md files are listed. */
 const MD_EXT = '.md'

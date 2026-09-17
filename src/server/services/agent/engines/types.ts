@@ -37,6 +37,8 @@ export type PendingUserInputResponse =
   | { kind: 'permission-deny'; reason?: string }
 
 export interface EngineProcess {
+  /** Resolves once the initial native conversation/turn is accepted; rejects on launch failure. */
+  readonly ready?: Promise<void>
   readonly pid: number | undefined
   readonly engineSessionId: string | undefined
   /**

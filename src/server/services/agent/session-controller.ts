@@ -1,7 +1,7 @@
 import type { AgentEngine, AgentEvent, EngineProcess, StartOptions } from './engines/types.js'
 
 /** Why a controller was asked to stop; read by the session-ended hook. */
-export type StopCause = 'user' | 'delete' | 'purge' | 'replacement' | 'setup' | 'archive' | 'shutdown'
+export type StopCause = 'user' | 'delete' | 'purge' | 'replacement' | 'setup' | 'archive' | 'shutdown' | 'handoff'
 
 export class SessionController {
   /**

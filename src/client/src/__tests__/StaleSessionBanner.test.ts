@@ -39,6 +39,16 @@ it('recognizes the returned original session after completion and reload without
   view.unmount()
 })
 
+it('recognizes a restored source without rewriting its earlier end time', () => {
+  const store = useWorkspaceStore()
+  store.sessions[1]!.endedAt = '2026-09-17T09:05:00Z'
+  Object.assign(store.sessions[0]!, { activationOrder: 2 })
+  Object.assign(store.sessions[1]!, { activationOrder: 3 })
+  const view = mountBanner()
+  expect(view.find('.banner').exists()).toBe(false)
+  view.unmount()
+})
+
 it('recognizes the original session while the review summary is running', () => {
   const store = useWorkspaceStore()
   store.sessions[1]!.status = 'running'

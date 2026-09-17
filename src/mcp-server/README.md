@@ -167,12 +167,19 @@ conversation tools are described separately. The registration schemas in
 | Tool | Input | Purpose |
 |---|---|---|
 | `get_ticket` | None | Read the workspace's Notion or Sentry source context. |
-| `list_documents` | None | List Markdown under `docs/plans/`, `docs/superpowers/`, and `.ai/thoughts/`. |
+| `list_documents` | None | List Markdown under `docs/plans/`, `docs/superpowers/`, `.ai/thoughts/`, and `.ai/handoffs/`. |
 | `read_document` | `path` | Read a worktree-relative document within those roots. |
 | `log_thought` | `title`, `content`, optional `tag` | Write a uniquely named decision note under `.ai/thoughts/logs/`. |
+| `submit_session_handoff` | `report` | Submit up to 24,000 characters of Markdown during a backend-requested handoff generation turn. The invocation supplies the operation identity; the agent cannot select another transfer. |
 | `search_codebase` | `query`, optional `include_archived`, `scope`, `limit` | Search conversations, not repository source. Scope defaults to `workspace`; `all` searches across workspaces. Limit defaults to 30, maximum 100. |
 | `get_session_usage` | None | Read workspace and active-session usage totals. |
 | `read_workspace_events_csv` | Optional `session_id`, `offset`, `limit` | Read this workspace's conversation as paginated CSV; limit defaults to 100, maximum 500. |
+
+`submit_session_handoff` is advertised only to the MCP invocation preparing a
+session transfer. That invocation exposes read tools and report submission only.
+After submitting, the agent ends its turn; the backend waits for confirmed engine
+closure before launching the fresh conversation. Ordinary workspace and global
+MCP clients cannot submit handoff reports or control this transition.
 
 ### Tasks
 

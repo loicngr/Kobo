@@ -17,7 +17,7 @@ Kōbō (工房, "workshop") turns *one agent, one terminal* into a real workflow
 
 | | |
 |---|---|
-| **🗂️ Isolated worktrees, two engines** | Every workspace is its own git worktree and branch — parallel sessions never collide. Pick Claude Code or OpenAI Codex per workspace, and switch engines later without losing the worktree: Kōbō hands off tasks, git state, and recent context to a fresh session. |
+| **🗂️ Isolated worktrees, two engines** | Every workspace is its own git worktree and branch — parallel sessions never collide. Pick Claude Code or OpenAI Codex per workspace, and [continue in a fresh session](#fresh-sessions-and-llm-handoffs) with the same LLM or a different model/engine, preserving the worktree and mission history. |
 | **💬 Live chat, real diff review** | Streaming responses, inline Edit/Write diffs, a reasoning panel, and a Monaco diff viewer with **inline file editing**, conflict resolution, and one-click `Sync` / `Push` / `Open PR` / `Merge`. |
 | **🔁 Auto-loop, cron, wakeups** | Turn an agent loose on the task list: it works through tasks, retries on rate limits, and stops itself when there's nothing left, progress stalls, or it needs you. Cron schedules and one-shot wakeups keep workspaces moving on their own timeline. |
 | **🔀 Create from a PR/MR, or from a ticket** | Pick an open pull/merge request from GitHub, GitLab, or Bitbucket and Kōbō resolves every local conflict for you before spinning up the workspace. Or start straight from a Notion page or a Sentry issue URL. |
@@ -61,6 +61,18 @@ Kōbō's production build is an installable PWA — use your browser's **Install
 - **Lifecycle scripts**: shell scripts run on setup, cleanup, archive, session end, PR merge, or auto-loop stop, with output streamed into the chat.
 - **Observability**: a per-session timeline (duration, tools, tokens, errors) and a downloadable redacted diagnostic JSON.
 - **Optional integrations**: Notion (import missions) and Sentry (fix from issue URL), each independently toggled with a **Test connection** action; local voice transcription via `whisper.cpp`.
+
+## Fresh sessions and LLM handoffs
+
+Long conversation getting crowded? Use **Continue in a fresh session** at the bottom of the right-hand Tools panel. **Change LLM** uses the same transfer flow and also lets you select another model within the current engine.
+
+1. Choose the destination model, reasoning effort and permission mode. A fresh session starts with the workspace's current configuration selected.
+2. Leave **Generate a handoff with the current agent** enabled to have the current conversation summarize the objective, constraints, decisions, verified progress, failed approaches and next action. Disable it when the old provider has no quota left: Kōbō builds context from the mission, tasks, Git state and source history without calling that LLM.
+3. Start the transfer. Kōbō interrupts the current work immediately, waits for confirmed shutdown, prepares the handoff and opens a fresh native conversation that continues the mission automatically.
+
+The workspace, worktree, task list and conversation history remain available. The transfer links to its source session and a Markdown report in **Documents** (`.ai/handoffs/`, ignored by Git). Auto-loop keeps its intent and diagnostic budget; queued instructions retain their delivery state.
+
+If generation fails, choose **Retry**, **Continue without an LLM summary**, or **Cancel transfer**. Cancel and Stop leave the work stopped and restore the source conversation and LLM configuration, including when the destination failed to start. Failed attempts remain in history. A server restart preserves the transfer and report for an explicit recovery decision; it never automatically replays a potentially delivered prompt. Transfers are manual—conversation size does not trigger them automatically.
 
 ## Configuration
 

@@ -5,6 +5,7 @@ import { ChatDeliveryTracker } from 'src/services/chat-delivery'
 import { disposeTerminalEntry } from 'src/services/terminal-registry'
 import { getWorkspaceQueueHost } from 'src/services/workspace-queue-bridge'
 import { useAgentStreamStore } from 'src/stores/agent-stream'
+import { useSessionHandoffStore } from 'src/stores/session-handoff'
 import { type GlobalSettings, useSettingsStore } from 'src/stores/settings'
 import { useUpdateStore } from 'src/stores/update'
 import type { AgentEvent } from 'src/types/agent-event'
@@ -15,6 +16,7 @@ import { openNetworkLogin } from 'src/utils/network-login-bus'
 import { resolveNotificationSoundOverride } from 'src/utils/notification-sounds'
 import { DEFAULT_TOAST_TIMEOUT_MS } from 'src/utils/notification-timeout'
 import { notify } from 'src/utils/notifications'
+import type { SessionHandoff } from '../../../shared/session-handoff'
 import { parseMessageSource } from '../utils/message-source'
 import type { DevServerStatus } from './dev-server'
 import { useDevServerStore } from './dev-server'
@@ -612,8 +614,12 @@ export const useWebSocketStore = defineStore('websocket', {
       // delivery transition. Each tab/pane refreshes every queue it has opened.
       const queuedWorkspaces = new Set(Object.keys(workspaceStore.autoLoopMessages))
       if (workspaceStore.selectedWorkspaceId) queuedWorkspaces.add(workspaceStore.selectedWorkspaceId)
+      const handoffs = useSessionHandoffStore()
+      const handoffWorkspaces = new Set(Object.keys(handoffs.current))
+      if (workspaceStore.selectedWorkspaceId) handoffWorkspaces.add(workspaceStore.selectedWorkspaceId)
       await Promise.allSettled([
         workspaceStore.fetchAutoLoopStates(),
+        ...[...handoffWorkspaces].map((id) => handoffs.refresh(id)),
         ...[...queuedWorkspaces].map((id) => workspaceStore.fetchAutoLoopMessages(id)),
         ...[...tracked].map((id) => devServers.fetchStatus(id)),
       ])
@@ -838,6 +844,13 @@ export const useWebSocketStore = defineStore('websocket', {
       }
 
       switch (msg.type) {
+        case 'workspace:handoff': {
+          if (!wid || this._replaying) break
+          const handoff = payload.handoff as SessionHandoff | undefined
+          if (handoff?.workspaceId === wid && typeof handoff.id === 'string' && typeof handoff.state === 'string')
+            useSessionHandoffStore().apply(handoff)
+          break
+        }
         case 'kobo:update-checked':
           useUpdateStore().applySnapshot(payload)
           break

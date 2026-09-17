@@ -84,6 +84,10 @@
 
     <AutoLoopStatusPanel :workspace-id="workspaceId" />
 
+    <div v-if="isHandoffBlocking" class="row items-center q-pa-xs q-px-sm text-caption text-kobo-2" role="status">
+      {{ $t(handoffs.isActive(workspaceId) ? 'handoff.progress' : 'handoff.blocked') }}
+    </div>
+
     <div v-if="isCompacting" class="row items-center q-pa-xs q-px-sm text-caption text-kobo-2">
       <q-spinner-dots size="14px" color="primary" class="q-mr-sm" />
       <span>{{ $t('chatInput.compactingBanner') }}</span>
@@ -233,7 +237,7 @@
         icon="pause"
         :label="$t('workspacePage.interrupt')"
         :loading="interrupting"
-        :disable="interrupting"
+        :disable="interrupting || isHandoffBlocking"
         class="chat-hint__interrupt"
         @click="handleInterrupt"
       >
@@ -254,6 +258,7 @@ import { useFileMention } from 'src/composables/use-file-mention'
 import { useIsMobile } from 'src/composables/use-is-mobile'
 import { type SlashDropdownItem, useSlashAutocomplete } from 'src/composables/use-slash-autocomplete'
 import { supportsLiveSteering, supportsQuotaStatus } from 'src/constants/engineFeatures'
+import { useSessionHandoffStore } from 'src/stores/session-handoff'
 import { useSettingsStore } from 'src/stores/settings'
 import { useTemplatesStore } from 'src/stores/templates'
 import { useWebSocketStore } from 'src/stores/websocket'
@@ -290,7 +295,7 @@ const showInterrupt = computed(() => isBusyStatus(store.selectedWorkspace?.statu
 const quotaStatusVisible = computed(() => supportsQuotaStatus(store.selectedWorkspace?.engine))
 
 async function handleInterrupt() {
-  if (!props.workspaceId) return
+  if (!props.workspaceId || isHandoffBlocking.value) return
   interrupting.value = true
   try {
     await store.interruptAgent(props.workspaceId)
@@ -305,6 +310,8 @@ async function handleInterrupt() {
 
 const isAgentBusy = computed(() => isBusyStatus(store.selectedWorkspace?.status))
 const isCompacting = computed(() => wsStore.isCompacting(props.workspaceId))
+const handoffs = useSessionHandoffStore()
+const isHandoffBlocking = computed(() => handoffs.isBlocking(props.workspaceId))
 
 const queuedSessionId = computed(() => store.selectedSessionId)
 const queuedMessage = computed(() => store.getQueuedMessage(props.workspaceId, queuedSessionId.value))
@@ -321,7 +328,7 @@ const canForceQueuedMessage = computed(() => {
   const workspace =
     store.workspaces.find((item) => item.id === props.workspaceId) ??
     store.archivedWorkspaces.find((item) => item.id === props.workspaceId)
-  return supportsLiveSteering(workspace?.engine) && isAgentBusy.value && !isCompacting.value
+  return supportsLiveSteering(workspace?.engine) && isAgentBusy.value && !isCompacting.value && !isHandoffBlocking.value
 })
 
 // Chat input element ref (for caret position access)
@@ -632,7 +639,7 @@ const isAwaitingUser = computed(() => store.selectedWorkspace?.status === 'await
 const isArchived = computed(() => Boolean(store.selectedWorkspace?.archivedAt))
 
 const isDisabled = computed(() => {
-  return !props.workspaceId || isAwaitingUser.value || isArchived.value
+  return !props.workspaceId || isAwaitingUser.value || isArchived.value || isHandoffBlocking.value
 })
 
 const voiceEnabled = computed(() => settingsStore.global.voiceEnabled && !isDisabled.value)
@@ -823,7 +830,7 @@ async function sendMessageNow() {
       return
     }
   }
-  if (isCompacting.value) {
+  if (isCompacting.value || isHandoffBlocking.value) {
     restoreDraft()
     return
   }

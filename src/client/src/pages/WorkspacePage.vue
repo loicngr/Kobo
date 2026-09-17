@@ -294,6 +294,7 @@
 <script setup lang="ts">
 import { useQuasar } from 'quasar'
 import { useIsMobile } from 'src/composables/use-is-mobile'
+import { useSessionHandoff } from 'src/composables/use-session-handoff'
 import { useTours } from 'src/composables/use-tours'
 import { useWorktreeRestore } from 'src/composables/use-worktree-restore'
 import { EFFORT_OPTION_DEFS_BY_ENGINE } from 'src/constants/efforts'
@@ -332,6 +333,7 @@ import WorkspaceWhipControl from 'src/components/WorkspaceWhipControl.vue'
 const $q = useQuasar()
 const { isMobile } = useIsMobile()
 const store = useWorkspaceStore()
+useSessionHandoff(computed(() => store.selectedWorkspaceId))
 const { restoreWorktree } = useWorktreeRestore()
 const layout = useLayoutStore()
 const { t } = useI18n()

@@ -291,12 +291,24 @@ export function createClaudeCodeEngine(): AgentEngine {
       const inputStream = new ClaudeInputStream(effectivePrompt)
       const q = query({ prompt: inputStream, options: sdkOptions })
 
+      let resolveReady!: () => void
+      let rejectReady!: (error: Error) => void
+      const ready = new Promise<void>((resolve, reject) => {
+        resolveReady = resolve
+        rejectReady = reject
+      })
+      // Legacy callers do not await readiness; still observe an early rejection.
+      void ready.catch(() => {})
       let discoveredSessionId: string | undefined
 
       // A throwing onEvent handler (e.g. DB query against a closed connection
       // during async test teardown) must not escape as an unhandled rejection.
       const emitDirect = (ev: AgentEvent): void => {
         try {
+          if (ev.kind === 'session:started') resolveReady()
+          if (ev.kind === 'error') rejectReady(new Error(ev.message))
+          if (ev.kind === 'session:ended')
+            rejectReady(new Error('Claude ended before confirming session initialization'))
           onEvent(ev)
         } catch (err) {
           console.error('[claude-engine] onEvent handler threw:', err)
@@ -643,6 +655,7 @@ export function createClaudeCodeEngine(): AgentEngine {
       })()
 
       const engineProcess: EngineProcess = {
+        ready,
         closed: iteratorPromise.then(() => {}),
         get pid() {
           return undefined

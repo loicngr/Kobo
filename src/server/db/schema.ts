@@ -3,6 +3,7 @@ import { initAutoLoopSchema } from './auto-loop-schema.js'
 import { initMcpMessageSchema } from './mcp-message-schema.js'
 import { initReviewReturnSchema } from './review-return-schema.js'
 import { initSearchSchema } from './search-schema.js'
+import { initSessionHandoffSchema } from './session-handoff-schema.js'
 
 /** Create all tables and indexes for a fresh install. Not used for upgrades -- see migrations.ts. */
 export function initSchema(db: Database.Database): void {
@@ -72,7 +73,8 @@ export function initSchema(db: Database.Database): void {
       ended_at TEXT,
       name TEXT,
       task_progress_baseline TEXT,
-      end_reason TEXT
+      end_reason TEXT,
+      activation_order INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS ws_events (
@@ -231,4 +233,5 @@ export function initSchema(db: Database.Database): void {
   initMcpMessageSchema(db)
   initReviewReturnSchema(db)
   initAutoLoopSchema(db)
+  initSessionHandoffSchema(db)
 }

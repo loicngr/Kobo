@@ -93,6 +93,7 @@ export interface AgentSession {
   model?: string | null
   startedAt: string
   endedAt: string | null
+  activationOrder?: number
   name: string | null
 }
 

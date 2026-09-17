@@ -8,6 +8,7 @@ import * as orchestrator from './agent/orchestrator.js'
 import * as autoLoopService from './auto-loop-service.js'
 import * as cronService from './cron-service.js'
 import * as quotaBackoffService from './quota-backoff-service.js'
+import { SESSION_RECENCY_ORDER } from './session-activity-service.js'
 import { createTaskRecord, deleteTaskRecord, type UpdateTaskMutation, updateTaskRecord } from './task-mutations.js'
 import * as wakeupService from './wakeup-service.js'
 import { emitEphemeral } from './websocket-service.js'
@@ -1114,6 +1115,7 @@ export interface AgentSession {
   model: string | null
   startedAt: string
   endedAt: string | null
+  activationOrder?: number
   name: string | null
 }
 
@@ -1127,6 +1129,7 @@ interface AgentSessionRow {
   model: string | null
   started_at: string
   ended_at: string | null
+  activation_order: number
   name: string | null
 }
 
@@ -1141,6 +1144,7 @@ function mapSession(row: AgentSessionRow): AgentSession {
     model: row.model,
     startedAt: row.started_at,
     endedAt: row.ended_at,
+    activationOrder: row.activation_order,
     name: row.name,
   }
 }
@@ -1167,7 +1171,8 @@ export function getLatestSession(workspaceId: string): AgentSession | null {
  * Return the "active" session for tagging events like push/pull/open-pr traces
  * or resumed chat messages. Skips idle sessions (never started) and prefers a
  * running session, falling back to the last used session (any non-idle status).
- * A resumed conversation keeps its started_at, but updates ended_at on stop.
+ * Starts and handoff rollbacks persist activation order independently of execution dates.
+ * Legacy sessions fall back to their last start/end time.
  */
 export function getActiveSession(workspaceId: string): AgentSession | null {
   const db = getDb()
@@ -1181,7 +1186,7 @@ export function getActiveSession(workspaceId: string): AgentSession | null {
   // Otherwise the last used non-idle session (completed, error, quota, etc.)
   const latestNonIdle = db
     .prepare(
-      "SELECT * FROM agent_sessions WHERE workspace_id = ? AND status != 'idle' ORDER BY MAX(started_at, COALESCE(ended_at, started_at)) DESC, started_at DESC LIMIT 1",
+      `SELECT * FROM agent_sessions WHERE workspace_id = ? AND status != 'idle' ORDER BY ${SESSION_RECENCY_ORDER} LIMIT 1`,
     )
     .get(workspaceId) as AgentSessionRow | undefined
   return latestNonIdle ? mapSession(latestNonIdle) : null

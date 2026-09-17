@@ -1,9 +1,25 @@
 import { describe, expect, it } from 'vitest'
 import {
+  assertWorkspaceLifecycleAvailable,
   deferUntilWorkspaceAvailable,
   isWorkspaceLifecycleBusy,
+  reserveWorkspaceLifecycle,
   withWorkspaceLifecycleGuard,
 } from '../server/utils/workspace-lifecycle-guard.js'
+
+it('only permits the owner of a long-lived reservation and releases it once', async () => {
+  const reservation = reserveWorkspaceLifecycle('handoff', 'session-handoff')
+  expect(() => assertWorkspaceLifecycleAvailable('handoff')).toThrow()
+  expect(() => assertWorkspaceLifecycleAvailable('handoff', Symbol())).toThrow()
+  expect(() => assertWorkspaceLifecycleAvailable('handoff', reservation.owner)).not.toThrow()
+  let calls = 0
+  deferUntilWorkspaceAvailable('handoff', () => calls++)
+  reservation.release()
+  reservation.release()
+  await Promise.resolve()
+  expect(calls).toBe(1)
+  expect(() => assertWorkspaceLifecycleAvailable('handoff', reservation.owner)).toThrow()
+})
 
 describe('workspace lifecycle exclusion', () => {
   it('rejects overlapping operations on the same workspace, but allows another workspace', async () => {

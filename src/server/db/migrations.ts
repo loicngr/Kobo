@@ -4,6 +4,7 @@ import { initMcpMessageSchema } from './mcp-message-schema.js'
 import { initReviewReturnSchema } from './review-return-schema.js'
 import { initSchema } from './schema.js'
 import { initSearchSchema } from './search-schema.js'
+import { initSessionHandoffSchema } from './session-handoff-schema.js'
 
 // ── Migration registry ────────────────────────────────────────────────────────
 // Each entry describes a single schema upgrade step.
@@ -775,6 +776,18 @@ export const migrations: Migration[] = [
   { version: 43, name: 'durable-mcp-message-requests', migrate: initMcpMessageSchema },
   { version: 44, name: 'review-session-returns', migrate: initReviewReturnSchema },
   { version: 45, name: 'durable-auto-loop', migrate: initAutoLoopSchema },
+  { version: 46, name: 'session-handoffs', migrate: initSessionHandoffSchema },
+  {
+    version: 47,
+    name: 'session-activation-order',
+    migrate(db) {
+      const table = db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_sessions'").get()
+      if (!table) return
+      const columns = db.prepare('PRAGMA table_info(agent_sessions)').all() as Array<{ name: string }>
+      if (!columns.some((column) => column.name === 'activation_order'))
+        db.exec('ALTER TABLE agent_sessions ADD COLUMN activation_order INTEGER NOT NULL DEFAULT 0')
+    },
+  },
 ]
 
 /** Current schema version — always equals the highest migration version. */
