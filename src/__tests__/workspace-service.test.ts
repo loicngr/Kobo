@@ -610,6 +610,19 @@ describe('getLatestSession(workspaceId)', () => {
 })
 
 describe('getActiveSession(workspaceId)', () => {
+  it('selects the original conversation after its resumed summary ends', async () => {
+    const { createWorkspace, getActiveSession, listSessions } = await import('../server/services/workspace-service.js')
+    const { getDb } = await import('../server/db/index.js')
+    const ws = createWorkspace({ name: 'WS', projectPath: '/p', sourceBranch: 'main', workingBranch: 'b' })
+    const insert = getDb().prepare(
+      'INSERT INTO agent_sessions (id, workspace_id, status, started_at, ended_at) VALUES (?, ?, ?, ?, ?)',
+    )
+    insert.run('original', ws.id, 'completed', '2026-09-17T09:00:00Z', '2026-09-17T10:06:00Z')
+    insert.run('review', ws.id, 'completed', '2026-09-17T10:00:00Z', '2026-09-17T10:05:00Z')
+    expect(getActiveSession(ws.id)?.id).toBe('original')
+    expect(listSessions(ws.id).map((session) => session.id)).toEqual(['review', 'original'])
+  })
+
   it('retourne null si aucune session', async () => {
     const { createWorkspace, getActiveSession } = await import('../server/services/workspace-service.js')
     const ws = createWorkspace({ name: 'WS', projectPath: '/p', sourceBranch: 'main', workingBranch: 'b' })

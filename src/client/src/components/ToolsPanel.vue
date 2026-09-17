@@ -150,6 +150,9 @@
     <StartReviewDialog
       v-model="reviewDialogOpen"
       :loading="startingReview"
+      :workspace="workspace"
+      :current-session="currentSession"
+      :can-return-to-session="canReturnToSession"
       @submit="startReview"
     />
   </div>
@@ -165,10 +168,12 @@ import StartReviewDialog from 'src/components/StartReviewDialog.vue'
 import { useSettingsStore } from 'src/stores/settings'
 import { useWorkspaceStore, type Workspace } from 'src/stores/workspace'
 import { getActionBlocker } from 'src/utils/action-blocker'
+import { getCurrentSession } from 'src/utils/current-session'
 import { isCiFailed } from 'src/utils/pr-status'
 import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
+import type { StartReviewRequest } from '../../../shared/review'
 
 const props = defineProps<{
   workspace: Workspace | null
@@ -186,6 +191,17 @@ const openingTerminal = ref(false)
 const reviewDialogOpen = ref(false)
 const startingReview = ref(false)
 const fixingCi = ref(false)
+const currentSession = computed(() => {
+  return getCurrentSession(
+    workspaceStore.sessions.filter(
+      (session) => session.workspaceId === props.workspace?.id && session.status !== 'idle',
+    ),
+  )
+})
+const canReturnToSession = computed(() => {
+  const current = currentSession.value
+  return !!current?.engineSessionId && (!current.engine || current.engine === props.workspace?.engine)
+})
 
 const hasCiFailure = computed(() => {
   if (!props.workspace) return false
@@ -347,8 +363,8 @@ async function startCiFix() {
   }
 }
 
-async function startReview(payload: { additionalInstructions: string; newSession: boolean }) {
-  if (reviewBlocker.value || !workspaceId.value) return
+async function startReview(payload: StartReviewRequest) {
+  if (startingReview.value || reviewBlocker.value || !workspaceId.value) return
   startingReview.value = true
   try {
     const res = await fetch(`/api/workspaces/${workspaceId.value}/start-review`, {

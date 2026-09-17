@@ -1450,6 +1450,11 @@ export default {
   'review.additionalInstructionsPlaceholder': 'Añade instrucciones específicas para la revisión…',
   'review.newSession': 'Nueva sesión',
   'review.newSessionHint': 'Inicia una sesión nueva en vez de continuar la actual.',
+  'review.newSessionRequired': 'Cambiar los ajustes del agente o volver automáticamente requiere una nueva sesión.',
+  'review.returnToSession': 'Volver a la sesión actual después de la revisión',
+  'review.returnToSessionHint':
+    'Reanuda esta sesión con el resumen final del revisor. Si se desactiva, la conversación continúa en la sesión de revisión.',
+  'review.returnUnavailable': 'La sesión actual debe haberse iniciado para poder reanudarla.',
   'review.start': 'Iniciar revisión',
   'review.cancel': 'Cancelar',
   'review.launched': 'Revisión iniciada',

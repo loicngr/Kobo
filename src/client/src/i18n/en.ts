@@ -1434,6 +1434,11 @@ export default {
   'review.additionalInstructionsPlaceholder': 'Add any specific instructions for the review…',
   'review.newSession': 'New session',
   'review.newSessionHint': 'Start a fresh agent session instead of continuing the current one.',
+  'review.newSessionRequired': 'A new session is required for different agent settings or an automatic return.',
+  'review.returnToSession': 'Return to the current session after the review',
+  'review.returnToSessionHint':
+    'Resume this session with the reviewer’s final summary. If disabled, continue in the review session.',
+  'review.returnUnavailable': 'The current session must have started before it can be resumed.',
   'review.start': 'Start Review',
   'review.cancel': 'Cancel',
   'review.launched': 'Review started',

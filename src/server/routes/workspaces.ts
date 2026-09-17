@@ -53,7 +53,7 @@ import {
   refreshPrSnapshot,
 } from '../services/pr-watcher-service.js'
 import * as quotaBackoffService from '../services/quota-backoff-service.js'
-import { getActiveReviewTemplate, renderReviewTemplate } from '../services/review-template-service.js'
+import { ReviewRequestError, startWorkspaceReview } from '../services/review-service.js'
 import * as sentryService from '../services/sentry-service.js'
 import * as settingsService from '../services/settings-service.js'
 import { runSetupScript } from '../services/setup-script-service.js'
@@ -4814,122 +4814,14 @@ app.post('/:id/open-pr', async (c) => {
 })
 
 // POST /api/workspaces/:id/start-review — ask the agent to review committed + uncommitted changes
-app.post('/:id/start-review', async (c) => {
+app.post('/:id/start-review', migrationGuard, async (c) => {
   try {
-    const id = c.req.param('id')
-    const workspace = workspaceService.getWorkspace(id)
-    if (!workspace) {
-      return c.json({ error: `Workspace '${id}' not found` }, 404)
-    }
-
-    const body = await c.req
-      .json<{ additionalInstructions?: string; newSession?: boolean }>()
-      .catch(() => ({}) as { additionalInstructions?: string; newSession?: boolean })
-    const additionalInstructions = (body.additionalInstructions ?? '').trim()
-    const newSession = body.newSession === true
-
-    const worktreePath = workspace.worktreePath
-
-    // Best-effort fetch so the base ref is fresh
-    try {
-      await execFileAsync('git', ['fetch', 'origin', workspace.sourceBranch], { cwd: worktreePath })
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      console.warn(`[start-review] git fetch origin ${workspace.sourceBranch} failed: ${msg}`)
-    }
-
-    // Resolve base commit
-    let baseCommit: string
-    try {
-      const { stdout } = await execFileAsync('git', ['rev-parse', `origin/${workspace.sourceBranch}`], {
-        cwd: worktreePath,
-      })
-      baseCommit = stdout.trim()
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err)
-      return c.json({ error: `Cannot resolve base commit for branch ${workspace.sourceBranch}: ${msg}` }, 500)
-    }
-
-    // Build context
-    const commits = gitOps.getCommitsBetween(worktreePath, workspace.sourceBranch, workspace.workingBranch)
-    const committedStats = gitOps.getDiffStatsBetween(worktreePath, workspace.sourceBranch, workspace.workingBranch)
-    const workingTreeStats = gitOps.getWorkingTreeDiffStats(worktreePath)
-    const diffStats =
-      workingTreeStats.trim().length > 0
-        ? `${committedStats}\n\n— Working tree (uncommitted) —\n${workingTreeStats}`
-        : committedStats
-
-    const template = getActiveReviewTemplate()
-
-    const rendered = renderReviewTemplate(template, {
-      workspace,
-      commits,
-      diffStats,
-      baseCommit,
-      additionalInstructions,
-    })
-
-    let messageSent = false
-    let emitSessionId: string | undefined
-
-    if (workspaceService.getWorkspace(workspace.id)?.status === 'compacting') {
-      return c.json(
-        {
-          code: 'compacting',
-          error: 'Workspace is compacting its context; wait until compaction finishes before sending a message',
-        },
-        409,
-      )
-    }
-
-    if (newSession) {
-      // Stop current agent, wait for it, then start fresh.
-      try {
-        assertAgentStopped(await agentManager.stopAgentAndWait(workspace.id, undefined, 'replacement'))
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        console.error(`[start-review] stopAgentAndWait failed (continuing): ${msg}`)
-        throw err
-      }
-      try {
-        const agent = agentManager.startAgent(
-          workspace.id,
-          worktreePath,
-          rendered,
-          workspace.model,
-          false /* resume */,
-          workspace.agentPermissionMode,
-          undefined,
-          workspace.reasoningEffort,
-        )
-        workspaceService.updateWorkspaceStatus(workspace.id, 'executing')
-        emitSessionId = agent?.agentSessionId
-        messageSent = true
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        return c.json({ error: `Failed to start review session: ${msg}` }, 500)
-      }
-    } else {
-      const session = workspaceService.getActiveSession(workspace.id)
-      emitSessionId = session?.id
-      try {
-        const delivery = await deliverAgentPrompt(workspace, worktreePath, rendered)
-        emitSessionId = delivery.agentSessionId
-        messageSent = true
-      } catch (deliveryErr) {
-        const message = deliveryErr instanceof Error ? deliveryErr.message : String(deliveryErr)
-        return c.json({ error: `Failed to dispatch review prompt: ${message}` }, 500)
-      }
-    }
-
-    // Emit AFTER dispatch so the user:message lands in the correct session id —
-    // for newSession=true that's the freshly created session, not the previous one.
-    wsService.emit(workspace.id, 'user:message', { content: rendered, sender: 'user' }, emitSessionId)
-
-    return c.json({ ok: true, messageSent, newSession })
+    return c.json(await startWorkspaceReview(c.req.param('id'), await c.req.json().catch(() => ({}))))
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, workspaceErrorStatus(err))
+    return c.json(
+      { error: err instanceof Error ? err.message : String(err) },
+      err instanceof ReviewRequestError ? err.status : workspaceErrorStatus(err),
+    )
   }
 })
 

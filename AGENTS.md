@@ -116,6 +116,7 @@ src/
 | `tasks` | workspace sub-items: title, status, `is_acceptance_criterion`, sort_order; CASCADE DELETE on workspace |
 | `agent_sessions` | agent-engine sessions: pid where applicable, engine session id, status, timestamps, model, and name |
 | `ws_events` | persisted WebSocket events for replay on reconnect: type, payload, session_id, created_at |
+| `pending_review_returns` | one-shot return from a review to its original session and LLM configuration (migration v44) |
 | `pending_wakeups` | one-row-per-workspace scheduler for the `schedule_wakeup` MCP tool: target_at (ISO UTC), prompt, reason; CASCADE DELETE on workspace |
 | `pending_quota_backoffs` | persisted quota retries and their attempt counts |
 | `pending_crons` | recurring workspace schedules and their next run |
@@ -258,6 +259,36 @@ Background: the engine was migrated from `@openai/codex-sdk` (one-shot `codex ex
 - **`MCP tools` need `default_tools_approval_mode: 'auto'` in `config.mcp_servers`.** Without it Codex flags every MCP tool call as needing user approval ("user cancelled MCP tool call"). Kōbō trusts every tool it spawns, so the options-builder pre-approves the namespace.
 
 ## Workspace operations
+
+### Review LLM and return to the original session
+
+The current conversation is the running session, or the last used session by
+`max(startedAt, endedAt)` after it stops. Keep the session list in creation order,
+but do not use its first entry to identify the current conversation: a temporary
+review can return to an older session. The stale-session banner and the next
+review's return target must recognize that original session, including on reload.
+
+`StartReviewDialog.vue` uses the shared model/effort/permission catalogues. Changed
+settings force a new session on both client and server. `review-service.ts`
+validates before side effects, waits for confirmed shutdown, then applies the
+selected configuration and launches the review. Without a return request, these
+settings remain the workspace defaults. Legacy requests retain their behavior.
+
+The optional `returnToSession` flag captures the exact resumable original session.
+`pending_review_returns` persists its configuration and the review session id
+before switching engines. The orchestrator intercepts a successful review end
+(including watchdog closure without a nonzero exit), restores configuration and
+resumes that exact native conversation with the reviewer's final text report.
+Resume selection is scoped to the target engine; never pass a reviewer's native
+conversation id to the original engine, even after cancellation or restart.
+The report reassembles text deltas/final snapshots, is bounded to 24,000 characters,
+and links back to the complete review session through the conversation tool.
+The receiving agent is asked to summarize and await instructions before fixes.
+The intent is consumed before delivery, preventing repeated ends from sending twice.
+Errors restore settings without automatically resuming; explicit stop cancels the
+return. Startup restores interrupted-review settings without replaying a possibly
+already-delivered handoff. Preserve these guards and the auto-loop interception.
+`workspace:configuration` is ephemeral and updates all four LLM settings across tabs.
 
 ### Delete confirmation
 

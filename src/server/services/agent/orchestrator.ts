@@ -19,6 +19,7 @@ import * as cronService from '../cron-service.js'
 import { resolveForge } from '../forge/resolve.js'
 import * as lifecycleHookService from '../lifecycle-hook-service.js'
 import * as quotaBackoffService from '../quota-backoff-service.js'
+import { buildReviewReturnPrompt, getReviewReturn, restoreReviewConfiguration } from '../review-return-service.js'
 import { getEffectiveSettings, getGlobalSettings } from '../settings-service.js'
 import { refreshNow } from '../usage/poller.js'
 import * as wakeupService from '../wakeup-service.js'
@@ -410,6 +411,7 @@ function runWatchdog(): void {
       notifyCapacityAvailable(workspaceId)
     }
     preCompactionStatus.delete(ctrl)
+    restoreReviewConfiguration(workspaceId, ctrl.agentSessionId)
     retryCounts.delete(workspaceId)
 
     // This end never goes through handleEvent → onSessionEnded, so the user's
@@ -641,6 +643,7 @@ function resolveSessionForResume(
   workspaceId: string,
   existingSessionId: string | undefined,
   model: string | undefined,
+  engineId: string,
 ): { agentSessionId: string; engineSessionId: string | undefined; existed: boolean } {
   const db = getDb()
   let lastSession: AgentSessionRow | undefined
@@ -656,16 +659,22 @@ function resolveSessionForResume(
           'session not found or has no associated engine conversation',
       )
     }
+    if ((lastSession.engine ?? 'claude-code') !== engineId) {
+      throw new Error(
+        `Cannot resume session '${existingSessionId}' with engine '${engineId}': the conversation belongs to '${lastSession.engine}'`,
+      )
+    }
   } else {
     lastSession = db
       .prepare(
-        'SELECT id, engine_session_id, engine FROM agent_sessions WHERE workspace_id = ? AND engine_session_id IS NOT NULL ORDER BY started_at DESC LIMIT 1',
+        "SELECT id, engine_session_id, engine FROM agent_sessions WHERE workspace_id = ? AND COALESCE(engine, 'claude-code') = ? AND engine_session_id IS NOT NULL ORDER BY started_at DESC LIMIT 1",
       )
-      .get(workspaceId) as AgentSessionRow | undefined
+      .get(workspaceId, engineId) as AgentSessionRow | undefined
   }
 
-  const engineSessionId =
-    lastSession?.engine_session_id ?? (existingSessionId ? undefined : sessionIds.get(workspaceId))
+  // A workspace can now contain conversations from multiple engines. The
+  // unscoped in-memory ID may belong to the reviewer, so only trust its DB row.
+  const engineSessionId = lastSession?.engine_session_id
 
   if (engineSessionId) {
     const existingId =
@@ -1075,13 +1084,16 @@ function handleEvent(
       console.error('[orchestrator] Failed to transition to executing:', err)
     }
   }
-  if (ev.kind === 'error' && ev.category === 'quota' && !sourceControllerIsStopping) {
+  const returningReview =
+    (ev.kind === 'error' || ev.kind === 'session:ended') && !!getReviewReturn(workspaceId, agentSessionId)
+  if (ev.kind === 'error' && ev.category === 'quota' && !sourceControllerIsStopping && !returningReview) {
     void handleQuota(workspaceId, agentSessionId)
   }
   if (
     ev.kind === 'error' &&
     ev.category === 'other' &&
     TRANSIENT_SERVER_ERROR_PATTERN.test(ev.message) &&
+    !returningReview &&
     getWs(workspaceId)?.autoLoop &&
     !sourceControllerIsStopping
   ) {
@@ -1127,7 +1139,8 @@ function handleEvent(
     // dead-engine branch evicts a controller from the map WITHOUT ever
     // calling `.stop()` on it, so an old controller can still be 'running'
     // by the time its own drain watchdog reports a late `session:ended`.
-    const watchdogRecovery = !hasReplacement && ev.reason === 'watchdog' && getWs(workspaceId)?.autoLoop === true
+    const watchdogRecovery =
+      !returningReview && !hasReplacement && ev.reason === 'watchdog' && getWs(workspaceId)?.autoLoop === true
     // A drain watchdog can fire mid-`stop()`: `stopController` already cancelled
     // any pending quota backoff (`quotaBackoffService.cancel(id, 'user')`), and
     // re-arming one here would resurrect a session the user just stopped — the
@@ -1154,6 +1167,45 @@ function handleEvent(
     )
 
     if (!ownsWorkspaceLifecycle) return
+
+    if (returningReview) {
+      const pending = restoreReviewConfiguration(workspaceId, agentSessionId)
+      const workspace = getWs(workspaceId)
+      if (
+        pending &&
+        workspace &&
+        !shuttingDown &&
+        !workspace.archivedAt &&
+        !workspace.worktreePurgedAt &&
+        (ev.reason === 'completed' || ev.reason === 'watchdog') &&
+        (ev.exitCode === null || ev.exitCode === 0)
+      ) {
+        try {
+          const prompt = buildReviewReturnPrompt(workspaceId, agentSessionId)
+          const original = pending.original
+          startAgent(
+            workspaceId,
+            workspace.worktreePath,
+            prompt,
+            original.sessionModel ?? original.model,
+            true,
+            original.agentPermissionMode,
+            pending.originalSessionId,
+            original.reasoningEffort,
+          )
+          updateWorkspaceStatus(workspaceId, 'executing')
+          emit(workspaceId, 'user:message', { content: prompt, sender: 'system-prompt' }, pending.originalSessionId)
+        } catch (err) {
+          routeEvent(workspaceId, agentSessionId, {
+            kind: 'error',
+            category: 'other',
+            message: `Could not return to the original session: ${err instanceof Error ? err.message : String(err)}`,
+          })
+        }
+      }
+      notifyCapacityAvailable(workspaceId)
+      return
+    }
 
     if (watchdogRecovery) {
       notifyCapacityAvailable(workspaceId)
@@ -1446,7 +1498,7 @@ export function startAgent(
   let resumeFromEngineSessionId: string | undefined
 
   if (resume) {
-    const r = resolveSessionForResume(workspaceId, existingSessionId, model)
+    const r = resolveSessionForResume(workspaceId, existingSessionId, model, engineId)
     agentSessionId = r.agentSessionId
     resumeFromEngineSessionId = r.engineSessionId
     // A native resume is only used by the currently selected workspace engine.
@@ -1581,6 +1633,7 @@ export type { StopAgentOutcome } from '../../utils/agent-stop-result.js'
 
 async function stopController(workspaceId: string, ctrl: SessionController, cause: StopCause = 'user'): Promise<void> {
   ctrl.stopCause = cause
+  restoreReviewConfiguration(workspaceId, ctrl.agentSessionId)
   preCompactionStatus.delete(ctrl)
 
   // Normalize the state synchronously so callers (archive, delete, manual

@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3'
 import { initMcpMessageSchema } from './mcp-message-schema.js'
+import { initReviewReturnSchema } from './review-return-schema.js'
 import { initSearchSchema } from './search-schema.js'
 
 /** Create all tables and indexes for a fresh install. Not used for upgrades -- see migrations.ts. */
@@ -227,4 +228,5 @@ export function initSchema(db: Database.Database): void {
   `)
   initSearchSchema(db)
   initMcpMessageSchema(db)
+  initReviewReturnSchema(db)
 }

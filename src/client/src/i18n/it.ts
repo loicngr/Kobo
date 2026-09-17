@@ -1448,6 +1448,11 @@ export default {
   'review.additionalInstructionsPlaceholder': 'Aggiungi istruzioni specifiche per la revisione…',
   'review.newSession': 'Nuova sessione',
   'review.newSessionHint': 'Avvia una nuova sessione invece di continuare quella attuale.',
+  'review.newSessionRequired': 'Impostazioni diverse o il ritorno automatico richiedono una nuova sessione.',
+  'review.returnToSession': 'Torna alla sessione attuale dopo la review',
+  'review.returnToSessionHint':
+    'Riprende questa sessione con il riepilogo finale del reviewer. Se disattivato, la conversazione continua nella sessione di review.',
+  'review.returnUnavailable': 'La sessione attuale deve essere stata avviata per poter essere ripresa.',
   'review.start': 'Avvia revisione',
   'review.cancel': 'Annulla',
   'review.launched': 'Revisione avviata',

@@ -1458,6 +1458,12 @@ export default {
   'review.additionalInstructionsPlaceholder': 'Ajoute des instructions spécifiques pour la review…',
   'review.newSession': 'Nouvelle session',
   'review.newSessionHint': "Démarre une nouvelle session d'agent au lieu de continuer la courante.",
+  'review.newSessionRequired':
+    'Une nouvelle session est nécessaire pour changer les réglages de l’agent ou revenir automatiquement.',
+  'review.returnToSession': 'Revenir à la session actuelle après la review',
+  'review.returnToSessionHint':
+    'Reprend cette session avec le résumé final du reviewer. Sinon, la conversation continue dans la session de review.',
+  'review.returnUnavailable': 'La session actuelle doit avoir démarré pour pouvoir être reprise.',
   'review.start': 'Lancer la review',
   'review.cancel': 'Annuler',
   'review.launched': 'Review lancée',

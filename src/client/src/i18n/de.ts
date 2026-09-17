@@ -1456,6 +1456,12 @@ export default {
   'review.additionalInstructionsPlaceholder': 'Spezifische Hinweise für die Review hinzufügen…',
   'review.newSession': 'Neue Sitzung',
   'review.newSessionHint': 'Eine neue Agenten-Sitzung starten statt die aktuelle fortzusetzen.',
+  'review.newSessionRequired':
+    'Andere Agenteneinstellungen oder eine automatische Rückkehr erfordern eine neue Sitzung.',
+  'review.returnToSession': 'Nach dem Review zur aktuellen Sitzung zurückkehren',
+  'review.returnToSessionHint':
+    'Setzt diese Sitzung mit der abschließenden Zusammenfassung des Reviewers fort. Andernfalls geht die Unterhaltung in der Review-Sitzung weiter.',
+  'review.returnUnavailable': 'Die aktuelle Sitzung muss gestartet worden sein, bevor sie fortgesetzt werden kann.',
   'review.start': 'Review starten',
   'review.cancel': 'Abbrechen',
   'review.launched': 'Review gestartet',

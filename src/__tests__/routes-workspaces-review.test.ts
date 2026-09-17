@@ -1,5 +1,6 @@
 import { Hono } from 'hono'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import * as reviewReturns from '../server/services/review-return-service.js'
 
 // ── Mocks (kept in sync with routes-workspaces.test.ts) ──────────────────────
 
@@ -13,6 +14,7 @@ vi.mock('../server/services/workspace-service.js', () => ({
   updateWorkingBranch: vi.fn(),
   updateWorktreePath: vi.fn(),
   updateWorkspaceModel: vi.fn(),
+  updateWorkspaceEngineConfiguration: vi.fn(),
   updateWorkspaceReasoningEffort: vi.fn(),
   updateAgentPermissionMode: vi.fn(),
   deleteWorkspace: vi.fn(),
@@ -38,6 +40,12 @@ vi.mock('../server/services/workspace-service.js', () => ({
   setWorkspaceTags: vi.fn(),
 }))
 
+vi.mock('../server/services/review-return-service.js', () => ({
+  getReviewReturn: vi.fn().mockReturnValue(null),
+  registerReviewReturn: vi.fn(),
+  restoreReviewConfiguration: vi.fn().mockReturnValue(null),
+}))
+
 vi.mock('../server/services/worktree-service.js', () => ({
   createWorktree: vi.fn(),
   removeWorktree: vi.fn(),
@@ -53,10 +61,17 @@ vi.mock('../server/services/agent/orchestrator.js', () => ({
   getActiveSessionId: vi.fn().mockReturnValue('active-session-id'),
 }))
 
-vi.mock('../server/services/agent/engines/registry.js', () => ({
-  listEngines: vi.fn().mockReturnValue([{ id: 'claude-code' }]),
-  resolveEngine: vi.fn(),
-}))
+vi.mock('../server/services/agent/engines/registry.js', async () => {
+  const { CLAUDE_CODE_CAPABILITIES } = await import('../server/services/agent/engines/claude-code/capabilities.js')
+  const { CODEX_CAPABILITIES } = await import('../server/services/agent/engines/codex/capabilities.js')
+  return {
+    listEngines: vi.fn().mockReturnValue([
+      { id: 'claude-code', capabilities: CLAUDE_CODE_CAPABILITIES },
+      { id: 'codex', capabilities: CODEX_CAPABILITIES },
+    ]),
+    resolveEngine: vi.fn(),
+  }
+})
 
 // execFile is promisified at module load. We mock execFile with a
 // [util.promisify.custom] property so that promisify returns our mock.
@@ -232,6 +247,18 @@ const TEMPLATE_WITH_PROJECT = 'PROJECT TEMPLATE — branch {{branch_name}} base 
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(reviewReturns.getReviewReturn).mockReturnValue(null)
+  vi.mocked(agentManager.startAgent).mockReturnValue({ agentSessionId: 'mock-agent-session-id' } as never)
+  vi.mocked(workspaceService.updateWorkspaceEngineConfiguration).mockImplementation(
+    (id, engine, model, reasoningEffort, agentPermissionMode) => ({
+      ...fakeWorkspace,
+      id,
+      engine,
+      model,
+      reasoningEffort,
+      agentPermissionMode,
+    }),
+  )
   vi.mocked(agentManager.stopAgentAndWait).mockResolvedValue('not-running')
 
   // Default execFile behaviour: git fetch + git rev-parse both succeed.
@@ -666,4 +693,190 @@ describe('POST /api/workspaces/:id/start-review', () => {
     expect(agentManager.startAgent).not.toHaveBeenCalled()
     expect(wsService.emit).not.toHaveBeenCalled()
   })
+})
+
+describe('review LLM configuration', () => {
+  const codex = { engine: 'codex', model: 'gpt-5.4', reasoningEffort: 'high', agentPermissionMode: 'strict' }
+  it.each([codex, { model: 'claude-sonnet-4-6' }, { reasoningEffort: 'high' }, { agentPermissionMode: 'plan' }])(
+    'forces a fresh session for changed settings: %j',
+    async (configuration) => {
+      const response = await app.request('/api/workspaces/ws-1/start-review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...configuration, newSession: false }),
+      })
+      expect(response.status).toBe(200)
+      expect(await response.json()).toMatchObject({ newSession: true })
+      const expected = { ...fakeWorkspace, ...configuration }
+      expect(workspaceService.updateWorkspaceEngineConfiguration).toHaveBeenCalledWith(
+        'ws-1',
+        expected.engine,
+        expected.model,
+        expected.reasoningEffort,
+        expected.agentPermissionMode,
+      )
+      expect(agentManager.startAgent).toHaveBeenCalledWith(
+        'ws-1',
+        fakeWorkspace.worktreePath,
+        expect.any(String),
+        expected.model,
+        false,
+        expected.agentPermissionMode,
+        undefined,
+        expected.reasoningEffort,
+      )
+      expect(agentManager.sendMessageForFallback).not.toHaveBeenCalled()
+      expect(vi.mocked(agentManager.stopAgentAndWait).mock.invocationCallOrder[0]).toBeLessThan(
+        vi.mocked(workspaceService.updateWorkspaceEngineConfiguration).mock.invocationCallOrder[0]!,
+      )
+    },
+  )
+  it('continues the session when the explicit settings are unchanged', async () => {
+    const response = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        engine: fakeWorkspace.engine,
+        model: fakeWorkspace.model,
+        reasoningEffort: fakeWorkspace.reasoningEffort,
+        agentPermissionMode: fakeWorkspace.agentPermissionMode,
+      }),
+    })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ newSession: false })
+    expect(workspaceService.updateWorkspaceEngineConfiguration).not.toHaveBeenCalled()
+    expect(agentManager.stopAgentAndWait).not.toHaveBeenCalled()
+  })
+  it.each([
+    { engine: 'unknown' },
+    { engine: 'codex', model: 'claude-opus-4-7' },
+    { model: '' },
+    { reasoningEffort: 'invalid' },
+    { agentPermissionMode: 'invalid' },
+    { additionalInstructions: 12 },
+    { newSession: 'true' },
+    { returnToSession: 'true' },
+    null,
+    [],
+  ])('rejects invalid review input before any side effects: %j', async (body) => {
+    const response = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    expect(response.status).toBe(400)
+    expect(execFilePromiseMock).not.toHaveBeenCalled()
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+    expect(agentManager.stopAgentAndWait).not.toHaveBeenCalled()
+    expect(workspaceService.updateWorkspaceEngineConfiguration).not.toHaveBeenCalled()
+  })
+  it('does not change configuration when the previous agent cannot stop', async () => {
+    vi.mocked(agentManager.stopAgentAndWait).mockResolvedValueOnce('timeout')
+    const response = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(codex),
+    })
+    expect(response.status).toBe(409)
+    expect(workspaceService.updateWorkspaceEngineConfiguration).not.toHaveBeenCalled()
+    expect(agentManager.startAgent).not.toHaveBeenCalled()
+  })
+  it('restores original configuration when starting the selected engine throws', async () => {
+    vi.mocked(agentManager.startAgent).mockImplementationOnce(() => {
+      throw new Error('cannot start')
+    })
+    const response = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(codex),
+    })
+    expect(response.status).toBe(500)
+    expect(workspaceService.updateWorkspaceEngineConfiguration).toHaveBeenLastCalledWith(
+      'ws-1',
+      fakeWorkspace.engine,
+      fakeWorkspace.model,
+      fakeWorkspace.reasoningEffort,
+      fakeWorkspace.agentPermissionMode,
+    )
+    expect(wsService.emit).not.toHaveBeenCalled()
+  })
+})
+
+describe('review return option', () => {
+  it('registers the exact current session before starting a fresh review', async () => {
+    vi.mocked(workspaceService.getActiveSession).mockReturnValue({
+      ...fakeSession,
+      engineSessionId: 'original-native',
+      engine: fakeWorkspace.engine,
+    } as never)
+    vi.mocked(workspaceService.createIdleSession).mockReturnValue({ id: 'review-session' } as never)
+    vi.mocked(agentManager.startAgent).mockReturnValue({ agentSessionId: 'review-session' } as never)
+    const response = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ engine: 'codex', model: 'gpt-5.4', returnToSession: true, newSession: false }),
+    })
+    expect(response.status).toBe(200)
+    expect(await response.json()).toMatchObject({ newSession: true })
+    expect(reviewReturns.registerReviewReturn).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: 'ws-1',
+        originalSessionId: 'sess-1',
+        reviewSessionId: 'review-session',
+        original: expect.objectContaining({ engine: fakeWorkspace.engine, model: fakeWorkspace.model }),
+        review: expect.objectContaining({ engine: 'codex', model: 'gpt-5.4' }),
+      }),
+    )
+    expect(vi.mocked(reviewReturns.registerReviewReturn).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(agentManager.startAgent).mock.invocationCallOrder[0]!,
+    )
+    expect(agentManager.startAgent).toHaveBeenCalledWith(
+      'ws-1',
+      fakeWorkspace.worktreePath,
+      expect.stringContaining('standalone summary'),
+      'gpt-5.4',
+      false,
+      'bypass',
+      'review-session',
+      'auto',
+    )
+    expect(wsService.emit).toHaveBeenCalledWith('ws-1', 'user:message', expect.anything(), 'review-session')
+  })
+  it('refuses a return to a session without native conversation before stopping anything', async () => {
+    const response = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ returnToSession: true }),
+    })
+    expect(response.status).toBe(400)
+    expect(agentManager.stopAgentAndWait).not.toHaveBeenCalled()
+    expect(execFilePromiseMock).not.toHaveBeenCalled()
+  })
+  it('refuses overlapping reviews with a pending return', async () => {
+    vi.mocked(reviewReturns.getReviewReturn).mockReturnValue({ workspaceId: 'ws-1' } as never)
+    const response = await app.request('/api/workspaces/ws-1/start-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    })
+    expect(response.status).toBe(409)
+    expect(agentManager.stopAgentAndWait).not.toHaveBeenCalled()
+  })
+})
+
+it('starts fresh when the actual running model differs from unchanged workspace settings', async () => {
+  vi.mocked(workspaceService.getActiveSession).mockReturnValue({
+    ...fakeSession,
+    model: 'claude-sonnet-4-6',
+    engine: 'claude-code',
+  } as never)
+  const response = await app.request('/api/workspaces/ws-1/start-review', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: fakeWorkspace.model }),
+  })
+  expect(response.status).toBe(200)
+  expect(await response.json()).toMatchObject({ newSession: true })
+  expect(agentManager.sendMessageForFallback).not.toHaveBeenCalled()
+  expect(workspaceService.updateWorkspaceEngineConfiguration).not.toHaveBeenCalled()
 })

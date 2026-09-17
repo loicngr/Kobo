@@ -554,6 +554,25 @@ instead of showing a single row as if that were the whole comparison.
 From there, each side's actual diff is one click away in the Git tab it sits
 above.
 
+## Choosing an LLM for code review
+
+The workspace's **Start review** dialog offers engine (Claude Code or Codex),
+model, reasoning effort and permission mode using the same catalogues as workspace
+creation. The current workspace settings are selected initially. Changing any of
+these settings automatically enables and locks **New session**; with unchanged
+settings you can continue the current session or start a fresh one explicitly.
+
+Enable **Return to the current session after the review** to resume the original
+conversation with its original LLM settings and the reviewer's final summary.
+This option requires an existing resumable session and is off by default. The
+receiving agent summarizes the findings and waits for your instructions before
+applying fixes. The complete review remains in its own session history.
+
+With the option off, subsequent conversation continues with the review LLM.
+When automatic return is enabled, stopping the review cancels it. If the review
+fails or Kobo restarts during it, the original settings are restored without launching the
+original agent automatically; review output already recorded remains available.
+
 ## Workspace templates and duplication
 
 A template is a named preset of the create-workspace form: project (optional),

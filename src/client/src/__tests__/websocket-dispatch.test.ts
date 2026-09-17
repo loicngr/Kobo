@@ -546,6 +546,27 @@ describe('websocket dispatch — AgentEvent side-effects to workspace store', ()
     }
   })
 
+  it('updates all LLM settings when a review starts or restores its original configuration', async () => {
+    const { useWorkspaceStore } = await import('../stores/workspace.js')
+    const { useWebSocketStore } = await import('../stores/websocket.js')
+    const workspace = useWorkspaceStore()
+    workspace.workspaces = [workspaceFixture()]
+    const socket = useWebSocketStore()
+    const review = { engine: 'codex', model: 'gpt-5.4', reasoningEffort: 'xhigh', agentPermissionMode: 'strict' }
+    socket._routeMessage({ type: 'workspace:configuration', workspaceId: 'w1', payload: review })
+    expect(workspace.workspaces[0]).toMatchObject(review)
+    const original = {
+      engine: 'claude-code',
+      model: 'claude-opus-4-7',
+      reasoningEffort: 'high',
+      agentPermissionMode: 'bypass',
+    }
+    socket._routeMessage({ type: 'workspace:configuration', workspaceId: 'w1', payload: original })
+    expect(workspace.workspaces[0]).toMatchObject(original)
+    socket._routeMessage({ type: 'workspace:configuration', workspaceId: 'w1', payload: { engine: 'invalid' } })
+    expect(workspace.workspaces[0]).toMatchObject(original)
+  })
+
   it('receives authoritative compaction status and ignores an old session status', async () => {
     const { useWorkspaceStore } = await import('../stores/workspace.js')
     const { useWebSocketStore } = await import('../stores/websocket.js')

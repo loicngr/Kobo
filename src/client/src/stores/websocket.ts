@@ -833,6 +833,23 @@ export const useWebSocketStore = defineStore('websocket', {
         case 'kobo:update-checked':
           useUpdateStore().applySnapshot(payload)
           break
+        case 'workspace:configuration': {
+          if (!wid || this._replaying) break
+          if (
+            typeof payload.engine !== 'string' ||
+            typeof payload.model !== 'string' ||
+            typeof payload.reasoningEffort !== 'string' ||
+            !['plan', 'bypass', 'strict', 'interactive'].includes(payload.agentPermissionMode as string)
+          )
+            break
+          workspaceStore.updateWorkspaceFromEvent(wid, {
+            engine: payload.engine,
+            model: payload.model,
+            reasoningEffort: payload.reasoningEffort,
+            agentPermissionMode: payload.agentPermissionMode as 'plan' | 'bypass' | 'strict' | 'interactive',
+          })
+          break
+        }
         case 'workspace:status': {
           if (!wid || this._replaying || typeof payload.status !== 'string') break
           const owner = workspaceStore.activeAgentSessionIds[wid]

@@ -57,8 +57,8 @@ describe('runMigrations(db)', () => {
     db.close()
   })
 
-  it('exporte SCHEMA_VERSION = 43', () => {
-    expect(SCHEMA_VERSION).toBe(43)
+  it('exporte SCHEMA_VERSION = 44', () => {
+    expect(SCHEMA_VERSION).toBe(44)
   })
 
   it('migration v33 records and backfills the engine on agent sessions', () => {
@@ -2381,4 +2381,31 @@ it('upgrades v42 with durable MCP receipts without losing existing data', () => 
   expect(getMigrationHistory(db).at(-1)?.version).toBe(SCHEMA_VERSION)
   db.close()
   fresh.close()
+})
+
+it('upgrades v43 with review returns without losing workspace or session data', () => {
+  const db = new Database(':memory:')
+  runMigrations(db)
+  db.exec('DROP TABLE IF EXISTS pending_review_returns; DELETE FROM schema_migrations WHERE version > 43;')
+  db.exec(
+    "INSERT INTO workspaces(id,name,project_path,source_branch,working_branch,created_at,updated_at) VALUES ('kept','kept','/tmp','main','work','now','now')",
+  )
+  db.exec(
+    "INSERT INTO agent_sessions(id,workspace_id,engine_session_id,started_at) VALUES ('original','kept','native-thread','now')",
+  )
+  runMigrations(db)
+  runMigrations(db)
+  expect(db.prepare("SELECT engine_session_id FROM agent_sessions WHERE id='original'").get()).toEqual({
+    engine_session_id: 'native-thread',
+  })
+  expect(db.prepare("SELECT name FROM workspaces WHERE id='kept'").get()).toEqual({ name: 'kept' })
+  expect(db.prepare("SELECT name FROM sqlite_master WHERE name='pending_review_returns'").get()).toBeTruthy()
+  const fresh = new Database(':memory:')
+  initSchema(fresh)
+  const shape = (database: Database.Database) =>
+    database.prepare("SELECT sql FROM sqlite_master WHERE tbl_name='pending_review_returns' ORDER BY name").all()
+  expect(shape(db)).toEqual(shape(fresh))
+  expect(getMigrationHistory(db).at(-1)?.version).toBe(SCHEMA_VERSION)
+  fresh.close()
+  db.close()
 })

@@ -74,7 +74,7 @@
     "@emnapi/runtime": "^1.11.3",
     "@hono/node-server": "^2.1.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "@openai/codex": "^0.152.0",
+    "@openai/codex": "^0.154.0",
     "better-sqlite3": "^13.0.3",
     "cron-parser": "^5.7.0",
     "hono": "^4.13.1",

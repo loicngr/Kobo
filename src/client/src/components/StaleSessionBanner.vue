@@ -17,21 +17,22 @@
 
 <script setup lang="ts">
 import { useWorkspaceStore } from 'src/stores/workspace'
+import { getCurrentSession } from 'src/utils/current-session'
 import { isBusyStatus } from 'src/utils/workspace-status'
 import { computed } from 'vue'
 
 const props = defineProps<{ workspaceId: string }>()
 const store = useWorkspaceStore()
 
-// Whatever spawned them, multiple sessions accumulate per workspace and the
-// chat input sends to the *selected* session. Viewing an older one therefore
-// risks resuming the wrong conversation without noticing. Warn on any
-// non-latest session and offer a one-click jump to the current one.
+const currentSession = computed(() =>
+  getCurrentSession(store.sessions.filter((session) => session.workspaceId === props.workspaceId)),
+)
+
+// A temporary review may return to an older conversation. Compare with the
+// last used session rather than the last created one, including after reload.
 const visible = computed<boolean>(() => {
   if (!store.selectedSessionId || store.sessions.length < 2) return false
-
-  const latest = store.sessions[0]
-  return !!latest && latest.id !== store.selectedSessionId
+  return !!currentSession.value && currentSession.value.id !== store.selectedSessionId
 })
 
 // Auto-loop has its own framing (the agent is actively working in the latest
@@ -43,7 +44,6 @@ const mode = computed<'autoloop' | 'stale'>(() => {
 })
 
 function jumpToLatest(): void {
-  const latest = store.sessions[0]
-  if (latest) store.selectSession(latest.id)
+  if (currentSession.value) store.selectSession(currentSession.value.id)
 }
 </script>

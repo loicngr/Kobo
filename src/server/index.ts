@@ -66,6 +66,7 @@ import {
 } from './services/network-access-service.js'
 import { startPrWatcher, stopPrWatcher } from './services/pr-watcher-service.js'
 import * as quotaBackoffService from './services/quota-backoff-service.js'
+import { reconcileReviewReturns } from './services/review-return-service.js'
 import { startSearchIndex, stopSearchIndex } from './services/search-service.js'
 import { getGlobalSettings, updateNetworkAccessSettings } from './services/settings-service.js'
 import { reloadDefaultTemplates } from './services/templates-service.js'
@@ -155,6 +156,7 @@ const dailyBackupScheduler = startDailyDbBackupScheduler(async () => {
 
 // Initialize process cleanup, agent watchdog, PR watcher, and wakeup rehydration
 reconcileOrphanSessions()
+reconcileReviewReturns()
 startWatchdog()
 wakeupService.rehydrate()
 autoLoopService.rehydrate()

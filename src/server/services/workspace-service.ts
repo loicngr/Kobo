@@ -1172,8 +1172,8 @@ export function getLatestSession(workspaceId: string): AgentSession | null {
 /**
  * Return the "active" session for tagging events like push/pull/open-pr traces
  * or resumed chat messages. Skips idle sessions (never started) and prefers a
- * running session, falling back to the most recent session that has actually
- * been started (any non-idle status).
+ * running session, falling back to the last used session (any non-idle status).
+ * A resumed conversation keeps its started_at, but updates ended_at on stop.
  */
 export function getActiveSession(workspaceId: string): AgentSession | null {
   const db = getDb()
@@ -1184,10 +1184,10 @@ export function getActiveSession(workspaceId: string): AgentSession | null {
     )
     .get(workspaceId) as AgentSessionRow | undefined
   if (running) return mapSession(running)
-  // Otherwise the most recent non-idle session (completed, error, quota, etc.)
+  // Otherwise the last used non-idle session (completed, error, quota, etc.)
   const latestNonIdle = db
     .prepare(
-      "SELECT * FROM agent_sessions WHERE workspace_id = ? AND status != 'idle' ORDER BY started_at DESC LIMIT 1",
+      "SELECT * FROM agent_sessions WHERE workspace_id = ? AND status != 'idle' ORDER BY MAX(started_at, COALESCE(ended_at, started_at)) DESC, started_at DESC LIMIT 1",
     )
     .get(workspaceId) as AgentSessionRow | undefined
   return latestNonIdle ? mapSession(latestNonIdle) : null
