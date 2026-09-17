@@ -1,5 +1,6 @@
 import type Database from 'better-sqlite3'
 import { nanoid } from 'nanoid'
+import { parseTaskVerification, type TaskRole, type TaskVerification } from '../../shared/task-verification.js'
 import { getDb } from '../db/index.js'
 import { isValidBranchName } from '../utils/git-ops.js'
 import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
@@ -7,6 +8,7 @@ import * as orchestrator from './agent/orchestrator.js'
 import * as autoLoopService from './auto-loop-service.js'
 import * as cronService from './cron-service.js'
 import * as quotaBackoffService from './quota-backoff-service.js'
+import { createTaskRecord, deleteTaskRecord, type UpdateTaskMutation, updateTaskRecord } from './task-mutations.js'
 import * as wakeupService from './wakeup-service.js'
 import { emitEphemeral } from './websocket-service.js'
 
@@ -114,6 +116,8 @@ export interface Task {
   status: TaskStatus
   isAcceptanceCriterion: boolean
   sortOrder: number
+  role: TaskRole
+  verification: TaskVerification | null
   createdAt: string
   updatedAt: string
 }
@@ -151,6 +155,8 @@ export interface CreateTaskInput {
   title: string
   isAcceptanceCriterion?: boolean
   sortOrder?: number
+  afterTaskId?: string
+  role?: TaskRole
 }
 
 /** Allowed status transitions per current status. Enforced by updateWorkspaceStatus. */
@@ -228,6 +234,8 @@ interface TaskRow {
   status: string
   is_acceptance_criterion: number
   sort_order: number
+  role: TaskRole
+  verification: string | null
   created_at: string
   updated_at: string
 }
@@ -310,6 +318,8 @@ function mapTask(row: TaskRow): Task {
     status: row.status as TaskStatus,
     isAcceptanceCriterion: row.is_acceptance_criterion === 1,
     sortOrder: row.sort_order,
+    role: row.role,
+    verification: parseTaskVerification(row.verification),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
@@ -893,22 +903,10 @@ export function deleteWorkspace(id: string): void {
 /** Create a new task under a workspace. Throws if the workspace does not exist. */
 export function createTask(workspaceId: string, data: CreateTaskInput): Task {
   const db = getDb()
-
-  const exists = db.prepare('SELECT 1 FROM workspaces WHERE id = ?').get(workspaceId)
-  if (!exists) {
+  if (!db.prepare('SELECT 1 FROM workspaces WHERE id = ?').get(workspaceId)) {
     throw new Error(`Workspace not found: '${workspaceId}'`)
   }
-
-  const now = new Date().toISOString()
-  const id = nanoid()
-
-  db.prepare(`
-    INSERT INTO tasks (id, workspace_id, title, status, is_acceptance_criterion, sort_order, created_at, updated_at)
-    VALUES (?, ?, ?, 'pending', ?, ?, ?, ?)
-  `).run(id, workspaceId, data.title, data.isAcceptanceCriterion ? 1 : 0, data.sortOrder ?? 0, now, now)
-
-  const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as TaskRow
-  return mapTask(row)
+  return mapTask(createTaskRecord(db, workspaceId, data))
 }
 
 /** Fetch a single task by ID scoped to a workspace, or null if not found. */
@@ -924,42 +922,38 @@ export function getTask(taskId: string, workspaceId: string): Task | null {
 export function listTasks(workspaceId: string): Task[] {
   const db = getDb()
   const rows = db
-    .prepare('SELECT * FROM tasks WHERE workspace_id = ? ORDER BY sort_order ASC')
+    .prepare('SELECT * FROM tasks WHERE workspace_id = ? ORDER BY sort_order ASC, rowid ASC')
     .all(workspaceId) as TaskRow[]
   return rows.map(mapTask)
 }
 
-/** Update a task's status (pending, in_progress, done). */
-export function updateTaskStatus(taskId: string, status: TaskStatus): Task {
+/** Update task fields atomically through the same completion policy as MCP. */
+export function updateTask(taskId: string, data: UpdateTaskMutation): Task {
   const db = getDb()
-  const now = new Date().toISOString()
-  db.prepare('UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?').run(status, now, taskId)
-  const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as TaskRow | undefined
-  if (!row) {
-    throw new Error(`Task '${taskId}' not found`)
-  }
-  return mapTask(row)
+  const existing = db.prepare('SELECT workspace_id FROM tasks WHERE id = ?').get(taskId) as
+    | { workspace_id: string }
+    | undefined
+  if (!existing) throw new Error(`Task '${taskId}' not found`)
+  return mapTask(updateTaskRecord(db, existing.workspace_id, taskId, data))
 }
 
-/** Update a task's title. Throws if the title is empty or the task does not exist. */
+/** Update a task's status; auto-loop completion requires successful verification. */
+export function updateTaskStatus(taskId: string, status: TaskStatus, verification?: unknown): Task {
+  return updateTask(taskId, { status, ...(verification !== undefined ? { verification } : {}) })
+}
+
+/** Update a task's title and invalidate obsolete verification. */
 export function updateTaskTitle(taskId: string, title: string): Task {
-  if (!title?.trim()) {
-    throw new Error('Task title cannot be empty')
-  }
-  const db = getDb()
-  const now = new Date().toISOString()
-  const result = db.prepare('UPDATE tasks SET title = ?, updated_at = ? WHERE id = ?').run(title.trim(), now, taskId)
-  if (result.changes === 0) {
-    throw new Error(`Task '${taskId}' not found`)
-  }
-  const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(taskId) as TaskRow
-  return mapTask(row)
+  return updateTask(taskId, { title })
 }
 
 /** Delete a task by ID. */
 export function deleteTask(taskId: string): void {
   const db = getDb()
-  db.prepare('DELETE FROM tasks WHERE id = ?').run(taskId)
+  const existing = db.prepare('SELECT workspace_id FROM tasks WHERE id = ?').get(taskId) as
+    | { workspace_id: string }
+    | undefined
+  if (existing) deleteTaskRecord(db, existing.workspace_id, taskId)
 }
 
 /** Fetch a workspace with all its tasks eagerly loaded. */

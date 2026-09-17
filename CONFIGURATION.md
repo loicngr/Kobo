@@ -130,11 +130,11 @@ Settings are managed live from the **Settings** page in the UI and persisted to 
 | `notionInitialPromptTemplate` | `string` | Template injected as the first user message when a workspace is created from a Notion page. |
 | `sentryInitialPromptTemplate` | `string` | Template injected as the first user message when a workspace is created from a Sentry issue. |
 | `gitConventions` | `string` | Markdown block written to `.ai/.git-conventions.md` inside every workspace. |
-| `setupScript` | `string` | Shell script run in a worktree after it is created, before the agent starts. Empty disables. |
+| `setupScript` | `string` | Shell script run in a worktree after it is created, before the agent starts. Empty uses the built-in mandatory final verification. |
 | `cleanupScript` | `string` | Shell script run after a session ends. Empty disables. See `cleanupScriptMode`. |
 | `cleanupScriptMode` | `'idle' \| 'no-tasks'` | When the cleanup script fires: after every session (`idle`) or only when no Kōbō task remains (`no-tasks`). In auto-loop it runs only once every task is done. |
 | `cleanupScriptOnlyOnChanges` | `boolean` | Run the cleanup script only when the worktree has uncommitted changes (modified / added / deleted / untracked files). |
-| `archiveScript` | `string` | Shell script run server-side when a workspace is archived. Empty disables. |
+| `archiveScript` | `string` | Shell script run server-side when a workspace is archived. Empty uses the built-in mandatory final verification. |
 | `changeSourceBranchScript` | `string` | Shell script that **replaces** the built-in change-source-branch logic. The global default is Kōbō's bundled script; clearing the effective script hides the UI action. The backend retains a built-in fallback. See [Custom change-source-branch script](#custom-change-source-branch-script). |
 | `editorCommand` | `string` | Command used by the "Open in editor" action (e.g. `code`, `phpstorm`, `cursor`). The worktree path is appended as the last argument. |
 | `browserNotifications` | `boolean` | Trigger Web Notifications when an agent finishes a turn. |
@@ -214,13 +214,13 @@ Projects override a subset of global settings. Anything you set here takes prece
 | `setupScript`, `cleanupScript`, `archiveScript` | `string` | Per-project versions of the global lifecycle scripts. Empty inherits the global value. |
 | `changeSourceBranchScript` | `string` | Per-project version of the custom change-source-branch script. Empty inherits the global value. See [Custom change-source-branch script](#custom-change-source-branch-script). |
 | `cleanupScriptMode` | `'' \| 'idle' \| 'no-tasks'` | Per-project override of the cleanup trigger mode. Empty inherits the global mode. |
-| `taskPromptTemplate` | `string` | Prompt auto-injected into the task-description textarea on the creation page when this project is selected. Empty disables. |
+| `taskPromptTemplate` | `string` | Prompt auto-injected into the task-description textarea on the creation page when this project is selected. Empty uses the built-in mandatory final verification. |
 | `forge` | `'auto' \| 'github' \| 'gitlab' \| 'bitbucket-community' \| 'none'` | Which forge provides PR/MR features. `auto` detects from the git remote URL. See [Forge integration](#forge-integration). |
 | `devServer.startCommand` / `stopCommand` | `string` | Per-workspace dev server commands. Docker, npm, or any shell-startable process. See [Dev server](#dev-server) for the status/URL contract. |
 | `e2e.framework` | `'cypress' \| 'playwright' \| 'jest' \| 'vitest' \| 'other' \| ''` | E2E framework auto-loop grooming should target. |
 | `e2e.skill` | `string` | Optional skill name injected into the E2E grooming prompt. |
 | `e2e.prompt` | `string` | Free-form prompt appended to every `[E2E] ` sub-task. |
-| `finalization.prompt` | `string` | Runs as the very last auto-loop iteration (`[FINAL]`-prefixed task). Empty disables. |
+| `finalization.prompt` | `string` | Runs as the very last auto-loop iteration (`[FINAL]`-prefixed task). Empty uses the built-in mandatory final verification. |
 
 ## Progressive Web App
 
@@ -380,7 +380,7 @@ the event. On top of that:
 |---|---|
 | Session ended | `KOBO_SESSION_ID`, `KOBO_SESSION_END_REASON` (`completed` / `error` / `killed` / `watchdog`), `KOBO_SESSION_EXIT_CODE` (empty when the engine reports none), `KOBO_SESSION_STOP_CAUSE` (`user`, `replacement`, `setup`, `archive`, or `shutdown`; empty for a natural end; superseded sessions and delete/purge stops skip the hook), `KOBO_AUTOLOOP_ACTIVE` (`1` when auto-loop is enabled, so a test run may overlap with the next agent's edits) |
 | PR merged | `KOBO_PR_NUMBER`, `KOBO_PR_URL` |
-| Auto-loop stopped | `KOBO_AUTOLOOP_REASON` (`completed` / `stall` / `error` / `user-action` / `awaiting-clarification`), `KOBO_TASKS_PENDING` |
+| Auto-loop stopped | `KOBO_AUTOLOOP_REASON` (`completed` / `user-action`; blocked missions retain their intent and do not fire this hook), `KOBO_TASKS_PENDING` |
 
 Only `KOBO_`-prefixed variables are passed through from the event; a hook
 payload can never replace `PATH`, `HOME` or the identity variables above.
@@ -402,9 +402,9 @@ curl -fsS -X POST "$MY_WEBHOOK" \
 ```
 
 ```bash
-# Auto-loop stopped — only shout when it stalled, not when it finished.
-[ "$KOBO_AUTOLOOP_REASON" = "stall" ] || exit 0
-notify-send "Kobo" "$WORKSPACE_NAME stalled with $KOBO_TASKS_PENDING task(s) left"
+# Auto-loop stopped — notify when all work has been verified.
+[ "$KOBO_AUTOLOOP_REASON" = "completed" ] || exit 0
+notify-send "Kobo" "$WORKSPACE_NAME completed"
 ```
 
 ### Ordering with archive and auto-purge
@@ -1832,3 +1832,17 @@ and across Unicode normalization boundaries.
   servers are refreshed after replay.
 - MCP thought logs use unique filenames. Repeated notes with the same title and
   tag no longer replace earlier files.
+
+## Auto-loop completion and recovery
+
+Auto-loop remains enabled while work is unfinished. Its panel distinguishes grooming, execution and final verification from waiting, blocked, completed and stopped states. All todos and acceptance criteria must be complete, followed by a successful final verification. The final check runs again after task changes or new instructions. Empty custom finalization settings use the built-in final check.
+
+Completing an auto-loop task through MCP or HTTP requires structured verification: a non-empty `method`, `summary`, and `checks` array with named checks whose `status` is `passed`. A required test that could not run stays open (`not_run`); writing test source alone is insufficient. These are results reported by the agent, not independently executed by Kōbō.
+
+After three iterations without a new task milestone, Kōbō runs one diagnostic session and allows two further attempts. Turns dedicated to integrating new instructions preserve these counters, including in continuous-session mode. Persistent failure pauses the mission with its reason and a **Resume** action. The loop's intent is retained. Explicitly stopping, archiving or deleting a workspace disables it. Independently configured cron schedules retain their existing behavior; cancel them separately when no scheduled session should run.
+
+Quota waits survive restarts and respect known reset dates, even several days away. Unknown resets use the fallback schedule, capped at five hours between attempts. `autoLoopMaxRetries` limits temporary engine/transport failures, not genuine quota waits. Outside auto-loop, an explicitly scheduled wakeup or cron can resume after the quota wait expires; expiry alone never launches a manual workspace. No automatic start may overlap an engine whose shutdown remains unconfirmed.
+
+Messages sent while auto-loop is enabled are stored for the next iteration, including during grooming. That iteration integrates the instructions into the task list before implementation continues. The panel lists pending messages and lets you cancel them before dispatch. If a crash or interrupted session makes delivery uncertain, the mission pauses: inspect its history, then explicitly acknowledge the instruction as handled or request a retry. A retry can repeat work; it never happens automatically for an uncertain delivery.
+
+HTTP clients can use `POST /api/workspaces/:id/auto-loop/messages` with `{content, clientMessageId}`, `GET` on the same path to inspect the queue, and `PATCH .../messages/:messageId` with `{action: "cancel" | "acknowledge" | "retry"}`. Keep the same `clientMessageId` when retrying an uncertain HTTP request. Existing immediate message delivery retains its explicit manual semantics.

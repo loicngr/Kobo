@@ -1569,7 +1569,9 @@ export default {
   'settings.awaitingUserReminderHint':
     'Minutes a workspace may wait for your answer before Kōbō reminds you, then again at each further interval. 0 disables it.',
   'settings.localeLoadFailed': 'Could not load that language; staying in the current one.',
-  'settings.autoLoopMaxRetriesHint': 'Stops the auto-loop after this many quota or temporary server failures.',
+  'settings.autoLoopMaxRetriesHint':
+    'Pauses the mission after this many temporary engine or server failures. Quotas wait for their reset and do not consume this limit.',
+
   'settings.retentionTitle': 'Conversation history retention (off by default)',
   'settings.retentionWarning':
     'Turning this on permanently deletes agent conversation history from the database, starting with everything already older than the window. Deleted events cannot be recovered.',
@@ -1925,6 +1927,36 @@ export default {
   'workspaceList.attentionReadyToMerge': 'Ready to merge',
 
   // Auto-loop
+  'autoLoop.status.active': 'Active',
+  'autoLoop.status.waiting': 'Waiting',
+  'autoLoop.status.blocked': 'Blocked',
+  'autoLoop.status.completed': 'Completed',
+  'autoLoop.status.stopped': 'Stopped',
+  'autoLoop.phase.grooming': 'Preparation',
+  'autoLoop.phase.execution': 'Execution',
+  'autoLoop.phase.finalization': 'Finalization',
+  'autoLoop.iteration': 'Iteration {count}',
+  'autoLoop.resume': 'Resume auto-loop',
+  'autoLoop.retryAt': 'Retry scheduled for',
+  'autoLoop.actionFailed': 'The action could not be completed.',
+  'autoLoop.messages.count': '{count} queued instruction(s)',
+  'autoLoop.messages.pending': 'Queued',
+  'autoLoop.messages.dispatching': 'Sending',
+  'autoLoop.messages.unknown': 'Delivery unknown',
+  'autoLoop.messages.delivered': 'Delivered',
+  'autoLoop.messages.cancel': 'Cancel instruction',
+  'autoLoop.messages.acknowledge': 'Mark as received',
+  'autoLoop.messages.retry': 'Send again',
+  'autoLoop.messages.unknownHelp':
+    'Delivery could not be confirmed. Check the conversation before deciding. Sending again may duplicate an instruction already received.',
+  'autoLoop.reason.quota': 'Waiting for provider quota.',
+  'autoLoop.reason.transient': 'Recovering after a temporary interruption.',
+  'autoLoop.reason.awaiting-user': 'Waiting for your answer.',
+  'autoLoop.reason.capacity-or-lifecycle': 'Waiting for an available agent slot.',
+  'autoLoop.reason.message-delivery-unknown': 'Resolve the instruction with unknown delivery before resuming.',
+  'autoLoop.reason.error': 'The loop needs attention before it can continue.',
+  'autoLoop.reason.stall': 'No progress detected. Review the last session before resuming.',
+  'autoLoop.reason.awaiting-clarification': 'A clarification is needed before continuing.',
   'autoLoop.toggle': 'Auto-loop',
   'autoLoop.start': 'Start auto-loop',
   'autoLoop.prepare': 'Prepare for auto-loop',

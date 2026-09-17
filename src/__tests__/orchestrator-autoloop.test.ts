@@ -132,7 +132,7 @@ describe('orchestrator auto-loop integration', () => {
       exitCode: 0,
     })
 
-    expect(autoLoop.onSessionEnded).toHaveBeenCalledWith(wsId, 'completed', 1)
+    expect(autoLoop.onSessionEnded).toHaveBeenCalledWith(wsId, 'completed', 1, false)
   })
 
   it('session:ended without prior session:started falls back to delta=0', async () => {
@@ -146,7 +146,7 @@ describe('orchestrator auto-loop integration', () => {
       exitCode: 0,
     })
 
-    expect(autoLoop.onSessionEnded).toHaveBeenCalledWith(wsId, 'completed', 0)
+    expect(autoLoop.onSessionEnded).toHaveBeenCalledWith(wsId, 'completed', 0, false)
   })
 
   it('uses the persisted baseline when session:started was lost during a restart', async () => {
@@ -178,7 +178,7 @@ describe('orchestrator auto-loop integration', () => {
       exitCode: 0,
     })
 
-    expect(autoLoop.onSessionEnded).toHaveBeenCalledWith(wsId, 'completed', 1)
+    expect(autoLoop.onSessionEnded).toHaveBeenCalledWith(wsId, 'completed', 1, false)
     expect(
       db.prepare('SELECT task_progress_baseline FROM agent_sessions WHERE id = ?').get('persisted-session'),
     ).toEqual({ task_progress_baseline: null })
@@ -252,8 +252,8 @@ describe('orchestrator auto-loop integration', () => {
       reason: 'completed',
       exitCode: 0,
     })
-    expect(autoLoop.onSessionEnded).toHaveBeenNthCalledWith(1, wsId, 'completed', 0)
-    expect(autoLoop.onSessionEnded).toHaveBeenNthCalledWith(2, wsId, 'completed', 0)
+    expect(autoLoop.onSessionEnded).toHaveBeenNthCalledWith(1, wsId, 'completed', 0, false)
+    expect(autoLoop.onSessionEnded).toHaveBeenNthCalledWith(2, wsId, 'completed', 0, false)
   })
 
   // Regression for C1: the internal cleanup that removes the controller from
@@ -380,7 +380,7 @@ describe('orchestrator auto-loop integration', () => {
     emitters[1]?.({ kind: 'session:ended', reason: 'error', exitCode: 1 })
 
     expect(autoLoop.onSessionEnded).toHaveBeenCalledOnce()
-    expect(autoLoop.onSessionEnded).toHaveBeenCalledWith(wsId, 'completed', 1)
+    expect(autoLoop.onSessionEnded).toHaveBeenCalledWith(wsId, 'completed', 1, false)
     expect(cleanupScript.onSessionEnded).toHaveBeenCalledOnce()
     const rows = (await import('../server/db/index.js'))
       .getDb()
@@ -706,7 +706,7 @@ describe('orchestrator auto-loop integration', () => {
     orch._runWatchdogForTest()
 
     expect(hooks.onSessionEnded).toHaveBeenCalledTimes(1)
-    expect(hooks.onSessionEnded).toHaveBeenCalledWith(wsId, expect.objectContaining({ reason: 'killed' }))
+    expect(hooks.onSessionEnded).toHaveBeenCalledWith(wsId, expect.objectContaining({ reason: 'error' }))
 
     // Its drain watchdog eventually reports a late end anyway: same session,
     // so no second hook.
@@ -768,7 +768,7 @@ describe('orchestrator auto-loop integration', () => {
     aliveFlags[0] = false
     orch._runWatchdogForTest()
     expect(orch._getControllers().get(wsId)).toBeUndefined()
-    expect(db.prepare('SELECT status FROM workspaces WHERE id = ?').get(wsId)).toEqual({ status: 'error' })
+    expect(db.prepare('SELECT status FROM workspaces WHERE id = ?').get(wsId)).toEqual({ status: 'quota' })
 
     // A genuinely new session starts with a FRESH agentSessionId (no
     // resume), so the lifecycle-ownership bookkeeping — keyed by
@@ -891,7 +891,7 @@ describe('resume_failed error handling', () => {
     })
     orch.__test__.handleEvent(wsId, 'sess-1', { kind: 'session:ended', reason: 'error', exitCode: 1 })
 
-    expect(autoLoop.onSessionEnded).toHaveBeenCalledWith(wsId, 'completed', expect.any(Number))
+    expect(autoLoop.onSessionEnded).toHaveBeenCalledWith(wsId, 'completed', expect.any(Number), false)
   })
 
   it('sets workspace status to completed (not error) after resume_failed', async () => {

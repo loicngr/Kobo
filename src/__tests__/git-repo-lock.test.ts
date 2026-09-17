@@ -67,15 +67,27 @@ describe('withGitRepoLock()', async () => {
 
   it('lets unrelated repositories run concurrently', async () => {
     const trace: string[] = []
-    const slow = async (tag: string) => {
+    let release!: () => void
+    const bothStarted = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    let started = 0
+    const operation = async (tag: string) => {
       trace.push(`${tag}:start`)
-      await new Promise((resolve) => setTimeout(resolve, 20))
+      if (++started === 2) release()
+      // Git process startup can exceed 20 ms under load. Wait for overlap,
+      // not a wall-clock assumption; a global operation lock would deadlock.
+      await bothStarted
       trace.push(`${tag}:end`)
     }
 
-    await Promise.all([withGitRepoLock(repo, () => slow('one')), withGitRepoLock(otherRepo, () => slow('two'))])
+    await Promise.all([
+      withGitRepoLock(repo, () => operation('one')),
+      withGitRepoLock(otherRepo, () => operation('two')),
+    ])
 
-    expect(trace).toEqual(['one:start', 'two:start', 'one:end', 'two:end'])
+    expect(trace.slice(0, 2)).toEqual(['one:start', 'two:start'])
+    expect(trace.slice(2).sort()).toEqual(['one:end', 'two:end'])
   })
 
   it('does not let a failed operation block the queue', async () => {

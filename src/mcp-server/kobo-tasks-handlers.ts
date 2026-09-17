@@ -4,10 +4,17 @@ import type Database from 'better-sqlite3'
 import { nanoid } from 'nanoid'
 import * as cronService from '../server/services/cron-service.js'
 import * as settingsService from '../server/services/settings-service.js'
+import {
+  createTaskRecord,
+  deleteTaskRecord,
+  type TaskRecord,
+  updateTaskRecord,
+} from '../server/services/task-mutations.js'
 import { slugifyProjectName } from '../server/utils/project-slug.js'
 import { ensureDirectoryInside, resolveExistingPathInside } from '../server/utils/safe-path.js'
 import { resolveWorkspaceWorktreePath } from '../server/utils/worktree-paths.js'
 import { MASKED_SECRET, SECRET_GLOBAL_KEYS } from '../shared/consts.js'
+import { parseTaskVerification, type TaskRole, type TaskVerification } from '../shared/task-verification.js'
 
 /** Allowed task status values. */
 export const VALID_TASK_STATUSES = ['pending', 'in_progress', 'done'] as const
@@ -21,6 +28,9 @@ export interface TaskDto {
   title: string
   status: string
   is_acceptance_criterion: boolean
+  sort_order: number
+  role: TaskRole
+  verification: TaskVerification | null
 }
 
 /** Result returned when a task is marked as done. */
@@ -35,12 +45,7 @@ export interface DevServerStatusDto {
   status: string
 }
 
-interface TaskRow {
-  id: string
-  title: string
-  status: string
-  is_acceptance_criterion: number
-}
+type TaskRow = TaskRecord
 
 function rowToDto(row: TaskRow): TaskDto {
   return {
@@ -48,15 +53,16 @@ function rowToDto(row: TaskRow): TaskDto {
     title: row.title,
     status: row.status,
     is_acceptance_criterion: row.is_acceptance_criterion === 1,
+    sort_order: row.sort_order,
+    role: row.role,
+    verification: parseTaskVerification(row.verification),
   }
 }
 
 /** Return all tasks for a workspace, ordered by sort_order. */
 export function listTasksHandler(db: Database.Database, workspaceId: string): TaskDto[] {
   const rows = db
-    .prepare(
-      'SELECT id, title, status, is_acceptance_criterion FROM tasks WHERE workspace_id = ? ORDER BY sort_order ASC',
-    )
+    .prepare('SELECT * FROM tasks WHERE workspace_id = ? ORDER BY sort_order ASC, rowid ASC')
     .all(workspaceId) as TaskRow[]
   return rows.map(rowToDto)
 }
@@ -143,118 +149,76 @@ export function setWorkspaceAgentDescriptionHandler(
   return { ok: true, description: stored }
 }
 
-/** Set a task's status to "done" and return the updated task. */
-export function markTaskDoneHandler(db: Database.Database, workspaceId: string, taskId: string): MarkDoneResult {
-  const now = new Date().toISOString()
-  const result = db
-    .prepare('UPDATE tasks SET status = ?, updated_at = ? WHERE id = ? AND workspace_id = ?')
-    .run('done', now, taskId, workspaceId)
-
-  if (result.changes === 0) {
-    throw new Error(`Task '${taskId}' not found in workspace '${workspaceId}'`)
-  }
-
-  const row = db
-    .prepare('SELECT id, title, status, is_acceptance_criterion FROM tasks WHERE id = ?')
-    .get(taskId) as TaskRow
+/** Set a task's status to done; auto-loop tasks require successful evidence. */
+export function markTaskDoneHandler(
+  db: Database.Database,
+  workspaceId: string,
+  taskId: string,
+  verification?: unknown,
+): MarkDoneResult {
+  const row = updateTaskRecord(db, workspaceId, taskId, {
+    status: 'done',
+    ...(verification !== undefined ? { verification } : {}),
+  })
   return { success: true, task: rowToDto(row) }
 }
 
-/** Create a new task appended at the end of the workspace's task list. */
+/** Create a task at an explicit position or append it to the list. */
 export function createTaskHandler(
   db: Database.Database,
   workspaceId: string,
-  data: { title: string; is_acceptance_criterion?: boolean },
+  data: {
+    title: string
+    is_acceptance_criterion?: boolean
+    sort_order?: number
+    after_task_id?: string
+    role?: TaskRole
+  },
 ): TaskDto {
-  if (!data.title?.trim()) {
-    throw new Error('title is required')
-  }
-
-  // Verify workspace exists
-  const ws = db.prepare('SELECT id FROM workspaces WHERE id = ?').get(workspaceId) as { id: string } | undefined
-  if (!ws) {
-    throw new Error(`Workspace '${workspaceId}' not found`)
-  }
-
-  const id = nanoid()
-  const now = new Date().toISOString()
-  const isAC = data.is_acceptance_criterion ? 1 : 0
-
-  // Append at the end: max(sort_order) + 1
-  const maxRow = db
-    .prepare('SELECT COALESCE(MAX(sort_order), -1) AS max FROM tasks WHERE workspace_id = ?')
-    .get(workspaceId) as { max: number }
-  const sortOrder = maxRow.max + 1
-
-  db.prepare(
-    'INSERT INTO tasks (id, workspace_id, title, status, is_acceptance_criterion, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
-  ).run(id, workspaceId, data.title.trim(), 'pending', isAC, sortOrder, now, now)
-
-  const row = db.prepare('SELECT id, title, status, is_acceptance_criterion FROM tasks WHERE id = ?').get(id) as TaskRow
-  return rowToDto(row)
+  return rowToDto(
+    createTaskRecord(db, workspaceId, {
+      title: data.title,
+      isAcceptanceCriterion: data.is_acceptance_criterion,
+      sortOrder: data.sort_order,
+      afterTaskId: data.after_task_id,
+      role: data.role,
+    }),
+  )
 }
 
-/** Update one or more fields of an existing task (title, status, or acceptance criterion flag). */
+/** Update task fields atomically, including insertion order and verification. */
 export function updateTaskHandler(
   db: Database.Database,
   workspaceId: string,
   taskId: string,
-  data: { title?: string; status?: string; is_acceptance_criterion?: boolean },
+  data: {
+    title?: string
+    status?: string
+    is_acceptance_criterion?: boolean
+    sort_order?: number
+    after_task_id?: string
+    verification?: unknown
+  },
 ): TaskDto {
-  // Verify task belongs to workspace
-  const existing = db.prepare('SELECT id FROM tasks WHERE id = ? AND workspace_id = ?').get(taskId, workspaceId) as
-    | { id: string }
-    | undefined
-  if (!existing) {
-    throw new Error(`Task '${taskId}' not found in workspace '${workspaceId}'`)
-  }
-
-  const sets: string[] = []
-  const values: unknown[] = []
-
-  if (data.title !== undefined) {
-    if (!data.title.trim()) throw new Error('title cannot be empty')
-    sets.push('title = ?')
-    values.push(data.title.trim())
-  }
-  if (data.status !== undefined) {
-    if (!(VALID_TASK_STATUSES as readonly string[]).includes(data.status)) {
-      throw new Error(`Invalid status '${data.status}'. Must be one of: ${VALID_TASK_STATUSES.join(', ')}`)
-    }
-    sets.push('status = ?')
-    values.push(data.status)
-  }
-  if (data.is_acceptance_criterion !== undefined) {
-    sets.push('is_acceptance_criterion = ?')
-    values.push(data.is_acceptance_criterion ? 1 : 0)
-  }
-
-  if (sets.length === 0) {
-    throw new Error('No fields to update (provide title, status, or is_acceptance_criterion)')
-  }
-
-  sets.push('updated_at = ?')
-  values.push(new Date().toISOString())
-  values.push(taskId)
-
-  db.prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id = ?`).run(...values)
-
-  const row = db
-    .prepare('SELECT id, title, status, is_acceptance_criterion FROM tasks WHERE id = ?')
-    .get(taskId) as TaskRow
-  return rowToDto(row)
+  return rowToDto(
+    updateTaskRecord(db, workspaceId, taskId, {
+      title: data.title,
+      status: data.status,
+      isAcceptanceCriterion: data.is_acceptance_criterion,
+      sortOrder: data.sort_order,
+      afterTaskId: data.after_task_id,
+      verification: data.verification,
+    }),
+  )
 }
 
-/** Permanently delete a task from a workspace. */
+/** Permanently delete a task from a workspace and invalidate its final review. */
 export function deleteTaskHandler(
   db: Database.Database,
   workspaceId: string,
   taskId: string,
 ): { success: true; task_id: string } {
-  const result = db.prepare('DELETE FROM tasks WHERE id = ? AND workspace_id = ?').run(taskId, workspaceId)
-  if (result.changes === 0) {
-    throw new Error(`Task '${taskId}' not found in workspace '${workspaceId}'`)
-  }
+  deleteTaskRecord(db, workspaceId, taskId)
   return { success: true, task_id: taskId }
 }
 

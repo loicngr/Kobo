@@ -11,6 +11,7 @@ let emitPermissionRequest = false
 let emitDelayedSubagentProgress = false
 let emitDelayedForegroundProgress = false
 let releaseProgress: (() => void) | undefined
+let ignoreAbort = false
 
 type MockCanUseTool = (
   toolName: string,
@@ -91,7 +92,7 @@ vi.mock('@anthropic-ai/claude-agent-sdk', () => ({
         }
         await new Promise<void>((resolve) => {
           releaseStream = resolve
-          abortSignal?.addEventListener('abort', () => resolve(), { once: true })
+          if (!ignoreAbort) abortSignal?.addEventListener('abort', () => resolve(), { once: true })
         })
       },
       stopTask: async () => {},
@@ -119,6 +120,34 @@ const BASE_OPTIONS: StartOptions = {
 }
 
 describe('claude-code engine — shared turn liveness', () => {
+  it('does not confirm closure while a watchdog-ended SDK iterator still ignores abort', async () => {
+    vi.useFakeTimers()
+    ignoreAbort = true
+    try {
+      const events: AgentEvent[] = []
+      const process = await createClaudeCodeEngine().start(BASE_OPTIONS, (event) => events.push(event))
+      expect(process.closed).toBeInstanceOf(Promise)
+      let closed = false
+      void process.closed!.then(() => {
+        closed = true
+      })
+      await vi.advanceTimersByTimeAsync(CLAUDE_TOOL_IDLE_TIMEOUT_MS + 1000)
+      expect(events).toContainEqual({ kind: 'session:ended', reason: 'watchdog', exitCode: null })
+      expect(abortSignal?.aborted).toBe(true)
+      expect(process.isAlive?.()).toBe(true)
+      expect(closed).toBe(false)
+      releaseStream?.()
+      await process.closed
+      expect(process.isAlive?.()).toBe(false)
+      expect(closed).toBe(true)
+    } finally {
+      releaseStream?.()
+      releaseStream = undefined
+      ignoreAbort = false
+      vi.useRealTimers()
+    }
+  })
+
   it('force-ends a stream frozen after a tool call, not only after a text-only reply', async () => {
     vi.useFakeTimers()
     try {

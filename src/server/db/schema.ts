@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3'
+import { initAutoLoopSchema } from './auto-loop-schema.js'
 import { initMcpMessageSchema } from './mcp-message-schema.js'
 import { initReviewReturnSchema } from './review-return-schema.js'
 import { initSearchSchema } from './search-schema.js'
@@ -229,4 +230,5 @@ export function initSchema(db: Database.Database): void {
   initSearchSchema(db)
   initMcpMessageSchema(db)
   initReviewReturnSchema(db)
+  initAutoLoopSchema(db)
 }

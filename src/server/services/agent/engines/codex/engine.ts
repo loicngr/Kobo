@@ -157,15 +157,40 @@ export function createCodexEngine(): AgentEngine {
       void childFailurePromise.catch(() => {})
 
       const child = spawnAppServer({ cwd: options.workingDir, env: options.env, signal: abortController.signal })
+      let childExited = false
+      let resolveChildExited!: () => void
+      const childExitedPromise = new Promise<void>((resolve) => {
+        resolveChildExited = resolve
+      })
+      const confirmChildExited = (): void => {
+        childExited = true
+        resolveChildExited()
+      }
+      let shutdownPromise: Promise<void> | undefined
+      const terminateChild = (): Promise<void> => {
+        if (childExited) return Promise.resolve()
+        shutdownPromise ??= (async () => {
+          if (!(await signalAndWaitForExit(child, 'SIGTERM', CODEX_FORCE_KILL_TIMEOUT_MS))) {
+            console.warn('[codex] app-server ignored SIGTERM — sending SIGKILL')
+            if (!(await signalAndWaitForExit(child, 'SIGKILL', CODEX_FORCE_KILL_TIMEOUT_MS))) {
+              throw new Error('Codex app-server did not exit after SIGKILL')
+            }
+          }
+          confirmChildExited()
+        })()
+        return shutdownPromise
+      }
 
       child.on('error', (error: NodeJS.ErrnoException) => {
         const isExpectedAbort =
           abortController.signal.aborted && (error.code === 'ABORT_ERR' || error.name === 'AbortError')
         if (isExpectedAbort) return
+        if (child.pid === undefined) confirmChildExited()
         console.error('[codex] child process error:', error)
         rejectChildFailure(error)
       })
       child.once('exit', (code, signal) => {
+        confirmChildExited()
         if (!iteratorRunning || abortController.signal.aborted) return
         const detail = code === null ? `signal ${signal ?? 'unknown'}` : `code ${code}`
         rejectChildFailure(new Error(`Codex app-server exited unexpectedly with ${detail}`))
@@ -189,6 +214,7 @@ export function createCodexEngine(): AgentEngine {
       let rejectTurnDone!: (err: Error) => void
       const activeSubagentThreads = new Map<string, { toolCallId: string; description?: string; taskType?: string }>()
       let waitingForBackgroundSubagents = false
+      let watchdogEnded = false
       const turnDonePromise = new Promise<void>((resolve, reject) => {
         resolveTurnDone = resolve
         rejectTurnDone = reject
@@ -203,6 +229,7 @@ export function createCodexEngine(): AgentEngine {
       // deadline tracks the last activity, not the start of the wait.
       const armSubagentStallWatchdog = (): void => {
         clearSubagentStallWatchdog()
+        if (!waitingForBackgroundSubagents || pendingByCallId.size > 0 || activeSubagentThreads.size === 0) return
         subagentStallTimer = setTimeout(() => {
           subagentStallTimer = undefined
           console.warn(
@@ -212,7 +239,13 @@ export function createCodexEngine(): AgentEngine {
           // Forced, unclean termination (a thread may still be alive
           // server-side) — never report it as a normal completion, so
           // auto-loop doesn't treat an orphaned run as forward progress.
-          mapperState.sawErrorResult = true
+          watchdogEnded = true
+          safeEmit({
+            kind: 'error',
+            category: 'other',
+            code: 'subagent_idle_timeout',
+            message: 'Session force-ended: background subagents stopped reporting activity (watchdog).',
+          })
           if (waitingForBackgroundSubagents) resolveTurnDone()
         }, CODEX_SUBAGENT_STALL_TIMEOUT_MS)
         subagentStallTimer.unref?.()
@@ -242,8 +275,13 @@ export function createCodexEngine(): AgentEngine {
       const turnLiveness = createTurnLiveness({
         timeoutMs: CODEX_TURN_IDLE_TIMEOUT_MS,
         onTimeout() {
-          mapperState.sawErrorResult = true
-          safeEmit({ kind: 'error', category: 'other', message: 'Codex stopped reporting activity for this turn' })
+          watchdogEnded = true
+          safeEmit({
+            kind: 'error',
+            category: 'other',
+            code: 'stream_idle_timeout',
+            message: 'Codex stopped reporting activity for this turn',
+          })
           rejectTurnDone(new CodexTurnTimeoutError())
         },
       })
@@ -255,6 +293,24 @@ export function createCodexEngine(): AgentEngine {
       })
 
       const fileChanges = new Map<string, FileChangeItem>()
+      const isParentTurn = (threadId: string | undefined, turnId?: string): boolean =>
+        (!threadId || threadId === discoveredSessionId) && (!activeTurnId || !turnId || turnId === activeTurnId)
+      const otherTurnMappers = new Map<string, ReturnType<typeof createMapperState>>()
+      const mapTurnEvents = (
+        notification: { threadId: string; turnId: string },
+        map: (state: ReturnType<typeof createMapperState>) => AgentEvent[],
+      ): AgentEvent[] => {
+        if (isParentTurn(notification.threadId, notification.turnId)) return map(mapperState)
+        const key = JSON.stringify([notification.threadId, notification.turnId])
+        let state = otherTurnMappers.get(key)
+        if (!state) {
+          state = createMapperState()
+          otherTurnMappers.set(key, state)
+        }
+        // Child output remains visible, but its failures/compaction/markers
+        // cannot control the parent session or its auto-loop lifecycle.
+        return map(state).filter((event) => event.kind !== 'error' && !event.kind.startsWith('session:'))
+      }
       const itemKey = (threadId: string, turnId: string, itemId: string): string =>
         JSON.stringify([threadId, turnId, itemId])
       const client = createAppServerClient({
@@ -264,6 +320,10 @@ export function createCodexEngine(): AgentEngine {
 
         onNotification(method: string, params: unknown) {
           turnLiveness.activity()
+          const notification = params as { threadId?: string; turnId?: string }
+          if (notification?.threadId && activeSubagentThreads.has(notification.threadId)) {
+            armSubagentStallWatchdog()
+          }
           // Ignored notifications — harmless bookkeeping by the server
           if (method === 'mcpServer/startupStatus/updated') {
             const status = (params ?? {}) as Record<string, unknown>
@@ -294,7 +354,7 @@ export function createCodexEngine(): AgentEngine {
           if (method === 'item/started') {
             const n = params as ItemStartedNotification
             if (n.item.type === 'fileChange') fileChanges.set(itemKey(n.threadId, n.turnId, n.item.id), n.item)
-            const events = handleItemStarted(n.item, mapperState)
+            const events = mapTurnEvents(n, (state) => handleItemStarted(n.item, state))
             for (const ev of events) safeEmit(ev)
             if (n.item.type === 'collabAgentToolCall' && n.item.tool === 'spawnAgent') {
               const progress = events.find(
@@ -317,7 +377,7 @@ export function createCodexEngine(): AgentEngine {
           if (method === 'item/completed') {
             const n = params as ItemCompletedNotification
             if (n.item.type === 'fileChange') fileChanges.set(itemKey(n.threadId, n.turnId, n.item.id), n.item)
-            const events = handleItemCompleted(n.item, mapperState)
+            const events = mapTurnEvents(n, (state) => handleItemCompleted(n.item, state))
             for (const ev of events) safeEmit(ev)
             if (n.item.type === 'collabAgentToolCall') {
               const progress = events.find(
@@ -343,7 +403,7 @@ export function createCodexEngine(): AgentEngine {
 
           if (method === 'item/agentMessage/delta') {
             const n = params as AgentMessageDeltaNotification
-            for (const ev of handleAgentMessageDelta(n, mapperState)) safeEmit(ev)
+            for (const ev of mapTurnEvents(n, (state) => handleAgentMessageDelta(n, state))) safeEmit(ev)
             return
           }
 
@@ -353,8 +413,8 @@ export function createCodexEngine(): AgentEngine {
               const [threadId, turnId] = JSON.parse(key)
               if (threadId === n.threadId && turnId === n.turn.id) fileChanges.delete(key)
             }
-            for (const ev of handleTurnCompleted(n, mapperState)) safeEmit(ev)
-            if (!activeTurnId || !n.turn?.id || n.turn.id === activeTurnId) {
+            if (isParentTurn(n.threadId, n.turn.id)) {
+              for (const ev of handleTurnCompleted(n, mapperState)) safeEmit(ev)
               if (n.turn?.status === 'completed' && activeSubagentThreads.size > 0) {
                 waitingForBackgroundSubagents = true
                 turnLiveness.pause()
@@ -397,6 +457,7 @@ export function createCodexEngine(): AgentEngine {
 
           if (method === 'error') {
             const n = params as ErrorNotification
+            if (!isParentTurn(n.threadId, n.turnId)) return
             if (n.willRetry) return
             const msg = n?.error?.message ?? 'unknown error'
             if (QUOTA_PATTERN.test(msg)) {
@@ -418,6 +479,7 @@ export function createCodexEngine(): AgentEngine {
             register(callId, pending) {
               pendingByCallId.set(callId, pending)
               turnLiveness.pause()
+              clearSubagentStallWatchdog()
             },
             respondError: (reqId, code, message) => client.peer.respondError(reqId, code, message),
             respond: (reqId, result) => client.peer.respond(reqId, result),
@@ -500,11 +562,13 @@ export function createCodexEngine(): AgentEngine {
           await waitForChild(turnDonePromise)
           turnLiveness.stop()
 
-          const reason: 'error' | 'killed' | 'completed' = mapperState.sawErrorResult
+          const reason = mapperState.sawErrorResult
             ? 'error'
             : mapperState.sawTurnInterrupted
               ? 'killed'
-              : 'completed'
+              : watchdogEnded
+                ? 'watchdog'
+                : 'completed'
           safeEmit({
             kind: 'session:ended',
             reason,
@@ -524,7 +588,11 @@ export function createCodexEngine(): AgentEngine {
           if (isAbort) {
             safeEmit({ kind: 'session:ended', reason: 'killed', exitCode: null })
           } else if (error.name === 'CodexTurnTimeoutError') {
-            safeEmit({ kind: 'session:ended', reason: 'error', exitCode: null })
+            safeEmit({
+              kind: 'session:ended',
+              reason: mapperState.sawErrorResult ? 'error' : 'watchdog',
+              exitCode: null,
+            })
           } else if (QUOTA_PATTERN.test(message)) {
             tryEmitQuota(mapperState, safeEmit, message)
             safeEmit({ kind: 'session:ended', reason: 'error', exitCode: null })
@@ -551,18 +619,16 @@ export function createCodexEngine(): AgentEngine {
             }
           }
           fileChanges.clear()
+          otherTurnMappers.clear()
           pendingByCallId.clear()
           pendingToolCalls.clear()
           client.close()
-          try {
-            child.kill('SIGTERM')
-          } catch {
-            // best-effort
-          }
+          await terminateChild().catch((error) => console.error('[codex] runtime shutdown unconfirmed:', error))
         }
       })()
 
       const engineProcess: EngineProcess = {
+        closed: Promise.all([iteratorPromise, childExitedPromise]).then(() => {}),
         get pid() {
           return child.pid
         },
@@ -570,7 +636,7 @@ export function createCodexEngine(): AgentEngine {
           return discoveredSessionId
         },
         isAlive(): boolean {
-          return iteratorRunning
+          return iteratorRunning || !childExited
         },
         sendMessage(text: string): Promise<void> {
           const steer = async (): Promise<void> => {
@@ -631,17 +697,7 @@ export function createCodexEngine(): AgentEngine {
           } catch {
             // swallow
           }
-          // Escalate. The SIGTERM in the `finally` below is a request, not a
-          // guarantee: a wedged `codex app-server` that ignores it outlives the
-          // stop, the archive, the delete and Kōbō's own shutdown, holding the
-          // worktree and its share of the model quota, with nothing left in
-          // this process tracking it.
-          if (!(await signalAndWaitForExit(child, 'SIGTERM', CODEX_FORCE_KILL_TIMEOUT_MS))) {
-            console.warn('[codex] app-server ignored SIGTERM — sending SIGKILL')
-            if (!(await signalAndWaitForExit(child, 'SIGKILL', CODEX_FORCE_KILL_TIMEOUT_MS))) {
-              throw new Error('Codex app-server did not exit after SIGKILL')
-            }
-          }
+          await terminateChild()
         },
         resolvePendingUserInput(callId: string, response): boolean {
           const pending = pendingByCallId.get(callId)
@@ -650,7 +706,10 @@ export function createCodexEngine(): AgentEngine {
           // Only resume the idle-timeout clock once every outstanding
           // approval has been answered — a sibling request may still be
           // waiting on a human decision.
-          if (pendingByCallId.size === 0) turnLiveness.resume()
+          if (pendingByCallId.size === 0) {
+            if (waitingForBackgroundSubagents) armSubagentStallWatchdog()
+            else turnLiveness.resume()
+          }
           const result = buildResponseForResolve(pending, response)
           client.peer.respond(pending.requestId, result)
           return true

@@ -15,6 +15,7 @@ vi.mock('../server/services/agent/orchestrator.js', () => ({
   hasController: vi.fn(() => false),
   runningAgentCount: vi.fn(() => 0),
   isShuttingDown: vi.fn(() => false),
+  resetAutoLoopRetries: vi.fn(),
 }))
 
 vi.mock('../server/services/lifecycle-hook-service.js', () => ({
@@ -67,6 +68,8 @@ describe('auto-loop-service', () => {
     })
     wsId = ws.id
     vi.clearAllMocks()
+    const orch = await import('../server/services/agent/orchestrator.js')
+    vi.mocked(orch.startAgent).mockReturnValue({ agentSessionId: 'mock-agent-session-id' } as never)
   })
 
   afterEach(async () => {
@@ -78,7 +81,14 @@ describe('auto-loop-service', () => {
   it('getStatus returns defaults for a fresh workspace', async () => {
     const svc = await import('../server/services/auto-loop-service.js')
     const s = svc.getStatus(wsId)
-    expect(s).toEqual({ auto_loop: false, auto_loop_ready: false, no_progress_streak: 0 })
+    expect(s).toMatchObject({
+      auto_loop: false,
+      auto_loop_ready: false,
+      no_progress_streak: 0,
+      state: 'stopped',
+      phase: 'grooming',
+      iteration: 0,
+    })
   })
 
   it('enable throws when auto_loop_ready is false', async () => {
@@ -154,7 +164,7 @@ describe('auto-loop-service', () => {
     )
   })
 
-  it('emits diagnostic context when disabling auto-loop', async () => {
+  it('emits blocked diagnostic context while preserving intent', async () => {
     const { createTask } = await import('../server/services/workspace-service.js')
     const svc = await import('../server/services/auto-loop-service.js')
     const ws = await import('../server/services/websocket-service.js')
@@ -165,24 +175,23 @@ describe('auto-loop-service', () => {
 
     svc.disable(wsId, 'stall')
 
-    expect(ws.emitEphemeral).toHaveBeenCalledWith(wsId, 'autoloop:disabled', {
-      reason: 'stall',
-      tasksPending: 1,
-      noProgressStreak: 0,
-      status: 'created',
-    })
+    expect(ws.emitEphemeral).toHaveBeenCalledWith(
+      wsId,
+      'autoloop:state',
+      expect.objectContaining({ reason: 'stall', state: 'blocked' }),
+    )
   })
 
-  it('disable(awaiting-clarification) turns auto-loop off and a later session:ended no-ops', async () => {
+  it('clarification blocks auto-loop and a later session:ended no-ops', async () => {
     const svc = await import('../server/services/auto-loop-service.js')
     const { createTask } = await import('../server/services/workspace-service.js')
     createTask(wsId, { title: 't1', isAcceptanceCriterion: false, sortOrder: 0 })
     svc._test_setAutoLoopReady(wsId, true)
     svc.enable(wsId)
     svc.disable(wsId, 'awaiting-clarification')
-    expect(svc.getStatus(wsId).auto_loop).toBe(false)
+    expect(svc.getStatus(wsId)).toMatchObject({ auto_loop: true, state: 'blocked' })
     svc.onSessionEnded(wsId, 'completed', 0)
-    expect(svc.getStatus(wsId).auto_loop).toBe(false)
+    expect(svc.getStatus(wsId)).toMatchObject({ auto_loop: true, state: 'blocked' })
     expect(svc.getStatus(wsId).no_progress_streak).toBe(0)
   })
 
@@ -330,7 +339,7 @@ describe('auto-loop-service', () => {
       expect(svc.getStatus(wsId).no_progress_streak).toBe(0)
     })
 
-    it('stops on reason=error regardless of delta', async () => {
+    it('blocks on reason=error regardless of delta', async () => {
       const svc = await import('../server/services/auto-loop-service.js')
       const { createTask } = await import('../server/services/workspace-service.js')
       createTask(wsId, { title: 't1', isAcceptanceCriterion: false, sortOrder: 0 })
@@ -338,7 +347,7 @@ describe('auto-loop-service', () => {
       svc.enable(wsId)
 
       svc.onSessionEnded(wsId, 'error', 0)
-      expect(svc.getStatus(wsId).auto_loop).toBe(false)
+      expect(svc.getStatus(wsId)).toMatchObject({ auto_loop: true, state: 'blocked' })
     })
 
     it('continues after reason=killed so a transient engine interruption does not stop the loop', async () => {
@@ -368,7 +377,7 @@ describe('auto-loop-service', () => {
 
       svc.onSessionEnded(wsId, 'watchdog', 0)
 
-      expect(svc.getStatus(wsId)).toEqual({ auto_loop: true, auto_loop_ready: true, no_progress_streak: 2 })
+      expect(svc.getStatus(wsId)).toMatchObject({ auto_loop: true, auto_loop_ready: true, no_progress_streak: 2 })
       expect(orch.startAgent).not.toHaveBeenCalled()
     })
 
@@ -401,10 +410,10 @@ describe('auto-loop-service', () => {
       svc.disable(wsId, 'user-action')
 
       expect(hooks.onAutoLoopDisabled).toHaveBeenCalledTimes(1)
-      expect(hooks.onAutoLoopDisabled).toHaveBeenCalledWith(wsId, { reason: 'user-action', tasksPending: 1 })
+      expect(hooks.onAutoLoopDisabled).toHaveBeenCalledWith(wsId, { reason: 'user-action', tasksPending: 2 })
     })
 
-    it('increments streak until 3 then disables with reason=stall', async () => {
+    it('starts diagnostic after three stagnant iterations', async () => {
       const svc = await import('../server/services/auto-loop-service.js')
       const { createTask } = await import('../server/services/workspace-service.js')
       const ws = await import('../server/services/websocket-service.js')
@@ -422,22 +431,29 @@ describe('auto-loop-service', () => {
       expect(svc.getStatus(wsId).auto_loop).toBe(true)
 
       svc.onSessionEnded(wsId, 'completed', 0)
-      expect(svc.getStatus(wsId).auto_loop).toBe(false)
+      expect(svc.getStatus(wsId)).toMatchObject({ auto_loop: true, diagnostic_attempts: 1 })
       expect(ws.emitEphemeral).toHaveBeenCalledWith(
         wsId,
-        'autoloop:disabled',
-        expect.objectContaining({ reason: 'stall' }),
+        'autoloop:state',
+        expect.objectContaining({ state: 'active', diagnostic_attempts: 1 }),
       )
     })
 
     it('disables with reason=completed when all tasks done', async () => {
       const svc = await import('../server/services/auto-loop-service.js')
-      const { createTask, updateTaskStatus } = await import('../server/services/workspace-service.js')
+      const { createTask, updateTask, listTasks } = await import('../server/services/workspace-service.js')
       const ws = await import('../server/services/websocket-service.js')
       const t1 = createTask(wsId, { title: 't1', isAcceptanceCriterion: false, sortOrder: 0 })
       svc._test_setAutoLoopReady(wsId, true)
       svc.enable(wsId)
-      updateTaskStatus(t1.id, 'done')
+      const verification = {
+        method: 'vitest',
+        summary: 'All checks passed',
+        checks: [{ name: 'suite', status: 'passed' as const }],
+      }
+      updateTask(t1.id, { status: 'done', verification })
+      const final = listTasks(wsId).find((t) => t.role === 'finalization')!
+      updateTask(final.id, { status: 'done', verification })
       vi.clearAllMocks()
 
       svc.onSessionEnded(wsId, 'completed', 1)
@@ -665,14 +681,14 @@ describe('auto-loop-service', () => {
       expect(startAgent).toHaveBeenCalled()
     })
 
-    it('disables with reason=completed if no pending tasks remain', async () => {
+    it('requires final verification even if no pending tasks remain', async () => {
       const svc = await import('../server/services/auto-loop-service.js')
       const db = (await import('../server/db/index.js')).getDb()
       db.prepare('UPDATE workspaces SET auto_loop = 1, auto_loop_ready = 1 WHERE id = ?').run(wsId)
 
       svc.rehydrate()
 
-      expect(svc.getStatus(wsId).auto_loop).toBe(false)
+      expect(svc.getStatus(wsId)).toMatchObject({ auto_loop: true, phase: 'finalization' })
     })
 
     it('skips archived workspaces', async () => {
@@ -716,13 +732,13 @@ describe('auto-loop-service', () => {
         expect.objectContaining({
           taskId: task.id,
           taskTitle: 'implement X',
-          tasksPending: 1,
+          tasksPending: 2,
           tasksDone: 0,
         }),
       )
     })
 
-    it('disables AND re-throws from enable() when startAgent throws on the initial spawn', async () => {
+    it('blocks AND re-throws from enable() when startAgent throws on the initial spawn', async () => {
       // Surfacing the failure at enable() is important: without it the HTTP
       // POST /auto-loop returns 200 for what's actually a failed enable, and
       // the client won't see the disable for another tick.
@@ -737,15 +753,15 @@ describe('auto-loop-service', () => {
       svc._test_setAutoLoopReady(wsId, true)
 
       expect(() => svc.enable(wsId)).toThrow(/boom/)
-      expect(svc.getStatus(wsId).auto_loop).toBe(false)
+      expect(svc.getStatus(wsId)).toMatchObject({ auto_loop: true, state: 'blocked' })
       expect(ws.emitEphemeral).toHaveBeenCalledWith(
         wsId,
-        'autoloop:disabled',
-        expect.objectContaining({ reason: 'error' }),
+        'autoloop:state',
+        expect.objectContaining({ state: 'blocked', reason: 'boom' }),
       )
     })
 
-    it('swallows startAgent throw in onSessionEnded (not in enable path) and auto-disables', async () => {
+    it('swallows startAgent throw in onSessionEnded and preserves blocked intent', async () => {
       const svc = await import('../server/services/auto-loop-service.js')
       const ws = await import('../server/services/websocket-service.js')
       const orch = await import('../server/services/agent/orchestrator.js')
@@ -763,11 +779,11 @@ describe('auto-loop-service', () => {
       vi.clearAllMocks()
       // onSessionEnded should NOT throw, but should auto-disable.
       expect(() => svc.onSessionEnded(wsId, 'completed', 1)).not.toThrow()
-      expect(svc.getStatus(wsId).auto_loop).toBe(false)
+      expect(svc.getStatus(wsId)).toMatchObject({ auto_loop: true, state: 'blocked' })
       expect(ws.emitEphemeral).toHaveBeenCalledWith(
         wsId,
-        'autoloop:disabled',
-        expect.objectContaining({ reason: 'error' }),
+        'autoloop:state',
+        expect.objectContaining({ state: 'blocked', reason: 'boom' }),
       )
     })
   })
@@ -788,24 +804,24 @@ describe('auto-loop-service', () => {
       expect(ws.emitEphemeral).not.toHaveBeenCalledWith(wsId, 'autoloop:disabled', expect.anything())
     })
 
-    it('does not increment no_progress_streak when auto_loop_ready=false', async () => {
+    it('counts unfinished grooming toward diagnostic recovery', async () => {
       const svc = await import('../server/services/auto-loop-service.js')
       const db = (await import('../server/db/index.js')).getDb()
       db.prepare('UPDATE workspaces SET auto_loop = 1, auto_loop_ready = 0 WHERE id = ?').run(wsId)
 
       svc.onSessionEnded(wsId, 'completed', 0)
 
-      expect(svc.getStatus(wsId).no_progress_streak).toBe(0)
+      expect(svc.getStatus(wsId).no_progress_streak).toBe(1)
     })
 
-    it('still disables on error/killed even when auto_loop_ready=false', async () => {
+    it('blocks on error even when auto_loop_ready=false', async () => {
       const svc = await import('../server/services/auto-loop-service.js')
       const db = (await import('../server/db/index.js')).getDb()
       db.prepare('UPDATE workspaces SET auto_loop = 1, auto_loop_ready = 0 WHERE id = ?').run(wsId)
 
       svc.onSessionEnded(wsId, 'error', 0)
 
-      expect(svc.getStatus(wsId).auto_loop).toBe(false)
+      expect(svc.getStatus(wsId)).toMatchObject({ auto_loop: true, state: 'blocked' })
     })
   })
 
@@ -994,7 +1010,7 @@ describe('auto-loop-service', () => {
       expect(prompt).toContain('Run lint and tests at the end.')
     })
 
-    it('does NOT inject the finalization block when prompt is empty', async () => {
+    it('injects default final verification when the custom prompt is empty', async () => {
       const svc = await import('../server/services/auto-loop-service.js')
       const settings = await import('../server/services/settings-service.js')
       const { createTask } = await import('../server/services/workspace-service.js')
@@ -1008,7 +1024,7 @@ describe('auto-loop-service', () => {
       svc.enable(wsId)
 
       const prompt = await getLastIterationPrompt()
-      expect(prompt).not.toContain('finalization task')
+      expect(prompt).toContain('finalization task')
     })
 
     it('does NOT inject the finalization block for `[FINAL]add` (missing trailing space)', async () => {

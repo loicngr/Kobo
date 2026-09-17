@@ -67,6 +67,64 @@ const BASE_OPTS: StartOptions = {
 }
 
 describe('SessionController', () => {
+  it('retains an end received during startup until the engine confirms closure', async () => {
+    const { SessionController } = await import('../../server/services/agent/session-controller.js')
+    const { engine, process } = fakeEngine()
+    let releaseStart!: () => void
+    let releaseClosed!: () => void
+    const startingGate = new Promise<void>((resolve) => {
+      releaseStart = resolve
+    })
+    Object.defineProperty(process, 'closed', {
+      value: new Promise<void>((resolve) => {
+        releaseClosed = resolve
+      }),
+    })
+    engine.start = async (_options, emit) => {
+      emit({ kind: 'session:ended', reason: 'watchdog', exitCode: null })
+      await startingGate
+      return process
+    }
+    const ctrl = new SessionController('w1', 'sess-1', engine, () => {})
+    const starting = ctrl.start(BASE_OPTS)
+    let closed = false
+    void ctrl.closed.then(() => {
+      closed = true
+    })
+    releaseStart()
+    await starting
+    expect(closed).toBe(false)
+    expect(ctrl.isClosed).toBe(false)
+    releaseClosed()
+    await ctrl.closed
+    expect(ctrl.isClosed).toBe(true)
+  })
+
+  it('marks a legacy engine closed before delivering its terminal event', async () => {
+    const { SessionController } = await import('../../server/services/agent/session-controller.js')
+    const { engine, emit } = fakeEngine()
+    let closedAtEnd = false
+    const ctrl = new SessionController('w1', 'sess-1', engine, (event) => {
+      if (event.kind === 'session:ended') closedAtEnd = ctrl.isClosed
+    })
+    await ctrl.start(BASE_OPTS)
+    emit({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+    expect(closedAtEnd).toBe(true)
+    await ctrl.closed
+  })
+
+  it('resolves closure when engine startup fails without a process', async () => {
+    const { SessionController } = await import('../../server/services/agent/session-controller.js')
+    const { engine } = fakeEngine()
+    engine.start = async () => {
+      throw new Error('spawn failed')
+    }
+    const ctrl = new SessionController('w1', 'sess-1', engine, () => {})
+    await expect(ctrl.start(BASE_OPTS)).rejects.toThrow('spawn failed')
+    expect(ctrl.isClosed).toBe(true)
+    await ctrl.closed
+  })
+
   it('forwards every event to the onEvent handler', async () => {
     const { SessionController } = await import('../../server/services/agent/session-controller.js')
     const { engine, emit } = fakeEngine()

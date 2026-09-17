@@ -217,7 +217,7 @@ describe('Orchestrator — pending question (canUseTool)', () => {
     expect(emit).not.toHaveBeenCalled()
   })
 
-  it('disables auto-loop with reason=awaiting-clarification when awaitingFreeForm is true', async () => {
+  it('blocks auto-loop with reason=awaiting-clarification when awaitingFreeForm is true', async () => {
     const { createWorkspace, updateWorkspaceStatus } = await import('../server/services/workspace-service.js')
     const ws = createWorkspace({
       name: 'WFF',
@@ -250,7 +250,7 @@ describe('Orchestrator — pending question (canUseTool)', () => {
 
     expect(autoLoopService.getStatus(ws.id).auto_loop).toBe(true)
     await answerPendingQuestion(ws.id, { 'Q?': 'free text' }, 'toolu_ff', { awaitingFreeForm: true })
-    expect(autoLoopService.getStatus(ws.id).auto_loop).toBe(false)
+    expect(autoLoopService.getStatus(ws.id)).toMatchObject({ auto_loop: true, state: 'blocked' })
   })
 
   it('leaves auto-loop on when awaitingFreeForm is false', async () => {

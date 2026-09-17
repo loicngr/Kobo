@@ -608,7 +608,15 @@ export const useWebSocketStore = defineStore('websocket', {
       const devServers = useDevServerStore()
       const tracked = new Set(Object.keys(devServers.statuses))
       if (workspaceStore.selectedWorkspaceId) tracked.add(workspaceStore.selectedWorkspaceId)
-      await Promise.allSettled([...tracked].map((id) => devServers.fetchStatus(id)))
+      // Queue changes are ephemeral: reconnect replay cannot restore a missed
+      // delivery transition. Each tab/pane refreshes every queue it has opened.
+      const queuedWorkspaces = new Set(Object.keys(workspaceStore.autoLoopMessages))
+      if (workspaceStore.selectedWorkspaceId) queuedWorkspaces.add(workspaceStore.selectedWorkspaceId)
+      await Promise.allSettled([
+        workspaceStore.fetchAutoLoopStates(),
+        ...[...queuedWorkspaces].map((id) => workspaceStore.fetchAutoLoopMessages(id)),
+        ...[...tracked].map((id) => devServers.fetchStatus(id)),
+      ])
     },
 
     disconnect() {
@@ -1633,6 +1641,11 @@ export const useWebSocketStore = defineStore('websocket', {
           break
         }
 
+        case 'autoloop:messages': {
+          if (wid) void workspaceStore.fetchAutoLoopMessages(wid).catch(() => {})
+          break
+        }
+        case 'autoloop:state':
         case 'autoloop:enabled':
         case 'autoloop:iteration-started':
         case 'autoloop:ready-flipped': {

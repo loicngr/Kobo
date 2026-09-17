@@ -1,8 +1,10 @@
 import type { MessageSource } from '../../shared/workspace-message-types.js'
 import { assertWorkspaceLifecycleAvailable } from '../utils/workspace-lifecycle-guard.js'
 import { isAgentUnavailableError, isShuttingDown, sendMessage, startAgent } from './agent/orchestrator.js'
+import { hasLoopMessage } from './auto-loop-message-service.js'
 import * as autoLoop from './auto-loop-service.js'
 import { createChatReceipt } from './chat-receipt-service.js'
+import { emitEphemeral } from './websocket-service.js'
 import { getActiveSession, getWorkspace, updateWorkspaceStatus } from './workspace-service.js'
 
 export interface WorkspaceMessage {
@@ -11,6 +13,7 @@ export interface WorkspaceMessage {
   sessionId?: string
   clientMessageId?: string
   force?: boolean
+  delivery?: 'immediate' | 'next_iteration'
   agentPermissionModeOverride?: 'plan' | 'bypass' | 'strict' | 'interactive'
 }
 
@@ -30,6 +33,15 @@ export async function deliverWorkspaceMessage(
     if (!workspace) throw new Error(`Workspace '${workspaceId}' not found`)
     if (workspace.archivedAt || workspace.worktreePurgedAt)
       throw new Error('Restore the workspace before sending a message')
+    if (message.delivery === 'next_iteration') {
+      if (!message.clientMessageId) throw new Error('clientMessageId is required for queued delivery')
+      const acceptedBefore = hasLoopMessage(workspaceId, message.clientMessageId)
+      if (!autoLoop.queueInstruction(workspaceId, message.content, message.clientMessageId, message.source))
+        throw new Error('Auto-loop is not enabled')
+      if (!acceptedBefore) receipt.accept()
+      else emitEphemeral(workspaceId, 'chat:accepted', { clientMessageId: message.clientMessageId })
+      return {}
+    }
     if (workspace.status === 'compacting') {
       reason = 'compacting'
       throw new Error('Workspace is compacting its context; wait until compaction finishes before sending a message')
@@ -39,7 +51,6 @@ export async function deliverWorkspaceMessage(
       throw new Error('Answer the pending question or permission request before sending a chat message')
     }
     const loop = autoLoop.getStatus(workspaceId)
-    if (loop.auto_loop && loop.auto_loop_ready) autoLoop.disable(workspaceId, 'user-action')
     let sessionId = message.sessionId ?? getActiveSession(workspaceId)?.id
     try {
       if (hooks?.beforeDispatch)
@@ -65,6 +76,7 @@ export async function deliverWorkspaceMessage(
       updateWorkspaceStatus(workspaceId, 'executing')
       sessionId = message.sessionId ?? started.agentSessionId
     }
+    if (loop.auto_loop && loop.auto_loop_ready) autoLoop.disable(workspaceId, 'user-action')
     receipt.accept(sessionId)
     return { sessionId }
   } catch (error) {

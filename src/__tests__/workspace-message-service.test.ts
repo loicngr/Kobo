@@ -123,3 +123,12 @@ it('disables an active auto-loop when redirecting the agent', async () => {
   await deliverWorkspaceMessage('ws', { content: 'new direction' })
   expect(autoLoop.disable).toHaveBeenCalledWith('ws', 'user-action')
 })
+
+it('does not disable an active loop when a stale session rejects delivery', async () => {
+  vi.mocked(autoLoop.getStatus).mockReturnValueOnce({ auto_loop: true, auto_loop_ready: true } as never)
+  vi.mocked(agent.sendMessage).mockRejectedValueOnce(new Error('Session is not active'))
+  await expect(deliverWorkspaceMessage('ws', { content: 'lost message', sessionId: 'stale' })).rejects.toThrow(
+    'not active',
+  )
+  expect(autoLoop.disable).not.toHaveBeenCalled()
+})

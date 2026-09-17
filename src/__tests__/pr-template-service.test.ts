@@ -26,6 +26,8 @@ function makeTask(overrides: Partial<Task> = {}): Task {
     status: 'pending',
     isAcceptanceCriterion: false,
     sortOrder: 0,
+    role: 'work',
+    verification: null,
     createdAt: '2026-04-05T10:00:00.000Z',
     updatedAt: '2026-04-05T10:00:00.000Z',
     ...overrides,

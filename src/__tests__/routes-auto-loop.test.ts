@@ -22,6 +22,7 @@ vi.mock('../server/services/agent/orchestrator.js', () => ({
   sendMessage: vi.fn(),
   hasController: vi.fn(() => false),
   isShuttingDown: vi.fn(() => false),
+  resetAutoLoopRetries: vi.fn(),
   getAgentStatus: vi.fn(() => null),
   forgetRateLimitInfo: vi.fn(),
   forgetTasksDoneSnapshot: vi.fn(),
@@ -101,7 +102,9 @@ beforeEach(async () => {
   // doesn't leak into the next test.
   vi.clearAllMocks()
   const orch = await import('../server/services/agent/orchestrator.js')
-  ;(orch.startAgent as ReturnType<typeof vi.fn>).mockReset()
+  ;(orch.startAgent as ReturnType<typeof vi.fn>)
+    .mockReset()
+    .mockReturnValue({ agentSessionId: 'mock-agent-session-id' })
   ;(orch.hasController as ReturnType<typeof vi.fn>).mockReset().mockReturnValue(false)
 })
 
@@ -115,7 +118,7 @@ describe('GET /api/workspaces/:id/auto-loop', () => {
   it('returns the default status for a fresh workspace', async () => {
     const res = await app.request(`/api/workspaces/${wsId}/auto-loop`)
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({
+    expect(await res.json()).toMatchObject({
       auto_loop: false,
       auto_loop_ready: false,
       no_progress_streak: 0,
@@ -128,7 +131,7 @@ describe('GET /api/workspaces/auto-loop-states', () => {
     const res = await app.request('/api/workspaces/auto-loop-states')
     expect(res.status).toBe(200)
     const body = (await res.json()) as Record<string, unknown>
-    expect(body[wsId]).toEqual({
+    expect(body[wsId]).toMatchObject({
       auto_loop: false,
       auto_loop_ready: false,
       no_progress_streak: 0,
@@ -178,14 +181,14 @@ describe('POST /api/workspaces/:id/auto-loop', () => {
 
     const res = await app.request(`/api/workspaces/${wsId}/auto-loop`, { method: 'POST' })
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ ok: true })
+    expect(await res.json()).toMatchObject({ ok: true })
 
     const statusRes = await app.request(`/api/workspaces/${wsId}/auto-loop`)
     const status = await statusRes.json()
     expect(status).toMatchObject({ auto_loop: true, auto_loop_ready: true })
   })
 
-  it('returns 400 + auto-disables when startAgent throws on the initial spawn', async () => {
+  it('returns 400 + preserves blocked intent when startAgent throws on the initial spawn', async () => {
     const orch = await import('../server/services/agent/orchestrator.js')
     ;(orch.startAgent as ReturnType<typeof vi.fn>).mockImplementation(() => {
       throw new Error('boom')
@@ -199,7 +202,7 @@ describe('POST /api/workspaces/:id/auto-loop', () => {
 
     const statusRes = await app.request(`/api/workspaces/${wsId}/auto-loop`)
     const status = await statusRes.json()
-    expect(status).toMatchObject({ auto_loop: false })
+    expect(status).toMatchObject({ auto_loop: true, state: 'blocked' })
   })
 })
 
@@ -212,7 +215,7 @@ describe('DELETE /api/workspaces/:id/auto-loop', () => {
 
     const res = await app.request(`/api/workspaces/${wsId}/auto-loop`, { method: 'DELETE' })
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ ok: true })
+    expect(await res.json()).toMatchObject({ ok: true })
 
     const statusRes = await app.request(`/api/workspaces/${wsId}/auto-loop`)
     const status = await statusRes.json()
@@ -222,7 +225,7 @@ describe('DELETE /api/workspaces/:id/auto-loop', () => {
   it('is idempotent on a non-running workspace', async () => {
     const res = await app.request(`/api/workspaces/${wsId}/auto-loop`, { method: 'DELETE' })
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ ok: true })
+    expect(await res.json()).toMatchObject({ ok: true })
   })
 })
 
@@ -232,7 +235,7 @@ describe('POST /api/workspaces/:id/auto-loop-ready', () => {
 
     const res = await app.request(`/api/workspaces/${wsId}/auto-loop-ready`, { method: 'POST' })
     expect(res.status).toBe(200)
-    expect(await res.json()).toEqual({ ok: true })
+    expect(await res.json()).toMatchObject({ ok: true })
 
     const statusRes = await app.request(`/api/workspaces/${wsId}/auto-loop`)
     const status = await statusRes.json()
@@ -394,5 +397,63 @@ describe('GET /api/workspaces/:id/events with session filter', () => {
     const body = (await res.json()) as { events: Array<{ id: string }>; hasMore: boolean }
     expect(body.events.map((e) => e.id)).toEqual(['evt-ws-old'])
     expect(body.hasMore).toBe(false)
+  })
+})
+
+describe('durable auto-loop instruction API', () => {
+  it('accepts once independently of the old session and exposes the queue', async () => {
+    const { getDb } = await import('../server/db/index.js')
+    const orch = await import('../server/services/agent/orchestrator.js')
+    const events = await import('../server/services/websocket-service.js')
+    getDb().prepare('UPDATE workspaces SET auto_loop=1 WHERE id=?').run(wsId)
+    vi.mocked(orch.hasController).mockReturnValue(true)
+    const send = () =>
+      app.request(`/api/workspaces/${wsId}/auto-loop/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: 'new requirement', clientMessageId: 'stable' }),
+      })
+    expect((await send()).status).toBe(200)
+    expect((await send()).status).toBe(200)
+    expect(events.emit).toHaveBeenCalledTimes(1)
+    expect(orch.sendMessage).not.toHaveBeenCalled()
+    const response = await app.request(`/api/workspaces/${wsId}/auto-loop/messages`)
+    const messages = await response.json()
+    expect(messages).toHaveLength(1)
+    expect(messages[0]).toMatchObject({ content: 'new requirement', state: 'pending' })
+    expect(
+      (
+        await app.request(`/api/workspaces/${wsId}/auto-loop/messages/${messages[0].id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action: 'cancel' }),
+        })
+      ).status,
+    ).toBe(200)
+    expect(await (await app.request(`/api/workspaces/${wsId}/auto-loop/messages`)).json()).toEqual([])
+  })
+
+  it('rejects mismatched idempotency payloads without replacing the pending instruction', async () => {
+    const { getDb } = await import('../server/db/index.js')
+    const orch = await import('../server/services/agent/orchestrator.js')
+    getDb().prepare('UPDATE workspaces SET auto_loop=1 WHERE id=?').run(wsId)
+    vi.mocked(orch.hasController).mockReturnValue(true)
+    for (const [content, status] of [
+      ['first', 200],
+      ['different', 400],
+    ] as const) {
+      expect(
+        (
+          await app.request(`/api/workspaces/${wsId}/auto-loop/messages`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content, clientMessageId: 'stable' }),
+          })
+        ).status,
+      ).toBe(status)
+    }
+    expect(getDb().prepare('SELECT content FROM auto_loop_messages WHERE workspace_id=?').get(wsId)).toEqual({
+      content: 'first',
+    })
   })
 })

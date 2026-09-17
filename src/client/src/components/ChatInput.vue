@@ -82,27 +82,7 @@
       <span>{{ $t('chatInput.queueBanner') }}</span>
     </div>
 
-    <!-- Auto-loop banner: input is locked while auto-loop is running.
-         Prevents racy queued messages between iterations. -->
-    <div
-      v-if="isAutoLoopRunning"
-      class="autoloop-banner row items-center no-wrap q-pa-xs q-px-sm text-caption text-kobo-2"
-    >
-      <q-icon name="all_inclusive" size="14px" color="primary" class="q-mr-sm" />
-      <span class="col">{{ $t('chatInput.autoLoopBanner') }}</span>
-      <q-btn
-        flat
-        dense
-        no-caps
-        size="sm"
-        icon="stop_circle"
-        color="orange-4"
-        :label="$t('chatInput.autoLoopStop')"
-        :loading="stoppingAutoLoop"
-        :disable="stoppingAutoLoop"
-        @click="stopAutoLoopFromChat"
-      />
-    </div>
+    <AutoLoopStatusPanel :workspace-id="workspaceId" />
 
     <div v-if="isCompacting" class="row items-center q-pa-xs q-px-sm text-caption text-kobo-2">
       <q-spinner-dots size="14px" color="primary" class="q-mr-sm" />
@@ -266,6 +246,7 @@
 <script setup lang="ts">
 import type { QInput } from 'quasar'
 import { useQuasar } from 'quasar'
+import AutoLoopStatusPanel from 'src/components/AutoLoopStatusPanel.vue'
 import QuotaFooter from 'src/components/QuotaFooter.vue'
 import SlashSuggestionsPopup from 'src/components/SlashSuggestionsPopup.vue'
 import { useChatAttachments } from 'src/composables/use-chat-attachments'
@@ -651,21 +632,10 @@ const isAwaitingUser = computed(() => store.selectedWorkspace?.status === 'await
 const isArchived = computed(() => Boolean(store.selectedWorkspace?.archivedAt))
 
 const isDisabled = computed(() => {
-  return !props.workspaceId || isAutoLoopRunning.value || isAwaitingUser.value || isArchived.value
+  return !props.workspaceId || isAwaitingUser.value || isArchived.value
 })
 
 const voiceEnabled = computed(() => settingsStore.global.voiceEnabled && !isDisabled.value)
-
-const stoppingAutoLoop = ref(false)
-async function stopAutoLoopFromChat() {
-  if (!props.workspaceId || stoppingAutoLoop.value) return
-  stoppingAutoLoop.value = true
-  try {
-    await store.disableAutoLoop(props.workspaceId)
-  } finally {
-    stoppingAutoLoop.value = false
-  }
-}
 
 // Message history (arrow up/down to cycle through previous messages).
 // Per-workspace, persisted server-side via /api/workspaces/:id/chat-history.
@@ -693,14 +663,13 @@ async function loadHistory() {
   historyIndex.value = -1
 }
 
-async function pushToHistory(text: string) {
+async function pushToHistory(text: string, wsId = props.workspaceId) {
   if (!text) return
-  if (messageHistory.value[0] === text) return
-  // Capture the workspace id synchronously so a mid-await workspace switch
-  // doesn't redirect the POST to a different workspace's history.
-  const wsId = props.workspaceId
-  messageHistory.value.unshift(text)
-  if (messageHistory.value.length > MAX_HISTORY_ENTRIES) messageHistory.value.pop()
+  if (wsId === props.workspaceId) {
+    if (messageHistory.value[0] === text) return
+    messageHistory.value.unshift(text)
+    if (messageHistory.value.length > MAX_HISTORY_ENTRIES) messageHistory.value.pop()
+  }
   try {
     const res = await fetch(`/api/workspaces/${wsId}/chat-history`, {
       method: 'POST',
@@ -756,6 +725,35 @@ async function sendMessageNow() {
     return
 
   let session = currentSession.value
+
+  const autoLoopEnabled =
+    store.autoLoopStates[workspaceId]?.auto_loop ??
+    store.workspaces.find((workspace) => workspace.id === workspaceId)?.autoLoop
+  if (autoLoopEnabled) {
+    // A queued iteration can become selected before its HTTP receipt arrives.
+    // Transfer attachment ownership before that change clears the old draft.
+    const sentAttachments = attachments.take()
+    try {
+      const instruction = KOBO_COMMANDS[text]?.prompt ?? text
+      await store.queueAutoLoopMessage(workspaceId, instruction)
+      pushToHistory(text, workspaceId)
+      if (props.workspaceId === workspaceId && store.selectedSessionId === targetSessionId) {
+        resetHistoryNav()
+        message.value = ''
+      }
+    } catch (error) {
+      if (props.workspaceId === workspaceId && store.selectedSessionId === targetSessionId) {
+        message.value = text
+        attachments.restore(sentAttachments)
+      }
+      $q.notify({
+        type: 'negative',
+        message: error instanceof Error ? error.message : t('network.login.unreachable'),
+        position: 'top',
+      })
+    }
+    return
+  }
 
   // Intercept Kobo built-in commands
   const koboCmd = KOBO_COMMANDS[text]

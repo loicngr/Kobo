@@ -55,6 +55,7 @@ vi.mock('../server/services/workspace-service.js', () => ({
   createTask: vi.fn(),
   getTask: vi.fn(),
   listTasks: vi.fn(),
+  updateTask: vi.fn(),
   updateTaskStatus: vi.fn(),
   updateTaskTitle: vi.fn(),
   deleteTask: vi.fn(),
@@ -2699,6 +2700,42 @@ describe('POST /api/workspaces/:id/tasks', () => {
 })
 
 describe('PATCH /api/workspaces/:id/tasks/:taskId', () => {
+  it('passes structured verification and the combined edit to one atomic mutation', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'ws-1', autoLoop: true } as never)
+    vi.mocked(workspaceService.getTask).mockReturnValue({ id: 'task-1', workspaceId: 'ws-1' } as never)
+    const verification = { method: 'tests', summary: 'Passed', checks: [{ name: 'unit', status: 'passed' }] }
+    const res = await app.request('/api/workspaces/ws-1/tasks/task-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: 'Verified scope', status: 'done', verification, afterTaskId: 'task-2' }),
+    })
+    expect(res.status).toBe(200)
+    expect(workspaceService.updateTask).toHaveBeenCalledWith('task-1', {
+      title: 'Verified scope',
+      status: 'done',
+      verification,
+      afterTaskId: 'task-2',
+    })
+    expect(workspaceService.updateTaskTitle).not.toHaveBeenCalled()
+    expect(workspaceService.updateTaskStatus).not.toHaveBeenCalled()
+  })
+
+  it('reports rejected auto-loop verification as a client error', async () => {
+    vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'ws-1', autoLoop: true } as never)
+    vi.mocked(workspaceService.getTask).mockReturnValue({ id: 'task-1', workspaceId: 'ws-1' } as never)
+    const { TaskValidationError } = await import('../server/services/task-mutations.js')
+    vi.mocked(workspaceService.updateTask).mockImplementationOnce(() => {
+      throw new TaskValidationError('Task verification is required')
+    })
+    const res = await app.request('/api/workspaces/ws-1/tasks/task-1', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'done' }),
+    })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toContain('verification')
+  })
+
   it('updates task status', async () => {
     vi.mocked(workspaceService.getWorkspace).mockReturnValue({ id: 'ws-1' } as never)
     vi.mocked(workspaceService.getTask).mockReturnValue({ id: 'task-1', workspaceId: 'ws-1' } as never)
@@ -2713,7 +2750,7 @@ describe('PATCH /api/workspaces/:id/tasks/:taskId', () => {
     expect(res.status).toBe(200)
     const data = await res.json()
     expect(data.ok).toBe(true)
-    expect(workspaceService.updateTaskStatus).toHaveBeenCalledWith('task-1', 'done')
+    expect(workspaceService.updateTask).toHaveBeenCalledWith('task-1', { status: 'done' })
   })
 
   it('returns 400 for invalid status', async () => {
@@ -2743,7 +2780,7 @@ describe('PATCH /api/workspaces/:id/tasks/:taskId', () => {
     })
 
     expect(res.status).toBe(200)
-    expect(workspaceService.updateTaskTitle).toHaveBeenCalledWith('task-1', 'New title')
+    expect(workspaceService.updateTask).toHaveBeenCalledWith('task-1', { title: 'New title' })
   })
 
   it('accepte title et status ensemble', async () => {
@@ -2759,8 +2796,7 @@ describe('PATCH /api/workspaces/:id/tasks/:taskId', () => {
     })
 
     expect(res.status).toBe(200)
-    expect(workspaceService.updateTaskTitle).toHaveBeenCalled()
-    expect(workspaceService.updateTaskStatus).toHaveBeenCalled()
+    expect(workspaceService.updateTask).toHaveBeenCalledWith('task-1', { title: 'New', status: 'done' })
   })
 
   it('retourne 400 si ni title ni status', async () => {

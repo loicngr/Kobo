@@ -643,6 +643,7 @@ export function createClaudeCodeEngine(): AgentEngine {
       })()
 
       const engineProcess: EngineProcess = {
+        closed: iteratorPromise.then(() => {}),
         get pid() {
           return undefined
         },

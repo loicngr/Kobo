@@ -282,6 +282,184 @@ describe('createCodexEngine — happy path', () => {
 })
 
 describe('createCodexEngine — background subagents', () => {
+  async function startBackgroundTurn(events: AgentEvent[], finishParent = true) {
+    const process = await createCodexEngine().start(BASE_OPTIONS, (event) => events.push(event))
+    await vi.advanceTimersByTimeAsync(5)
+    pushInitializeResponse()
+    await vi.advanceTimersByTimeAsync(5)
+    pushThreadStartResponse('thr_parent')
+    await vi.advanceTimersByTimeAsync(5)
+    pushTurnStartResponse('turn_parent')
+    await vi.advanceTimersByTimeAsync(5)
+    pushNotification('item/completed', {
+      threadId: 'thr_parent',
+      turnId: 'turn_parent',
+      item: {
+        id: 'spawn_1',
+        type: 'collabAgentToolCall',
+        tool: 'spawnAgent',
+        status: 'completed',
+        senderThreadId: 'thr_parent',
+        receiverThreadIds: ['thr_child'],
+        prompt: 'Implement task',
+        model: null,
+        agentsStates: { thr_child: { status: 'running', message: null } },
+      },
+    })
+    if (finishParent)
+      pushNotification('turn/completed', {
+        threadId: 'thr_parent',
+        turn: { id: 'turn_parent', status: 'completed' },
+      })
+    await vi.advanceTimersByTimeAsync(1)
+    return process
+  }
+
+  it('renews the background deadline on child progress', async () => {
+    resetChild()
+    vi.useFakeTimers()
+    try {
+      const events: AgentEvent[] = []
+      await startBackgroundTurn(events)
+      for (let minute = 0; minute < 11; minute++) {
+        pushNotification('item/agentMessage/delta', {
+          threadId: 'thr_child',
+          turnId: 'child_turn',
+          itemId: 'child_text',
+          delta: 'Still working',
+        })
+        await vi.advanceTimersByTimeAsync(60_000)
+      }
+      expect(events.some((event) => event.kind === 'session:ended')).toBe(false)
+      await vi.advanceTimersByTimeAsync(CODEX_SUBAGENT_STALL_TIMEOUT_MS)
+      expect(events).toContainEqual({ kind: 'session:ended', reason: 'watchdog', exitCode: null })
+    } finally {
+      _child.kill('SIGTERM')
+      await vi.advanceTimersByTimeAsync(1)
+      vi.useRealTimers()
+    }
+  })
+
+  it('suspends the background deadline for human input and keeps the parent idle clock paused after answering', async () => {
+    resetChild()
+    vi.useFakeTimers()
+    try {
+      const events: AgentEvent[] = []
+      const process = await startBackgroundTurn(events)
+      pushLine({
+        jsonrpc: '2.0',
+        id: 800,
+        method: 'item/tool/requestUserInput',
+        params: {
+          threadId: 'thr_child',
+          turnId: 'child_turn',
+          itemId: 'question',
+          questions: [],
+        },
+      })
+      await vi.advanceTimersByTimeAsync(CODEX_SUBAGENT_STALL_TIMEOUT_MS + 1000)
+      expect(events.some((event) => event.kind === 'session:user-input-requested')).toBe(true)
+      expect(events.some((event) => event.kind === 'session:ended')).toBe(false)
+      expect(process.resolvePendingUserInput('srv_800', { kind: 'question', answers: {} })).toBe(true)
+      await vi.advanceTimersByTimeAsync(CODEX_TURN_IDLE_TIMEOUT_MS + 1000)
+      expect(events.some((event) => event.kind === 'session:ended')).toBe(false)
+      pushNotification('thread/status/changed', { threadId: 'thr_child', status: { type: 'idle' } })
+      await vi.advanceTimersByTimeAsync(1)
+      expect(events).toContainEqual({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+    } finally {
+      _child.kill('SIGTERM')
+      await vi.advanceTimersByTimeAsync(1)
+      vi.useRealTimers()
+    }
+  })
+
+  it.each(['failed', 'interrupted'])('keeps a child %s turn separate from the successful parent', async (status) => {
+    resetChild()
+    vi.useFakeTimers()
+    try {
+      const events: AgentEvent[] = []
+      await startBackgroundTurn(events, false)
+      pushNotification('error', {
+        threadId: 'thr_child',
+        turnId: 'child_turn',
+        willRetry: false,
+        error: { message: 'Child failed' },
+      })
+      pushNotification('turn/completed', {
+        threadId: 'thr_child',
+        turn: { id: 'child_turn', status, error: { message: 'Child failed' } },
+      })
+      pushNotification('thread/status/changed', { threadId: 'thr_child', status: { type: 'idle' } })
+      pushNotification('turn/completed', {
+        threadId: 'thr_parent',
+        turn: { id: 'turn_parent', status: 'completed' },
+      })
+      await vi.advanceTimersByTimeAsync(1)
+      expect(events.filter((event) => event.kind === 'session:ended')).toEqual([
+        { kind: 'session:ended', reason: 'completed', exitCode: 0 },
+      ])
+      expect(events.some((event) => event.kind === 'error')).toBe(false)
+    } finally {
+      _child.kill('SIGTERM')
+      await vi.advanceTimersByTimeAsync(1)
+      vi.useRealTimers()
+    }
+  })
+
+  it('does not turn a stale parent turn failure into the outcome of the active turn', async () => {
+    resetChild()
+    vi.useFakeTimers()
+    try {
+      const events: AgentEvent[] = []
+      await startBackgroundTurn(events, false)
+      pushNotification('turn/completed', {
+        threadId: 'thr_parent',
+        turn: { id: 'older_turn', status: 'failed', error: { message: 'Old failure' } },
+      })
+      pushNotification('thread/status/changed', { threadId: 'thr_child', status: { type: 'idle' } })
+      pushNotification('turn/completed', {
+        threadId: 'thr_parent',
+        turn: { id: 'turn_parent', status: 'completed' },
+      })
+      await vi.advanceTimersByTimeAsync(1)
+      expect(events.filter((event) => event.kind === 'session:ended')).toEqual([
+        { kind: 'session:ended', reason: 'completed', exitCode: 0 },
+      ])
+    } finally {
+      _child.kill('SIGTERM')
+      await vi.advanceTimersByTimeAsync(1)
+      vi.useRealTimers()
+    }
+  })
+
+  it('keeps quota notices in child output separate from parent lifecycle', async () => {
+    resetChild()
+    vi.useFakeTimers()
+    try {
+      const events: AgentEvent[] = []
+      await startBackgroundTurn(events, false)
+      pushNotification('item/completed', {
+        threadId: 'thr_child',
+        turnId: 'child_turn',
+        item: { id: 'child_quota', type: 'agentMessage', text: 'quota exceeded' },
+      })
+      pushNotification('thread/status/changed', { threadId: 'thr_child', status: { type: 'idle' } })
+      pushNotification('turn/completed', {
+        threadId: 'thr_parent',
+        turn: { id: 'turn_parent', status: 'completed' },
+      })
+      await vi.advanceTimersByTimeAsync(1)
+      expect(events.some((event) => event.kind === 'error')).toBe(false)
+      expect(events.filter((event) => event.kind === 'session:ended')).toEqual([
+        { kind: 'session:ended', reason: 'completed', exitCode: 0 },
+      ])
+    } finally {
+      _child.kill('SIGTERM')
+      await vi.advanceTimersByTimeAsync(1)
+      vi.useRealTimers()
+    }
+  })
+
   it('keeps app-server alive after the parent turn until the child thread becomes idle', async () => {
     resetChild()
     const events: AgentEvent[] = []
@@ -388,7 +566,8 @@ describe('createCodexEngine — background subagents', () => {
       // (turnLiveness stays paused, and nothing else resumes it).
       await vi.advanceTimersByTimeAsync(CODEX_SUBAGENT_STALL_TIMEOUT_MS + 1_000)
 
-      expect(events).toContainEqual({ kind: 'session:ended', reason: 'error', exitCode: null })
+      expect(events).toContainEqual({ kind: 'session:ended', reason: 'watchdog', exitCode: null })
+      expect(events).toContainEqual(expect.objectContaining({ kind: 'error', code: 'subagent_idle_timeout' }))
       expect(_child.kill).toHaveBeenCalledWith('SIGTERM')
     } finally {
       vi.useRealTimers()
@@ -713,6 +892,39 @@ describe('createCodexEngine — child process errors', () => {
 })
 
 describe('createCodexEngine — stop()', () => {
+  it('keeps closure pending after a natural end until the subprocess actually exits', async () => {
+    resetChild()
+    _child.kill.mockReturnValue(true)
+    vi.useFakeTimers()
+    try {
+      const events: AgentEvent[] = []
+      const process = await createCodexEngine().start(BASE_OPTIONS, (event) => events.push(event))
+      expect(process.closed).toBeInstanceOf(Promise)
+      let closed = false
+      void process.closed!.then(() => {
+        closed = true
+      })
+      await vi.advanceTimersByTimeAsync(5)
+      pushInitializeResponse()
+      await vi.advanceTimersByTimeAsync(5)
+      pushThreadStartResponse('thr_closing')
+      await vi.advanceTimersByTimeAsync(5)
+      pushTurnStartResponse()
+      await vi.advanceTimersByTimeAsync(5)
+      pushNotification('turn/completed', { threadId: 'thr_closing', turn: { id: 'turn_1', status: 'completed' } })
+      await vi.advanceTimersByTimeAsync(7000)
+      expect(events).toContainEqual({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+      expect(_child.kill).toHaveBeenCalledWith('SIGKILL')
+      expect(closed).toBe(false)
+      _child.signalCode = 'SIGKILL'
+      _child.emit('exit', null, 'SIGKILL')
+      await process.closed
+      expect(closed).toBe(true)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
   it.each(['delayed-exit', 'no-exit', 'signal-failed'] as const)(
     'requires confirmed process exit after escalation: %s',
     async (scenario) => {
@@ -1262,7 +1474,7 @@ it('keeps silent foreground tools alive and restores the stream deadline after c
     })
     await vi.advanceTimersByTimeAsync(CODEX_TURN_IDLE_TIMEOUT_MS + 10)
     expect(events.filter((ev) => ev.kind === 'session:ended')).toEqual([
-      { kind: 'session:ended', reason: 'error', exitCode: null },
+      { kind: 'session:ended', reason: 'watchdog', exitCode: null },
     ])
   } finally {
     vi.useRealTimers()
@@ -1313,7 +1525,7 @@ it.each([false, true])('uses the stream deadline after a completed plan (foregro
 
     await vi.advanceTimersByTimeAsync(CODEX_TURN_IDLE_TIMEOUT_MS + 10)
     expect(events.filter((ev) => ev.kind === 'session:ended')).toEqual([
-      { kind: 'session:ended', reason: 'error', exitCode: null },
+      { kind: 'session:ended', reason: 'watchdog', exitCode: null },
     ])
   } finally {
     vi.useRealTimers()

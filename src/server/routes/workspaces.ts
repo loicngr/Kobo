@@ -3,6 +3,7 @@ import { promisify } from 'node:util'
 import { getSearchIndexStatus, searchEvents } from '../services/search-service.js'
 import { AgentStopError, assertAgentStopped } from '../utils/agent-stop-result.js'
 import { withGitRepoLock } from '../utils/git-repo-lock.js'
+import autoLoopMessagesRoutes from './auto-loop-messages.js'
 
 const execFileAsync = promisify(execFileCb)
 
@@ -58,6 +59,7 @@ import * as sentryService from '../services/sentry-service.js'
 import * as settingsService from '../services/settings-service.js'
 import { runSetupScript } from '../services/setup-script-service.js'
 import { getSuitePrompts } from '../services/skill-suite-prompts.js'
+import { TaskValidationError, type UpdateTaskMutation } from '../services/task-mutations.js'
 import * as terminalService from '../services/terminal-service.js'
 import * as wakeupService from '../services/wakeup-service.js'
 import * as wsService from '../services/websocket-service.js'
@@ -1826,9 +1828,7 @@ app.get('/auto-loop-states', (c) => {
     > = {}
     for (const r of rows) {
       out[r.id] = {
-        auto_loop: r.auto_loop === 1,
-        auto_loop_ready: r.auto_loop_ready === 1,
-        no_progress_streak: r.no_progress_streak,
+        ...autoLoopService.getStatus(r.id),
         tasks_done: r.tasks_done ?? 0,
         tasks_total: r.tasks_total ?? 0,
         crons_count: r.crons_count ?? 0,
@@ -1840,6 +1840,8 @@ app.get('/auto-loop-states', (c) => {
     return c.json({ error: message }, workspaceErrorStatus(err))
   }
 })
+
+app.route('/', autoLoopMessagesRoutes)
 
 // GET /api/workspaces/:id/auto-loop — current auto-loop status for one workspace.
 app.get('/:id/auto-loop', (c) => {
@@ -2252,75 +2254,62 @@ app.delete('/:id/events/:eventId', (c) => {
 app.post('/:id/tasks', async (c) => {
   try {
     const id = c.req.param('id')
-    const workspace = workspaceService.getWorkspace(id)
-    if (!workspace) {
-      return c.json({ error: `Workspace '${id}' not found` }, 404)
-    }
-
-    const body = await c.req
-      .json<{ title?: string; isAcceptanceCriterion?: boolean }>()
-      .catch(() => ({}) as { title?: string; isAcceptanceCriterion?: boolean })
-    if (!body.title?.trim()) {
+    if (!workspaceService.getWorkspace(id)) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    const body = await c.req.json<Partial<workspaceService.CreateTaskInput>>().catch(() => null)
+    if (!body || typeof body.title !== 'string' || !body.title.trim()) {
       return c.json({ error: 'Title is required' }, 400)
     }
-
-    const existing = workspaceService.listTasks(id)
-    const nextSortOrder = existing.length > 0 ? Math.max(...existing.map((t) => t.sortOrder)) + 1 : 0
     const task = workspaceService.createTask(id, {
       title: body.title.trim(),
-      isAcceptanceCriterion: !!body.isAcceptanceCriterion,
-      sortOrder: nextSortOrder,
+      isAcceptanceCriterion: body.isAcceptanceCriterion,
+      sortOrder: body.sortOrder,
+      afterTaskId: body.afterTaskId,
+      role: body.role,
     })
     return c.json(task, 201)
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, workspaceErrorStatus(err))
+    return c.json({ error: message }, err instanceof TaskValidationError ? 400 : workspaceErrorStatus(err))
   }
 })
 
-// PATCH /api/workspaces/:id/tasks/:taskId — update task status and/or title
+// PATCH /api/workspaces/:id/tasks/:taskId — validate and apply every field atomically
 app.patch('/:id/tasks/:taskId', async (c) => {
   try {
     const id = c.req.param('id')
     const taskId = c.req.param('taskId')
-
-    const workspace = workspaceService.getWorkspace(id)
-    if (!workspace) {
-      return c.json({ error: `Workspace '${id}' not found` }, 404)
-    }
-
-    const task = workspaceService.getTask(taskId, id)
-    if (!task) {
+    if (!workspaceService.getWorkspace(id)) return c.json({ error: `Workspace '${id}' not found` }, 404)
+    if (!workspaceService.getTask(taskId, id)) {
       return c.json({ error: `Task '${taskId}' not found in workspace '${id}'` }, 404)
     }
-
-    const body = await c.req
-      .json<{ status?: string; title?: string }>()
-      .catch(() => ({}) as { status?: string; title?: string })
-
-    if (body.status === undefined && body.title === undefined) {
-      return c.json({ error: 'At least one of status or title is required' }, 400)
+    const body = await c.req.json<UpdateTaskMutation>().catch(() => null)
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return c.json({ error: 'Request body must be a JSON object' }, 400)
     }
-
-    if (body.title !== undefined) {
-      if (!body.title.trim()) {
-        return c.json({ error: 'Title cannot be empty' }, 400)
-      }
-      workspaceService.updateTaskTitle(taskId, body.title.trim())
+    const fields: UpdateTaskMutation = {}
+    for (const key of [
+      'title',
+      'status',
+      'isAcceptanceCriterion',
+      'sortOrder',
+      'afterTaskId',
+      'verification',
+    ] as const) {
+      if (body[key] !== undefined) Object.assign(fields, { [key]: body[key] })
     }
-
-    if (body.status !== undefined) {
-      const validStatuses = ['pending', 'in_progress', 'done']
-      if (!validStatuses.includes(body.status)) {
-        return c.json({ error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` }, 400)
-      }
-      workspaceService.updateTaskStatus(taskId, body.status as workspaceService.TaskStatus)
+    if (Object.keys(fields).length === 0) return c.json({ error: 'At least one task field is required' }, 400)
+    if (fields.title !== undefined && (typeof fields.title !== 'string' || !fields.title.trim())) {
+      return c.json({ error: 'Title cannot be empty' }, 400)
     }
-
+    if (fields.status !== undefined && !['pending', 'in_progress', 'done'].includes(fields.status)) {
+      return c.json({ error: 'Invalid status. Must be one of: pending, in_progress, done' }, 400)
+    }
+    if (fields.title !== undefined) fields.title = fields.title.trim()
+    workspaceService.updateTask(taskId, fields)
     return c.json({ ok: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
-    return c.json({ error: message }, workspaceErrorStatus(err))
+    return c.json({ error: message }, err instanceof TaskValidationError ? 400 : workspaceErrorStatus(err))
   }
 })
 

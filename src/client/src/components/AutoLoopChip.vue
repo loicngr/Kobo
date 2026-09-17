@@ -1,8 +1,15 @@
 <template>
+  <q-chip
+    v-if="isOn && (status?.state === 'blocked' || status?.state === 'waiting')"
+    dense square size="sm" class="q-ml-sm auto-loop-chip"
+    :class="{ 'auto-loop-chip--blocked': status.state === 'blocked' }"
+  >
+    {{ t('autoLoop.toggle') }} · {{ t(`autoLoop.status.${status.state}`) }}
+  </q-chip>
   <!-- Armed but not yet ready: grooming in progress (brainstorm creating tasks).
        Distinct styling so users don't confuse this with an active loop. -->
   <q-chip
-    v-if="isOn && !isReady"
+    v-else-if="isOn && !isReady"
     dense
     square
     size="sm"
@@ -59,3 +66,11 @@ const tasksDone = computed(() =>
 )
 const tasksTotal = computed(() => (isSelected.value ? store.tasks.length : (status.value?.tasks_total ?? 0)))
 </script>
+
+<style scoped>
+.auto-loop-chip {
+  background: var(--kobo-surface-2);
+  color: var(--kobo-text-2);
+}
+.auto-loop-chip--blocked { color: var(--kobo-warning); }
+</style>

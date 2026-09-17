@@ -72,6 +72,52 @@ describe('quota-backoff-service', () => {
     }
   })
 
+  it('waits through a reset beyond the Node timeout limit without firing early', async () => {
+    const wsId = await makeWorkspace()
+    const service = await import('../server/services/quota-backoff-service.js')
+    const fired = vi.fn()
+    service.setOnFireCallback(fired)
+    service.arm(wsId, 40 * 24 * 60 * 60_000, {
+      resetsAt: null,
+      source: 'rate_limit_info',
+      reason: 'quota',
+      retryCount: 1,
+    })
+    await vi.advanceTimersByTimeAsync(39 * 24 * 60 * 60_000)
+    expect(fired).not.toHaveBeenCalled()
+    await vi.advanceTimersByTimeAsync(24 * 60 * 60_000)
+    expect(fired).toHaveBeenCalledOnce()
+  })
+
+  it('does not reinterpret a persisted blocked loop as an orphan quota on boot', async () => {
+    const wsId = await makeWorkspace()
+    const { getDb } = await import('../server/db/index.js')
+    const db = getDb()
+    db.prepare("UPDATE workspaces SET auto_loop = 1, status = 'quota' WHERE id = ?").run(wsId)
+    db.prepare(
+      "INSERT INTO auto_loop_runs (workspace_id, state, reason, updated_at) VALUES (?, 'blocked', 'engine-stop-unconfirmed', ?)",
+    ).run(wsId, new Date().toISOString())
+    const service = await import('../server/services/quota-backoff-service.js')
+    service.restoreOnBoot(vi.fn())
+    expect(service.getPending(wsId)).toBeNull()
+  })
+
+  it('preserves a retry when its recovery callback fails before dispatch', async () => {
+    const wsId = await makeWorkspace()
+    const { getDb } = await import('../server/db/index.js')
+    getDb().prepare("UPDATE workspaces SET auto_loop = 1, status = 'quota' WHERE id = ?").run(wsId)
+    const service = await import('../server/services/quota-backoff-service.js')
+    const fired = vi.fn().mockImplementationOnce(() => {
+      throw new Error('temporary dispatch failure')
+    })
+    service.setOnFireCallback(fired)
+    service.arm(wsId, 10, { resetsAt: null, source: 'fallback_ladder', reason: 'transient', retryCount: 3 })
+    await expect(vi.advanceTimersByTimeAsync(10)).resolves.toBeDefined()
+    expect(service.getPending(wsId)).toMatchObject({ reason: 'transient', retryCount: 3 })
+    await vi.advanceTimersByTimeAsync(15_000)
+    expect(fired).toHaveBeenCalledTimes(2)
+  })
+
   it('persists the next attempt after the previous row has been consumed', async () => {
     const wsId = await makeWorkspace()
     const service = await import('../server/services/quota-backoff-service.js')

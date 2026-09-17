@@ -19,6 +19,11 @@ vi.mock('../server/services/agent/orchestrator.js', () => ({
 }))
 
 // Mock settings-service to avoid filesystem access during tests.
+vi.mock('../server/services/auto-loop-service.js', () => ({
+  canStartAutomatically: vi.fn(() => true),
+  queueInstruction: vi.fn(() => true),
+}))
+
 vi.mock('../server/services/settings-service.js', () => ({
   getGlobalSettings: vi.fn(() => ({
     worktreesPath: '',

@@ -157,15 +157,6 @@ const dailyBackupScheduler = startDailyDbBackupScheduler(async () => {
 // Initialize process cleanup, agent watchdog, PR watcher, and wakeup rehydration
 reconcileOrphanSessions()
 reconcileReviewReturns()
-startWatchdog()
-wakeupService.rehydrate()
-autoLoopService.rehydrate()
-// Restore in-memory retry counts BEFORE re-arming the persisted backoff timers,
-// otherwise the next arm() after restart would compute the next ladder rung
-// from retryCount=0 and undo the progression.
-restoreRetryCountsFromDb()
-quotaBackoffService.restoreOnBoot((workspaceId, pending) => autoLoopService.onQuotaBackoffExpired(workspaceId, pending))
-cronService.restoreOnBoot()
 // Deliver any new default prompt templates to existing installs (seed-once via the
 // seededDefaultSlugs watermark; never overwrites or re-adds deleted defaults).
 try {
@@ -283,6 +274,16 @@ const server = serve(
   },
   (info) => {
     setBackendPort(info.port)
+    // Restored agents receive the actual listening endpoint, including an
+    // ephemeral or SERVER_PORT-selected port. Quota ownership comes first.
+    restoreRetryCountsFromDb()
+    quotaBackoffService.restoreOnBoot((workspaceId, pending) =>
+      autoLoopService.onQuotaBackoffExpired(workspaceId, pending),
+    )
+    autoLoopService.rehydrate()
+    wakeupService.rehydrate()
+    cronService.restoreOnBoot()
+    startWatchdog()
     startUpdateChecker()
     stopStartupSpinner()
     const settings = getGlobalSettings()

@@ -28,7 +28,7 @@ vi.mock('../server/services/quota-backoff-service.js', () => ({
   arm: vi.fn(),
   cancel: vi.fn(),
   restoreOnBoot: vi.fn(),
-  getPending: vi.fn(),
+  getPending: vi.fn(() => ({ retryCount: 1 })),
   listPending: vi.fn(() => []),
   setOnFireCallback: vi.fn(),
 }))
@@ -38,6 +38,7 @@ vi.mock('../server/services/auto-loop-service.js', () => ({
   // Called by handleQuota when the retry ladder runs out, and by failVisibly
   // when the retry machinery itself fails.
   disable: vi.fn(),
+  block: vi.fn(),
 }))
 
 describe('computeQuotaBackoffMs', () => {
@@ -83,14 +84,14 @@ describe('computeQuotaBackoffMs', () => {
     expect(result.delayMs).toBe(15 * 60 * 1000)
   })
 
-  it('falls back to exponential when resetsAt is > 24h in the future', async () => {
+  it('waits for a known quota reset beyond 24 hours', async () => {
     const orch = await import('../server/services/agent/orchestrator.js')
     orch._test_setRateLimitInfo('w1', {
       buckets: [{ id: 'x', usedPct: 100, resetsAt: '2026-04-25T10:00:00Z' }],
     })
     const result = await orch.computeQuotaBackoffMs('w1', 2)
-    expect(result.source).toBe('fallback_ladder')
-    expect(result.delayMs).toBe(60 * 60 * 1000)
+    expect(result.source).toBe('rate_limit_info')
+    expect(result.delayMs).toBe(2 * 24 * 60 * 60 * 1000 + 30_000)
   })
 
   it('fallback ladder steps: 15 → 30 → 60 → 180 → 300 minutes', async () => {
@@ -249,8 +250,8 @@ describe('handleQuota → quotaBackoffService.arm', () => {
 
     await orch._handleQuota('w1')
 
-    expect(vi.mocked(quotaBackoffService.arm)).toHaveBeenCalledOnce()
-    const [wsId, delayMs, meta] = vi.mocked(quotaBackoffService.arm).mock.calls[0]
+    expect(vi.mocked(quotaBackoffService.arm)).toHaveBeenCalledTimes(2)
+    const [wsId, delayMs, meta] = vi.mocked(quotaBackoffService.arm).mock.calls.at(-1)!
     expect(wsId).toBe('w1')
     // 30 min until reset + 30s safety margin = 30 * 60_000 + 30_000
     expect(delayMs).toBe(30 * 60_000 + 30_000)
@@ -309,7 +310,7 @@ describe('handleQuota → quotaBackoffService.arm', () => {
     // "resume now" only renders when a backoff row exists. Left as is, the
     // workspace would sit there waiting for a timer nobody armed.
     expect(vi.mocked(workspaceService.updateWorkspaceStatus)).toHaveBeenCalledWith('w-stuck', 'error')
-    expect(vi.mocked(autoLoopService.disable)).toHaveBeenCalledWith('w-stuck', 'error')
+    expect(vi.mocked(autoLoopService.block)).toHaveBeenCalledWith('w-stuck', 'retry-unavailable')
 
     errorSpy.mockRestore()
   })
@@ -321,8 +322,8 @@ describe('handleQuota → quotaBackoffService.arm', () => {
     orch.forgetRateLimitInfo('w2')
     await orch._handleQuota('w2')
 
-    expect(vi.mocked(quotaBackoffService.arm)).toHaveBeenCalledOnce()
-    const [wsId, delayMs, meta] = vi.mocked(quotaBackoffService.arm).mock.calls[0]
+    expect(vi.mocked(quotaBackoffService.arm)).toHaveBeenCalledTimes(2)
+    const [wsId, delayMs, meta] = vi.mocked(quotaBackoffService.arm).mock.calls.at(-1)!
     expect(wsId).toBe('w2')
     expect(delayMs).toBe(15 * 60_000)
     expect(meta.resetsAt).toBeNull()
@@ -361,8 +362,8 @@ describe('handleQuota → quotaBackoffService.arm', () => {
     orch.forgetRateLimitInfo('w3')
     await orch._handleQuota('w3')
 
-    expect(vi.mocked(quotaBackoffService.arm)).toHaveBeenCalledOnce()
-    const [wsId, delayMs, meta] = vi.mocked(quotaBackoffService.arm).mock.calls[0]
+    expect(vi.mocked(quotaBackoffService.arm)).toHaveBeenCalledTimes(2)
+    const [wsId, delayMs, meta] = vi.mocked(quotaBackoffService.arm).mock.calls.at(-1)!
     expect(wsId).toBe('w3')
     expect(delayMs).toBeGreaterThan(0)
     expect(meta.source).toBe('usage_api')

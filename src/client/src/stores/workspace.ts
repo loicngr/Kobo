@@ -3,6 +3,7 @@ import { is } from 'quasar'
 import { disposeTerminalEntry } from 'src/services/terminal-registry'
 import { getWorkspaceQueueHost } from 'src/services/workspace-queue-bridge'
 import { apiFetch } from 'src/utils/api'
+import type { AutoLoopRuntime, QueuedAutoLoopMessage } from '../../../shared/auto-loop-types'
 import type { ProviderId, UsageSnapshot } from '../types/usage'
 import { hasPrAttention } from '../utils/pr-status'
 import { isBusyStatus } from '../utils/workspace-status'
@@ -294,7 +295,8 @@ export type PendingItem =
   | { kind: 'question'; agentSessionId: string | null; toolCallId: string; toolName: string; input: unknown }
   | { kind: 'permission'; agentSessionId: string | null; toolCallId: string; toolName: string; toolInput: unknown }
 
-export interface AutoLoopStatus {
+export interface AutoLoopStatus extends Partial<AutoLoopRuntime> {
+  retry_at?: string | null
   auto_loop: boolean
   auto_loop_ready: boolean
   no_progress_streak: number
@@ -468,6 +470,11 @@ export const useWorkspaceStore = defineStore('workspace', {
     pendingQueue: {} as Record<string, PendingItem[]>,
     prSnapshots: {} as Record<string, PrSnapshot>,
     autoLoopStates: {} as Record<string, AutoLoopStatus>,
+    autoLoopMessages: {} as Record<string, QueuedAutoLoopMessage[]>,
+    autoLoopMessageVersions: {} as Record<string, number>,
+    autoLoopSnapshotVersion: 0,
+    autoLoopMessageKeys: {} as Record<string, { content: string; id: string }>,
+    autoLoopQueueTransfers: {} as Record<string, boolean>,
     crons: {} as Record<string, PendingCron[]>,
     // Live step of an in-flight POST /api/workspaces, fed by the ephemeral
     // `workspace:create-progress` events the server emits on the creationId
@@ -587,6 +594,8 @@ export const useWorkspaceStore = defineStore('workspace', {
       delete this.pendingQueue[id]
       delete this.prSnapshots[id]
       delete this.autoLoopStates[id]
+      delete this.autoLoopMessages[id]
+      delete this.autoLoopMessageKeys[id]
       delete this.crons[id]
       delete this.activeAgentSessionIds[id]
       for (const key of Object.keys(this.queuedMessages)) {
@@ -1812,14 +1821,63 @@ export const useWorkspaceStore = defineStore('workspace', {
     },
 
     async fetchAutoLoopStates(): Promise<void> {
+      const version = ++this.autoLoopSnapshotVersion
       try {
         const res = await fetch('/api/workspaces/auto-loop-states', { cache: 'no-store' })
         if (!res.ok) return
         const data = (await res.json()) as Record<string, AutoLoopStatus>
-        this.autoLoopStates = data
+        if (version === this.autoLoopSnapshotVersion) this.autoLoopStates = data
       } catch (err) {
         console.error('[workspace-store] fetchAutoLoopStates failed:', err)
       }
+    },
+
+    async fetchAutoLoopMessages(id: string): Promise<void> {
+      const version = (this.autoLoopMessageVersions[id] ?? 0) + 1
+      this.autoLoopMessageVersions[id] = version
+      const response = await fetch(`/api/workspaces/${id}/auto-loop/messages`, { cache: 'no-store' })
+      if (response.ok) {
+        const messages = await response.json()
+        if (this.autoLoopMessageVersions[id] === version) this.autoLoopMessages[id] = messages
+      }
+    },
+
+    async queueAutoLoopMessage(id: string, content: string): Promise<void> {
+      let delivery = this.autoLoopMessageKeys[id]
+      if (!delivery || delivery.content !== content) {
+        const key = Array.from(crypto.getRandomValues(new Uint32Array(4)), (n) => n.toString(16)).join('-')
+        delivery = { content, id: key }
+        this.autoLoopMessageKeys[id] = delivery
+      }
+      const response = await fetch(`/api/workspaces/${id}/auto-loop/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content, clientMessageId: delivery.id }),
+      })
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}))
+        throw new Error(body.error ?? `HTTP ${response.status}`)
+      }
+      delete this.autoLoopMessageKeys[id]
+      // Delivery is already acknowledged: a failed list refresh must not restore a sent draft.
+      await this.fetchAutoLoopMessages(id).catch(() => {})
+    },
+
+    async resolveAutoLoopMessage(
+      id: string,
+      messageId: number,
+      action: 'cancel' | 'acknowledge' | 'retry',
+    ): Promise<void> {
+      const response = await fetch(`/api/workspaces/${id}/auto-loop/messages/${messageId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      })
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}))
+        throw new Error(body.error ?? `HTTP ${response.status}`)
+      }
+      await this.fetchAutoLoopMessages(id)
     },
 
     async enableAutoLoop(id: string): Promise<void> {
@@ -1862,6 +1920,8 @@ export const useWorkspaceStore = defineStore('workspace', {
 
     clearAutoLoopState(id: string): void {
       delete this.autoLoopStates[id]
+      delete this.autoLoopMessages[id]
+      delete this.autoLoopMessageKeys[id]
     },
 
     async fetchCrons(workspaceId: string): Promise<void> {
@@ -2421,11 +2481,29 @@ export const useWorkspaceStore = defineStore('workspace', {
       if (sessionId) delete this.queuedMessages[this.queuedMessageKey(workspaceId, sessionId)]
     },
 
-    flushQueuedMessage(workspaceId: string, sessionId: string) {
+    async flushQueuedMessage(workspaceId: string, sessionId: string) {
       const host = getWorkspaceQueueHost(this)
       if (host) return host.flush(workspaceId, sessionId)
       const queued = this.getQueuedMessage(workspaceId, sessionId)
       if (!queued) return
+      if (
+        this.autoLoopStates[workspaceId]?.auto_loop ??
+        this.workspaces.find((workspace) => workspace.id === workspaceId)?.autoLoop
+      ) {
+        const key = this.queuedMessageKey(workspaceId, sessionId)
+        if (this.autoLoopQueueTransfers[key]) return
+        this.autoLoopQueueTransfers[key] = true
+        try {
+          await this.queueAutoLoopMessage(workspaceId, queued.content)
+          if (this.getQueuedMessage(workspaceId, sessionId)?.content === queued.content)
+            this.cancelQueuedMessage(workspaceId, sessionId)
+        } catch {
+          /* Keep the local queue until a durable receipt arrives. */
+        } finally {
+          delete this.autoLoopQueueTransfers[key]
+        }
+        return
+      }
       const websocket = useWebSocketStore()
       if (websocket.isCompacting(workspaceId)) return
       this.cancelQueuedMessage(workspaceId, sessionId)

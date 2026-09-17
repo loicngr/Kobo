@@ -16,6 +16,12 @@ vi.mock('../server/services/agent/orchestrator.js', () => ({
   hasController: vi.fn(() => false),
 }))
 
+vi.mock('../server/services/auto-loop-service.js', () => ({
+  canStartAutomatically: vi.fn(() => true),
+  queueInstruction: vi.fn(() => true),
+  disable: vi.fn(),
+}))
+
 vi.mock('../server/services/settings-service.js', () => ({
   getGlobalSettings: vi.fn(() => ({
     worktreesPath: '',

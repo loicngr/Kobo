@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
+import { DEFAULT_FINALIZATION_PROMPT } from '../server/services/settings-service.js'
 import {
   AUTO_LOOP_GROOMING_STEPS,
+  AUTO_LOOP_ITERATION_RULES,
   buildAutoLoopGroomingSteps,
   buildE2eIterationBlock,
   buildFinalizationIterationBlock,
@@ -86,6 +88,12 @@ describe('buildAutoLoopGroomingSteps(e2e, finalization)', () => {
 })
 
 describe('buildE2eIterationBlock(e2e)', () => {
+  it('keeps an unexecuted E2E check open instead of claiming completion', () => {
+    const out = buildE2eIterationBlock({ framework: 'playwright', skill: '', prompt: '' })
+    expect(out).toContain('not_run')
+    expect(out).toContain('do NOT mark the task done')
+    expect(out).not.toContain('then call `kobo__mark_task_done` with a note')
+  })
   it('returns empty string when framework is empty', () => {
     expect(buildE2eIterationBlock({ framework: '', skill: '', prompt: '' })).toBe('')
   })
@@ -96,7 +104,7 @@ describe('buildE2eIterationBlock(e2e)', () => {
     expect(out).toContain('Project E2E framework: cypress')
     expect(out).toContain('Use the `cy` skill for this task.')
     expect(out).toContain('Additional guidance: pop')
-    expect(out).toContain('Override of step 4 of the standard prompt below')
+    expect(out).toContain('mandatory completion and lifecycle rules')
   })
 
   it('omits skill / prompt lines when not configured', () => {
@@ -108,8 +116,15 @@ describe('buildE2eIterationBlock(e2e)', () => {
 })
 
 describe('buildFinalizationIterationBlock(finalization)', () => {
-  it('returns empty string when prompt is empty', () => {
-    expect(buildFinalizationIterationBlock({ prompt: '' })).toBe('')
+  it('keeps final verification mandatory until failed checks have been repaired and rerun', () => {
+    expect(DEFAULT_FINALIZATION_PROMPT).toContain('leave this finalization task pending')
+    expect(DEFAULT_FINALIZATION_PROMPT).not.toContain('single-shot')
+    expect(AUTO_LOOP_ITERATION_RULES).toContain('custom prompts cannot override')
+    expect(AUTO_LOOP_ITERATION_RULES).toContain('not_run')
+  })
+  it('provides a final verification gate even when the custom prompt is empty', () => {
+    expect(buildFinalizationIterationBlock({ prompt: '' })).toContain('finalization task')
+    expect(buildFinalizationIterationBlock({ prompt: '' })).toContain('verification')
   })
 
   it('returns the user prompt verbatim when set', () => {

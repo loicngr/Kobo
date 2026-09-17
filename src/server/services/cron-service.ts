@@ -5,6 +5,7 @@ import { slugifyProjectName } from '../utils/project-slug.js'
 import { isWorkspaceLifecycleBusy } from '../utils/workspace-lifecycle-guard.js'
 import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 import * as orchestrator from './agent/orchestrator.js'
+import * as autoLoopService from './auto-loop-service.js'
 import * as settingsService from './settings-service.js'
 import { emitEphemeral } from './websocket-service.js'
 
@@ -247,7 +248,7 @@ function fireOrSkip(id: string): void {
 
     const wsRow = db
       .prepare(
-        `SELECT project_path, working_branch, worktree_path, model, agent_permission_mode, reasoning_effort, archived_at
+        `SELECT project_path, working_branch, worktree_path, model, agent_permission_mode, reasoning_effort, archived_at, auto_loop
            FROM workspaces WHERE id = ?`,
       )
       .get(row.workspace_id) as
@@ -259,6 +260,7 @@ function fireOrSkip(id: string): void {
           agent_permission_mode: string | null
           reasoning_effort: string
           archived_at: string | null
+          auto_loop: number
         }
       | undefined
 
@@ -274,38 +276,50 @@ function fireOrSkip(id: string): void {
 
     let status: 'fired' | 'skipped-active' | 'start-failed' = 'skipped-active'
     if (!orchestrator.hasController(row.workspace_id)) {
+      if (wsRow.auto_loop !== 1 && !autoLoopService.canStartAutomatically(row.workspace_id)) {
+        scheduleAt(id, new Date(Date.now() + 15_000))
+        return
+      }
       try {
-        const globalSettings = settingsService.getGlobalSettings()
-        const projectSettings = settingsService.getProjectSettings(wsRow.project_path)
-        const projectSlug = globalSettings.worktreesPrefixByProject
-          ? slugifyProjectName(projectSettings?.displayName ?? '', wsRow.project_path)
-          : undefined
-        const worktreePath =
-          wsRow.worktree_path ??
-          resolveWorkspaceWorktreePath(
-            wsRow.project_path,
-            wsRow.working_branch,
-            globalSettings.worktreesPath,
-            projectSlug,
+        if (wsRow.auto_loop === 1) {
+          if (!autoLoopService.queueInstruction(row.workspace_id, row.prompt, `cron:${id}:${row.next_fire_at}`)) {
+            scheduleAt(id, new Date(Date.now() + 15_000))
+            return
+          }
+          status = 'fired'
+        } else {
+          const globalSettings = settingsService.getGlobalSettings()
+          const projectSettings = settingsService.getProjectSettings(wsRow.project_path)
+          const projectSlug = globalSettings.worktreesPrefixByProject
+            ? slugifyProjectName(projectSettings?.displayName ?? '', wsRow.project_path)
+            : undefined
+          const worktreePath =
+            wsRow.worktree_path ??
+            resolveWorkspaceWorktreePath(
+              wsRow.project_path,
+              wsRow.working_branch,
+              globalSettings.worktreesPath,
+              projectSlug,
+            )
+          const stored = wsRow.agent_permission_mode
+          const agentPermissionMode: 'plan' | 'bypass' | 'strict' | 'interactive' =
+            stored === 'plan' || stored === 'strict' || stored === 'interactive' ? stored : 'bypass'
+          // agent_session_id encodes the cron's mode: non-NULL means "resume
+          // that session" (pinned at create time); NULL means "fresh session
+          // every fire" (clean context, no conversation continuity).
+          const resumeMode = row.agent_session_id !== null
+          orchestrator.startAgent(
+            row.workspace_id,
+            worktreePath,
+            row.prompt,
+            wsRow.model,
+            resumeMode,
+            agentPermissionMode,
+            row.agent_session_id ?? undefined,
+            wsRow.reasoning_effort,
           )
-        const stored = wsRow.agent_permission_mode
-        const agentPermissionMode: 'plan' | 'bypass' | 'strict' | 'interactive' =
-          stored === 'plan' || stored === 'strict' || stored === 'interactive' ? stored : 'bypass'
-        // agent_session_id encodes the cron's mode: non-NULL means "resume
-        // that session" (pinned at create time); NULL means "fresh session
-        // every fire" (clean context, no conversation continuity).
-        const resumeMode = row.agent_session_id !== null
-        orchestrator.startAgent(
-          row.workspace_id,
-          worktreePath,
-          row.prompt,
-          wsRow.model,
-          resumeMode,
-          agentPermissionMode,
-          row.agent_session_id ?? undefined,
-          wsRow.reasoning_effort,
-        )
-        status = 'fired'
+          status = 'fired'
+        }
       } catch (err) {
         console.error(`[cron-service] startAgent at fire time failed for cron '${id}':`, err)
         status = 'start-failed'

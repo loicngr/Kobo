@@ -46,6 +46,8 @@ describe('websocket sync request loading', () => {
     vi.spyOn(useUpdateStore(), 'refreshSnapshot').mockResolvedValue()
     vi.spyOn(navigator, 'onLine', 'get').mockReturnValue(true)
     vi.spyOn(useWorkspaceStore(), 'fetchWorkspacesInfo').mockResolvedValue()
+    vi.spyOn(useWorkspaceStore(), 'fetchAutoLoopStates').mockResolvedValue()
+    vi.spyOn(useWorkspaceStore(), 'fetchAutoLoopMessages').mockResolvedValue()
     vi.spyOn(useDevServerStore(), 'fetchStatus').mockResolvedValue()
   })
 
@@ -214,5 +216,23 @@ describe('websocket sync request loading', () => {
     await Promise.resolve()
     expect(workspace.fetchWorkspacesInfo).toHaveBeenCalledTimes(1)
     expect(useDevServerStore().fetchStatus).toHaveBeenCalledWith('w1')
+  })
+
+  it('refreshes auto-loop instructions after reconnect even when no new message event is replayed', async () => {
+    const workspace = useWorkspaceStore()
+    workspace.workspaces = [{ id: 'w1' }] as Workspace[]
+    workspace.selectedWorkspaceId = 'w1'
+    workspace.autoLoopMessages.w1 = []
+    workspace.autoLoopMessages['previously-opened'] = []
+    const ws = useWebSocketStore()
+    ws.lastEventId = 'before'
+    const { socket } = connect()
+    socket.respond()
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(workspace.fetchAutoLoopStates).toHaveBeenCalledTimes(1)
+    expect(workspace.fetchAutoLoopMessages).toHaveBeenCalledWith('w1')
+    expect(workspace.fetchAutoLoopMessages).toHaveBeenCalledWith('previously-opened')
+    expect(workspace.fetchAutoLoopMessages).toHaveBeenCalledTimes(2)
   })
 })

@@ -20,6 +20,21 @@ export class SessionController {
    * is awaiting the engine.
    */
   private _stopRequested = false
+  private _sessionEnded = false
+  private _isClosed = false
+  private resolveClosed!: () => void
+  readonly closed = new Promise<void>((resolve) => {
+    this.resolveClosed = resolve
+  })
+
+  get isClosed(): boolean {
+    return this._isClosed
+  }
+
+  private confirmClosed(): void {
+    this._isClosed = true
+    this.resolveClosed()
+  }
 
   /**
    * Wall-clock creation time. The watchdog needs it: `engineProcess` stays
@@ -70,14 +85,29 @@ export class SessionController {
     // until the next boot — blocking deleteSession and tagging the next
     // messages onto a ghost session.
     if (this._stopRequested) {
+      this.confirmClosed()
       this.handle({ kind: 'session:ended', reason: 'killed', exitCode: null })
       return
     }
 
-    const process = await this.engine.start(options, (ev) => this.handle(ev))
+    let process: EngineProcess
+    try {
+      process = await this.engine.start(options, (ev) => this.handle(ev))
+    } catch (error) {
+      this.confirmClosed()
+      throw error
+    }
     this._engineProcess = process
+    if (process.closed) {
+      // A failed closure is never evidence that the runtime is gone.
+      void process.closed.then(() => this.confirmClosed()).catch(() => {})
+    } else if (this._sessionEnded) {
+      this.confirmClosed()
+    }
     if (this._status === 'stopping') {
       await process.stop()
+      if (process.closed) await process.closed
+      this.confirmClosed()
       this._engineProcess = undefined
       return
     }
@@ -119,7 +149,11 @@ export class SessionController {
     // 'stopping'`, so waiting here is enough; a failed start must not fail
     // the stop, hence the swallowed rejection.
     if (this._startPromise) await this._startPromise.catch(() => {})
-    if (this._engineProcess) await this._engineProcess.stop()
+    if (this._engineProcess) {
+      await this._engineProcess.stop()
+      if (this._engineProcess.closed) await this._engineProcess.closed
+    }
+    this.confirmClosed()
   }
 
   get status(): 'running' | 'stopping' {
@@ -136,6 +170,10 @@ export class SessionController {
 
   private handle(ev: AgentEvent): void {
     this._lastEventAt = Date.now()
+    if (ev.kind === 'session:ended') {
+      this._sessionEnded = true
+      if (this._engineProcess && !this._engineProcess.closed) this.confirmClosed()
+    }
     this.onEvent(ev)
   }
 }

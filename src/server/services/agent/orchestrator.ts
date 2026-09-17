@@ -13,6 +13,7 @@ import {
   getSkillsPath,
 } from '../../utils/paths.js'
 import { assertWorkspaceLifecycleAvailable } from '../../utils/workspace-lifecycle-guard.js'
+import { listLoopMessages, settleLoopMessages } from '../auto-loop-message-service.js'
 import * as autoLoopService from '../auto-loop-service.js'
 import * as cleanupScriptService from '../cleanup-script-service.js'
 import * as cronService from '../cron-service.js'
@@ -85,6 +86,8 @@ export function getBackendPort(): number {
 
 /** workspaceId -> SessionController */
 const controllers = new Map<string, SessionController>()
+const pendingTerminalControllers = new WeakSet<SessionController>()
+const finalizedControllers = new WeakSet<SessionController>()
 /** Replacements waiting for the previous controller to release its worktree. */
 const pendingStarts = new Map<string, SessionController>()
 let shuttingDown = false
@@ -340,6 +343,10 @@ let availableSkills: string[] = (() => {
 
 /** workspaceId -> retry count (for quota backoff) */
 const retryCounts = new Map<string, number>()
+const retryReasons = new Map<string, quotaBackoffService.QuotaBackoffReason>()
+const quotaLookups = new Map<string, symbol>()
+/** Multiple error surfaces and the terminal watchdog can describe one incident. */
+const transientRecoveryControllers = new WeakSet<SessionController>()
 
 /** Tracks agent sessions that failed due to a stale --resume session ID. */
 const resumeFailedSessions = new Map<string, Set<string>>()
@@ -370,7 +377,7 @@ function runWatchdog(): void {
     // window) must not be raced here: doing so would report a false "Agent
     // process died unexpectedly", force the workspace to `error`, and set an
     // unread badge — all on a stop the user explicitly asked for.
-    if (ctrl.status === 'stopping') continue
+    if (ctrl.status === 'stopping' || pendingTerminalControllers.has(ctrl)) continue
 
     const ep = ctrl.engineProcess
 
@@ -381,6 +388,16 @@ function runWatchdog(): void {
       console.error(
         `[watchdog] Controller for workspace '${workspaceId}' produced no engine process within ${CONTROLLER_STARTUP_GRACE_MS}ms — cleaning up`,
       )
+      // The start may still complete and acquire a process. Keep ownership
+      // until its stop is confirmed instead of dispatching a second writer.
+      void stopAgentAndWait(workspaceId, STOP_AGENT_TIMEOUT_MS, 'replacement').then((outcome) => {
+        if (outcome === 'timeout' || outcome === 'failed') {
+          autoLoopService.block(workspaceId, 'engine-start-timeout')
+        } else if (getWs(workspaceId)?.autoLoop && !shuttingDown) {
+          scheduleTransientAutoLoopRecovery(workspaceId, ctrl)
+        }
+      })
+      continue
     } else {
       // D1 — the pid is never a liveness criterion. The Claude engine exposes
       // none, and a pid recycled after a machine restart reads as alive. An
@@ -390,56 +407,22 @@ function runWatchdog(): void {
       console.error(`[watchdog] Agent engine for workspace '${workspaceId}' reports dead — cleaning up`)
     }
 
-    // Emit an error + session:ended AgentEvent pair so clients can react uniformly
+    // Use the same terminal path as an engine watchdog: it preserves the
+    // loop's retry intent and releases capacity only after actual closure.
     try {
-      routeEvent(workspaceId, ctrl.agentSessionId, {
+      handleEvent(workspaceId, ctrl.agentSessionId, ctrl, {
         kind: 'error',
         category: 'other',
         message: 'Agent process died unexpectedly',
       })
-      routeEvent(workspaceId, ctrl.agentSessionId, {
+      handleEvent(workspaceId, ctrl.agentSessionId, ctrl, {
         kind: 'session:ended',
-        reason: 'killed',
+        reason: getWs(workspaceId)?.autoLoop ? 'watchdog' : 'error',
         exitCode: null,
       })
     } catch (err) {
-      console.warn('[watchdog] Failed to route death notification events:', err)
-    }
-
-    if (controllers.get(workspaceId) === ctrl) {
-      controllers.delete(workspaceId)
-      notifyCapacityAvailable(workspaceId)
-    }
-    preCompactionStatus.delete(ctrl)
-    restoreReviewConfiguration(workspaceId, ctrl.agentSessionId)
-    retryCounts.delete(workspaceId)
-
-    // This end never goes through handleEvent → onSessionEnded, so the user's
-    // hook would otherwise miss precisely the case it is most useful for.
-    fireSessionEndedHook(workspaceId, ctrl.agentSessionId, 'killed', null, ctrl)
-
-    try {
-      const db = getDb()
-      db.prepare('UPDATE agent_sessions SET status = ?, ended_at = ? WHERE id = ?').run(
-        'error',
-        new Date().toISOString(),
-        ctrl.agentSessionId,
-      )
-    } catch (err) {
-      console.error('[watchdog] Failed to update agent_sessions:', err)
-    }
-
-    try {
-      updateWorkspaceStatus(workspaceId, 'error')
-    } catch (err) {
-      console.warn('[watchdog] Failed to transition workspace to error (likely invalid transition):', err)
-    }
-
-    try {
-      markWorkspaceUnread(workspaceId)
-      emitEphemeral(workspaceId, 'workspace:unread', { hasUnread: true })
-    } catch (err) {
-      console.warn('[watchdog] Failed to mark workspace unread:', err)
+      console.warn('[watchdog] Failed to recover a dead agent:', err)
+      autoLoopService.block(workspaceId, 'engine-recovery-failed')
     }
   }
 }
@@ -781,6 +764,11 @@ function captureTaskProgressBaseline(workspaceId: string, agentSessionId: string
     getDb()
       .prepare('UPDATE agent_sessions SET task_progress_baseline = ? WHERE id = ?')
       .run(JSON.stringify(snapshot), agentSessionId)
+    const baseline = JSON.parse(snapshot.stateSignature || '[]') as Array<{ id: string; status: string }>
+    const insert = getDb().prepare(
+      'INSERT OR IGNORE INTO auto_loop_progress (workspace_id, task_id, milestone) VALUES (?, ?, ?)',
+    )
+    for (const task of baseline) insert.run(workspaceId, task.id, taskMilestone(task.status))
   } catch (err) {
     console.warn('[orchestrator] Failed to persist task progress baseline:', err)
   }
@@ -855,12 +843,53 @@ function getTaskStateSignature(workspaceId: string): string {
   try {
     const db = getDb()
     const rows = db
-      .prepare('SELECT id, status, updated_at FROM tasks WHERE workspace_id = ? ORDER BY id')
-      .all(workspaceId) as Array<{ id: string; status: string; updated_at: string }>
+      .prepare('SELECT id, status FROM tasks WHERE workspace_id = ? ORDER BY id')
+      .all(workspaceId) as Array<{ id: string; status: string }>
     return JSON.stringify(rows)
   } catch (err) {
     console.warn('[orchestrator] getTaskStateSignature failed, returning empty state:', err)
     return ''
+  }
+}
+
+function taskMilestone(status: string): number {
+  return status === 'done' ? 2 : status === 'in_progress' ? 1 : 0
+}
+
+/** Credit each forward task milestone only once during the current loop cycle. */
+function consumeMonotoneTaskProgress(workspaceId: string, snapshot: TaskProgressSnapshot | undefined): number {
+  if (!snapshot) return 0
+  try {
+    const before = new Map(
+      (JSON.parse(snapshot.stateSignature || '[]') as Array<{ id: string; status: string }>).map((task) => [
+        task.id,
+        taskMilestone(task.status),
+      ]),
+    )
+    const db = getDb()
+    return db.transaction(() => {
+      const rows = db
+        .prepare(`SELECT tasks.id, tasks.status, COALESCE(auto_loop_progress.milestone, 0) AS milestone
+        FROM tasks LEFT JOIN auto_loop_progress ON auto_loop_progress.workspace_id = tasks.workspace_id
+        AND auto_loop_progress.task_id = tasks.id WHERE tasks.workspace_id = ?`)
+        .all(workspaceId) as Array<{
+        id: string
+        status: string
+        milestone: number
+      }>
+      const record = db.prepare(`INSERT INTO auto_loop_progress (workspace_id, task_id, milestone) VALUES (?, ?, ?)
+        ON CONFLICT(workspace_id, task_id) DO UPDATE SET milestone = MAX(milestone, excluded.milestone)`)
+      let progressed = false
+      for (const task of rows) {
+        const milestone = taskMilestone(task.status)
+        if (milestone > (before.get(task.id) ?? 0) && milestone > task.milestone) progressed = true
+        record.run(workspaceId, task.id, milestone)
+      }
+      return progressed ? 1 : 0
+    })()
+  } catch (err) {
+    console.warn('[orchestrator] Failed to record monotone task progress:', err)
+    return 0
   }
 }
 
@@ -911,7 +940,41 @@ function handleEvent(
   agentSessionId: string,
   sourceController: SessionController | undefined,
   ev: AgentEvent,
+  terminalAfterClose = false,
 ): void {
+  if (sourceController && !terminalAfterClose) {
+    if (ev.kind === 'session:ended') {
+      if (pendingTerminalControllers.has(sourceController) || finalizedControllers.has(sourceController)) return
+      // Real engines may announce their logical result before their writer
+      // exits. Delay all terminal effects, including review return and quota
+      // retries, until SessionController confirms closure.
+      if (!sourceController.isClosed && (sourceController.engineProcess?.closed || !sourceController.engineProcess)) {
+        pendingTerminalControllers.add(sourceController)
+        const closeDeadline = setTimeout(() => {
+          if (controllers.get(workspaceId) === sourceController && !sourceController.isClosed) {
+            autoLoopService.block(workspaceId, 'engine-stop-unconfirmed')
+          }
+        }, STOP_AGENT_TIMEOUT_MS)
+        closeDeadline.unref?.()
+        void sourceController.closed
+          .then(() => {
+            clearTimeout(closeDeadline)
+            pendingTerminalControllers.delete(sourceController)
+            finalizedControllers.add(sourceController)
+            handleEvent(workspaceId, agentSessionId, sourceController, ev, true)
+          })
+          .catch((err) => {
+            clearTimeout(closeDeadline)
+            console.error('[orchestrator] Terminal recovery failed:', err)
+            autoLoopService.block(workspaceId, 'engine-recovery-failed')
+          })
+        return
+      }
+      finalizedControllers.add(sourceController)
+    } else if (pendingTerminalControllers.has(sourceController) || finalizedControllers.has(sourceController)) {
+      return
+    }
+  }
   const registeredController = controllers.get(workspaceId)
   const hasReplacement =
     sourceController !== undefined && registeredController !== undefined && registeredController !== sourceController
@@ -973,7 +1036,7 @@ function handleEvent(
   if (ev.kind === 'tool:call' && !sourceControllerIsStopping && getWs(workspaceId)?.status === 'quota') {
     updateWorkspaceStatus(workspaceId, 'executing')
     quotaBackoffService.cancel(workspaceId, 'completed')
-    retryCounts.delete(workspaceId)
+    resetAutoLoopRetries(workspaceId)
     emitEphemeral(workspaceId, 'agent:quota-recovered', {})
   }
 
@@ -1086,18 +1149,20 @@ function handleEvent(
   }
   const returningReview =
     (ev.kind === 'error' || ev.kind === 'session:ended') && !!getReviewReturn(workspaceId, agentSessionId)
-  if (ev.kind === 'error' && ev.category === 'quota' && !sourceControllerIsStopping && !returningReview) {
+  const quotaError = ev.kind === 'error' && (ev.category === 'quota' || /\b429\b/.test(ev.message))
+  if (quotaError && !sourceControllerIsStopping && !returningReview) {
     void handleQuota(workspaceId, agentSessionId)
   }
   if (
     ev.kind === 'error' &&
-    ev.category === 'other' &&
+    !quotaError &&
+    ev.category !== 'resume_failed' &&
     TRANSIENT_SERVER_ERROR_PATTERN.test(ev.message) &&
     !returningReview &&
     getWs(workspaceId)?.autoLoop &&
     !sourceControllerIsStopping
   ) {
-    void handleTransientAutoLoopFailure(workspaceId)
+    scheduleTransientAutoLoopRecovery(workspaceId, sourceController)
   }
   if (ev.kind === 'error' && ev.category === 'resume_failed') {
     rememberResumeFailed(workspaceId, agentSessionId)
@@ -1113,12 +1178,6 @@ function handleEvent(
     const isResumeFailed = consumeResumeFailed(workspaceId, agentSessionId)
 
     const snapshot = consumeTaskProgressSnapshot(workspaceId, agentSessionId)
-    const before = snapshot?.doneCount ?? getDoneTaskCount(workspaceId)
-    const after = getDoneTaskCount(workspaceId)
-    const completedDelta = Math.max(0, after - before)
-    const taskStateBefore = snapshot?.stateSignature ?? getTaskStateSignature(workspaceId)
-    const taskStateAfter = getTaskStateSignature(workspaceId)
-    const progressDelta = completedDelta > 0 || taskStateBefore !== taskStateAfter ? 1 : 0
 
     clearPendingForSession(workspaceId, agentSessionId)
     // A completed/failed SDK session cannot resolve canUseTool anymore. Drop
@@ -1140,7 +1199,11 @@ function handleEvent(
     // calling `.stop()` on it, so an old controller can still be 'running'
     // by the time its own drain watchdog reports a late `session:ended`.
     const watchdogRecovery =
-      !returningReview && !hasReplacement && ev.reason === 'watchdog' && getWs(workspaceId)?.autoLoop === true
+      !returningReview &&
+      !hasReplacement &&
+      ev.reason === 'watchdog' &&
+      getWs(workspaceId)?.autoLoop === true &&
+      autoLoopService.getStatus(workspaceId).state !== 'blocked'
     // A drain watchdog can fire mid-`stop()`: `stopController` already cancelled
     // any pending quota backoff (`quotaBackoffService.cancel(id, 'user')`), and
     // re-arming one here would resurrect a session the user just stopped — the
@@ -1151,7 +1214,7 @@ function handleEvent(
     // could matter.
     if (watchdogRecovery && !sourceControllerIsStopping) {
       console.warn(`[auto-loop] watchdog recovery scheduled for workspace '${workspaceId}'`)
-      void handleTransientAutoLoopFailure(workspaceId)
+      scheduleTransientAutoLoopRecovery(workspaceId, sourceController)
     }
 
     // Must run BEFORE autoLoopService.onSessionEnded → spawnNextIteration →
@@ -1166,7 +1229,21 @@ function handleEvent(
       isResumeFailed,
     )
 
+    // A technical stop deliberately skips normal loop continuation, but its
+    // instructions still need a definitive delivery state after closure.
+    // A superseded controller must never settle a replacement's instructions.
+    let instructionIntake = false
+    if (!hasReplacement) {
+      instructionIntake = settleLoopMessages(workspaceId, agentSessionId, ev.reason === 'completed') > 0
+      if (listLoopMessages(workspaceId).some((message) => message.state === 'unknown')) {
+        restoreReviewConfiguration(workspaceId, agentSessionId)
+        autoLoopService.block(workspaceId, 'message-delivery-unknown')
+        if (ownsWorkspaceLifecycle) notifyCapacityAvailable(workspaceId)
+        return
+      }
+    }
     if (!ownsWorkspaceLifecycle) return
+    const progressDelta = consumeMonotoneTaskProgress(workspaceId, snapshot)
 
     if (returningReview) {
       const pending = restoreReviewConfiguration(workspaceId, agentSessionId)
@@ -1177,6 +1254,7 @@ function handleEvent(
         !shuttingDown &&
         !workspace.archivedAt &&
         !workspace.worktreePurgedAt &&
+        autoLoopService.getStatus(workspaceId).state !== 'blocked' &&
         (ev.reason === 'completed' || ev.reason === 'watchdog') &&
         (ev.exitCode === null || ev.exitCode === 0)
       ) {
@@ -1220,7 +1298,7 @@ function handleEvent(
     // disable() clears it, and the cleanup hook needs to know whether this was
     // a mid-loop session (never cleans) or a standalone one.
     const wasAutoLoop = autoLoopService.getStatus(workspaceId).auto_loop
-    autoLoopService.onSessionEnded(workspaceId, effectiveReason, progressDelta)
+    autoLoopService.onSessionEnded(workspaceId, effectiveReason, progressDelta, instructionIntake)
     // A slot just freed. Any auto-loop workspace parked on the concurrency
     // limit has no session of its own to bring it back; this one does it.
     autoLoopService.resumeWaitingWorkspaces()
@@ -1363,7 +1441,7 @@ function onSessionEnded(
   }
 
   if (!preserveQuotaBackoff) {
-    retryCounts.delete(workspaceId)
+    resetAutoLoopRetries(workspaceId)
   }
 
   if (wasStopping) return false
@@ -2328,17 +2406,19 @@ export interface QuotaBackoff {
 
 /** Retryable upstream failures for an auto-loop iteration (not coding errors). */
 export const TRANSIENT_SERVER_ERROR_PATTERN =
-  /\b(?:http\s*)?500\b|internal server error|service unavailable|temporarily unavailable|overloaded/i
+  /\b(?:http\s*)?(?:500|502|503|504)\b|internal server error|bad gateway|gateway timeout|service unavailable|temporarily unavailable|overloaded|\b(?:ECONNRESET|ECONNREFUSED|ETIMEDOUT|EAI_AGAIN|ENETUNREACH|EPIPE)\b|fetch failed|network (?:error|connection)|connection (?:reset|closed|terminated)|socket hang up|request timed out|stopped reporting activity/i
 
 const QUOTA_SAFETY_MARGIN_MS = 30_000
-const QUOTA_MAX_BACKOFF_MS = 24 * 60 * 60 * 1000
+// Weekly and monthly provider windows are legitimate. The scheduler chunks
+// long delays so they never overflow Node's signed 32-bit timeout.
+const QUOTA_MAX_BACKOFF_MS = 366 * 24 * 60 * 60 * 1000
 const QUOTA_SATURATION_THRESHOLD_PCT = 95
 
 /**
  * Fallback backoff ladder (in minutes) used when the `rate_limit` info
  * isn't usable. Indexed by `retryCount`; anything past the last entry
- * clamps to the final value (5 h) — long enough to cross a weekly
- * bucket reset if the rate_limit info truly never arrives.
+ * clamps to the final value (5 h). Genuine quota retries retain their intent
+ * until recovery, including when no provider reset time is available.
  */
 const QUOTA_FALLBACK_LADDER_MINUTES = [15, 30, 60, 180, 300] as const
 
@@ -2380,9 +2460,12 @@ export async function computeQuotaBackoffMs(
 
   // 1.5. Try the official usage API (Claude subscription). Best-effort; never throws.
   try {
-    const snap = await refreshNow('claude-code')
+    const snap =
+      (getWs(workspaceId)?.engine ?? 'claude-code') === 'claude-code' ? await refreshNow('claude-code') : null
     if (snap) {
-      const fiveHour = snap.buckets.find((b) => b.id === 'five_hour')
+      const fiveHour = snap.buckets
+        .filter((b) => b.usedPct >= QUOTA_SATURATION_THRESHOLD_PCT && b.resetsAt)
+        .sort((a, b) => Date.parse(b.resetsAt!) - Date.parse(a.resetsAt!))[0]
       if (
         fiveHour &&
         typeof fiveHour.usedPct === 'number' &&
@@ -2429,21 +2512,24 @@ async function handleQuota(workspaceId: string, _agentSessionId?: string): Promi
   // would otherwise kill Kōbō and every agent running under it.
   try {
     const retryCount = retryCounts.get(workspaceId) ?? 0
-    const autoLoopEnabled = getWs(workspaceId)?.autoLoop === true
-    const maxRetries = autoLoopEnabled ? (getGlobalSettings().autoLoopMaxRetries ?? 5) : 5
-    if (autoLoopEnabled && retryCount >= maxRetries) {
-      autoLoopService.disable(workspaceId, 'error')
-      try {
-        updateWorkspaceStatus(workspaceId, 'error')
-      } catch {
-        // The loop is disabled even if an already-terminal status rejects this transition.
-      }
-      return
-    }
-    const { delayMs, resetsAt, source } = await computeQuotaBackoffMs(workspaceId, retryCount)
-    // Usage lookup can finish after the agent has already resumed.
-    if (getWs(workspaceId)?.status !== 'quota') return
+    const generation = Symbol('quota-lookup')
+    quotaLookups.set(workspaceId, generation)
     retryCounts.set(workspaceId, retryCount + 1)
+    retryReasons.set(workspaceId, 'quota')
+    // Establish durable ownership BEFORE the usage provider can yield. A
+    // restart or failed lookup retains this conservative fallback deadline.
+    const fallbackIndex = Math.min(retryCount, QUOTA_FALLBACK_LADDER_MINUTES.length - 1)
+    quotaBackoffService.arm(workspaceId, QUOTA_FALLBACK_LADDER_MINUTES[fallbackIndex] * 60_000, {
+      resetsAt: null,
+      source: 'fallback_ladder',
+      reason: 'quota',
+      retryCount: retryCount + 1,
+    })
+    const { delayMs, resetsAt, source } = await computeQuotaBackoffMs(workspaceId, retryCount)
+    // A stop, recovery, replacement or newer quota may supersede this lookup.
+    if (quotaLookups.get(workspaceId) !== generation) return
+    quotaLookups.delete(workspaceId)
+    if (getWs(workspaceId)?.status !== 'quota' || !quotaBackoffService.getPending(workspaceId)) return
 
     // The quotaBackoffService owns the timer + the persistent row + the
     // 'agent:quota-backoff' WS emit. Hand off everything to it.
@@ -2464,13 +2550,12 @@ async function handleQuota(workspaceId: string, _agentSessionId?: string): Promi
 }
 
 /**
- * Last resort when the retry machinery itself fails: stop the loop and move the
- * workspace to a status the UI actually surfaces, so the user sees something to
- * act on instead of a workspace that has quietly stopped moving.
+ * Last resort when retry scheduling fails: retain loop intent in a visible
+ * blocked state so an explicit human resume can recover it.
  */
 function failVisibly(workspaceId: string): void {
   try {
-    autoLoopService.disable(workspaceId, 'error')
+    autoLoopService.block(workspaceId, 'retry-unavailable')
   } catch (err) {
     console.error(`[orchestrator] Could not disable the auto-loop for workspace '${workspaceId}':`, err)
   }
@@ -2485,6 +2570,16 @@ function failVisibly(workspaceId: string): void {
  *  quota ladder's 15-minute floor is tuned for real quota windows — a forced
  *  kill or a server blip deserves a much faster first attempt. */
 const TRANSIENT_FIRST_RETRY_MS = 2 * 60_000
+
+/** Charge an incident once, until this controller demonstrably starts working again. */
+function scheduleTransientAutoLoopRecovery(workspaceId: string, controller?: SessionController): void {
+  if (controller && transientRecoveryControllers.has(controller)) return
+  // Preserve whichever backoff already owns the next start, including a real
+  // provider quota followed by its engine's drain-watchdog diagnostic.
+  if (getWs(workspaceId)?.status === 'quota' && quotaBackoffService.getPending(workspaceId)) return
+  if (controller) transientRecoveryControllers.add(controller)
+  void handleTransientAutoLoopFailure(workspaceId)
+}
 
 /**
  * Use the same persisted retry path for temporary upstream failures (HTTP 500
@@ -2504,10 +2599,10 @@ async function handleTransientAutoLoopFailure(workspaceId: string): Promise<void
   // Same reasoning as handleQuota: fire-and-forget call sites plus a fatal
   // unhandled-rejection policy mean a failure here must stay contained.
   try {
-    const retryCount = retryCounts.get(workspaceId) ?? 0
+    const retryCount = retryReasons.get(workspaceId) === 'quota' ? 0 : (retryCounts.get(workspaceId) ?? 0)
     const maxRetries = getGlobalSettings().autoLoopMaxRetries ?? 5
     if (retryCount >= maxRetries) {
-      autoLoopService.disable(workspaceId, 'error')
+      autoLoopService.block(workspaceId, 'retry-exhausted')
       try {
         updateWorkspaceStatus(workspaceId, 'error')
       } catch {
@@ -2515,12 +2610,14 @@ async function handleTransientAutoLoopFailure(workspaceId: string): Promise<void
       }
       return
     }
-    const { delayMs, resetsAt, source } = await computeQuotaBackoffMs(workspaceId, retryCount, false)
+    const idx = Math.min(retryCount, QUOTA_FALLBACK_LADDER_MINUTES.length - 1)
+    const delayMs = QUOTA_FALLBACK_LADDER_MINUTES[idx] * 60_000
     const effectiveDelayMs = retryCount === 0 ? Math.min(delayMs, TRANSIENT_FIRST_RETRY_MS) : delayMs
     retryCounts.set(workspaceId, retryCount + 1)
+    retryReasons.set(workspaceId, 'transient')
     quotaBackoffService.arm(workspaceId, effectiveDelayMs, {
-      resetsAt: resetsAt ?? null,
-      source,
+      resetsAt: null,
+      source: 'fallback_ladder',
       reason: 'transient',
       retryCount: retryCount + 1,
     })
@@ -2545,7 +2642,17 @@ export const _handleTransientAutoLoopFailure = handleTransientAutoLoopFailure
 export function restoreRetryCountsFromDb(): void {
   for (const pending of quotaBackoffService.listPending()) {
     retryCounts.set(pending.workspaceId, pending.retryCount)
+    retryReasons.set(pending.workspaceId, pending.reason)
   }
+}
+
+/** An explicit human resume starts a new bounded transient-recovery attempt. */
+export function resetAutoLoopRetries(workspaceId: string): void {
+  retryCounts.delete(workspaceId)
+  retryReasons.delete(workspaceId)
+  quotaLookups.delete(workspaceId)
+  const controller = controllers.get(workspaceId)
+  if (controller) transientRecoveryControllers.delete(controller)
 }
 
 // One-time wire: when the persisted backoff timer fires (or a row is
@@ -2556,8 +2663,8 @@ export function restoreRetryCountsFromDb(): void {
 // IMPORTANT — behavioural contract: only auto-loop workspaces auto-resume
 // after a quota backoff. `onQuotaBackoffExpired` no-ops if `auto_loop !== 1`
 // (see auto-loop-service). Workspaces hit by quota WITHOUT auto-loop stay
-// in `quota` status and require manual user action (resume / new message)
-// to leave that state. This is intentional: without an auto-loop intent,
+// in `quota` status until manual user action (resume / new message) or an
+// explicitly scheduled wakeup/cron resumes them after expiry. Without either intent,
 // firing a fresh agent run in the user's absence would surprise them.
 quotaBackoffService.setOnFireCallback((workspaceId, pending) => {
   autoLoopService.onQuotaBackoffExpired(workspaceId, pending)

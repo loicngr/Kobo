@@ -39,6 +39,12 @@ export type PendingUserInputResponse =
 export interface EngineProcess {
   readonly pid: number | undefined
   readonly engineSessionId: string | undefined
+  /**
+   * Resolves only once the runtime has actually closed. A watchdog may emit
+   * session:ended before this; an unconfirmed shutdown leaves it pending.
+   * Optional for legacy engines/test doubles; both built-in engines expose it.
+   */
+  readonly closed?: Promise<void>
   sendMessage(text: string): void | Promise<void>
   /** Atomically queue a wakeup only after a turn ended waiting on background work. */
   sendWakeupIfWaiting?(text: string): boolean

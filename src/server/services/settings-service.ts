@@ -125,10 +125,10 @@ export interface FinalizationSettings {
 
 export const DEFAULT_FINALIZATION_PROMPT = `Run final quality checks before closing the workspace:
 
-1. Verify all other tasks are marked \`done\`. If any remain \`pending\`, stop and report.
+1. Verify all work tasks and acceptance criteria are marked \`done\`. If any remain pending/in_progress, keep finalization open and report them.
 2. Run the project's linters, type-checkers, and tests (see CLAUDE.md or package.json scripts).
-3. If any check fails, create a new regular task at the end of the list with a title like \`Fix lint failure in X\` (NO \`[FINAL]\` or \`[E2E]\` prefix — it must use the default iteration prompt) and mark this \`[FINAL]\` task as \`done\`. The auto-loop will pick up the fix on the next iteration. The finalization mechanism is single-shot per grooming pass; if you want quality checks to re-run after the fix, mark the fix task \`done\` and re-trigger grooming manually.
-4. If everything passes, mark this task as \`done\`.
+3. If any check fails or cannot be run, create a regular repair task with a title like \`Fix lint failure in X\` (role \`work\`, no \`[FINAL]\` prefix), record the failed/not_run checks and leave this finalization task pending. Kōbō will process the repairs first, then run final verification again against the repaired state.
+4. Only after all required checks actually pass, mark this task as \`done\` with structured verification: method, summary, and the named checks with status \`passed\`.
 
 HARD RULE: Do NOT open a pull request, do NOT run \`gh pr create\` or any equivalent command. The finalization step never opens a PR — that is a separate, explicit user action via the "Open PR" button.`
 

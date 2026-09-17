@@ -143,22 +143,59 @@ async function backendRequest(
 
 const server = new Server({ name: 'kobo-tasks', version: '1.0.0' }, { capabilities: { tools: {} } })
 
+const TASK_VERIFICATION_SCHEMA = {
+  type: 'object',
+  description:
+    'Required to complete an auto-loop task. Describe checks actually performed; every check must be passed for done. Record failed/not_run checks only on an unfinished task.',
+  properties: {
+    method: { type: 'string', minLength: 1 },
+    summary: { type: 'string', minLength: 1 },
+    checks: {
+      type: 'array',
+      minItems: 1,
+      items: {
+        type: 'object',
+        properties: {
+          name: { type: 'string', minLength: 1 },
+          status: { type: 'string', enum: ['passed', 'failed', 'not_run'] },
+        },
+        required: ['name', 'status'],
+      },
+    },
+  },
+  required: ['method', 'summary', 'checks'],
+}
+
+const TASK_ORDER_PROPERTIES = {
+  sort_order: {
+    type: 'integer',
+    minimum: 0,
+    description:
+      'Insert/move at this order, shifting siblings. Omit to append on creation. Mutually exclusive with after_task_id.',
+  },
+  after_task_id: {
+    type: 'string',
+    description: 'Insert/move immediately after this task in the same workspace, preserving the remaining order.',
+  },
+}
+
 const WORKSPACE_SCOPED_TOOLS: Tool[] = [
   {
     name: 'list_tasks',
     description:
-      'CALL FIRST on any non-trivial turn to know what the user wants done and what is already completed. Returns every task and acceptance criterion for the current workspace with its id and status. Re-call periodically (before marking something done, or after the user asks for a status) to stay in sync with user-added or external updates.',
+      'CALL FIRST on any non-trivial turn to know what the user wants done and what is already completed. Returns every task and acceptance criterion for the current workspace with its id, status, sort_order, role, and verification evidence. Re-call periodically (before marking something done, or after the user asks for a status) to stay in sync with user-added or external updates.',
     inputSchema: { type: 'object', properties: {}, required: [] },
     annotations: { readOnlyHint: true, openWorldHint: false },
   },
   {
     name: 'mark_task_done',
     description:
-      'CALL AS SOON AS a task or acceptance criterion is finished AND verified (tests pass, feature works, diff committed). Do not wait for the end of the turn — the user watches progress live and marking each item as it completes is the primary signal Kōbō uses to track you.',
+      'CALL AS SOON AS a task or acceptance criterion is finished AND verified by checks actually performed. Auto-loop requires structured verification evidence with all checks passed. Never mark done if required checks failed or were not run. Finalization also requires all work tasks and criteria done. Do not wait for the end of the turn — the user watches progress live and marking each item as it completes is the primary signal Kōbō uses to track you.',
     inputSchema: {
       type: 'object',
       properties: {
         task_id: { type: 'string', description: 'Task id from list_tasks.' },
+        verification: TASK_VERIFICATION_SCHEMA,
       },
       required: ['task_id'],
     },
@@ -174,10 +211,17 @@ const WORKSPACE_SCOPED_TOOLS: Tool[] = [
   {
     name: 'create_task',
     description:
-      'CALL WHEN you discover follow-up work that was not in the original list and needs to stick around (e.g. "refactor this helper later", "add a test for edge case"). Appends at the end of the list. Do not use it for ephemeral internal notes — prefer log_thought for those.',
+      'CALL WHEN you discover follow-up work that was not in the original list and needs to stick around (e.g. "refactor this helper later", "add a test for edge case"). Appends by default; use after_task_id for a dependent check immediately after its parent. Use role finalization for the final verification gate. Do not use it for ephemeral internal notes — prefer log_thought for those.',
     inputSchema: {
       type: 'object',
       properties: {
+        ...TASK_ORDER_PROPERTIES,
+        role: {
+          type: 'string',
+          enum: ['work', 'finalization'],
+          description:
+            'Default work. Finalization is the final verification gate and cannot finish while work/criteria remain open.',
+        },
         title: { type: 'string', description: 'Short, imperative title (e.g. "Add retry to fetchUser").' },
         is_acceptance_criterion: {
           type: 'boolean',
@@ -196,6 +240,8 @@ const WORKSPACE_SCOPED_TOOLS: Tool[] = [
       type: 'object',
       properties: {
         task_id: { type: 'string', description: 'Task id from list_tasks.' },
+        ...TASK_ORDER_PROPERTIES,
+        verification: TASK_VERIFICATION_SCHEMA,
         title: { type: 'string', description: 'New title (optional).' },
         status: {
           type: 'string',
@@ -692,7 +738,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     if (name === 'mark_task_done') {
       const taskId = a.task_id as string | undefined
       if (!taskId) return fail('task_id parameter is required')
-      const result = markTaskDoneHandler(db, workspaceId!, taskId)
+      const result = markTaskDoneHandler(db, workspaceId!, taskId, a.verification)
       void notifyBackend(taskId)
       return ok(result)
     }
@@ -708,7 +754,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       if (!title) return fail('title parameter is required')
       const task = createTaskHandler(db, workspaceId!, {
         title,
+        role: a.role as 'work' | 'finalization' | undefined,
         is_acceptance_criterion: a.is_acceptance_criterion as boolean | undefined,
+        sort_order: a.sort_order as number | undefined,
+        after_task_id: a.after_task_id as string | undefined,
       })
       void notifyTasksUpdated()
       return ok(task)
@@ -720,7 +769,10 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const task = updateTaskHandler(db, workspaceId!, taskId, {
         title: a.title as string | undefined,
         status: a.status as string | undefined,
+        verification: a.verification,
         is_acceptance_criterion: a.is_acceptance_criterion as boolean | undefined,
+        sort_order: a.sort_order as number | undefined,
+        after_task_id: a.after_task_id as string | undefined,
       })
       void notifyTasksUpdated()
       return ok(task)

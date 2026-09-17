@@ -1,4 +1,5 @@
 import type Database from 'better-sqlite3'
+import { initAutoLoopSchema } from './auto-loop-schema.js'
 import { initMcpMessageSchema } from './mcp-message-schema.js'
 import { initReviewReturnSchema } from './review-return-schema.js'
 import { initSchema } from './schema.js'
@@ -773,6 +774,7 @@ export const migrations: Migration[] = [
   { version: 42, name: 'index-logical-search-messages', migrate: initSearchSchema },
   { version: 43, name: 'durable-mcp-message-requests', migrate: initMcpMessageSchema },
   { version: 44, name: 'review-session-returns', migrate: initReviewReturnSchema },
+  { version: 45, name: 'durable-auto-loop', migrate: initAutoLoopSchema },
 ]
 
 /** Current schema version — always equals the highest migration version. */

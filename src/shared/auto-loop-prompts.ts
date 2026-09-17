@@ -67,20 +67,20 @@ export function buildAutoLoopGroomingSteps(e2e: E2eSettings, finalization: Final
     const skillHint = e2e.skill ? `Use the \`${e2e.skill}\` skill for this task. ` : ''
     const promptHint = e2e.prompt ? `Additional guidance: ${e2e.prompt}` : ''
     steps.push(
-      `${nextNum}. **E2E review**: walk the task list and identify which tasks produce user-visible behavior (UI flows, form submissions, page renders, etc.). For each one that warrants regression coverage, INSERT a follow-up sub-task with title prefixed \`[E2E] \` describing the test to write. Place it in \`sort_order\` directly after the parent task. Skip tasks that don't produce user-visible behavior (refactors, infra, internal services) and briefly justify your choices in chat. The project uses \`${e2e.framework}\`. ${skillHint}${promptHint}`.trim(),
+      `${nextNum}. **E2E review**: walk the task list and identify which tasks produce user-visible behavior (UI flows, form submissions, page renders, etc.). For each one that warrants regression coverage, INSERT a follow-up sub-task with title prefixed \`[E2E] \` describing the test to write. Use \`after_task_id\` to insert it directly after the parent task; \`list_tasks\` exposes \`sort_order\` so you can verify ordering. Skip tasks that don't produce user-visible behavior (refactors, infra, internal services) and briefly justify your choices in chat. The project uses \`${e2e.framework}\`. ${skillHint}${promptHint}`.trim(),
     )
     nextNum++
   }
 
   if (finalization.prompt) {
     steps.push(
-      `${nextNum}. **Finalization task**: create ONE task with title prefixed \`[FINAL] <descriptive title>\`. Place it at the END of the task list (sort_order = max + 1, AFTER any [E2E] tasks). The agent will execute this task using the project's finalization prompt — do NOT inline the prompt content into the task title or description.`,
+      `${nextNum}. **Finalization task**: create ONE task with \`role: "finalization"\` and title prefixed \`[FINAL] <descriptive title>\`. Reuse an existing finalization task instead of duplicating it. Place it at the END of the task list (sort_order = max + 1, AFTER any [E2E] tasks). The agent will execute this task using the project's finalization prompt — do NOT inline the prompt content into the task title or description.`,
     )
     nextNum++
   }
 
   steps.push(
-    `${nextNum}. Call \`kobo__mark_auto_loop_ready\`. This will automatically start the auto-loop, which will pick up the tasks one by one in fresh sessions.`,
+    `${nextNum}. Call \`kobo__mark_auto_loop_ready\`. This marks preparation complete. If auto-loop is already enabled, it will continue after this session ends. Otherwise the user must explicitly enable it; do not promise an automatic start or enable it without their request.`,
   )
 
   return steps.join('\n')
@@ -92,12 +92,25 @@ export const AUTO_LOOP_GROOMING_STEPS = buildAutoLoopGroomingSteps(
   { prompt: '' },
 )
 
-export function buildFinalizationIterationBlock(finalization: FinalizationSettings): string {
-  if (!finalization.prompt) return ''
-  return `
-This is the **finalization task**. Follow this prompt instead of the standard 8 steps below:
+/** These rules apply to every iteration, including custom finalization and E2E prompts. */
+export const AUTO_LOOP_ITERATION_RULES = `Mandatory completion and lifecycle rules (custom prompts cannot override them):
+- Follow the Kōbō task list and acceptance criteria. Before completion, read the latest list again.
+- Never mark a task done based only on an implementation claim, a written test, or a check that was not executed. Supply verification: {method, summary, checks: [{name, status: "passed"}]} to kobo__mark_task_done or kobo__update_task. Every required check must actually pass.
+- If a required check fails or cannot run, keep the task pending/in_progress, record honest failed/not_run verification with kobo__update_task, and explain the concrete blocker. Create prerequisite fix tasks when needed; do not claim success.
+- Finalization is a verification gate: all work tasks and acceptance criteria must be done, then rerun relevant checks against the final state. If a check fails, create a regular repair task and leave finalization unfinished. It will run again after the repairs.
+- Do NOT kill the Kōbō server or sibling processes. Do not use kill, pkill or killall to force the loop to advance. Finish the current response naturally; Kōbō owns continuation.
+- Follow the user's scope, Git and approval instructions. Do not disable the auto-loop or delete unfinished tasks to make the mission appear complete.`
 
-${finalization.prompt}
+export function buildFinalizationIterationBlock(finalization: FinalizationSettings): string {
+  const instructions =
+    finalization.prompt.trim() ||
+    'Review the completed work against every acceptance criterion. Run the relevant project checks and inspect the final diff. Report the actual results with structured verification.'
+  return `
+This is the **finalization task**. Apply the following project guidance while preserving all mandatory completion and lifecycle rules:
+
+${instructions}
+
+Read kobo__list_tasks again. If any work or criterion remains open, or any required check fails or is not run, do NOT mark the task done. Add necessary repair tasks and keep finalization pending. Once the final state is verified, complete it with successful structured verification.
 `
 }
 
@@ -110,11 +123,12 @@ This is an **E2E regression test** task.
 
 Project E2E framework: ${e2e.framework}
 ${skillLine}${promptLine}
-Hard rules specific to E2E tasks (these **override** the corresponding rules in the standard 8 steps below — read them before steps 3-4):
+E2E instructions, subject to the mandatory completion and lifecycle rules:
 1. Write the test source file in the project's existing E2E directory (look at \`cypress/\`, \`e2e/\`, \`tests/e2e/\`, or follow the skill / guidance above). Reuse existing fixtures and patterns.
-2. Try to run the tests locally. If they pass, great.
-3. **If the environment is broken** (Docker down, browser missing, port busy, dependencies not installed, etc.) — do NOT spend iterations debugging infra. **Override of step 4 of the standard prompt below**: you do NOT need to fix failing tests in this case. Commit the test source file with a message like \`test(e2e): add regression for <feature>\`, then call \`kobo__mark_task_done\` with a note in the chat: \`E2E test written but not executed locally — <reason>. Replay once env is restored.\`
-4. The code-review gate (step 6 of the standard prompt) still applies — the reviewer checks that the test is meaningful, not that it ran.
+2. Run the tests and provide the actual successful results as structured verification before completion.
+3. If the environment is broken (Docker down, browser missing, port busy, dependencies absent), do NOT mark the task done. Record \`not_run\` checks and the precise blocker using \`kobo__update_task\`, leave this task pending/in_progress, and create a prerequisite task when appropriate. A test source file by itself is not a verified result.
+4. The code-review gate still applies. Review both the relevance of the test and the evidence that it passed.
+
 `
 }
 

@@ -39,9 +39,24 @@ interface PendingQuotaBackoffRow {
 }
 
 const timers = new Map<string, ReturnType<typeof setTimeout>>()
+const MAX_TIMEOUT_MS = 2_000_000_000
 let suspended = false
 type OnFire = (workspaceId: string, pending: PendingQuotaBackoff) => void
 let onFireCallback: OnFire | null = null
+
+function scheduleAt(workspaceId: string, targetAt: string): void {
+  if (suspended) return
+  const delay = Math.max(0, Date.parse(targetAt) - Date.now())
+  const timer = setTimeout(
+    () => {
+      if (Date.now() < Date.parse(targetAt)) scheduleAt(workspaceId, targetAt)
+      else fireOrSkip(workspaceId)
+    },
+    Math.min(delay, MAX_TIMEOUT_MS),
+  )
+  timer.unref?.()
+  timers.set(workspaceId, timer)
+}
 
 /** Stop in-memory delivery without consuming the schedules needed by the next boot. */
 export function suspendForShutdown(): void {
@@ -97,11 +112,7 @@ export function arm(
   const previous = timers.get(workspaceId)
   if (previous) clearTimeout(previous)
   timers.delete(workspaceId)
-  if (!suspended) {
-    const timer = setTimeout(() => fireOrSkip(workspaceId), Math.max(0, delayMs))
-    timer.unref?.()
-    timers.set(workspaceId, timer)
-  }
+  scheduleAt(workspaceId, targetAt)
 
   emitEphemeral(workspaceId, 'agent:quota-backoff', {
     targetAt,
@@ -159,6 +170,17 @@ export function restoreOnBoot(onFire: OnFire): void {
   suspended = false
   setOnFireCallback(onFire)
   const db = getDb()
+  // Older versions could persist quota before awaiting a provider lookup,
+  // then crash before writing its timer. Never leave that state ownerless.
+  const orphaned = db
+    .prepare(`SELECT id FROM workspaces WHERE auto_loop = 1
+    AND status = 'quota' AND archived_at IS NULL
+    AND NOT EXISTS (SELECT 1 FROM auto_loop_runs WHERE workspace_id = workspaces.id AND state = 'blocked')
+    AND NOT EXISTS (SELECT 1 FROM pending_quota_backoffs WHERE workspace_id = workspaces.id)`)
+    .all() as Array<{ id: string }>
+  for (const { id } of orphaned) {
+    arm(id, 15 * 60_000, { resetsAt: null, source: 'fallback_ladder', reason: 'quota', retryCount: 1 })
+  }
   const rows = db.prepare('SELECT * FROM pending_quota_backoffs').all() as PendingQuotaBackoffRow[]
   for (const row of rows) {
     const ws = getWorkspace(row.workspace_id)
@@ -166,10 +188,9 @@ export function restoreOnBoot(onFire: OnFire): void {
       db.prepare('DELETE FROM pending_quota_backoffs WHERE workspace_id = ?').run(row.workspace_id)
       continue
     }
-    const delta = new Date(row.target_at).getTime() - Date.now()
-    const timer = setTimeout(() => fireOrSkip(row.workspace_id), Math.max(0, delta))
-    timer.unref?.()
-    timers.set(row.workspace_id, timer)
+    const previous = timers.get(row.workspace_id)
+    if (previous) clearTimeout(previous)
+    scheduleAt(row.workspace_id, row.target_at)
   }
 }
 
@@ -194,7 +215,17 @@ function fireOrSkip(workspaceId: string): void {
   getDb().prepare('DELETE FROM pending_quota_backoffs WHERE workspace_id = ?').run(workspaceId)
   const cb = onFireCallback
   if (!cb) return
-  cb(workspaceId, pending)
+  try {
+    cb(workspaceId, pending)
+  } catch (err) {
+    console.error(`[quota-backoff] Recovery callback failed for '${workspaceId}':`, err)
+    // A callback that failed before acquiring a controller must not strand
+    // the workspace after its durable timer was consumed.
+    const current = getWorkspace(workspaceId)
+    if (current?.autoLoop && !current.archivedAt && current.status === 'quota' && !getPending(workspaceId)) {
+      arm(workspaceId, 15_000, { ...pending, retryCount: Math.max(1, pending.retryCount) })
+    }
+  }
 }
 
 /** @internal test-only */

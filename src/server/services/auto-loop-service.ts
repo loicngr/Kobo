@@ -1,19 +1,40 @@
 import fs from 'node:fs'
-import { buildE2eIterationBlock, buildFinalizationIterationBlock } from '../../shared/auto-loop-prompts.js'
+import {
+  AUTO_LOOP_HARD_RULES,
+  AUTO_LOOP_ITERATION_RULES,
+  buildAutoLoopGroomingSteps,
+  buildE2eIterationBlock,
+  buildFinalizationIterationBlock,
+} from '../../shared/auto-loop-prompts.js'
+import type { AutoLoopRuntime } from '../../shared/auto-loop-types.js'
+import type { MessageSource } from '../../shared/workspace-message-types.js'
 import { getDb } from '../db/index.js'
 import { slugifyProjectName } from '../utils/project-slug.js'
 import { deferUntilWorkspaceAvailable, isWorkspaceLifecycleBusy } from '../utils/workspace-lifecycle-guard.js'
 import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 import * as orchestrator from './agent/orchestrator.js'
+import {
+  bindLoopMessages,
+  claimLoopMessages,
+  enqueueLoopMessage,
+  hasLoopMessage,
+  listLoopMessages,
+  recoverLoopMessages,
+  settleLoopMessages,
+} from './auto-loop-message-service.js'
+import { getRuntime, setRuntime } from './auto-loop-state-service.js'
 import * as cleanupScriptService from './cleanup-script-service.js'
 import * as lifecycleHookService from './lifecycle-hook-service.js'
 import * as quotaBackoffService from './quota-backoff-service.js'
 import * as settingsService from './settings-service.js'
 import { getSuitePrompts } from './skill-suite-prompts.js'
+import { invalidateTaskFinalization } from './task-mutations.js'
 import { emit, emitEphemeral } from './websocket-service.js'
-import { listTasks, type Task, updateWorkspaceStatus } from './workspace-service.js'
+import { createTask, listTasks, type Task, updateWorkspaceStatus } from './workspace-service.js'
 
-export interface AutoLoopStatus {
+export interface AutoLoopStatus extends AutoLoopRuntime {
+  retry_at: string | null
+
   auto_loop: boolean
   auto_loop_ready: boolean
   no_progress_streak: number
@@ -38,6 +59,7 @@ interface WorkspaceRow {
   auto_loop_session_mode: string
   no_progress_streak: number
   archived_at: string | null
+  worktree_purged_at: string | null
 }
 
 function getRow(workspaceId: string): WorkspaceRow | null {
@@ -45,7 +67,7 @@ function getRow(workspaceId: string): WorkspaceRow | null {
   const row = db
     .prepare(
       `SELECT id, project_path, working_branch, worktree_path, model, permission_mode, agent_permission_mode, reasoning_effort,
-              status, auto_loop, auto_loop_ready, auto_loop_session_mode, no_progress_streak, archived_at
+              status, auto_loop, auto_loop_ready, auto_loop_session_mode, no_progress_streak, archived_at, worktree_purged_at
        FROM workspaces WHERE id = ?`,
     )
     .get(workspaceId) as WorkspaceRow | undefined
@@ -70,24 +92,86 @@ function countDoneTasks(workspaceId: string): number {
 
 export function getStatus(workspaceId: string): AutoLoopStatus {
   const row = getRow(workspaceId)
-  if (!row) return { auto_loop: false, auto_loop_ready: false, no_progress_streak: 0 }
+  const runtime = getRuntime(workspaceId, row?.auto_loop_ready === 1)
+  const pending = quotaBackoffService.getPending(workspaceId)
   return {
-    auto_loop: row.auto_loop === 1,
-    auto_loop_ready: row.auto_loop_ready === 1,
-    no_progress_streak: row.no_progress_streak,
+    ...runtime,
+    state: !row?.auto_loop
+      ? runtime.state === 'completed'
+        ? 'completed'
+        : 'stopped'
+      : runtime.state === 'blocked'
+        ? 'blocked'
+        : pending || row.status === 'quota' || row.status === 'awaiting-user' || row.status === 'compacting'
+          ? 'waiting'
+          : runtime.state,
+    reason: pending ? pending.reason : row?.status === 'awaiting-user' ? 'awaiting-user' : runtime.reason,
+    retry_at: pending?.targetAt ?? null,
+    auto_loop: row?.auto_loop === 1,
+    auto_loop_ready: row?.auto_loop_ready === 1,
+    no_progress_streak: row?.no_progress_streak ?? 0,
   }
+}
+
+/** Durable instructions join the next iteration, never a stale engine session. */
+export function queueInstruction(
+  workspaceId: string,
+  content: string,
+  clientMessageId: string,
+  source?: MessageSource,
+): boolean {
+  if (hasLoopMessage(workspaceId, clientMessageId)) {
+    enqueueLoopMessage(workspaceId, content, clientMessageId, source)
+    return true
+  }
+  const row = getRow(workspaceId)
+  if (!row?.auto_loop) return false
+  if (row.archived_at || row.worktree_purged_at || isWorkspaceLifecycleBusy(workspaceId))
+    throw new Error('Workspace is unavailable')
+  enqueueLoopMessage(workspaceId, content, clientMessageId, source)
+  spawnNextIteration(workspaceId)
+  return true
+}
+
+/** Incomplete work keeps its intent, but requires an explicit human resume. */
+export function block(workspaceId: string, reason: string): void {
+  if (getRow(workspaceId)?.auto_loop !== 1) return
+  quotaBackoffService.cancel(workspaceId, 'completed')
+  setRuntime(workspaceId, { state: 'blocked', reason })
+}
+
+/** Shared admission gate for all unattended starts. */
+export function canStartAutomatically(workspaceId: string): boolean {
+  const row = getRow(workspaceId)
+  return (
+    !!row &&
+    !row.archived_at &&
+    !row.worktree_purged_at &&
+    !orchestrator.isShuttingDown() &&
+    !isWorkspaceLifecycleBusy(workspaceId) &&
+    !orchestrator.hasController(workspaceId) &&
+    !['awaiting-user', 'compacting'].includes(row.status) &&
+    // A manual workspace keeps its quota status after expiry. Its explicit
+    // wakeup/cron may resume then; an enabled loop still belongs to quota recovery.
+    !(row.status === 'quota' && row.auto_loop === 1) &&
+    !quotaBackoffService.getPending(workspaceId) &&
+    getRuntime(workspaceId).state !== 'blocked' &&
+    hasFreeAgentSlot()
+  )
 }
 
 /**
  * Enable auto-loop for the workspace. Spawns immediately if idle + pending
  * tasks. If the initial spawn fails (e.g. worktree missing, engine misconfig),
- * re-throws so the HTTP caller gets a 4xx instead of a silent 200 — the
- * workspace will already have been auto-disabled by `spawnNextIteration`.
+ * re-throws so the HTTP caller gets a 4xx; the mission remains explicitly blocked.
  */
 export function enable(workspaceId: string): void {
   const row = getRow(workspaceId)
   if (!row) throw new Error(`Workspace '${workspaceId}' not found`)
-  if (row.auto_loop_ready !== 1) {
+  if (row.archived_at) throw new Error(`Workspace '${workspaceId}' is already archived`)
+  if (row.worktree_purged_at) throw new Error(`Workspace '${workspaceId}' is unavailable`)
+  if (isWorkspaceLifecycleBusy(workspaceId)) throw new Error(`Workspace '${workspaceId}' is busy`)
+  if (row.auto_loop_ready !== 1 && !row.auto_loop) {
     throw new Error(`Workspace '${workspaceId}' is not ready for auto-loop (run grooming first)`)
   }
 
@@ -96,12 +180,27 @@ export function enable(workspaceId: string): void {
   // (auto-loop banner) without doing any work. The user must add a task or
   // unmark a done task before re-enabling.
   const pending = countPendingTasks(workspaceId)
-  if (pending === 0) {
+  if (pending === 0 && !row.auto_loop) {
     throw new Error(`Workspace '${workspaceId}' has no pending tasks; add or unmark a task before enabling auto-loop`)
   }
 
+  if (
+    getRuntime(workspaceId).state === 'blocked' &&
+    row.status === 'quota' &&
+    !quotaBackoffService.getPending(workspaceId) &&
+    !orchestrator.hasController(workspaceId)
+  )
+    updateWorkspaceStatus(workspaceId, 'idle')
   const db = getDb()
   db.prepare('UPDATE workspaces SET auto_loop = 1, no_progress_streak = 0 WHERE id = ?').run(workspaceId)
+  orchestrator.resetAutoLoopRetries(workspaceId)
+  db.prepare('DELETE FROM auto_loop_progress WHERE workspace_id=?').run(workspaceId)
+  setRuntime(workspaceId, {
+    state: 'waiting',
+    reason: null,
+    diagnostic_attempts: 0,
+    phase: row.auto_loop_ready ? 'execution' : 'grooming',
+  })
   emitEphemeral(workspaceId, 'autoloop:enabled', {})
 
   if (orchestrator.hasController(workspaceId)) return
@@ -116,7 +215,13 @@ export function enable(workspaceId: string): void {
 export function disable(workspaceId: string, reason: DisableReason): void {
   const row = getRow(workspaceId)
   if (row?.auto_loop !== 1) return
+  if (reason === 'error' || reason === 'stall' || reason === 'awaiting-clarification') {
+    block(workspaceId, reason)
+    return
+  }
   const db = getDb()
+  quotaBackoffService.cancel(workspaceId, 'completed')
+  setRuntime(workspaceId, { state: reason === 'completed' ? 'completed' : 'stopped', reason })
   db.prepare('UPDATE workspaces SET auto_loop = 0 WHERE id = ?').run(workspaceId)
   const diagnostic = {
     reason,
@@ -130,9 +235,7 @@ export function disable(workspaceId: string, reason: DisableReason): void {
   )
   emitEphemeral(workspaceId, 'autoloop:disabled', diagnostic)
 
-  // The user's own hook, if they wrote one. Deliberately fired for EVERY
-  // reason, not only 'completed' like the cleanup script below: a loop that
-  // stalled is precisely the case worth being told about.
+  // Only actual disable transitions fire this hook. A blocked mission retains its intent.
   void lifecycleHookService.onAutoLoopDisabled(workspaceId, {
     reason,
     tasksPending: diagnostic.tasksPending,
@@ -152,6 +255,8 @@ export function disable(workspaceId: string, reason: DisableReason): void {
  * Called by orchestrator.handleEvent. The delta records whether task state
  * progressed during this session, including transitions such as pending to
  * in_progress, not only completion.
+ * Instruction-intake turns preserve the stagnation budget: their prompt only
+ * integrates requirements. The orchestrator reports them after settling delivery.
  *
  * When status is `quota` we skip spawning: the orchestrator's handleQuota
  * already scheduled a backoff timer and will call `onQuotaBackoffExpired` once
@@ -161,10 +266,22 @@ export function onSessionEnded(
   workspaceId: string,
   reason: 'completed' | 'error' | 'killed' | 'watchdog',
   taskProgressDelta: number,
+  instructionIntake = false,
 ): void {
   const row = getRow(workspaceId)
   if (!row) return
   if (row.auto_loop !== 1) return
+  const settledInstructions = settleLoopMessages(
+    workspaceId,
+    getRuntime(workspaceId).current_session_id,
+    reason === 'completed',
+  )
+  // The orchestrator may already have settled this exact turn's deliveries.
+  instructionIntake ||= settledInstructions > 0
+  if (listLoopMessages(workspaceId).some((m) => m.state === 'unknown')) {
+    block(workspaceId, 'message-delivery-unknown')
+    return
+  }
 
   // When a quota backoff is in flight (orchestrator.handleQuota scheduled a
   // timer), let that timer own the next spawn so the backoff delay is respected.
@@ -181,32 +298,26 @@ export function onSessionEnded(
   if (reason === 'watchdog') return
 
   if (reason === 'error') {
-    disable(workspaceId, 'error')
+    block(workspaceId, 'error')
     return
   }
 
-  // When grooming hasn't run yet (auto_loop_ready=false), the loop is "armed"
-  // but waiting for tasks to be created. Skip streak tracking and task checks —
-  // onAutoLoopReadySet() will trigger the first spawn once grooming completes.
-  if (row.auto_loop_ready !== 1) return
-
+  if (getRuntime(workspaceId).state === 'blocked') return
+  if (row.auto_loop_ready === 1 && countPendingTasks(workspaceId) === 0 && listLoopMessages(workspaceId).length === 0) {
+    spawnNextIteration(workspaceId)
+    return
+  }
   const db = getDb()
-  let streak: number
-  if (taskProgressDelta > 0) {
-    db.prepare('UPDATE workspaces SET no_progress_streak = 0 WHERE id = ?').run(workspaceId)
-    streak = 0
-  } else {
-    db.prepare('UPDATE workspaces SET no_progress_streak = no_progress_streak + 1 WHERE id = ?').run(workspaceId)
-    streak = row.no_progress_streak + 1
-  }
-
-  if (streak >= NO_PROGRESS_STALL_THRESHOLD) {
-    disable(workspaceId, 'stall')
-    return
-  }
-
-  if (countPendingTasks(workspaceId) === 0) {
-    disable(workspaceId, 'completed')
+  const runtime = getRuntime(workspaceId)
+  const streak = taskProgressDelta > 0 ? 0 : row.no_progress_streak + (instructionIntake ? 0 : 1)
+  db.prepare('UPDATE workspaces SET no_progress_streak=? WHERE id=?').run(streak, workspaceId)
+  if (taskProgressDelta > 0) setRuntime(workspaceId, { diagnostic_attempts: 0 })
+  // One diagnostic session after three stagnant iterations, followed by two attempts.
+  if (!instructionIntake && taskProgressDelta <= 0 && runtime.diagnostic_attempts >= 3) {
+    block(
+      workspaceId,
+      'No progress after diagnostic and two further attempts. Review the session findings and resume after resolving the blocker.',
+    )
     return
   }
 
@@ -221,6 +332,11 @@ export function onSessionEnded(
 export function rehydrate(): void {
   try {
     const db = getDb()
+    const interrupted = db
+      .prepare("SELECT DISTINCT workspace_id FROM auto_loop_messages WHERE state='dispatching'")
+      .all() as { workspace_id: string }[]
+    for (const row of interrupted)
+      if (!orchestrator.hasController(row.workspace_id)) recoverLoopMessages(row.workspace_id)
     const rows = db.prepare('SELECT id FROM workspaces WHERE auto_loop = 1 AND archived_at IS NULL').all() as Array<{
       id: string
     }>
@@ -228,17 +344,21 @@ export function rehydrate(): void {
     for (const { id } of rows) {
       try {
         if (orchestrator.hasController(id)) continue
-        // Workspaces still in grooming (ready=0) have their session killed by
-        // the server reload. Don't disable — the user can re-trigger grooming
-        // manually. Auto-disable on missing pending tasks would also fire here
-        // if the agent hadn't yet seeded any task before the reload.
+        recoverLoopMessages(id)
+        if (listLoopMessages(id).some((m) => m.state === 'unknown')) {
+          block(id, 'message-delivery-unknown')
+          continue
+        }
+        if (getRuntime(id).state === 'blocked') continue
         const row = getRow(id)
-        if (row?.auto_loop_ready !== 1) continue
-        // Persisted quota timers own the restart of these workspaces. Boot
-        // restores them after this pass; starting here bypasses their delay.
-        if (row.status === 'quota') continue
-        if (countPendingTasks(id) === 0) {
-          disable(id, 'completed')
+        if (row?.status === 'quota') {
+          if (!quotaBackoffService.getPending(id))
+            quotaBackoffService.arm(id, 15_000, {
+              resetsAt: null,
+              source: 'fallback_ladder',
+              reason: 'quota',
+              retryCount: 1,
+            })
           continue
         }
         spawnNextIteration(id)
@@ -260,7 +380,7 @@ export function forgetAutoLoopState(workspaceId: string): void {
 
 const PROMPT_TEMPLATE = `[Kōbō auto-loop — iteration #{n}{sessionModeSuffix}]
 
-Current pending task (highest priority, non-acceptance-criterion first):
+Current pending task (workspace order; finalization follows all todos and criteria):
 - Task ID: {taskId}
 - Title: {taskTitle}
 - Is acceptance criterion: {isAcceptanceCriterion}
@@ -301,23 +421,35 @@ function getActiveAutoLoopReviewGate(): string {
 function pickNextTask(workspaceId: string): Task | null {
   const pending = listTasks(workspaceId).filter((t) => t.status !== 'done')
   if (pending.length === 0) return null
-  // Rule D: non-acceptance first, each group in sort_order (listTasks orders).
-  const nonCriteria = pending.filter((t) => !t.isAcceptanceCriterion)
-  const criteria = pending.filter((t) => t.isAcceptanceCriterion)
-  return [...nonCriteria, ...criteria][0] ?? null
+  return pending.find((t) => !isFinalTask(t)) ?? pending[0] ?? null
 }
 
-function computeIterationNumber(workspaceId: string): number {
-  const done = countDoneTasks(workspaceId)
-  const status = getStatus(workspaceId)
-  return done + status.no_progress_streak + 1
+function isFinalTask(task: Task): boolean {
+  return task.role === 'finalization'
+}
+
+function ensureFinalVerification(workspaceId: string): void {
+  const tasks = listTasks(workspaceId)
+  if (!tasks.some(isFinalTask)) {
+    createTask(workspaceId, {
+      title: '[FINAL] Verify all todos and acceptance criteria',
+      sortOrder: Math.max(-1, ...tasks.map((t) => t.sortOrder)) + 1,
+    })
+  } else {
+    // Legacy completed finalizations have no evidence: preserve work but revalidate completion.
+    getDb()
+      .prepare(
+        "UPDATE tasks SET status='pending' WHERE workspace_id=? AND role='finalization' AND status='done' AND verification IS NULL",
+      )
+      .run(workspaceId)
+  }
 }
 
 /**
  * Pick the next task, build the prompt, call `orchestrator.startAgent`.
  *
  * When called by `onSessionEnded` / `rehydrate`, `startAgent` throws are
- * swallowed and the loop auto-disables (`reason: 'error'`). When called from
+ * swallowed and the loop is blocked with the failure reason. When called from
  * `enable` (initial user-driven spawn), we want the HTTP endpoint to surface
  * the failure instead of lying with 200, so the caller passes
  * `throwOnStartAgentError: true` and we re-throw after disabling.
@@ -352,7 +484,7 @@ export function resumeWaitingWorkspaces(excluded: ReadonlySet<string> = new Set(
   const rows = db
     .prepare(
       `SELECT id, status FROM workspaces
-        WHERE auto_loop = 1 AND auto_loop_ready = 1 AND archived_at IS NULL
+        WHERE auto_loop = 1 AND archived_at IS NULL
         ORDER BY updated_at ASC`,
     )
     .all() as Array<{ id: string; status: string }>
@@ -377,29 +509,33 @@ function spawnNextIteration(workspaceId: string, opts: { throwOnStartAgentError?
   const row = getRow(workspaceId)
   if (!row || row.archived_at || !row.auto_loop) return
   if (deferUntilWorkspaceAvailable(workspaceId, resumeWaitingWorkspaces)) return
-  if (orchestrator.hasController(workspaceId)) return
-  // Same guard as onSessionEnded — never race a deferred-resume start.
-  if (row.status === 'awaiting-user' || row.status === 'compacting') return
-  const task = pickNextTask(workspaceId)
-  if (!task) {
+  if (!canStartAutomatically(workspaceId)) {
+    if (getRuntime(workspaceId).state !== 'blocked' && !orchestrator.hasController(workspaceId)) {
+      setRuntime(workspaceId, { state: 'waiting', reason: row.status === 'quota' ? 'quota' : 'capacity-or-lifecycle' })
+      if (!hasFreeAgentSlot())
+        emitEphemeral(workspaceId, 'autoloop:waiting-for-slot', {
+          running: orchestrator.runningAgentCount(),
+          limit: settingsService.getGlobalSettings().maxConcurrentAgents,
+        })
+    }
+    return
+  }
+  if (listLoopMessages(workspaceId).some((m) => m.state === 'unknown' || m.state === 'dispatching')) {
+    block(workspaceId, 'message-delivery-unknown')
+    return
+  }
+  const grooming = row.auto_loop_ready !== 1
+  if (listLoopMessages(workspaceId).some((m) => m.state === 'pending')) invalidateTaskFinalization(getDb(), workspaceId)
+  if (!grooming) ensureFinalVerification(workspaceId)
+  const task = grooming ? null : pickNextTask(workspaceId)
+  const pendingInstructions = listLoopMessages(workspaceId).filter((m) => m.state === 'pending')
+  if (!grooming && !task && pendingInstructions.length === 0) {
     disable(workspaceId, 'completed')
     return
   }
-
-  // Hold off rather than pile on. Ten auto-loop workspaces waking together
-  // hammer the same rate limit and each land in their own backoff, so nobody
-  // gets through. The loop stays enabled: the next session to end anywhere
-  // calls back in here, and by then a slot has freed.
-  if (!hasFreeAgentSlot()) {
-    console.log(`[auto-loop] workspace '${workspaceId}' is waiting for a free agent slot`)
-    emitEphemeral(workspaceId, 'autoloop:waiting-for-slot', {
-      running: orchestrator.runningAgentCount(),
-      limit: settingsService.getGlobalSettings().maxConcurrentAgents,
-    })
-    return
-  }
-
-  const iterationNumber = computeIterationNumber(workspaceId)
+  const runtime = getRuntime(workspaceId)
+  const diagnostic = row.no_progress_streak >= NO_PROGRESS_STALL_THRESHOLD && runtime.diagnostic_attempts === 0
+  const iterationNumber = runtime.iteration + 1
   // Override block: replaces the standard iteration prompt body when the task
   // title carries a recognized prefix (case-sensitive, trailing space required).
   // Empty string otherwise so the placeholder collapses cleanly in PROMPT_TEMPLATE.
@@ -411,21 +547,32 @@ function spawnNextIteration(workspaceId: string, opts: { throwOnStartAgentError?
   const finalizationSettings = settingsService.getEffectiveFinalization(row.project_path)
 
   let overrideBlock = ''
-  if (task.title.startsWith('[FINAL] ')) {
+  if (task && isFinalTask(task)) {
     overrideBlock = buildFinalizationIterationBlock(finalizationSettings)
-  } else if (task.title.startsWith('[E2E] ') && e2eSettings.framework) {
+  } else if (task?.title.startsWith('[E2E] ') && e2eSettings.framework) {
     overrideBlock = buildE2eIterationBlock(e2eSettings)
   }
 
   const continuousSession = row.auto_loop_session_mode === 'continuous'
 
-  const prompt = PROMPT_TEMPLATE.replaceAll('{n}', String(iterationNumber))
+  let prompt = PROMPT_TEMPLATE.replaceAll('{n}', String(iterationNumber))
     .replaceAll('{sessionModeSuffix}', continuousSession ? ', session continue' : '')
-    .replaceAll('{taskId}', task.id)
-    .replaceAll('{taskTitle}', task.title)
-    .replaceAll('{isAcceptanceCriterion}', String(task.isAcceptanceCriterion))
+    .replaceAll('{taskId}', task?.id ?? '')
+    .replaceAll('{taskTitle}', task?.title ?? '')
+    .replaceAll('{isAcceptanceCriterion}', String(task?.isAcceptanceCriterion ?? false))
     .replaceAll('{overrideBlock}', overrideBlock)
     .replaceAll('{reviewGate}', getActiveAutoLoopReviewGate())
+
+  if (grooming)
+    prompt = `[Kōbō auto-loop — resume grooming]
+Resume the interrupted preparation. Read the workspace conversation with kobo__read_workspace_events_csv, recover the user's goal and constraints, and inspect existing tasks before making changes. Do not duplicate tasks.
+${buildAutoLoopGroomingSteps(e2eSettings, finalizationSettings)}
+${AUTO_LOOP_HARD_RULES}`
+  if (diagnostic)
+    prompt = `[Kōbō auto-loop — diagnostic]
+Three iterations produced no task progress. Read recent workspace events, explain the blocker, and try a different approach or decompose the task. Never mark unfinished or unverified work done. If intervention is required, state the precise action needed.
+${prompt}`
+  prompt += `\n${AUTO_LOOP_ITERATION_RULES}`
 
   const globalSettings = settingsService.getGlobalSettings()
   const projectSlug = globalSettings.worktreesPrefixByProject
@@ -450,12 +597,15 @@ function spawnNextIteration(workspaceId: string, opts: { throwOnStartAgentError?
   if (!fs.existsSync(worktreePath)) {
     const msg = `Worktree directory missing: ${worktreePath}`
     console.error('[auto-loop-service]', msg)
-    disable(workspaceId, 'error')
+    block(workspaceId, msg)
     if (opts.throwOnStartAgentError) throw new Error(msg)
     return
   }
 
   let agentSessionId: string | undefined
+  const instructions = claimLoopMessages(workspaceId)
+  if (instructions.length)
+    prompt = `[Kōbō auto-loop — integrate user instructions]\nRead kobo__list_tasks and relevant workspace history. Integrate the following instructions into the todos and acceptance criteria, preserving the user's constraints. Update existing tasks and create missing ones before ending this turn. Do not implement or finalize work during this intake turn: the next iteration will select the updated highest-priority task. Leave finalization open.\n${instructions.map((m) => `- ${m.content}`).join('\n')}\n${grooming ? prompt : AUTO_LOOP_ITERATION_RULES}`
   try {
     const agent = orchestrator.startAgent(
       workspaceId,
@@ -468,15 +618,38 @@ function spawnNextIteration(workspaceId: string, opts: { throwOnStartAgentError?
       // prior session to resume (e.g. the very first iteration), orchestrator's
       // resolveSessionForResume gracefully falls back to a fresh session — no
       // special-casing needed here.
-      continuousSession,
+      grooming || continuousSession,
       agentPermissionMode,
       undefined,
       row.reasoning_effort,
     )
     agentSessionId = agent.agentSessionId
+    if (agentSessionId) bindLoopMessages(workspaceId, agentSessionId)
+    setRuntime(workspaceId, {
+      phase: grooming ? 'grooming' : task && isFinalTask(task) ? 'finalization' : 'execution',
+      state: 'active',
+      reason: null,
+      iteration: iterationNumber,
+      current_task_id: task?.id ?? null,
+      current_session_id: agentSessionId ?? null,
+      // An intake prompt replaces the diagnostic/work prompt and forbids implementation.
+      diagnostic_attempts: instructions.length
+        ? runtime.diagnostic_attempts
+        : diagnostic
+          ? 1
+          : runtime.diagnostic_attempts > 0
+            ? runtime.diagnostic_attempts + 1
+            : 0,
+    })
   } catch (err) {
+    // Synchronous rejection precedes dispatch; return only this unbound claim to the queue.
+    getDb()
+      .prepare(
+        "UPDATE auto_loop_messages SET state='pending' WHERE workspace_id=? AND state='dispatching' AND session_id IS NULL",
+      )
+      .run(workspaceId)
     console.error('[auto-loop-service] startAgent failed:', err)
-    disable(workspaceId, 'error')
+    block(workspaceId, err instanceof Error ? err.message : String(err))
     if (opts.throwOnStartAgentError) throw err
     return
   }
@@ -491,8 +664,8 @@ function spawnNextIteration(workspaceId: string, opts: { throwOnStartAgentError?
   const tasksDone = countDoneTasks(workspaceId)
   emitEphemeral(workspaceId, 'autoloop:iteration-started', {
     iterationNumber,
-    taskId: task.id,
-    taskTitle: task.title,
+    taskId: task?.id ?? null,
+    taskTitle: task?.title ?? 'Grooming',
     tasksPending,
     tasksDone,
   })

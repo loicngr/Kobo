@@ -3,6 +3,7 @@ import { slugifyProjectName } from '../utils/project-slug.js'
 import { isWorkspaceLifecycleBusy } from '../utils/workspace-lifecycle-guard.js'
 import { resolveWorkspaceWorktreePath } from '../utils/worktree-paths.js'
 import * as orchestrator from './agent/orchestrator.js'
+import * as autoLoopService from './auto-loop-service.js'
 import * as settingsService from './settings-service.js'
 import { emitEphemeral } from './websocket-service.js'
 
@@ -232,7 +233,7 @@ function fire(workspaceId: string): void {
 
     const wsRow = db
       .prepare(
-        `SELECT project_path, working_branch, worktree_path, model, agent_permission_mode, reasoning_effort
+        `SELECT project_path, working_branch, worktree_path, model, agent_permission_mode, reasoning_effort, auto_loop
            FROM workspaces WHERE id = ?`,
       )
       .get(workspaceId) as
@@ -243,11 +244,27 @@ function fire(workspaceId: string): void {
           model: string
           agent_permission_mode: string | null
           reasoning_effort: string
+          auto_loop: number
         }
       | undefined
 
     if (!wsRow) {
       emitEphemeral(workspaceId, 'wakeup:skipped', { reason: 'fire-failed' })
+      return
+    }
+
+    if (wsRow.auto_loop !== 1 && !autoLoopService.canStartAutomatically(workspaceId)) {
+      defer(workspaceId, row)
+      return
+    }
+    if (wsRow.auto_loop === 1) {
+      if (!autoLoopService.queueInstruction(workspaceId, row.prompt, `wakeup:${row.created_at}`)) {
+        defer(workspaceId, row)
+        return
+      }
+      failedRetries.delete(workspaceId)
+      db.prepare('DELETE FROM pending_wakeups WHERE workspace_id = ?').run(workspaceId)
+      emitEphemeral(workspaceId, 'wakeup:fired', {})
       return
     }
 
