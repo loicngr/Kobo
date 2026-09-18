@@ -653,7 +653,7 @@ function resolveSessionForResume(
   } else {
     lastSession = db
       .prepare(
-        `SELECT id, engine_session_id, engine FROM agent_sessions WHERE workspace_id = ? AND COALESCE(engine, 'claude-code') = ? AND engine_session_id IS NOT NULL ORDER BY ${SESSION_RECENCY_ORDER} LIMIT 1`,
+        `SELECT id, engine_session_id, engine FROM agent_sessions WHERE workspace_id = ? AND COALESCE(engine, 'claude-code') = ? AND engine_session_id IS NOT NULL AND activation_order >= 0 ORDER BY ${SESSION_RECENCY_ORDER} LIMIT 1`,
       )
       .get(workspaceId, engineId) as AgentSessionRow | undefined
   }

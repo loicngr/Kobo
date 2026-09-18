@@ -17,8 +17,9 @@ import { listEngines } from './agent/engines/registry.js'
 import * as agents from './agent/orchestrator.js'
 import { buildEngineHandoff } from './engine-handoff-service.js'
 import { getReviewReturn } from './review-return-service.js'
-import { activateSession } from './session-activity-service.js'
+import { activateSession, deactivateSession } from './session-activity-service.js'
 import { registerHandoffStopHandler } from './session-handoff-runtime.js'
+import * as wakeupService from './wakeup-service.js'
 import { emit, emitEphemeral } from './websocket-service.js'
 import * as workspaces from './workspace-service.js'
 
@@ -94,10 +95,13 @@ function publish(id: string): SessionHandoff {
   emitEphemeral(handoff.workspaceId, 'workspace:handoff', { handoff })
   return handoff
 }
-function state(id: string, next: SessionHandoff['state'], error: string | null = null): SessionHandoff {
+function persistState(id: string, next: SessionHandoff['state'], error: string | null = null): void {
   getDb()
     .prepare('UPDATE session_handoffs SET state = ?, error = ?, updated_at = ? WHERE id = ?')
     .run(next, error, new Date().toISOString(), id)
+}
+function state(id: string, next: SessionHandoff['state'], error: string | null = null): SessionHandoff {
+  persistState(id, next, error)
   return publish(id)
 }
 function configure(workspaceId: string, configuration: HandoffConfiguration): void {
@@ -123,8 +127,10 @@ function normalizeStoppedWorkspace(workspaceId: string): void {
     workspaces.updateWorkspaceStatus(workspaceId, 'idle')
 }
 function restoreSource(row: HandoffRow): void {
-  if (!agents.hasController(row.workspace_id) && row.source_session_id)
-    activateSession(row.workspace_id, row.source_session_id)
+  if (!agents.hasController(row.workspace_id)) {
+    if (row.target_session_id) deactivateSession(row.workspace_id, row.target_session_id)
+    if (row.source_session_id) activateSession(row.workspace_id, row.source_session_id)
+  }
   configure(row.workspace_id, map(row).source)
 }
 function clearTimer(runtime: Runtime): void {
@@ -441,7 +447,12 @@ async function startTarget(runtime: Runtime): Promise<void> {
       fail(runtime, startError)
       return
     }
-    state(row.id, 'completed')
+    // A restart must never restore the source while its wakeup points at an unconfirmed target.
+    getDb().transaction(() => {
+      wakeupService.transferSession(row.workspace_id, row.source_session_id, session.id)
+      persistState(row.id, 'completed')
+    })()
+    publish(row.id)
     release(row.workspace_id, runtime)
   }
   workspaces.updateWorkspaceStatus(row.workspace_id, 'executing')

@@ -20,7 +20,7 @@
       <AutoLoopPanel class="q-mb-md" />
 
       <ActionAvailability :reason="isArchived ? $t('blockers.archived') : null">
-        <EngineSwitchButton :workspace="workspace" />
+        <EngineSwitchButton :workspace="workspace" @started="revealHandoff" />
       </ActionAvailability>
 
       <ActionAvailability data-tour="action-availability" :reason="setupBlocker ? $t(setupBlocker === 'configuration' ? 'blockers.setupConfiguration' : `blockers.${setupBlocker}`) : null" :settings="setupBlocker === 'configuration'" settings-tab="scripts">
@@ -142,11 +142,10 @@
         @click="openExternal(workspace.sentryUrl)"
       />
 
-      <EngineSwitchButton :workspace="workspace" mode="fresh" class="q-mt-sm" />
-      <SessionHandoffStatus :workspace-id="workspace.id" />
-
-
-
+      <div ref="handoffSection" data-tour="ws-session-handoff" class="handoff-section q-mt-sm" :class="{ 'handoff-section--highlighted': handoffHighlighted }">
+        <EngineSwitchButton :workspace="workspace" mode="fresh" @started="revealHandoff" />
+        <SessionHandoffStatus :workspace-id="workspace.id" @started="revealHandoff" />
+      </div>
       </template>
     </div>
 
@@ -176,7 +175,7 @@ import { getActionBlocker } from 'src/utils/action-blocker'
 import { getCurrentSession } from 'src/utils/current-session'
 import { isCiFailed } from 'src/utils/pr-status'
 import { isBusyStatus } from 'src/utils/workspace-status'
-import { computed, ref } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { StartReviewRequest } from '../../../shared/review'
 
@@ -189,6 +188,29 @@ const $q = useQuasar()
 const settingsStore = useSettingsStore()
 const workspaceStore = useWorkspaceStore()
 const handoffs = useSessionHandoffStore()
+const handoffSection = ref<HTMLElement | null>(null)
+const handoffHighlighted = ref(false)
+let handoffHighlightTimer: ReturnType<typeof setTimeout> | undefined
+
+function clearHandoffHighlight() {
+  clearTimeout(handoffHighlightTimer)
+  handoffHighlighted.value = false
+}
+
+async function revealHandoff(id: string) {
+  if (props.workspace?.id !== id) return
+  // Wait for the status and any recovery controls to take their final space.
+  await nextTick()
+  if (props.workspace?.id !== id || !handoffSection.value) return
+  const panel = handoffSection.value.closest<HTMLElement>('[data-tour="ws-tab-tools"]')
+  if (panel) panel.scrollTop = panel.scrollHeight
+  clearHandoffHighlight()
+  handoffHighlighted.value = true
+  handoffHighlightTimer = setTimeout(clearHandoffHighlight, 3000)
+}
+
+watch(() => props.workspace?.id, clearHandoffHighlight)
+onBeforeUnmount(clearHandoffHighlight)
 
 const running = ref(false)
 const openingEditor = ref(false)
@@ -411,5 +433,21 @@ async function startReview(payload: StartReviewRequest) {
 <style lang="scss" scoped>
 .tools-panel {
   min-height: 48px;
+}
+
+.handoff-section {
+  border-radius: var(--kobo-radius-sm);
+  outline: 1px solid transparent;
+  outline-offset: var(--kobo-space-xs);
+  transition: background-color var(--kobo-duration-short) ease-out, outline-color var(--kobo-duration-short) ease-out;
+}
+
+.handoff-section--highlighted {
+  background-color: rgba(var(--kobo-accent-rgb), 0.12);
+  outline-color: var(--kobo-accent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .handoff-section { transition: none; }
 }
 </style>

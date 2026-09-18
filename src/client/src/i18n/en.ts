@@ -960,6 +960,9 @@ export default {
   'tours.workspace.documents.description': 'Plans and files the agent wrote, browsable without leaving the chat.',
   'tours.workspace.schedule.title': 'Schedule',
   'tours.workspace.schedule.description': 'Wake-ups and crons that restart the agent later.',
+  'tours.workspace.handoff.title': 'Continue with fresh context',
+  'tours.workspace.handoff.description':
+    'Long conversation? Start a fresh session here, or use “Change LLM”. Current work stops immediately and the new session continues automatically in the same workspace. The handoff summary is optional: turn it off if the current LLM has no quota left. Progress, the report and a link to the previous session appear below this button.',
   'tours.workspace.terminal.title': 'Terminal',
   'tours.workspace.terminal.description': 'A shell inside the worktree, without leaving Kōbō.',
   'tours.gitPr.title': 'Pull request',

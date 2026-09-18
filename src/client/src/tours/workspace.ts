@@ -1,4 +1,5 @@
 import { useLayoutStore } from 'src/stores/layout'
+import { useWorkspaceStore } from 'src/stores/workspace'
 import { anchorPresent, clickAnchor } from './dom'
 import type { TourDefinition, TourStep } from './types'
 
@@ -63,6 +64,18 @@ export const workspaceTour: TourDefinition = {
     },
     tabStep('documents', 'tours.workspace.documents'),
     tabStep('schedule', 'tours.workspace.schedule'),
+    {
+      id: 'ws-session-handoff',
+      anchor: 'ws-session-handoff',
+      i18nKey: 'tours.workspace.handoff',
+      when: () => !!useWorkspaceStore().selectedWorkspaceId,
+      clickTarget: 'ws-tabnav-tools',
+      beforeShow: async () => {
+        if (!(await openRightTab('ws-tabnav-tools', 'ws-tab-tools'))) return
+        const panel = document.querySelector<HTMLElement>('[data-tour="ws-tab-tools"]')
+        if (panel) panel.scrollTop = panel.scrollHeight
+      },
+    },
     {
       id: 'ws-terminal',
       anchor: 'ws-terminal',

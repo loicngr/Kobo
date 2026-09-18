@@ -93,6 +93,7 @@ export interface AgentSession {
   model?: string | null
   startedAt: string
   endedAt: string | null
+  /** Negative values retain rolled-back targets in history without implicit selection. */
   activationOrder?: number
   name: string | null
 }
@@ -1421,7 +1422,7 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
-    async fetchSessions(workspaceId: string, forceSelectId?: string) {
+    async fetchSessions(workspaceId: string, forceSelectId?: string | null) {
       const requestVersion = (_sessionsRequestVersions.get(workspaceId) ?? 0) + 1
       _sessionsRequestVersions.set(workspaceId, requestVersion)
       this.loadingSessions[workspaceId] = true
@@ -1437,6 +1438,12 @@ export const useWorkspaceStore = defineStore('workspace', {
 
         this.sessions = sessions
 
+        // A cancelled first transfer has history, but no conversation to restore.
+        if (forceSelectId === null) {
+          this.selectSession(null)
+          return
+        }
+
         // When auto-loop starts a new session, force-switch to it.
         if (forceSelectId && this.sessions.some((s) => s.id === forceSelectId)) {
           this.selectSession(forceSelectId)
@@ -1447,8 +1454,9 @@ export const useWorkspaceStore = defineStore('workspace', {
         const currentStillExists = this.selectedSessionId && this.sessions.some((s) => s.id === this.selectedSessionId)
         if (this.sessions.length > 0 && !currentStillExists) {
           const persisted = localStorage.getItem(`kobo:session:${workspaceId}`)
-          const found = persisted ? this.sessions.find((s) => s.id === persisted) : null
-          this.selectSession(found ? found.id : this.sessions[0].id)
+          const selectable = this.sessions.filter((session) => (session.activationOrder ?? 0) >= 0)
+          const found = persisted ? selectable.find((s) => s.id === persisted) : null
+          this.selectSession(found?.id ?? selectable[0]?.id ?? null)
         }
       } catch (err) {
         console.error('[workspace store] fetchSessions failed:', err)
@@ -1501,10 +1509,12 @@ export const useWorkspaceStore = defineStore('workspace', {
       }
     },
 
-    selectSession(id: string) {
+    selectSession(id: string | null) {
       this.selectedSessionId = id
       if (this.selectedWorkspaceId) {
-        localStorage.setItem(`kobo:session:${this.selectedWorkspaceId}`, id)
+        const key = `kobo:session:${this.selectedWorkspaceId}`
+        if (id === null) localStorage.removeItem(key)
+        else localStorage.setItem(key, id)
       }
     },
 

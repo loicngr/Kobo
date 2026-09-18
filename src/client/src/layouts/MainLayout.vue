@@ -115,7 +115,7 @@
             indicator-color="primary"
             narrow-indicator
           >
-            <q-tab name="tools" icon="build" :aria-label="$t('tools.title')">
+            <q-tab name="tools" data-tour="ws-tabnav-tools" icon="build" :aria-label="$t('tools.title')">
               <q-tooltip>{{ $t('tools.title') }}</q-tooltip>
             </q-tab>
             <q-tab name="terminal" data-tour="ws-tabnav-terminal" icon="terminal" :aria-label="$t('terminal.title')">
@@ -126,7 +126,7 @@
           <q-separator dark />
 
           <q-tab-panels v-model="bottomTab" animated keep-alive class="col" style="overflow: hidden;">
-            <q-tab-panel name="tools" class="q-pa-none" style="overflow: auto;">
+            <q-tab-panel name="tools" data-tour="ws-tab-tools" class="q-pa-none" style="overflow: auto;">
               <ToolsPanel :workspace="store.selectedWorkspace" />
             </q-tab-panel>
 

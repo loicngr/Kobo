@@ -30,6 +30,7 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{ workspaceId: string }>()
+const emit = defineEmits<(e: 'started', workspaceId: string) => void>()
 const handoffs = useSessionHandoffStore()
 const workspace = useWorkspaceStore()
 const documents = useDocumentsStore()
@@ -43,9 +44,11 @@ function reportError(error: unknown) {
 }
 async function decide(action: 'retry' | 'skip' | 'cancel') {
   if (!handoff.value || busy.value) return
+  const workspaceId = props.workspaceId
   busy.value = true
   try {
-    await handoffs.decide(props.workspaceId, handoff.value.id, action)
+    await handoffs.decide(workspaceId, handoff.value.id, action)
+    if (action !== 'cancel') emit('started', workspaceId)
   } catch (error) {
     reportError(error)
   } finally {

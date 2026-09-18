@@ -975,6 +975,9 @@ export default {
     'Pläne und Dateien, die der Agent geschrieben hat, lesbar ohne den Chat zu verlassen.',
   'tours.workspace.schedule.title': 'Zeitplan',
   'tours.workspace.schedule.description': 'Wake-ups und Crons, die den Agenten später neu starten.',
+  'tours.workspace.handoff.title': 'Mit frischem Kontext fortfahren',
+  'tours.workspace.handoff.description':
+    'Lange Unterhaltung? Starte hier eine frische Sitzung oder nutze „LLM wechseln“. Die aktuelle Arbeit wird sofort unterbrochen und die neue Sitzung setzt automatisch im selben Workspace fort. Die Zusammenfassung ist optional: Deaktiviere sie, wenn das Kontingent des aktuellen LLM erschöpft ist. Fortschritt, Bericht und Link zur vorherigen Sitzung erscheinen unter diesem Button.',
   'tours.workspace.terminal.title': 'Terminal',
   'tours.workspace.terminal.description': 'Eine Shell im Worktree, ohne Kōbō zu verlassen.',
   'tours.gitPr.title': 'Pull Request',

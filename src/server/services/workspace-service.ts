@@ -1115,6 +1115,7 @@ export interface AgentSession {
   model: string | null
   startedAt: string
   endedAt: string | null
+  /** Negative values retain rolled-back targets in history without implicit selection. */
   activationOrder?: number
   name: string | null
 }
@@ -1186,7 +1187,7 @@ export function getActiveSession(workspaceId: string): AgentSession | null {
   // Otherwise the last used non-idle session (completed, error, quota, etc.)
   const latestNonIdle = db
     .prepare(
-      `SELECT * FROM agent_sessions WHERE workspace_id = ? AND status != 'idle' ORDER BY ${SESSION_RECENCY_ORDER} LIMIT 1`,
+      `SELECT * FROM agent_sessions WHERE workspace_id = ? AND status != 'idle' AND activation_order >= 0 ORDER BY ${SESSION_RECENCY_ORDER} LIMIT 1`,
     )
     .get(workspaceId) as AgentSessionRow | undefined
   return latestNonIdle ? mapSession(latestNonIdle) : null

@@ -1,9 +1,11 @@
+import { flushPromises } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import { beforeEach, expect, it, vi } from 'vitest'
 import type { SessionHandoff, SessionHandoffRequest } from '../../../shared/session-handoff'
 import { useSessionHandoffStore } from '../stores/session-handoff'
 import { useWebSocketStore } from '../stores/websocket'
 import { useWorkspaceStore } from '../stores/workspace'
+import { getCurrentSession } from '../utils/current-session'
 
 function handoff(overrides: Partial<SessionHandoff> = {}): SessionHandoff {
   const configuration = {
@@ -63,6 +65,46 @@ it('restores the source when cancelling an interrupted transfer loaded after rel
   )
   await store.decide('ws-1', 'handoff-1', 'cancel')
   expect(fetchSessions).toHaveBeenCalledWith('ws-1', 'source')
+})
+
+it('clears a cancelled first transfer selection and keeps its failed attempt as history after reload', async () => {
+  const workspace = useWorkspaceStore()
+  workspace.selectedWorkspaceId = 'ws-1'
+  workspace.selectSession('target')
+  const failed = {
+    id: 'target',
+    workspaceId: 'ws-1',
+    engine: 'codex',
+    status: 'error',
+    activationOrder: -1,
+    startedAt: '2026-09-17T12:00:00.000Z',
+    endedAt: '2026-09-17T12:00:01.000Z',
+    pid: null,
+    engineSessionId: 'native',
+    name: null,
+  }
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockImplementation(() => Promise.resolve(Response.json([failed]))),
+  )
+  const store = useSessionHandoffStore()
+  store.apply(handoff({ state: 'starting', sourceSessionId: null, targetSessionId: 'target' }))
+  store.apply(handoff({ state: 'cancelled', sourceSessionId: null, targetSessionId: 'target' }))
+  await flushPromises()
+  expect(workspace.selectedSessionId).toBeNull()
+  expect(workspace.sessions).toEqual([failed])
+  expect(getCurrentSession(workspace.sessions)).toBeUndefined()
+  // A stale browser preference from before cancellation must not select the failed target on reload.
+  localStorage.setItem('kobo:session:ws-1', 'target')
+  setActivePinia(createPinia())
+  const reloaded = useWorkspaceStore()
+  reloaded.selectedWorkspaceId = 'ws-1'
+  await reloaded.fetchSessions('ws-1')
+  expect(reloaded.selectedSessionId).toBeNull()
+  expect(reloaded.sessions).toEqual([failed])
+  reloaded.selectSession('target')
+  expect(reloaded.selectedSessionId).toBe('target')
+  localStorage.removeItem('kobo:session:ws-1')
 })
 
 it('starts a handoff without a synthesis and preserves the explicit source and idempotency key', async () => {

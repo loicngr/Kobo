@@ -109,6 +109,14 @@ export function schedule(
   }
 }
 
+/** Move a source conversation's pending check only once its handoff succeeds. */
+export function transferSession(workspaceId: string, sourceSessionId: string | null, targetSessionId: string): void {
+  if (!sourceSessionId) return
+  getDb()
+    .prepare('UPDATE pending_wakeups SET agent_session_id = ? WHERE workspace_id = ? AND agent_session_id = ?')
+    .run(targetSessionId, workspaceId, sourceSessionId)
+}
+
 /** Cancel any pending wakeup for the workspace. Idempotent. */
 export function cancel(
   workspaceId: string,

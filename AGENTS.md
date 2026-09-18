@@ -293,6 +293,14 @@ start/end timestamps. Backend current-session and implicit-resume selection, and
 client's current-session helper, use this order with the legacy timestamp fallback.
 Keep failed target sessions in history and do not force a historical handoff's
 selection over a later conversation after reload.
+Rolled-back targets have `activation_order = -1`: exclude them from default
+selection and implicit resume, but retain their native id and execution history.
+An explicit start/resume activates them again. Without a source conversation,
+rollback clears the client selection, including stale persisted preferences,
+so the next ordinary message starts a fresh conversation on the restored engine.
+Pending wakeups pinned to the source move to the destination only after confirmed
+startup, in the same transaction as handoff completion. Preserve their prompt and
+deadline, and never rebind a wakeup belonging to another conversation.
 
 ### Review LLM and return to the original session
 

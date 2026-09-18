@@ -971,6 +971,9 @@ export default {
   'tours.workspace.documents.description': "Piani e file scritti dall'agente, consultabili senza lasciare la chat.",
   'tours.workspace.schedule.title': 'Pianificazione',
   'tours.workspace.schedule.description': "Wake-up e cron che riavviano l'agente più tardi.",
+  'tours.workspace.handoff.title': 'Continua con un contesto nuovo',
+  'tours.workspace.handoff.description':
+    'Conversazione lunga? Avvia qui una nuova sessione o usa «Cambia LLM». Il lavoro corrente si interrompe immediatamente e la nuova sessione riprende automaticamente nello stesso workspace. Il riepilogo del passaggio di consegne è facoltativo: disattivalo se il LLM attuale ha esaurito la quota. Avanzamento, rapporto e collegamento alla sessione precedente appaiono sotto questo pulsante.',
   'tours.workspace.terminal.title': 'Terminale',
   'tours.workspace.terminal.description': 'Una shell dentro il worktree, senza lasciare Kōbō.',
   'tours.gitPr.title': 'Pull request',

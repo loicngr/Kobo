@@ -1,5 +1,6 @@
 <template>
   <q-btn
+    v-bind="$attrs"
     no-caps dense outline color="primary" :icon="mode === 'fresh' ? 'restart_alt' : 'swap_horiz'"
     :label="$t(mode === 'fresh' ? 'handoff.freshTitle' : 'handoff.switchTitle')"
     :disable="blocked" class="full-width q-mb-xs" @click="isOpen = true"
@@ -20,7 +21,9 @@ import { computed, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import type { SessionHandoffRequest } from '../../../shared/session-handoff'
 
+defineOptions({ inheritAttrs: false })
 const props = withDefaults(defineProps<{ workspace: Workspace; mode?: 'fresh' | 'switch' }>(), { mode: 'switch' })
+const emit = defineEmits<(e: 'started', workspaceId: string) => void>()
 const store = useWorkspaceStore()
 const handoffs = useSessionHandoffStore()
 const $q = useQuasar()
@@ -37,10 +40,12 @@ const currentSession = computed(() =>
 )
 async function submit(input: SessionHandoffRequest) {
   if (submitting.value || blocked.value) return
+  const workspaceId = props.workspace.id
   submitting.value = true
   try {
-    await handoffs.start(props.workspace.id, input)
+    await handoffs.start(workspaceId, input)
     isOpen.value = false
+    emit('started', workspaceId)
   } catch (error) {
     $q.notify({
       type: 'negative',
@@ -48,8 +53,11 @@ async function submit(input: SessionHandoffRequest) {
       position: 'top',
     })
     // A timeout may have hidden an accepted operation. Recover its durable status before retrying.
-    await handoffs.refresh(props.workspace.id).catch(() => {})
-    if (handoffs.isBlocking(props.workspace.id)) isOpen.value = false
+    await handoffs.refresh(workspaceId).catch(() => {})
+    if (handoffs.isBlocking(workspaceId)) {
+      isOpen.value = false
+      emit('started', workspaceId)
+    }
   } finally {
     submitting.value = false
   }

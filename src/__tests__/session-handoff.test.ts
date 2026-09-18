@@ -8,6 +8,7 @@ import { resetDb } from './helpers/reset-db.js'
 
 vi.mock('../server/services/settings-service.js', () => ({
   getGlobalSettings: () => ({ autoLoopMaxRetries: 5 }),
+  getProjectSettings: () => undefined,
   getEffectiveSettings: () => ({ model: 'auto', dangerouslySkipPermissions: true, sourceBranch: 'main' }),
 }))
 vi.mock('../server/services/usage/poller.js', () => ({ refreshNow: vi.fn().mockResolvedValue(null) }))
@@ -158,6 +159,88 @@ it('stops immediately and starts a fresh target without contacting the source fo
   expect(fs.existsSync(path.join(directory, result.reportPath!))).toBe(true)
   await f.orch.stopAgentAndWait(f.workspace.id)
 })
+
+it.each(['codex', 'claude-code'])('delivers a preserved wakeup to the fresh %s conversation', async (engine) => {
+  let ready!: () => void
+  const f = await fixture(
+    new Promise<void>((resolve) => {
+      ready = resolve
+    }),
+  )
+  const wakeup = await import('../server/services/wakeup-service.js')
+  wakeup.schedule(f.workspace.id, 60, 'Check the background job', 'Pending work', f.request.sourceSessionId)
+  const scheduled = wakeup.getPending(f.workspace.id)
+  f.service.createSessionHandoff(f.workspace.id, { ...f.request, target: { ...f.request.target, engine } })
+  await vi.waitFor(() => expect(f.starts).toHaveLength(2))
+  const pendingSession = () =>
+    f.getDb().prepare('SELECT agent_session_id FROM pending_wakeups WHERE workspace_id=?').get(f.workspace.id)
+  expect(pendingSession()).toEqual({ agent_session_id: f.request.sourceSessionId })
+  ready()
+  await vi.waitFor(() => expect(f.service.getCurrentSessionHandoff(f.workspace.id)?.state).toBe('completed'))
+  const targetSessionId = f.service.getCurrentSessionHandoff(f.workspace.id)!.targetSessionId
+  expect(pendingSession()).toEqual({ agent_session_id: targetSessionId })
+  expect(wakeup.getPending(f.workspace.id)).toEqual(scheduled)
+  f.starts[1]!.emit({ kind: 'session:ended', reason: 'completed', exitCode: 0 })
+  f.starts[1]!.close()
+  await vi.waitFor(() => expect(f.orch.hasController(f.workspace.id)).toBe(false))
+  // Rehydrate the due timer as on a backend restart; do not wait a real minute.
+  f.getDb()
+    .prepare('UPDATE pending_wakeups SET target_at=? WHERE workspace_id=?')
+    .run(new Date().toISOString(), f.workspace.id)
+  wakeup.rehydrate()
+  await vi.waitFor(() => expect(f.starts).toHaveLength(3))
+  expect(f.starts[2]!.options.resumeFromEngineSessionId).toBe(`${engine}-2`)
+  expect(f.starts[2]!.options.prompt).toContain('Check the background job')
+  expect(wakeup.getPending(f.workspace.id)).toBeNull()
+  await f.orch.stopAgentAndWait(f.workspace.id)
+})
+
+it.each(['codex', 'claude-code'])(
+  'leaves no implicit conversation after cancelling a failed first %s transfer',
+  async (engine) => {
+    let rejectReady!: (error: Error) => void
+    const f = await fixture(
+      new Promise<void>((_resolve, reject) => {
+        rejectReady = reject
+      }),
+    )
+    await f.orch.stopAgentAndWait(f.workspace.id)
+    const workspace = f.ws.createWorkspace({
+      name: 'New mission',
+      projectPath: directory,
+      sourceBranch: 'main',
+      workingBranch: 'new',
+      model: 'auto',
+    })
+    f.getDb().prepare('UPDATE workspaces SET worktree_path=? WHERE id=?').run(directory, workspace.id)
+    const handoff = f.service.createSessionHandoff(workspace.id, {
+      ...f.request,
+      sourceSessionId: null,
+      target: { ...f.request.target, engine },
+    })
+    await vi.waitFor(() => expect(f.starts).toHaveLength(2))
+    rejectReady(new Error('Initial turn rejected'))
+    f.starts[1]!.emit({ kind: 'session:ended', reason: 'error', exitCode: 1 })
+    f.starts[1]!.close()
+    await vi.waitFor(() => expect(f.service.getCurrentSessionHandoff(workspace.id)?.state).toBe('failed'))
+    await f.service.decideSessionHandoff(workspace.id, handoff.id, 'cancel')
+    const dbPath = f.getDb().name
+    const { closeDb } = await import('../server/db/index.js')
+    closeDb()
+    f.getDb(dbPath)
+    expect(f.ws.getWorkspace(workspace.id)?.engine).toBe('claude-code')
+    expect(f.ws.getActiveSession(workspace.id)).toBeNull()
+    const failed = f.ws.listSessions(workspace.id)[0]!
+    expect(failed).toMatchObject({ status: 'error', engineSessionId: `${engine}-2` })
+    const { deliverWorkspaceMessage } = await import('../server/services/workspace-message-service.js')
+    const delivered = await deliverWorkspaceMessage(workspace.id, { content: 'Continue the original mission' })
+    expect(delivered.sessionId).not.toBe(failed.id)
+    await vi.waitFor(() => expect(f.starts).toHaveLength(3))
+    expect(f.starts[2]!.engine).toBe('claude-code')
+    expect(f.starts[2]!.options.resumeFromEngineSessionId).toBeUndefined()
+    await f.orch.stopAgentAndWait(workspace.id)
+  },
+)
 
 it.each(['cancel', 'stop', 'restart'] as const)(
   'restores the source when %s interrupts target startup',

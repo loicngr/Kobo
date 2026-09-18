@@ -34,7 +34,6 @@ export const useSessionHandoffStore = defineStore('session-handoff', {
       if (
         shouldFollow &&
         ['failed', 'interrupted', 'cancelled'].includes(handoff.state) &&
-        handoff.sourceSessionId &&
         workspace.selectedWorkspaceId === handoff.workspaceId &&
         this.selectedSources[handoff.workspaceId] !== sourceSelection
       ) {
