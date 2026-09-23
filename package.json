@@ -1,6 +1,6 @@
 {
   "name": "@loicngr/kobo",
-  "version": "1.11.45",
+  "version": "2.0.0",
   "description": "Kōbō — local multi-workspace orchestrator for Claude Code and OpenAI Codex, with isolated Git worktrees, live review and optional automation.",
   "type": "module",
   "license": "GPL-3.0-or-later",
